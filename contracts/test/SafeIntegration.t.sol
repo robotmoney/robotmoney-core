@@ -1595,6 +1595,277 @@ contract SafeIntegrationTest is Test {
         _safeTimelockExecuteReverts(exec, salt);
         assertTrue(router.hasRole(WEIGHT_SETTER, address(governance)));
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Self-administration (issue 1645): the Safe changes its own owners and
+    // threshold, and the Safe changes the timelock's delay and roles as
+    // Safe -> Timelock self-calls. Every case runs through the real Safe.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    address internal constant SENTINEL = address(1);
+    /// @dev GuardManager's slot: keccak256("guard_manager.guard.address").
+    bytes32 internal constant GUARD_STORAGE_SLOT =
+        0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8;
+
+    /// @dev The owner that precedes `o` in the Safe's linked list (the sentinel for the head).
+    function _prevOwner(address o) internal view returns (address prev) {
+        address[] memory list = safe.getOwners();
+        prev = SENTINEL;
+        for (uint256 i = 0; i < list.length; i++) {
+            if (list[i] == o) return prev;
+            prev = list[i];
+        }
+        revert("owner not in list");
+    }
+
+    function _safeSelf(bytes memory data) internal returns (bool) {
+        return _safeCall(address(safe), data);
+    }
+
+    function _safeSelfReverts(bytes memory data) internal {
+        _safeCallReverts(address(safe), data);
+    }
+
+    function _guard() internal view returns (address) {
+        return address(uint160(uint256(vm.load(address(safe), GUARD_STORAGE_SLOT))));
+    }
+
+    function test_selfAdmin_addOwnerWithThreshold() public withSnap {
+        address fresh = makeAddr("fresh-owner");
+        assertTrue(
+            _safeSelf(abi.encodeWithSignature("addOwnerWithThreshold(address,uint256)", fresh, 3))
+        );
+        assertTrue(safe.isOwner(fresh));
+        assertEq(safe.getOwners().length, 4);
+        assertEq(safe.getThreshold(), 3);
+    }
+
+    function test_selfAdmin_addOwner_refusesZeroSentinelDuplicateAndSelf() public withSnap {
+        _safeSelfReverts(
+            abi.encodeWithSignature("addOwnerWithThreshold(address,uint256)", address(0), 2)
+        );
+        _safeSelfReverts(
+            abi.encodeWithSignature("addOwnerWithThreshold(address,uint256)", SENTINEL, 2)
+        );
+        _safeSelfReverts(
+            abi.encodeWithSignature("addOwnerWithThreshold(address,uint256)", owner1, 2)
+        );
+        _safeSelfReverts(
+            abi.encodeWithSignature("addOwnerWithThreshold(address,uint256)", address(safe), 2)
+        );
+        assertEq(safe.getOwners().length, 3);
+    }
+
+    function test_selfAdmin_removeOwner() public withSnap {
+        address victim = safe.getOwners()[2];
+        assertTrue(
+            _safeSelf(
+                abi.encodeWithSignature(
+                    "removeOwner(address,address,uint256)", _prevOwner(victim), victim, 2
+                )
+            )
+        );
+        assertFalse(safe.isOwner(victim));
+        assertEq(safe.getOwners().length, 2);
+        assertEq(safe.getThreshold(), 2);
+    }
+
+    function test_selfAdmin_removeOwner_cannotLeaveFewerOwnersThanTheThreshold() public withSnap {
+        address victim = safe.getOwners()[2];
+        // threshold 3 with 2 owners left
+        _safeSelfReverts(
+            abi.encodeWithSignature(
+                "removeOwner(address,address,uint256)", _prevOwner(victim), victim, 3
+            )
+        );
+        // a wrong predecessor
+        _safeSelfReverts(
+            abi.encodeWithSignature("removeOwner(address,address,uint256)", SENTINEL, victim, 2)
+        );
+        assertEq(safe.getOwners().length, 3);
+    }
+
+    function test_selfAdmin_swapOwner_oldOwnerSignatureStopsWorking() public withSnap {
+        // _buildTwoOwnerSigs signs with the two lowest addresses, so swap out the lowest one.
+        address old = _sortedOwners()[0];
+        address fresh = makeAddr("swap-in-owner");
+        assertTrue(
+            _safeSelf(
+                abi.encodeWithSignature(
+                    "swapOwner(address,address,address)", _prevOwner(old), old, fresh
+                )
+            )
+        );
+        assertFalse(safe.isOwner(old));
+        assertTrue(safe.isOwner(fresh));
+        assertEq(safe.getOwners().length, 3);
+        // the removed owner's signature no longer reaches quorum
+        _safeCallReverts(
+            address(d.timelock), abi.encodeCall(d.timelock.cancel, (bytes32(uint256(1))))
+        );
+    }
+
+    function test_selfAdmin_swapOwner_refusesAnExistingOwnerAndAnUnknownOld() public withSnap {
+        address old = _sortedOwners()[0];
+        _safeSelfReverts(
+            abi.encodeWithSignature(
+                "swapOwner(address,address,address)", _prevOwner(old), old, owner2
+            )
+        );
+        _safeSelfReverts(
+            abi.encodeWithSignature(
+                "swapOwner(address,address,address)",
+                SENTINEL,
+                makeAddr("stranger"),
+                makeAddr("new")
+            )
+        );
+    }
+
+    function test_selfAdmin_changeThreshold_takesEffect() public withSnap {
+        assertTrue(_safeSelf(abi.encodeWithSignature("changeThreshold(uint256)", 3)));
+        assertEq(safe.getThreshold(), 3);
+        // two signatures are now short of quorum
+        _safeCallReverts(
+            address(d.timelock), abi.encodeCall(d.timelock.cancel, (bytes32(uint256(1))))
+        );
+    }
+
+    function test_selfAdmin_changeThreshold_refusesZeroAndMoreThanOwners() public withSnap {
+        _safeSelfReverts(abi.encodeWithSignature("changeThreshold(uint256)", 0));
+        _safeSelfReverts(abi.encodeWithSignature("changeThreshold(uint256)", 4));
+        assertEq(safe.getThreshold(), 2);
+    }
+
+    /// @notice Module, guard and fallback-handler changes: the Safe contract rejects the malformed ones.
+    function test_selfAdmin_safeRejectsMalformedModuleGuardAndHandlerChanges() public withSnap {
+        _safeSelfReverts(abi.encodeWithSignature("enableModule(address)", address(0)));
+        _safeSelfReverts(abi.encodeWithSignature("enableModule(address)", SENTINEL));
+        // a guard must answer supportsInterface: the test token does not
+        _safeSelfReverts(abi.encodeWithSignature("setGuard(address)", address(usdc)));
+        // the Safe cannot be its own fallback handler
+        _safeSelfReverts(abi.encodeWithSignature("setFallbackHandler(address)", address(safe)));
+        assertEq(_guard(), address(0));
+        assertEq(
+            address(uint160(uint256(vm.load(address(safe), FALLBACK_HANDLER_STORAGE_SLOT)))),
+            SAFE_FALLBACK_HANDLER
+        );
+    }
+
+    /// @notice A well-formed module or handler change is NOT blocked by the Safe contract: two owners can
+    ///         make it at once, outside the timelock. The refusal lives in the govern tool (no row builds
+    ///         it) and in the verifier (it reads no module, no guard and the canonical handler).
+    ///         This test pins that fact so nobody mistakes the contract for the control.
+    function test_selfAdmin_wellFormedModuleAndHandlerChangeIsDetectableNotPrevented()
+        public
+        withSnap
+    {
+        address module = makeAddr("module");
+        assertTrue(_safeSelf(abi.encodeWithSignature("enableModule(address)", module)));
+        (bool ok, bytes memory ret) =
+            address(safe).staticcall(abi.encodeWithSignature("isModuleEnabled(address)", module));
+        assertTrue(ok);
+        assertTrue(abi.decode(ret, (bool)));
+
+        address handler = makeAddr("handler");
+        assertTrue(_safeSelf(abi.encodeWithSignature("setFallbackHandler(address)", handler)));
+        assertEq(
+            address(uint160(uint256(vm.load(address(safe), FALLBACK_HANDLER_STORAGE_SLOT)))),
+            handler
+        );
+    }
+
+    // ─── Safe -> Timelock self-calls ──────────────────────────────────────────
+
+    /// @dev The Safe schedules `data` on the timelock itself, the delay passes, the Safe executes it.
+    function _timelockSelfCall(bytes memory data, bytes32 salt) internal {
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(
+                    d.timelock.schedule,
+                    (address(d.timelock), 0, data, bytes32(0), salt, d.timelock.getMinDelay())
+                )
+            ),
+            "schedule failed"
+        );
+        vm.warp(block.timestamp + d.timelock.getMinDelay() + 1);
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(d.timelock.execute, (address(d.timelock), 0, data, bytes32(0), salt))
+            ),
+            "execute failed"
+        );
+    }
+
+    function test_selfAdmin_timelockUpdateDelay_viaSafeSelfCall() public withSnap {
+        uint256 next = d.timelock.getMinDelay() + 1 days;
+        _timelockSelfCall(abi.encodeCall(d.timelock.updateDelay, (next)), keccak256("ud"));
+        assertEq(d.timelock.getMinDelay(), next);
+    }
+
+    function test_selfAdmin_timelockUpdateDelay_directCallsRevert() public withSnap {
+        uint256 before = d.timelock.getMinDelay();
+        _safeCallReverts(address(d.timelock), abi.encodeCall(d.timelock.updateDelay, (1 days)));
+        vm.expectRevert();
+        d.timelock.updateDelay(1 days);
+        assertEq(d.timelock.getMinDelay(), before);
+    }
+
+    function test_selfAdmin_timelockGrantAndRevokeRole_viaSafeSelfCall() public withSnap {
+        address proposer = makeAddr("second-proposer");
+        bytes32 role = d.timelock.PROPOSER_ROLE();
+        _timelockSelfCall(
+            abi.encodeCall(IAccessControl.grantRole, (role, proposer)), keccak256("g")
+        );
+        assertTrue(d.timelock.hasRole(role, proposer));
+        _timelockSelfCall(
+            abi.encodeCall(IAccessControl.revokeRole, (role, proposer)), keccak256("r")
+        );
+        assertFalse(d.timelock.hasRole(role, proposer));
+    }
+
+    function test_selfAdmin_timelockRoleChange_directCallsRevert() public withSnap {
+        address proposer = makeAddr("second-proposer");
+        bytes32 role = d.timelock.PROPOSER_ROLE();
+        _safeCallReverts(
+            address(d.timelock), abi.encodeCall(IAccessControl.grantRole, (role, proposer))
+        );
+        assertFalse(d.timelock.hasRole(role, proposer));
+    }
+
+    /// @notice Owner decision 1, default (b): the Safe gives up its timelock role through the delay.
+    ///         The route is revokeRole as a timelock self-call. After it the Safe cannot schedule.
+    function test_selfAdmin_safeProposerRoleRevoked_throughTheDelay() public withSnap {
+        bytes32 role = d.timelock.PROPOSER_ROLE();
+        assertTrue(d.timelock.hasRole(role, address(safe)));
+        _timelockSelfCall(
+            abi.encodeCall(IAccessControl.revokeRole, (role, address(safe))), keccak256("rv")
+        );
+        assertFalse(d.timelock.hasRole(role, address(safe)));
+        _safeCallReverts(
+            address(d.timelock),
+            abi.encodeCall(
+                d.timelock.schedule,
+                (address(d.timelock), 0, "", bytes32(0), keccak256("x"), d.timelock.getMinDelay())
+            )
+        );
+    }
+
+    /// @notice The contract cannot force the delay on a renounce: the timelock's renounceRole only
+    ///         accepts the role holder as caller, and a Safe transaction is instant. The tool never
+    ///         builds a renounce (default (b)), and this test pins that the contract would allow it.
+    function test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt() public withSnap {
+        bytes32 role = d.timelock.PROPOSER_ROLE();
+        assertTrue(
+            _safeCall(
+                address(d.timelock),
+                abi.encodeCall(IAccessControl.renounceRole, (role, address(safe)))
+            )
+        );
+        assertFalse(d.timelock.hasRole(role, address(safe)));
+    }
 }
 
 // ─── Minimal interface shim for Safe.setup() ─────────────────────────────────

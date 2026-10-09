@@ -4,9 +4,9 @@
 // Issue 1520: the only mainnet operation after the handover is the basket unpause. Everything else is deploy-time configuration.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { decodeFunctionData, toFunctionSelector } from "viem";
+import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector } from "viem";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, buildSelfAdminCall, refuseSafeConfigChange, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
@@ -979,3 +979,133 @@ describe("issue 1686: pause-all and govern both rewrite publish-run.json without
   });
 });
 
+
+describe("issue 1645: Safe and timelock self-administration rows (Twin-only by default)", () => {
+  const NEW = addr(0x9001), NEW2 = addr(0x9002), ROLE = "PROPOSER_ROLE";
+  const roleHash = keccak256(toBytes(ROLE));
+  const args: Record<string, object> = {
+    "safe-add-owner": { owner: NEW, threshold: 3 }, "safe-remove-owner": { owner: "", threshold: 2 }, "safe-swap-owner": { oldOwner: "", newOwner: NEW2 },
+    "safe-change-threshold": { threshold: 3 }, "timelock-grant-role": { role: ROLE, account: NEW }, "timelock-revoke-role": { role: ROLE, account: NEW },
+  };
+
+  test("the rows are on demand: in no default run, no numbered --row and no stage run on either chain", () => {
+    expect(SELF_ADMIN_ROWS).toEqual([...SAFE_ADMIN_ROWS, ...TIMELOCK_ADMIN_ROWS]);
+    for (const r of SELF_ADMIN_ROWS) expect(GOVERN_ROWS as readonly string[]).not.toContain(r);
+    expect(stageRows(8453).length + 3).toBe(stageRows(918453).length);
+  });
+
+  test("every row is refused with USAGE on 8453 before the Safe is read, and nothing is sent", async () => {
+    for (const row of SELF_ADMIN_ROWS) {
+      const { ctx, sheet } = setup(ALL, 8453);
+      const tl = fakeTimelock(sheet, DELAY);
+      const err = await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row, selfAdmin: { owner: NEW, threshold: 2, role: ROLE, account: NEW, oldOwner: NEW, newOwner: NEW2 } }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+      expect(err.kind).toBe("USAGE");
+      expect(err.message).toContain("8453");
+      expect(tl.s.events).toEqual([]);
+    }
+  });
+
+  test("calldata: each Safe row is one call to the Safe, each timelock row one call to the timelock, with the predecessor the linked list needs", () => {
+    const { ctx, sheet } = setup(ALL);
+    const a = loadGovernAddrs(ctx);
+    const owners = sheet.safeOwners;
+    const add = buildSelfAdminCall("safe-add-owner", a, { owner: NEW, threshold: 3 }, owners);
+    expect(add.target).toBe(a.safe);
+    expect(decodeFunctionData({ abi: parseAbi(["function addOwnerWithThreshold(address owner, uint256 t)"]), data: add.data }).args).toEqual([NEW, 3n]);
+    const rm = buildSelfAdminCall("safe-remove-owner", a, { owner: owners[1]!, threshold: 2 }, owners);
+    expect(decodeFunctionData({ abi: parseAbi(["function removeOwner(address prev, address owner, uint256 t)"]), data: rm.data }).args).toEqual([owners[0], owners[1], 2n]);
+    const head = buildSelfAdminCall("safe-remove-owner", a, { owner: owners[0]!, threshold: 2 }, owners);
+    expect(decodeFunctionData({ abi: parseAbi(["function removeOwner(address prev, address owner, uint256 t)"]), data: head.data }).args[0]).toBe("0x0000000000000000000000000000000000000001");
+    const grant = buildSelfAdminCall("timelock-grant-role", a, { role: ROLE, account: NEW }, owners);
+    expect(grant.target).toBe(a.timelock);
+    expect(decodeFunctionData({ abi: parseAbi(["function grantRole(bytes32 role, address account)"]), data: grant.data }).args).toEqual([roleHash, NEW]);
+  });
+
+  test("bad arguments are USAGE: a missing key, a non-owner, an unknown role, a zero threshold", () => {
+    const { ctx, sheet } = setup(ALL);
+    const a = loadGovernAddrs(ctx);
+    const bad = (row: (typeof SELF_ADMIN_ROWS)[number], x: object) => { try { buildSelfAdminCall(row, a, x, sheet.safeOwners); } catch (e) { return (e as PublishError).kind; } return "no error"; };
+    expect(bad("safe-add-owner", { owner: NEW })).toBe("USAGE");
+    expect(bad("safe-remove-owner", { owner: NEW, threshold: 2 })).toBe("USAGE");
+    expect(bad("timelock-grant-role", { role: "ADMIN_ROLE", account: NEW })).toBe("USAGE");
+    expect(bad("safe-change-threshold", { threshold: 0 })).toBe("USAGE");
+  });
+
+  test("a Safe module, guard or fallback-handler change is refused by name, and no row can build one", () => {
+    const abi = parseAbi(["function enableModule(address module)", "function disableModule(address prev, address module)", "function setGuard(address guard)", "function setModuleGuard(address g)", "function setFallbackHandler(address handler)"]);
+    const calls = [
+      encodeFunctionData({ abi, functionName: "enableModule", args: [NEW] }), encodeFunctionData({ abi, functionName: "disableModule", args: [NEW2, NEW] }),
+      encodeFunctionData({ abi, functionName: "setGuard", args: [NEW] }), encodeFunctionData({ abi, functionName: "setModuleGuard", args: [NEW] }),
+      encodeFunctionData({ abi, functionName: "setFallbackHandler", args: [NEW] }),
+    ];
+    for (const data of calls) expect(() => refuseSafeConfigChange(data)).toThrow(/refused/);
+    const { ctx, sheet } = setup(ALL);
+    const a = loadGovernAddrs(ctx);
+    for (const row of SELF_ADMIN_ROWS) {
+      const x = { ...args[row], owner: sheet.safeOwners[1], oldOwner: sheet.safeOwners[0] } as Record<string, string>;
+      const data = buildSelfAdminCall(row, a, x, sheet.safeOwners).data;
+      expect(() => refuseSafeConfigChange(data)).not.toThrow();
+      for (const c of calls) expect(data.slice(0, 10)).not.toBe(c.slice(0, 10));
+    }
+  });
+
+  test("on a Twin fork each Safe row is one Safe transaction to the Safe and reads the owner set back", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const o0 = sheet.safeOwners[0]!;
+    await run(ctx, manifest, sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).toContain(NEW);
+    expect(tl.s.threshold).toBe(3n);
+    await run(ctx, manifest, sheet, tl, { row: "safe-swap-owner", selfAdmin: { oldOwner: o0, newOwner: NEW2 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).not.toContain(o0);
+    expect(tl.s.owners).toContain(NEW2);
+    await run(ctx, manifest, sheet, tl, { row: "safe-remove-owner", selfAdmin: { owner: NEW, threshold: 2 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).not.toContain(NEW);
+    await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.threshold).toBe(3n);
+    expect(out.map((l) => JSON.parse(l).row)).toEqual(["safe-add-owner", "safe-swap-owner", "safe-remove-owner", "safe-change-threshold"]);
+    expect(tl.s.events.filter((e) => e.startsWith("schedule"))).toEqual([]);
+    expect(manifest.stages.govern).toBeUndefined();
+  });
+
+  test("a rerun of a done Safe row sends nothing and reprints its line", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = { row: "safe-change-threshold", selfAdmin: { threshold: 3 } };
+    await run(ctx, manifest, sheet, tl, x);
+    const n = tl.s.events.length;
+    const again: string[] = [];
+    await run(ctx, manifest, sheet, tl, { ...x, emit: (l: string) => again.push(l) });
+    expect(tl.s.events.length).toBe(n);
+    expect(again.length).toBe(1);
+  });
+
+  test("a failed read-back stops the Safe row", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.reads.getThreshold = 2n;
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } })).rejects.toMatchObject({ kind: "GOVERN" });
+  });
+
+  test("on a Twin fork grant and revoke are one schedule and one execute through the timelock, and read hasRole back", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
+    expect(tl.s.roles.size).toBe(0);
+    expect(out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed", "scheduled", "executed"]);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+  });
+
+  test("--admin-arg goes with a self-administration row only", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", selfAdmin: { threshold: 3 } })).rejects.toMatchObject({ kind: "USAGE" });
+  });
+});

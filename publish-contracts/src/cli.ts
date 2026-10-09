@@ -23,7 +23,7 @@ import { callerInputs, parseSheet } from "./sheet.ts";
 import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
-import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
@@ -63,6 +63,8 @@ export const USAGE = `publish contracts
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
                      (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
                      the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
+  --admin-arg K=V    govern with a self-administration row (Twin chain 918453 only, refused on 8453): safe-add-owner, safe-remove-owner, safe-swap-owner, safe-change-threshold
+                     (one Safe transaction to the Safe) and timelock-grant-role, timelock-revoke-role (a Safe -> Timelock round). Keys: owner, old-owner, new-owner, threshold, role, account.
   --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
@@ -122,6 +124,8 @@ export interface Parsed {
   verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt only: the receipt to release. */
   receiptId?: string;
+  /** With a self-administration row only: the key=value pairs of --admin-arg. */
+  adminArgs?: Record<string, string>;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -134,7 +138,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -154,7 +158,8 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
-    if (row !== RECEIPT_ROW) {
+    if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
+    else if (row !== RECEIPT_ROW) {
       const resolved = resolveGovernRow(row); // an unknown row fails here, before any work
       if (isTwinOnlyRow(resolved) && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `--row ${resolved} is a Twin-fork demonstration of the Safe tool: it is refused on chain ${MAINNET_CHAIN_ID}\n${USAGE}`);
     }
@@ -165,6 +170,17 @@ export function parseCli(argv: string[]): Parsed {
   if (receiptIdRaw !== undefined) {
     if (row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only\n${USAGE}`);
     receiptId = assertReceiptId(receiptIdRaw);
+  }
+  let adminArgs: Record<string, string> | undefined;
+  const adminRaw = v["admin-arg"] as string[] | undefined;
+  if (adminRaw !== undefined) {
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row only (${SELF_ADMIN_ROWS.join(", ")})\n${USAGE}`);
+    adminArgs = {};
+    for (const kv of adminRaw) {
+      const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
+      if (!m) throw new PublishError("USAGE", `--admin-arg takes key=value with key owner, old-owner, new-owner, threshold, role or account, got '${kv}'`);
+      adminArgs[m[1]!] = m[2]!;
+    }
   }
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
@@ -182,7 +198,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId, adminArgs,
   };
 }
 
@@ -362,7 +378,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, ...(a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

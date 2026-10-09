@@ -435,3 +435,64 @@ no release branch to backport from, since every deployment runs the same
 | --- | --- | --- | --- |
 | Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
 | Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key. |
+
+## 9. Safe and timelock self-administration (Twin-only)
+
+Issue 1645, part of 1447. This section is the procedure for changing the Safe's
+own owners and threshold, and the timelock's own roles. The forge tests in
+`contracts/test/SafeIntegration.t.sol` (`test_selfAdmin_*`) run each action
+through the real Safe. The govern rows live in `publish-contracts/src/govern.ts`.
+
+**Availability.** The rows run on the Twin chain (`918453`) only. They are
+refused with `USAGE` on `8453` before the Safe is read. That is owner question 2
+at its default (Twin-only). The owner may later decide to open them on mainnet.
+
+| Row | What it does | Route |
+| --- | --- | --- |
+| `safe-add-owner` | `addOwnerWithThreshold(owner, threshold)` | One Safe transaction to the Safe, signed by the threshold. No delay. |
+| `safe-remove-owner` | `removeOwner(prev, owner, threshold)` | Same. The tool reads the owner list for `prev`. |
+| `safe-swap-owner` | `swapOwner(prev, old, new)` | Same. |
+| `safe-change-threshold` | `changeThreshold(threshold)` | Same. |
+| `timelock-grant-role` | `grantRole(role, account)` on the timelock | Safe schedules, the delay passes, the Safe executes. The timelock calls itself. |
+| `timelock-revoke-role` | `revokeRole(role, account)` on the timelock | Same. |
+| `update-delay` | `updateDelay(newDelay)` on the timelock | The existing Twin-only row. |
+
+Run a row with the govern verb, the row name, and one `--admin-arg key=value`
+per argument (keys: `owner`, `old-owner`, `new-owner`, `threshold`, `role`,
+`account`). The roles are `PROPOSER_ROLE`, `EXECUTOR_ROLE` and `CANCELLER_ROLE`.
+
+```
+bun publish-contracts/src/cli.ts govern --row safe-add-owner --admin-arg owner=0x... --admin-arg threshold=3 --chain 918453 --core-sha <sha> ...
+bun publish-contracts/src/cli.ts govern --row timelock-grant-role --admin-arg role=PROPOSER_ROLE --admin-arg account=0x... --chain 918453 --core-sha <sha> ...
+```
+
+Each run prints one JSON line per phase and reads the result back from the
+chain (the owner set and threshold, or `hasRole`). A rerun of a finished change
+sends nothing.
+
+**Refused: module, guard and fallback-handler changes.** No row builds
+`enableModule`, `disableModule`, `setGuard`, `setModuleGuard` or
+`setFallbackHandler`. The tool refuses them by name (`refuseSafeConfigChange`).
+The Safe contract does not refuse a well-formed one: two owners can enable a
+module at once, outside the timelock. The forge test
+`test_selfAdmin_wellFormedModuleAndHandlerChangeIsDetectableNotPrevented` pins
+that fact. The control is therefore this tool plus the verifier, which asserts
+no module, no guard and the canonical fallback handler.
+
+**The Safe's own timelock role.** Owner question 1 is open. The default is (b):
+giving up a timelock role goes through the delay. The route is
+`timelock-revoke-role` with the Safe as `account`. The tool never builds
+`renounceRole`, because a Safe transaction is instant. The contract cannot force
+the delay on a renounce, and `test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt`
+pins that.
+
+**Owner decisions.** Record the answer here when given.
+
+| Question | Default in force | Owner answer |
+| --- | --- | --- |
+| 1. May the Safe renounce its timelock roles instantly? | (b) through the timelock delay | not yet given |
+| 2. Are these rows available on mainnet 8453? | (a) Twin-only | not yet given |
+
+**CI proof.** The forge tests run in the required SafeIntegration suite. The
+govern rows are covered by `publish-contracts/tests/govern.test.ts` (issue 1645
+block): accepted on the Twin chain, refused on 8453.
