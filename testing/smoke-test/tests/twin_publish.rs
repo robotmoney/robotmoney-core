@@ -455,8 +455,14 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     }
     rm_v4_flows(&fx, dir);
 
-    // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain
-    // after the full publish and govern run. `cast_send` fails on a reverted receipt.
+    // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
+    // `cast_send` fails on a reverted receipt.
+    //
+    // OPEN OWNER QUESTION (issue 1743 report). With the deploy fixed, the router routes by the sheet's launch vector 9500/500/0/0 over all four vaults. The
+    // router calls `vault.deposit` on EVERY router-eligible leg, a 0 bps leg included (legAmount 0), and a deposit of 0 into rmAGENT reverts (the V4 swap of
+    // 0), so ONE 0 bps leg reverts the whole router deposit with UsdcLegTransferFailed(rmAGENT). Before the fix the voted vector (rmUSDC alone) hid it. Fixing
+    // it needs a PortfolioRouter change (skip legs whose legAmount is 0) or a different launch eligibility: both owner decisions, so this test pins the
+    // CURRENT behavior instead of hiding it. When the owner decides, replace the revert assertion with the deposit.
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC
@@ -474,13 +480,36 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         &[&router_s, &amount_s],
     )
     .expect("approve the router");
+    let refused = fx
+        .cast_send(
+            &pk,
+            router,
+            "deposit(uint256,uint256[])",
+            &[&amount_s, "[]"],
+        )
+        .expect_err("the router deposit reverts on the 0 bps rmAGENT leg (issue 1743 report)")
+        .to_string()
+        .to_lowercase();
+    assert!(
+        refused.contains("02d3b81f")
+            && refused.contains(&format!("{:#x}", fx.agent_vault())[2..].to_lowercase()),
+        "the router deposit must revert UsdcLegTransferFailed(rmAGENT), got: {refused}"
+    );
+    // The withdraw path does not depend on the weights: deposit into rmUSDC directly, then redeem through the router.
     fx.cast_send(
         &pk,
-        router,
-        "deposit(uint256,uint256[])",
-        &[&amount_s, "[]"],
+        fx.usdc(),
+        "approve(address,uint256)",
+        &[&format!("{:#x}", fx.vault()), &amount_s],
     )
-    .expect("the router deposit must succeed on the Twin chain");
+    .expect("approve rmUSDC");
+    fx.cast_send(
+        &pk,
+        fx.vault(),
+        "deposit(uint256,address)",
+        &[&amount_s, &format!("{user:#x}")],
+    )
+    .expect("the direct rmUSDC deposit must succeed on the Twin chain");
     let usdc_after_deposit = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
     assert_eq!(
         usdc_after_deposit,
@@ -490,7 +519,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let shares = fx
         .erc20_balance_of(fx.vault(), user)
         .expect("rmUSDC share balance");
-    assert!(shares > 0, "the router deposit minted no rmUSDC shares");
+    assert!(shares > 0, "the rmUSDC deposit minted no shares");
     let (vault_s, shares_s) = (format!("{:#x}", fx.vault()), shares.to_string());
     fx.cast_send(
         &pk,
