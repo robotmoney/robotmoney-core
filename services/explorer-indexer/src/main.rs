@@ -24,8 +24,8 @@
 use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
-    db::Db, feature_flags, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc,
-    rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
+    db::Db, feature_flags, indexer::refusal_backoff, indexer::run_once, indexer::IndexerConfig,
+    rpc::JsonRpc, rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -114,6 +114,16 @@ struct Cli {
     #[arg(long, env = "INDEXER_CONSENSUS_RECEIPT")]
     consensus_receipt: Option<String>,
 
+    /// Optional TimelockController address. When set, the indexer lists it as a contract and ingests
+    /// CallScheduled, CallExecuted, Cancelled and MinDelayChange (issue 1731).
+    #[arg(long, env = "INDEXER_TIMELOCK")]
+    timelock: Option<String>,
+
+    /// Optional Safe address. When set, the indexer lists it as a contract and ingests ExecutionSuccess,
+    /// ExecutionFailure, AddedOwner, RemovedOwner and ChangedThreshold (issue 1731).
+    #[arg(long, env = "INDEXER_SAFE")]
+    safe: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -154,6 +164,14 @@ struct Cli {
     /// the long-running daemon is unwanted.
     #[arg(long, default_value_t = false)]
     once: bool,
+}
+
+fn parse_optional_address(v: Option<&str>) -> Result<Option<Address>, Box<dyn std::error::Error>> {
+    v.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()
+        .map_err(Into::into)
 }
 
 #[tokio::main]
@@ -272,6 +290,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let timelock = parse_optional_address(cli.timelock.as_deref())?;
+    let safe = parse_optional_address(cli.safe.as_deref())?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -283,6 +304,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         portfolio_router,
         investment_committee,
         consensus_receipt,
+        timelock,
+        safe,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         start_block: cli.start_block,
         end_block: cli.end_block,
@@ -292,12 +315,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut interval = tokio::time::interval(Duration::from_secs(cli.tick_seconds));
+    let mut consecutive_refusals: u32 = 0;
 
     loop {
         match run_once(&db, &rpc, &cfg).await {
             Ok(o) => {
                 if let Some(ref err) = o.error {
+                    if o.refused {
+                        // An endpoint said no. Asking again every tick cannot change the answer, so say what
+                        // to do and wait longer each time (capped), instead of logging the same line forever.
+                        consecutive_refusals = consecutive_refusals.saturating_add(1);
+                        let wait = refusal_backoff(consecutive_refusals, cli.tick_seconds);
+                        error!(
+                            run_id = o.run_id,
+                            error = %err,
+                            consecutive_refusals,
+                            next_attempt_in_secs = wait.as_secs(),
+                            "indexer cannot make progress: an RPC endpoint refused the request; fix the endpoint and restart"
+                        );
+                        if cli.once {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    consecutive_refusals = 0;
                     error!(run_id = o.run_id, error = %err, "tick error (will retry)");
+                } else {
+                    consecutive_refusals = 0;
                 }
                 info!(
                     run_id = o.run_id,

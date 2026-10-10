@@ -23,6 +23,10 @@ import { VaultDetail } from "../../src/components/VaultDetail";
 // still receives the real wagmi module; only component-source imports are
 // replaced by this mock (useReadContract returns isLoading:true).
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
   createConfig: () => ({}),
   http: () => ({}),
@@ -31,7 +35,7 @@ vi.mock("wagmi", () => ({
 }));
 import { RouterView } from "../../src/components/RouterView";
 import { ProtocolStats } from "../../src/components/ProtocolStats";
-import { ExplorerProvider } from "../../src/lib/ExplorerContext";
+import { ExplorerContext, ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type {
   FetchLike,
   VaultsResponse,
@@ -54,6 +58,7 @@ const vaultsFixture: VaultsResponse = {
       name: "Alpha Vault",
       risk_label: "stable-yield",
       status: 0,
+      deposits_paused: false,
       deposit_cap: "1000000000",
       total_assets: "99999999",
       exit_fee_bps: 25,
@@ -72,6 +77,7 @@ const vaultsFixture: VaultsResponse = {
     },
   ],
   block_number: 1000,
+  chain_head_block: 1005,
   indexed_at: "2026-01-01T12:00:00Z",
 };
 
@@ -82,6 +88,7 @@ const vaultDetailFixture: VaultDetailResponse = {
     name: "Alpha Vault",
     risk_label: "stable-yield",
     status: 0,
+    deposits_paused: false,
     deposit_cap: "1000000000",
     tvl_history: [
       {
@@ -236,8 +243,8 @@ describe("VaultList", () => {
     expect(names).toContain("Beta Vault");
 
     const statuses = getAllByTestId("vault-list-row-status").map((n) => n.textContent);
-    expect(statuses).toContain("Active");
-    expect(statuses).toContain("Deposits paused");
+    expect(statuses).toContain("Active (per index, block 1000)");
+    expect(statuses).toContain("Deposits paused / closed");
   });
 
   it("renders without a connected wallet — no wagmi hooks used", async () => {
@@ -319,16 +326,30 @@ describe("VaultList", () => {
 
 describe("VaultDetail", () => {
   it("renders vault name, risk, status, and cap", async () => {
+    // The chain head comes from the shared explorer context, as in the app.
     const { getByTestId } = render(
-      <VaultDetail
-        apiUrl="http://api"
-        address={VAULT_A_ADDR}
-        fetchImpl={makeFetch(vaultDetailFixture)}
-      />,
+      <ExplorerContext.Provider
+        value={{
+          vaults: [],
+          stats: null,
+          blockNumber: 1000,
+          chainHeadBlock: 1005,
+          vaultsLoading: false,
+          statsLoading: false,
+          vaultsError: null,
+          statsError: null,
+        }}
+      >
+        <VaultDetail
+          apiUrl="http://api"
+          address={VAULT_A_ADDR}
+          fetchImpl={makeFetch(vaultDetailFixture)}
+        />
+      </ExplorerContext.Provider>,
     );
     await waitFor(() => expect(getByTestId("vault-detail-name").textContent).toBe("Alpha Vault"));
     expect(getByTestId("vault-detail-risk").textContent).toBe("stable-yield");
-    expect(getByTestId("vault-detail-status").textContent).toBe("Active");
+    expect(getByTestId("vault-detail-status").textContent).toBe("Active (per index, block 1000)");
     expect(getByTestId("vault-detail-cap").textContent).toBe("1000000000");
   });
 
@@ -381,6 +402,7 @@ describe("VaultDetail", () => {
         name: "deSPXA RWA Vault",
         risk_label: "SPECULATIVE",
         status: 0,
+        deposits_paused: false,
         deposit_cap: "1000000000",
         tvl_history: [],
         indexed_at: "2026-01-01T12:00:00Z",

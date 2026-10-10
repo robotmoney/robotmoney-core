@@ -28,10 +28,18 @@ issues #654, #661, #675, and #695.
 | GET | `/v1/router/weights` | `get_router_weights` | Implemented |
 | GET | `/v1/governance/proposals` | `list_proposals` | Implemented |
 | GET | `/v1/governance/proposals/:id` | `get_proposal` | Implemented |
+| GET | `/v1/governance/admin-events` | `list_admin_events` | Implemented (issue 1731) |
 | GET | `/v1/stats` | `get_stats` | Implemented |
 | GET | `/v1/router/state` | `get_router_state` | Implemented |
 | GET | `/v1/accounts/:address/positions` | `get_account_positions` | Implemented |
 | GET | `/v1/accounts/:address/history` | `get_account_history` | Partial — see issue #654 |
+
+### Index cursor, chain head and deposit state (issue 1731)
+
+- `block_number` of `/v1/vaults`, `/v1/stats` and the other freshness headers, and `last_indexed_block` of `/health`, are the highest block an indexer run that finished **without an error** committed for the service's chain. They are never read from the newest `indexer_runs` row, which is the tick in flight or a failed tick. `block_number` 0 means nothing is indexed yet; `/health` then reports `last_indexed_block: null`.
+- `chain_head_block` (on `/health`, `/v1/vaults` and `/v1/stats`) is the head the indexer last saw. `chain_head_block - block_number` is the lag (about 5 when healthy, because the indexer waits 5 confirmations). It is `null` until a tick has read a head.
+- `GET /v1/vaults` rows carry `deposits_paused`: the vault's `depositsPaused()` at its latest snapshot, `null` when it has none (read that as unknown, never as open). `status` is the registry lifecycle status and does not follow `pauseDeposits()`.
+- `GET /v1/governance/admin-events` lists, newest first (at most 500), the events of the Timelock (`CallScheduled`, `CallExecuted`, `Cancelled`, `MinDelayChange`) and of the Safe (`ExecutionSuccess`, `ExecutionFailure`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`) when the indexer is given `INDEXER_TIMELOCK` and `INDEXER_SAFE`. Each entry has `block_number`, `log_index`, `tx_hash`, `contract`, `contract_kind` (`timelock` or `safe`), `event_name`, `op_id` (timelock operation id or Safe transaction hash) and `detail` (the decoded arguments). Both contracts are listed by `/v1/chains/:chain_id/contracts` with kinds `timelock` and `safe`.
 
 ---
 

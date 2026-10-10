@@ -63,6 +63,10 @@ describe("decodeShortlist — five parallel arrays zipped by index", () => {
 // ─── VaultDetail composition rows from a parallel-array result ─────────────────
 
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "shortlist") {
       return { data: SHORTLIST, isError: false, isLoading: false };

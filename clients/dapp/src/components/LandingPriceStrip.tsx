@@ -30,6 +30,9 @@ import {
 import { UNISWAP_V3_POOL_SLOT0_ABI, sqrtPriceX96ToPrice } from "../lib/uniswapV3";
 import { useExplorer } from "../lib/ExplorerContext";
 import { formatPrice as canonicalFormatPrice } from "../lib/format";
+import { useWriteChainGuard } from "../lib/useGuardedWriteContract";
+import { describeIndexFreshness } from "../lib/indexFreshness";
+import type { WriteGuardState } from "../lib/writeChainGuard";
 
 /** One cell's resolved state for the pure view. */
 export interface PriceCellState {
@@ -42,6 +45,40 @@ export interface PriceCellState {
   readonly unavailable: boolean;
   /** True while this cell's read is in flight. */
   readonly loading: boolean;
+  /**
+   * Why `unavailable` is true, in operator words: the source that failed and what to do. Shown as
+   * "price unavailable (source)" (issue 1731). Absent when the cell is available.
+   */
+  readonly unavailableReason?: string;
+  /**
+   * True when the last read failed but an earlier good price is still shown. A refetch error must not
+   * blank a price the page already has; the cell keeps it and says it may be old.
+   */
+  readonly stale?: boolean;
+}
+
+/** The words for why a pool read cannot run, from the write guard. Pure. */
+export function priceSourceBlockedReason(guard: WriteGuardState): string | undefined {
+  if (guard.kind === "not-connected") {
+    return "wallet RPC: connect a wallet on Base, prices are read through your wallet";
+  }
+  if (guard.kind === "wrong-chain") {
+    return `wallet RPC: your wallet is on chain ${guard.connectedChainId}, switch it to Base (${guard.targetChainId})`;
+  }
+  return undefined;
+}
+
+/** The words for a failed read, short enough for a cell and free of URLs. Pure. */
+export function priceReadFailureReason(error: unknown): string {
+  const raw =
+    typeof error === "object" && error !== null
+      ? ((error as { shortMessage?: string }).shortMessage ?? (error as Error).message ?? "")
+      : String(error ?? "");
+  const clean = raw
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `wallet RPC: read failed${clean ? ` (${clean.slice(0, 80)})` : ""}`;
 }
 
 /** data-testid suffix for a pair, e.g. landing-price-cell-eth-usd. */
@@ -63,6 +100,8 @@ interface LandingPriceStripViewProps {
   readonly cells: readonly PriceCellState[];
   /** Block the prices were read at, or null while unknown. */
   readonly blockNumber: number | null;
+  /** Chain head the indexer last saw, for the staleness hint. */
+  readonly chainHeadBlock?: number | null;
 }
 
 /**
@@ -70,13 +109,19 @@ interface LandingPriceStripViewProps {
  * can assert decimal-math output and per-cell error isolation without any
  * wagmi/RPC fixture.
  */
-export function LandingPriceStripView({ cells, blockNumber }: LandingPriceStripViewProps) {
+export function LandingPriceStripView({
+  cells,
+  blockNumber,
+  chainHeadBlock,
+}: LandingPriceStripViewProps) {
   return (
     <section className="landing-price-strip" data-testid="landing-price-strip">
       <div className="section-heading-row">
         <h2>Live prices</h2>
         <p data-testid="landing-price-strip-freshness">
-          {blockNumber == null ? "Block —" : `Block ${blockNumber}`}
+          {blockNumber == null
+            ? "Block —"
+            : describeIndexFreshness(blockNumber, chainHeadBlock).text}
         </p>
       </div>
       <div className="price-cell-grid">
@@ -86,6 +131,7 @@ export function LandingPriceStripView({ cells, blockNumber }: LandingPriceStripV
             className="price-cell"
             data-testid={cellTestId(cell.id)}
             data-cell-unavailable={cell.unavailable ? "true" : "false"}
+            data-cell-stale={cell.stale ? "true" : "false"}
           >
             <p className="price-cell-label" data-testid={`${cellTestId(cell.id)}-label`}>
               {cell.label}
@@ -95,19 +141,26 @@ export function LandingPriceStripView({ cells, blockNumber }: LandingPriceStripV
                 className="price-cell-value price-cell-unavailable"
                 data-testid={`${cellTestId(cell.id)}-value`}
               >
-                unavailable
+                {cell.unavailableReason
+                  ? `price unavailable (${cell.unavailableReason})`
+                  : "unavailable"}
               </p>
             ) : cell.loading || cell.price == null ? (
               <p className="price-cell-value" data-testid={`${cellTestId(cell.id)}-value`}>
                 …
               </p>
             ) : (
-              <p className="price-cell-value" data-testid={`${cellTestId(cell.id)}-value`}>
+              <p
+                className="price-cell-value"
+                data-testid={`${cellTestId(cell.id)}-value`}
+                title={cell.stale ? "The last read failed; this is the last good price" : undefined}
+              >
                 {formatPrice(cell.price, cell.quoteSymbol)}
+                {cell.stale ? " (may be old)" : ""}
               </p>
             )}
             <p className="price-cell-block" data-testid={`${cellTestId(cell.id)}-block`}>
-              {blockNumber == null ? "Block —" : `Block ${blockNumber}`}
+              {blockNumber == null || blockNumber <= 0 ? "Block —" : `Block ${blockNumber}`}
             </p>
           </article>
         ))}
@@ -118,11 +171,17 @@ export function LandingPriceStripView({ cells, blockNumber }: LandingPriceStripV
 
 /** One container hook instance per pool — keeps reads independent per cell. */
 function usePoolPrice(pair: PairMeta, config: PoolConfig | undefined): PriceCellState {
-  const enabled = config != null;
-  const { data, isError, isLoading } = useReadContract({
+  const { state: guard } = useWriteChainGuard();
+  const blockedReason = priceSourceBlockedReason(guard);
+  const enabled = config != null && blockedReason === undefined;
+  // On the mainnet class the read is pinned to Base, so a wallet on another chain is refused above
+  // instead of answering for the same pool address on its own chain.
+  const chainId = guard.kind === "ok" ? guard.targetChainId : undefined;
+  const { data, error, isError, isLoading } = useReadContract({
     abi: UNISWAP_V3_POOL_SLOT0_ABI,
     address: config?.pool,
     functionName: "slot0",
+    chainId,
     query: { enabled },
   });
 
@@ -142,15 +201,31 @@ function usePoolPrice(pair: PairMeta, config: PoolConfig | undefined): PriceCell
     }
   }
 
+  // A missing config, a blocked source, an RPC read error with no price to show, or a conversion failure
+  // isolates to this cell only — the other cells are independent hook instances. An error on a REFETCH while
+  // an earlier good price is held keeps the price (react-query keeps `data` and sets `isError`), flagged stale.
+  const failedWithoutPrice = (isError && price == null) || convertError;
+  const unavailable = config == null || blockedReason !== undefined || failedWithoutPrice;
+  const unavailableReason =
+    config == null
+      ? "no pool is configured for this pair"
+      : blockedReason !== undefined
+        ? blockedReason
+        : convertError
+          ? "the pool answer could not be converted to a price"
+          : failedWithoutPrice
+            ? priceReadFailureReason(error)
+            : undefined;
+
   return {
     id: pair.id,
     label: pair.label,
     quoteSymbol: pair.quote,
-    price,
-    // A missing config, an RPC read error, or a conversion failure isolates to
-    // this cell only — the other cells are independent hook instances.
-    unavailable: !enabled || isError || convertError,
+    price: unavailable ? null : price,
+    unavailable,
     loading: enabled && isLoading,
+    unavailableReason,
+    stale: !unavailable && isError && price != null,
   };
 }
 
@@ -166,12 +241,18 @@ function usePoolPrice(pair: PairMeta, config: PoolConfig | undefined): PriceCell
  * mixed-block state when the indexer lags behind the chain (issue #612).
  */
 export function LandingPriceStrip() {
-  const { blockNumber } = useExplorer();
+  const { blockNumber, chainHeadBlock } = useExplorer();
 
   const cells = PRICE_STRIP_PAIRS.map((pair) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks -- PRICE_STRIP_PAIRS is a static, fixed-length config array; iteration order never changes.
     usePoolPrice(pair, resolvePoolConfig(pair.id)),
   );
 
-  return <LandingPriceStripView cells={cells} blockNumber={blockNumber} />;
+  return (
+    <LandingPriceStripView
+      cells={cells}
+      blockNumber={blockNumber}
+      chainHeadBlock={chainHeadBlock}
+    />
+  );
 }

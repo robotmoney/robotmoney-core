@@ -12,6 +12,8 @@ import { DepositWithdrawTab } from "../../../src/components/DepositWithdrawTab";
 import type { VaultPreviewContext } from "../../../src/lib/vaultPreview";
 
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
   useAccount: () => ({ address: undefined, isConnected: false }),
   useSimulateContract: () => ({ data: undefined, error: null }),
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false, data: undefined }),

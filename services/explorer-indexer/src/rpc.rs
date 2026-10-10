@@ -17,6 +17,42 @@ pub enum RpcError {
     Server { method: String, message: String },
     #[error("decode {method}: {message}")]
     Decode { method: String, message: String },
+    /// The endpoint answered HTTP 401 or 403: it understood the request and refuses to serve it
+    /// (an expired key, or a provider that serves archive history only to a personal token). It is a
+    /// final answer, never retried, and the operator has to change the endpoint. `detail` is filled
+    /// by the caller that knows the request (the block range of an `eth_getLogs`).
+    #[error("{}", refused_message(method, *status, origin, detail))]
+    Refused {
+        method: String,
+        status: u16,
+        /// `https://host` of the endpoint that refused, never a path or key.
+        origin: String,
+        detail: String,
+    },
+}
+
+/// The one operator-facing text of a refusal: which endpoint refused which method and range, and what to do.
+fn refused_message(method: &str, status: u16, origin: &str, detail: &str) -> String {
+    let scope = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" for {detail}")
+    };
+    let advice = if method == "eth_getLogs" {
+        "this endpoint will not serve these logs (public providers refuse archive requests without a \
+         personal token): set INDEXER_LOGS_RPC_URL (--logs-rpc) to an archive-capable logs RPC such as \
+         https://base.gateway.tenderly.co"
+    } else {
+        "check the key or token of this endpoint (INDEXER_RPC_URL) or use another RPC"
+    };
+    format!("rpc {method} refused by {origin} (HTTP {status}){scope}: {advice}")
+}
+
+/// `https://host` of a URL, or `(invalid url)`. A path or a query can carry an API key.
+fn origin_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_else(|_| "(invalid url)".to_string())
 }
 
 /// Replace every `scheme://...` token in `text` with `scheme://<redacted>`.
@@ -198,6 +234,14 @@ impl JsonRpc {
                             Err(e) => (true, None, transport_error(method, "read body: ", e)),
                         }
                     } else {
+                        if matches!(status.as_u16(), 401 | 403) {
+                            return Err(RpcError::Refused {
+                                method: method.to_string(),
+                                status: status.as_u16(),
+                                origin: origin_of(url),
+                                detail: String::new(),
+                            });
+                        }
                         let hint = r
                             .headers()
                             .get(reqwest::header::RETRY_AFTER)
@@ -397,7 +441,21 @@ impl JsonRpc {
         });
         let raw: Vec<serde_json::Value> = self
             .call("eth_getLogs", serde_json::json!([filter]))
-            .await?;
+            .await
+            .map_err(|e| match e {
+                RpcError::Refused {
+                    method,
+                    status,
+                    origin,
+                    ..
+                } => RpcError::Refused {
+                    method,
+                    status,
+                    origin,
+                    detail: format!("blocks {from_block}..{to_block}"),
+                },
+                other => other,
+            })?;
         let mut out = Vec::with_capacity(raw.len());
         for r in raw {
             let address = parse_address(

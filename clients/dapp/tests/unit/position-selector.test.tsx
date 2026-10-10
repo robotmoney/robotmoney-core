@@ -19,6 +19,8 @@ import type { VaultPreviewContext } from "../../src/lib/vaultPreview";
 
 // ---- wagmi mock (disconnected state, no chain data) ----
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
   useAccount: () => ({ address: undefined, isConnected: false }),
   useSimulateContract: () => ({ data: undefined, error: null }),
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false, data: undefined }),
@@ -293,6 +295,7 @@ describe("DepositWithdrawTab — insufficient balance guard (wagmi-connected moc
     // Override the top-level wagmi mock with a connected version that
     // returns a known shareBalance.
     vi.mock("wagmi", () => ({
+      useReadContracts: () => ({ data: undefined }),
       useAccount: () => ({
         address: "0x1111111111111111111111111111111111111111" as `0x${string}`,
         isConnected: true,

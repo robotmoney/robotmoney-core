@@ -15,7 +15,9 @@
  * governance-panel.test.tsx) so the tests run without a live WagmiProvider.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "./helpers/render";
+import { cleanup, fireEvent, render, screen } from "./helpers/render";
+import { ExplorerContext } from "../../src/lib/ExplorerContext";
+import { RuntimeConfigProvider } from "../../src/lib/RuntimeConfigContext";
 import type { Address } from "viem";
 import { VaultSelectorDepositTab } from "../../src/components/VaultSelectorDepositTab";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";
@@ -108,6 +110,10 @@ interface WagmiMockState {
   liveVaultRecord: readonly [unknown, number] | undefined;
   approveSim: unknown;
   depositSim: unknown;
+  /** The selected vault's own `depositsPaused()` (issue 1731); undefined = not read. */
+  vaultDepositsPaused: boolean | undefined;
+  /** The connected wallet chain. */
+  chainId: number | undefined;
 }
 
 const mockState: WagmiMockState = {
@@ -119,15 +125,37 @@ const mockState: WagmiMockState = {
   liveVaultRecord: [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const, // Active
   approveSim: undefined,
   depositSim: { request: {} }, // valid sim = submit enabled
+  vaultDepositsPaused: false,
+  chainId: undefined,
 };
 
+/** Every option object `useReadContracts` (the depositsPaused() reads) was called with. */
+const readsSeen = vi.hoisted((): { contracts: unknown[]; query?: { enabled?: boolean } }[] => []);
+
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: (opts: { contracts: unknown[]; query?: { enabled?: boolean } }) => {
+    readsSeen.push(opts);
+    return mockState.vaultDepositsPaused === undefined
+      ? { data: undefined }
+      : {
+          data: opts.contracts.map(() => ({
+            status: "success",
+            result: mockState.vaultDepositsPaused,
+          })),
+        };
+  },
+  useAccount: () => ({
+    address: mockState.address,
+    isConnected: mockState.isConnected,
+    chainId: mockState.chainId,
+  }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };
     if (opts.functionName === "balanceOf") return { data: mockState.usdcBalance };
     if (opts.functionName === "previewDeposit") return { data: mockState.previewDepositShares };
     if (opts.functionName === "getVault") return { data: mockState.liveVaultRecord };
+    if (opts.functionName === "depositsPaused") return { data: mockState.vaultDepositsPaused };
     return { data: undefined };
   },
   useSimulateContract: (opts: { functionName?: string }) => {
@@ -269,24 +297,156 @@ describe("VaultSelectorDepositTab submit disabled when vault deposits are paused
   });
 
   // Issue #1348: the guard reads the live `getVault` status POSITIONALLY,
-  // because viem decodes a two-output function as `[metadata, status]`. The
-  // old code did `(record).status`, which on an array is `undefined` — and
-  // `undefined !== Active` meant the guard latched ON permanently. These two
-  // assertions pin both directions, so either mistake (never firing, or
-  // always firing) is red.
-  it("raises the deposits-paused warning when the live status output is DepositsPaused", () => {
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 1] as const;
-    renderTab();
-    const warning = screen.getByTestId("vault-paused-warning");
-    // Core 1494: the banner says deposits are paused and withdrawals stay open.
-    expect(warning.textContent).toMatch(/Deposits into this vault are paused/);
-    expect(warning.textContent).toMatch(/Withdrawals stay open/);
+  // because viem decodes a two-output function as `[metadata, status]`.
+  // Issue 1731: the form is enabled ONLY in the known-open state, resolved with the other deposit forms from
+  // the live registry status, the vault's own depositsPaused() and the fresh explorer snapshot.
+  const OPEN = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+  const withStatus = (n: number) => [{ name: "", asset: ASSET, registeredAt: 0n }, n] as const;
+  const vaultRow = (o: { status?: number; paused?: boolean | null }) => ({
+    chain_id: 8453,
+    address: VAULT_A,
+    name: "A",
+    risk_label: "STABLE_YIELD",
+    status: o.status ?? 0,
+    deposit_cap: "0",
+    total_assets: "1",
+    exit_fee_bps: 0,
+    deposits_paused: o.paused ?? null,
+    indexed_at: "",
   });
 
-  it("does NOT raise the paused warning when the live status output is Active", () => {
-    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
-    renderTab();
-    expect(screen.queryByTestId("vault-paused-warning")).toBeNull();
+  interface SelCase {
+    name: string;
+    registry?: readonly [unknown, number];
+    chain: boolean | undefined;
+    explorer?: { status?: number; paused?: boolean | null; block: number; head: number | null };
+    env?: Record<string, string>;
+    walletChainId?: number;
+    open: boolean;
+    notice?: RegExp;
+  }
+  const CASES: SelCase[] = [
+    { name: "open: registry Active, chain false", chain: false, open: true },
+    {
+      name: "paused: registry Active, chain true",
+      chain: true,
+      open: false,
+      notice: /Deposits paused \/ closed.*Withdraw and redeem stay open/,
+    },
+    {
+      name: "paused: registry DepositsPaused",
+      registry: withStatus(1),
+      chain: false,
+      open: false,
+      notice: /Deposits paused \/ closed/,
+    },
+    {
+      name: "retired: registry Retired",
+      registry: withStatus(2),
+      chain: false,
+      open: false,
+      notice: /Retired/,
+    },
+    {
+      name: "unknown: chain read fails, no explorer",
+      chain: undefined,
+      open: false,
+      notice: /Deposit state unknown: cannot confirm deposits are open/,
+    },
+    {
+      name: "read failure, fresh explorer open: open per index",
+      chain: undefined,
+      explorer: { paused: false, block: 1000, head: 1005 },
+      open: true,
+    },
+    {
+      name: "read failure, stale explorer open: unknown",
+      chain: undefined,
+      explorer: { paused: false, block: 1000, head: 1500 },
+      open: false,
+      notice: /Deposit state unknown/,
+    },
+    {
+      name: "read failure, explorer paused: paused",
+      chain: undefined,
+      explorer: { paused: true, block: 1000, head: 1005 },
+      open: false,
+      notice: /Deposits paused \/ closed/,
+    },
+    {
+      name: "mainnet, wallet on the wrong chain: not asked, fresh explorer paused",
+      chain: undefined,
+      env: { VITE_ENV_CLASS: "mainnet" },
+      walletChainId: 1,
+      explorer: { paused: true, block: 1000, head: 1005 },
+      open: false,
+      notice: /Deposits paused \/ closed/,
+    },
+  ];
+
+  it.each(CASES)("state matrix: $name", async (c) => {
+    mockState.liveVaultRecord = c.registry ?? OPEN;
+    mockState.vaultDepositsPaused = c.chain;
+    mockState.chainId = c.walletChainId ?? (c.env ? 8453 : undefined);
+    const explorerValue = {
+      vaults: c.explorer ? [vaultRow(c.explorer)] : [],
+      stats: null,
+      blockNumber: c.explorer?.block ?? 1000,
+      chainHeadBlock: c.explorer ? c.explorer.head : 1005,
+      vaultsLoading: false,
+      statsLoading: false,
+      vaultsError: null,
+      statsError: null,
+    };
+    try {
+      render(
+        <RuntimeConfigProvider config={c.env ?? {}}>
+          <ExplorerContext.Provider value={explorerValue}>
+            <VaultSelectorDepositTab usdcAddress={USDC} registryAddress={REGISTRY} ctx={ctx} />
+          </ExplorerContext.Provider>
+        </RuntimeConfigProvider>,
+      );
+      fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
+      const amount = screen.getByTestId("vault-selector-deposit-amount") as HTMLInputElement;
+      const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
+      if (c.open) {
+        expect(screen.queryByTestId("vault-paused-warning")).toBeNull();
+        expect(amount.disabled).toBe(false);
+      } else {
+        expect(screen.getByTestId("vault-paused-warning").textContent).toMatch(c.notice!);
+        expect(amount.disabled).toBe(true);
+        expect(submit.disabled).toBe(true);
+        expect(screen.queryByTestId("vault-selector-deposit-approve")).toBeNull();
+      }
+    } finally {
+      mockState.vaultDepositsPaused = false;
+      mockState.chainId = undefined;
+    }
+  });
+
+  it("the depositsPaused() read is pinned to Base on the mainnet class and not run on another chain", () => {
+    readsSeen.length = 0;
+    mockState.chainId = 8453;
+    render(
+      <RuntimeConfigProvider config={{ VITE_ENV_CLASS: "mainnet" }}>
+        <VaultSelectorDepositTab usdcAddress={USDC} registryAddress={REGISTRY} ctx={ctx} />
+      </RuntimeConfigProvider>,
+    );
+    fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
+    const last = readsSeen[readsSeen.length - 1]!;
+    expect(last.query?.enabled).toBe(true);
+    expect((last.contracts[0] as { chainId?: number }).chainId).toBe(8453);
+    cleanup();
+    readsSeen.length = 0;
+    mockState.chainId = 1;
+    render(
+      <RuntimeConfigProvider config={{ VITE_ENV_CLASS: "mainnet" }}>
+        <VaultSelectorDepositTab usdcAddress={USDC} registryAddress={REGISTRY} ctx={ctx} />
+      </RuntimeConfigProvider>,
+    );
+    fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
+    expect(readsSeen.every((r) => r.query?.enabled === false)).toBe(true);
+    mockState.chainId = undefined;
   });
 });
 

@@ -74,6 +74,10 @@ const DECODED = decodeFunctionResult({
 // `useReadContract` is only dereferenced at render time, so referencing
 // DECODED inside the factory is safe despite vi.mock hoisting.
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "shortlist") {
       return { data: DECODED, isError: false, isLoading: false };

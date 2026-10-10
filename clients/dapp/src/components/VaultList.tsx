@@ -15,12 +15,9 @@
  */
 import type { VaultRow } from "../lib/explorerApi";
 import { useExplorer } from "../lib/ExplorerContext";
-
-const STATUS_LABEL: Record<number, string> = {
-  0: "Active",
-  1: "Deposits paused",
-  2: "Retired",
-};
+import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
+import { depositStateAttr, depositStateLabel, resolveDepositState } from "../lib/vaultDepositState";
+import { IndexFreshness } from "./IndexFreshness";
 
 interface VaultListProps {
   onSelectVault?: (address: string) => void;
@@ -39,7 +36,8 @@ function headroom(vault: VaultRow): string | null {
 }
 
 export function VaultList({ onSelectVault }: VaultListProps) {
-  const { vaults, blockNumber, vaultsLoading, vaultsError } = useExplorer();
+  const { vaults, blockNumber, chainHeadBlock, vaultsLoading, vaultsError } = useExplorer();
+  const { byAddress: chainPaused } = useVaultsDepositsPaused(vaults.map((v) => v.address));
 
   if (vaultsLoading) {
     return (
@@ -75,29 +73,43 @@ export function VaultList({ onSelectVault }: VaultListProps) {
               </tr>
             </thead>
             <tbody>
-              {vaults.map((v) => (
-                <tr
-                  key={v.address}
-                  data-testid={`vault-list-row-${v.address.toLowerCase()}`}
-                  data-vault-addr={v.address.toLowerCase()}
-                  onClick={() => onSelectVault?.(v.address)}
-                  style={onSelectVault ? { cursor: "pointer" } : undefined}
-                >
-                  <td data-testid="vault-list-row-name">{v.name}</td>
-                  <td data-testid="vault-list-row-risk">{v.risk_label}</td>
-                  <td data-testid="vault-list-row-status">
-                    {STATUS_LABEL[v.status] ?? String(v.status)}
-                  </td>
-                  <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
-                  <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
-                  <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
-                </tr>
-              ))}
+              {vaults.map((v) => {
+                const deposit = resolveDepositState({
+                  registryStatus: v.status,
+                  explorerPaused: v.deposits_paused,
+                  explorerBlock: blockNumber,
+                  explorerHead: chainHeadBlock,
+                  chainPaused: chainPaused.get(v.address.toLowerCase()),
+                });
+                return (
+                  <tr
+                    key={v.address}
+                    data-testid={`vault-list-row-${v.address.toLowerCase()}`}
+                    data-vault-addr={v.address.toLowerCase()}
+                    data-deposit-state={depositStateAttr(deposit)}
+                    onClick={() => onSelectVault?.(v.address)}
+                    style={onSelectVault ? { cursor: "pointer" } : undefined}
+                  >
+                    <td data-testid="vault-list-row-name">{v.name}</td>
+                    <td data-testid="vault-list-row-risk">{v.risk_label}</td>
+                    <td data-testid="vault-list-row-status">{depositStateLabel(deposit)}</td>
+                    <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
+                    <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
+                    <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
-      {blockNumber != null && <p data-testid="vault-list-freshness">Block {blockNumber}</p>}
+      {blockNumber != null && (
+        <IndexFreshness
+          blockNumber={blockNumber}
+          chainHeadBlock={chainHeadBlock}
+          testId="vault-list-freshness"
+        />
+      )}
     </section>
   );
 }

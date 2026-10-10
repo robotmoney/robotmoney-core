@@ -165,13 +165,22 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length < registeredVaults.length) return false;
           for (const row of rows) {
             const statusText = (await row.textContent())?.trim();
-            if (!["Active", "Deposits paused", "Retired"].includes(statusText ?? "")) return false;
+            if (
+              ![
+                "Active",
+                "Deposits paused",
+                "Deposits paused / closed",
+                "Deposit state unknown",
+                "Retired",
+              ].includes(statusText ?? "")
+            )
+              return false;
           }
           return true;
         },
         {
           message:
-            "each registered vault must have a status cell reading Active / Deposits paused / Retired",
+            "each registered vault must have a status cell reading Active / Deposits paused / closed / Deposit state unknown / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -201,12 +210,22 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length === 0) return false;
           for (const row of rows) {
             const text = (await row.textContent())?.trim();
-            if (!["Active", "Deposits paused", "Retired"].includes(text ?? "")) return false;
+            if (
+              ![
+                "Active",
+                "Deposits paused",
+                "Deposits paused / closed",
+                "Deposit state unknown",
+                "Retired",
+              ].includes(text ?? "")
+            )
+              return false;
           }
           return true;
         },
         {
-          message: "every vault row status must read Active / Deposits paused / Retired",
+          message:
+            "every vault row status must read Active / Deposits paused / closed / Deposit state unknown / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
