@@ -53,14 +53,47 @@ const FORBIDDEN_NAMES = new Set([
   "useSendTransactionSync",
   "useWriteContracts",
   "useDeployContract",
+  // viem account abstraction and experimental senders
+  "sendUserOperation",
+  "bundlerActions",
+  "createBundlerClient",
+  "writeContracts",
+  "sendCallsSync",
 ]);
 
 /** Whole packages that may not be imported outside the guard. The repo uses none of them today. */
-const FORBIDDEN_PACKAGES = /^(@wagmi\/|ethers($|\/)|@ethersproject\/|web3($|\/))/;
+const FORBIDDEN_PACKAGES =
+  /^(@wagmi\/|ethers($|\/)|@ethersproject\/|web3($|\/)|viem\/(account-abstraction|experimental)($|\/))/;
 
 /** Signing and sending JSON-RPC methods. */
 const RAW_METHOD =
   /["'`](eth_sendTransaction|eth_sendRawTransaction|eth_signTransaction|eth_sign|personal_sign|eth_signTypedData(_v\d)?)["'`]/;
+
+/** String-built or non-literal RPC method names, which the literal scan above cannot see. */
+const BUILT_METHOD = [
+  /["'`](eth_s?e?|eth_|personal_?|eth_send|eth_sign)["'`]\s*\+/, // 'eth_send' + ...
+  /\+\s*["'`](Transaction|RawTransaction|TypedData\w*|_sign)["'`]/, // ... + 'Transaction'
+  /`[^`]*(eth_send|eth_sign|personal_)[^`]*\$\{/, // `eth_send${x}`
+  /`[^`]*\$\{[^}]*\}(Transaction|RawTransaction|TypedData\w*|_sign)\b[^`]*`/, // `${x}Transaction`
+  /\.request\s*\(\s*\{[^}]*\bmethod\s*:\s*(?![\s"'`])/, // .request({ method: someVariable })
+];
+
+/** Text-level problems in one file that are not about import shape. Exported for the self-test. */
+export function textViolations(
+  rawText: string,
+  opts: { rawProviderOk: boolean; methodOk: boolean },
+) {
+  const text = stripComments(rawText);
+  const out: string[] = [];
+  if (/\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(/.test(text))
+    out.push("eval or Function()");
+  if (!opts.rawProviderOk && /\bcustom\s*\(/.test(text)) out.push("custom( transport");
+  if (!opts.methodOk) {
+    for (const re of BUILT_METHOD)
+      if (re.test(text)) out.push(`built RPC method ${re.source.slice(0, 30)}`);
+  }
+  return out;
+}
 
 /**
  * Modules that touch the raw injected provider (`getInjectedProvider`, `getProvider()`,
@@ -183,6 +216,16 @@ describe("single guarded write path", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("no eval, no custom transports, no built or non-literal RPC method names outside the allowlists", () => {
+    const offenders = files.flatMap(([f, s]) =>
+      textViolations(s, {
+        rawProviderOk: RAW_PROVIDER_ALLOWED.has(f),
+        methodOk: RAW_METHOD_ALLOWED.has(f),
+      }).map((v) => `${f}: ${v}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it("the set of modules that write through the guarded hook is exactly the known list", () => {
     const writers = files
       .filter(([, s]) => /\buseGuardedWriteContract\s*\(/.test(stripComments(s)))
@@ -217,8 +260,26 @@ describe("single guarded write path", () => {
       `import { Wallet } from "@ethersproject/wallet";`,
       `const e = await import("ethers");`,
       `const w = require("@wagmi/core");`,
+      `import { sendUserOperation } from "viem/account-abstraction";`,
+      `import { createBundlerClient } from "viem/account-abstraction";`,
+      `import { writeContracts } from "viem/experimental";`,
+      `import * as aa from "viem/account-abstraction";`,
     ];
     for (const src of bad) expect(importViolations(src), src).not.toEqual([]);
+    const none = { rawProviderOk: false, methodOk: false };
+    const badText = [
+      `eval("x")`,
+      `new Function("return 1")`,
+      `const t = custom(window.ethereum)`,
+      `p.request({ method: "eth_send" + "Transaction" })`,
+      `p.request({ method: m })`,
+      "p.request({ method: `eth_send${x}` })",
+      "p.request({ method: `${x}Transaction` })",
+      `const m = "eth_" + "sendTransaction"`,
+    ];
+    for (const src of badText) expect(textViolations(src, none), src).not.toEqual([]);
+    expect(textViolations(`p.request({ method: "eth_getCode", params: [] })`, none)).toEqual([]);
+    expect(textViolations(`custom(x)`, { rawProviderOk: true, methodOk: false })).toEqual([]);
     const good = [
       `import { useAccount, useReadContract } from "wagmi";`,
       `import { createPublicClient, type Address } from "viem";`,
