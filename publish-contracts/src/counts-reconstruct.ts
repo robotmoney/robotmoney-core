@@ -89,6 +89,10 @@ export function verifyReconstruction(file: Pick<FrozenFile, "deploySha" | "measu
     const want_ = r.measuredCounts[k]! + (perStage.get(k)?.length ?? 0);
     if (file.counts[k] !== want_) refuse(`stage ${k}: the count is ${file.counts[k]}, the measured count ${r.measuredCounts[k]} plus ${perStage.get(k)?.length ?? 0} adopted creation(s) is ${want_}`, { stage: k });
   }
+  const cc = file.measured.crossChecked;
+  if (cc !== undefined && (!/^[0-9a-f]{40}$/.test(String(cc?.sha)) || !/^[0-9a-f]{64}$/.test(String(cc?.fileHash)) || cc.sha === file.deploySha)) refuse("crossChecked is malformed");
+  if ((r.crossCheck === undefined) !== (cc === undefined)) refuse("crossCheck and crossChecked must both be present or both absent");
+  if (r.crossCheck !== undefined && cc !== undefined && r.crossCheck.against !== cc.sha) refuse("crossCheck and crossChecked name different files");
   if (r.crossCheck !== undefined) {
     const c = r.crossCheck;
     if (!/^[0-9a-f]{40}$/.test(String(c?.against)) || !Array.isArray(c.accepted)) refuse("crossCheck is malformed");
@@ -146,7 +150,7 @@ export interface CountsJsonLike { deploySha: string; chainId: number; counts: Fr
 export async function reconstructBaseline(o: {
   j: CountsJsonLike; sha: string; table: StageTable; at: string;
   verify: (r: Reconstruction) => Promise<void>;
-  cross?: { sha: string; counts: FrozenCounts }; acceptDiff?: string[];
+  cross?: { sha: string; counts: FrozenCounts; fileHash: string }; acceptDiff?: string[];
 }): Promise<FrozenFile> {
   const usage = (m: string): never => { throw new PublishError("USAGE", `from-adopted-run: ${m}`); };
   const { j, sha, table } = o;
@@ -183,6 +187,7 @@ export async function reconstructBaseline(o: {
     const stray = (o.acceptDiff ?? []).filter((s) => !diff.some((d) => d.stage === s));
     if (stray.length > 0) usage(`--accept-diff names stage(s) ${stray.join(", ")} that do not differ from ${o.cross.sha}: accept only a difference that exists`);
     reconstructed.crossCheck = { against: o.cross.sha, accepted: diff };
+    file.measured.crossChecked = { sha: o.cross.sha, fileHash: o.cross.fileHash };
   } else if ((o.acceptDiff ?? []).length > 0) usage("--accept-diff needs --cross-check");
   verifyReconstruction(file, table);
   return file;

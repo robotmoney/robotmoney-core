@@ -1,6 +1,7 @@
 // Frozen transaction counts keyed by core DEPLOY_SHA. Counts are measured on a rehearsal at the same SHA, then frozen in a reviewed
 // data file: deployments/frozen-counts/<sha>.json. There are no hand-typed literals. Plan principle 17.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
@@ -10,7 +11,9 @@ import { getStageTable } from "./stages.ts";
 export type FrozenCounts = Record<string, number>;
 export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[];
   /** Issue 1733: a BASELINE rebuilt from an adopted measuring run (counts-reconstruct.ts). Not a pure measurement; verified against the stage table on every load. */
-  reconstructed?: Reconstruction }; counts: FrozenCounts }
+  reconstructed?: Reconstruction;
+  /** Issue 1733: the earlier frozen file a reconstructed baseline was cross-checked against (its sha and the sha256 of its bytes). Mandatory when an earlier file exists. */
+  crossChecked?: { sha: string; fileHash: string } }; counts: FrozenCounts }
 
 export const FROZEN_DIR = "deployments/frozen-counts";
 const SHA = /^[0-9a-f]{40}$/;
@@ -43,11 +46,39 @@ export function loadFrozenFile(p: string, sha: string, o: { allowAdopted?: boole
   return file;
 }
 
+export const fileHashOf = (bytes: string | Buffer): string => createHash("sha256").update(bytes).digest("hex");
+
+/** The other frozen files of a directory (40 hex names, not `sha`), each loaded strictly. A file that does not load is an error: an anchor is never skipped. */
+export function otherFrozenFiles(dir: string, sha: string): { sha: string; file: FrozenFile; path: string }[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((n) => /^[0-9a-f]{40}\.json$/.test(n) && n !== `${sha}.json`).sort().map((n) => {
+    const path = join(dir, n), s = n.slice(0, 40);
+    return { sha: s, file: loadFrozenFile(path, s), path };
+  });
+}
+
+/** The most recent earlier frozen file (by `measured.at`) of the directory, or none. */
+export function latestOtherFrozen(dir: string, sha: string, before?: string): { sha: string; file: FrozenFile; path: string } | undefined {
+  return otherFrozenFiles(dir, sha).filter((o) => before === undefined || String(o.file.measured.at) < before).sort((a, b) => String(a.file.measured.at).localeCompare(String(b.file.measured.at))).pop();
+}
+
 /** Loads the frozen counts for a DEPLOY_SHA. A missing file or a file for another SHA fails. */
 export function loadFrozen(dir: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
   const p = frozenPath(dir, sha);
   if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), then commit ${FROZEN_DIR}/${sha}.json: review a measurement that ran every stage, or, when the run ADOPTED the CREATE2 libraries (every Twin fork since Base block 52401633), rebuild the baseline with freeze-counts --from-adopted-run (issue 1733). Nothing here guesses a count.`, { sha });
-  return loadFrozenFile(p, sha, o);
+  const f = loadFrozenFile(p, sha, o);
+  if (f.measured.reconstructed) {
+    // Issue 1733: the counts of the stages that adopted nothing come from a Twin counts.json nobody can prove untampered offline. The earlier release is the independent anchor,
+    // so a reconstructed baseline written while an earlier frozen file exists must say it was cross-checked against it (and the file must still be the one that was checked).
+    const earlier = latestOtherFrozen(dir, sha, String(f.measured.at));
+    const cc = f.measured.crossChecked;
+    if (earlier && !cc) throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline with no crossChecked record, but the earlier frozen file ${earlier.sha} exists: rebuild it with freeze-counts --from-adopted-run (the cross-check against the previous release is mandatory)`, { sha, earlier: earlier.sha });
+    if (cc) {
+      const there = join(dir, `${cc.sha}.json`);
+      if (existsSync(there) && fileHashOf(readFileSync(there)) !== cc.fileHash) throw new PublishError("COUNTS_MISSING", `${p} was cross-checked against ${cc.sha}, whose file has changed since (hash differs)`, { sha, against: cc.sha });
+    }
+  }
+  return f;
 }
 
 export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages ?? Object.keys(c)).reduce((a, s) => a + (c[s] ?? 0), 0);

@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
-import { loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
+import { fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
 import { adoptableOf, crossCheckDiff, reconstructBaseline, verifyReconstruction, verifyReconstructionOnChain, type CountsJsonLike, type Reconstruction } from "../src/counts-reconstruct.ts";
 import { PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime } from "../src/libs-adopt.ts";
@@ -51,8 +51,8 @@ function adoptedRun(over: Partial<CountsJsonLike> = {}, ad: Record<string, unkno
     ...over,
   };
 }
-const rebuild = (j: CountsJsonLike, o: { cross?: { sha: string; counts: Record<string, number> }; acceptDiff?: string[]; getCode?: (a: Address) => Promise<string>; sha?: string } = {}) =>
-  reconstructBaseline({ j, sha: o.sha ?? SHA, table, at: "2026-10-10T00:00:00Z", verify: (r) => verifyReconstructionOnChain(r, { table, out: OUTS, getCode: o.getCode ?? chain() }), cross: o.cross, acceptDiff: o.acceptDiff });
+const rebuild = (j: CountsJsonLike, o: { cross?: { sha: string; counts: Record<string, number>; fileHash?: string }; acceptDiff?: string[]; getCode?: (a: Address) => Promise<string>; sha?: string } = {}) =>
+  reconstructBaseline({ j, sha: o.sha ?? SHA, table, at: "2026-10-10T00:00:00Z", verify: (r) => verifyReconstructionOnChain(r, { table, out: OUTS, getCode: o.getCode ?? chain() }), cross: o.cross && { fileHash: "ab".repeat(32), ...o.cross }, acceptDiff: o.acceptDiff });
 
 describe("the fixtures are the real thing", () => {
   test("the build's libraries sit at the Base mainnet addresses and the table lets libs adopt tick_math and proto the three create2 libraries", () => {
@@ -233,7 +233,7 @@ describe("a reconstructed file is verified on every load, so a hand-set or tampe
     expect(await edit((f) => { f.measured.reconstructed.fromRun.sha = "d".repeat(40); })).toContain("SAME sha");
     expect(await edit((f) => { f.measured.reconstructed.fromRun.chainId = 8453; })).toContain("Twin chain");
     expect(await edit((f) => { f.measured.reconstructed.fromRun.pinBlock = -1; })).toContain("pinBlock");
-    expect(await edit((f) => { f.measured.reconstructed.crossCheck = { against: "zz", accepted: [] }; })).toContain("crossCheck is malformed");
+    expect(await edit((f) => { f.measured.reconstructed.crossCheck = { against: "zz", accepted: [] }; f.measured.crossChecked = { sha: "zz", fileHash: "zz" }; })).toContain("crossChecked is malformed");
   });
   test("a file for another sha, a stage set that is not the table's and a marker on a pure measurement are refused", async () => {
     const { dir } = await good();
@@ -351,5 +351,103 @@ describe("the 8453 plan job (the CLI) with a reconstructed baseline", () => {
   test("the old adopted marker is refused by the plan: it is not a frozen file", async () => {
     const r = await plan({ deploySha: A40, measured: { chainId: 918453, at: "x", adopted: ["libs", "proto"] }, counts: REF });
     expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+  });
+});
+
+describe("the cross-check against the previous release is mandatory (issue 1733 review)", () => {
+  const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
+  /** A counts dir holding an earlier frozen file (the first release's, copied), and the adopted run's counts.json. */
+  function setup(counts = REF) {
+    const dir = tmp("pc-mand-");
+    const frozen = join(dir, "frozen");
+    mkdirSync(frozen);
+    const earlier = { deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts };
+    writeFileSync(join(frozen, `${PREV}.json`), JSON.stringify(earlier, null, 2));
+    const cj = join(dir, "counts.json");
+    return { dir, frozen, cj, earlier };
+  }
+  const go = (cj: string, frozen: string, extra: Partial<Parameters<typeof freezeFromAdoptedRun>[0]> = {}) =>
+    freezeFromAdoptedRun({ countsJsonPath: cj, sha: SHA, countsDir: frozen, table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), ...extra });
+  test("with an earlier frozen file in the counts dir and no --cross-check, the most recent earlier file is the anchor; the file records its sha and the hash of its bytes", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    const p = await go(t.cj, t.frozen);
+    const f = JSON.parse(readFileSync(p, "utf8"));
+    expect(f.measured.crossChecked).toEqual({ sha: PREV, fileHash: fileHashOf(readFileSync(join(t.frozen, `${PREV}.json`))) });
+    expect(f.measured.reconstructed.crossCheck.against).toBe(PREV);
+    expect(loadFrozen(t.frozen, SHA).counts).toEqual(REF);
+  });
+  test("a stage difference against that anchor is COUNT_MISMATCH with no way to skip it; only --accept-diff naming the stage lets it through, and it is recorded", async () => {
+    const t = setup();
+    const run = adoptedRun();
+    run.counts = { ...run.counts, vault: 17 }; run.deployerNonce += 1;
+    writeFileSync(t.cj, JSON.stringify(run));
+    expect(await kind(() => go(t.cj, t.frozen))).toBe("COUNT_MISMATCH");
+    expect(await kind(() => go(t.cj, t.frozen, { acceptDiff: ["router"] }))).toBe("COUNT_MISMATCH");
+    const p = await go(t.cj, t.frozen, { acceptDiff: ["vault"] });
+    expect(JSON.parse(readFileSync(p, "utf8")).measured.reconstructed.crossCheck.accepted).toEqual([{ stage: "vault", old: 16, new: 17 }]);
+  });
+  test("an explicit --cross-check overrides the automatic choice; with no earlier file at all nothing is recorded and the baseline still builds", async () => {
+    const t = setup({ ...REF, vault: 99 });
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    expect(await kind(() => go(t.cj, t.frozen))).toBe("COUNT_MISMATCH"); // the auto anchor differs
+    const p = await go(t.cj, t.frozen, { crossCheckPath: REF_PATH });
+    expect(JSON.parse(readFileSync(p, "utf8")).measured.crossChecked.sha).toBe(PREV);
+    const empty = tmp("pc-mand-");
+    const p2 = await go(t.cj, empty);
+    expect(JSON.parse(readFileSync(p2, "utf8")).measured.crossChecked).toBeUndefined();
+    expect(loadFrozen(empty, SHA).counts).toEqual(REF);
+  });
+  test("an earlier file that does not load (adopted-marked) stops the verb: an anchor is never silently skipped", async () => {
+    const t = setup();
+    writeFileSync(join(t.frozen, `${PREV}.json`), JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T00:00:00Z", adopted: ["libs"] }, counts: REF }));
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    expect(await kind(() => go(t.cj, t.frozen))).toBe("COUNTS_MISSING");
+  });
+  test("loadFrozen refuses a reconstructed file with no crossChecked record when an earlier frozen file exists, and one whose anchor file changed since", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    const p = await go(t.cj, t.frozen);
+    const good = JSON.parse(readFileSync(p, "utf8"));
+    const strip = JSON.parse(JSON.stringify(good));
+    delete strip.measured.crossChecked; delete strip.measured.reconstructed.crossCheck;
+    writeFileSync(p, JSON.stringify(strip));
+    expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("no crossChecked record");
+    writeFileSync(p, JSON.stringify(good));
+    expect(() => loadFrozen(t.frozen, SHA)).not.toThrow();
+    writeFileSync(join(t.frozen, `${PREV}.json`), JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts: { ...REF, timelock: 44 } }));
+    expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("has changed since");
+  });
+  test("a LATER frozen file in the dir is not an earlier anchor, so an old baseline keeps loading after a newer release is added", async () => {
+    const dir = tmp("pc-mand-");
+    const f = await rebuild(adoptedRun());
+    writeFileSync(frozenPath(dir, SHA), JSON.stringify(f));
+    writeFileSync(frozenPath(dir, "e".repeat(40)), JSON.stringify({ deploySha: "e".repeat(40), measured: { chainId: 918453, at: "2099-01-01T00:00:00Z" }, counts: REF }));
+    expect(() => loadFrozen(dir, SHA)).not.toThrow();
+  });
+  test("malformed or inconsistent crossChecked fields are refused offline", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    const good = JSON.parse(readFileSync(await go(t.cj, t.frozen), "utf8"));
+    const bad = (fn: (f: any) => void): string => { const f = JSON.parse(JSON.stringify(good)); fn(f); try { verifyReconstruction(f, table); } catch (e) { return (e as Error).message; } return ""; };
+    expect(bad((f) => { f.measured.crossChecked.fileHash = "zz"; })).toContain("crossChecked is malformed");
+    expect(bad((f) => { f.measured.crossChecked.sha = SHA; })).toContain("crossChecked is malformed");
+    expect(bad((f) => { delete f.measured.crossChecked; })).toContain("both be present");
+    expect(bad((f) => { f.measured.crossChecked.sha = "f".repeat(40); })).toContain("different files");
+  });
+});
+
+describe("publish on 8453 re-verifies a reconstructed baseline itself (the order plan then publish is not left to the operator)", () => {
+  test("a deploy stage on 8453 asks for the re-verification before any signer or forge call; a failure stops it with LIBS_ADOPTION", async () => {
+    const A40 = "a".repeat(40);
+    const w = world({ chainId: 8453, writeFrozen: false });
+    mkdirSync(w.countsDir, { recursive: true });
+    writeFileSync(frozenPath(w.countsDir, A40), JSON.stringify(await rebuild(adoptedRun({ deploySha: A40 }), { sha: A40 })));
+    let asked = 0, signerMade = false;
+    const code = await w.run(["--stage", "libs", "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; throw new Error("no signer"); }, verifyReconstructed: async () => { asked++; throw new PublishError("LIBS_ADOPTION", "the chain disagrees"); } });
+    expect(code).toBe(EXIT_CODES.LIBS_ADOPTION);
+    expect(asked).toBe(1);
+    expect(signerMade).toBe(false);
+    expect(w.state().calls.filter((c: any) => c.tool === "forge").length).toBe(0);
   });
 });

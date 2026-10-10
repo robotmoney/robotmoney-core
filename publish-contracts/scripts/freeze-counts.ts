@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TWIN_CHAIN_ID } from "../src/chains.ts";
-import { FROZEN_DIR, PROOF_TX_NONCES, assertSha, loadFrozenFile, validateCounts, writeFrozen } from "../src/counts.ts";
+import { FROZEN_DIR, PROOF_TX_NONCES, assertSha, fileHashOf, latestOtherFrozen, loadFrozenFile, validateCounts, writeFrozen } from "../src/counts.ts";
 import { reconstructBaseline, verifyReconstructionOnChain, type CountsJsonLike } from "../src/counts-reconstruct.ts";
 import { PublishError, exitCodeOf } from "../src/errors.ts";
 import { buildLibraryArtifacts } from "../src/libs-build.ts";
@@ -44,11 +44,18 @@ export async function freezeFromAdoptedRun(o: {
 }): Promise<string> {
   const sha = assertSha(o.sha);
   const j = JSON.parse(readFileSync(o.countsJsonPath, "utf8")) as CountsJsonLike;
-  let cross: { sha: string; counts: Record<string, number> } | undefined;
+  // Mandatory anchor (issue 1733): the counts of the stages that adopted nothing come from a counts.json nobody can prove untampered offline, so the baseline is compared with
+  // the previous release. --cross-check names it; otherwise the most recent earlier frozen file of the counts dir is used. There is no way to skip it when one exists.
+  let cross: { sha: string; counts: Record<string, number>; fileHash: string } | undefined;
   if (o.crossCheckPath) {
-    const old = JSON.parse(readFileSync(o.crossCheckPath, "utf8"));
+    const bytes = readFileSync(o.crossCheckPath);
+    const old = JSON.parse(bytes.toString("utf8"));
     const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha))); // an adopted-marked or unverifiable earlier file is no reference
-    cross = { sha: f.deploySha, counts: f.counts };
+    if (f.deploySha === sha) throw new PublishError("USAGE", "--cross-check names the file being written");
+    cross = { sha: f.deploySha, counts: f.counts, fileHash: fileHashOf(bytes) };
+  } else {
+    const latest = latestOtherFrozen(o.countsDir, sha);
+    if (latest) cross = { sha: latest.sha, counts: latest.file.counts, fileHash: fileHashOf(readFileSync(latest.path)) };
   }
   const file = await reconstructBaseline({
     j, sha, table: o.table, at: o.at ?? new Date().toISOString(), cross, acceptDiff: o.acceptDiff,
@@ -72,6 +79,8 @@ if (import.meta.main) {
       const rpc = httpRpc(v.rpc);
       const p = await freezeFromAdoptedRun({ countsJsonPath: resolve(v["from-adopted-run"]), sha: v.sha, countsDir: dir, table, getCode: async (a) => String(await rpc("eth_getCode", [a, "latest"])), build: () => buildLibraryArtifacts(core, table), crossCheckPath: v["cross-check"] ? resolve(v["cross-check"]) : undefined, acceptDiff: v["accept-diff"] ? v["accept-diff"].split(",").filter(Boolean) : undefined });
       console.log(`reconstructed baseline: ${p}`);
+      const w = JSON.parse(readFileSync(p, "utf8")).measured?.crossChecked;
+      console.log(w ? `cross-checked against ${w.sha} (file hash ${w.fileHash})` : "no earlier frozen file in the counts dir: nothing to cross-check against");
       process.exit(0);
     }
     if (!v.counts) throw new PublishError("USAGE", "usage: bun publish-contracts/scripts/freeze-counts.ts --counts counts.json [--counts-dir DIR]");

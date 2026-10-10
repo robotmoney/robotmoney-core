@@ -371,11 +371,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
       return 0;
     }
+    const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => (await run("cast", ["code", x], { env: castEnv })).stdout.trim() });
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
       const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
-        verifyReconstructed: deps.verifyReconstructed ?? (async (f) => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (a) => (await run("cast", ["code", a], { env: castEnv })).stdout.trim() })) });
+        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
@@ -401,6 +402,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
+    // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
+    // before any signer exists, so the order plan then publish is not something an operator can get wrong.
+    if (rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
+      const f = loadFrozen(countsDir, a.coreSha);
+      if (f.measured.reconstructed) await (deps.verifyReconstructed ?? realVerifyReconstructed)(f);
+    }
     const ctx = buildCtx(frozen, counts.measure);
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
