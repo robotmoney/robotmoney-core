@@ -43,13 +43,14 @@ const WRITE_METHODS = [
   "eth_signTypedData_v4",
 ];
 
-function setup(chainId: number, envClass: string) {
+function setup(chainId: number, envClass: string, code: string | null = "0x6001") {
   const requests: Array<{ chainId: number; method: string }> = [];
   const t = (id: number) =>
     custom({
       request: async ({ method }: { method: string }) => {
         requests.push({ chainId: id, method });
         if (method === "eth_chainId") return `0x${id.toString(16)}`;
+        if (method === "eth_getCode") return code;
         if (method === "eth_sendTransaction") return `0x${"ab".repeat(32)}`;
         return null;
       },
@@ -62,10 +63,22 @@ function setup(chainId: number, envClass: string) {
   // Every wallet send goes to a chain RPC URL over fetch: record the JSON-RPC methods and fail them.
   const fetched: string[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+    let method = "unparsed";
+    let id: unknown = 1;
     try {
-      fetched.push((JSON.parse(String(init?.body)) as { method: string }).method);
+      const body = JSON.parse(String(init?.body)) as { method: string; id: unknown };
+      method = body.method;
+      id = body.id;
     } catch {
-      fetched.push("unparsed");
+      /* not JSON-RPC */
+    }
+    fetched.push(method);
+    if (method === "eth_getCode") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ jsonrpc: "2.0", id, result: code }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
     }
     return Promise.reject(new TypeError("blocked by test"));
   });
@@ -102,8 +115,8 @@ function setup(chainId: number, envClass: string) {
   return { requests, fetched, getWrite: () => write! };
 }
 
-async function connected(chainId: number, envClass: string) {
-  const h = setup(chainId, envClass);
+async function connected(chainId: number, envClass: string, code: string | null = "0x6001") {
+  const h = setup(chainId, envClass, code);
   await act(async () => screen.getByTestId("go").click());
   await waitFor(() =>
     expect(screen.getByTestId("state")).toHaveTextContent(`connected:${chainId}`),
@@ -111,6 +124,19 @@ async function connected(chainId: number, envClass: string) {
   return h;
 }
 
+let nextTarget = 0x1000;
+const fresh = (): {
+  address: Address;
+  abi: typeof abi;
+  functionName: "deposit";
+  args: readonly [bigint];
+} => ({
+  // a new target per call: the hook remembers targets that had code
+  address: `0x${(nextTarget += 1).toString(16).padStart(40, "0")}` as Address,
+  abi,
+  functionName: "deposit",
+  args: [1n],
+});
 const call = { address: TARGET, abi, functionName: "deposit", args: [1n] } as const;
 
 describe("useGuardedWriteContract on the mainnet class", () => {
@@ -121,7 +147,15 @@ describe("useGuardedWriteContract on the mainnet class", () => {
       errors += 1;
     };
     await act(async () => getWrite().writeContract(call, { onError }));
-    await expect(getWrite().writeContractAsync(call)).rejects.toThrow(/Switch your wallet to Base/);
+    let rejected = "";
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(call)
+        .catch((e: Error) => {
+          rejected = e.message;
+        });
+    });
+    expect(rejected).toMatch(/Switch your wallet to Base/);
     expect(errors).toBe(1);
     expect(requests.filter((r) => WRITE_METHODS.includes(r.method))).toEqual([]);
     expect(fetched.filter((m) => WRITE_METHODS.includes(m))).toEqual([]);
@@ -145,7 +179,7 @@ describe("useGuardedWriteContract on the mainnet class", () => {
     let message = "";
     await act(async () => {
       await getWrite()
-        .writeContractAsync({ ...call, chainId: 1 })
+        .writeContractAsync({ ...fresh(), chainId: 1 })
         .catch((e: Error) => {
           message = `${e.name}: ${e.message.slice(0, 400)}`;
         });
@@ -154,6 +188,39 @@ describe("useGuardedWriteContract on the mainnet class", () => {
     // The send was attempted against Base's (dead, local) RPC URL, i.e. it reached the wallet.
     expect(message).toMatch(/127\.0\.0\.1:1/);
     expect(fetched).toContain("eth_sendTransaction");
+  });
+});
+
+describe("useGuardedWriteContract target code check (issue 1729)", () => {
+  it.each([null, "0x"])("refuses a target with no code (%s) and sends nothing", async (code) => {
+    const { fetched, getWrite } = await connected(8453, "mainnet", code);
+    let refused: Error | undefined;
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(fresh())
+        .catch((e: Error) => {
+          refused = e;
+        });
+    });
+    expect(refused?.name).toBe("WriteTargetCodeError");
+    expect(refused?.message).toMatch(/no contract code/);
+    expect(fetched.filter((m) => WRITE_METHODS.includes(m))).toEqual([]);
+  });
+
+  it("the callback form reports the refusal through onError and sends nothing", async () => {
+    const { fetched, getWrite } = await connected(8453, "mainnet", "0x");
+    let errors = 0;
+    await act(async () => {
+      getWrite().writeContract(fresh(), {
+        onError: () => {
+          errors += 1;
+        },
+      });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(errors).toBe(1);
+    expect(getWrite().error?.name).toBe("WriteTargetCodeError");
+    expect(fetched.filter((m) => WRITE_METHODS.includes(m))).toEqual([]);
   });
 });
 

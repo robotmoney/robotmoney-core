@@ -117,3 +117,60 @@ export function validateFaucetKeyForBuild(
 function isDappEnvClass(value: unknown): value is DappEnvClass {
   return value === "fork" || value === "devnet" || value === "testnet" || value === "mainnet";
 }
+
+/**
+ * Tie the env class to the chain (issue 1729). The mainnet banner and the
+ * wrong-chain guard key off `VITE_ENV_CLASS`, so a bundle aimed at a real-money
+ * chain with any other class would ship with both off.
+ *
+ * Rules (build only):
+ *   - `VITE_CHAIN_ID` of 1 or 8453 requires `VITE_ENV_CLASS=mainnet`.
+ *   - `VITE_ENV_CLASS=mainnet` requires `VITE_CHAIN_ID` to be unset or 8453, and
+ *     `VITE_DEVNET_RPC_URL` to be empty (a devnet RPC means a devnet target).
+ *   - `VITE_CHAIN_ID` must be a plain positive integer when set.
+ */
+export function validateEnvClassForChain(input: {
+  readonly env: Record<string, string | undefined>;
+  readonly command: ViteCommand;
+}): FaucetKeyValidationResult {
+  const { env, command } = input;
+  if (command !== "build") return { ok: true };
+
+  const rawChain = env.VITE_CHAIN_ID?.trim();
+  let chainId: number | undefined;
+  if (rawChain) {
+    if (!/^[1-9][0-9]*$/.test(rawChain)) {
+      return {
+        ok: false,
+        reason: `VITE_CHAIN_ID must be a positive integer, got ${JSON.stringify(rawChain)}.`,
+      };
+    }
+    chainId = Number(rawChain);
+  }
+  const envClass = env.VITE_ENV_CLASS;
+
+  if ((chainId === 8453 || chainId === 1) && envClass !== "mainnet") {
+    return {
+      ok: false,
+      reason:
+        `VITE_CHAIN_ID=${chainId} is a real-money chain, so VITE_ENV_CLASS must be "mainnet" ` +
+        `(got ${JSON.stringify(envClass ?? null)}). Any other class ships without the mainnet banner and the wrong-chain guard.`,
+    };
+  }
+  if (envClass === "mainnet") {
+    if (chainId !== undefined && chainId !== 8453) {
+      return {
+        ok: false,
+        reason: `VITE_ENV_CLASS=mainnet requires VITE_CHAIN_ID to be 8453 or unset, got ${chainId}.`,
+      };
+    }
+    if ((env.VITE_DEVNET_RPC_URL ?? "").trim() !== "") {
+      return {
+        ok: false,
+        reason:
+          "VITE_ENV_CLASS=mainnet must not set VITE_DEVNET_RPC_URL (a devnet RPC means a devnet target).",
+      };
+    }
+  }
+  return { ok: true };
+}

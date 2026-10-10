@@ -9,7 +9,7 @@ import { BASE_MAINNET_CHAIN_ID, BASE_MAINNET_CHAIN_NAME } from "../lib/writeChai
 export function MainnetBanner({ envClass }: { envClass: string }) {
   if (envClass !== "mainnet") return null;
   return (
-    <div className="mainnet-banner" data-testid="mainnet-banner" role="alert">
+    <div className="mainnet-banner" data-testid="mainnet-banner" role="status">
       <span className="mainnet-banner-tag">
         {BASE_MAINNET_CHAIN_NAME} mainnet {"—"} real funds
       </span>

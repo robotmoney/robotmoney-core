@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { validateFaucetKeyForBuild } from "./src/lib/buildEnvValidation";
+import { validateEnvClassForChain, validateFaucetKeyForBuild } from "./src/lib/buildEnvValidation";
 import { cspPlugin } from "./src/lib/csp";
 
 const packageJson = JSON.parse(
@@ -33,6 +33,11 @@ export default defineConfig(({ command, mode }) => {
     // Throw rather than process.exit so Vite's error reporting surfaces
     // the message verbatim in CI logs and local builds.
     throw new Error(`[dapp build] faucet-key guard failed: ${faucetCheck.reason}`);
+  }
+
+  const classCheck = validateEnvClassForChain({ env, command });
+  if (!classCheck.ok) {
+    throw new Error(`[dapp build] env-class guard failed: ${classCheck.reason}`);
   }
 
   return {

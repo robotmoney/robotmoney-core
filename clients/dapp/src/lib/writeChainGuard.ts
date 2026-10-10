@@ -72,3 +72,16 @@ export class WrongChainError extends Error {
     this.name = "WrongChainError";
   }
 }
+
+/** The write target has no contract code on Base, or its code could not be read. */
+export class WriteTargetCodeError extends Error {
+  constructor(
+    public readonly target: string,
+    reason: string,
+  ) {
+    super(
+      `Refusing to send: the target ${target} on Base (chain ${BASE_MAINNET_CHAIN_ID}) ${reason}.`,
+    );
+    this.name = "WriteTargetCodeError";
+  }
+}
