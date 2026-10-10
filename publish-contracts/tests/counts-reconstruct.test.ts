@@ -5,11 +5,11 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
-import { fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
+import { MAX_ANCHOR_DEPTH, anchorChainOf, fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
 import { codeWithRetry, adoptableOf, crossCheckDiff, reconstructBaseline, verifyReconstruction, verifyReconstructionOnChain, type CountsJsonLike, type Reconstruction } from "../src/counts-reconstruct.ts";
 import { PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime } from "../src/libs-adopt.ts";
-import { assertReleaseGate, gitAnchorCommitted } from "../src/release-gate.ts";
+import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
 import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src/ci/rehearsal-counts.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
 import { getStageTable } from "../src/stages.ts";
@@ -278,7 +278,7 @@ describe("a reconstructed file is verified on every load, so a hand-set or tampe
     writeFileSync(frozenPath(dir, SHA), JSON.stringify(f));
     let calls = 0;
     const gate = (d: string) => assertReleaseGate({ sha: SHA, coreDir: "/x", countsDir: d, env: { GITHUB_TOKEN: "t" }, kind: "rehearsal", releaseTags: async () => ["release/v1-rehearsal"], remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }),
-      verifyReconstructed: async (file) => { calls++; await verifyReconstructionOnChain(file.measured.reconstructed!, { table, out: OUTS, getCode: chain() }); } });
+      frozenDirCommitted: async () => {}, verifyReconstructed: async (file) => { calls++; await verifyReconstructionOnChain(file.measured.reconstructed!, { table, out: OUTS, getCode: chain() }); } });
     expect(await gate(dir)).toBe("release/v1-rehearsal");
     expect(calls).toBe(1);
     const pure = tmp("pc-recon-");
@@ -332,7 +332,7 @@ describe("the 8453 plan job (the CLI) with a reconstructed baseline", () => {
     const real = console.log;
     console.log = () => {};
     try {
-      const code = await w.run(["--stage", "plan", "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; throw new Error("no signer in the plan"); }, verifyReconstructed: async (f: unknown) => { verified++; await seam?.(f); } });
+      const code = await w.run(["--stage", "plan", "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; throw new Error("no signer in the plan"); }, verifyReconstructed: async (f: unknown) => { verified++; await seam?.(f); }, frozenDirCommitted: async () => {} });
       return { code, verified, signerMade };
     } finally { console.log = real; }
   }
@@ -542,21 +542,21 @@ describe("the anchor must be COMMITTED (8453 plan and publish, pre-signer)", () 
     const seen: string[][] = [];
     const real = console.log; console.log = () => {};
     try {
-      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async (p: string, h: string) => { seen.push([p.split("/").pop()!, h]); } })).toBe(0);
+      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, frozenDirCommitted: async () => {}, anchorCommitted: async (p: string, h: string) => { seen.push([p.split("/").pop()!, h]); } })).toBe(0);
       expect(seen.length).toBe(1);
       expect(seen[0]![0]).toBe(`${PREV}.json`);
-      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } })).toBe(EXIT_CODES.COUNTS_MISSING);
+      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, frozenDirCommitted: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } })).toBe(EXIT_CODES.COUNTS_MISSING);
     } finally { console.log = real; }
   });
   test("a publish stage on 8453 asks for it too, before any signer or forge call", async () => {
     const w = await worldWithAnchor();
-    const code = await w.run(["--stage", "libs", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } });
+    const code = await w.run(["--stage", "libs", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, frozenDirCommitted: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } });
     expect(code).toBe(EXIT_CODES.COUNTS_MISSING);
     expect(w.state().calls.filter((c: any) => c.tool === "forge").length).toBe(0);
   });
   test("the release gate without an anchor proof refuses a baseline that names an anchor", async () => {
     const w = await worldWithAnchor();
-    const gate = (anchorCommitted?: () => Promise<void>) => assertReleaseGate({ sha: A40, coreDir: "/x", countsDir: w.countsDir, env: { GITHUB_TOKEN: "t" }, kind: "rehearsal", releaseTags: async () => ["release/v1-rehearsal"], remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }), verifyReconstructed: async () => {}, anchorCommitted });
+    const gate = (anchorCommitted?: () => Promise<void>) => assertReleaseGate({ sha: A40, coreDir: "/x", countsDir: w.countsDir, env: { GITHUB_TOKEN: "t" }, kind: "rehearsal", releaseTags: async () => ["release/v1-rehearsal"], remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }), verifyReconstructed: async () => {}, frozenDirCommitted: async () => {}, anchorCommitted });
     expect(await kind(() => gate())).toBe("COUNTS_MISSING");
     expect(await gate(async () => {})).toBe("release/v1-rehearsal");
   });
@@ -577,5 +577,102 @@ describe("a rate-limited cast code is retried (3 tries, backoff) and still fails
     expect(e.message).toContain("https://rpc.example");
     expect(e.message).toContain("eth_getCode");
     expect(e.message).not.toContain("SECRET");
+  });
+});
+
+describe("anchors are verified all the way down, not one hop (final review)", () => {
+  const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
+  const sha = (n: number): string => n.toString(16).padStart(40, "0");
+  const put = (dir: string, name: string, body: unknown): string => { const b = typeof body === "string" ? body : JSON.stringify(body); writeFileSync(frozenPath(dir, name), b); return fileHashOf(b); };
+  /** A chain F1..Fn: F1 is cross-checked against the plain PREV, Fk against F(k-1), each with the REAL hash of its anchor's bytes. */
+  async function chain_(n: number): Promise<{ dir: string; shas: string[] }> {
+    const dir = tmp("pc-chain-");
+    let anchorSha = PREV, anchorHash = put(dir, PREV, { deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T00:00:00Z" }, counts: REF });
+    const shas: string[] = [];
+    for (let k = 1; k <= n; k++) {
+      const s_ = sha(k);
+      const f = await rebuild(adoptedRun({ deploySha: s_ }), { sha: s_, cross: { sha: anchorSha, counts: REF, fileHash: anchorHash } });
+      anchorHash = put(dir, s_, f); anchorSha = s_; shas.push(s_);
+    }
+    return { dir, shas };
+  }
+  test("a chain of reconstructed baselines that ends at the plain file loads, and its anchors are listed nearest first", async () => {
+    const { dir, shas } = await chain_(3);
+    expect(loadFrozen(dir, shas[2]!).counts).toEqual(REF);
+    expect(anchorChainOf(dir, shas[2]!).map((h) => h.sha)).toEqual([shas[1]!, shas[0]!, PREV]);
+    expect(anchorChainOf(dir, PREV)).toEqual([]);
+  });
+  test("FORGED S1/S2: S1 (altered counts, no crossChecked, backdated) fails its own load, and S2 cross-checked against S1 with S1's real hash is refused too; the real earlier release is never bypassed", async () => {
+    const dir = tmp("pc-chain-");
+    put(dir, PREV, { deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts: REF });
+    const run1 = adoptedRun({ deploySha: sha(1) }); run1.counts = { ...run1.counts, vault: 17 }; run1.deployerNonce += 1;
+    const s1 = JSON.parse(JSON.stringify(await rebuild(run1, { sha: sha(1) })));
+    s1.measured.at = "2000-01-01T00:00:00Z";
+    const h1 = put(dir, sha(1), s1);
+    expect(await msg(() => loadFrozen(dir, sha(1)))).toContain("no crossChecked record");
+    const s2 = await rebuild(adoptedRun({ deploySha: sha(2) }), { sha: sha(2), cross: { sha: sha(1), counts: s1.counts, fileHash: h1 }, acceptDiff: ["vault"] });
+    put(dir, sha(2), s2);
+    expect(await msg(() => loadFrozen(dir, sha(2)))).toContain("no crossChecked record"); // S1's own load fails, so does S2's
+  });
+  test("an anchor that is reconstructed must itself satisfy the counts-equal rule: a middle link with forged counts breaks the chain above it", async () => {
+    const { dir, shas } = await chain_(2);
+    const mid = JSON.parse(readFileSync(frozenPath(dir, shas[0]!), "utf8"));
+    mid.counts.vault = 17; mid.measured.reconstructed.measuredCounts.vault = 17;
+    put(dir, shas[0]!, mid);
+    expect(await kind(() => loadFrozen(dir, shas[1]!))).toBe("COUNTS_MISSING"); // the hash of the middle link no longer matches, and its own counts differ from PREV
+  });
+  test("a cycle is refused (A anchors on B, B anchors on A)", async () => {
+    const dir = tmp("pc-chain-");
+    const a = await rebuild(adoptedRun({ deploySha: sha(1) }), { sha: sha(1), cross: { sha: sha(2), counts: REF } });
+    const b = await rebuild(adoptedRun({ deploySha: sha(2) }), { sha: sha(2), cross: { sha: sha(1), counts: REF } });
+    put(dir, sha(1), a); put(dir, sha(2), b);
+    expect(await msg(() => loadFrozen(dir, sha(1)))).toContain("loops back");
+  });
+  test(`the depth is bounded (${MAX_ANCHOR_DEPTH}): a chain of ${MAX_ANCHOR_DEPTH} links loads, one more is refused`, async () => {
+    const { dir, shas } = await chain_(MAX_ANCHOR_DEPTH + 2);
+    expect(() => loadFrozen(dir, shas[MAX_ANCHOR_DEPTH - 2]!)).not.toThrow();
+    expect(await msg(() => loadFrozen(dir, shas[MAX_ANCHOR_DEPTH + 1]!))).toContain("deeper than");
+    expect(await msg(() => anchorChainOf(dir, shas[MAX_ANCHOR_DEPTH + 1]!))).toContain("deeper than");
+  });
+  test("the git proof covers EVERY hop of the chain, nearest first, and the committed-dir proof runs once", async () => {
+    const { dir, shas } = await chain_(2);
+    const hops: string[] = []; let dirs = 0;
+    await assertBaselineCommitted({ countsDir: dir, sha: shas[1]!, frozen: loadFrozen(dir, shas[1]!), frozenDirCommitted: async () => { dirs++; }, anchorCommitted: async (p) => { hops.push(p.split("/").pop()!.slice(0, 8)); } });
+    expect(hops).toEqual([shas[0]!.slice(0, 8), PREV.slice(0, 8)]);
+    expect(dirs).toBe(1);
+    expect(await kind(() => assertBaselineCommitted({ countsDir: dir, sha: shas[1]!, frozen: loadFrozen(dir, shas[1]!), anchorCommitted: async () => {} }))).toBe("COUNTS_MISSING"); // no dir proof
+    await assertBaselineCommitted({ countsDir: dir, sha: PREV, frozen: loadFrozen(dir, PREV) }); // a plain file needs none
+  });
+});
+
+describe("the counts dir of a reconstructed baseline is the committed one (final review)", () => {
+  const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
+  function repo() {
+    const r = tmp("pc-git-");
+    const git = (...a: string[]) => execFileSync("git", ["-C", r, ...a], { stdio: "pipe" });
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t");
+    const dir = join(r, "deployments", "frozen-counts");
+    mkdirSync(dir, { recursive: true });
+    return { r, git, dir };
+  }
+  test("a counts dir outside the core checkout is refused", async () => {
+    const { r } = repo();
+    expect(await msg(() => gitFrozenDirCommitted(r, tmp("pc-out-")))).toContain("outside the core checkout");
+  });
+  test("a frozen file tracked at HEAD but missing from the dir is refused (a deleted anchor cannot hide behind the 'alone in the dir' case); a complete dir passes", async () => {
+    const { r, git, dir } = repo();
+    writeFileSync(join(dir, `${PREV}.json`), "{}");
+    git("add", "."); git("commit", "-q", "-m", "x");
+    await gitFrozenDirCommitted(r, dir);
+    rmSync(join(dir, `${PREV}.json`));
+    expect(await msg(() => gitFrozenDirCommitted(r, dir))).toContain("tracked");
+    writeFileSync(join(dir, `${"1".repeat(40)}.json`), "{}"); // an untracked extra file is the anchor proof's business, not this one's
+    expect(await msg(() => gitFrozenDirCommitted(r, dir))).toContain("missing from the counts dir");
+  });
+  test("when git cannot run the refusal says so instead of 'git show: null'", async () => {
+    const { r, dir } = repo();
+    writeFileSync(join(dir, "x.json"), "{}");
+    expect(await msg(() => gitAnchorCommitted(r, join(dir, "x.json"), "00", "/nonexistent/git"))).toContain("git could not run");
+    expect(await msg(() => gitFrozenDirCommitted(r, dir, "/nonexistent/git"))).toContain("git could not run");
   });
 });
