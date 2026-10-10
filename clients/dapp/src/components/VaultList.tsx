@@ -18,7 +18,13 @@
 import { useExplorer } from "../lib/ExplorerContext";
 import { formatUsdcCapString, formatUsdcString } from "../lib/format";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
-import { depositStateAttr, depositStateLabel, resolveDepositState } from "../lib/vaultDepositState";
+import {
+  HEADROOM_LABEL,
+  depositStateAttr,
+  depositStateLabel,
+  headroomCell,
+  resolveDepositState,
+} from "../lib/vaultDepositState";
 import { IndexFreshness } from "./IndexFreshness";
 
 interface VaultListProps {
@@ -61,7 +67,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                 <th>Exit Fee (bps)</th>
                 <th>TVL Cap</th>
                 <th>Per-deposit Cap</th>
-                <th>Headroom</th>
+                <th>{HEADROOM_LABEL}</th>
               </tr>
             </thead>
             <tbody>
@@ -91,7 +97,9 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                     <td data-testid="vault-list-row-per-deposit-cap">
                       {formatUsdcCapString(v.per_deposit_cap)}
                     </td>
-                    <td data-testid="vault-list-row-headroom">{formatUsdcCapString(v.headroom)}</td>
+                    <td data-testid="vault-list-row-headroom">
+                      {headroomCell(v.headroom, deposit)}
+                    </td>
                   </tr>
                 );
               })}

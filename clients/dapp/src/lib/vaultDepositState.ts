@@ -19,6 +19,8 @@
  * is why no function here looks at them.
  */
 
+import { UNKNOWN, formatUsdcCapString } from "./format";
+
 export const DEPOSITS_PAUSED_ABI = [
   {
     type: "function",
@@ -122,3 +124,19 @@ export const depositStateAttr = (s: DepositState): string => s.kind;
 
 /** Where an open answer came from: `chain` (live read) or `index` (explorer snapshot). Empty for other states. */
 export const depositStateSource = (s: DepositState): string => (s.kind === "open" ? s.source : "");
+
+/**
+ * The headroom cell (issue 1741). The explorer's `headroom` is `tvlCap - totalAssets` from the vault's latest
+ * snapshot. It ignores `perDepositCap`, `depositsPaused`, shutdown and retirement, which the on-chain
+ * `maxDeposit` folds in. So it is shown as a number ONLY when deposits are known open. A paused or retired
+ * vault reads "n/a (deposits closed)", an unknown deposit state reads "unknown", and an unknown headroom reads
+ * "unknown".
+ */
+export function headroomCell(headroom: string | null | undefined, s: DepositState): string {
+  if (s.kind === "paused" || s.kind === "retired") return "n/a (deposits closed)";
+  if (s.kind === "unknown") return UNKNOWN;
+  return formatUsdcCapString(headroom);
+}
+
+/** Label of the headroom figure: it is a snapshot of the TVL cap room, not the next deposit's limit. */
+export const HEADROOM_LABEL = "TVL headroom (snapshot)";

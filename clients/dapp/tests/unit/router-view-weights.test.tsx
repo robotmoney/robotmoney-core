@@ -246,4 +246,62 @@ describe("RouterView effective weights", () => {
       expect((await findByTestId("router-view-error")).textContent).toContain("503"),
     );
   });
+
+  describe("on the mainnet class (reads are pinned to the deployment chain)", () => {
+    const MAINNET = { chainId: 8453, env: { VITE_ENV_CLASS: "mainnet" } };
+    const voted = () =>
+      fakeRouter({
+        effective: VOTED_USDC,
+        active: true,
+        voted: VOTED_USDC,
+        defaults: DEFAULT_VECTOR,
+      });
+    const routerCalls = (fake: ReturnType<typeof fakeRouter>) =>
+      fake.calls.filter(
+        (c) => c.method === "eth_call" && c.to?.toLowerCase() === ROUTER.toLowerCase(),
+      );
+
+    it("a wallet on the deployment chain reads the router and labels the weights", async () => {
+      const fake = voted();
+      const { findByTestId } = await renderOnFakeChain(
+        <RouterView apiUrl="http://api" fetchImpl={explorerFetch} routerAddress={ROUTER} />,
+        fake,
+        { ...MAINNET, connected: true },
+      );
+      expect((await findByTestId("router-view-weight-source")).textContent).toBe(
+        "Effective: voted",
+      );
+      expect(routerCalls(fake).length).toBeGreaterThan(0);
+    });
+
+    for (const foreign of [1, 918453]) {
+      it(`a wallet on chain ${foreign} gets 'unknown', no foreign weights, and no router read`, async () => {
+        // The fake would answer on the foreign chain too: a read that was issued would show the weights.
+        const fake = voted();
+        const { findByTestId, queryByTestId, getByTestId } = await renderOnFakeChain(
+          <RouterView apiUrl="http://api" fetchImpl={explorerFetch} routerAddress={ROUTER} />,
+          fake,
+          { ...MAINNET, connected: true, walletChainId: foreign },
+        );
+        const unknown = await findByTestId("router-view-weights-unknown");
+        expect(unknown.textContent).toContain("deployment's chain");
+        expect(queryByTestId("router-view-weight-source")).toBeNull();
+        expect(queryByTestId("router-view-weights-table")).toBeNull();
+        expect(getByTestId("router-view").textContent).not.toContain("Effective:");
+        expect(routerCalls(fake)).toEqual([]);
+      });
+    }
+
+    it("no wallet connected gets 'unknown' and no router read", async () => {
+      const fake = voted();
+      const { findByTestId, queryByTestId } = await renderOnFakeChain(
+        <RouterView apiUrl="http://api" fetchImpl={explorerFetch} routerAddress={ROUTER} />,
+        fake,
+        MAINNET,
+      );
+      await findByTestId("router-view-weights-unknown");
+      expect(queryByTestId("router-view-weight-source")).toBeNull();
+      expect(routerCalls(fake)).toEqual([]);
+    });
+  });
 });

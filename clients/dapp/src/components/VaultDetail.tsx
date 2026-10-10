@@ -35,6 +35,8 @@ import {
 import { useExplorer } from "../lib/ExplorerContext";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
+  HEADROOM_LABEL,
+  headroomCell,
   depositStateAttr,
   depositStateLabel,
   depositStateReason,
@@ -274,9 +276,9 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
           </p>
         </div>
         <div className="stat-card">
-          <p className="stat-label">Headroom</p>
+          <p className="stat-label">{HEADROOM_LABEL}</p>
           <p data-testid="vault-detail-headroom" className="stat-value font-mono">
-            {formatUsdcCapString(vault.headroom)}
+            {headroomCell(vault.headroom, deposit)}
           </p>
         </div>
         <div className="stat-card">

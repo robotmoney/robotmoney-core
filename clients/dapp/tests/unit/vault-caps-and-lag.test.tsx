@@ -220,4 +220,55 @@ describe("VaultList caps", () => {
     expect(await cell("vault-list-row-per-deposit-cap")).toEqual(["100.00 USDC", "15.00 USDC"]);
     expect(await cell("vault-list-row-headroom")).toEqual(["998.999955 USDC", "unknown"]);
   });
+
+  describe("headroom is a number only when deposits are open", () => {
+    const cases: [string, Partial<VaultRow>, string][] = [
+      ["open (fresh index, not paused)", {}, "998.999955 USDC"],
+      ["paused flag from the index", { deposits_paused: true }, "n/a (deposits closed)"],
+      ["registry says deposits paused", { status: 1 }, "n/a (deposits closed)"],
+      ["registry says retired", { status: 2 }, "n/a (deposits closed)"],
+      ["deposit state unknown (no flag)", { deposits_paused: null }, "unknown"],
+      ["open but headroom unknown", { headroom: null }, "unknown"],
+    ];
+    for (const [name, over, want] of cases) {
+      it(`${name}: ${want}`, async () => {
+        const { findByTestId } = await renderOnFakeChain(
+          <ExplorerProvider apiUrl="http://api" fetchImpl={listFetch([row(over)])}>
+            <VaultList />
+          </ExplorerProvider>,
+          makeFakeChain(),
+        );
+        expect((await findByTestId("vault-list-row-headroom")).textContent).toBe(want);
+      });
+    }
+
+    it("the column is labelled as a TVL snapshot figure", async () => {
+      const { findByText } = await renderOnFakeChain(
+        <ExplorerProvider apiUrl="http://api" fetchImpl={listFetch([row({})])}>
+          <VaultList />
+        </ExplorerProvider>,
+        makeFakeChain(),
+      );
+      expect(await findByText("TVL headroom (snapshot)")).toBeTruthy();
+    });
+  });
+});
+
+describe("VaultDetail headroom by deposit state", () => {
+  const states: [string, Partial<VaultDetailRow>, string][] = [
+    ["open", {}, "998.999955 USDC"],
+    ["paused", { deposits_paused: true }, "n/a (deposits closed)"],
+    ["registry paused", { status: 1 }, "n/a (deposits closed)"],
+    ["retired", { status: 2 }, "n/a (deposits closed)"],
+    ["unknown deposit state", { deposits_paused: null }, "unknown"],
+  ];
+  for (const [name, over, want] of states) {
+    it(`${name}: ${want}`, async () => {
+      const { getByTestId, getByText } = await renderDetail(
+        detailRes(detailRow(over), 52424271, 52424276),
+      );
+      expect(getByTestId("vault-detail-headroom").textContent).toBe(want);
+      expect(getByText("TVL headroom (snapshot)")).toBeTruthy();
+    });
+  }
 });

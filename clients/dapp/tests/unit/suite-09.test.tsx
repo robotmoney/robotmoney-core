@@ -279,8 +279,8 @@ describe("VaultList", () => {
     const headrooms = getAllByTestId("vault-list-row-headroom").map((n) => n.textContent);
     // Alpha: the explorer's headroom (1000000000 - 99999999 = 900000001), not a figure computed here.
     expect(headrooms[0]).toBe("900.000001 USDC");
-    // Beta: headroom null (no snapshot) is "unknown", never 0.00 USDC (issue 1741).
-    expect(headrooms[1]).toBe("unknown");
+    // Beta is registry-paused: deposits are closed, so no headroom number is shown (issue 1741).
+    expect(headrooms[1]).toBe("n/a (deposits closed)");
   });
 
   it("renders the TVL cap and the per-deposit cap, unknown when null", async () => {

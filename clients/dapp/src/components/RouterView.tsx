@@ -32,6 +32,8 @@ import { useEffect, useState } from "react";
 import { useReadContracts } from "wagmi";
 import type { Address } from "viem";
 import { routerAbi } from "../lib/abi";
+import { useWriteChainGuard } from "../lib/useGuardedWriteContract";
+import { depositsReadAllowed } from "../lib/useVaultsDepositsPaused";
 import type {
   FetchLike,
   RouterWeightsResponse,
@@ -76,12 +78,24 @@ type State =
 
 export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
+  // Reads go through the wallet provider, which answers for the chain it is on. On the mainnet class a wallet that
+  // is absent or on another chain would answer with ITS chain's contract at the router address, so the read is
+  // pinned to the deployment's chain and runs only when the write-chain guard allows it (as in
+  // useVaultsDepositsPaused). Otherwise the tab says "unknown" and labels nothing.
+  const { state: guard } = useWriteChainGuard();
+  const readAllowed = depositsReadAllowed(guard);
+  const chainId = guard.kind === "ok" ? guard.targetChainId : undefined;
   const chain = useReadContracts({
     allowFailure: true,
     contracts: (
       ["getEffectiveWeights", "votedWeightsActive", "getWeights", "getDefaultWeights"] as const
-    ).map((functionName) => ({ address: routerAddress as Address, abi: routerAbi, functionName })),
-    query: { enabled: routerAddress != null, refetchInterval: WEIGHTS_REFETCH_MS },
+    ).map((functionName) => ({
+      address: routerAddress as Address,
+      abi: routerAbi,
+      functionName,
+      chainId,
+    })),
+    query: { enabled: routerAddress != null && readAllowed, refetchInterval: WEIGHTS_REFETCH_MS },
   });
 
   useEffect(() => {
@@ -125,12 +139,13 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
   }
 
   // The four router reads: effective vector, voted flag, voted vector, default vector (in that order).
-  const [effectiveR, activeR, votedR, defaultR] = chain.data ?? [];
+  // A blocked read has no data to show, even if an earlier one cached some on another chain.
+  const [effectiveR, activeR, votedR, defaultR] = readAllowed ? (chain.data ?? []) : [];
   const effective = effectiveR?.status === "success" ? toVector(effectiveR.result) : undefined;
   const votedActive = activeR?.status === "success" ? activeR.result : undefined;
   const voted = votedR?.status === "success" ? toVector(votedR.result) : undefined;
   const defaults = defaultR?.status === "success" ? toVector(defaultR.result) : undefined;
-  const chainLoading = routerAddress != null && chain.isLoading;
+  const chainLoading = routerAddress != null && readAllowed && chain.isLoading;
   // The label needs BOTH the effective vector and the flag. One of them missing is "unknown", never a guess.
   const source: "voted" | "default" | null =
     effective !== undefined && typeof votedActive === "boolean"
@@ -151,7 +166,9 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
           Effective weights unknown:{" "}
           {routerAddress == null
             ? "the router address is not configured."
-            : "the router could not be read."}
+            : !readAllowed
+              ? "connect a wallet on the deployment's chain to read the router."
+              : "the router could not be read."}
         </p>
       ) : (
         <>
