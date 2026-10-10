@@ -89,7 +89,7 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | Contract | Audit report(s) | Status | Exception (if any) |
 |---|---|---|---|
 | `RobotMoneyVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
-| `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
+| `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612, AZ-0623 | Audited | Post-audit change (issue 1746): zero-amount legs are skipped and the rounding remainder goes to the last non-zero-bps leg (`_executeLegs`, `_availabilityAndAmounts`, new `NoFundedLeg` error). This value-routing change is NOT covered by the reports above and is on the list for the external audit before the final deployment. The live Base 8453 router bytecode is unchanged. |
 | `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `FeatureFlags.sol` | VA-0609 | Audited | Pre-mainnet re-audit pending under the bucket-B/C economic-audit gate (security-model.md §14) |

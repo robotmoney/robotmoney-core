@@ -51,7 +51,7 @@ describe("docs mention the clear-voted-weights row and the voted-vector refusal 
     ["the evidence list", /voted_weights_clears/],
     ["the verifier labels", /router: votedWeightsActive is false after deploy/],
     ["no contract change", /No contract change/i],
-    ["the 0 bps leg warning", /0 bps leg included/],
+    ["the live-router 0 bps leg warning (issue 1746)", /NEVER run clear-voted-weights on the LIVE 8453 router/],
   ];
   for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
 });

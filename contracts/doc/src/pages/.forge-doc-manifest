@@ -215,6 +215,8 @@ contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
 contracts/test/contract.PortfolioRouterRuntimeEligibilityTest.mdx
 contracts/test/contract.PortfolioRouterTest.mdx
+contracts/test/contract.PortfolioRouterZeroLegInvariantTest.mdx
+contracts/test/contract.PortfolioRouterZeroLegTest.mdx
 contracts/test/contract.PosConfAavePool.mdx
 contracts/test/contract.PosConfComet.mdx
 contracts/test/contract.PosConfMorphoVault.mdx
@@ -263,6 +265,7 @@ contracts/test/contract.ShortfallAdapter.mdx
 contracts/test/contract.ShortfallMorphoVault.mdx
 contracts/test/contract.ShortlistMockPool.mdx
 contracts/test/contract.ShortlistStubSwapRouter.mdx
+contracts/test/contract.StrictZeroRevertVault.mdx
 contracts/test/contract.StubSwapRouter.mdx
 contracts/test/contract.TestUSDC.mdx
 contracts/test/contract.TwapTickMathHarness.mdx
@@ -282,6 +285,7 @@ contracts/test/contract.VaultHarness.mdx
 contracts/test/contract.VaultRegistryTest.mdx
 contracts/test/contract.WeightSetterRotationTest.mdx
 contracts/test/contract.WithdrawalsNeverFrozenTest.mdx
+contracts/test/contract.ZeroLegHandler.mdx
 contracts/test/contract.ZeroLiquidityPool.mdx
 contracts/test/fv/contract.CoverageMapTest.mdx
 contracts/test/fv/contract.CustodyMultiVaultTest.mdx
