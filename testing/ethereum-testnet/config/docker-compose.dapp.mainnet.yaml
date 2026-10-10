@@ -1,0 +1,46 @@
+# Read-only mainnet overlay of docker-compose.dapp.yaml (core issue 1725). Use both files, from
+# `core-stack dapp up --chain 8453`, never by hand with a key in the environment:
+#
+#   docker compose -p robotmoney-dapp-8453 -f docker-compose.dapp.yaml -f docker-compose.dapp.mainnet.yaml up -d --build --wait
+#
+# This stack READS Base mainnet (8453) from the contracts a mainnet rehearsal deployed. It deploys nothing,
+# signs nothing and holds no key:
+#   - no Twin chain and no chain-net network: the indexer dials a public Base RPC given in INDEXER_RPC_URL,
+#   - the dapp bundle is built with VITE_ENV_CLASS=mainnet and an EMPTY faucet key (a mainnet bundle with a key
+#     is refused at build time, clients/dapp/src/lib/buildEnvValidation.ts),
+#   - every published port is bound to 127.0.0.1 by docker-compose.dapp.yaml and the overlay adds none,
+#   - the project name and every container name differ from the stage stack (robotmoney-dapp, dapp-*), so this
+#     stack never replaces or is mistaken for the stage stack behind stage-dapp.robotmoney-labs.dev.
+# It carries no ingress, tunnel or DNS configuration. Public exposure (owner decision 2026-10-10) is done by the
+# tunnel already on the stage host, which reaches these loopback ports. See core issue 1725.
+
+services:
+  postgres:
+    container_name: dapp8453-postgres
+    ports: !reset []
+  explorer-migrate:
+    container_name: dapp8453-explorer-migrate
+  explorer-indexer:
+    container_name: dapp8453-explorer-indexer
+    environment:
+      INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-8453}
+      INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-base}
+      INDEXER_RPC_LABEL: base-mainnet-readonly
+      INDEXER_START_BLOCK: "${INDEXER_START_BLOCK:?INDEXER_START_BLOCK must be set to the first block of the deployment}"
+      INDEXER_LOGS_RPC_URL: ${INDEXER_LOGS_RPC_URL:-}
+      INDEXER_MAX_BLOCKS_PER_TICK: ${INDEXER_MAX_BLOCKS_PER_TICK:-1000}
+      INDEXER_RPC_MAX_RETRIES: ${INDEXER_RPC_MAX_RETRIES:-6}
+      INDEXER_RPC_BACKOFF_MS: ${INDEXER_RPC_BACKOFF_MS:-1000}
+  explorer-api:
+    container_name: dapp8453-explorer-api
+    environment:
+      EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-8453}
+  dapp:
+    container_name: dapp8453-frontend
+    build:
+      args:
+        VITE_ENV_CLASS: mainnet
+        VITE_FAUCET_HARNESS_PRIVATE_KEY: ""
+        VITE_DEVNET_RPC_URL: ""
+  receipt-fixtures:
+    container_name: dapp8453-receipt-fixtures

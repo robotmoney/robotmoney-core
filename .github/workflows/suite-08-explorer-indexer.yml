@@ -146,6 +146,18 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test rpc_failure -- --nocapture
 
+      # Read-only mainnet dapp (issue 1725): retry and backoff on 429, the separate logs endpoint,
+      # the explicit start block and the refusal of a zero block range. Loopback fake RPC, no network
+      # and no Postgres. Routed through cargo_test_require_executed.sh so zero collected tests is RED.
+      - name: RPC retry, logs endpoint, start block and CLI flags (issue 1725)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test rpc_retry -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests indexer::tests::configured_start_block --nocapture
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --bin indexer -- --nocapture
+
       # Two targets that landed on fusion/deployment-workflow without a job
       # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
       # no workflow executes, which is how they surfaced when the branch came
@@ -153,7 +165,7 @@ jobs:
       - name: Deploy-block detection
         working-directory: services/explorer-indexer
         run: |
-          CARGO_TEST_MIN_EXECUTED=6 bash ../../.github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=7 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test deploy_block_detection -- --nocapture
 
       - name: Postgres env requirement

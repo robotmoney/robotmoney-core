@@ -34,6 +34,7 @@
 //   core-stack parity labels   --mainnet FILE [--stage-labels FILE] [--out-dir DIR]
 //   core-stack parity sheet    --production FILE
 //   core-stack dapp status
+//   core-stack dapp up|down|status --chain 8453 [--rpc URL --manifests DIR --start-block N ...]  (read-only, core 1725)
 //   core-stack rmpc check
 //   core-stack record write|show [--record FILE] [--path] [--list-required-fields]
 //
@@ -60,6 +61,7 @@ import { parseArgs } from "node:util";
 import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
+import { MAINNET_CHAIN_ID, MAINNET_DAPP_PROJECT, MAINNET_DEFAULT_PORTS, MAINNET_TEARDOWN_ENV, MainnetDappError, assertComposeReadOnly, assertMergedConfigLoopback, assertNoSigningEnv, buildMainnetDappEnv, mainnetComposeFiles, mainnetComposeTexts, redactRpc } from "./mainnet-dapp.ts";
 import { STAGE_TABLE, expectedManifestCount, manifestOf, missingManifests, presentManifests, publishEnv, vaultManifests, type StageTableShape } from "./stage-manifests.ts";
 
 // ─── constants ───────────────────────────────────────────────────────────────
@@ -112,6 +114,8 @@ const USAGE_TEXT = `usage: core-stack <noun> <verb> [flags]
   governance preflight|ensure|verify|release [--receipt-id ID] [--out-dir DIR]
   parity labels --mainnet FILE [--stage-labels FILE] | parity sheet --production FILE
   dapp status
+  dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U]
+  dapp down|status --chain 8453 [--dapp-port P] [--explorer-port P]
   rmpc check
   record write|show [--record FILE] [--path] [--list-required-fields]`;
 
@@ -230,6 +234,17 @@ export interface Opts {
   stageLabels: string;
   pathOnly: boolean;
   listRequiredFields: boolean;
+  /** The read-only mainnet dapp verb (core 1725): `--chain 8453`, the RPC, a COPY of the manifests, the first block. */
+  chain: string;
+  rpc: string;
+  logsRpc: string;
+  manifests: string;
+  startBlock: string;
+  maxBlockRange: string;
+  dappPort: string;
+  explorerPort: string;
+  publicDappUrl: string;
+  publicExplorerUrl: string;
 }
 export interface Parsed {
   noun: string;
@@ -255,6 +270,16 @@ export function parseCli(argv: string[]): Parsed {
         "stage-labels": { type: "string" },
         path: { type: "boolean" },
         "list-required-fields": { type: "boolean" },
+        chain: { type: "string" },
+        rpc: { type: "string" },
+        "logs-rpc": { type: "string" },
+        manifests: { type: "string" },
+        "start-block": { type: "string" },
+        "max-block-range": { type: "string" },
+        "dapp-port": { type: "string" },
+        "explorer-port": { type: "string" },
+        "public-dapp-url": { type: "string" },
+        "public-explorer-url": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -268,7 +293,7 @@ export function parseCli(argv: string[]): Parsed {
   const timeoutSecs = v.timeout === undefined ? 3600 : Number(v.timeout);
   if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1) throw usageError("--timeout must be a positive integer");
   const str = (x: string | undefined): string => x ?? "";
-  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"] })) {
+  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"] })) {
     if (val !== undefined && val === "") throw usageError(`--${name} needs a value`);
   }
   return {
@@ -285,6 +310,16 @@ export function parseCli(argv: string[]): Parsed {
       stageLabels: str(v["stage-labels"]),
       pathOnly: v.path === true,
       listRequiredFields: v["list-required-fields"] === true,
+      chain: str(v.chain),
+      rpc: str(v.rpc),
+      logsRpc: str(v["logs-rpc"]),
+      manifests: str(v.manifests),
+      startBlock: str(v["start-block"]),
+      maxBlockRange: str(v["max-block-range"]),
+      dappPort: str(v["dapp-port"]),
+      explorerPort: str(v["explorer-port"]),
+      publicDappUrl: str(v["public-dapp-url"]),
+      publicExplorerUrl: str(v["public-explorer-url"]),
     },
   };
 }
@@ -838,6 +873,76 @@ async function dappStatus(s: Stack): Promise<void> {
   s.deps.out("ok: rpc, explorer-api and dapp all answer\n");
 }
 
+// ─── dapp on Base mainnet, read-only (core 1725) ─────────────────────────────
+/** A mainnet dapp refusal ends the run with exit 65 and one classed line on stdout. */
+const mainnetRefusal = (e: MainnetDappError): StackExit => new StackExit(EXIT.INPUT, e.message, e.message);
+
+/** `docker compose` of the 8453 stack: its own project, the dapp file and the read-only overlay, and no chain or deploy file. */
+function mainnetCompose(s: Stack, args: string[]): string[] {
+  const files = mainnetComposeFiles().flatMap((rel) => ["-f", join(s.deps.repoRoot, rel)]);
+  return ["docker", "compose", "--project-name", MAINNET_DAPP_PROJECT, ...files, ...args];
+}
+
+const mainnetNumber = (flag: string, v: string): number => {
+  if (!/^[0-9]+$/.test(v)) throw new MainnetDappError("usage", `${flag} must be a non-negative integer`);
+  return Number(v);
+};
+
+async function dappMainnet(s: Stack, verb: string): Promise<void> {
+  try {
+    await dappMainnetInner(s, verb);
+  } catch (e) {
+    if (e instanceof MainnetDappError) throw mainnetRefusal(e);
+    throw e;
+  }
+}
+
+async function dappMainnetInner(s: Stack, verb: string): Promise<void> {
+  const o = s.opts;
+  if (o.chain !== String(MAINNET_CHAIN_ID)) throw new MainnetDappError("wrong-chain", `--chain ${o.chain} is not ${MAINNET_CHAIN_ID}: this verb only reads Base mainnet`);
+  if (!["up", "down", "status"].includes(verb)) throw usageError();
+  // The refusal on keys comes first, before any file is read or any command is run.
+  assertNoSigningEnv(s.deps.env);
+  const dappPort = o.dappPort ? mainnetNumber("--dapp-port", o.dappPort) : MAINNET_DEFAULT_PORTS.dapp;
+  const explorerPort = o.explorerPort ? mainnetNumber("--explorer-port", o.explorerPort) : MAINNET_DEFAULT_PORTS.explorer;
+  if (verb === "status") {
+    if (!(await s.deps.httpOk(`http://127.0.0.1:${explorerPort}/health`))) throw unsatisfied("explorer-unready", `explorer-api /health on ${explorerPort} does not answer`);
+    if (!(await s.deps.httpOk(`http://127.0.0.1:${dappPort}/`))) throw unsatisfied("dapp-unready", `the dapp on ${dappPort} does not answer`);
+    s.deps.out("ok: explorer-api and dapp answer on 127.0.0.1\n");
+    return;
+  }
+  s.need("docker");
+  assertComposeReadOnly(mainnetComposeTexts(s.deps.repoRoot));
+  if (verb === "down") {
+    const r = await s.deps.run(mainnetCompose(s, ["down", "--remove-orphans"]), { env: MAINNET_TEARDOWN_ENV });
+    if (r.code !== 0) throw fail("mainnet dapp stack down failed");
+    s.log("mainnet dapp stack down", { project: MAINNET_DAPP_PROJECT });
+    return;
+  }
+  if (!o.rpc) throw usageError("dapp up --chain 8453 needs --rpc");
+  if (!o.manifests) throw usageError("dapp up --chain 8453 needs --manifests (a copy of the manifests directory)");
+  if (!o.startBlock) throw usageError("dapp up --chain 8453 needs --start-block (the first block of the deployment)");
+  const env = buildMainnetDappEnv({
+    rpc: o.rpc,
+    logsRpc: o.logsRpc || undefined,
+    manifestsDir: resolve(o.manifests),
+    startBlock: mainnetNumber("--start-block", o.startBlock),
+    maxBlockRange: o.maxBlockRange ? mainnetNumber("--max-block-range", o.maxBlockRange) : undefined,
+    dappPort,
+    explorerPort,
+    publicDappUrl: o.publicDappUrl || undefined,
+    publicExplorerUrl: o.publicExplorerUrl || undefined,
+  });
+  // The merged, interpolated config must publish loopback ports only and hold no deploy job.
+  const cfg = await s.deps.run(mainnetCompose(s, ["config", "--format", "json"]), { env });
+  if (cfg.code !== 0) throw fail("docker compose config failed for the mainnet dapp stack");
+  assertMergedConfigLoopback(cfg.stdout);
+  s.log("starting the read-only mainnet dapp stack", { project: MAINNET_DAPP_PROJECT, rpc: redactRpc(o.rpc), logs_rpc: o.logsRpc ? redactRpc(o.logsRpc) : "", start_block: o.startBlock });
+  const up = await s.deps.run(mainnetCompose(s, ["up", "--detach", "--build", "--wait", "--wait-timeout", String(o.timeoutSecs)]), { env, stream: true });
+  if (up.code !== 0) throw fail("the mainnet dapp stack did not become healthy; `core-stack dapp down --chain 8453` removes it");
+  s.deps.out(`ok: dapp http://127.0.0.1:${dappPort} explorer-api http://127.0.0.1:${explorerPort} (loopback only, chain ${MAINNET_CHAIN_ID}, read-only)\n`);
+}
+
 async function rmpcCheck(s: Stack): Promise<void> {
   for (const b of [s.rmpc, s.rmpcImport]) if (!isFile(b)) throw unsatisfied("missing-binary", b);
   if ((await s.deps.run([s.rmpc, "self-check", "--help"])).code !== 0) throw unsatisfied("missing-subcommand", "this rmpc has no self-check: the candidate predates it");
@@ -1025,8 +1130,9 @@ export async function runCli(argv: string[], deps: Deps): Promise<number> {
         await parityVerb(s, verb);
         break;
       case "dapp":
-        if (verb !== "status") throw usageError();
-        await dappStatus(s);
+        if (opts.chain !== "") await dappMainnet(s, verb);
+        else if (verb !== "status") throw usageError();
+        else await dappStatus(s);
         break;
       case "rmpc":
         if (verb !== "check") throw usageError();

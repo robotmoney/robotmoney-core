@@ -20,6 +20,7 @@ export const DOCKERFILES = ["docker/rust-services.Dockerfile", "docker/stage-ima
 export const COMPOSE_FILES = [
   "testing/ethereum-testnet/config/docker-compose.dapp.yaml",
   "testing/ethereum-testnet/config/docker-compose.dapp.stage.yaml",
+  "testing/ethereum-testnet/config/docker-compose.dapp.mainnet.yaml",
   "testing/ethereum-testnet/config/docker-compose.stage-chain.yaml",
 ];
 /** Committed lockfiles the reproducible builds depend on. */
