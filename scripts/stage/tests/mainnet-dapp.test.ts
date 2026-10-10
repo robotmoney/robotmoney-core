@@ -471,6 +471,25 @@ describe("core-stack dapp --chain 8453", () => {
     expect(await runCli(["dapp", "status", "--chain", "8453"], down.deps)).toBe(1);
     expect(down.out).toContain("explorer-unready");
   });
+  test("up and down refuse a compose list without the overlay before any docker call", async () => {
+    const lists: Record<string, string[]> = {
+      "no overlay": [MAINNET_DAPP_COMPOSE_REL],
+      "stage overlay instead": [MAINNET_DAPP_COMPOSE_REL, "testing/ethereum-testnet/config/docker-compose.dapp.stage.yaml"],
+      "extra file": [...mainnetComposeFiles(), "testing/ethereum-testnet/config/docker-compose.stage-chain.yaml"],
+    };
+    for (const [name, list] of Object.entries(lists)) {
+      for (const argv of [UP, ["dapp", "down", "--chain", "8453"]]) {
+        const h = harness();
+        h.deps.mainnetComposeFiles = () => list;
+        expect(await runCli(argv, h.deps), name).toBe(65);
+        expect(h.out, name).toContain("overlay-missing");
+        expect(h.calls.length, name).toBe(0);
+      }
+    }
+    const ok = harness();
+    ok.deps.mainnetComposeFiles = () => mainnetComposeFiles();
+    expect(await runCli(UP, ok.deps)).toBe(0);
+  });
   test("the Twin-mode verbs are unchanged: dapp up without --chain stays a usage error", async () => {
     expect(await runCli(["dapp", "up"], harness().deps)).toBe(64);
   });

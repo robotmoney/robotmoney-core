@@ -159,6 +159,8 @@ export interface Deps {
   /** eth_chainId result, or "" when nothing answers. */
   rpcChainId(url: string): Promise<string>;
   httpOk(url: string): Promise<boolean>;
+  /** Test seam: the compose file list of the 8453 stack. Production leaves it unset. */
+  mainnetComposeFiles?(): string[];
   /** /proc start time of a live (non-zombie) process, or undefined. Names the holder of the one-writer lock. */
   procStart(pid: number): string | undefined;
 }
@@ -878,9 +880,15 @@ async function dappStatus(s: Stack): Promise<void> {
 const mainnetRefusal = (e: MainnetDappError): StackExit => new StackExit(EXIT.INPUT, e.message, e.message);
 
 /** `docker compose` of the 8453 stack: its own project, the dapp file and the read-only overlay, and no chain or deploy file. */
-function mainnetCompose(s: Stack, args: string[]): string[] {
-  const rels = mainnetComposeFiles();
+/** The compose files of the 8453 stack, refused unless they are exactly the dapp file plus the read-only overlay. */
+function mainnetFileList(s: Stack): string[] {
+  const rels = s.deps.mainnetComposeFiles?.() ?? mainnetComposeFiles();
   assertOverlayInFileList(rels);
+  return rels;
+}
+
+function mainnetCompose(s: Stack, args: string[]): string[] {
+  const rels = mainnetFileList(s);
   const files = rels.flatMap((rel) => ["-f", join(s.deps.repoRoot, rel)]);
   return ["docker", "compose", "--project-name", MAINNET_DAPP_PROJECT, ...files, ...args];
 }
@@ -914,6 +922,8 @@ async function dappMainnetInner(s: Stack, verb: string): Promise<void> {
     return;
   }
   s.need("docker");
+  // Before any file is read or any docker call: no overlay, no build.
+  mainnetFileList(s);
   assertComposeReadOnly(mainnetComposeTexts(s.deps.repoRoot));
   if (verb === "down") {
     const r = await s.deps.run(mainnetCompose(s, ["down", "--remove-orphans"]), { env: MAINNET_TEARDOWN_ENV });
