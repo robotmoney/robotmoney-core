@@ -99,6 +99,9 @@ describe("the env builder from the manifests", () => {
     expect(env.INDEXER_PORTFOLIO_ROUTER).toBe(ROUTER);
     expect(env.INDEXER_ROUTER_GOVERNANCE).toBe(GOVERNANCE);
     expect(env.INDEXER_CONSENSUS_RECEIPT).toBe(RECEIPT);
+    // Issue 1731: the Safe and the timelock are in the indexer's watched set.
+    expect(env.INDEXER_SAFE).toBe(SAFE);
+    expect(env.INDEXER_TIMELOCK).toBe(TIMELOCK);
     expect(env.VITE_TIMELOCK_ADDRESS).toBe(TIMELOCK);
   });
 
@@ -270,6 +273,12 @@ describe("the loopback guard on the compose files", () => {
     const ports = real.flatMap((f) => composePortEntries(f.text));
     expect(ports.length).toBeGreaterThanOrEqual(4);
     for (const p of ports) expect(p.startsWith("127.0.0.1:")).toBe(true);
+  });
+  test("issue 1731: the compose file hands INDEXER_TIMELOCK and INDEXER_SAFE to the indexer container", () => {
+    // An env value the container never receives watches nothing. The indexer service block must pass both.
+    const block = noComments(base.text).split(/\n  explorer-api:/)[0]!.split(/\n  explorer-indexer:/)[1]!;
+    expect(block).toContain("INDEXER_TIMELOCK: ${INDEXER_TIMELOCK:-}");
+    expect(block).toContain("INDEXER_SAFE: ${INDEXER_SAFE:-}");
   });
   test("mutation: a port on all interfaces, a bare port and 0.0.0.0 are each refused", () => {
     for (const bad of ['"5173:5173"', '"0.0.0.0:5173:5173"', "5173:5173", '"${DAPP_PORT:-5173}:5173"']) {

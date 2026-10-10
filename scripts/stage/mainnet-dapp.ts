@@ -322,6 +322,10 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     INDEXER_PORTFOLIO_ROUTER: a.router,
     INDEXER_ROUTER_GOVERNANCE: a.governance,
     INDEXER_CONSENSUS_RECEIPT: a.consensusReceipt,
+    // The indexer watches only the addresses it is given. Without these two the Safe and the timelock are
+    // absent from /v1/chains/8453/contracts and their governance events are never read (issue 1731).
+    INDEXER_TIMELOCK: a.timelock,
+    INDEXER_SAFE: a.safe,
     INDEXER_RPC_URL: input.rpc,
     INDEXER_LOGS_RPC_URL: input.logsRpc ?? "",
     INDEXER_START_BLOCK: String(input.startBlock),
