@@ -136,6 +136,10 @@ describe("resolveDepositState (pure)", () => {
       [0, 1000],
       [null, 1000],
       [undefined, undefined],
+      // A block with NO known head cannot be called fresh.
+      [1000, null],
+      [1000, undefined],
+      [1000, 0],
     ] as const) {
       expect(
         resolveDepositState({

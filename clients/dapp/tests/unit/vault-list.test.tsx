@@ -79,6 +79,7 @@ const fourVaultFixture: VaultsResponse = {
     },
   ],
   block_number: 1000,
+  chain_head_block: 1005,
   indexed_at: "2026-01-01T12:00:00Z",
 };
 

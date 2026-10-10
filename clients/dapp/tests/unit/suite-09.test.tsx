@@ -35,7 +35,7 @@ vi.mock("wagmi", () => ({
 }));
 import { RouterView } from "../../src/components/RouterView";
 import { ProtocolStats } from "../../src/components/ProtocolStats";
-import { ExplorerProvider } from "../../src/lib/ExplorerContext";
+import { ExplorerContext, ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type {
   FetchLike,
   VaultsResponse,
@@ -77,6 +77,7 @@ const vaultsFixture: VaultsResponse = {
     },
   ],
   block_number: 1000,
+  chain_head_block: 1005,
   indexed_at: "2026-01-01T12:00:00Z",
 };
 
@@ -325,12 +326,26 @@ describe("VaultList", () => {
 
 describe("VaultDetail", () => {
   it("renders vault name, risk, status, and cap", async () => {
+    // The chain head comes from the shared explorer context, as in the app.
     const { getByTestId } = render(
-      <VaultDetail
-        apiUrl="http://api"
-        address={VAULT_A_ADDR}
-        fetchImpl={makeFetch(vaultDetailFixture)}
-      />,
+      <ExplorerContext.Provider
+        value={{
+          vaults: [],
+          stats: null,
+          blockNumber: 1000,
+          chainHeadBlock: 1005,
+          vaultsLoading: false,
+          statsLoading: false,
+          vaultsError: null,
+          statsError: null,
+        }}
+      >
+        <VaultDetail
+          apiUrl="http://api"
+          address={VAULT_A_ADDR}
+          fetchImpl={makeFetch(vaultDetailFixture)}
+        />
+      </ExplorerContext.Provider>,
     );
     await waitFor(() => expect(getByTestId("vault-detail-name").textContent).toBe("Alpha Vault"));
     expect(getByTestId("vault-detail-risk").textContent).toBe("stable-yield");

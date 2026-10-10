@@ -62,8 +62,9 @@ export function explorerFresh(
   head: number | null | undefined,
 ): boolean {
   if (block == null || block <= 0) return false;
-  if (head != null && head > 0 && head - block > EXPLORER_STALE_AFTER_BLOCKS) return false;
-  return true;
+  // Both a block and a KNOWN head are needed to call the index fresh: without a head its lag is unknowable.
+  if (head == null || head <= 0) return false;
+  return head - block <= EXPLORER_STALE_AFTER_BLOCKS;
 }
 
 export function resolveDepositState(input: DepositStateInput): DepositState {
