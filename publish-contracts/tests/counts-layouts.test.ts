@@ -13,7 +13,10 @@ import type { CountsJsonLike } from "../src/counts-reconstruct.ts";
 import { verifyReconstructionOnChain } from "../src/counts-reconstruct.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress } from "../src/libs-adopt.ts";
-import { gitFrozenDirCommitted } from "../src/release-gate.ts";
+import { gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
+import { dirtyTreeLines } from "../src/isomorphism.ts";
+import { fileHashOf } from "../src/counts.ts";
+import { STUB_DIR } from "./harness.ts";
 import { spawnTool } from "../src/runner.ts";
 import { getStageTable } from "../src/stages.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
@@ -77,11 +80,11 @@ async function devAtY(l: Layout, commit = true): Promise<string> {
 }
 
 /** The pre-signer flow of the 8453 plan or a deploy stage: real `main`, real git status and real git proofs; the chain re-verification is the real one against the fixture build. */
-async function runIt(l: Layout, countsDir: string, stage: "plan" | "libs" = "plan"): Promise<{ code: number; err: string; signerMade: boolean }> {
+async function runIt(l: Layout, countsDir: string, stage: "plan" | "libs" = "plan", more: string[] = []): Promise<{ code: number; err: string; signerMade: boolean }> {
   let signerMade = false;
   const real = console.log; console.log = () => {};
   try {
-    const code = await l.w.run(["--stage", stage, "--environment", "base-mainnet", "--core-sha", l.x, "--counts-dir", countsDir], {
+    const code = await l.w.run(["--stage", stage, "--environment", "base-mainnet", "--core-sha", l.x, "--counts-dir", countsDir, ...more], {
       run: realGit as never, makeSigner: () => { signerMade = true; throw new Error("no signer"); },
       verifyReconstructed: async (f: any) => { await verifyReconstructionOnChain(f.measured.reconstructed, { table, out: { linkOut: OUT, c2Out: OUT } as never, getCode }); },
     });
@@ -237,5 +240,109 @@ describe("L3: the file cannot be committed in X's own tree", () => {
     const r = await runIt({ ...l, x: l.x }, join(l.core, FROZEN));
     expect(r.code).toBe(EXIT_CODES.USAGE);
     expect(r.err).toContain("not the DEPLOY_SHA");
+  });
+});
+
+describe("the git children are hermetic (issue 1740 review)", () => {
+  const withEnv = async <T>(vars: Record<string, string>, f: () => Promise<T>): Promise<T> => {
+    const old: Record<string, string | undefined> = {};
+    for (const k of Object.keys(vars)) { old[k] = process.env[k]; process.env[k] = vars[k]; }
+    try { return await f(); } finally { for (const [k, v] of Object.entries(old)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  };
+  /** A repo that would PASS every check for X (the descendant dev checkout of a good layout): the place a hostile GIT_DIR would redirect git to. */
+  test("a hostile GIT_DIR, GIT_WORK_TREE, GIT_OBJECT_DIRECTORY and GIT_INDEX_FILE in the process env cannot redirect the checks: a bad counts dir is still refused, a good one still passes", async () => {
+    const l = coreAtX();
+    const good = await devAtY(l);
+    const bad = await devAtY(l, false); // X.json present but not committed
+    const hostile = { GIT_DIR: join(good, ".git"), GIT_WORK_TREE: good, GIT_OBJECT_DIRECTORY: join(good, ".git", "objects"), GIT_INDEX_FILE: join(good, ".git", "index"), GIT_CEILING_DIRECTORIES: "/" };
+    // a plain copy of the good dir, in no repository: a git redirected by GIT_DIR/GIT_WORK_TREE would read the good repo and accept it
+    const plain = tmp("pc-plainwt-");
+    mkdirSync(join(plain, FROZEN), { recursive: true });
+    for (const n of [`${PREV}.json`, `${l.x}.json`]) copyFileSync(join(good, FROZEN, n), join(plain, FROZEN, n));
+    const redirect = { ...hostile, GIT_WORK_TREE: plain };
+    await withEnv(redirect, async () => {
+      expect(await msg(() => gitFrozenDirCommitted(l.core, join(plain, FROZEN)))).toContain("not inside a git work tree");
+      expect(await msg(() => gitAnchorCommitted(join(plain, FROZEN, `${l.x}.json`), fileHashOf(readFileSync(join(plain, FROZEN, `${l.x}.json`)))))).toContain("not committed at HEAD");
+    });
+    await withEnv(hostile, async () => {
+      expect(await msg(() => gitFrozenDirCommitted(l.core, join(bad, FROZEN)))).toContain("not tracked at HEAD");
+      expect(await msg(() => gitFrozenDirCommitted(l.core, join(good, FROZEN)))).toBe("");
+      expect(await msg(() => gitAnchorCommitted(join(bad, FROZEN, `${l.x}.json`), fileHashOf(readFileSync(join(bad, FROZEN, `${l.x}.json`)))))).toContain("not committed at HEAD");
+      // the dirty-tree check of the core checkout is hermetic too: it reports the dirt of the repo it was pointed at
+      writeFileSync(join(l.core, "stray.txt"), "x");
+      expect((await dirtyTreeLines(spawnTool, l.core, 8453, { PATH: process.env.PATH!, ...hostile })).join("|")).toContain("stray.txt");
+    });
+  });
+  test("a refs/replace ref cannot fake ancestry: an unrelated repo whose HEAD is grafted onto X is refused", async () => {
+    const l = coreAtX();
+    const other = join(tmp("pc-rep-"), "o");
+    mkdirSync(join(other, FROZEN), { recursive: true });
+    git(other, "init", "-q"); git(other, "config", "commit.gpgsign", "false");
+    copyFileSync(REF_PATH, join(other, FROZEN, `${PREV}.json`));
+    git(other, "add", "-A"); git(other, "commit", "-q", "-m", "unrelated root");
+    await freeze(l.x, join(other, FROZEN));
+    git(other, "add", "-A"); git(other, "commit", "-q", "-m", "forged data");
+    git(other, "fetch", "-q", l.core, l.x); // X's objects are now in the repo, but not in its history
+    git(other, "replace", "--graft", "HEAD", l.x); // HEAD now "has" X as its parent
+    // the replacement really does fake it for a plain git
+    expect(execFileSync("git", ["-C", other, "merge-base", "--is-ancestor", l.x, "HEAD"], { stdio: "pipe", env: cleanEnv }).toString()).toBe("");
+    const r = await runIt(l, join(other, FROZEN));
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(r.err).toContain("is not a descendant of");
+  });
+  test("an ignored file in the counts dir is refused", async () => {
+    const l = coreAtX();
+    const dev = await devAtY(l);
+    writeFileSync(join(dev, ".gitignore"), "*.tmp\n"); git(dev, "add", ".gitignore"); git(dev, "commit", "-q", "-m", "ignore");
+    expect((await runIt(l, join(dev, FROZEN))).code).toBe(0);
+    writeFileSync(join(dev, FROZEN, "hidden.tmp"), "x");
+    const r = await runIt(l, join(dev, FROZEN));
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(r.err).toContain("!! deployments/frozen-counts/hidden.tmp");
+  });
+  test("git refusing a foreign-owned checkout is said plainly", async () => {
+    const l = coreAtX();
+    const fake = join(tmp("pc-fakegit-"), "git");
+    writeFileSync(fake, "#!/bin/sh\ncase \"$*\" in *rev-parse\\ HEAD*) git \"$@\" ;; *) echo \"fatal: detected dubious ownership in repository at 'x'\" >&2; exit 128 ;; esac\n", { mode: 0o755 });
+    const dev = await devAtY(l);
+    const m = await msg(() => gitFrozenDirCommitted(l.core, join(dev, FROZEN), fake));
+    expect(m).toContain("dubious ownership");
+    expect(m).toContain("owned by the operator");
+  });
+});
+
+describe("--counts-require-origin-dev (issue 1740 review)", () => {
+  test("off by default; on, HEAD must be reachable from the counts repo's local origin/dev", async () => {
+    const l = coreAtX();
+    const dev = await devAtY(l);
+    expect((await runIt(l, join(dev, FROZEN))).code).toBe(0); // default: not asked
+    let r = await runIt(l, join(dev, FROZEN), "plan", ["--counts-require-origin-dev"]);
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING); // no refs/remotes/origin/dev at all
+    expect(r.err).toContain("not reachable from its origin/dev");
+    git(dev, "update-ref", "refs/remotes/origin/dev", "HEAD");
+    expect((await runIt(l, join(dev, FROZEN), "plan", ["--counts-require-origin-dev"])).code).toBe(0);
+    // a local descendant Y' that adds a forged file after the fetch is not on origin/dev
+    writeFileSync(join(dev, "forged.txt"), "x"); git(dev, "add", "forged.txt"); git(dev, "commit", "-q", "-m", "local only");
+    r = await runIt(l, join(dev, FROZEN), "plan", ["--counts-require-origin-dev"]);
+    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(r.err).toContain("not reachable from its origin/dev");
+    expect((await runIt(l, join(dev, FROZEN))).code).toBe(0);
+  });
+});
+
+describe("the default counts dir cannot satisfy the layout and the error says what to pass (issue 1740 review)", () => {
+  test("no --counts-dir: the refusal names --counts-dir and a clean dev checkout at Y >= X", async () => {
+    const l = coreAtX();
+    const cwdCounts = join(l.w.dir, FROZEN); // the default: deployments/frozen-counts under the working directory
+    mkdirSync(cwdCounts, { recursive: true });
+    copyFileSync(REF_PATH, join(cwdCounts, `${PREV}.json`));
+    await freeze(l.x, cwdCounts);
+    const env = { PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: l.w.statePath, STUB_CONFIG: l.w.cfgPath, GITHUB_TOKEN: "t" };
+    const args = ["--chain", "8453", "--rpc", "http://rpc.test:8545", "--sheet", l.w.sheetPath, "--signer", "keystore:/dev/shm/stub/DEPLOYER", "--environment", "base-mainnet", "--core-sha", l.x, "--core-dir", l.core, "--evidence", l.w.evidence, "--stage", "plan"];
+    const { main } = await import("../src/cli.ts");
+    const code = await main(args, l.w.deps({ env, run: realGit as never, verifyReconstructed: async () => {} }));
+    expect(code).toBe(EXIT_CODES.COUNTS_MISSING);
+    const e = l.w.logs().reverse().find((x) => x.level === "error");
+    expect(JSON.stringify(e)).toContain("pass --counts-dir <a clean checkout of dev at Y >= the release sha");
   });
 });

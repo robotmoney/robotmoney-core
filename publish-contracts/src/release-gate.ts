@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { anchorChainOf, fileHashOf, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
+import { gitEnv } from "./git-env.ts";
 import { releaseTagsFor, tagKind, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
 import type { DeploymentKind } from "./chains.ts";
 
@@ -57,12 +58,17 @@ export interface ReleaseGateInput {
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
 }
 
-/** `git -C dir args`: the output, or the refusal. A git that cannot run, and a git that fails, are told apart. */
+const DUBIOUS = "git refuses a checkout owned by another user (safe.directory): the counts checkout must be owned by the operator";
+/** `git --no-replace-objects -C dir args`: the output, or the refusal. A git that cannot run, and a git that fails, are told apart. */
 function gitRead(git: string, dir: string, args: string[], what: string): { ok: boolean; out: Buffer; err: string } {
-  const r = spawnSync(git, ["-C", dir, ...args], { maxBuffer: 1 << 24 });
+  const r = spawnSync(git, ["--no-replace-objects", "-C", dir, ...args], { maxBuffer: 1 << 24, env: gitEnv() });
   if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): ${what}`);
-  return { ok: r.status === 0, out: r.stdout, err: String(r.stderr).trim().split("\n").pop() ?? "" };
+  const stderr = String(r.stderr);
+  const last = stderr.trim().split("\n").pop() ?? "";
+  return { ok: r.status === 0, out: r.stdout, err: /dubious ownership/.test(stderr) ? `${last} (${DUBIOUS})` : last };
 }
+
+export interface FrozenDirOptions { git?: string; /** Also require HEAD of the counts checkout to be an ancestor of (or equal to) its local refs/remotes/origin/dev. */ requireOriginDev?: boolean }
 
 /**
  * Issue 1740: the counts dir of a reconstructed baseline is a directory of a git checkout of THIS repository, and that checkout proves the dir.
@@ -73,7 +79,9 @@ function gitRead(git: string, dir: string, args: string[], what: string): { ok: 
  *   2. every `<40 hex>.json` in the dir is tracked at HEAD with the same bytes (the baseline X.json, every anchor, any extra file), and every one tracked at HEAD is in the dir (no deleted anchor);
  *   3. the dir is clean: nothing modified and nothing untracked under it.
  */
-export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, git = "git"): Promise<void> {
+export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, opt: FrozenDirOptions | string = {}): Promise<void> {
+  const o: FrozenDirOptions = typeof opt === "string" ? { git: opt } : opt;
+  const git = o.git ?? "git";
   const head = gitRead(git, coreDir, ["rev-parse", "HEAD"], `the commit of the core checkout ${coreDir} cannot be read`);
   const x = head.out.toString().trim();
   if (!head.ok || !/^[0-9a-f]{40}$/.test(x)) throw new PublishError("COUNTS_MISSING", `cannot read HEAD of the core checkout ${coreDir}: ${head.err}`);
@@ -92,10 +100,14 @@ export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, 
     const committed = gitRead(git, countsDir, ["show", `HEAD:./${name}`], `${name} cannot be compared with its committed bytes`);
     if (!committed.ok || !committed.out.equals(readFileSync(resolve(countsDir, name)))) throw new PublishError("COUNTS_MISSING", `${name} in the counts dir ${countsDir} differs from the committed bytes at HEAD: restore the committed bytes (git checkout)`);
   }
-  const st = gitRead(git, countsDir, ["status", "--porcelain", "--untracked-files=all", "--", "."], `the counts dir ${countsDir} cannot be checked for changes`);
+  const st = gitRead(git, countsDir, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", "."], `the counts dir ${countsDir} cannot be checked for changes`);
   if (!st.ok) throw new PublishError("COUNTS_MISSING", `git status failed in ${countsDir}: ${st.err}`);
   const dirty = st.out.toString().split("\n").filter((l) => l.trim() !== "");
-  if (dirty.length > 0) throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is not clean (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. Commit or remove it, the counts are read from a clean checkout`);
+  if (dirty.length > 0) throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is not clean (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. Commit or remove it (ignored files count too), the counts are read from a clean checkout`);
+  if (o.requireOriginDev) {
+    const od = gitRead(git, countsDir, ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/dev"], `the counts checkout ${countsDir} cannot be compared with origin/dev`);
+    if (!od.ok) throw new PublishError("COUNTS_MISSING", `HEAD of the counts checkout ${countsDir} is not reachable from its origin/dev (--counts-require-origin-dev): run 'git fetch origin dev' there and use a reviewed commit that is merged to dev (${od.err || "no refs/remotes/origin/dev"})`);
+  }
 }
 
 /** The proofs a reconstructed baseline needs before anything is signed: the dir is the committed one, and every anchor of its chain is committed with the checked bytes. */
@@ -113,7 +125,7 @@ export async function assertBaselineCommitted(o: { countsDir: string; sha: strin
 export async function gitAnchorCommitted(abs: string, expectedHash: string, git = "git"): Promise<void> {
   const file = resolve(abs);
   const rel = basename(file);
-  const r = spawnSync(git, ["-C", dirname(file), "show", `HEAD:./${rel}`], { maxBuffer: 1 << 24 });
+  const r = spawnSync(git, ["--no-replace-objects", "-C", dirname(file), "show", `HEAD:./${rel}`], { maxBuffer: 1 << 24, env: gitEnv() });
   if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): the anchor file ${rel} cannot be proven committed`);
   if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `the anchor file ${file} is not committed at HEAD of its checkout (git show: ${String(r.stderr).trim().split("\n").pop() ?? ""}): commit the earlier frozen file the baseline was cross-checked against`);
   if (fileHashOf(r.stdout) !== expectedHash) throw new PublishError("COUNTS_MISSING", `the anchor file ${rel} committed at HEAD differs from the bytes the baseline was cross-checked against: restore the committed bytes`);
