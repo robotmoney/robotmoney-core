@@ -88,6 +88,10 @@ pub struct IndexerConfig {
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
+    /// Explicit first block to read (issue 1725). When set, it IS the deploy floor and the
+    /// `eth_getCode` search is skipped: public Base RPCs are not archive nodes, so that search
+    /// degrades to block 0 there. Use the first block of the deployment being watched.
+    pub start_block: Option<u64>,
     /// Optional explicit upper bound — useful for bounded test runs.
     /// When `Some(end)`, the indexer never advances past `end`.
     pub end_block: Option<u64>,
@@ -498,6 +502,14 @@ pub async fn resolve_deploy_floor(
     cfg: &IndexerConfig,
     stored_cursor: Option<i64>,
 ) -> u64 {
+    if let Some(block) = configured_start_floor(cfg) {
+        tracing::info!(
+            start_block = block,
+            chain_id = cfg.chain_id,
+            "INDEXER_START_BLOCK is set; using it as the deploy floor and skipping eth_getCode detection"
+        );
+        return block;
+    }
     let contracts = cfg.configured_contracts();
     if contracts.is_empty() {
         tracing::warn!(
@@ -769,6 +781,11 @@ pub fn first_block(last_indexed: Option<i64>, deploy_floor: u64) -> i64 {
     let resume = last_indexed.map(|x| x.saturating_add(1)).unwrap_or(0);
     let floor: i64 = deploy_floor.try_into().unwrap_or(i64::MAX);
     resume.max(floor)
+}
+
+/// The operator-configured first block, when there is one. Pure so the rule is testable without a chain.
+pub fn configured_start_floor(cfg: &IndexerConfig) -> Option<u64> {
+    cfg.start_block
 }
 
 /// One indexer tick. Returns the outcome (also written to `indexer_runs`).
@@ -2972,6 +2989,7 @@ mod tests {
             investment_committee: None,
             consensus_receipt: None,
             max_blocks_per_tick: 100,
+            start_block: None,
             end_block: None,
             feature_flags: 0,
         };
@@ -2981,6 +2999,44 @@ mod tests {
             contracts[2],
             (router, "router_governance"),
             "first kind wins, which is what the upsert's ON CONFLICT already did"
+        );
+    }
+
+    #[test]
+    fn configured_start_block_is_the_floor_and_first_block_honours_it() {
+        let mut cfg = IndexerConfig {
+            chain_id: 8453,
+            chain_name: "base".into(),
+            rpc_label: "t".into(),
+            gateway: Address::from([0x11u8; 20]),
+            vault: Address::from([0x22u8; 20]),
+            registry: None,
+            router_governance: None,
+            portfolio_router: None,
+            investment_committee: None,
+            consensus_receipt: None,
+            max_blocks_per_tick: 1000,
+            start_block: Some(52_401_633),
+            end_block: None,
+            feature_flags: 0,
+        };
+        let floor = configured_start_floor(&cfg).expect("start block configured");
+        assert_eq!(floor, 52_401_633);
+        assert_eq!(
+            first_block(None, floor),
+            52_401_633,
+            "fresh database starts at the start block"
+        );
+        assert_eq!(
+            first_block(Some(52_500_000), floor),
+            52_500_001,
+            "a cursor past it resumes"
+        );
+        cfg.start_block = None;
+        assert_eq!(
+            configured_start_floor(&cfg),
+            None,
+            "unset keeps the getCode derivation"
         );
     }
 }

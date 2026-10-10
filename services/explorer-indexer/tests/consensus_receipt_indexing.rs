@@ -192,6 +192,7 @@ fn base_cfg(end_block: u64) -> IndexerConfig {
         investment_committee: None,
         consensus_receipt: Some(receipt_addr()),
         max_blocks_per_tick: 100,
+        start_block: None,
         end_block: Some(end_block),
         feature_flags: 0,
     }

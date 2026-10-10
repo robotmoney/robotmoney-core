@@ -37,6 +37,27 @@ Every stage service runs in a container (core 1549). `core-stack.ts` only calls 
 
 All four vaults ship with assets that have usable pools: rmUSDC, rmPROTO (wETH and cbBTC), rmAGENT (paused, holding RM on the Uniswap V4 RM/USDC 2.91% pool, priced by the permissionless price recorder; the Twin forks the live pool and never funds it) and rmRWA (deSPXA only, plain basket row, no oracle). Coinbase stocks are phase two.
 
+## Read-only dapp on Base mainnet (core issue 1725)
+
+`core-stack dapp up --chain 8453` runs the dapp, the explorer indexer and the explorer API against real Base (8453) and the contracts a mainnet rehearsal deployed. It reads only. It starts no Twin chain, runs no deploy job, holds no key and sends no transaction.
+
+```
+bun scripts/stage/core-stack.ts dapp up --chain 8453 \
+  --rpc <base rpc url> --manifests <copy of the manifests dir> --start-block <first block of the deployment> \
+  [--logs-rpc <url>] [--max-block-range N] [--dapp-port P] [--explorer-port P]
+bun scripts/stage/core-stack.ts dapp status --chain 8453
+bun scripts/stage/core-stack.ts dapp down --chain 8453
+```
+
+- **Manifests.** Pass a COPY of the manifests directory as an argument. The tool only reads it and requires `chain_id` 8453 in every file. The gateway, vaults, registry, router, governance, consensus receipt, timelock and Safe addresses and the gateway runtime hash come from there (`scripts/stage/mainnet-dapp.ts`). The vault order is rmUSDC, rmPROTO, rmAGENT, rmRWA and must match `timelock.json`.
+- **Start block.** `--start-block` becomes `INDEXER_START_BLOCK`. The indexer then skips its `eth_getCode` search for the deploy block. Public Base RPCs are not archive nodes, so that search fails there and falls back to block 0. The first block of the rehearsal on 8453 is 52401633.
+- **RPC choices.** `--rpc` serves everything. `--logs-rpc` (`INDEXER_LOGS_RPC_URL`) sends only `eth_getLogs` to a second endpoint. `--max-block-range` (`INDEXER_MAX_BLOCKS_PER_TICK`, default 1000, at least 1) is the `eth_getLogs` range. The indexer always sends the address list. `mainnet.base.org` throttles logs with 429. `base-rpc.publicnode.com` refuses old receipts. `base.gateway.tenderly.co` allows `eth_getLogs` up to 1000 blocks. The overlay sets `INDEXER_RPC_MAX_RETRIES` 6 and `INDEXER_RPC_BACKOFF_MS` 1000: HTTP 429, 502, 503, 504 and transport errors are retried with doubling waits. A key inside an RPC URL is passed through the environment only and logged as its origin.
+- **Known limit.** Block snapshots use `eth_call` at old blocks and each event block fetches its receipts. A node that keeps no old state or receipts answers those with errors. The indexer logs and skips a snapshot it cannot read. Use an archive endpoint when full history matters.
+- **No signing, no faucet, no deploy.** The tool refuses to start (exit 65, class `signing-env-present`) when the environment holds a variable named like a key, mnemonic, passphrase, keystore, signer, deployer, faucet, `STAGE_SHEET` or `PUBLISH_*`. It builds the dapp with `VITE_ENV_CLASS=mainnet` and an empty `VITE_FAUCET_HARNESS_PRIVATE_KEY`, so the faucet is refused (`chainClassifier.ts`, `buildEnvValidation.ts`). It reads `docker compose config` and refuses unless every published port is on `127.0.0.1`.
+- **Exposure (owner decision 2026-10-10, relayed by the plan owner's session).** Public exposure of the mainnet stage dapp is approved, through the cloudflared tunnel already configured on the stage host (`stage-dapp` and `stage-explorer` under `robotmoney-labs.dev`). That tunnel config is not in this repo and this tool never creates, edits or runs tunnel, DNS, Cloudflare or nginx configuration. The stack publishes on `127.0.0.1` only, which a tunnel on the same host reaches. The compose project is `robotmoney-dapp-8453`, the containers are `dapp8453-*`, and the default host ports are 15173 (dapp) and 18547 (explorer API), which differ from the Twin stack (5173 and 18546) so nothing existing is repointed by accident. To serve the public names the operator stops the Twin stack, then starts this one on the ports the existing tunnel forwards to (`--dapp-port` and `--explorer-port`, read from the host's tunnel config) and passes `--public-dapp-url` and `--public-explorer-url` so the bundle and the explorer CORS origin name the public URLs. Those two flags change only what the browser is told.
+- **Warning: real funds.** Once the vaults open on 2026-10-12 anyone who reaches the public dapp can deposit REAL USDC (caps 1000 and 100 USDC, rmAGENT 100 and 15). The dapp has no mainnet banner today: `TestnetBanner.tsx` renders nothing when the env class is `mainnet`. A banner with the chain name and "real funds" is a follow-up in core issue 1725.
+- **Never from CI.** No workflow runs this verb. The tests use a fixture and a fake `docker compose`.
+
 ## What is not here
 
 Stage has no second deployment path. These do not exist and a CI gate keeps them gone:

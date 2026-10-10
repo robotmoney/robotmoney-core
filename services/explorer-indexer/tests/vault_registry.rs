@@ -186,6 +186,7 @@ async fn vault_registered_event_inserts_vaults_row() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -276,6 +277,7 @@ async fn vault_status_changed_updates_status() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -335,6 +337,7 @@ async fn vault_status_changed_updates_status() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(89),
         feature_flags: 4,
     };
@@ -415,6 +418,7 @@ async fn registered_vault_added_to_watched_address_set() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -574,6 +578,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -636,6 +641,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -741,6 +747,7 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };

@@ -74,6 +74,7 @@ fn history_cfg(gateway: Address, vault: Address, gov: Option<Address>) -> Indexe
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(10),
         feature_flags: 0,
     }

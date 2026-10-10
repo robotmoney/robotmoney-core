@@ -272,6 +272,7 @@ async fn two_registered_vaults_indexed_independently() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -311,6 +312,7 @@ async fn two_registered_vaults_indexed_independently() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(89),
         feature_flags: 4,
     };
@@ -386,6 +388,7 @@ async fn weights_set_event_populates_router_weight_snapshots() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -466,6 +469,7 @@ async fn proposal_created_event_populates_governance_proposals() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -551,6 +555,7 @@ async fn vote_cast_event_populates_governance_votes() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };

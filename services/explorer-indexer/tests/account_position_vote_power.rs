@@ -44,6 +44,7 @@ fn cfg(vault: Address) -> IndexerConfig {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: None,
         feature_flags: 0,
     }

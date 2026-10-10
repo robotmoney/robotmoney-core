@@ -287,6 +287,7 @@ fn base_config(vault: Address) -> IndexerConfig {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 0,
     }
