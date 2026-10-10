@@ -31,6 +31,10 @@ inputs:
       receipt through the gateway, apply it with the Safe, verify again, check the run manifest's receipt path. Needs govern 'true'.
     required: false
     default: "false"
+  predeploy-libs:
+    description: "'true' first deploys the four CREATE2 libraries (TickMath, BasketAssetConfigGuard, TwapTickMath, BasketViews) on the Twin fork, so the run finds them all already deployed (issue 1721)."
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -42,4 +46,5 @@ runs:
         VERIFY_IN: ${{ inputs.verify }}
         GOVERN_IN: ${{ inputs.govern }}
         REHEARSAL_IN: ${{ inputs.rehearsal }}
+        PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
       run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"

@@ -46,7 +46,7 @@ const path = (e: any) => {
   return e;
 };
 const R = { kind: "rehearsal" as const };
-const problems = (e: any, o?: { kind?: "rehearsal" | "production" }) => checkEvidence(e, undefined, o).join("\n");
+const problems = (e: any, o?: { kind?: "rehearsal" | "production" }) => checkEvidence(e, undefined, undefined, o).join("\n");
 
 describe("evidence kind", () => {
   test("production evidence passes as production; a rehearsal evidence presented as production is refused (and the reverse)", () => {
@@ -54,7 +54,7 @@ describe("evidence kind", () => {
     expect(problems(reh())).toContain("deployment_kind is rehearsal, the evidence is checked as production");
     expect(problems(reh())).toContain("never production evidence");
     expect(problems(prod(), R)).toContain("deployment_kind is production, the evidence is checked as rehearsal");
-    expect(checkEvidence(reh(), undefined, R)).toEqual([]); // mutation: asked for as a rehearsal it passes
+    expect(checkEvidence(reh(), undefined, undefined, R)).toEqual([]); // mutation: asked for as a rehearsal it passes
   });
   test("an explicit deployment_kind production passes; an unknown kind is refused", () => {
     expect(checkEvidence({ ...prod(), deployment_kind: "production" })).toEqual([]);
@@ -64,17 +64,17 @@ describe("evidence kind", () => {
     const e = prod(); e.timelock.min_delay = 900;
     expect(problems(e)).toContain("min_delay 900 is under 172800");
     const r = reh();
-    expect(checkEvidence(r, undefined, R)).toEqual([]);
+    expect(checkEvidence(r, undefined, undefined, R)).toEqual([]);
     r.timelock.min_delay = 899;
     expect(problems(r, R)).toContain("is under 900");
     r.timelock.min_delay = 172800;
     expect(problems(r, R)).toContain("cannot be told from production");
     r.timelock.min_delay = 172799;
-    expect(checkEvidence(r, undefined, R)).toEqual([]);
+    expect(checkEvidence(r, undefined, undefined, R)).toEqual([]);
   });
   test("govern gaps follow the kind: 900 s passes as a rehearsal, fails as production", () => {
     const r = reh();
-    expect(checkEvidence(r, undefined, R)).toEqual([]);
+    expect(checkEvidence(r, undefined, undefined, R)).toEqual([]);
     expect(problems(r, { kind: "production" })).toContain("gap 900 s is under 172800");
     r.govern[0].execute_block_timestamp = T0 + 899;
     expect(problems(r, R)).toContain("gap 899 s is under 900");
@@ -82,17 +82,17 @@ describe("evidence kind", () => {
   test("the deployer start nonce: rehearsal counts from it, production refuses one and counts from 0", () => {
     const counts = { safe: 2 };
     const r = reh(); r.deployer_nonce_final = finalDeployerNonce(counts, 118);
-    expect(checkEvidence(r, counts, R)).toEqual([]);
+    expect(checkEvidence(r, counts, undefined, R)).toEqual([]);
     r.deployer_nonce_final = finalDeployerNonce(counts);
-    expect(checkEvidence(r, counts, R).join()).toContain("start nonce 118");
+    expect(checkEvidence(r, counts, undefined, R).join()).toContain("start nonce 118");
     delete r.deployer_start_nonce;
-    expect(checkEvidence(r, counts, R).join()).toContain("deployer_start_nonce is missing");
+    expect(checkEvidence(r, counts, undefined, R).join()).toContain("deployer_start_nonce is missing");
     const p = prod(); p.deployer_nonce_final = finalDeployerNonce(counts); p.deployer_start_nonce = 118;
     expect(checkEvidence(p, counts).join()).toContain("deployer_start_nonce is present in a production evidence");
   });
   test("update-delay, batch and cancel: refused on 8453 in production (govern and rehearsal_rows), accepted under rehearsal_rows in a rehearsal", () => {
     expect([...REHEARSAL_ROWS]).toEqual(["update-delay", "batch", "cancel"]);
-    expect(checkEvidence(rows(reh()), undefined, R)).toEqual([]);
+    expect(checkEvidence(rows(reh()), undefined, undefined, R)).toEqual([]);
     expect(problems(rows(prod()))).toContain("rehearsal_rows is present in a production evidence");
     const e = reh(); e.govern.push({ ...e.govern[0], step: "update-delay", schedule_tx: h(700), execute_tx: h(701), operation_id: h(702) });
     expect(problems(e, R)).toContain("'update-delay' is not a vault unpause"); // they never go in govern
@@ -136,12 +136,12 @@ describe("forged evidence cannot skip the gap check (review B1)", () => {
   test("in a rehearsal the cancel flag on an update-delay or batch row does not skip its gap, while the real cancel row is still exempt", () => {
     const e = rows(reh()); e.rehearsal_rows[0].execute_block_timestamp = T0 + 5; e.rehearsal_rows[0].cancelled = true;
     expect(problems(e, R)).toContain("gap 5 s is under 900");
-    expect(checkEvidence(rows(reh()), undefined, R)).toEqual([]); // mutation: the genuine cancel row has no execute and passes
+    expect(checkEvidence(rows(reh()), undefined, undefined, R)).toEqual([]); // mutation: the genuine cancel row has no execute and passes
   });
 });
 
 describe("the receipt path of a rehearsal", () => {
-  test("a registered submitter, a recorded receipt and the application of that same receipt pass", () => expect(checkEvidence(path(reh()), undefined, R)).toEqual([]));
+  test("a registered submitter, a recorded receipt and the application of that same receipt pass", () => expect(checkEvidence(path(reh()), undefined, undefined, R)).toEqual([]));
   test("production refuses both lists", () => {
     const e: any = path(prod());
     expect(problems(e)).toContain("committee_registrations is present in a production evidence");
@@ -159,7 +159,7 @@ describe("the receipt path of a rehearsal", () => {
     const e = path(reh()); e.recorded_receipts[0].submitter = a(0xbad);
     expect(problems(e, R)).toContain("has no committee_registrations entry");
     e.recorded_receipts[0].submitter = SUB;
-    expect(checkEvidence(e, undefined, R)).toEqual([]);
+    expect(checkEvidence(e, undefined, undefined, R)).toEqual([]);
   });
   test("the shape of each entry is checked: addresses, label, validity, digest, uri, status, transaction", () => {
     const m = (f: (e: any) => void) => { const e = path(reh()); f(e); return problems(e, R); };
@@ -178,7 +178,7 @@ describe("the receipt path of a rehearsal", () => {
   });
   test("a recorded receipt that was already on chain needs no transaction of its own", () => {
     const e = path(reh()); delete e.recorded_receipts[0].tx_hash; e.recorded_receipts[0].already_recorded = true;
-    expect(checkEvidence(e, undefined, R)).toEqual([]);
+    expect(checkEvidence(e, undefined, undefined, R)).toEqual([]);
   });
   test("no key, passphrase or keystore path is a field of the evidence", () => {
     expect(JSON.stringify(path(reh()))).not.toMatch(/private|passphrase|keystore|mnemonic/i);
@@ -235,5 +235,47 @@ describe("the registration batch and the rehearsal rows on chain", () => {
   test("checkEvidenceOnChain in production does not run the rehearsal checks, and refuses a rehearsal evidence as production", async () => {
     const out = await checkEvidenceOnChain(reh(), stub({}, {}), { safe: 2 });
     expect(out.join("\n")).toContain("the evidence is checked as production");
+  });
+});
+
+
+// ---- rehearsal kind + adoption (PR 1722) together: start + sum(effectiveCounts) + proof ----
+import { keccak256 as k256 } from "viem";
+describe("a rehearsal evidence with adopted stages and a non-zero start nonce", () => {
+  const CODE = "0x73" + "11".repeat(20) + "3014608060405260";
+  const FROZEN = { safe: 2, libs: 4, proto: 10 };
+  const CAP = { safe: 0, libs: 1, proto: 3 };
+  const START = 118;
+  const adopted = (): any => {
+    const e = reh();
+    e.deployer_start_nonce = START;
+    e.stages.push({ stage: "libs", frozen_count: 4, receipt_count: 0, tx_hashes: [], receipts_status: [], adopted: { deployer_txs: 0, libraries: [{ name: "tick_math", address: a(77), code_hash: k256(CODE as Hex) }] } });
+    e.stages.push({ stage: "proto", frozen_count: 10, receipt_count: 7, tx_hashes: Array.from({ length: 7 }, (_, i) => h(60 + i)), receipts_status: Array.from({ length: 7 }, () => 1),
+      adopted: { deployer_txs: 7, libraries: ["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"].map((name, i) => ({ name, address: a(80 + i), code_hash: k256(CODE as Hex) })) } });
+    e.deployer_nonce_final = START + (2 + 0 + 7) + 1; // start + sum(effectiveCounts) + proof
+    return e;
+  };
+  const off = (e: any) => checkEvidence(e, FROZEN, CAP, R).join("\n");
+  test("start 118, libs adopted at 0 and proto at 7 of 10: the final nonce is start + sum(effective) + proof, and it passes", () => expect(off(adopted())).toBe(""));
+  test("mutations: without the start, with the un-adjusted frozen sum, or with one stray transaction the final nonce fails", () => {
+    for (const final of [(2 + 0 + 7) + 1, START + (2 + 4 + 10) + 1, START + (2 + 0 + 7) + 2, START + (2 + 0 + 7)]) {
+      const e = adopted(); e.deployer_nonce_final = final;
+      expect(off(e)).toContain("deployer_nonce_final");
+    }
+  });
+  test("adoption bounds still hold in a rehearsal: proto below its frozen count less three, a longer library list than the table allows, and an adopted stage with no start are refused", () => {
+    const low = adopted(); low.stages[2].receipt_count = 6; low.stages[2].tx_hashes.pop(); low.stages[2].receipts_status.pop(); low.stages[2].adopted.deployer_txs = 6; low.deployer_nonce_final = START + 2 + 6 + 1;
+    expect(off(low)).toContain("is below the frozen count 10 less its 3 adopted libraries");
+    const forged = adopted(); forged.stages[2].adopted.libraries.push({ name: "X", address: a(99), code_hash: k256(CODE as Hex) });
+    expect(off(forged)).not.toBe("");
+    const nostart = adopted(); delete nostart.deployer_start_nonce;
+    expect(off(nostart)).toContain("deployer_start_nonce is missing");
+  });
+  test("on chain: the live deployer nonce must be start + sum(effective) + proof", async () => {
+    const reader = (nonce: number): ChainReader => ({ getChainId: async () => 8453, getTransactionCount: async () => nonce, getTransactionReceipt: async () => { throw new Error("none"); }, getBlock: async () => { throw new Error("none"); }, readContract: async () => { throw new Error("none"); }, getCode: async () => CODE as Hex } as never);
+    const want = START + 9 + 1;
+    const ok = (await checkEvidenceOnChain(adopted(), reader(want), FROZEN, R)).join("\n");
+    expect(ok).not.toContain("deployer nonce on chain");
+    for (const bad of [want + 1, want - 1, 10]) expect((await checkEvidenceOnChain(adopted(), reader(bad), FROZEN, R)).join("\n")).toContain("deployer nonce on chain");
   });
 });

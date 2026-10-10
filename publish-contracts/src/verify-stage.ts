@@ -3,10 +3,11 @@
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
+import { effectiveCounts } from "./counts.ts";
 import { resumeCommand } from "./govern.ts";
 import { MAINNET_CHAIN_ID } from "./floors.ts";
 import { kindLabel } from "./chains.ts";
-import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
+import { adoptedTxs, governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { RECORDER_STAGE, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
@@ -144,8 +145,9 @@ const readDepositsPaused = async (rpc: string, vault: `0x${string}`): Promise<bo
 export const realVerifyDeps: VerifyDeps = { verifyDeployment, verifySources, depositsPaused: readDepositsPaused };
 
 export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: RunManifest, deps: VerifyDeps = realVerifyDeps): Promise<VerifyReport> {
-  const frozen = ctx.frozen ?? (ctx.measure ? measuredCounts(manifest) : undefined);
-  if (!frozen) throw new PublishError("COUNTS_MISSING", "the verifier needs the frozen counts for this DEPLOY_SHA");
+  const frozenFile = ctx.frozen ?? (ctx.measure ? measuredCounts(manifest) : undefined);
+  if (!frozenFile) throw new PublishError("COUNTS_MISSING", "the verifier needs the frozen counts for this DEPLOY_SHA");
+  const frozen = effectiveCounts(frozenFile, adoptedTxs(manifest)); // an adopted stage (libs, issue 1721) counts the transactions this deployer sent for it
   if (manifest.firstBlock === undefined) throw new PublishError("INPUT_MISSING", "the run manifest has no first deploy block: the role scan needs it. Run the deploy stages first.");
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const startedAt = Date.now();

@@ -14,7 +14,7 @@
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
-import { decodeEventLog, encodeFunctionData, parseAbi, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, type Hex } from "viem";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -22,7 +22,9 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProble
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { assertOwnerExceptions } from "./plan.ts";
-import { finalDeployerNonce } from "./counts.ts";
+import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
+import { LIBS_STAGE } from "./core-wiring.ts";
+import { loadStageTable } from "./stage-table.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -239,7 +241,32 @@ function startNonceOf(ev: any, kind: DeploymentKind, bad: (m: string) => void): 
   return ev.deployer_start_nonce;
 }
 
-export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, opts?: EvidenceOpts): string[] {
+/**
+ * An ADOPTED stage (issue 1721): a stage whose CREATE2 libraries already sat on chain (the libs stage: its one library; a basket stage: BasketAssetConfigGuard,
+ * TwapTickMath, BasketViews), so the deployer sent fewer transactions than the frozen count. The stage entry carries
+ * `adopted: { libraries: [{ name, address, code_hash }], deployer_txs }`. `deployer_txs` is what this deployer sent and is the stage's contribution to the
+ * deployer nonce: between (frozen count - number of adopted libraries) and the frozen count (the libs stage may send none). The entry names at least one library.
+ */
+const adoptedOf = (s: any): any => (s?.adopted === undefined || s.adopted === null ? undefined : s.adopted);
+/** stage -> deployer transactions, for the stages the evidence records as adopted. Malformed entries are skipped here and named by checkEvidence. */
+export function adoptedTxsOfEvidence(ev: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of Array.isArray(ev?.stages) ? ev.stages : []) {
+    const a = adoptedOf(s);
+    if (a && Number.isInteger(a.deployer_txs)) out[s.stage] = a.deployer_txs;
+  }
+  return out;
+}
+/** The frozen counts with every adopted stage counted at the transactions the deployer sent. An impossible adopted entry leaves the counts as frozen, so the nonce check still fails on it. */
+function effectiveForEvidence(ev: any, frozenCounts: Record<string, number>): Record<string, number> {
+  try { return effectiveCounts(frozenCounts, adoptedTxsOfEvidence(ev)); } catch { return frozenCounts; }
+}
+const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?: string }[] => (Array.isArray(adoptedOf(s)?.libraries) ? adoptedOf(s).libraries : []);
+
+/** stage -> how many libraries the stage table lets it adopt (libs: its linked libraries; a basket stage: its create2Libraries). The CLI passes it from the table. */
+export type AdoptableLibraries = Record<string, number>;
+
+export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, adoptable?: AdoptableLibraries, opts?: EvidenceOpts): string[] {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
   const kind = kindOf(opts);
@@ -254,8 +281,33 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, op
   for (const s of stages) {
     const hashes: unknown[] = Array.isArray(s.tx_hashes) ? s.tx_hashes : [];
     const st: unknown[] = Array.isArray(s.receipts_status) ? s.receipts_status : [];
-    if (s.frozen_count !== s.receipt_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from receipt_count ${s.receipt_count}`);
-    if (frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.receipt_count) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+    const adopted = adoptedOf(s);
+    if (adopted !== undefined) {
+      // an adopted stage sent no (or fewer) transactions: its frozen count is not demanded of the receipts, its deployer_txs is
+      if (!Number.isInteger(adopted.deployer_txs) || adopted.deployer_txs < 0) bad(`stage ${s.stage}: adopted.deployer_txs is not a non-negative integer`);
+      else {
+        if (s.receipt_count !== adopted.deployer_txs) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from adopted.deployer_txs ${adopted.deployer_txs}`);
+        if (s.frozen_count !== undefined && frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.frozen_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+        if (frozenCounts && s.stage in frozenCounts && adopted.deployer_txs > frozenCounts[s.stage]!) bad(`stage ${s.stage}: adopted.deployer_txs ${adopted.deployer_txs} is above the frozen count ${frozenCounts[s.stage]}`);
+        // a stage adopts at most one creation per adopted library: it cannot send fewer than the frozen count less that many (the libs stage may send none)
+        if (frozenCounts && s.stage in frozenCounts && s.stage !== LIBS_STAGE && adopted.deployer_txs < frozenCounts[s.stage]! - adoptedLibraries(s).length) bad(`stage ${s.stage}: adopted.deployer_txs ${adopted.deployer_txs} is below the frozen count ${frozenCounts[s.stage]} less its ${adoptedLibraries(s).length} adopted librar${adoptedLibraries(s).length === 1 ? "y" : "ies"}`);
+      }
+      const libs = adoptedLibraries(s);
+      if (libs.length === 0) bad(`stage ${s.stage}: adopted names no library`);
+      // the list length sets the lowest allowed deposit count, so a longer list than the table allows would lower it: capped, and no repeat
+      if (adoptable) {
+        const cap = adoptable[s.stage] ?? 0;
+        if (libs.length > cap) bad(`stage ${s.stage}: adopted lists ${libs.length} librar${libs.length === 1 ? "y" : "ies"}, the stage table lets this stage adopt ${cap}`);
+        if (new Set(libs.map((l) => lc(String(l?.address ?? "")))).size !== libs.length || new Set(libs.map((l) => l?.name)).size !== libs.length) bad(`stage ${s.stage}: adopted lists a library twice`);
+      }
+      for (const l of libs) {
+        if (!ADDR.test(l?.address ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no address`);
+        if (!TX.test(l?.code_hash ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no code_hash (the keccak256 of its runtime code)`);
+      }
+    } else {
+      if (s.frozen_count !== s.receipt_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from receipt_count ${s.receipt_count}`);
+      if (frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.receipt_count) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+    }
     if (hashes.length !== s.receipt_count) bad(`stage ${s.stage}: ${hashes.length} tx hashes for ${s.receipt_count} receipts`);
     hashes.forEach((h, i) => { if (typeof h !== "string" || !TX.test(h)) bad(`stage ${s.stage}: tx hash ${i} is missing or malformed`); });
     if (st.length !== hashes.length) bad(`stage ${s.stage}: ${st.length} receipt statuses for ${hashes.length} tx hashes`);
@@ -304,7 +356,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, op
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
   const start = startNonceOf(ev, kind, bad);
-  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(frozenCounts, start)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(frozenCounts, start)}`);
+  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
@@ -317,6 +369,8 @@ export interface ChainReader {
   getTransactionCount(a: { address: `0x${string}` }): Promise<number>;
   getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }>;
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
+  /** Runtime code at an address (viem getCode). Needed only when the evidence records an adopted stage. */
+  getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
   readContract(a: { address: `0x${string}`; abi: any; functionName: string }): Promise<unknown>;
 }
 
@@ -355,7 +409,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   };
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
-  const want = finalDeployerNonce(frozenCounts, startNonceOf(ev, kind, bad));
+  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad));
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
   if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction say ${want}`);
 
@@ -367,6 +421,16 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
   };
   for (const s of ev.stages ?? []) for (const [i, h] of (s.tx_hashes ?? []).entries()) await status(`stage ${s.stage} tx ${i}`, h);
+  // An adopted stage is believed only when the chain holds the recorded code: keccak256 of the runtime code at each adopted address equals the recorded code_hash.
+  for (const s of ev.stages ?? []) for (const l of adoptedLibraries(s)) {
+    if (!ADDR.test(l?.address ?? "") || !TX.test(l?.code_hash ?? "")) continue; // the offline check already named it
+    if (!chain.getCode) { bad(`stage ${s.stage}: adopted library ${l.name}: this chain reader cannot read code, so the adoption is not proven`); continue; }
+    try {
+      const code = await chain.getCode({ address: l.address as `0x${string}` });
+      if (!code || code === "0x") bad(`stage ${s.stage}: adopted library ${l.name} has no code at ${l.address} on chain`);
+      else if (lc(keccak256(code)) !== lc(l.code_hash!)) bad(`stage ${s.stage}: adopted library ${l.name}: the code hash on chain at ${l.address} is ${keccak256(code)}, the evidence says ${l.code_hash}`);
+    } catch (e) { bad(`stage ${s.stage}: adopted library ${l.name}: code not readable on chain (${(e as Error).message})`); }
+  }
   if (ev.safe?.creation_tx) await status("safe creation", ev.safe.creation_tx);
 
   try {
@@ -606,6 +670,8 @@ export interface ChainFixture {
   receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[] }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
+  /** Runtime code by lower-case address, recorded for the adopted libraries only (issue 1721). Optional: older fixtures have none. */
+  codes?: Record<string, string>;
 }
 
 const readKey = (address: string, fn: string) => `${lc(address)}:${fn}`;
@@ -621,6 +687,7 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
       return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs };
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
+    getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
     readContract: async ({ address, functionName }) => {
       const k = readKey(address, functionName);
       return k in fx.reads ? fx.reads[k] : miss(`read ${k}`);
@@ -644,6 +711,11 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
       const b = await inner.getBlock(a);
       fixture.blocks[a.blockNumber.toString()] = Number(b.timestamp);
       return b;
+    },
+    getCode: async (a) => {
+      const c = await inner.getCode!(a);
+      (fixture.codes ??= {})[lc(a.address)] = c ?? "0x";
+      return c;
     },
     readContract: async (a) => {
       const v = await inner.readContract(a);
@@ -711,6 +783,12 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/** The per-stage cap from core's stage table in this checkout. */
+function adoptableFromTable(): AdoptableLibraries {
+  const t = loadStageTable(new URL("../../", import.meta.url).pathname);
+  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length]));
+}
+
 async function main() {
   const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
@@ -725,7 +803,7 @@ async function main() {
     if (values["deploy-sha"] && j.deploySha !== values["deploy-sha"]) { console.error(`evidence: frozen file is for ${j.deploySha}, not ${values["deploy-sha"]}`); process.exit(1); }
     counts = j.counts ?? j;
   }
-  const problems = [...checkEvidence(ev, counts, { kind }), ...scanEvidenceFolder(join(values.evidence, ".."))];
+  const problems = [...checkEvidence(ev, counts, adoptableFromTable(), { kind }), ...scanEvidenceFolder(join(values.evidence, ".."))];
   if (values.rpc && values["chain-fixture"]) { console.error("evidence: give --rpc or --chain-fixture, not both"); process.exit(2); }
   if (values["record-chain-fixture"] && !values.rpc) { console.error("evidence: --record-chain-fixture needs --rpc"); process.exit(2); }
   if ((values.rpc || values["chain-fixture"]) && !counts) { console.error("evidence: reading the chain needs --frozen FILE (and --deploy-sha SHA): the nonce is checked against the frozen counts"); process.exit(2); }

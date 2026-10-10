@@ -12,6 +12,11 @@ interface Cfg {
   castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>; // cast subcommand -> its canned reply (receipt, call)
   emptyCode?: string[];                    // addresses `cast code` answers 0x for (no code). Default: the Safe the fake Safe API predicts, a fresh address (issue 1727); [] gives it code
   simFails?: string;                       // script file whose simulation fails
+  zeroTx?: string;                         // script file that plans ZERO transactions (issue 1721): exit 0, "Script ran successfully.", no SIMULATION COMPLETE, no broadcast file; the manifest is still written
+  zeroTxBumps?: number;                    // with zeroTx: the deployer nonce moves by this much during the run (its own transaction landed meanwhile)
+  codeAt?: Record<string, string>;         // lower-case address -> the runtime code `cast code` prints there (default: STUB_CODE)
+  creates?: Record<string, string[]>;     // script file -> the CREATE2 library addresses its first transactions create (issue 1721); the file marks them transactionType CREATE2
+  libsAddress?: string;                    // the tick_math address the stub manifest holds (default 0x1009)
   chainId: number;
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
 }
@@ -47,7 +52,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (cmd === "client") out("stub-node/1.0");
     if (cmd === "block-number") out("100");
     if (cmd === "rpc") out("null");
-    if (cmd === "code") out((cfg.emptyCode ?? ["0x00000000000000000000000000000000000050fe"]).includes((a0 ?? "").toLowerCase()) ? "0x" : STUB_CODE);
+    if (cmd === "code") out(cfg.codeAt?.[a0!.toLowerCase()] ?? ((cfg.emptyCode ?? ["0x00000000000000000000000000000000000050fe"]).includes((a0 ?? "").toLowerCase()) ? "0x" : STUB_CODE));
     if (cmd === "codehash") out(`0x${"ab".repeat(32)}`);
     out(`stub cast: unsupported ${cmd}`, 1);
   }
@@ -65,23 +70,27 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (cfg.simFails === file) out("Error: script failed", 1);
 
   const writeFiles = (n: number, dry: boolean) => {
+    if (cfg.zeroTx === file) n = -1; // zero planned transactions: forge writes no broadcast file, only the script's own manifest
     const dir = join("broadcast", file, chain, ...(dry ? ["dry-run"] : []));
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "run-latest.json"), JSON.stringify({
-      transactions: Array.from({ length: n }, (_, i) => ({ hash: `0x${(i + 1).toString(16).padStart(64, "0")}` })),
-      ...(dry ? {} : { receipts: Array.from({ length: n }, () => ({ blockNumber: "0x64" })) }),
-    }));
+    if (n >= 0) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "run-latest.json"), JSON.stringify({
+        transactions: Array.from({ length: n }, (_, i) => ({ hash: `0x${(i + 1).toString(16).padStart(64, "0")}`, ...(cfg.creates?.[file]?.[i] ? { transactionType: "CREATE2", contractAddress: cfg.creates[file]![i] } : {}) })),
+        ...(dry ? {} : { receipts: Array.from({ length: n }, () => ({ blockNumber: "0x64" })) }),
+      }));
+    }
     const outPath = process.env.DEPLOYMENT_OUT;
     if (outPath) {
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, JSON.stringify({
         vault: addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
-        consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: addr(0x1009), adapter: addr(0xa2),
+        consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: cfg.libsAddress ?? addr(0x1009), adapter: addr(0xa2),
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
       }));
     }
   };
 
+  if (cfg.zeroTx === file) { st.nonces[sender] = (st.nonces[sender] ?? 0) + (cfg.zeroTxBumps ?? 0); writeFiles(0, !broadcast); out("Script ran successfully."); }
   if (!broadcast) {
     writeFiles(count, true);
     out(`Estimated amount required: 0.000001 ETH\nSIMULATION COMPLETE. To broadcast these transactions, add --broadcast`);

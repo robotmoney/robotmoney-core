@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The step script of the twin-publish action (core 1488, 1523), in TypeScript because no shell file may orchestrate the deploy driver.
-// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
+// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture: register the SUBMITTER through the Safe and the timelock (govern --row register-committee), the submitter records the
@@ -35,6 +35,7 @@ const bun = process.execPath;
 const cli = env("TWIN_CLI", "src/cli.ts");
 const rehearsal = env("TWIN_REHEARSAL_CLI", "src/rehearsal/cli.ts");
 const mergeSheet = env("TWIN_MERGE_SHEET", "src/ci/merge-sheet.ts");
+const predeploy = env("TWIN_PREDEPLOY", "src/ci/predeploy-libs.ts");
 
 // Under /tmp: foundry.toml fs_permissions lets the deploy scripts write their manifests there only.
 const rh = mkdtempSync("/tmp/twin-publish.");
@@ -52,6 +53,8 @@ const rehearsalMode = env("REHEARSAL_IN") === "true";
 if (rehearsalMode) appendFileSync(fragment, ["DEPLOYMENT_KIND=rehearsal", "TIMELOCK_MIN_DELAY=900", "GOVERN_NEW_DELAY=1800", `SAFE_SALT_NONCE=${Math.floor(Date.now() / 1000)}`].join("\n") + "\n");
 const sheet = join(rh, "sheet.env");
 run([bun, mergeSheet, "--template", join(core, "deployments/twin-918453/stage-sheet.env"), "--fragment", fragment, "--out", sheet], { cwd: pc });
+// PREDEPLOY_LIBS_IN=true (issue 1721): put all four CREATE2 libraries on the fork first, so the whole run finds them already deployed (the state of Base after the real deploy).
+if (env("PREDEPLOY_LIBS_IN") === "true") run([bun, predeploy, "--rpc", rpc, "--core-dir", core], { cwd: pc });
 // Twin environment steps: gas for every key, USDC for the seed deposit.
 run([bun, rehearsal, "fund-gas", "--rpc", rpc, "--sheet", sheet], { cwd: pc });
 run([bun, rehearsal, "fund-usdc", "--rpc", rpc, "--sheet", sheet, "--usdc-units", "2000000000"], { cwd: pc });
@@ -77,7 +80,7 @@ stage("publish");
 // counts.json: the measured counts and the real deployer nonce, read after publish (it includes the one prove-control transaction; verify and govern run after it).
 const nonce = run([castBin, "nonce", admin, "--rpc-url", rpc]).trim();
 const countsJson = join(rh, "counts.json");
-run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson, ...(rehearsalMode ? ["--start-nonce", startNonce] : [])], { cwd: pc });
+run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson, "--run-manifest", join(rh, "evidence", "publish-run.json"), ...(rehearsalMode ? ["--start-nonce", startNonce] : [])], { cwd: pc });
 run([bun, "src/ci/rehearsal-counts.ts", "check", "--file", countsJson], { cwd: pc });
 exportVar("TWIN_COUNTS_JSON", countsJson);
 if (env("VERIFY_IN") === "true") {

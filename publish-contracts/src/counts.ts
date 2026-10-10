@@ -3,10 +3,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
-import { MAINNET_CHAIN_ID } from "./chains.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
 
 export type FrozenCounts = Record<string, number>;
-export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string }; counts: FrozenCounts }
+export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[] }; counts: FrozenCounts }
 
 export const FROZEN_DIR = "deployments/frozen-counts";
 const SHA = /^[0-9a-f]{40}$/;
@@ -23,11 +23,12 @@ export function validateCounts(counts: unknown): FrozenCounts {
 }
 
 /** Loads the frozen counts for a DEPLOY_SHA. A missing file or a file for another SHA fails. */
-export function loadFrozen(dir: string, sha: string): FrozenFile {
+export function loadFrozen(dir: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
   const p = frozenPath(dir, sha);
   if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), review ${FROZEN_DIR}/${sha}.json, then commit it. Nothing here guesses a count.`, { sha });
   const j = JSON.parse(readFileSync(p, "utf8"));
   if (j.deploySha !== sha) throw new PublishError("COUNTS_MISSING", `${p} is for DEPLOY_SHA ${j.deploySha}, not ${sha}`, { sha });
+  if (!o.allowAdopted && Array.isArray(j.measured?.adopted) && j.measured.adopted.length > 0) throw new PublishError("COUNTS_MISSING", `${p} was written by a run that ADOPTED stage(s) ${j.measured.adopted.join(", ")} (already on chain, not run): their counts were never measured, so it is not a frozen file. Measure on a fork pinned before Base block 52401633, or take the count of the adopted stage from the earlier frozen file. Delete this file before rerunning.`, { sha, adopted: j.measured.adopted });
   return { deploySha: sha, measured: j.measured, counts: validateCounts(j.counts) };
 }
 
@@ -41,6 +42,26 @@ export const PROOF_TX_NONCES = 1;
 
 /** The deployer nonce at the end of the deploy stages: the summed frozen counts plus the one prove-control transaction. */
 export const finalDeployerNonce = (c: FrozenCounts, startNonce = 0): number => startNonce + sumCounts(c) + PROOF_TX_NONCES;
+
+/**
+ * Adopted stages (issue 1721). A stage whose contracts already sit on chain (the permissionless CREATE2 libraries) plans zero transactions, so the stage is
+ * ADOPTED rather than run. `adopted` maps the stage to the number of transactions THIS deployer really sent for it: 0 on a Twin fork (the library came with the
+ * pinned mainnet state), the whole frozen count on a resume where the deployer's own transaction had already landed.
+ * The expected deployer nonce counts that number and not the frozen count. With nothing adopted the frozen counts come back untouched, so the normal path is unchanged.
+ */
+export type AdoptedTxs = Record<string, number>;
+export function effectiveCounts(c: FrozenCounts, adopted: AdoptedTxs = {}): FrozenCounts {
+  const keys = Object.keys(adopted);
+  if (keys.length === 0) return c;
+  const out: FrozenCounts = { ...c };
+  for (const k of keys) {
+    const sent = adopted[k];
+    if (!(k in c)) throw new PublishError("LIBS_ADOPTION", `stage '${k}' is recorded as adopted but has no frozen count`, { stage: k });
+    if (!Number.isInteger(sent) || sent! < 0 || sent! > c[k]!) throw new PublishError("LIBS_ADOPTION", `stage '${k}' is adopted with ${String(sent)} deployer transactions, outside 0 to its count ${c[k]}`, { stage: k, sent, count: c[k] });
+    out[k] = sent!;
+  }
+  return out;
+}
 
 /** The count of one stage. A stage with no frozen entry fails: nothing is guessed. */
 export function countFor(c: FrozenCounts, stage: string): number {
@@ -88,7 +109,8 @@ export interface ResolvedCounts { frozen?: FrozenCounts; measure: boolean; mode:
 export function resolveCounts(o: { dir: string; sha: string; measureFlag: boolean; dryRun: boolean; chainId: number; warn?: (event: string, f: Record<string, unknown>) => void }): ResolvedCounts {
   const file = frozenPath(o.dir, o.sha);
   if (o.measureFlag) return { measure: true, mode: "measure-flag", file };
-  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha).counts, measure: false, mode: "frozen", file };
+  // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on the Twin chain only (918453): every other chain, 8453 included, refuses it.
+  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId === TWIN_CHAIN_ID }).counts, measure: false, mode: "frozen", file };
   if (o.dryRun) {
     o.warn?.("dry_run.counts_missing", { file, note: "no frozen counts for this SHA: the dry run measures them and writes nothing" });
     return { measure: true, mode: "dry-run-measure", file };

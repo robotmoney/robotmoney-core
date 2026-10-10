@@ -116,6 +116,8 @@ jobs:
           rpc-url: ${{ steps.fork.outputs.rpc-url }}
           verify: "true"
           govern: "true"
+          # issue 1721: every CREATE2 library is deployed on the fork first, the state Base is in after the real deploy: libs and the first basket stage are ADOPTED
+          predeploy-libs: "true"
           # Issue 1727: the Twin chain runs the REHEARSAL kind of the Base mainnet rehearsal (900 s timelock, non-fresh deployer, new Safe salt) and
           # the receipt path with a REAL recorded receipt (register the submitter, record through the gateway, apply with the Safe, read back).
           rehearsal: "true"

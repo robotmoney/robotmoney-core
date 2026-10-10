@@ -23,8 +23,8 @@ describe("counts.json with a start nonce", () => {
   });
   test("build records the start only when there is one", () => {
     const dir = tmp("pc-counts-"); writeCounts(dir);
-    expect(buildCountsJson(dir, SHA, 9, 3).deployerStartNonce).toBe(3);
+    expect(buildCountsJson(dir, SHA, 9, {}, 3).deployerStartNonce).toBe(3);
     expect("deployerStartNonce" in buildCountsJson(dir, SHA, 9)).toBe(false);
-    expect("deployerStartNonce" in buildCountsJson(dir, SHA, 9, 0)).toBe(false);
+    expect("deployerStartNonce" in buildCountsJson(dir, SHA, 9, {}, 0)).toBe(false);
   });
 });

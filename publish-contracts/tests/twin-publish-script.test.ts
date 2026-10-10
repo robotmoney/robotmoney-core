@@ -23,6 +23,7 @@ function stubs(): Record<string, string> {
         const v = (k) => a[a.indexOf(k) + 1];
         writeFileSync(v("--counts-dir") + "/" + v("--core-sha") + ".json", JSON.stringify({ deploySha: v("--core-sha"), measured: { chainId: 918453, at: "now" }, counts: JSON.parse(process.env.STUB_COUNTS) }));
       }`),
+    TWIN_PREDEPLOY: f("predeploy.js", `require("node:fs").appendFileSync(process.env.STUB_LOG, "predeploy " + process.argv.slice(2).filter((x) => x.startsWith("--")).join(" ") + "\\n"); if (process.env.STUB_FAIL === "predeploy") { console.error("stub: predeploy failed"); process.exit(3); }`),
     TWIN_REHEARSAL_CLI: f("rehearsal.js", `
       if (process.argv[2] === "keys") console.log("ADMIN_ADDRESS=0x00000000000000000000000000000000000000aa");`),
     TWIN_MERGE_SHEET: f("merge.js", `
@@ -41,7 +42,7 @@ function runScript(env: Record<string, string>) {
     stdout: "pipe", stderr: "pipe",
   });
   const exported = Object.fromEntries(readFileSync(ghEnv, "utf8").split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-  return { code: r.exitCode, err: r.stderr.toString(), logText: readFileSync(log, "utf8"), verbs: readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("cli ")).map((l) => l.slice(4)), exported };
+  return { code: r.exitCode, err: r.stderr.toString(), logText: readFileSync(log, "utf8"), all: readFileSync(log, "utf8").split("\n").filter(Boolean), verbs: readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("cli ")).map((l) => l.slice(4)), exported };
 }
 
 describe("twin-publish step script", () => {
@@ -65,6 +66,18 @@ describe("twin-publish step script", () => {
       expect(r.verbs).toEqual([...verbs]);
     });
   }
+  test("PREDEPLOY_LIBS_IN=true puts the libraries on the fork before anything is published (issue 1721), and a failing predeploy stops the run", () => {
+    const r = runScript({ PREDEPLOY_LIBS_IN: "true" });
+    expect(r.code).toBe(0);
+    expect(r.all[0]).toBe("predeploy --rpc --core-dir");
+    expect(r.all.slice(1)).toEqual(["cli publish", "cli verify", "cli govern", "cli verify"]);
+    const bad = runScript({ PREDEPLOY_LIBS_IN: "true", STUB_FAIL: "predeploy" });
+    expect(bad.code).not.toBe(0);
+    expect(bad.verbs).toEqual([]);
+  });
+  test("without PREDEPLOY_LIBS_IN nothing is predeployed", () => {
+    expect(runScript({}).all.some((l) => l.startsWith("predeploy"))).toBe(false);
+  });
   test("the second verify only runs when govern ran: verify without govern is one verify", () => {
     const r = runScript({ GOVERN_IN: "false" });
     expect(r.verbs).toEqual(["publish", "verify"]);
