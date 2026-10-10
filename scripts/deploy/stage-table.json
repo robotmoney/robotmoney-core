@@ -167,7 +167,12 @@
       "libraries": [
         "tick_math"
       ],
-      "vault": "PROTO"
+      "vault": "PROTO",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews"
+      ]
     },
     {
       "name": "agent",
@@ -194,7 +199,12 @@
       "libraries": [
         "tick_math"
       ],
-      "vault": "AGENT"
+      "vault": "AGENT",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews"
+      ]
     },
     {
       "name": "rwa",
@@ -220,7 +230,12 @@
       "libraries": [
         "tick_math"
       ],
-      "vault": "RWA"
+      "vault": "RWA",
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews"
+      ]
     },
     {
       "name": "timelock",
@@ -298,6 +313,23 @@
       "artifact": "TickMath",
       "manifestKey": "tick_math",
       "path": "contracts/lib/TickMath.sol"
+    }
+  ],
+  "create2Libraries": [
+    {
+      "name": "BasketAssetConfigGuard",
+      "artifact": "BasketAssetConfigGuard",
+      "path": "contracts/lib/BasketAssetConfigGuard.sol"
+    },
+    {
+      "name": "TwapTickMath",
+      "artifact": "TwapTickMath",
+      "path": "contracts/lib/TwapTickMath.sol"
+    },
+    {
+      "name": "BasketViews",
+      "artifact": "BasketViews",
+      "path": "contracts/lib/BasketViews.sol"
     }
   ],
   "artifacts": {

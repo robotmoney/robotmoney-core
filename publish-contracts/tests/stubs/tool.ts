@@ -14,6 +14,7 @@ interface Cfg {
   zeroTx?: string;                         // script file that plans ZERO transactions (issue 1721): exit 0, "Script ran successfully.", no SIMULATION COMPLETE, no broadcast file; the manifest is still written
   zeroTxBumps?: number;                    // with zeroTx: the deployer nonce moves by this much during the run (its own transaction landed meanwhile)
   codeAt?: Record<string, string>;         // lower-case address -> the runtime code `cast code` prints there (default: STUB_CODE)
+  creates?: Record<string, string[]>;     // script file -> the CREATE2 library addresses its first transactions create (issue 1721); the file marks them transactionType CREATE2
   libsAddress?: string;                    // the tick_math address the stub manifest holds (default 0x1009)
   chainId: number;
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
@@ -73,7 +74,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (n >= 0) {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "run-latest.json"), JSON.stringify({
-        transactions: Array.from({ length: n }, (_, i) => ({ hash: `0x${(i + 1).toString(16).padStart(64, "0")}` })),
+        transactions: Array.from({ length: n }, (_, i) => ({ hash: `0x${(i + 1).toString(16).padStart(64, "0")}`, ...(cfg.creates?.[file]?.[i] ? { transactionType: "CREATE2", contractAddress: cfg.creates[file]![i] } : {}) })),
         ...(dry ? {} : { receipts: Array.from({ length: n }, () => ({ blockNumber: "0x64" })) }),
       }));
     }

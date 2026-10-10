@@ -24,6 +24,10 @@ inputs:
     description: "'true' also runs stage 13 (the govern verb, with the Twin time warp) after verify, then verify again (post-govern state) when verify is also on."
     required: false
     default: "false"
+  predeploy-libs:
+    description: "'true' first deploys the four CREATE2 libraries (TickMath, BasketAssetConfigGuard, TwapTickMath, BasketViews) on the Twin fork, so the run finds them all already deployed (issue 1721)."
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -34,4 +38,5 @@ runs:
         SHARE_RECEIVER_IN: ${{ inputs.share-receiver-address }}
         VERIFY_IN: ${{ inputs.verify }}
         GOVERN_IN: ${{ inputs.govern }}
+        PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
       run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"

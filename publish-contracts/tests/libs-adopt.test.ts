@@ -16,7 +16,8 @@ import { COUNTS, SHA } from "./fixtures.ts";
 import { loadFrozen } from "../src/counts.ts";
 import { LOCAL_RPC, SCRIPT, world, type World } from "./harness.ts";
 
-const ART = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "TickMath.artifact.json"), "utf8")) as { bytecode: { object: Hex }; deployedBytecode: { object: string } };
+const OUT_FIXTURE = join(import.meta.dir, "fixtures", "build-out");
+const ART = JSON.parse(readFileSync(join(OUT_FIXTURE, "TickMath.sol", "TickMath.json"), "utf8")) as { bytecode: { object: Hex }; deployedBytecode: { object: string } };
 /** The library address on Base mainnet (block 52401633): the CREATE2 address of the build below. */
 const MAINNET_TICKMATH: Address = "0x3353854084194AE5Cc1697a9E4337806ECcdD9F6";
 const ADDR = predictedLibraryAddress(ART.bytecode.object);

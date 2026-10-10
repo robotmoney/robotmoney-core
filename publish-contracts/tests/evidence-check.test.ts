@@ -474,8 +474,23 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     expect(checkEvidence(over, FROZEN_WITH_LIBS).join()).toContain("above the frozen count");
     const split = adoptedEv(); split.stages[1].receipt_count = 1; split.stages[1].tx_hashes = [h(40)]; split.stages[1].receipts_status = [1];
     expect(checkEvidence(split, FROZEN_WITH_LIBS).join()).toContain("differs from adopted.deployer_txs");
-    const wrong = adoptedEv(); wrong.stages[1].stage = "recorder";
-    expect(checkEvidence(wrong, { ...FROZEN_WITH_LIBS, recorder: 6 }).join()).toContain("only the libs stage can be adopted");
+    // a non-libs stage adopts at most one creation per adopted library: 0 sent of 6 with one adopted library is refused, 5 and 6 are fine
+    const wrong = adoptedEv(); wrong.stages[1].stage = "recorder"; wrong.stages[1].frozen_count = 6;
+    expect(checkEvidence(wrong, { ...FROZEN_WITH_LIBS, recorder: 6 }).join()).toContain("is below the frozen count 6 less its 1 adopted library");
+  });
+  test("offline: a basket stage that adopted three libraries sends the frozen count less three (or more), never fewer", () => {
+    const mk = (txs: number) => {
+      const e: any = good();
+      e.stages.push({ stage: "proto", frozen_count: 10, receipt_count: txs, tx_hashes: Array.from({ length: txs }, (_, i) => h(60 + i)), receipts_status: Array.from({ length: txs }, () => 1),
+        adopted: { deployer_txs: txs, libraries: ["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"].map((name, i) => ({ name, address: a(80 + i), code_hash: keccak256(LIBCODE) })) } });
+      e.deployer_nonce_final = 2 + txs + 1;
+      return e;
+    };
+    const f = { safe: 2, proto: 10 };
+    expect(checkEvidence(mk(7), f)).toEqual([]);
+    expect(checkEvidence(mk(10), f)).toEqual([]);
+    expect(checkEvidence(mk(6), f).join()).toContain("is below the frozen count 10 less its 3 adopted libraries");
+    expect(checkEvidence(mk(11), f).join()).toContain("above the frozen count");
   });
   test("offline: an adopted entry without a library, an address or a code hash is refused", () => {
     const none = adoptedEv(); none.stages[1].adopted.libraries = [];

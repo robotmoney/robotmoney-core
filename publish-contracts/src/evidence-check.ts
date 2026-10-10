@@ -123,9 +123,10 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
 }
 
 /**
- * An ADOPTED stage (issue 1721): the libs stage, when the CREATE2 library already sat on chain, so the deployer sent nothing for it. The stage entry carries
- * `adopted: { libraries: [{ name, address, code_hash }], deployer_txs }`. `deployer_txs` is what this deployer sent (0 on a Twin fork, the whole frozen count on a
- * resume that had already landed it) and is the stage's contribution to the deployer nonce. Only the libs stage can be adopted.
+ * An ADOPTED stage (issue 1721): a stage whose CREATE2 libraries already sat on chain (the libs stage: its one library; a basket stage: BasketAssetConfigGuard,
+ * TwapTickMath, BasketViews), so the deployer sent fewer transactions than the frozen count. The stage entry carries
+ * `adopted: { libraries: [{ name, address, code_hash }], deployer_txs }`. `deployer_txs` is what this deployer sent and is the stage's contribution to the
+ * deployer nonce: between (frozen count - number of adopted libraries) and the frozen count (the libs stage may send none). The entry names at least one library.
  */
 const adoptedOf = (s: any): any => (s?.adopted === undefined || s.adopted === null ? undefined : s.adopted);
 /** stage -> deployer transactions, for the stages the evidence records as adopted. Malformed entries are skipped here and named by checkEvidence. */
@@ -133,7 +134,7 @@ export function adoptedTxsOfEvidence(ev: any): Record<string, number> {
   const out: Record<string, number> = {};
   for (const s of Array.isArray(ev?.stages) ? ev.stages : []) {
     const a = adoptedOf(s);
-    if (a && s.stage === LIBS_STAGE && Number.isInteger(a.deployer_txs)) out[s.stage] = a.deployer_txs;
+    if (a && Number.isInteger(a.deployer_txs)) out[s.stage] = a.deployer_txs;
   }
   return out;
 }
@@ -158,12 +159,13 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
     const adopted = adoptedOf(s);
     if (adopted !== undefined) {
       // an adopted stage sent no (or fewer) transactions: its frozen count is not demanded of the receipts, its deployer_txs is
-      if (s.stage !== LIBS_STAGE) bad(`stage ${s.stage}: only the ${LIBS_STAGE} stage can be adopted`);
       if (!Number.isInteger(adopted.deployer_txs) || adopted.deployer_txs < 0) bad(`stage ${s.stage}: adopted.deployer_txs is not a non-negative integer`);
       else {
         if (s.receipt_count !== adopted.deployer_txs) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from adopted.deployer_txs ${adopted.deployer_txs}`);
         if (s.frozen_count !== undefined && frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.frozen_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from the frozen file (${frozenCounts[s.stage]})`);
         if (frozenCounts && s.stage in frozenCounts && adopted.deployer_txs > frozenCounts[s.stage]!) bad(`stage ${s.stage}: adopted.deployer_txs ${adopted.deployer_txs} is above the frozen count ${frozenCounts[s.stage]}`);
+        // a stage adopts at most one creation per adopted library: it cannot send fewer than the frozen count less that many (the libs stage may send none)
+        if (frozenCounts && s.stage in frozenCounts && s.stage !== LIBS_STAGE && adopted.deployer_txs < frozenCounts[s.stage]! - adoptedLibraries(s).length) bad(`stage ${s.stage}: adopted.deployer_txs ${adopted.deployer_txs} is below the frozen count ${frozenCounts[s.stage]} less its ${adoptedLibraries(s).length} adopted librar${adoptedLibraries(s).length === 1 ? "y" : "ies"}`);
       }
       const libs = adoptedLibraries(s);
       if (libs.length === 0) bad(`stage ${s.stage}: adopted names no library`);

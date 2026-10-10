@@ -9,7 +9,7 @@ import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
 import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
-import { CREATE2_FACTORY, verifyAdoptedLibraries, type AdoptionRecord } from "./libs-adopt.ts";
+import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
@@ -71,6 +71,8 @@ export interface StageRecord {
   adopted?: boolean;
   /** With adopted: which libraries, at which addresses and code hashes, and how many transactions this deployer sent for the stage. */
   adoption?: AdoptionRecord;
+  /** CREATE2 library addresses (lower case) this stage's own broadcast created. A later stage that finds them deployed did not adopt them: this run made them. */
+  created?: string[];
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
   safe?: string;
   [k: string]: unknown;
@@ -505,14 +507,15 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number; lastBlock?: number } | undefined {
+function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
   const hashes = txs.map((t) => (t as { hash?: string }).hash).filter((h): h is string => typeof h === "string");
   const rc = Array.isArray(j.receipts) ? j.receipts : [];
   const blocks = rc.map((r: { blockNumber?: string }) => (r.blockNumber ? Number(BigInt(r.blockNumber)) : NaN)).filter((n: number) => Number.isFinite(n));
-  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
+  const creates = txs.filter((t) => (t as { transactionType?: string }).transactionType === "CREATE2").map((t) => String((t as { contractAddress?: string }).contractAddress ?? "").toLowerCase()).filter(Boolean);
+  return { count: txs.length, hashes, creates, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
 }
 
 /** forge writes broadcast/<ScriptFile>/<chainId>/(dry-run/)run-latest.json. */
@@ -676,6 +679,32 @@ async function adoptLibsStage(ctx: RunContext, row: StageRow, manifest: RunManif
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: rec.startNonce, end_nonce: nonce, count: rec.count, adopted: true });
 }
 
+/** CREATE2 libraries created, or already adopted, by stages of THIS run before the current one (persisted `created` and `adoption`, plus the simulations of a dry run, which never persist). */
+const createdInDryRun = new WeakMap<object, Set<string>>();
+const createdEarlier = (manifest: RunManifest): Set<string> => new Set([...Object.values(manifest.stages).flatMap((r) => [...(r.created ?? []), ...(r.adoption?.libraries ?? []).map((l) => l.address.toLowerCase())]), ...(createdInDryRun.get(manifest) ?? [])]);
+
+/**
+ * Libraries forge deploys by itself inside this stage (issue 1721: BasketAssetConfigGuard, TwapTickMath, BasketViews inside the first basket stage). When one already
+ * sits on chain forge leaves its creation out of the stage's transactions. This finds those, and only those that this run did not create itself, and proves each is the
+ * build's library (address = CREATE2 of the resolved build, runtime code hash equal). Returns the adopted libraries (none: the stage is the normal path).
+ * Frozen counts: evaluated only when the simulation plans fewer transactions than the frozen count (the normal path reads nothing), and the shortfall must be EXACTLY the
+ * number of adopted libraries, else the usual COUNT_MISMATCH. Measuring: evaluated always, the measured count is then the reduced one and the counts file is marked.
+ */
+async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: RunManifest, dry: { count: number; creates: string[] }, expectedCount: number | undefined): Promise<AdoptedLibrary[]> {
+  if (row.create2Libraries.length === 0) return [];
+  if (expectedCount !== undefined && dry.count >= expectedCount) return [];
+  const all = getStageTable().create2Libraries ?? [];
+  const outDir = join(ctx.coreDir, "out");
+  if (!create2ArtifactsPresent(all, outDir)) { ctx.log.log("warn", "stage.create2_not_evaluated", { stage: row.name, reason: `no build artifacts under ${outDir}` }); return []; }
+  const built = buildCreate2Libraries(all, outDir);
+  const planned = new Set(dry.creates), earlier = createdEarlier(manifest);
+  const absent = row.create2Libraries.map((l) => built.get(l.artifact)!).filter((b) => !planned.has(b.address.toLowerCase()) && !earlier.has(b.address.toLowerCase()));
+  if (absent.length === 0) return [];
+  const libs = await verifyAdoptedCreate2({ adopted: absent, getCode: async (a) => castOut(ctx, ["code", a]) });
+  if (expectedCount !== undefined && dry.count !== expectedCount - libs.length) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount} and ${libs.length} adopted librar${libs.length === 1 ? "y" : "ies"} (${libs.map((l) => l.name).join(", ")}) explain only ${libs.length} of the ${expectedCount - dry.count} missing. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount, adopted: libs.length });
+  return libs;
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
@@ -730,12 +759,15 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
   rec.dryRunCount = dry.count;
   if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
-  ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null });
-  if (expectedCount !== undefined && dry.count !== expectedCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
+  const adoptedLibs = await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount);
+  const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
+  ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
+  if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
   if (ctx.dryRun) {
     // The simulation wrote the manifest. It stays for the later stages of this dry run (their inputs); runStages restores the checkout at the end.
     // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
     // reads VAULT_ADDRESS code). That sends to the local anvil only (the sender is impersonated there), never to the target RPC.
+    createdInDryRun.set(manifest, new Set([...(createdInDryRun.get(manifest) ?? []), ...dry.creates, ...adoptedLibs.map((l) => l.address.toLowerCase())]));
     if (real.simRpc) await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
     ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: real.simRpc ? "local-anvil" : "target-rpc" });
     return;
@@ -774,10 +806,17 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.endNonce = nonce1;
   const delta = nonce1 - startNonce;
   // the count checks that make the broadcast trustworthy: broadcast file, nonce delta and the frozen count all agree
-  if (expectedCount !== undefined && (sent.count !== expectedCount || delta !== expectedCount)) {
+  rec.created = sent.creates;
+  if (adoptedLibs.length > 0) {
+    // adopted creations: this deployer sent exactly what the simulation planned. A resume adds what an earlier attempt of this stage had landed: then between (frozen - adopted) and the frozen count. Forge's file always agrees with the nonce.
+    const lo = resuming ? (expectedCount ?? sent.count) - adoptedLibs.length : dry.count, hi = resuming ? (expectedCount ?? sent.count) : dry.count;
+    if (delta < lo || delta > hi || sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, adopted stage allows ${lo} to ${hi} deployer transactions (frozen count ${expectedCount ?? "none"} less up to ${adoptedLibs.length} adopted). The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, lo, hi });
+    rec.adopted = true;
+    rec.adoption = { libraries: adoptedLibs, factory: CREATE2_FACTORY, deployerTxs: delta };
+  } else if (expectedCount !== undefined && (sent.count !== expectedCount || delta !== expectedCount)) {
     throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, frozen count ${expectedCount}. The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, frozen: expectedCount });
   }
-  if (expectedCount === undefined && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
+  if (expectedCount === undefined && adoptedLibs.length === 0 && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
   rec.count = expectedCount ?? sent.count;
   if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
   if (sent.firstBlock !== undefined && (manifest.firstBlock === undefined || sent.firstBlock < manifest.firstBlock)) manifest.firstBlock = sent.firstBlock;
