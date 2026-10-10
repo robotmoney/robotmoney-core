@@ -1,12 +1,12 @@
 ---
-title: "DeployTimelockRequiredSafeOwnersTest"
+title: "DeployTimelockRehearsalKindTest"
 ---
 
-# DeployTimelockRequiredSafeOwnersTest
+# DeployTimelockRehearsalKindTest
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+**Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
 ## Functions
 
@@ -31,11 +31,13 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_revertswhensafeownersmalformed"></a>
+<a id="test_rehearsalkind_boundariesonbase"></a>
 
-### test_run_revertsWhenSafeOwnersMalformed
+### test_rehearsalKind_boundariesOnBase
+
+899 and 172800 are refused in the rehearsal kind, 900 passes and records the kind. A rehearsal never carries a production delay: the chain could not tell them apart.
 
 ```solidity
-function test_run_revertsWhenSafeOwnersMalformed() public;
+function test_rehearsalKind_boundariesOnBase() public;
 ```
 
