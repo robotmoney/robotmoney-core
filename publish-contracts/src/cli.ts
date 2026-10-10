@@ -17,7 +17,7 @@ import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from ".
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
-import { stagePlan } from "./plan.ts";
+import { planNonceBasis, stagePlan } from "./plan.ts";
 import { assertReleaseGate, type CheckShaGreen } from "./release-gate.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
@@ -26,7 +26,7 @@ import { callerInputs, parseSheet } from "./sheet.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
-import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, assertReceiptId, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
@@ -306,6 +306,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
     assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
     if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
+    // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
+    const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
+    if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
@@ -388,7 +391,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const lines = await runCoreConfigCheck({ coreDir, outDir: join(evidenceDir, "core-config-check"), chainId: rpcChainId, rpc: a.rpc, baseEnv: env }, deps.coreConfigCheck, "the plan");
       log.log("info", "plan.core_config_check", { ok: true, lines: lines.length });
       const plan = frozen ? stagePlan(frozen) : [];
-      console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, plan }));
+      // Issue 1727: a rehearsal plan prints nonces RELATIVE to the deployer start nonce (recorded in the run manifest at the first stage), never absolute ones.
+      console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, deploymentKind: sheet.kind, startNonceBasis: planNonceBasis(sheet.kind), plan }));
       return 0;
     }
     const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);

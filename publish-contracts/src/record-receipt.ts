@@ -7,7 +7,7 @@
 //
 // THE KEY. --signer is the SUBMITTER: the address registered by `govern --row register-committee`. It is supplied by the operator at run time. No key, passphrase or keystore
 // path is ever written to the repo, the evidence or the run manifest (only the submitter ADDRESS is). The submitter holds AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on
-// the IC policy and nothing else. Recording is signalling only (INV-4): it moves no value and sets no weight. (AGENT_ROLE also allows allocation-signalling votes and 1-unit deposits and withdrawals of the submitter's own funds.)
+// the IC policy and nothing else. Recording is signalling only (INV-4): it moves no value and sets no weight. (AGENT_ROLE also allows allocation-signalling votes and tiny deposits: Withdrawals are disabled (the policy's withdraw caps are 0, so withdraw reverts WithdrawalNotEnabled); deposits are capped at 1 raw unit of USDC per payment and per window, paid from the submitter's own funds, with the shares going to the timelock.)
 //
 // BEFORE ANYTHING IS SENT it checks, on chain: the receipt contract is the one the gateway routes to, the submitter holds both roles, the receipt id is not recorded yet (or is
 // recorded with exactly this digest, uri and submitter, which is reported and not sent again). AFTER it reads the receipt back and compares id, digest, uri and submitter.

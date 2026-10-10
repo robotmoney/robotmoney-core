@@ -101,6 +101,24 @@ export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readon
  * are explicit `--row` runs: stage 13 on 8453 stays the four unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
  */
 export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKind): boolean => isTwinOnlyRow(row) && chainId === BASE_CHAIN_ID && kind !== "rehearsal";
+/**
+ * The refusal of a `--row` on this chain and kind, or undefined. ONE place: the CLI applies it right after the floors, BEFORE any signer or passphrase prompt (review of PR 1728:
+ * production keeps refusing update-delay, batch, cancel and register-committee on 8453 without asking for a single passphrase), and runGovern applies it again.
+ */
+export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
+  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW) return undefined;
+  if (row === REGISTER_ROW) {
+    return chainId === BASE_CHAIN_ID && kind !== "rehearsal"
+      ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW} and ${APPLY_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
+      : undefined;
+  }
+  let name: string;
+  try { name = resolveGovernRow(row); } catch { return undefined; } // an unknown row is a usage error raised where it always was
+  return twinOnlyRefused(name, chainId, kind)
+    ? `--row ${name} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`
+    : undefined;
+}
+
 /** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
 export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? UNPAUSE_ROWS : GOVERN_ROWS);
 /**
@@ -357,13 +375,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const applying = o.row === APPLY_ROW;
   const registering = o.row === REGISTER_ROW;
   if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
-  if (registering && ctx.chainId === BASE_CHAIN_ID && ctx.sheet.kind !== "rehearsal") {
-    throw new PublishError("USAGE", `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW} and ${APPLY_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`);
-  }
+  const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
+  if (early !== undefined) throw new PublishError("USAGE", early);
   const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering ? undefined : resolveGovernRow(o.row);
-  if (selected !== undefined && twinOnlyRefused(selected, ctx.chainId, ctx.sheet.kind)) {
-    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`);
-  }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });

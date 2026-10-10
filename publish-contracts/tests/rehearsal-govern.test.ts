@@ -172,3 +172,38 @@ describe("register-committee: the consensus receipt submitter, through the Safe 
     expect(buildRegisterCalls(A.gateway, A.timelock, addr(0x5ab2), "a", 1000n)[0]!.data).not.toBe(base[0]!.data);
   });
 });
+
+describe("production refuses the rehearsal-only rows BEFORE any signer or passphrase prompt (review of PR 1728)", () => {
+  const ROWS: string[][] = [["update-delay"], ["batch"], ["cancel"], ["5"], ["6"], ["7"], ["register-committee", "--submitter", SUBMITTER]];
+  const probe = async (sheet: Record<string, string>, row: string[]) => {
+    const { world: mkWorld } = await import("./harness.ts");
+    const w = mkWorld({ chainId: 8453, sheet });
+    const calls = { makeSigner: 0, ownerSigner: 0, prompt: 0 };
+    const code = await w.run(["govern", "--row", ...row], {
+      makeSigner: () => { calls.makeSigner++; throw new Error("stop: a signer was built"); },
+      ownerSigner: async () => { calls.ownerSigner++; throw new Error("stop: an owner signer was built"); },
+      prompt: async () => { calls.prompt++; return ""; },
+    });
+    return { code, calls, msg: w.logs().filter((l) => l.event === "run.failed").pop()?.message as string };
+  };
+  test("production on 8453: exit USAGE, no signer built, no owner signer, no prompt, for every such row (by name and by number)", async () => {
+    for (const row of ROWS) {
+      const r = await probe({}, row);
+      expect(r.code, row.join(" ")).toBe(EXIT_CODES.USAGE);
+      expect(r.calls, row.join(" ")).toEqual({ makeSigner: 0, ownerSigner: 0, prompt: 0 });
+      expect(r.msg).toMatch(/refused on chain 8453/);
+    }
+  });
+  test("mutation: the same rows in a rehearsal get past the refusal and reach the signer", async () => {
+    for (const row of ROWS) {
+      const r = await probe({ DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "20261010" }, row);
+      expect(r.calls.makeSigner, row.join(" ")).toBeGreaterThan(0);
+    }
+  });
+  test("the unpauses and the on-demand release and apply rows are not refused early in production", async () => {
+    for (const row of [["unpause-USDC"], ["1"], ["release-receipt", "--receipt-id", `0x${"ab".repeat(32)}`]]) {
+      const r = await probe({}, row);
+      expect(r.calls.makeSigner, row.join(" ")).toBeGreaterThan(0);
+    }
+  });
+});

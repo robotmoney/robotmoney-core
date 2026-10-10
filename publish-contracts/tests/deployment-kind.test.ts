@@ -153,6 +153,25 @@ describe("the release tag kind", () => {
   });
 });
 
+describe("the plan labels its nonce column by kind (review of PR 1728)", () => {
+  const planJson = async (over: Record<string, string>, tag: string) => {
+    const w = world({ chainId: 8453, sheet: over });
+    const out: string[] = [];
+    const real = console.log; console.log = (x: unknown) => { out.push(String(x)); };
+    try { const code = await w.run(["--stage", "plan", "--environment", "base-mainnet"], { makeSigner: () => { throw new Error("no signer in plan"); }, releaseTag: async () => tag }); return { code, doc: out.length ? JSON.parse(out[out.length - 1]!) : undefined }; } finally { console.log = real; }
+  };
+  test("a rehearsal plan says its start nonces are relative; a production plan says absolute from a fresh deployer", async () => {
+    const r = await planJson(REH, "release/v1.0.0-rehearsal");
+    expect(r.code).toBe(0);
+    expect(r.doc.deploymentKind).toBe("rehearsal");
+    expect(r.doc.startNonceBasis).toContain("relative to the deployer start nonce");
+    const p = await planJson({}, "release/v1.0.0");
+    expect(p.doc.deploymentKind).toBe("production");
+    expect(p.doc.startNonceBasis).toContain("absolute");
+    expect(p.doc.startNonceBasis).not.toContain("relative");
+  });
+});
+
 describe("the deployer nonce relative to the recorded start (rehearsal), absolute from 0 (production)", () => {
   const D = ["safe", "libs", "recorder"];
   const rehearsalWorld = (startNonce: number) => world({ startNonce, sheet: REH });
