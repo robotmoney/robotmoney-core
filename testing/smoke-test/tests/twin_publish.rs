@@ -591,8 +591,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
     //
-    // Issue 1746: the router routes by the sheet's launch vector 9500/500/0/0 over all four (open, eligible) vaults. The 0 bps rmAGENT and rmRWA legs have a
-    // computed amount of 0, so the router skips them (no vault call): before the fix `rmAGENT.deposit(0)` reverted the whole router deposit.
+    // Issue 1746: the router skips every leg whose computed amount is 0 (no vault call). At this point of the run the EFFECTIVE vector is the one the applied receipt
+    // wrote (5000/3000/0/2000: rmAGENT is 0 bps). Before the fix that 0 bps rmAGENT leg reverted the whole router deposit (`rmAGENT.deposit(0)` reverts).
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC
@@ -612,54 +612,66 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     .expect("approve the router");
     let vault_shares =
         |v: alloy_primitives::Address| fx.erc20_balance_of(v, user).expect("share balance");
-    let (agent_before, rwa_before) = (vault_shares(fx.agent_vault()), vault_shares(fx.rwa_vault()));
-    let (usdc_vault_before, proto_before) =
-        (vault_shares(fx.vault()), vault_shares(fx.proto_vault()));
+    let legs = [
+        ("rmUSDC", fx.vault()),
+        ("rmPROTO", fx.proto_vault()),
+        ("rmAGENT", fx.agent_vault()),
+        ("rmRWA", fx.rwa_vault()),
+    ];
+    let (leg_vaults, leg_bps) = effective_weights(&fx);
+    assert_eq!(
+        leg_vaults,
+        legs.iter()
+            .map(|(_, a)| format!("{a:#x}"))
+            .collect::<Vec<_>>(),
+        "the effective vector lists the four vaults in registry order"
+    );
+    assert!(
+        leg_bps.contains(&0) && leg_bps.iter().any(|b| *b > 0),
+        "the router deposit must exercise a 0 bps leg next to funded legs, got {leg_bps:?}"
+    );
+    let before: Vec<u128> = legs.iter().map(|(_, a)| vault_shares(*a)).collect();
     fx.cast_send(
         &pk,
         router,
         "deposit(uint256,uint256[])",
         &[&amount_s, "[]"],
     )
-    .expect("the router deposit over the 9500/500/0/0 launch vector must succeed (issue 1746)");
+    .expect("the router deposit with a 0 bps eligible leg must succeed (issue 1746)");
     let usdc_after_deposit = fx.erc20_balance_of(fx.usdc(), user).expect("USDC balance");
     assert_eq!(
         usdc_after_deposit,
         usdc_before - amount,
         "the router deposit must pull exactly the amount"
     );
-    // The 0 bps legs received nothing.
-    assert_eq!(
-        vault_shares(fx.agent_vault()),
-        agent_before,
-        "the 0 bps rmAGENT leg must receive nothing"
-    );
-    assert_eq!(
-        vault_shares(fx.rwa_vault()),
-        rwa_before,
-        "the 0 bps rmRWA leg must receive nothing"
-    );
-    // rmUSDC and rmPROTO got 9500 and 500 bps of the amount, within rounding (the share price is read back, so the check holds for any price).
+    // The 0 bps legs received nothing. Every other leg got its bps of the amount within rounding (the share price is read back with convertToAssets, so the
+    // check holds for any price). The rounding remainder lands on the last non-zero leg, so the legs together hold the whole amount.
     let assets_of = |v: alloy_primitives::Address, shares: u128| -> u128 {
         let raw = fx
             .cast_call_raw(v, "convertToAssets(uint256)", &[&shares.to_string()])
             .expect("convertToAssets");
         u128::from_str_radix(raw.trim().trim_start_matches("0x"), 16).expect("assets word")
     };
-    let usdc_minted = vault_shares(fx.vault()) - usdc_vault_before;
-    let proto_minted = vault_shares(fx.proto_vault()) - proto_before;
+    let mut total_assets = 0u128;
+    for (i, (name, v)) in legs.iter().enumerate() {
+        let minted = vault_shares(*v) - before[i];
+        if leg_bps[i] == 0 {
+            assert_eq!(minted, 0, "the 0 bps {name} leg must receive nothing");
+        } else {
+            let want = amount * u128::from(leg_bps[i]) / 10_000;
+            let got = assets_of(*v, minted);
+            total_assets += got;
+            assert!(minted > 0, "{name} ({} bps) minted no shares", leg_bps[i]);
+            assert!(
+                got.abs_diff(want) <= 2,
+                "{name} must get {} bps within rounding: got {got}, want {want}",
+                leg_bps[i]
+            );
+        }
+    }
     assert!(
-        usdc_minted > 0 && proto_minted > 0,
-        "the router deposit minted no shares to rmUSDC and rmPROTO"
-    );
-    let (usdc_assets, proto_assets) = (
-        assets_of(fx.vault(), usdc_minted),
-        assets_of(fx.proto_vault(), proto_minted),
-    );
-    let (want_usdc, want_proto) = (amount * 9500 / 10_000, amount * 500 / 10_000);
-    assert!(
-        usdc_assets.abs_diff(want_usdc) <= 2 && proto_assets.abs_diff(want_proto) <= 2,
-        "the split must be 9500/500 within rounding: rmUSDC {usdc_assets} (want {want_usdc}), rmPROTO {proto_assets} (want {want_proto})"
+        total_assets.abs_diff(amount) <= 4,
+        "the legs together must hold the whole amount: {total_assets} of {amount}"
     );
     // The withdraw path does not depend on the weights: redeem the rmUSDC shares through the router.
     let shares = vault_shares(fx.vault());
