@@ -19,7 +19,9 @@ const ART = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "TickMath.
 /** The library address on Base mainnet (block 52401633): the CREATE2 address of the build below. */
 const MAINNET_TICKMATH: Address = "0x3353854084194AE5Cc1697a9E4337806ECcdD9F6";
 const ADDR = predictedLibraryAddress(ART.bytecode.object);
-const RUNTIME = expectedLibraryRuntime(ART.deployedBytecode.object, ADDR);
+// built here by hand, not with the function under test: the library's runtime code is its artifact with PUSH20 <its own address> at bytes 1 to 20
+const withSelf = (a: string): Hex => `0x73${a.slice(2).toLowerCase()}${ART.deployedBytecode.object.slice(44)}` as Hex;
+const RUNTIME = withSelf(ADDR);
 const A = "0x000000000000000000000000000000000000a001";
 const manifest = (w: World) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
 const lastError = (w: World) => w.logs().filter((l) => l.event === "run.failed").pop();
@@ -42,6 +44,7 @@ describe("the CREATE2 library address and runtime code", () => {
     expect(ADDR).toBe(MAINNET_TICKMATH);
   });
   test("the expected runtime code is the artifact with the library's own address filled in", () => {
+    expect(expectedLibraryRuntime(ART.deployedBytecode.object, ADDR)).toBe(RUNTIME);
     expect(RUNTIME.slice(0, 4)).toBe("0x73");
     expect(RUNTIME.slice(4, 44)).toBe(ADDR.slice(2).toLowerCase());
     expect(RUNTIME.length).toBe(ART.deployedBytecode.object.length);
@@ -113,7 +116,7 @@ describe("a libs stage that plans zero transactions", () => {
   });
 
   test("code with the right bytes but another library address filled in is refused (the self-address is part of the hash)", async () => {
-    const other = expectedLibraryRuntime(ART.deployedBytecode.object, "0x000000000000000000000000000000000000dead");
+    const other = withSelf("0x000000000000000000000000000000000000dead");
     const w = adoptWorld({ code: other });
     expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.LIBS_ADOPTION);
   });
