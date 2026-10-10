@@ -27,7 +27,7 @@ export function adoptedFromRunManifest(path: string): Record<string, { deployerT
 }
 
 export function buildCountsJson(countsDir: string, sha: string, nonce: number, adopted: Record<string, { deployerTxs: number }> = {}): CountsJson {
-  const f = loadFrozen(countsDir, sha);
+  const f = loadFrozen(countsDir, sha, { allowAdopted: true }); // the measuring run of an adopted stage marks its file; counts.json carries the marker on
   return { deploySha: sha, chainId: f.measured.chainId, counts: f.counts, deployerNonce: nonce, ...(Object.keys(adopted).length ? { adopted } : {}) };
 }
 

@@ -6,7 +6,7 @@ import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID } from "./chains.ts";
 
 export type FrozenCounts = Record<string, number>;
-export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string }; counts: FrozenCounts }
+export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[] }; counts: FrozenCounts }
 
 export const FROZEN_DIR = "deployments/frozen-counts";
 const SHA = /^[0-9a-f]{40}$/;
@@ -23,11 +23,12 @@ export function validateCounts(counts: unknown): FrozenCounts {
 }
 
 /** Loads the frozen counts for a DEPLOY_SHA. A missing file or a file for another SHA fails. */
-export function loadFrozen(dir: string, sha: string): FrozenFile {
+export function loadFrozen(dir: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
   const p = frozenPath(dir, sha);
   if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), review ${FROZEN_DIR}/${sha}.json, then commit it. Nothing here guesses a count.`, { sha });
   const j = JSON.parse(readFileSync(p, "utf8"));
   if (j.deploySha !== sha) throw new PublishError("COUNTS_MISSING", `${p} is for DEPLOY_SHA ${j.deploySha}, not ${sha}`, { sha });
+  if (!o.allowAdopted && Array.isArray(j.measured?.adopted) && j.measured.adopted.length > 0) throw new PublishError("COUNTS_MISSING", `${p} was written by a run that ADOPTED stage(s) ${j.measured.adopted.join(", ")} (already on chain, not run): their counts were never measured, so it is not a frozen file. Measure on a fork pinned before Base block 52401633, or take the count of the adopted stage from the earlier frozen file. Delete this file before rerunning.`, { sha, adopted: j.measured.adopted });
   return { deploySha: sha, measured: j.measured, counts: validateCounts(j.counts) };
 }
 

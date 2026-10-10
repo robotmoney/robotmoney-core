@@ -12,7 +12,8 @@ import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src
 import { freezeCounts } from "../scripts/freeze-counts.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { COUNTS } from "./fixtures.ts";
+import { COUNTS, SHA } from "./fixtures.ts";
+import { loadFrozen } from "../src/counts.ts";
 import { LOCAL_RPC, SCRIPT, world, type World } from "./harness.ts";
 
 const ART = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "TickMath.artifact.json"), "utf8")) as { bytecode: { object: Hex }; deployedBytecode: { object: string } };
@@ -173,9 +174,25 @@ describe("a libs stage that plans zero transactions", () => {
   test("a measuring run (no frozen file) adopts, measures libs as 0 and writes the counts file", async () => {
     const w = adoptWorld({ writeFrozen: false });
     expect(await w.run(["--stage", "deploy"])).toBe(0);
+    writeFileSync(join(w.dir, "c.json"), JSON.stringify({ deploySha: SHA }));
     const f = JSON.parse(readFileSync(join(w.countsDir, `${"a".repeat(40)}.json`), "utf8"));
     expect(f.counts.libs).toBe(0);
     expect(manifest(w).stages.libs.adoption.deployerTxs).toBe(0);
+    // the raw counts file is MARKED: it is never a frozen file (loadFrozen, the release gate and the drift check refuse it)
+    expect(f.measured.adopted).toEqual(["libs"]);
+    expect(() => loadFrozen(w.countsDir, SHA)).toThrow("ADOPTED stage(s) libs");
+    expect(loadFrozen(w.countsDir, SHA, { allowAdopted: true }).counts.libs).toBe(0);
+    const drift = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "counts-drift.ts"), "--counts", join(w.dir, "c.json"), "--frozen-dir", w.countsDir], { stderr: "pipe" });
+    expect(drift.exitCode).toBe(1);
+    expect(drift.stderr.toString()).toContain("not a frozen file");
+  });
+
+  test("a measuring run that adopts nothing writes an unmarked file that loads as frozen", async () => {
+    const w = world({ startNonce: 0, writeFrozen: false });
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    const f = JSON.parse(readFileSync(join(w.countsDir, `${"a".repeat(40)}.json`), "utf8"));
+    expect(f.measured.adopted).toBeUndefined();
+    expect(loadFrozen(w.countsDir, SHA).counts).toEqual(COUNTS);
   });
 
   test("resume skips an adopted stage, and an adopted record counts for the start nonce of the later stages", async () => {

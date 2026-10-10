@@ -22,6 +22,8 @@ if (import.meta.main) {
   const dir = v["frozen-dir"] ?? resolve(import.meta.dir, "../..", FROZEN_DIR);
   const p = frozenPath(dir, j.deploySha);
   if (!existsSync(p)) { console.log(`counts-drift: no frozen counts for ${j.deploySha}, nothing to compare`); process.exit(0); }
+  const committed = JSON.parse(readFileSync(p, "utf8"));
+  if (Array.isArray(committed.measured?.adopted) && committed.measured.adopted.length > 0) { console.error(`counts-drift: ${p} is marked as measured with adopted stage(s) ${committed.measured.adopted.join(", ")}: it is not a frozen file`); process.exit(1); }
   const errs = driftErrors(j.counts, JSON.parse(readFileSync(p, "utf8")).counts, Object.keys(j.adopted ?? {}));
   if (errs.length) { console.error(`counts-drift: ${errs.length} stage(s) differ from ${p}\n  ${errs.join("\n  ")}`); process.exit(1); }
   console.log(`counts-drift: counts equal ${p}${Object.keys(j.adopted ?? {}).length ? ` (adopted, not compared: ${Object.keys(j.adopted).join(", ")})` : ""}`);
