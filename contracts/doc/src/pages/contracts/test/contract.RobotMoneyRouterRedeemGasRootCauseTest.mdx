@@ -238,7 +238,8 @@ function test_gateway_withdrawFromRouter_estimateThenIncludeNextBlock_3legs() pu
 
 <i>
 
-Weight the router equally over the first `k` vaults.
+Weight the router equally over the first `k` vaults, on the DEFAULT vector. The router stage leaves the default `[vaults[0]]/[10000]` and no voted
+vector (issue 1743), so each further vault is made eligible by one atomic `migrateEligibility` that re-sets the default over the grown set.
 
 </i>
 

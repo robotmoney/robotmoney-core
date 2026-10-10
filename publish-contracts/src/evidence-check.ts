@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProblem } from "./floors.ts";
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
+import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
@@ -123,8 +124,59 @@ function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
     if (vaults.length === 0 || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not a list of distinct addresses with one weight each`);
     else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
     if (releasedIds(ev).has(lc(r?.receipt_id ?? ""))) bad(`${w}: the receipt is also under receipt_releases: a receipt is released once`);
+    effectiveReadBackProblems(w, r, vaults, bps, bad);
   }
   return apps;
+}
+
+/**
+ * Issue 1743: the router's EFFECTIVE weights are what deposits route by. After an application (or a clear) the read-back saw votedWeightsActive false, and the entry records it
+ * (`voted_weights_active: false`, `effective_vaults`, `effective_bps`). A voted vector on top of the default would leave routing unchanged while the default read right.
+ * `vaults` / `bps` are the vector the entry claims the router holds (the applied one); undefined for a clear entry, which only needs a well formed vector.
+ */
+function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, bad: (m: string) => void): void {
+  if (r?.voted_weights_active !== false) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want false: the read-back must show no voted vector overriding the default (issue 1743)`);
+  const ev: unknown[] = Array.isArray(r?.effective_vaults) ? r.effective_vaults : [];
+  const eb: unknown[] = Array.isArray(r?.effective_bps) ? r.effective_bps : [];
+  if (ev.length === 0 || ev.length !== eb.length || !ev.every((v) => typeof v === "string" && ADDR.test(v)) || !eb.every((x) => Number.isInteger(x) && (x as number) >= 0) || (eb as number[]).reduce((t, x) => t + x, 0) !== 10000) {
+    bad(`${w}: effective_vaults and effective_bps (the router's getEffectiveWeights after the round) are missing or not a vector summing to 10000`);
+    return;
+  }
+  if (vaults !== undefined && bps !== undefined) {
+    const key = (v: unknown[], b: unknown[]) => v.map((x, i) => `${lc(String(x))}:${b[i]}`).join(",");
+    if (key(ev, eb) !== key(vaults, bps)) bad(`${w}: the effective weights [${key(ev, eb)}] differ from the applied vector [${key(vaults, bps)}]: routing did not change`);
+  }
+}
+
+/**
+ * A router voted-vector clear (issue 1743, `govern --row clear-voted-weights`), recorded under `voted_weights_clears` (never in `govern`, so stage 13 stays the four unpauses).
+ * One entry per round: ONE timelock call, clearVotedWeights() on the governance contract (`governance.address`), one schedule and one execute at least the floor apart, and the
+ * read-back: votedWeightsActive false and the effective weights recorded.
+ */
+const clearLabel = (r: any) => `${CLEAR_ROW} round ${r?.round ?? 1}`;
+function clearShapeProblems(ev: any, bad: (m: string) => void): any[] {
+  const clears: any[] = ev?.voted_weights_clears === undefined ? [] : Array.isArray(ev.voted_weights_clears) ? ev.voted_weights_clears : (bad("voted_weights_clears is not a list"), []);
+  if (clears.length > 0 && !ADDR.test(ev?.governance?.address ?? "")) bad("governance.address is missing: a voted-weights clear has no target to check");
+  const seen = new Set<number>();
+  for (const r of clears) {
+    const w = clearLabel(r);
+    if (r?.step !== undefined && r.step !== CLEAR_ROW) bad(`${w}: step '${r.step}' is not ${CLEAR_ROW}`);
+    if (r?.round !== undefined && !(Number.isInteger(r.round) && r.round >= 1)) bad(`${w}: round ${r.round} is not a positive integer`);
+    const n = Number.isInteger(r?.round) ? r.round : 1;
+    if (seen.has(n)) bad(`${w}: more than one evidence entry for this round`); else seen.add(n);
+    if (lc(r?.governance ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: governance ${r?.governance} is not the governance contract ${ev?.governance?.address}`);
+    if (!ADDR.test(r?.router ?? "")) bad(`${w}: router is not an address`);
+    effectiveReadBackProblems(w, r, undefined, undefined, bad);
+  }
+  return clears;
+}
+/** Offline check of `voted_weights_clears` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
+export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_FLOOR): string[] {
+  const p: string[] = [];
+  const clears = clearShapeProblems(ev, (m) => p.push(m));
+  forbidCancelFields(clears, (e) => String(e?.step ?? "entry"), (m) => p.push(m));
+  operationProblems(clears.map((r) => ({ ...r, step: clearLabel(r) })), (m) => p.push(m), floor);
+  return p;
 }
 const releasedIds = (ev: any): Set<string> => new Set<string>((Array.isArray(ev?.receipt_releases) ? ev.receipt_releases : []).map((r: any) => lc(String(r?.receipt_id ?? ""))));
 
@@ -347,11 +399,12 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
     if (r?.step !== undefined && r.step !== "release-receipt") bad(`${w}: step '${r.step}' is not release-receipt`);
   }
   const applications = applicationShapeProblems(ev, bad);
+  const clears = clearShapeProblems(ev, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  forbidCancelFields([...govern, ...releases, ...applications, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
-  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
@@ -497,6 +550,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     if (!(gap >= FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${FLOOR} s`);
   }
   p.push(...(await checkReceiptApplicationsOnChain(ev, chain, FLOOR)));
+  p.push(...(await checkVotedWeightsClearsOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
   // (all four vaults deploy paused, issue 1710).
@@ -557,6 +611,44 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
     if (!ex) continue;
     const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
     if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `voted_weights_clears` (issue 1743). Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event (the recorded operation_id), target the
+ * governance contract, calldata clearVotedWeights(), a delay of at least the floor. The execute tx has the matching CallExecuted event. The block gap is at least the floor.
+ */
+export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const status = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  const want = clearCalldata();
+  for (const r of Array.isArray(ev?.voted_weights_clears) ? ev.voted_weights_clears : []) {
+    const w = clearLabel(r);
+    if (!ADDR.test(ev.governance?.address ?? "") || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
+    const sc = await status(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
+    if (scheduled.length !== 1) { bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a clear is exactly one call`); continue; }
+    const e = scheduled[0]!;
+    if (lc(e.target) !== lc(ev.governance.address)) bad(`${w}: CallScheduled target ${e.target} is not the governance contract ${ev.governance.address}`);
+    else if (lc(e.data) !== lc(want)) bad(`${w}: CallScheduled calldata is not clearVotedWeights()`);
+    if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(e.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${e.id}`);
+    const schedTs = await ts(sc);
+    const ex = await status(`${w} execute`, r.execute_tx);
+    if (!ex) continue;
+    if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(ev.governance.address) && lc(x.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled clear`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -763,11 +855,11 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   const need = ["consensus-receipt", "governance", "timelock"].filter((k) => typeof values[k] !== "string");
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
-  const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications,
+  const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications, voted_weights_clears: m.voted_weights_clears,
     ...(kind === "rehearsal" ? { committee_registrations: m.committee_registrations, recorded_receipts: m.recorded_receipts } : {}) };
   const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
   if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
-  const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor)];
+  const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor), ...checkVotedWeightsClears(ev, floor)];
   // issue 1727: a rehearsal's receipt path (registration, REAL recorded receipt, application) must trace end to end. A production run manifest has none of the first two.
   if (kind === "rehearsal") {
     receiptPathProblems(ev, kind, Array.isArray(m.receipt_applications) ? m.receipt_applications : [], (x) => problems.push(x));
@@ -777,6 +869,7 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
     const { createPublicClient, http } = await import("viem");
     const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
     problems.push(...(await checkReceiptApplicationsOnChain(ev, reader, floor)));
+    problems.push(...(await checkVotedWeightsClearsOnChain(ev, reader, floor)));
     if (kind === "rehearsal") problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
   }
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }

@@ -56,6 +56,11 @@ const governanceAbi = parseAbi([
   "function hasVoted(uint256 proposalId, address voter) view returns (bool)",
 ]);
 
+/** The router's EFFECTIVE weights: what it routes by (the voted vector when active, else the default). */
+const routerAbi = parseAbi([
+  "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)",
+]);
+
 interface ApiProposal {
   proposal_id: number;
   proposer: string;
@@ -148,11 +153,13 @@ test.describe("suite-10: GovernancePanel E2E on the real Safe topology", () => {
       }),
     ).toBe(VOTING_POWER);
 
-    // Re-propose the router's current weights: every vault in them is router-eligible and Active.
+    // Re-propose the router's current weights: every vault in them is router-eligible and Active. Issue 1743: the deploy no
+    // longer leaves a VOTED vector (governance.currentWeights() is the voted vector, empty until a vote passes), so the vector
+    // the router routes by is the EFFECTIVE one (the default launch vector).
     const [vaults, bps] = (await chain.readContract({
-      address: governance,
-      abi: governanceAbi,
-      functionName: "currentWeights",
+      address: endpoints.router_addr as Address,
+      abi: routerAbi,
+      functionName: "getEffectiveWeights",
     })) as readonly [readonly Address[], readonly bigint[]];
     await runTimelockRound(endpoints, {
       target: governance,

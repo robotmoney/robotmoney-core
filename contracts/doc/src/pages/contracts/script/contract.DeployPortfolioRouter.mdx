@@ -1,6 +1,6 @@
 ---
 title: "DeployPortfolioRouter"
-description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
+description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets the initial DEFAULT weights (10 000 bps to RobotMoneyVault — the sole active vault; no voted vector), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
 ---
 
 # DeployPortfolioRouter
@@ -13,8 +13,8 @@ description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of
 
 Foundry deploy script for the PortfolioRouter contract.
 Stage 4 of the core deploy (libs, vault, registry, router, gateway).
-Deploys PortfolioRouter, sets initial weights (10 000 bps to
-RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+Deploys PortfolioRouter, sets the initial DEFAULT weights (10 000 bps to
+RobotMoneyVault — the sole active vault; no voted vector), calls `registry.setRouter(router)`,
 and writes the router address to a deployment JSON alongside the registry
 address. The router comes BEFORE the gateway: the gateway stores the router as
 an immutable (core 1493).
@@ -64,7 +64,7 @@ sets initial weights, and writes a deployment JSON.
 
 In broadcast mode the broadcaster IS admin (the deployer signs
 the broadcast), so msg.sender on
-setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
+setDefaultWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -81,7 +81,7 @@ function run() external returns (Deployed memory d);
 ### runInProcessWith
 
 In-process variant for forge tests. No broadcast, no JSON written.
-setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
+setDefaultWeights requires ADMIN_ROLE; this method pranks admin.
 
 ```solidity
 function runInProcessWith(address admin_, address registry_, address vault_, address usdc_)

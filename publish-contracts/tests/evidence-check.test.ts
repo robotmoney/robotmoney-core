@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
-import { releaseCalldata } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
+import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { keccak256 } from "viem";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
@@ -82,7 +83,7 @@ const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: numbe
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { appDelay?: bigint; appGap?: number; appCalls?: number; appData?: [string?, string?]; appTarget?: [string?, string?]; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { clearData?: string; clearTarget?: string; clearDelay?: bigint; clearGap?: number; clearCalls?: number; appDelay?: bigint; appGap?: number; appCalls?: number; appData?: [string?, string?]; appTarget?: [string?, string?]; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -112,6 +113,14 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     const calls = [{ target: o.appTarget?.[0] ?? RCPT, data: o.appData?.[0] ?? relData }, { target: o.appTarget?.[1] ?? GOV, data: o.appData?.[1] ?? wData }].slice(0, o.appCalls ?? 2);
     add(r.schedule_tx, calls.map((c, k) => log("CallScheduled", id, o.appDelay, c.target, c.data, BigInt(k))), t0);
     add(r.execute_tx, calls.map((c, k) => log("CallExecuted", id, 0n, c.target, c.data, BigInt(k))), t0 + (o.appGap ?? 172800));
+  });
+  (ev.voted_weights_clears ?? []).forEach((r: any, i: number) => {
+    const id = 90 + i;
+    const t0 = T0 + 30 + i;
+    const data = o.clearData ?? clearCalldata();
+    const sched = Array.from({ length: o.clearCalls ?? 1 }, (_, k) => log("CallScheduled", id, o.clearDelay, o.clearTarget ?? GOV, data, BigInt(k)));
+    add(r.schedule_tx, sched, t0);
+    add(r.execute_tx, [log("CallExecuted", id, 0n, o.clearTarget ?? GOV, data)], t0 + (o.clearGap ?? 172800));
   });
   return {
     getChainId: async () => o.chainId ?? 8453,
@@ -196,7 +205,7 @@ describe("receipt_applications: one timelock batch, release then weights (issue 
   const BPS = [5000, 3000, 2000];
   const withApply = (e: any) => {
     e.consensus_receipt = { address: RCPT }; e.governance = { address: GOV };
-    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
+    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps: BPS, voted_weights_active: false, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
   };
   const app = (f: (e: any) => void = () => {}) => { const e = good(); withApply(e); f(e); return e; };
   const offline = (f: (e: any) => void = () => {}) => checkEvidence(app(f)).join("\n");
@@ -268,7 +277,7 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
     const r = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "evidence-check.ts"), "--receipt-applications", file, "--consensus-receipt", a(30), "--governance", a(32), "--timelock", a(9), ...extra]);
     return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
   };
-  const entry = { step: "apply-receipt", receipt_id: h(0xabc), target: a(30), governance: a(32), vaults: [a(5), a(6)], bps: [6000, 4000], operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: h(621), execute_status: 1, execute_block_timestamp: 1000 + 172800 };
+  const entry = { step: "apply-receipt", receipt_id: h(0xabc), target: a(30), governance: a(32), vaults: [a(5), a(6)], bps: [6000, 4000], voted_weights_active: false, effective_vaults: [a(5), a(6)], effective_bps: [6000, 4000], operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: h(621), execute_status: 1, execute_block_timestamp: 1000 + 172800 };
   test("a complete entry passes, a missing entry or a broken one exits 1 naming the problem", () => {
     const ok = run({ receipt_applications: [entry] });
     expect(ok.code).toBe(0);
@@ -541,5 +550,56 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     expect(await checkEvidenceOnChain(e, reader, FROZEN_WITH_LIBS)).toEqual([]);
     expect(fixture.codes?.[a(77)]).toBe(LIBCODE);
     expect(await checkEvidenceOnChain(e, chainReaderFromFixture(JSON.parse(JSON.stringify(fixture))), FROZEN_WITH_LIBS)).toEqual([]);
+  });
+});
+
+describe("effective weights and voted_weights_clears in the evidence (issue 1743)", () => {
+  const VAULTS = [a(5), a(6), a(8)];
+  const BPS = [5000, 3000, 2000];
+  const withApply = (e: any) => {
+    e.consensus_receipt = { address: RCPT }; e.governance = { address: GOV };
+    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps: BPS, voted_weights_active: false, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
+  };
+  const withClear = (e: any) => {
+    e.governance = { address: GOV };
+    e.voted_weights_clears = [{ step: "clear-voted-weights", round: 1, governance: GOV, router: a(40), voted_weights_active: false, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(90), schedule_tx: h(660), schedule_status: 1, schedule_block_timestamp: T0 + 30, execute_tx: h(661), execute_status: 1, execute_block_timestamp: T0 + 30 + 172800 }];
+  };
+  const app = (f: (e: any) => void = () => {}) => { const e = good(); withApply(e); f(e); return checkEvidence(e).join("\n"); };
+  const clr = (f: (e: any) => void = () => {}) => { const e = good(); withClear(e); f(e); return e; };
+  const clearOffline = (f: (e: any) => void = () => {}) => checkEvidence(clr(f)).join("\n");
+  const clearChain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = clr(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
+
+  test("an application records votedWeightsActive false and effective weights equal to the applied vector, and refuses without them", () => {
+    expect(app()).toBe("");
+    expect(app((e) => { e.receipt_applications[0].voted_weights_active = true; })).toContain("voted_weights_active is true, want false");
+    expect(app((e) => { delete e.receipt_applications[0].voted_weights_active; })).toContain("voted_weights_active is undefined");
+    expect(app((e) => { delete e.receipt_applications[0].effective_vaults; delete e.receipt_applications[0].effective_bps; })).toContain("effective_vaults and effective_bps");
+    expect(app((e) => { e.receipt_applications[0].effective_vaults = [a(5)]; e.receipt_applications[0].effective_bps = [10000]; })).toContain("routing did not change");
+    expect(app((e) => { e.receipt_applications[0].effective_bps = [5000, 3000, 1000]; })).toContain("effective_vaults and effective_bps");
+  });
+  test("a clear entry passes offline and on chain: one call, clearVotedWeights() on the governance contract, one delay apart", async () => {
+    expect(clearOffline()).toBe("");
+    expect(await clearChain()).toBe("");
+    expect(checkVotedWeightsClears(clr())).toEqual([]);
+    expect(await checkVotedWeightsClearsOnChain(clr(), stub(clr()))).toEqual([]);
+  });
+  test("a clear entry is refused for a voted vector still active, a missing read-back, a wrong target and a short gap", async () => {
+    expect(clearOffline((e) => { e.voted_weights_clears[0].voted_weights_active = true; })).toContain("voted_weights_active is true");
+    expect(clearOffline((e) => { delete e.voted_weights_clears[0].effective_bps; })).toContain("effective_vaults and effective_bps");
+    expect(clearOffline((e) => { e.voted_weights_clears[0].governance = a(33); })).toContain("is not the governance contract");
+    expect(clearOffline((e) => { e.voted_weights_clears[0].step = "unpause-USDC"; })).toContain("is not clear-voted-weights");
+    expect(clearOffline((e) => { e.voted_weights_clears[0].execute_block_timestamp = T0 + 30 + 172799; })).toContain("gap");
+    expect(clearOffline((e) => { e.voted_weights_clears.push({ ...e.voted_weights_clears[0] }); })).toContain("more than one evidence entry");
+    expect(clearOffline((e) => { e.voted_weights_clears[0].cancelled = true; })).toContain("cancelled is not a field");
+    expect(await clearChain({ clearData: "0x12345678" })).toContain("calldata is not clearVotedWeights()");
+    expect(await clearChain({ clearTarget: a(31) })).toContain("is not the governance contract");
+    expect(await clearChain({ clearCalls: 2 })).toContain("exactly one call");
+    expect(await clearChain({ clearDelay: 60n })).toContain("delay");
+    expect(await clearChain({ clearGap: 172799 })).toContain("on-chain schedule-to-execute gap");
+  });
+  test("the template lists the clear block and an empty list passes", () => {
+    const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
+    expect(tpl.voted_weights_clears).toEqual([]);
+    expect(checkEvidence({ ...good(), voted_weights_clears: [] })).toEqual([]);
   });
 });

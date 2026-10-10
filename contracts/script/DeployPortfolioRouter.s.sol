@@ -13,8 +13,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
 ///         Stage 4 of the core deploy (libs, vault, registry, router, gateway).
-///         Deploys PortfolioRouter, sets initial weights (10 000 bps to
-///         RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+///         Deploys PortfolioRouter, sets the initial DEFAULT weights (10 000 bps to
+///         RobotMoneyVault — the sole active vault; no voted vector), calls `registry.setRouter(router)`,
 ///         and writes the router address to a deployment JSON alongside the registry
 ///         address. The router comes BEFORE the gateway: the gateway stores the router as
 ///         an immutable (core 1493).
@@ -53,7 +53,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     ///
     ///         In broadcast mode the broadcaster IS admin (the deployer signs
     ///         the broadcast), so msg.sender on
-    ///         setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
+    ///         setDefaultWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
     /// @return d Struct containing the deployed router and key parameters.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
@@ -73,7 +73,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     }
 
     /// @notice In-process variant for forge tests. No broadcast, no JSON written.
-    ///         setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
+    ///         setDefaultWeights requires ADMIN_ROLE; this method pranks admin.
     /// @param admin_     Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE.
     /// @param registry_  Deployed VaultRegistry address.
     /// @param vault_     RobotMoneyVault to seed with 10 000 bps.
@@ -118,12 +118,17 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         // docs/development/single-production-codebase.md.
         d.registry.setRouterEligible(vault_, true);
 
-        // Set initial weights: 10 000 bps (100%) to RobotMoneyVault.
+        // Initial weights: 10 000 bps (100%) to RobotMoneyVault, on the DEFAULT vector (ADMIN_ROLE,
+        // held by the deployer here; the registry has no router linked yet, so the eligible count is 1).
+        // NEVER `setWeights`: that writes the voted vector and flips `votedWeightsActive`, which then
+        // overrides every later default (the basket stages' migrateEligibility, a receipt-driven
+        // setDefaultWeights) so the sheet launch vector would never be the effective routing (issue 1743).
         address[] memory vaults = new address[](1);
         vaults[0] = vault_;
         uint256[] memory bps = new uint256[](1);
         bps[0] = INITIAL_VAULT_WEIGHT_BPS;
-        d.router.setWeights(vaults, bps);
+        d.router.setDefaultWeights(vaults, bps);
+        require(!d.router.votedWeightsActive(), "voted weights active after the router stage");
 
         // Link the router into the registry at the router stage (core S3). This is the one
         // and only `registry.setRouter` call of the deploy: the gateway stage that follows

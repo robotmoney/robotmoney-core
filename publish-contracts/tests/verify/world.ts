@@ -260,6 +260,9 @@ export function buildWorld(chainId = 8453): World {
   ch.set(GOV, "votingPeriod", GOV_SHEET.votingPeriod);
   ch.set(GOV, "executionDelay", GOV_SHEET.executionDelay);
   ch.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
+  // issue 1743: no voted vector is active, so the effective vector is the default one
+  ch.set(ROUTER, "votedWeightsActive", false);
+  ch.set(ROUTER, "getEffectiveWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
   // the deploy authorizes no agent: the gateway carries no AgentAuthorized log and nobody holds AGENT_ROLE
   // deployer once held roles; all were renounced
   ch.roleGrantedLog(TIMELOCK, ADMIN_ROLE, DEPLOYER, 120n);

@@ -121,6 +121,8 @@ governance: quorumThreshold equals sheet
 governance: votingPeriod equals sheet
 governance: executionDelay equals sheet
 router: default weights equal sheet
+router: votedWeightsActive is false after deploy
+router: effective weights equal the sheet's launch vector
 receipt: applied receipt is released and its weights are on the router
 vault[rmUSDC]: ADMIN_ROLE held by timelock
 vault[rmUSDC]: ADMIN_ROLE not held by deployer

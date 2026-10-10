@@ -1,6 +1,6 @@
 ---
 title: "MockVaultForRouter"
-description: "Minimal ERC-4626-shaped mock vault for router weight tests. Implements `asset()` because PortfolioRouter.setWeights validates router eligibility by checking `IERC4626(vault).asset() == usdc`."
+description: "Minimal ERC-4626-shaped mock vault for router weight tests. Implements `asset()` because PortfolioRouter.setDefaultWeights validates router eligibility by checking `IERC4626(vault).asset() == usdc`."
 ---
 
 # MockVaultForRouter
@@ -8,7 +8,7 @@ description: "Minimal ERC-4626-shaped mock vault for router weight tests. Implem
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployPortfolioRouter.t.sol)
 
 Minimal ERC-4626-shaped mock vault for router weight tests.
-Implements `asset()` because PortfolioRouter.setWeights validates
+Implements `asset()` because PortfolioRouter.setDefaultWeights validates
 router eligibility by checking `IERC4626(vault).asset() == usdc`.
 
 ## Constants
