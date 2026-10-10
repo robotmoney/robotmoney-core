@@ -479,11 +479,11 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
 1. Reads the active weight vector (voted weights if active; otherwise default weights).
 2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
-3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg. Skipped legs get 0.
-4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg (`_executeLeg`).
+3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg that has a non-zero weight, so it never lands on a 0 bps leg. Skipped legs get 0.
+4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg whose `legAmount` is non-zero (`_executeLeg`). A leg whose computed amount is 0 (a 0 bps weight, or a small weight that rounds to 0 on a tiny deposit) is skipped like an unavailable leg: no approval, no vault call, no event (issue 1746). Without this, one Active, eligible 0 bps leg such as rmAGENT (whose `deposit(0)` reverts) would revert the whole router deposit over the 9500/500/0/0 launch vector. `previewDeposit` reports such a leg as available with `legAmount` 0 and `estShares` 0.
 5. Emits `RouterDeposit` per deposited leg and returns the shares minted per leg (0 for a skipped leg).
 
-The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
+The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. If every computed leg amount is 0 (only a zero-amount deposit, or only 0 bps legs left available), the deposit reverts `NoFundedLeg` and calls no vault. The sum of the leg amounts always equals `amount`, so nothing is stranded. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
 
 ### 9.1.2 Weight vectors and governance integration
 
@@ -501,7 +501,7 @@ The timelock may set default weights only. Active weights come only from RouterG
 A vault is **eligible for routing** only when its `VaultRegistry` status is `Active`, its registry router-eligible flag is set (`VaultRegistry.isRouterEligible`), and its `asset()` is the router's USDC (`PortfolioRouter.isRouterEligibleAndActive`).
 
 - `setWeights`, `setDefaultWeights` and `applyMigrationDefaultWeights` call `_requireActiveAndEligible` for every listed vault, at any bps, 0 included. An ineligible or non-Active vault cannot be listed even at 0 bps, so it receives 0.
-- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves.
+- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves. An eligible leg whose computed amount is 0 is not called (issue 1746).
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
 - **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.

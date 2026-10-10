@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d10083c3fcb22c22a537433d925e50d14ee0f882/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -1407,6 +1407,15 @@ configured, so there is no effective allocation to route by.
 
 ```solidity
 error NoWeightsSet();
+```
+
+### NoFundedLeg
+
+Every leg's computed amount is zero (a zero-amount deposit), so
+nothing would be routed. Zero-amount legs are skipped (issue 1746).
+
+```solidity
+error NoFundedLeg();
 ```
 
 ### VaultNotActive

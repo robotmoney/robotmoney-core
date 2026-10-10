@@ -233,6 +233,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         configured, so there is no effective allocation to route by.
     error NoWeightsSet();
 
+    /// @notice Every leg's computed amount is zero (a zero-amount deposit), so
+    ///         nothing would be routed. Zero-amount legs are skipped (issue 1746).
+    error NoFundedLeg();
+
     /// @notice A vault's registry status is not Active; deposit is blocked.
     /// @param vault  The vault address that is not Active.
     /// @param status The current non-Active status of the vault.
@@ -661,6 +665,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
                 continue;
             }
 
+            // A zero-amount leg is never called by the deposit path (issue 1746),
+            // so it quotes zero shares and stays available.
+            if (legAmounts[i] == 0) continue;
+
             // Available legs quote against the renormalised legAmount. A revert
             // in the vault's own previewDeposit downgrades the leg to unavailable
             // (the runtime deposit would likewise fail this vault) — but note the
@@ -719,7 +727,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             if (!available[i]) continue;
             legAmounts[i] = (amount * bpsList[i]) / availableBps;
             allocated += legAmounts[i];
-            lastAvailable = i;
+            // The rounding remainder must land on a leg that carries weight: a
+            // 0-bps leg is never funded (issue 1746), so it cannot be the sink.
+            // `availableBps > 0` guarantees at least one such leg exists.
+            if (bpsList[i] != 0) lastAvailable = i;
         }
         if (allocated < amount) {
             legAmounts[lastAvailable] += amount - allocated;
@@ -996,6 +1007,20 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         }
         if (!anyAvailable) revert NoWeightsSet();
 
+        // Zero-amount legs are skipped by `_executeLegs` (issue 1746). If every
+        // leg is zero (only possible for `amount == 0`) nothing would be minted,
+        // so revert with a named error instead of a silent no-op deposit.
+        {
+            bool anyFunded;
+            for (uint256 i = 0; i < n; i++) {
+                if (available[i] && legAmounts[i] != 0) {
+                    anyFunded = true;
+                    break;
+                }
+            }
+            if (!anyFunded) revert NoFundedLeg();
+        }
+
         // Execute legs in a separate frame so its locals do not pile onto this
         // function's stack (Solidity stack-too-deep guard).
         _executeLegs(
@@ -1029,6 +1054,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ) internal {
         for (uint256 i = 0; i < vaultList.length; i++) {
             if (!available[i]) continue; // skip non-depositable legs (RTR-5)
+            // Skip zero-amount legs (issue 1746): an Active, eligible 0-bps leg
+            // (or a weight that rounds to 0) gets no approval, no vault call and
+            // no event. Vaults such as rmAGENT revert on deposit(0).
+            if (legAmounts[i] == 0) continue;
 
             uint256 sharesReceived = _executeLeg(receiver, vaultList[i], legAmounts[i], bpsList[i]);
             sharesPerLeg[i] = sharesReceived;
