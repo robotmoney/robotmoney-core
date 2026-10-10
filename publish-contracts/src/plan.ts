@@ -5,6 +5,10 @@ import { STAGES, expectedStartNonce } from "./stages.ts";
 
 export interface PlanRow { stage: string; kind: string; script: string | null; countKey: string | null; expectedCount: number | null; startNonce: number | null; manifest: string | null; vault: string | null }
 
+/** What the `startNonce` column of the plan means. Production: absolute, from a fresh deployer at nonce 0. Rehearsal: an offset from the deployer start nonce the run records at its first stage. */
+export const planNonceBasis = (kind: "production" | "rehearsal"): string =>
+  kind === "rehearsal" ? "relative to the deployer start nonce (recorded at the first stage; add the live nonce of the deployer)" : "absolute (a fresh deployer at nonce 0)";
+
 export function stagePlan(counts: FrozenCounts): PlanRow[] {
   return STAGES.map((s) => ({
     stage: s.name, kind: s.kind, script: s.script ?? null, countKey: s.countKey,

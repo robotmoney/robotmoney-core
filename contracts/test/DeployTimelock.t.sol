@@ -1982,6 +1982,67 @@ contract DeployTimelockDelayBoundaryTest is DeployTimelockRunEntrypointBase {
     }
 }
 
+/// @dev Issue 1727: the rehearsal kind (env DEPLOYMENT_KIND=rehearsal, the sheet line of the same name). On chain id 8453 it lowers the delay floor to 900 s and keeps
+///      the delay below the production floor; the default and an explicit "production" keep 172800 s unchanged. Anything else reverts.
+///      One scenario per contract: vm.setEnv is process-wide and forge runs the tests of a contract in parallel.
+abstract contract DeployTimelockKindBase is DeployTimelockRunEntrypointBase {
+    function _base(string memory kind, string memory delay) internal {
+        vm.chainId(8453);
+        _set("EXPECTED_CHAIN_ID", "8453");
+        _set("DEPLOYMENT_KIND", kind);
+        _set("TIMELOCK_MIN_DELAY", delay);
+    }
+}
+
+contract DeployTimelockRehearsalKindTest is DeployTimelockKindBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_1727_REHEARSAL_KIND_";
+    }
+
+    /// @notice 899 and 172800 are refused in the rehearsal kind, 900 passes and records the kind. A rehearsal never carries a production delay: the chain could not tell them apart.
+    function test_rehearsalKind_boundariesOnBase() public {
+        _base("rehearsal", "899");
+        vm.expectRevert(bytes("rehearsal TIMELOCK_MIN_DELAY outside 900..172799"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "172800");
+        vm.expectRevert(bytes("rehearsal TIMELOCK_MIN_DELAY outside 900..172799"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "900");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 900, "rehearsal delay not applied");
+        assertTrue(d.rehearsal, "the kind is not recorded");
+    }
+}
+
+contract DeployTimelockProductionKindTest is DeployTimelockKindBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_1727_PRODUCTION_KIND_";
+    }
+
+    /// @notice An explicit "production" keeps the 8453 floor: 900 s is refused, 172800 s passes.
+    function test_productionKind_floorUnchangedOnBase() public {
+        _base("production", "900");
+        vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        _set("TIMELOCK_MIN_DELAY", "172800");
+        DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+        assertEq(d.timelock.getMinDelay(), 172_800);
+        assertFalse(d.rehearsal);
+    }
+}
+
+contract DeployTimelockUnknownKindTest is DeployTimelockKindBase {
+    function _prefix() internal pure override returns (string memory) {
+        return "RM_1727_UNKNOWN_KIND_";
+    }
+
+    function test_unknownKind_reverts() public {
+        _base("Rehearsal", "900");
+        vm.expectRevert(bytes("DEPLOYMENT_KIND must be production or rehearsal"));
+        RunEntrypointRelay(deployer).runFrom(harness, _prefix());
+    }
+}
+
 contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
         return "RM_REVIEW_R04_TWIN_";

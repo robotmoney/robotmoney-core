@@ -95,9 +95,12 @@ export function proofNoncesBefore(stage: string): number {
   return at > STAGE_NAMES.indexOf(PROOF_STAGE) ? PROOF_TX_NONCES : 0;
 }
 
-/** The deployer nonce a stage starts at: the frozen counts of every deployer stage before it, plus the prove-control transaction once it has been sent. */
-export function expectedStartNonce(stage: string, counts: Record<string, number>): number {
-  let n = 0;
+/**
+ * The deployer nonce a stage starts at: the frozen counts of every deployer stage before it, plus the prove-control transaction once it has been sent.
+ * `startNonce` (issue 1727) is the nonce the run started at: 0 for a fresh deployer, and the only value production ever uses.
+ */
+export function expectedStartNonce(stage: string, counts: Record<string, number>, startNonce = 0): number {
+  let n = startNonce;
   for (const s of DEPLOYER_STAGES) {
     if (s.name === stage) return n + proofNoncesBefore(stage);
     n += counts[s.countKey!] ?? 0;

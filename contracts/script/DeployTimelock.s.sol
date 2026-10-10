@@ -161,6 +161,10 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @dev security-model.md §4: production timelock delay floor, 48 hours. Enforced
     ///      by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+    /// @dev Issue 1727 (owner decision 2026-10-10): the delay floor of a rehearsal, an explicit mode selected by the env var DEPLOYMENT_KIND=rehearsal (the publish-contracts
+    ///      sheet line of the same name). A rehearsal delay is 900 s up to 172799 s, on every chain, so the delay on chain always agrees with the kind. The default (variable
+    ///      absent or "production") keeps the 8453 floor above unchanged. The kind is also recorded in timelock.json.
+    uint256 public constant MIN_REHEARSAL_DELAY = 900;
 
     /// @dev Recorded in timelock.json as `executorPolicy` / `cancellerPolicy`.
     ///      `open`: EXECUTOR_ROLE is held by address(0). `safe-only`: only the Safe
@@ -209,6 +213,8 @@ contract DeployTimelock is ExpectedChainGuard {
         address safe;
         address emergency;
         uint256 minDelay;
+        /// Issue 1727: true only when DEPLOYMENT_KIND=rehearsal was set. Never true by default.
+        bool rehearsal;
         address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
@@ -240,6 +246,7 @@ contract DeployTimelock is ExpectedChainGuard {
         d.safe = _envAddressRequired(string.concat(prefix, "SAFE_ADDRESS"));
         d.emergency = _envAddressRequired(string.concat(prefix, "EMERGENCY_ADDRESS"));
         d.minDelay = _envUintRequired(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        d.rehearsal = _readRehearsal(prefix);
         uint256 safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
         address[] memory safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
         // One deployment scheme: these inputs are required on every chain. No input
@@ -415,6 +422,15 @@ contract DeployTimelock is ExpectedChainGuard {
         return vm.envAddress(name, ",");
     }
 
+    /// @dev DEPLOYMENT_KIND (issue 1727): absent or "production" is production, "rehearsal" is the explicit rehearsal mode, anything else reverts.
+    function _readRehearsal(string memory prefix) internal view returns (bool) {
+        string memory kind =
+            vm.envOr(string.concat(prefix, "DEPLOYMENT_KIND"), string("production"));
+        if (keccak256(bytes(kind)) == keccak256("production")) return false;
+        if (keccak256(bytes(kind)) == keccak256("rehearsal")) return true;
+        revert("DEPLOYMENT_KIND must be production or rehearsal");
+    }
+
     /// @dev VAULT_ADDRESSES: required, no default, comma-separated, at least one vault.
     function _readVaultList(string memory name) internal view returns (address[] memory) {
         require(vm.envExists(name), "VAULT_ADDRESSES must be set: every vault, comma-separated");
@@ -456,7 +472,13 @@ contract DeployTimelock is ExpectedChainGuard {
         // different code path: 8453 refuses anything under 48 hours, every other chain
         // (the Twin chain 918453, anvil) accepts any non-zero delay. The contract is
         // stock OpenZeppelin and carries no floor of its own.
-        if (block.chainid == BASE_MAINNET_CHAIN_ID) {
+        if (d.rehearsal) {
+            // Issue 1727: a rehearsal-kind run carries a short delay on any chain, and never a production one.
+            require(
+                d.minDelay >= MIN_REHEARSAL_DELAY && d.minDelay < MIN_PRODUCTION_DELAY,
+                "rehearsal TIMELOCK_MIN_DELAY outside 900..172799"
+            );
+        } else if (block.chainid == BASE_MAINNET_CHAIN_ID) {
             require(
                 d.minDelay >= MIN_PRODUCTION_DELAY,
                 "TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"
@@ -936,6 +958,7 @@ contract DeployTimelock is ExpectedChainGuard {
         string memory obj = "timelock";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeUint(obj, "min_delay", d.minDelay);
+        vm.serializeString(obj, "deployment_kind", d.rehearsal ? "rehearsal" : "production");
         vm.serializeUint(
             obj, "quorum_threshold", IRouterGovernanceQuorum(d.governance).quorumThreshold()
         );

@@ -1,12 +1,12 @@
 ---
-title: "DeployTimelockRequiredSafeOwnersTest"
+title: "DeployTimelockProductionKindTest"
 ---
 
-# DeployTimelockRequiredSafeOwnersTest
+# DeployTimelockProductionKindTest
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+**Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
 ## Functions
 
@@ -31,11 +31,13 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_revertswhensafeownersmalformed"></a>
+<a id="test_productionkind_floorunchangedonbase"></a>
 
-### test_run_revertsWhenSafeOwnersMalformed
+### test_productionKind_floorUnchangedOnBase
+
+An explicit "production" keeps the 8453 floor: 900 s is refused, 172800 s passes.
 
 ```solidity
-function test_run_revertsWhenSafeOwnersMalformed() public;
+function test_productionKind_floorUnchangedOnBase() public;
 ```
 

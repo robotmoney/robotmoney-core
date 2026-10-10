@@ -7,7 +7,7 @@
 import { USDC_ADDRESS } from "./usdc.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
-import { MAINNET_CHAIN_ID } from "./chains.ts";
+import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
 export type Address = `0x${string}`;
 export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
@@ -58,6 +58,8 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VOTING_PERIOD: { kind: "uint" },
   EXECUTION_DELAY: { kind: "uint" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
+  /** Issue 1727: `production` (the default when the line is absent) or `rehearsal` (a Base mainnet rehearsal with a 900 s timelock). Sheet only: never an environment variable, never a CLI flag. */
+  DEPLOYMENT_KIND: { kind: "string" },
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
   ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
@@ -68,8 +70,8 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
 
-/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
-export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS"]);
+/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production) and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
+export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND"]);
 export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n));
 
 /** Refused by name with a reason. Anything else not in the whitelist is refused as unknown. */
@@ -98,6 +100,8 @@ export interface Sheet {
   values: Record<string, string>;
   chainId: number;
   expectedChainId: number;
+  /** The deployment kind (issue 1727): `production` unless the sheet says `DEPLOYMENT_KIND=rehearsal`. */
+  kind: DeploymentKind;
   admin: Address;
   pauser: Address;
   emergency: Address;
@@ -224,6 +228,10 @@ export function parseSheet(text: string): Sheet {
   if (chainId <= 0) throw err("CHAIN_ID must be positive");
   if (expectedChainId !== chainId) throw err(`EXPECTED_CHAIN_ID ${expectedChainId} differs from CHAIN_ID ${chainId}`);
 
+  const kindRaw = v.DEPLOYMENT_KIND ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindRaw)) throw err(`DEPLOYMENT_KIND must be ${DEPLOYMENT_KINDS.join(" or ")}, got '${kindRaw}'. Production is the default when the line is absent.`, { name: "DEPLOYMENT_KIND" });
+  const kind = kindRaw as DeploymentKind;
+
   const admin = asAddress("ADMIN_ADDRESS", v.ADMIN_ADDRESS!);
   const pauser = asAddress("PAUSER_ADDRESS", v.PAUSER_ADDRESS!);
   const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
@@ -268,6 +276,13 @@ export function parseSheet(text: string): Sheet {
   if (executionDelay < 3600n) throw err("EXECUTION_DELAY is below 3600 (the contract floor on every chain)");
   const timelockMinDelay = asUint("TIMELOCK_MIN_DELAY", v.TIMELOCK_MIN_DELAY!);
   if (timelockMinDelay < 1n) throw err("TIMELOCK_MIN_DELAY must be at least 1 second on every chain");
+  if (kind === "rehearsal") {
+    // issue 1727: the delay on chain must agree with the kind, so a rehearsal can never be mistaken for production (and the reverse)
+    const why = rehearsalDelayProblem(timelockMinDelay);
+    if (why) throw err(`TIMELOCK_MIN_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "TIMELOCK_MIN_DELAY" });
+    // a rehearsal reuses the first rehearsal's keys, so the same owners and threshold would predict the Safe that already exists: a new salt is always explicit
+    if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
+  }
   const voterPower = asUint("VOTER_POWER", v.VOTER_POWER!);
   if (voterPower === 0n) throw err("VOTER_POWER must be above 0");
   if (voterPower * BigInt(voters.length) < quorum) throw err("QUORUM_THRESHOLD is above the total voting power: no proposal could ever pass");
@@ -314,13 +329,18 @@ export function parseSheet(text: string): Sheet {
     if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,AGENT:0,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
   }
   const newDelay = asUint("GOVERN_NEW_DELAY", v.GOVERN_NEW_DELAY!);
-  if (newDelay < 3600n || newDelay > 2592000n) throw err("GOVERN_NEW_DELAY must be from 3600 to 2592000 seconds (the Safe tool's updateDelay bounds)");
+  const newDelayMin = kind === "rehearsal" ? BigInt(REHEARSAL_DELAY_FLOOR) : 3600n;
+  if (newDelay < newDelayMin || newDelay > 2592000n) throw err(`GOVERN_NEW_DELAY must be from ${newDelayMin} to 2592000 seconds (the Safe tool's updateDelay bounds${kind === "rehearsal" ? " in a rehearsal" : ""})`);
+  if (kind === "rehearsal") {
+    const why = rehearsalDelayProblem(newDelay);
+    if (why) throw err(`GOVERN_NEW_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "GOVERN_NEW_DELAY" });
+  }
 
   const values: Record<string, string> = {};
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
-    values, chainId, expectedChainId, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
+    values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };

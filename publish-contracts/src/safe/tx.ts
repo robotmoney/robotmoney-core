@@ -114,7 +114,7 @@ function describeInner(inner: Hex, target: string, chainId?: number): string[] {
       const nd = (u.args as readonly bigint[])[0]!;
       const out = [`inner       updateDelay(newDelay=${nd}) on ${target}`];
       if (nd < 3600n || nd > 2592000n) out.push(`WARNING     new delay ${nd} is outside 1 hour to 30 days. If executed it can lock the timelock for good.`);
-      if (chainId !== undefined && isMainnet(chainId) && nd < BigInt(delayFloor(chainId))) out.push(`WARNING     new delay ${nd} is below the ${delayFloor(chainId)} second floor on chain ${chainId}. publish contracts refuses to propose it.`);
+      if (chainId !== undefined && isMainnet(chainId) && nd < BigInt(delayFloor(chainId))) out.push(`WARNING     new delay ${nd} is below the ${delayFloor(chainId)} second floor on chain ${chainId}. publish contracts refuses to propose it unless the sheet says DEPLOYMENT_KIND=rehearsal.`);
       return out;
     }
   } catch { /* unknown inner call */ }

@@ -220,6 +220,7 @@
   "agents: manifest says deployer owns no listed agent",
   "deployer: holds no role on any contract (log scan)",
   "timelock: min delay at least chain floor",
+  "deployment kind: the timelock delay agrees with the kind",
   "timelock: min delay equals sheet",
   "timelock: manifest executorPolicy is open",
   "timelock: manifest cancellerPolicy is safe-only",

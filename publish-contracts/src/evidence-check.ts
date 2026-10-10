@@ -5,6 +5,9 @@
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
 // operation scheduled on 8453 that is not a vault unpause (issue 1520) or a validated receipt release (issue 1611), a chain id other than 8453, owner exceptions recorded at or after plan approval.
+// DEPLOYMENT KIND (issue 1727): the evidence is read as PRODUCTION unless `--deployment-kind rehearsal` is passed. Evidence carries `deployment_kind` (absent means production).
+// A rehearsal evidence presented as production fails, and so does a production evidence presented as a rehearsal. Production keeps the 172800 s floor and the four unpauses.
+// A rehearsal reads the 900 s floor, accepts the rehearsal-only `rehearsal_rows` (update-delay, batch, cancel) and counts the deployer nonce from `deployer_start_nonce`.
 // Offline mode (no --rpc) checks the recorded JSON shape only. Online mode (--rpc URL, chain 8453) reads the chain with viem and
 // does not trust the recorded numbers: deployer nonce, every receipt status, the timelock events and block timestamps of each
 // govern step, registry.listVaults() against the recorded manifests, and depositsPaused() of the basket vaults against the unpause govern rows.
@@ -15,7 +18,9 @@ import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, type Hex } fro
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR } from "./floors.ts";
+import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProblem } from "./floors.ts";
+import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
+import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
@@ -69,6 +74,13 @@ export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]
 ];
 const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
 
+/** Operations built INSIDE this module for the rehearsal cancel row. Identity-based and never serialised: a `cancelled` field in evidence JSON means nothing. */
+const INTERNAL_CANCELS = new WeakSet<object>();
+/** Entries of govern, receipt_releases, receipt_applications and committee_registrations are executed operations: a cancel field there is a forgery attempt at the gap check. */
+function forbidCancelFields(entries: any[], label: (e: any) => string, bad: (m: string) => void): void {
+  for (const e of entries) for (const k of ["cancelled", "cancel_tx", "cancel_status"]) if (e && typeof e === "object" && k in e) bad(`${label(e)}: ${k} is not a field of an executed operation (only the rehearsal cancel row in rehearsal_rows has a cancel)`);
+}
+
 /** The checks every operation of the run shares: both transactions present with status 1, one delay apart, none shared with another operation. */
 function operationProblems(operations: any[], bad: (m: string) => void, floor: number = MAINNET_DELAY_FLOOR): void {
   for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
@@ -86,6 +98,7 @@ function operationProblems(operations: any[], bad: (m: string) => void, floor: n
     if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
     if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
     if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
+    if (INTERNAL_CANCELS.has(g)) continue; // only the rehearsal cancel row, built by rowOperations below, never executes. Nothing read from the evidence JSON can set this.
     const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
     if (!(gap >= floor)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -124,6 +137,111 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
 }
 
 /**
+ * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (authorizeAgent, committeeRegister), one schedule and one execute at
+ * least the floor apart. `recorded_receipts`: one entry per receipt the submitter anchored through the gateway (receipt_id, payload_digest, payload_uri, submitter ADDRESS, tx_hash; never a key).
+ * Both are refused in a production evidence. In a rehearsal every receipt_applications entry must trace to a recorded receipt with the same digest, by a registered submitter.
+ */
+const regLabel = (r: any) => `${REGISTER_ROW} ${r?.submitter}`;
+const recLabel = (r: any) => `recorded receipt ${r?.receipt_id}`;
+function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[], bad: (m: string) => void): any[] {
+  const regs: any[] = ev?.committee_registrations === undefined ? [] : Array.isArray(ev.committee_registrations) ? ev.committee_registrations : (bad("committee_registrations is not a list"), []);
+  const recs: any[] = ev?.recorded_receipts === undefined ? [] : Array.isArray(ev.recorded_receipts) ? ev.recorded_receipts : (bad("recorded_receipts is not a list"), []);
+  if (kind !== "rehearsal") {
+    if (regs.length > 0) bad("committee_registrations is present in a production evidence: the production govern surface on 8453 is the four unpauses, release-receipt and apply-receipt");
+    if (recs.length > 0) bad("recorded_receipts is present in a production evidence: production records receipts with rmpc and an HSM or KMS signer, outside this evidence");
+    return [];
+  }
+  const seenSub = new Set<string>();
+  for (const r of regs) {
+    const w = regLabel(r);
+    if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
+    else if (seenSub.has(lc(r.submitter))) bad(`${w}: submitter has more than one evidence entry`);
+    else seenSub.add(lc(r.submitter));
+    if (r?.step !== undefined && r.step !== REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${REGISTER_ROW}`);
+    for (const k of ["gateway", "ic_policy", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+    if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    if (typeof r?.agent_label !== "string" || r.agent_label === "") bad(`${w}: agent_label is missing`);
+    if (!/^[0-9]+$/.test(String(r?.valid_until ?? ""))) bad(`${w}: valid_until is not a decimal timestamp`);
+  }
+  const seenRec = new Set<string>();
+  for (const r of recs) {
+    const w = recLabel(r);
+    if (!TX.test(r?.receipt_id ?? "")) bad(`${w}: receipt_id is not a bytes32`);
+    else if (seenRec.has(lc(r.receipt_id))) bad(`${w}: receipt_id has more than one evidence entry`);
+    else seenRec.add(lc(r.receipt_id));
+    if (!TX.test(r?.payload_digest ?? "")) bad(`${w}: payload_digest is not a bytes32`);
+    if (typeof r?.payload_uri !== "string" || !/^https?:\/\//.test(r.payload_uri)) bad(`${w}: payload_uri is not an http(s) route`);
+    if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
+    else if (!seenSub.has(lc(r.submitter))) bad(`${w}: submitter ${r.submitter} has no committee_registrations entry: a receipt is recorded only by a registered submitter`);
+    if (r?.already_recorded !== true && !TX.test(r?.tx_hash ?? "")) bad(`${w}: tx_hash is missing`);
+    if (r?.status !== 1) bad(`${w}: status is ${r?.status}`);
+  }
+  for (const a of applications) {
+    const rec = recs.find((x) => lc(x?.receipt_id ?? "") === lc(a?.receipt_id ?? ""));
+    if (!rec) bad(`${applyLabel(a)}: the receipt was not recorded through the gateway in this run (no recorded_receipts entry): a rehearsal applies a REAL recorded receipt`);
+    else if (lc(rec.payload_digest ?? "") !== lc(a?.payload_digest ?? "")) bad(`${applyLabel(a)}: payload_digest ${a?.payload_digest} differs from the recorded receipt's ${rec.payload_digest}`);
+  }
+  return regs;
+}
+const registrationOperations = (regs: any[]): any[] => regs.map((r) => ({ ...r, step: regLabel(r) }));
+
+/** How the evidence is read (issue 1727). `kind` is the deployment kind the caller expects: production unless the operator passed --deployment-kind rehearsal. */
+export interface EvidenceOpts { kind?: DeploymentKind }
+const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
+/** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
+function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
+  const claimed = ev?.deployment_kind ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(claimed)) { bad(`deployment_kind '${String(claimed)}' is not ${DEPLOYMENT_KINDS.join(" or ")}`); return; }
+  if (claimed !== expected) bad(`deployment_kind is ${claimed}, the evidence is checked as ${expected}${claimed === "rehearsal" ? ": a rehearsal evidence is never production evidence (pass --deployment-kind rehearsal to check a rehearsal)" : ": a production evidence is not a rehearsal"}`);
+}
+
+/**
+ * Issue 1727: the rehearsal-only govern rows on 8453, recorded under `rehearsal_rows` (never in `govern`, so stage 13 stays the four unpauses). update-delay and batch:
+ * one schedule and one execute at least the floor apart. cancel: a schedule and a cancel_tx, no execute. Refused in production.
+ */
+export const REHEARSAL_ROWS = ["update-delay", "batch", "cancel"] as const;
+const rowLabel = (r: any) => `rehearsal row ${r?.step}`;
+function rehearsalRowProblems(ev: any, kind: DeploymentKind, bad: (m: string) => void): any[] {
+  const rows: any[] = ev?.rehearsal_rows === undefined ? [] : Array.isArray(ev.rehearsal_rows) ? ev.rehearsal_rows : (bad("rehearsal_rows is not a list"), []);
+  if (kind !== "rehearsal") {
+    if (rows.length > 0) bad(`rehearsal_rows is present in a production evidence: update-delay, batch and cancel are refused on 8453 in production`);
+    return [];
+  }
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!(REHEARSAL_ROWS as readonly string[]).includes(r?.step)) bad(`${rowLabel(r)}: step '${r?.step}' is not one of ${REHEARSAL_ROWS.join(", ")}`);
+    else if (seen.has(r.step)) bad(`${rowLabel(r)}: more than one evidence entry`);
+    else seen.add(r.step);
+    if (r?.step === "cancel") {
+      if (!TX.test(r?.cancel_tx ?? "")) bad(`${rowLabel(r)}: cancel_tx is missing`);
+      if (r?.cancel_status !== 1) bad(`${rowLabel(r)}: cancel receipt status is ${r?.cancel_status}`);
+      if (r?.execute_tx !== undefined) bad(`${rowLabel(r)}: a cancelled operation has no execute_tx`);
+    }
+  }
+  // schedule/execute shape, uniqueness across every operation of the evidence is checked by the caller together with the unpauses
+  return rows;
+}
+/** The rows as operations for operationProblems: cancel maps its cancel transaction onto the execute fields and skips the gap. */
+const rowOperations = (rows: any[]): any[] => rows.map((r) => {
+  const op = { ...(r.step === "cancel" ? { ...r, execute_tx: r.cancel_tx, execute_status: r.cancel_status } : r), step: rowLabel(r) };
+  if (r.step === "cancel") INTERNAL_CANCELS.add(op);
+  return op;
+});
+
+/**
+ * The deployer start nonce the final nonce is counted from. Production: 0, always (a fresh deployer; a `deployer_start_nonce` in a production evidence is refused).
+ * Rehearsal: `deployer_start_nonce`, required, a non-negative integer (the run manifest's deployerStartNonce).
+ */
+function startNonceOf(ev: any, kind: DeploymentKind, bad: (m: string) => void): number {
+  if (kind !== "rehearsal") {
+    if (ev?.deployer_start_nonce !== undefined) bad("deployer_start_nonce is present in a production evidence: a production deployer is fresh, its nonce starts at 0");
+    return 0;
+  }
+  if (!Number.isInteger(ev?.deployer_start_nonce) || ev.deployer_start_nonce < 0) { bad("deployer_start_nonce is missing: a rehearsal deployer is not fresh, the evidence records the nonce the run started at"); return 0; }
+  return ev.deployer_start_nonce;
+}
+
+/**
  * An ADOPTED stage (issue 1721): a stage whose CREATE2 libraries already sat on chain (the libs stage: its one library; a basket stage: BasketAssetConfigGuard,
  * TwapTickMath, BasketViews), so the deployer sent fewer transactions than the frozen count. The stage entry carries
  * `adopted: { libraries: [{ name, address, code_hash }], deployer_txs }`. `deployer_txs` is what this deployer sent and is the stage's contribution to the
@@ -148,9 +266,12 @@ const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?
 /** stage -> how many libraries the stage table lets it adopt (libs: its linked libraries; a basket stage: its create2Libraries). The CLI passes it from the table. */
 export type AdoptableLibraries = Record<string, number>;
 
-export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, adoptable?: AdoptableLibraries): string[] {
+export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, adoptable?: AdoptableLibraries, opts?: EvidenceOpts): string[] {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
+  const kind = kindOf(opts);
+  const floor = delayFloor(MAINNET_CHAIN_ID, kind);
+  kindProblems(ev, kind, bad);
   if (ev?.chain_id !== MAINNET_CHAIN_ID) bad(`chain_id is ${ev?.chain_id}, evidence is read for ${MAINNET_CHAIN_ID}`);
   if (!/^[0-9a-f]{40}$/.test(ev?.core_sha ?? "") || /^0+$/.test(ev.core_sha)) bad("core_sha is missing or a placeholder");
   try { assertOwnerExceptions(ev?.owner_exceptions, ev?.plan_approved_at); } catch (e) { bad((e as Error).message); }
@@ -195,7 +316,8 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
 
   if (!ADDR.test(ev?.safe?.address ?? "") || !TX.test(ev?.safe?.creation_tx ?? "")) bad("safe address or creation_tx is missing");
   if (!ADDR.test(ev?.timelock?.address ?? "")) bad("timelock address is missing");
-  if (!(ev?.timelock?.min_delay >= MAINNET_DELAY_FLOOR)) bad(`timelock min_delay ${ev?.timelock?.min_delay} is under ${MAINNET_DELAY_FLOOR} s`);
+  if (!(ev?.timelock?.min_delay >= floor)) bad(`timelock min_delay ${ev?.timelock?.min_delay} is under ${floor} s${kind === "rehearsal" ? " (the rehearsal floor)" : ""}`);
+  else if (kind === "rehearsal" && rehearsalDelayProblem(ev.timelock.min_delay)) bad(`timelock min_delay ${rehearsalDelayProblem(ev.timelock.min_delay)}: ${kindLabel(kind, ev.timelock.min_delay)} cannot be told from production`);
   if (!(ev?.safe?.owners?.length >= 3) || !(ev?.safe?.threshold >= 2)) bad("safe owners or threshold are under the floor (3 owners, threshold 2)");
   for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) if (!ADDR.test(ev?.vaults?.[k]?.address ?? "")) bad(`vault ${k} address is missing`);
 
@@ -226,11 +348,15 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   }
   const applications = applicationShapeProblems(ev, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) }))], bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  const rrows = rehearsalRowProblems(ev, kind, bad);
+  const regs = receiptPathProblems(ev, kind, applications, bad);
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
-  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts))) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts))}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
+  const start = startNonceOf(ev, kind, bad);
+  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
@@ -270,12 +396,20 @@ function timelockEvents(rc: Awaited<ReturnType<ChainReader["getTransactionReceip
 }
 
 /** Reads chain 8453 and checks the recorded evidence against it. Returns problems; an empty list is a pass. */
-export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCounts: Record<string, number>): Promise<string[]> {
+export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCounts: Record<string, number>, opts?: EvidenceOpts): Promise<string[]> {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
+  const kind = kindOf(opts);
+  const FLOOR = delayFloor(MAINNET_CHAIN_ID, kind);
+  kindProblems(ev, kind, bad);
+  /** A delay on chain must agree with the kind: at least the floor, and for a rehearsal also below the production floor, so the chain tells the two apart. */
+  const delayAgrees = (what: string, d: bigint | undefined) => {
+    if (!(d !== undefined && d >= BigInt(FLOOR))) bad(`${what}: CallScheduled delay ${d} is under ${FLOOR} s`);
+    else if (kind === "rehearsal" && rehearsalDelayProblem(d)) bad(`${what}: CallScheduled delay ${rehearsalDelayProblem(d)}: it does not read as a rehearsal on chain`);
+  };
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
-  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts));
+  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad));
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
   if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction say ${want}`);
 
@@ -316,7 +450,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
     if (scheduled.length === 0) { bad(`govern ${g.step}: the schedule tx has no CallScheduled event from the timelock`); continue; }
-    for (const e of scheduled) if (!(e.delay !== undefined && e.delay >= BigInt(MAINNET_DELAY_FLOOR))) bad(`govern ${g.step}: CallScheduled delay ${e.delay} is under ${MAINNET_DELAY_FLOOR} s`);
+    for (const e of scheduled) delayAgrees(`govern ${g.step}`, e.delay);
     // an unpause round is exactly one call: unpauseDeposits() on that step's own vault. Any other call on a vault (rmUSDC included) is refused.
     if (scheduled.length !== 1) bad(`govern ${g.step}: the schedule tx has ${scheduled.length} CallScheduled events, an unpause is exactly one call`);
     for (const e of scheduled) {
@@ -335,7 +469,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((e) => scheduled.some((s) => s.id === e.id))) bad(`govern ${g.step}: the execute tx has no CallExecuted event for the scheduled id`);
     const execTs = await ts(ex);
     const gap = execTs - schedTs;
-    if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`govern ${g.step}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
+    if (!(gap >= FLOOR)) bad(`govern ${g.step}: on-chain schedule-to-execute gap ${gap} s is under ${FLOOR} s`);
   }
   // Receipt releases (issue 1611): each is exactly one timelock call, releaseReceipt(receipt_id) on the receipt contract, one delay apart.
   for (const r of ev.receipt_releases ?? []) {
@@ -350,7 +484,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     for (const e of scheduled) {
       if (lc(e.target) !== lc(ev.consensus_receipt.address)) bad(`${w}: CallScheduled target ${e.target} is not the receipt contract ${ev.consensus_receipt.address}`);
       else if (lc(e.data) !== lc(want)) bad(`${w}: CallScheduled calldata is not releaseReceipt(${r.receipt_id})`);
-      if (!(e.delay !== undefined && e.delay >= BigInt(MAINNET_DELAY_FLOOR))) bad(`${w}: CallScheduled delay ${e.delay} is under ${MAINNET_DELAY_FLOOR} s`);
+      delayAgrees(w, e.delay);
       const other = idsByStep.get(e.id);
       if (other !== undefined && other !== w) bad(`${w}: the timelock operation ${e.id} is also the operation of step '${other}' (one operation per step, none shared)`);
       idsByStep.set(e.id, w);
@@ -360,9 +494,10 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     if (!ex) continue;
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((e) => scheduled.some((s) => s.id === e.id) && lc(e.target) === lc(ev.consensus_receipt.address) && lc(e.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled release`);
     const gap = (await ts(ex)) - schedTs;
-    if (!(gap >= MAINNET_DELAY_FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${MAINNET_DELAY_FLOOR} s`);
+    if (!(gap >= FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${FLOOR} s`);
   }
-  p.push(...(await checkReceiptApplicationsOnChain(ev, chain)));
+  p.push(...(await checkReceiptApplicationsOnChain(ev, chain, FLOOR)));
+  if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
   // (all four vaults deploy paused, issue 1710).
   for (const b of VAULTS) {
@@ -422,6 +557,103 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
     if (!ex) continue;
     const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
     if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `committee_registrations` and `recorded_receipts` (issue 1727). A registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
+ * authorizeAgent then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
+ * the block gap is at least the floor. A recorded receipt's transaction must have succeeded.
+ */
+export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor: number): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const rcOf = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  for (const r of Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : []) {
+    const w = regLabel(r);
+    if (!ADDR.test(r?.submitter ?? "") || !ADDR.test(r?.gateway ?? "") || !ADDR.test(r?.timelock ?? "") || typeof r?.agent_label !== "string" || !/^[0-9]+$/.test(String(r?.valid_until ?? "")) || !TX.test(r?.schedule_tx ?? "")) continue; // the offline check already named it
+    const sc = await rcOf(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    const want = buildRegisterCalls(r.gateway, r.timelock, r.submitter, r.agent_label, BigInt(r.valid_until));
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (authorizeAgent, committeeRegister) in one batch`);
+    scheduled.forEach((e, i) => {
+      const c = want[i];
+      if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not part of a registration`); return; }
+      if (lc(e.target) !== lc(c.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not the gateway ${c.target}`);
+      else if (lc(e.data) !== lc(c.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${c.label}`);
+      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      else if (rehearsalDelayProblem(e.delay)) bad(`${w}: CallScheduled delay ${rehearsalDelayProblem(e.delay)}`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation`);
+    });
+    if (scheduled[0] && typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0].id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0].id}`);
+    const schedTs = await ts(sc);
+    const ex = await rcOf(`${w} execute`, r.execute_tx);
+    if (!ex || !scheduled[0]) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id));
+    if (executed.length !== want.length) bad(`${w}: the execute tx has ${executed.length} CallExecuted events for the scheduled id, want ${want.length}`);
+    if (!((await ts(ex)) - schedTs >= floor)) bad(`${w}: on-chain schedule-to-execute gap is under ${floor} s`);
+  }
+  for (const r of Array.isArray(ev?.recorded_receipts) ? ev.recorded_receipts : []) {
+    if (TX.test(r?.tx_hash ?? "")) await rcOf(`${recLabel(r)} tx`, r.tx_hash);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `rehearsal_rows` (issue 1727). update-delay: one CallScheduled on the timelock itself, updateDelay(new_delay). batch: two CallScheduled in one operation.
+ * Both: the delay is the rehearsal floor or more (and below production), the CallExecuted event matches, the block gap is at least the floor. cancel: the schedule is
+ * a single CallScheduled and the cancel transaction carries a Cancelled event for that id.
+ */
+export async function checkRehearsalRowsOnChain(ev: any, chain: ChainReader, floor: number): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const rcOf = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  for (const r of Array.isArray(ev?.rehearsal_rows) ? ev.rehearsal_rows : []) {
+    const w = rowLabel(r);
+    if (!(REHEARSAL_ROWS as readonly string[]).includes(r?.step) || !TX.test(r?.schedule_tx ?? "")) continue; // the offline check already named it
+    const sc = await rcOf(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    const wantCalls = r.step === "batch" ? 2 : 1;
+    if (scheduled.length !== wantCalls) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, ${r.step} is ${wantCalls} call(s)`);
+    for (const e of scheduled) {
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      else if (rehearsalDelayProblem(e.delay)) bad(`${w}: CallScheduled delay ${rehearsalDelayProblem(e.delay)}`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the calls are not one operation`);
+    }
+    if (r.step !== "batch" && scheduled[0] && lc(scheduled[0].target) !== lc(ev.timelock.address) && r.step === "update-delay") bad(`${w}: CallScheduled target ${scheduled[0].target} is not the timelock itself`);
+    if (scheduled[0] && typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0].id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0].id}`);
+    if (r.step === "cancel") {
+      const cx = await rcOf(`${w} cancel`, r.cancel_tx);
+      if (!cx || !scheduled[0]) continue;
+      const cancelled = cx.logs.some((l) => { if (lc(l.address) !== lc(ev.timelock.address)) return false; try { const d: any = decodeEventLog({ abi: TIMELOCK_ABI, data: l.data, topics: l.topics as [Hex, ...Hex[]] }); return d.eventName === "Cancelled" && lc(d.args.id) === lc(scheduled[0]!.id); } catch { return false; } });
+      if (!cancelled) bad(`${w}: the cancel tx has no Cancelled event for the scheduled id`);
+      continue;
+    }
+    const schedTs = await ts(sc);
+    const ex = await rcOf(`${w} execute`, r.execute_tx);
+    if (!ex || !scheduled[0]) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id));
+    if (executed.length !== scheduled.length) bad(`${w}: the execute tx has ${executed.length} CallExecuted events for the scheduled id, want ${scheduled.length}`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -527,17 +759,25 @@ export function scanEvidenceFolder(dir: string): string[] {
  * with the receipt, governance and timelock addresses of that run. Offline shape and delay checks, then (with --rpc) the timelock events on that chain.
  * The Twin rehearsal uses it: a Twin run proves the row executes on the real contracts, not that mainnet governance works.
  */
-async function checkApplicationsMain(values: Record<string, string | boolean | undefined>): Promise<void> {
+async function checkApplicationsMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
   const need = ["consensus-receipt", "governance", "timelock"].filter((k) => typeof values[k] !== "string");
   if (need.length) { console.error(`evidence: --receipt-applications needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
-  const ev = { consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications };
-  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : MAINNET_DELAY_FLOOR;
+  const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications,
+    ...(kind === "rehearsal" ? { committee_registrations: m.committee_registrations, recorded_receipts: m.recorded_receipts } : {}) };
+  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
   if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
   const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor)];
+  // issue 1727: a rehearsal's receipt path (registration, REAL recorded receipt, application) must trace end to end. A production run manifest has none of the first two.
+  if (kind === "rehearsal") {
+    receiptPathProblems(ev, kind, Array.isArray(m.receipt_applications) ? m.receipt_applications : [], (x) => problems.push(x));
+    operationProblems((Array.isArray(m.committee_registrations) ? m.committee_registrations : []).map((r: any) => ({ ...r, step: regLabel(r) })), (x) => problems.push(x), floor);
+  }
   if (typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
-    problems.push(...(await checkReceiptApplicationsOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
+    const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
+    problems.push(...(await checkReceiptApplicationsOnChain(ev, reader, floor)));
+    if (kind === "rehearsal") problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
   }
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
@@ -550,8 +790,11 @@ function adoptableFromTable(): AdoptableLibraries {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
-  if (values["receipt-applications"]) return checkApplicationsMain(values);
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
+  const kindArg = values["deployment-kind"] ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
+  const kind = kindArg as DeploymentKind;
+  if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));
   let counts: Record<string, number> | undefined;
@@ -560,7 +803,7 @@ async function main() {
     if (values["deploy-sha"] && j.deploySha !== values["deploy-sha"]) { console.error(`evidence: frozen file is for ${j.deploySha}, not ${values["deploy-sha"]}`); process.exit(1); }
     counts = j.counts ?? j;
   }
-  const problems = [...checkEvidence(ev, counts, adoptableFromTable()), ...scanEvidenceFolder(join(values.evidence, ".."))];
+  const problems = [...checkEvidence(ev, counts, adoptableFromTable(), { kind }), ...scanEvidenceFolder(join(values.evidence, ".."))];
   if (values.rpc && values["chain-fixture"]) { console.error("evidence: give --rpc or --chain-fixture, not both"); process.exit(2); }
   if (values["record-chain-fixture"] && !values.rpc) { console.error("evidence: --record-chain-fixture needs --rpc"); process.exit(2); }
   if ((values.rpc || values["chain-fixture"]) && !counts) { console.error("evidence: reading the chain needs --frozen FILE (and --deploy-sha SHA): the nonce is checked against the frozen counts"); process.exit(2); }
@@ -569,10 +812,10 @@ async function main() {
     const { createPublicClient, http } = await import("viem");
     const live = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
     const rec = values["record-chain-fixture"] ? recordingChainReader(live) : undefined;
-    problems.push(...(await checkEvidenceOnChain(ev, rec?.reader ?? live, counts!)));
+    problems.push(...(await checkEvidenceOnChain(ev, rec?.reader ?? live, counts!, { kind })));
     if (rec && problems.length === 0) { writeFileSync(values["record-chain-fixture"]!, JSON.stringify(rec.fixture, null, 2) + "\n"); console.error(`evidence: chain fixture written to ${values["record-chain-fixture"]}`); }
   } else if (values["chain-fixture"]) {
-    problems.push(...(await checkEvidenceOnChain(ev, chainReaderFromFixture(JSON.parse(readFileSync(values["chain-fixture"], "utf8"))), counts!)));
+    problems.push(...(await checkEvidenceOnChain(ev, chainReaderFromFixture(JSON.parse(readFileSync(values["chain-fixture"], "utf8"))), counts!, { kind })));
   }
   if (problems.length) { for (const m of problems) console.error(`evidence: ${m}`); process.exit(1); }
   console.log(values.rpc ? "evidence ok (chain read)" : values["chain-fixture"] ? "evidence ok (recorded chain fixture, offline)" : "evidence ok (offline shape only)");

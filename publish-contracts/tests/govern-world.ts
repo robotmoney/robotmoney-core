@@ -12,10 +12,11 @@ import { stageManifestName } from "../src/verify/constants.ts";
 import type { Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
+import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
-export const A = { timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
+export const A = { icPolicy: addr(0x1007), timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
 
 /** Writes the manifests govern reads (timelock, safe, router, registry, gateway, governance, ic-policy's receipt, one per vault) into `dir`. */
 export function writeGovernManifests(dir: string): void {
@@ -25,7 +26,7 @@ export function writeGovernManifests(dir: string): void {
   const n = (stage: string) => stageManifestName(t, stage);
   w(n("timelock"), { timelock: A.timelock }); w("safe", { safe: A.safe }); w(n("router"), { router: A.router }); w(n("registry"), { registry: A.registry });
   w(n("recorder"), { recorder: "0x00000000000000000000000000000000000c0c0c" });
-  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt });
+  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt, policy: A.icPolicy });
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }
 
@@ -62,6 +63,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
+    /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
+    agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
@@ -88,6 +91,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
+          case "hasRole": return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
+          case "icPolicy": return A.icPolicy;
+          case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
           case "isRecorded": return s.recorded.has(String(args?.[0]).toLowerCase());
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
         }
@@ -133,6 +140,14 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           if (c.target === A.governance) {
             const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
             s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
+            continue;
+          }
+          if (c.target === A.gateway) {
+            let d: ReturnType<typeof decodeFunctionData<typeof GATEWAY_REGISTER_ABI>>;
+            try { d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
+            const who = String(d.args[0]).toLowerCase();
+            if (d.functionName === "authorizeAgent") { s.agentRole.add(who); s.agentOwner.set(who, A.timelock); }
+            if (d.functionName === "committeeRegister") s.committee.set(who, String(d.args[1]));
             continue;
           }
           if (c.target !== A.receipt) {

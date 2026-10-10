@@ -5,7 +5,7 @@ import { encodeFunctionData, getAddress, type Address, type Hex } from "viem";
 import { sameAddress } from "./chain.ts";
 import { MAX_SAFE_DELAY, MIN_SAFE_DELAY, TIMELOCK_ABI, ZERO_ADDRESS, ZERO_BYTES32, type TimelockRole } from "./constants.ts";
 import { SafeToolError } from "./errors.ts";
-import { delayFloor } from "../floors.ts";
+import { delayFloor, rehearsalDelayProblem, REHEARSAL_DELAY_FLOOR, type DeploymentKind } from "../floors.ts";
 import type { SafeHandle } from "./safe.ts";
 import { proposeTx, type SafeTxBundle } from "./tx.ts";
 import { keccak256, toBytes } from "viem";
@@ -35,6 +35,8 @@ export interface UpdateDelayParams extends Common {
   predecessor?: Hex;
   delay?: bigint;
   allowUnsafeDelay?: boolean;
+  /** Issue 1727: the deployment kind of the run (the sheet's DEPLOYMENT_KIND). Absent means production: the 172800 s floor on 8453. Only the govern row passes `rehearsal`, from the sheet. */
+  deploymentKind?: DeploymentKind;
 }
 
 const is32 = (h: string): boolean => /^0x[0-9a-fA-F]{64}$/.test(h);
@@ -142,17 +144,22 @@ export async function updateTimelockDelay(handle: SafeHandle, p: UpdateDelayPara
   if (p.newDelay < 0n) throw new SafeToolError("BAD_INPUT", "newDelay must not be negative");
   // Bounds no flag lifts, allowUnsafeDelay included: the chain-keyed floor (172800 s on 8453, at least 1 s elsewhere) and the 30 day ceiling.
   const chainId = handle.chain.chainId;
-  const floor = BigInt(delayFloor(chainId));
+  const kind = p.deploymentKind ?? "production";
+  const floor = BigInt(delayFloor(chainId, kind));
   if (p.newDelay < floor) {
-    throw new SafeToolError("UNSAFE_DELAY", `newDelay ${p.newDelay} is below the ${floor} second floor on chain ${chainId}. No flag lifts this floor.`, { newDelay: p.newDelay.toString(), floor: floor.toString() });
+    throw new SafeToolError("UNSAFE_DELAY", `newDelay ${p.newDelay} is below the ${floor} second floor on chain ${chainId}${kind === "rehearsal" ? " (deployment kind rehearsal)" : ""}. No flag lifts this floor.`, { newDelay: p.newDelay.toString(), floor: floor.toString() });
   }
+  if (kind === "rehearsal" && rehearsalDelayProblem(p.newDelay)) {
+    throw new SafeToolError("UNSAFE_DELAY", `newDelay ${rehearsalDelayProblem(p.newDelay)} (deployment kind rehearsal)`, { newDelay: p.newDelay.toString() });
+  }
+  const minSafe = kind === "rehearsal" ? BigInt(REHEARSAL_DELAY_FLOOR) : MIN_SAFE_DELAY;
   if (p.newDelay > MAX_SAFE_DELAY) {
     throw new SafeToolError("UNSAFE_DELAY", `newDelay ${p.newDelay} is above the ${MAX_SAFE_DELAY} second ceiling (30 days). No flag lifts this ceiling: a delay that long can lock the timelock for good.`, { newDelay: p.newDelay.toString(), ceiling: MAX_SAFE_DELAY.toString() });
   }
-  if ((p.newDelay < MIN_SAFE_DELAY || p.newDelay > MAX_SAFE_DELAY) && !p.allowUnsafeDelay) {
-    throw new SafeToolError("UNSAFE_DELAY", `newDelay ${p.newDelay} is outside 1 hour to 30 days (${MIN_SAFE_DELAY} to ${MAX_SAFE_DELAY} seconds). A wrong delay can lock the timelock for good.`, { newDelay: p.newDelay.toString() });
+  if ((p.newDelay < minSafe || p.newDelay > MAX_SAFE_DELAY) && !p.allowUnsafeDelay) {
+    throw new SafeToolError("UNSAFE_DELAY", `newDelay ${p.newDelay} is outside ${minSafe} to ${MAX_SAFE_DELAY} seconds. A wrong delay can lock the timelock for good.`, { newDelay: p.newDelay.toString() });
   }
-  if (p.allowUnsafeDelay && (p.newDelay < MIN_SAFE_DELAY || p.newDelay > MAX_SAFE_DELAY)) handle.logger.log("warn", "timelock.unsafe_delay_allowed", { new_delay: p.newDelay.toString() });
+  if (p.allowUnsafeDelay && (p.newDelay < minSafe || p.newDelay > MAX_SAFE_DELAY)) handle.logger.log("warn", "timelock.unsafe_delay_allowed", { new_delay: p.newDelay.toString() });
   const timelock = getAddress(p.timelock);
   const inner = encodeFunctionData({ abi: TIMELOCK_ABI, functionName: "updateDelay", args: [p.newDelay] });
   const common = { timelock, calls: [{ target: timelock, data: inner }], salt: p.salt, predecessor: p.predecessor, form: "single" as const, description: p.description, out: p.out };

@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -186,6 +186,20 @@ by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
 
 ```solidity
 uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+```
+
+### MIN_REHEARSAL_DELAY
+
+<i>
+
+Issue 1727 (owner decision 2026-10-10): the delay floor of a rehearsal, an explicit mode selected by the env var DEPLOYMENT_KIND=rehearsal (the publish-contracts
+sheet line of the same name). A rehearsal delay is 900 s up to 172799 s, on every chain, so the delay on chain always agrees with the kind. The default (variable
+absent or "production") keeps the 8453 floor above unchanged. The kind is also recorded in timelock.json.
+
+</i>
+
+```solidity
+uint256 public constant MIN_REHEARSAL_DELAY = 900;
 ```
 
 ### EXECUTOR_POLICY
@@ -541,6 +555,32 @@ function _readAgentList(string memory name) internal view returns (address[] mem
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address[]` |  |
+
+<a id="_readrehearsal-string"></a>
+
+### _readRehearsal
+
+<i>
+
+DEPLOYMENT_KIND (issue 1727): absent or "production" is production, "rehearsal" is the explicit rehearsal mode, anything else reverts.
+
+</i>
+
+```solidity
+function _readRehearsal(string memory prefix) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="_readvaultlist-string"></a>
 
@@ -981,6 +1021,8 @@ struct Deployed {
         address safe;
         address emergency;
         uint256 minDelay;
+        /// Issue 1727: true only when DEPLOYMENT_KIND=rehearsal was set. Never true by default.
+        bool rehearsal;
         address icPolicy;
         address consensusReceipt;
         address receiptAdmin;
@@ -1002,6 +1044,7 @@ struct Deployed {
 | safe | `address` |  |
 | emergency | `address` |  |
 | minDelay | `uint256` |  |
+| rehearsal | `bool` |  |
 | icPolicy | `address` |  |
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |

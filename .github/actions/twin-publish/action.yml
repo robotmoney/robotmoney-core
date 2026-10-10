@@ -24,6 +24,13 @@ inputs:
     description: "'true' also runs stage 13 (the govern verb, with the Twin time warp) after verify, then verify again (post-govern state) when verify is also on."
     required: false
     default: "false"
+  rehearsal:
+    description: >-
+      'true' runs the Twin chain in the REHEARSAL kind of the Base mainnet rehearsal (issue 1727): the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900 and a new SAFE_SALT_NONCE, the deployer
+      is not fresh (one self-transfer first), and after govern and the second verify the receipt path runs with a REAL recorded receipt: register the submitter through the Safe and the timelock, record the
+      receipt through the gateway, apply it with the Safe, verify again, check the run manifest's receipt path. Needs govern 'true'.
+    required: false
+    default: "false"
   predeploy-libs:
     description: "'true' first deploys the four CREATE2 libraries (TickMath, BasketAssetConfigGuard, TwapTickMath, BasketViews) on the Twin fork, so the run finds them all already deployed (issue 1721)."
     required: false
@@ -38,5 +45,6 @@ runs:
         SHARE_RECEIVER_IN: ${{ inputs.share-receiver-address }}
         VERIFY_IN: ${{ inputs.verify }}
         GOVERN_IN: ${{ inputs.govern }}
+        REHEARSAL_IN: ${{ inputs.rehearsal }}
         PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
       run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"

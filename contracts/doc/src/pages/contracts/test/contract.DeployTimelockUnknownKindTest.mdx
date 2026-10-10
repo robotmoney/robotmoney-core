@@ -1,12 +1,12 @@
 ---
-title: "DeployTimelockRequiredSafeOwnersTest"
+title: "DeployTimelockUnknownKindTest"
 ---
 
-# DeployTimelockRequiredSafeOwnersTest
+# DeployTimelockUnknownKindTest
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
 
-**Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+**Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
 ## Functions
 
@@ -31,11 +31,11 @@ function _prefix() internal pure override returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="test_run_revertswhensafeownersmalformed"></a>
+<a id="test_unknownkind_reverts"></a>
 
-### test_run_revertsWhenSafeOwnersMalformed
+### test_unknownKind_reverts
 
 ```solidity
-function test_run_revertsWhenSafeOwnersMalformed() public;
+function test_unknownKind_reverts() public;
 ```
 

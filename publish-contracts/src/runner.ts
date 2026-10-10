@@ -8,6 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
+import type { DeploymentKind } from "./chains.ts";
 import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
 import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
 import type { Logger } from "./log.ts";
@@ -80,6 +81,13 @@ export interface StageRecord {
 
 export interface RunManifest {
   version: 1;
+  /** Issue 1727: the deployment kind of the run, from the sheet's DEPLOYMENT_KIND. A manifest written before the field existed is a production run. */
+  deploymentKind?: DeploymentKind;
+  /**
+   * Issue 1727, rehearsal only: the deployer nonce at the first deployer stage. A rehearsal reuses a deployer that is not at nonce 0, so every nonce check is relative
+   * to this value. It is recorded once, before the first transaction, and never rewritten. Production runs never carry it: a fresh deployer starts at 0.
+   */
+  deployerStartNonce?: number;
   chainId: number;
   coreSha: string;
   deployer: string;
@@ -90,6 +98,10 @@ export interface RunManifest {
   govern?: Record<string, unknown>;
   /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
   receipt_applications?: unknown[];
+  /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
+  committee_registrations?: unknown[];
+  /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */
+  recorded_receipts?: unknown[];
   /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
   pauses?: PauseEntry[];
   /** The highest manifest sequence number handed out by reserveManifestSeq (issue 1688). Merged by max on every save, so it only grows. */
@@ -288,12 +300,13 @@ export const manifestDir = (ctx: ManifestCtx): string => ctx.manifestOut ?? join
 /** The path a stage manifest file takes. forge gets it as DEPLOYMENT_OUT (absolute when the caller chose the directory). */
 export const manifestFilePath = (ctx: ManifestCtx, file: string): string => join(manifestDir(ctx), file);
 
-/** The environment a child process gets: no plaintext signing material, no YES or CONFIRM, plus the RPC and chain id. */
+/** The environment a child process gets: no plaintext signing material, no YES or CONFIRM, no DEPLOYMENT_KIND (the sheet sets it for the stages), plus the RPC and chain id. */
 export function childEnv(ctx: Pick<RunContext, "baseEnv" | "rpc" | "chainId">, extra: Record<string, string> = {}): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(ctx.baseEnv)) {
     if (v === undefined) continue;
     if (PLAINTEXT_ENV.includes(k) || /^CHAIN_(SIGNER|FUNDER)_/.test(k) || k === "YES" || k === "CONFIRM") continue;
+    if (k === "DEPLOYMENT_KIND") continue; // issue 1727: the kind comes from the sheet only (stageEnv), never from the caller environment
     out[k] = v;
   }
   out.ETH_RPC_URL = ctx.rpc; // cast reads this one
@@ -475,7 +488,8 @@ const stageManifestBase = (stage: string): string => manifestBase(getStageTable(
 
 /** Every env var a forge stage gets: the table's requiredEnv (a missing value stops the stage) and the optionalEnv the sheet carries. */
 export function stageEnv(ctx: RunContext, row: StageRow): Record<string, string> {
-  const e: Record<string, string> = { CHAIN_ID: String(ctx.chainId), DEPLOY_SHA: ctx.coreSha };
+  // DEPLOYMENT_KIND (issue 1727) reaches every stage script from the sheet alone: the timelock stage script applies the rehearsal floor only when it reads "rehearsal"
+  const e: Record<string, string> = { CHAIN_ID: String(ctx.chainId), DEPLOY_SHA: ctx.coreSha, DEPLOYMENT_KIND: ctx.sheet.kind };
   for (const name of row.requiredEnv) {
     const src = resolveEnv(name, row.vault ?? null);
     if (src.from === "unmapped") throw new PublishError("INPUT_MISSING", `stage ${row.name}: core reads ${name} and publish contracts has no mapping for it (core-wiring.ts)`, { stage: row.name, name });
@@ -723,7 +737,8 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   // start nonce: exactly where the frozen counts say. Measure mode learns the start from earlier records.
   const nonce0 = await deployerNonce(ctx, deployer);
   const adoptedBefore = adoptedTxs(manifest);
-  const wantStart = counts ? expectedStartNonce(row.name, effectiveCounts(counts, adoptedBefore)) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (s.name in adoptedBefore ? adoptedBefore[s.name]! : (manifest.stages[s.name]?.count ?? 0)), 0) + proofNoncesBefore(row.name);
+  const startBase = runStartNonce(ctx, manifest, row, nonce0);
+  const wantStart = counts ? expectedStartNonce(row.name, effectiveCounts(counts, adoptedBefore), startBase) : startBase + DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (s.name in adoptedBefore ? adoptedBefore[s.name]! : (manifest.stages[s.name]?.count ?? 0)), 0) + proofNoncesBefore(row.name);
   let resuming = false;
   if (nonce0 !== wantStart) {
     const upper = wantStart + (expectedCount ?? Number.MAX_SAFE_INTEGER);
@@ -827,6 +842,56 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: startNonce, end_nonce: nonce1, count: rec.count });
 }
 
+/**
+ * Issue 1727, rehearsal only. The deployer start nonce the nonce checks are relative to. Production returns 0 without reading anything: a fresh deployer, absolute counts.
+ * A rehearsal records the live nonce in the run manifest at the FIRST deployer stage, before any transaction, and reads it back from the manifest ever after. The recorded
+ * value is never rewritten: a resume cross-checks it against the first stage's own record and, before any stage has started, against the chain.
+ */
+export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "evidenceDir" | "log">, manifest: RunManifest, row: Pick<StageRow, "name">, nonce0: number): number {
+  if (ctx.sheet.kind !== "rehearsal") return 0;
+  const first = DEPLOYER_STAGES[0]!.name;
+  const recorded = manifest.deployerStartNonce;
+  if (recorded === undefined) {
+    if (row.name !== first || Object.keys(manifest.stages).some((n) => manifest.stages[n]?.startNonce !== undefined)) {
+      throw new PublishError("NONCE", `the rehearsal run manifest has no deployerStartNonce and stage ${row.name} is not the first deployer stage (${first}) of a fresh run: the start nonce is recorded once, at the first stage, before any transaction. Use the run's own evidence directory with --resume, or start a new run from stage ${first}.`, { stage: row.name });
+    }
+    manifest.deployerStartNonce = nonce0;
+    manifest.deploymentKind = "rehearsal";
+    if (!ctx.dryRun) saveRunManifest(ctx.evidenceDir, manifest);
+    ctx.log.log("info", "run.start_nonce_recorded", { deployer_start_nonce: nonce0, deployment_kind: "rehearsal" });
+    return nonce0;
+  }
+  if (!Number.isInteger(recorded) || recorded < 0) throw new PublishError("MANIFEST", `the run manifest deployerStartNonce '${String(recorded)}' is not a non-negative integer`);
+  const firstRec = manifest.stages[first];
+  if (firstRec?.startNonce !== undefined && firstRec.startNonce !== recorded) {
+    throw new PublishError("NONCE", `the recorded start nonce ${recorded} differs from the start nonce ${firstRec.startNonce} of stage ${first} in the same run manifest: the recorded start is never rewritten`, { recorded, stage: first, stageStart: firstRec.startNonce });
+  }
+  if (firstRec === undefined && nonce0 !== recorded) {
+    throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, the run manifest recorded start nonce ${recorded} and no stage has started: a transaction left the deployer since the start was recorded`, { nonce: nonce0, recorded });
+  }
+  return recorded;
+}
+
+/** The start nonce a finished rehearsal run is measured from: the manifest's record. A rehearsal manifest without one is refused. Production: 0. */
+export function recordedStartNonce(kind: DeploymentKind, manifest: Pick<RunManifest, "deployerStartNonce">): number {
+  if (kind !== "rehearsal") return 0;
+  if (!Number.isInteger(manifest.deployerStartNonce)) throw new PublishError("MANIFEST", "the rehearsal run manifest has no deployerStartNonce: the deployer nonce cannot be checked relative to the start");
+  return manifest.deployerStartNonce!;
+}
+
+/**
+ * Issue 1727, rehearsal only. The Safe predicted from the sheet's owners, threshold and SAFE_SALT_NONCE must not already hold code: the rehearsal reuses the first
+ * rehearsal's owners, and an unchanged salt predicts the Safe that is already there. The only exception is the resume of THIS run, whose manifest recorded the same address.
+ */
+export async function assertFreshSafeAddress(ctx: RunContext, prior: StageRecord | undefined, predicted: string): Promise<void> {
+  if (ctx.sheet.kind !== "rehearsal") return;
+  if (ctx.resume && prior?.safe && prior.safe.toLowerCase() === predicted.toLowerCase()) return;
+  const code = (await castOut(ctx, ["code", predicted])).trim();
+  if (code !== "" && code !== "0x") {
+    throw new PublishError("SAFE", `SAFE_SALT_NONCE_REUSED: the Safe predicted at ${predicted} from the sheet's SAFE_OWNERS, SAFE_THRESHOLD and SAFE_SALT_NONCE already holds code on chain ${ctx.chainId}. A rehearsal must create a NEW Safe: change SAFE_SALT_NONCE in the sheet to a value no earlier run used. (Only a --resume of the same run, whose manifest recorded this address, adopts an existing Safe.)`, { predicted });
+  }
+}
+
 // ---- the Safe stage ------------------------------------------------------------------------------------------------------
 
 async function createSafeOnSimulationChain(ctx: RunContext, api: SafeApi, deployer: Address, predicted: Address, outPath: string): Promise<void> {
@@ -853,7 +918,6 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   if (deployer.toLowerCase() !== ctx.sheet.admin.toLowerCase()) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}`);
   const counts = ctx.frozen;
   const expectedCount = counts ? countFor(counts, "safe") : undefined;
-  const wantStart = counts ? expectedStartNonce("safe", counts) : 0;
   const nonce0 = await deployerNonce(ctx, deployer);
   const prior = manifest.stages.safe;
   const chain = { rpcUrl: ctx.rpc, chainId: ctx.chainId };
@@ -872,6 +936,8 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     saveRunManifest(ctx.evidenceDir, manifest);
     return;
   }
+  const startBase = runStartNonce(ctx, manifest, row, nonce0);
+  const wantStart = counts ? expectedStartNonce("safe", counts, startBase) : startBase;
   if (nonce0 !== wantStart) throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, expected ${wantStart} before stage safe`, { nonce: nonce0, want: wantStart });
   if (existsSync(outPath) && !ctx.dryRun) throw new PublishError("MANIFEST", `${outPath} already exists: the safe stage already ran`);
 
@@ -883,6 +949,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
     confirm: async (plan: CreateSafePlan) => {
+      await assertFreshSafeAddress(ctx, prior, plan.predictedAddress);
       // record the predicted address BEFORE anything is sent: a resume adopts it
       rec.safe = plan.predictedAddress;
       manifest.stages.safe = rec;
@@ -893,6 +960,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   });
   if (ctx.dryRun || !res.created || !res.manifest) {
     if (ctx.dryRun) {
+      await assertFreshSafeAddress(ctx, prior, res.plan.predictedAddress);
       // the predicted Safe is the input of the stages after it (the vault fee recipient, the timelock): kept until runStages restores the checkout
       const sim = { safe: res.plan.predictedAddress, version: "1.4.1", threshold: ctx.sheet.safeThreshold, owners: ctx.sheet.safeOwners, created_by: deployer, chain_id: ctx.chainId, simulated: true };
       ctx.dryFiles?.write(outPath, JSON.stringify(sim, null, 2) + "\n");
@@ -922,7 +990,7 @@ export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifes
 export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
-  return { version: 1, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
+  return { version: 1, deploymentKind: ctx.sheet.kind, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
 }
 
 export interface RunResult { manifest: RunManifest; ran: string[]; skipped: string[] }
@@ -967,6 +1035,8 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
   if (manifest) {
     if (!ctx.resume && Object.keys(manifest.stages).length > 0 && !ctx.dryRun) throw new PublishError("RESUME", `${manifestPath(ctx.evidenceDir)} exists with earlier stages: pass --resume to continue, or use a fresh evidence directory`);
     if (manifest.chainId !== ctx.chainId || manifest.coreSha !== ctx.coreSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) throw new PublishError("RESUME", "the run manifest belongs to a different chain, core SHA or deployer");
+    if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
+    if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
   } else manifest = newManifest(ctx, deployer);
   const ran: string[] = [], skipped: string[] = [];
   let stop = async () => {};
@@ -1040,9 +1110,10 @@ export async function finalNonceCheck(ctx: RunContext, manifest: RunManifest, ra
   const nonce = await deployerNonce(ctx, await ctx.signer.address());
   const counts: FrozenCounts = ctx.frozen ?? Object.fromEntries(DEPLOYER_STAGES.map((s) => [s.countKey!, manifest.stages[s.name]!.count ?? 0]));
   const effective = effectiveCounts(counts, adoptedTxs(manifest)); // an adopted stage counts the transactions this deployer sent for it (issue 1721)
-  checkNonce(nonce, effective);
+  const startNonce = recordedStartNonce(ctx.sheet?.kind ?? "production", manifest);
+  checkNonce(nonce, effective, undefined, startNonce);
   const sum = sumCounts(effective);
-  ctx.log.log("info", "run.nonce_ok", { nonce, summed_frozen_counts: sum });
+  ctx.log.log("info", "run.nonce_ok", { nonce, summed_frozen_counts: sum, deployer_start_nonce: startNonce, deployment_kind: ctx.sheet?.kind ?? "production" });
   return { checked: true, nonce, sum };
 }
 
