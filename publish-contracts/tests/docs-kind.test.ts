@@ -38,4 +38,13 @@ describe("docs for the multisig submitter (issue 1750)", () => {
     test(`the release runbook documents ${what}`, () => expect(RUNBOOK).toMatch(re));
   }
   for (const [what, re] of ALL.slice(0, 5)) test(`the README documents ${what}`, () => expect(README).toMatch(re));
+  const OLD_SAFE = /0x5E68a40648DD23065b21b1C414e1178ddE6482ca/;
+  for (const [what, re] of [["the old governance Safe address", OLD_SAFE], ["the PROPOSER role", /PROPOSER/], ["the APPROVER role", /APPROVER/], ["the new Safe salt", /2026101002/]] as [string, RegExp][]) {
+    test(`the submitter runbook documents ${what}`, () => expect(SUBMITTER_RUNBOOK).toMatch(re));
+    test(`the release runbook documents ${what}`, () => expect(RUNBOOK).toMatch(re));
+    test(`the README documents ${what}`, () => expect(README).toMatch(re.source.includes("PROPOSER") || re.source.includes("APPROVER") ? /PROPOSER[\s\S]*APPROVER/ : re));
+  }
+  test("the owner preflight is documented in both runbooks", () => {
+    for (const d of [SUBMITTER_RUNBOOK, RUNBOOK]) expect(d).toMatch(/must differ from the 900 s sheet's ADMIN_ADDRESS, PAUSER_ADDRESS and EMERGENCY_ADDRESS/);
+  });
 });

@@ -67,11 +67,36 @@ export interface RecordApi {
   send(signer: Signer, to: Address, data: Hex): Promise<{ txHash: Hex; status: "success" | "reverted"; blockNumber: bigint }>;
   /** Issue 1750: code, storage and reads of the submitter, for the canonical-Safe check. Needed whenever the submitter has code or the chain is 8453. */
   chain?: SubmitterChain;
+  /** Issue 1750: the transaction that recorded `receiptId` (the receipt contract's ReceiptRecorded log) and the Safe transaction hash of the Safe's ExecutionSuccess in it. Null when not found. */
+  findRecordTx?(receipt: Address, receiptId: Hex, safe: Address): Promise<{ txHash: Hex; blockNumber: bigint; safeTxHash?: Hex } | null>;
   /** Issue 1750: propose, sign with the owners, execute with the sender (the deployer pays the gas). Needed in Safe mode. */
   sendViaSafe?(req: SafeSendRequest): Promise<SafeSendResult>;
 }
 
 const EXECUTION_SUCCESS = parseAbiItem("event ExecutionSuccess(bytes32 indexed txHash, uint256 payment)");
+const RECEIPT_RECORDED = parseAbiItem("event ReceiptRecorded(bytes32 indexed receiptId, address indexed submitter, uint256 indexed index, bytes32 payloadDigest, string payloadUri, uint64 recordedAt)");
+
+type LogLike = { address: Address; topics: readonly Hex[]; data: Hex };
+/** True when the Safe emitted ExecutionSuccess for `safeTxHash` in `logs`. */
+export function hasExecutionSuccess(logs: readonly LogLike[], safe: Address, safeTxHash: Hex): boolean {
+  const events = parseEventLogs({ abi: [EXECUTION_SUCCESS], logs: logs as never, eventName: "ExecutionSuccess" });
+  return events.some((e) => e.address.toLowerCase() === safe.toLowerCase() && String(e.args.txHash).toLowerCase() === safeTxHash.toLowerCase());
+}
+/**
+ * The ExecutionSuccess lookup, bounded (issue 1723: a stale load-balanced RPC may answer a receipt without its logs). The logs already in hand are tried first, then the
+ * receipt is fetched again `tries - 1` more times with `delayMs` between. Still absent: false, and the caller fails closed.
+ */
+export async function awaitExecutionSuccess(fetchLogs: () => Promise<readonly LogLike[]>, safe: Address, safeTxHash: Hex, first: readonly LogLike[], o: { tries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<boolean> {
+  const tries = o.tries ?? 5, delay = o.delayMs ?? 1000, sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  if (hasExecutionSuccess(first, safe, safeTxHash)) return true;
+  for (let i = 1; i < tries; i++) {
+    await sleep(delay);
+    let logs: readonly LogLike[] = [];
+    try { logs = await fetchLogs(); } catch { /* try again */ }
+    if (hasExecutionSuccess(logs, safe, safeTxHash)) return true;
+  }
+  return false;
+}
 
 export function realRecordApi(rpc: string, chainId: number, logger?: Logger): RecordApi {
   const client = createPublicClient({ transport: http(rpc) });
@@ -83,6 +108,14 @@ export function realRecordApi(rpc: string, chainId: number, logger?: Logger): Re
       return { txHash, status: rc.status, blockNumber: rc.blockNumber };
     },
     chain: chainFromClient(client as never),
+    findRecordTx: async (receipt, receiptId, safe) => {
+      const logs = await client.getLogs({ address: receipt, event: RECEIPT_RECORDED, args: { receiptId }, fromBlock: 0n, toBlock: "latest" });
+      const l = logs[0];
+      if (!l?.transactionHash) return null;
+      const rc = await client.getTransactionReceipt({ hash: l.transactionHash });
+      const ev = parseEventLogs({ abi: [EXECUTION_SUCCESS], logs: rc.logs as never, eventName: "ExecutionSuccess" }).find((e) => e.address.toLowerCase() === safe.toLowerCase());
+      return { txHash: l.transactionHash, blockNumber: rc.blockNumber, ...(ev ? { safeTxHash: ev.args.txHash as Hex } : {}) };
+    },
     sendViaSafe: async (req) => {
       const handle = await connectSafe({ rpcUrl: rpc, chainId, safeAddress: req.safe, logger });
       if (handle.address.toLowerCase() !== req.safe.toLowerCase()) throw new PublishError("USAGE", `the Safe the tool connected to (${handle.address}) is not --submitter ${req.safe}: nothing sent`);
@@ -93,8 +126,7 @@ export function realRecordApi(rpc: string, chainId: number, logger?: Logger): Re
       const res = await executeTx(handle, bundle, req.sender);
       if (!res.txHash) throw new PublishError("GOVERN", "the submitter Safe transaction was not sent");
       const rc = await client.waitForTransactionReceipt({ hash: res.txHash });
-      const events = parseEventLogs({ abi: [EXECUTION_SUCCESS], logs: rc.logs, eventName: "ExecutionSuccess" });
-      const executionSuccess = events.some((e) => e.address.toLowerCase() === handle.address.toLowerCase() && String(e.args.txHash).toLowerCase() === bundle.safe_tx_hash.toLowerCase());
+      const executionSuccess = await awaitExecutionSuccess(async () => (await client.getTransactionReceipt({ hash: res.txHash! })).logs as never, handle.address, bundle.safe_tx_hash, rc.logs as never);
       return { txHash: res.txHash, status: rc.status, blockNumber: rc.blockNumber, safe: handle.address, safeTxHash: bundle.safe_tx_hash, nonce: bundle.nonce, signers: bundle.signatures.map((x) => x.owner), sentBy: res.sentBy, executionSuccess };
     },
   };
@@ -172,7 +204,19 @@ export async function recordReceipt(ctx: RunContext, signer: Signer, i: RecordIn
   if (recorded) {
     await readBack(); // same digest, uri and submitter: nothing to send. Anything else throws: an id is recorded once and a wrong digest blocks it for good.
     ctx.log.log("info", "record_receipt.already_recorded", { receipt_id: i.receiptId, submitter });
-    return finish(ctx, { receipt_id: i.receiptId, payload_digest: i.payloadDigest, payload_uri: i.payloadUri, submitter, status: 1, already_recorded: true, ...(safeInfo ? { submitter_safe: { address: submitter, ...submitterSafeEvidence(safeInfo) } } : {}) });
+    // Issue 1750: the earlier run may have died after the Safe transaction landed (a stale RPC read). If the evidence has no transaction for this receipt yet, find it on chain
+    // (the receipt contract's ReceiptRecorded log, then the Safe's ExecutionSuccess in that transaction) and write tx_hash and safe_tx_hash. Not found: no guess, the entry stays
+    // already_recorded without a transaction (the runbook says how to add it by hand).
+    let found: Awaited<ReturnType<NonNullable<RecordApi["findRecordTx"]>>> = null;
+    const prior = (loadRunManifest(ctx.evidenceDir)?.recorded_receipts as RecordedReceipt[] | undefined)?.find((x) => lc(x.receipt_id) === lc(i.receiptId));
+    if (safeInfo && !prior?.tx_hash && api.findRecordTx) {
+      try { found = await api.findRecordTx(a.receipt, i.receiptId, submitter); } catch (e) { ctx.log.log("warn", "record_receipt.find_tx_failed", { receipt_id: i.receiptId, error: (e as Error).message }); }
+    }
+    return finish(ctx, {
+      receipt_id: i.receiptId, payload_digest: i.payloadDigest, payload_uri: i.payloadUri, submitter, status: 1, already_recorded: true,
+      ...(found ? { tx_hash: found.txHash, block_number: Number(found.blockNumber) } : {}),
+      ...(safeInfo ? { submitter_safe: { address: submitter, ...submitterSafeEvidence(safeInfo), ...(found?.safeTxHash ? { safe_tx_hash: found.safeTxHash } : {}) } } : {}),
+    });
   }
   await confirmStage(ctx, "record-receipt", `record receipt ${i.receiptId} (digest ${i.payloadDigest}) from ${safeMode ? `the submitter Safe ${submitter} (${safeInfo!.threshold} of ${safeInfo!.owners.length} owners sign; gas paid by ${await signer.address()})` : submitter} through the gateway ${a.gateway}`);
   const data = encodeFunctionData({ abi: GATEWAY_RECORD_ABI, functionName: "consensusRecordReceipt", args: [i.receiptId, i.payloadDigest, i.payloadUri] });

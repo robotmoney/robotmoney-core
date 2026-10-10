@@ -80,10 +80,10 @@ export async function inspectSubmitterSafe(chain: SubmitterChain, address: Addre
   } catch { bad.push("getModulesPaginated() cannot be read"); }
   if (slotAddr(await chain.getStorageAt(safe, SAFE_GUARD_SLOT)) !== ZERO) bad.push("a transaction guard is set");
   if (slotAddr(await chain.getStorageAt(safe, FALLBACK_HANDLER_SLOT)) !== lc(SAFE_141.fallbackHandler)) bad.push(`its fallback handler is not the canonical ${SAFE_141.fallbackHandler}`);
-  for (const o of owners) {
+  owners.forEach((o, i) => {
     const why = forbidden.get(lc(o));
-    if (why) bad.push(`its owner ${o} is ${why}: role separation`);
-  }
+    if (why) bad.push(`its owner ${i + 1} of ${owners.length} (${o}) is ${why} of this deployment: the owner EOAs must differ from the sheet's ADMIN, PAUSER and EMERGENCY addresses (role separation). Pick another owner or change the sheet`);
+  });
   if (bad.length) throw new PublishError("USAGE", `the submitter ${safe} is not a canonical SafeL2 1.4.1 multisig: ${bad.join("; ")}. Nothing sent.`, { submitter: safe, problems: bad });
   return { address: safe, owners, threshold, code_hash: codeHash };
 }

@@ -59,7 +59,7 @@ describe("submitter-safe: the canonical SafeL2 1.4.1 check", () => {
     const f = canonical(); f.code = "0x6080" as Hex; f.slot0 = word(addr(0xbad)); f.version = "1.3.0"; f.threshold = 1n; f.modules = [addr(0x30d)]; f.guard = word(addr(0x9a)); f.fallback = word(addr(0xfb)); f.owners = [OWNERS[0]!, addr(0xb0)];
     const e = await inspectSubmitterSafe(chainFor(f), SUBSAFE, forbidden).catch((x) => x);
     expect(e).toMatchObject({ kind: "USAGE" });
-    for (const w of ["code hash", "singleton", "VERSION()", "threshold is 1", "modules are enabled", "guard", "fallback handler", "role separation"]) expect(e.message).toContain(w);
+    for (const w of ["code hash", "singleton", "VERSION()", "threshold is 1", "modules are enabled", "guard", "fallback handler", "role separation", "its owner 2 of 2", getAddress(addr(0xb0))]) expect(e.message).toContain(w);
   });
   test("each single difference alone is refused (mutations of a passing Safe)", async () => {
     const real = await realProxyCode();
@@ -179,6 +179,28 @@ describe("record-receipt in Safe mode (the submitter is a multisig)", () => {
     const again = await recordReceipt(ctx, signer(DEPLOYER), inputs, api, { safe: SUBSAFE, ownerSigners: owners });
     expect(st.reqs).toHaveLength(1);
     expect(again).toEqual(first);
+  });
+
+  test("rerun after a landed tx whose evidence was lost: the already_recorded path writes tx_hash and safe_tx_hash found on chain; not found writes no guess", async () => {
+    const f = mk(REHEARSAL, 8453); f.st.facts.code = STANDIN;
+    f.st.recorded = { receiptId: RID, payloadDigest: DIGEST, payloadUri: URI, submitter: getAddress(SUBSAFE) };
+    f.api.findRecordTx = async (receipt, id, safe) => { expect([receipt, id, safe]).toEqual([A.receipt, RID, getAddress(SUBSAFE)]); return { txHash: `0x${"77".repeat(32)}` as Hex, blockNumber: 9n, safeTxHash: `0x${"88".repeat(32)}` as Hex }; };
+    const out = await recordReceipt(f.ctx, signer(DEPLOYER), f.inputs, f.api, { safe: SUBSAFE, ownerSigners: f.owners });
+    expect(f.st.reqs).toEqual([]);
+    expect(out).toMatchObject({ already_recorded: true, tx_hash: `0x${"77".repeat(32)}`, block_number: 9 });
+    expect(out.submitter_safe).toMatchObject({ safe_tx_hash: `0x${"88".repeat(32)}`, threshold: 2 });
+    expect((loadRunManifest(f.ctx.evidenceDir)!.recorded_receipts as unknown[])[0]).toEqual(out);
+    const g = mk(REHEARSAL, 8453); g.st.facts.code = STANDIN;
+    g.st.recorded = { receiptId: RID, payloadDigest: DIGEST, payloadUri: URI, submitter: getAddress(SUBSAFE) };
+    g.api.findRecordTx = async () => null;
+    const none = await recordReceipt(g.ctx, signer(DEPLOYER), g.inputs, g.api, { safe: SUBSAFE, ownerSigners: g.owners });
+    expect(none.tx_hash).toBeUndefined();
+    expect(none.submitter_safe!.safe_tx_hash).toBeUndefined();
+    // a lookup that throws is not fatal
+    const h = mk(REHEARSAL, 8453); h.st.facts.code = STANDIN;
+    h.st.recorded = { receiptId: RID, payloadDigest: DIGEST, payloadUri: URI, submitter: getAddress(SUBSAFE) };
+    h.api.findRecordTx = async () => { throw new Error("rpc"); };
+    await expect(recordReceipt(h.ctx, signer(DEPLOYER), h.inputs, h.api, { safe: SUBSAFE, ownerSigners: h.owners })).resolves.toMatchObject({ already_recorded: true });
   });
 
   test("the Safe must hold both roles: registration comes first", async () => {
