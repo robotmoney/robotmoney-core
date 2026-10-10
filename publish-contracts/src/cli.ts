@@ -13,13 +13,15 @@ import { assertFloors, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_
 import { kindLabel } from "./chains.ts";
 import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
-import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from "./counts.ts";
+import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
-import { assertReleaseGate, type CheckShaGreen } from "./release-gate.ts";
-import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
+import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
+import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
+import { buildLibraryArtifacts } from "./libs-build.ts";
+import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet } from "./sheet.ts";
@@ -131,6 +133,12 @@ export interface CliDeps {
   releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
+  /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
+  verifyReconstructed?: (file: FrozenFile) => Promise<void>;
+  /** Test seams (issue 1733): the proof that the anchor file is committed, and the sleep between the retries of a rate-limited `cast code`. */
+  anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
+  frozenDirCommitted?: (countsDir: string) => Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
   /** Test seams for the record-receipt verb: the whole step, or only its chain reads and send. */
   recordReceipt?: typeof recordReceipt;
   recordApi?: RecordApi;
@@ -367,10 +375,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
       return 0;
     }
+    const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => codeWithRetry(() => run("cast", ["code", x], { env: castEnv }), { address: x, rpc: a.rpc, sleep: deps.sleep }) });
+    const realFrozenDirCommitted = (d: string): Promise<void> => gitFrozenDirCommitted(coreDir, d);
+    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(coreDir, anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
+        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
@@ -396,6 +408,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
+    // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
+    // before any signer exists, so the order plan then publish is not something an operator can get wrong.
+    if (rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
+      const f = loadFrozen(countsDir, a.coreSha);
+      if (f.measured.reconstructed) {
+        await (deps.verifyReconstructed ?? realVerifyReconstructed)(f);
+        await assertBaselineCommitted({ countsDir, sha: a.coreSha, frozen: f, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted });
+      }
+    }
     const ctx = buildCtx(frozen, counts.measure);
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {

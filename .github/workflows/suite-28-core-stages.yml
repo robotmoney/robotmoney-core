@@ -8,7 +8,8 @@
 # dev, on a ready pull request, and nightly (suite-29 calls this workflow with the run's one pin). It writes
 # counts.json (per-stage broadcast counts and the deployer nonce), checks it, compares it with
 # deployments/frozen-counts/<sha>.json when that file exists, and uploads rehearsal-counts-<sha>.
-# At release time a person copies `counts` from that artifact into the frozen counts file (docs/operations/contract-release-runbooks.md).
+# At release time a person turns that artifact's counts.json into the frozen counts file (docs/operations/contract-release-runbooks.md): freeze-counts.ts --counts for a run that ran every
+# stage, freeze-counts.ts --from-adopted-run for a run that adopted the CREATE2 libraries (issue 1733, the normal case since Base block 52401633). The job rebuilds that baseline itself as a check.
 # The router, basket and timelock role proofs are labels of the one verifier.
 name: core-stages
 
@@ -118,11 +119,26 @@ jobs:
           govern: "true"
           # issue 1721: every CREATE2 library is deployed on the fork first, the state Base is in after the real deploy: libs and the first basket stage are ADOPTED
           predeploy-libs: "true"
+          pin-block: ${{ needs.pin.outputs.block }}
           # Issue 1727: the Twin chain runs the REHEARSAL kind of the Base mainnet rehearsal (900 s timelock, non-fresh deployer, new Safe salt) and
           # the receipt path with a REAL recorded receipt (register the submitter, record through the gateway, apply with the Safe, read back).
           rehearsal: "true"
       - name: Check counts.json against the stage table
         run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
+      # Issue 1733: this run ADOPTED the CREATE2 libraries, so its counts.json is not a frozen file. The reconstruct verb rebuilds the BASELINE from the adoption records,
+      # re-derives every adopted library from the build, reads its code hash from the Twin fork, and the strict loader (the 8453 rules) must accept the result.
+      - name: Rebuild the baseline frozen counts from the adopted measuring counts.json and load it strictly
+        env:
+          TWIN_RPC: ${{ steps.fork.outputs.rpc-url }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          base="$RUNNER_TEMP/baseline-frozen"
+          jq '. + {rehearsal: {conclusion: "success"}}' "$TWIN_COUNTS_JSON" > "$RUNNER_TEMP/counts-green.json"
+          bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run "$RUNNER_TEMP/counts-green.json" --sha "$sha" --rpc "$TWIN_RPC" --counts-dir "$base"
+          bun publish-contracts/src/ci/rehearsal-counts.ts check-baseline --counts-dir "$base" --sha "$sha"
+          jq -e '(.measured.reconstructed.adopted | length > 0) and (.measured.adopted == null)' "$base/$sha.json" >/dev/null
+          cp "$base/$sha.json" "$RUNNER_TEMP/baseline-$sha.json"
       - name: Drift check against the frozen counts of this SHA
         run: bun publish-contracts/src/counts-drift.ts --counts "$TWIN_COUNTS_JSON"
       - name: Collect the counts and the run files
@@ -139,6 +155,7 @@ jobs:
           [ -z "${TWIN_VERIFY_LABELS:-}" ] || cp "$TWIN_VERIFY_LABELS" "$out/verify-labels.txt"
           [ -z "${TWIN_GOVERN_ROWS:-}" ] || cp "$TWIN_GOVERN_ROWS" "$out/govern-rows.txt"
           [ -z "${TWIN_VERIFY_LABELS_POST_GOVERN:-}" ] || cp "$TWIN_VERIFY_LABELS_POST_GOVERN" "$out/verify-labels-post-govern.txt"
+          [ ! -f "$RUNNER_TEMP/baseline-$(git rev-parse HEAD).json" ] || cp "$RUNNER_TEMP/baseline-$(git rev-parse HEAD).json" "$out/"
           ls -R "$out"
       - uses: actions/upload-artifact@v4
         if: always()

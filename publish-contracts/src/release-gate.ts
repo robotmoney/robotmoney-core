@@ -6,7 +6,10 @@
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
-import { loadFrozen } from "./counts.ts";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { anchorChainOf, fileHashOf, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
 import { releaseTagsFor, tagKind, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
 import type { DeploymentKind } from "./chains.ts";
@@ -37,6 +40,55 @@ export interface ReleaseGateInput {
   checkShaGreen?: CheckShaGreen;
   /** Default: the tag must exist on the origin of the core checkout with the same tag object (RELEASE_TAG_REMOTE_MISMATCH). */
   remoteTag?: RemoteTagCheck;
+  /**
+   * Issue 1733: re-verifies a RECONSTRUCTED baseline (counts-reconstruct.ts) against the build and the chain at plan time. Required when the frozen file is a reconstruction:
+   * without it the gate refuses (COUNTS_MISSING), because an offline load proves only the arithmetic, not the adoption records.
+   */
+  verifyReconstructed?: (file: FrozenFile) => Promise<void>;
+  /**
+   * Issue 1733: proves the anchor file of a reconstructed baseline (measured.crossChecked) is COMMITTED at the checkout's HEAD with the bytes that were checked, so deleting or
+   * swapping it in the working tree cannot hide the cross-check. Required when the file has a crossChecked record (COUNTS_MISSING without it). Default seam in the CLI: gitAnchorCommitted.
+   */
+  anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
+  /**
+   * Issue 1733: the counts dir of a reconstructed baseline must be INSIDE the core checkout and hold every frozen file tracked at HEAD (a tracked file missing from the dir is a
+   * deleted anchor). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
+   */
+  frozenDirCommitted?: (countsDir: string) => Promise<void>;
+}
+
+/** The counts dir must lie inside the git checkout `coreDir`, and every `<40 hex>.json` tracked in it at HEAD must exist in the working dir. */
+export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, git = "git"): Promise<void> {
+  const rel = relative(resolve(coreDir), resolve(countsDir));
+  if (rel.startsWith("..") || rel === "") throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is outside the core checkout ${coreDir}: a reconstructed baseline needs the committed frozen-counts dir of the checkout, so its anchors can be proven committed`);
+  const r = spawnSync(git, ["-C", coreDir, "ls-tree", "--name-only", "HEAD", `${rel}/`], { maxBuffer: 1 << 24 });
+  if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): the frozen files tracked in ${rel} cannot be listed`);
+  if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `git ls-tree HEAD ${rel} failed in ${coreDir}: ${String(r.stderr).trim().split("\n").pop() ?? ""}`);
+  for (const line of String(r.stdout).split("\n")) {
+    const name = line.split("/").pop() ?? "";
+    if (/^[0-9a-f]{40}\.json$/.test(name) && !existsSync(resolve(countsDir, name))) throw new PublishError("COUNTS_MISSING", `${name} is tracked in ${rel} at HEAD but missing from the counts dir ${countsDir}: restore it (git checkout)`);
+  }
+}
+
+/** The proofs a reconstructed baseline needs before anything is signed: the dir is the committed one, and every anchor of its chain is committed with the checked bytes. */
+export async function assertBaselineCommitted(o: { countsDir: string; sha: string; frozen: FrozenFile; frozenDirCommitted?: (d: string) => Promise<void>; anchorCommitted?: (p: string, h: string) => Promise<void> }): Promise<void> {
+  if (!o.frozen.measured.reconstructed) return;
+  if (!o.frozenDirCommitted) throw new PublishError("COUNTS_MISSING", `the reconstructed baseline ${o.sha} needs a proof that the counts dir is the committed one and none was given: refused`, { sha: o.sha });
+  await o.frozenDirCommitted(o.countsDir);
+  for (const hop of anchorChainOf(o.countsDir, o.sha)) {
+    if (!o.anchorCommitted) throw new PublishError("COUNTS_MISSING", `the reconstructed baseline names the anchor ${hop.sha} and there is no way to prove it is committed: refused`, { sha: o.sha });
+    await o.anchorCommitted(join(o.countsDir, `${hop.sha}.json`), hop.fileHash);
+  }
+}
+
+/** The anchor file at `abs` must be a tracked file of the git checkout `coreDir`, equal at HEAD to the bytes whose sha256 is `expectedHash`. */
+export async function gitAnchorCommitted(coreDir: string, abs: string, expectedHash: string, git = "git"): Promise<void> {
+  const rel = relative(resolve(coreDir), resolve(abs));
+  if (rel.startsWith("..") || rel === "") throw new PublishError("COUNTS_MISSING", `the anchor file ${abs} is outside the core checkout ${coreDir}: it cannot be proven committed`);
+  const r = spawnSync(git, ["-C", coreDir, "show", `HEAD:${rel}`], { maxBuffer: 1 << 24 });
+  if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): the anchor file ${rel} cannot be proven committed`);
+  if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `the anchor file ${rel} is not committed at HEAD of ${coreDir} (git show: ${String(r.stderr).trim().split("\n").pop() ?? ""}): commit the earlier frozen file the baseline was cross-checked against`);
+  if (fileHashOf(r.stdout) !== expectedHash) throw new PublishError("COUNTS_MISSING", `the anchor file ${rel} committed at HEAD differs from the bytes the baseline was cross-checked against: restore the committed bytes`);
 }
 
 /**
@@ -58,7 +110,12 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const tag = await tagForKind(i);
   if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version>${i.kind === "rehearsal" ? "-rehearsal" : ""} tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
   await (i.remoteTag ?? ((d, t) => verifyRemoteTag(d, t)))(i.coreDir, tag);
-  loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING
+  const frozen = loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING; a reconstructed baseline is also verified against the stage table here
+  if (frozen.measured.reconstructed) {
+    if (!i.verifyReconstructed) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json is a reconstructed baseline (issue 1733) and the gate has no way to re-verify it on chain: it is refused`, { sha: i.sha });
+    await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
+    await assertBaselineCommitted({ countsDir: i.countsDir, sha: i.sha, frozen, frozenDirCommitted: i.frozenDirCommitted, anchorCommitted: i.anchorCommitted });
+  }
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
   if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453.`, { sha: i.sha });
   const env: Record<string, string> = { GITHUB_TOKEN: token };

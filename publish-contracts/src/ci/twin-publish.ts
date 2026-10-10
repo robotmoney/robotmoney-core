@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The step script of the twin-publish action (core 1488, 1523), in TypeScript because no shell file may orchestrate the deploy driver.
-// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
+// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, PIN_BLOCK_IN (optional), REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture: register the SUBMITTER through the Safe and the timelock (govern --row register-committee), the submitter records the
@@ -80,7 +80,7 @@ stage("publish");
 // counts.json: the measured counts and the real deployer nonce, read after publish (it includes the one prove-control transaction; verify and govern run after it).
 const nonce = run([castBin, "nonce", admin, "--rpc-url", rpc]).trim();
 const countsJson = join(rh, "counts.json");
-run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson, "--run-manifest", join(rh, "evidence", "publish-run.json"), ...(rehearsalMode ? ["--start-nonce", startNonce] : [])], { cwd: pc });
+run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson, "--run-manifest", join(rh, "evidence", "publish-run.json"), ...(rehearsalMode ? ["--start-nonce", startNonce] : []), ...(env("PIN_BLOCK_IN") ? ["--pin-block", env("PIN_BLOCK_IN")] : [])], { cwd: pc });
 run([bun, "src/ci/rehearsal-counts.ts", "check", "--file", countsJson], { cwd: pc });
 exportVar("TWIN_COUNTS_JSON", countsJson);
 if (env("VERIFY_IN") === "true") {

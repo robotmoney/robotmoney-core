@@ -871,7 +871,7 @@ besides the govern time warp), `publish` (stages 0 to 11), `verify` (12), `gover
 (`publish-contracts/tests/twin-publish-script.test.ts` runs the step script `publish-contracts/src/ci/twin-publish.ts` with a stub CLI). The job writes `counts.json`
 (`counts` per stage, `deployerNonce` read from the chain), checks that the keys equal the stage table and the nonce equals the sum plus the deployer's one prove-control transaction
 (`publish-contracts/src/ci/rehearsal-counts.ts`), runs `bun publish-contracts/src/counts-drift.ts` (exit 0 when no `deployments/frozen-counts/<sha>.json` exists, non-zero naming each differing stage otherwise),
-and uploads `rehearsal-counts-<sha>` (counts.json, manifests, verifier labels, govern rows). It runs on every push to `dev`, on a ready pull request and in the nightly (suite 29 calls this workflow, so suite 21 does not dispatch it).
+rebuilds the baseline frozen counts from its own adopted counts.json (`publish-contracts/scripts/freeze-counts.ts --from-adopted-run`, checked against the build and the Twin fork, then loaded with the strict 8453 rules by `rehearsal-counts.ts check-baseline`, issue 1733), and uploads `rehearsal-counts-<sha>` (counts.json, manifests, verifier labels, govern rows). It runs on every push to `dev`, on a ready pull request and in the nightly (suite 29 calls this workflow, so suite 21 does not dispatch it).
 The release procedure copies `counts` from the release SHA's artifact into `deployments/frozen-counts/<sha>.json`. The router, basket vault and timelock role proofs are labels of the one verifier. No key is passed in an argument.
 
 ---
