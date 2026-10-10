@@ -148,7 +148,8 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
             {
               vault_addr: endpoints.vault_addr,
               vault_name: "RobotMoney USDC Vault",
-              shares: formatShares(sharesBefore),
+              // The explorer API serialises shares as a raw integer string (NUMERIC(78,0)).
+              shares: sharesBefore.toString(),
             },
           ],
         }),
