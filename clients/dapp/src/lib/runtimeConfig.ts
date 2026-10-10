@@ -100,11 +100,30 @@ export const RUNTIME_CONFIG_KEYS = [
   "VITE_SAFE_ADDRESS",
   "VITE_TIMELOCK_DEPLOY_BLOCK",
   "VITE_RM_TOKEN_ADDRESS",
-  "VITE_ENV_CLASS",
   "VITE_VAULT_ADDRESSES",
   "VITE_DEVNET_RPC_URL",
   "VITE_EXPLORER_API_URL",
 ] as const;
+
+/**
+ * The env class is BUILD-TIME ONLY (issue 1729). The mainnet banner and the
+ * wrong-chain write guard key off it, so a `/config.json` that could change it
+ * would switch both off on a public 8453 stack. It is therefore not in
+ * `RUNTIME_CONFIG_KEYS`, and `loadRuntimeConfig` re-asserts the build-time value
+ * after the overlay.
+ */
+export const BUILD_TIME_ENV_CLASS_KEY = "VITE_ENV_CLASS";
+
+/**
+ * On a `mainnet` build the runtime document may supply only these keys. Every
+ * other allowlisted key is an address or endpoint that decides which contracts
+ * the user approves and deposits to, so on mainnet they come from the bundle
+ * alone (the bundle is what the release provenance covers).
+ */
+export const MAINNET_RUNTIME_KEYS: ReadonlyArray<string> = [
+  "VITE_EXPLORER_API_URL",
+  "VITE_TIMELOCK_DEPLOY_BLOCK",
+];
 
 /** URL the runtime config is served from, relative to the dapp origin. */
 export const RUNTIME_CONFIG_URL = "/config.json";
@@ -275,8 +294,39 @@ export async function loadRuntimeConfig(args: {
     );
   }
 
-  return {
-    config: { ...args.buildEnv, ...parseRuntimeConfig(payload) },
-    source: "fetched",
-  };
+  const buildClass = args.buildEnv[BUILD_TIME_ENV_CLASS_KEY];
+  const mainnetBuild = buildClass === "mainnet";
+
+  // A mainnet build refuses, visibly, a document that names a different class.
+  // Fail closed: do not render rather than render with the guard off.
+  if (mainnetBuild && isPlainObject(payload)) {
+    const claimed = payload[BUILD_TIME_ENV_CLASS_KEY];
+    if (claimed !== undefined && claimed !== null && claimed !== buildClass) {
+      throw new RuntimeConfigError(
+        `${url} sets VITE_ENV_CLASS to ${JSON.stringify(claimed)} but this bundle was built for ` +
+          "mainnet. The class is fixed at build time. Refusing to start.",
+      );
+    }
+  }
+
+  let overlay: RuntimeConfig = parseRuntimeConfig(payload);
+  if (mainnetBuild) {
+    const kept: Record<string, string | undefined> = {};
+    const ignored: string[] = [];
+    for (const [key, value] of Object.entries(overlay)) {
+      if (MAINNET_RUNTIME_KEYS.includes(key)) kept[key] = value;
+      else ignored.push(key);
+    }
+    if (ignored.length > 0) {
+      console.warn(
+        `${url}: ignoring key(s) on a mainnet build (contract addresses and RPC endpoints are build-time only): ${ignored.join(", ")}.`,
+      );
+    }
+    overlay = kept;
+  }
+
+  const merged: Record<string, string | undefined> = { ...args.buildEnv, ...overlay };
+  // The class never comes from the document, whatever the allowlist says.
+  merged[BUILD_TIME_ENV_CLASS_KEY] = buildClass;
+  return { config: merged, source: "fetched" };
 }

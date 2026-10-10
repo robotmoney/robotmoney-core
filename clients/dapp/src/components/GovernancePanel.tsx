@@ -51,7 +51,8 @@
  *   that array as the second `deposit` arg.
  */
 import { useEffect, useState } from "react";
-import { useAccount, useReadContract, useWriteContract, useSimulateContract } from "wagmi";
+import { useAccount, useReadContract, useSimulateContract } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address } from "viem";
 import type { FetchLike } from "../lib/explorerApi";
 import { fetchProposals, type ProposalSummary, type ProposalsResponse } from "../lib/governanceApi";
@@ -260,7 +261,7 @@ export function GovernancePanel(props: GovernancePanelProps) {
     query: { enabled: canVote },
   });
 
-  const voteWrite = useWriteContract();
+  const voteWrite = useGuardedWriteContract();
 
   const onVote = () => {
     if (!voteSim) return;

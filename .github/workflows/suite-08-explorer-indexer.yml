@@ -111,6 +111,15 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
 
+      # RPC URL redaction (issue 1729). A keyed RPC URL must never reach logs or
+      # indexer_runs.error. Fails if zero tests ran.
+      - name: RPC transport error URL redaction lib tests
+        env:
+          CARGO_TEST_MIN_EXECUTED: "3"
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests --nocapture
+
       # MIGRATIONS + BOOT SCHEMA GUARD (issues #1359, #1392, #1429)
       # tests/migrations.rs covers the schema itself, the `--migrate-only` CLI,
       # and (issues #1392, #1429) the boot-time refusal to run against a schema

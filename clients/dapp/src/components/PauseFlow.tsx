@@ -24,13 +24,8 @@
  * DEPOSIT_PAUSER_ROLE; the structured preview still renders so the operator
  * sees what *would* be signed. Pause stays a direct wallet transaction.
  */
-import {
-  useAccount,
-  useReadContract,
-  useSimulateContract,
-  useWriteContract,
-  useChainId,
-} from "wagmi";
+import { useAccount, useReadContract, useSimulateContract, useChainId } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address } from "viem";
 import { DEPOSIT_PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
@@ -67,7 +62,7 @@ export function PauseFlow(props: PauseFlowProps) {
   });
   const hasPauserRole = Boolean(hasPauserData);
 
-  const { writeContract, isPending } = useWriteContract();
+  const { writeContract, isPending } = useGuardedWriteContract();
 
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,

@@ -24,8 +24,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, routerAbi } from "../lib/abi";
 import {
@@ -48,8 +48,8 @@ type Props = Readonly<{
 
 export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const { address, isConnected } = useAccount();
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,

@@ -1,6 +1,7 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
-import { useAccount, useSimulateContract, useWriteContract } from "wagmi";
+import { useAccount, useSimulateContract } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
@@ -14,7 +15,7 @@ type Props = Readonly<{
 
 export function RevokeTab(props: Props) {
   const { isConnected } = useAccount();
-  const { writeContract, isPending } = useWriteContract();
+  const { writeContract, isPending } = useGuardedWriteContract();
 
   const action: AdminAction | null = isAddress(props.agent)
     ? { kind: "revokeAgent", agent: props.agent as Address }

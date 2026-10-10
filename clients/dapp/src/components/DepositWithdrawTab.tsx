@@ -41,8 +41,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
@@ -120,9 +120,9 @@ export function DepositWithdrawTab(props: Props) {
   // `writeContract` callback fires when the hash is returned, not when
   // the tx is mined, so allowance/share-balance reads race past the
   // pending state and the deposit/withdraw submit never enables.
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
-  const withdrawWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
+  const withdrawWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,

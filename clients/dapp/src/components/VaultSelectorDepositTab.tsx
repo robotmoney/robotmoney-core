@@ -28,8 +28,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi, registryAbi, VaultStatus } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
@@ -157,8 +157,8 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
   });
 
   // -------- write hooks --------
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,
