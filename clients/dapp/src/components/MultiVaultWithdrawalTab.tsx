@@ -38,8 +38,13 @@ import { vaultAbi } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
-import { parseUsdcAmount } from "./DepositWithdrawTab";
-import { formatUsdc, formatShares, formatBps, formatPercentFromNumber } from "../lib/format";
+import {
+  formatUsdc,
+  formatShares,
+  formatBps,
+  formatPercentFromNumber,
+  parseSharesAmount,
+} from "../lib/format";
 
 type Props = Readonly<{
   ctx: VaultPreviewContext;
@@ -57,7 +62,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
   const [selectedVault, setSelectedVault] = useState<Address | "">("");
   const [sharesInput, setSharesInput] = useState("");
 
-  const withdrawShares = parseUsdcAmount(sharesInput);
+  const withdrawShares = parseSharesAmount(sharesInput);
 
   // -------- batched balanceOf reads across all registered vaults (AC §8) --------
   // One eth_call batch rather than N independent reads.

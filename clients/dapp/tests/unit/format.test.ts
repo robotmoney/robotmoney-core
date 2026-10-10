@@ -27,17 +27,17 @@ import {
 // ---------------------------------------------------------------------------
 describe("formatUsdc", () => {
   it("formats whole amounts", () => {
-    expect(formatUsdc(1_000_000n)).toBe("1 USDC");
-    expect(formatUsdc(100_000_000n)).toBe("100 USDC");
+    expect(formatUsdc(1_000_000n)).toBe("1.00 USDC");
+    expect(formatUsdc(100_000_000n)).toBe("100.00 USDC");
   });
 
   it("formats fractional amounts, stripping trailing zeros", () => {
-    expect(formatUsdc(1_500_000n)).toBe("1.5 USDC");
+    expect(formatUsdc(1_500_000n)).toBe("1.50 USDC");
     expect(formatUsdc(1_000_001n)).toBe("1.000001 USDC");
   });
 
   it("formats zero as '0 USDC'", () => {
-    expect(formatUsdc(0n)).toBe("0 USDC");
+    expect(formatUsdc(0n)).toBe("0.00 USDC");
   });
 
   it("formats very small values (< 0.01 USDC)", () => {
@@ -49,12 +49,12 @@ describe("formatUsdc", () => {
 
   it("formats very large values (> 1e9 USDC)", () => {
     // 1 billion USDC = 1_000_000_000 * 1_000_000 base units
-    expect(formatUsdc(1_000_000_000_000_000n)).toBe("1,000,000,000 USDC");
+    expect(formatUsdc(1_000_000_000_000_000n)).toBe("1,000,000,000.00 USDC");
   });
 
   it("formats negative amounts", () => {
-    expect(formatUsdc(-1_000_000n)).toBe("−1 USDC");
-    expect(formatUsdc(-500_000n)).toBe("−0.5 USDC");
+    expect(formatUsdc(-1_000_000n)).toBe("−1.00 USDC");
+    expect(formatUsdc(-500_000n)).toBe("−0.50 USDC");
   });
 
   it("returns placeholder for undefined", () => {
@@ -67,28 +67,28 @@ describe("formatUsdc", () => {
 // ---------------------------------------------------------------------------
 describe("formatShares", () => {
   it("formats with default symbol", () => {
-    expect(formatShares(1_000_000n)).toBe("1 shares");
+    expect(formatShares(10n ** 24n)).toBe("1.00 shares");
   });
 
   it("formats with explicit symbol", () => {
-    expect(formatShares(2_000_000n, "rmUSDC")).toBe("2 rmUSDC");
-    expect(formatShares(500_000n, "rmPROTO")).toBe("0.5 rmPROTO");
+    expect(formatShares(2n * 10n ** 24n, "rmUSDC")).toBe("2.00 rmUSDC");
+    expect(formatShares(5n * 10n ** 23n, "rmPROTO")).toBe("0.50 rmPROTO");
   });
 
   it("formats zero", () => {
-    expect(formatShares(0n)).toBe("0 shares");
+    expect(formatShares(0n)).toBe("0.00 shares");
   });
 
   it("formats very small shares", () => {
-    expect(formatShares(1n, "rmUSDC")).toBe("0.000001 rmUSDC");
+    expect(formatShares(10n ** 18n, "rmUSDC")).toBe("0.000001 rmUSDC");
   });
 
   it("formats very large shares", () => {
-    expect(formatShares(1_000_000_000_000_000n, "rmUSDC")).toBe("1,000,000,000 rmUSDC");
+    expect(formatShares(10n ** 33n, "rmUSDC")).toBe("1,000,000,000.00 rmUSDC");
   });
 
   it("formats negative shares", () => {
-    expect(formatShares(-1_000_000n, "rmUSDC")).toBe("−1 rmUSDC");
+    expect(formatShares(-(10n ** 24n), "rmUSDC")).toBe("−1.00 rmUSDC");
   });
 
   it("returns placeholder for undefined", () => {
@@ -101,36 +101,36 @@ describe("formatShares", () => {
 // ---------------------------------------------------------------------------
 describe("formatEth", () => {
   it("formats 1 ETH", () => {
-    expect(formatEth(1_000_000_000_000_000_000n)).toBe("1 ETH");
+    expect(formatEth(1_000_000_000_000_000_000n)).toBe("1.00 ETH");
   });
 
   it("formats fractional ETH (up to 4 decimal places)", () => {
-    expect(formatEth(1_500_000_000_000_000_000n)).toBe("1.5 ETH");
+    expect(formatEth(1_500_000_000_000_000_000n)).toBe("1.50 ETH");
     expect(formatEth(1_234_500_000_000_000_000n)).toBe("1.2345 ETH");
   });
 
   it("strips trailing zeros", () => {
-    expect(formatEth(2_000_000_000_000_000_000n)).toBe("2 ETH");
+    expect(formatEth(2_000_000_000_000_000_000n)).toBe("2.00 ETH");
   });
 
   it("formats zero", () => {
-    expect(formatEth(0n)).toBe("0 ETH");
+    expect(formatEth(0n)).toBe("0.00 ETH");
   });
 
   it("formats very small ETH (< 0.0001 ETH rounds to 0 decimal places)", () => {
     // 1 wei = 1e-18 ETH, at 4 decimal places this rounds to "0 ETH"
-    expect(formatEth(1n)).toBe("0 ETH");
+    expect(formatEth(1n)).toBe("<0.0001 ETH");
     // 0.0001 ETH = 1e14 wei
     expect(formatEth(100_000_000_000_000n)).toBe("0.0001 ETH");
   });
 
   it("formats very large ETH (> 1e9)", () => {
     // 1 billion ETH
-    expect(formatEth(1_000_000_000n * 1_000_000_000_000_000_000n)).toBe("1,000,000,000 ETH");
+    expect(formatEth(1_000_000_000n * 1_000_000_000_000_000_000n)).toBe("1,000,000,000.00 ETH");
   });
 
   it("formats negative ETH", () => {
-    expect(formatEth(-1_000_000_000_000_000_000n)).toBe("−1 ETH");
+    expect(formatEth(-1_000_000_000_000_000_000n)).toBe("−1.00 ETH");
   });
 
   it("returns placeholder for undefined", () => {
@@ -143,11 +143,11 @@ describe("formatEth", () => {
 // ---------------------------------------------------------------------------
 describe("formatTokenBalance", () => {
   it("formats an 18-decimal token", () => {
-    expect(formatTokenBalance(25_000_000_000_000_000_000n, 18, "RM")).toBe("25 RM");
+    expect(formatTokenBalance(25_000_000_000_000_000_000n, 18, "RM")).toBe("25.00 RM");
   });
 
   it("formats a 6-decimal token without symbol", () => {
-    expect(formatTokenBalance(1_500_000n, 6)).toBe("1.5");
+    expect(formatTokenBalance(1_500_000n, 6)).toBe("1.50");
   });
 
   it("returns placeholder for undefined", () => {

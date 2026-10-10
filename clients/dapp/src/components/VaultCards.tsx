@@ -31,6 +31,7 @@
  * required.
  */
 import { useExplorer } from "../lib/ExplorerContext";
+import { formatUsdcString } from "../lib/format";
 import { IndexFreshness } from "./IndexFreshness";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
@@ -147,7 +148,9 @@ export function VaultCards({ onSelectVault, onSwitchToExplorer }: VaultCardsProp
                     </div>
                     <div>
                       <dt>TVL</dt>
-                      <dd data-testid="landing-vault-card-tvl">{vault.total_assets ?? "—"}</dd>
+                      <dd data-testid="landing-vault-card-tvl">
+                        {formatUsdcString(vault.total_assets)}
+                      </dd>
                     </div>
                     <div>
                       <dt>Exit Fee</dt>

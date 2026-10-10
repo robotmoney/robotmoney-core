@@ -29,7 +29,7 @@ import {
   type FetchLike,
 } from "../lib/explorerApi";
 import { VaultPositionCard } from "./shared";
-import { formatUsdc } from "../lib/format";
+import { formatSharesString, formatUsdc, formatUsdcString } from "../lib/format";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -145,9 +145,11 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                         <tr key={pos.vault_address} data-testid="portfolio-position-row">
                           <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
                           <td data-testid="portfolio-position-row-risk">{pos.risk_label}</td>
-                          <td data-testid="portfolio-position-row-shares">{pos.shares}</td>
+                          <td data-testid="portfolio-position-row-shares">
+                            {formatSharesString(pos.shares, "rmUSDC")}
+                          </td>
                           <td data-testid="portfolio-position-row-usdc">
-                            {usdc !== undefined ? usdc : "—"}
+                            {formatUsdcString(usdc)}
                           </td>
                         </tr>
                       );
@@ -177,9 +179,9 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                       key={pos.vault_address}
                       vaultAddress={pos.vault_address}
                       vaultName={pos.vault_name}
-                      shares={pos.shares}
+                      shares={formatSharesString(pos.shares, "rmUSDC")}
                       riskLabel={pos.risk_label}
-                      usdcValue={usdc}
+                      usdcValue={usdc !== undefined ? formatUsdcString(usdc) : undefined}
                     />
                   );
                 })}

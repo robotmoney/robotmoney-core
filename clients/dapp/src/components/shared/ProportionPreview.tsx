@@ -19,6 +19,7 @@
  */
 import type { LegPreview } from "../../lib/routerPreview";
 import { formatPercent, formatUsdc, formatShares } from "../../lib/format";
+import { depositStateLabel, type DepositState } from "../../lib/vaultDepositState";
 
 export interface ProportionPreviewProps {
   /**
@@ -26,6 +27,23 @@ export interface ProportionPreviewProps {
    * When empty, a "no legs" placeholder is shown.
    */
   readonly legs: readonly LegPreview[];
+  /**
+   * Each leg vault's deposit state (lowercase vault address to state), from useDepositStates. The STATUS column
+   * is `depositStateLabel` of this state; a vault with no entry reads as unknown. Never a hardcoded "Active".
+   */
+  readonly legStates?: ReadonlyMap<string, DepositState>;
+}
+
+function legStatus(
+  leg: LegPreview,
+  legStates: ReadonlyMap<string, DepositState> | undefined,
+): string {
+  const state: DepositState = (leg.vault && legStates?.get(leg.vault.toLowerCase())) || {
+    kind: "unknown",
+  };
+  const label = depositStateLabel(state);
+  if (!leg.unavailable) return label;
+  return state.kind === "open" ? "⚠ UNAVAILABLE" : `⚠ UNAVAILABLE · ${label}`;
 }
 
 /**
@@ -33,7 +51,7 @@ export interface ProportionPreviewProps {
  * estimated shares, and an availability flag. Used on the deposit/withdraw
  * page and portfolio explorer.
  */
-export function ProportionPreview({ legs }: ProportionPreviewProps) {
+export function ProportionPreview({ legs, legStates }: ProportionPreviewProps) {
   if (legs.length === 0) {
     return (
       <p data-testid="proportion-preview-empty" className="hint">
@@ -75,9 +93,7 @@ export function ProportionPreview({ legs }: ProportionPreviewProps) {
                 <td data-testid={`proportion-preview-shares-${i}`}>
                   {leg.unavailable ? "—" : formatShares(leg.estShares)}
                 </td>
-                <td data-testid={`proportion-preview-status-${i}`}>
-                  {leg.unavailable ? "⚠ UNAVAILABLE" : "Active"}
-                </td>
+                <td data-testid={`proportion-preview-status-${i}`}>{legStatus(leg, legStates)}</td>
               </tr>
             );
           })}

@@ -38,7 +38,7 @@ import { TxPreview } from "./TxPreview";
 import { depositsBlocked } from "../lib/vaultDepositState";
 import { useDepositState } from "../lib/useDepositStates";
 import { DepositsClosedNotice } from "./DepositsClosedNotice";
-import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { parseUsdcAmount } from "../lib/format";
 import { formatUsdc, formatShares } from "../lib/format";
 
 type Props = Readonly<{

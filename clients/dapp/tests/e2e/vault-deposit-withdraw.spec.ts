@@ -140,9 +140,9 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
     // ---- Withdraw half ----
     // Withdraw all newly minted shares (sharesAfter - sharesStart).
     const sharesToRedeem = sharesAfter - sharesStart;
-    // Format shares as a 6-decimal decimal string the input accepts.
-    const whole = sharesToRedeem / 1_000_000n;
-    const frac = (sharesToRedeem % 1_000_000n).toString().padStart(6, "0");
+    // Format shares as the 24-decimal (decimals() 6 + virtual offset 18) decimal string the input accepts.
+    const whole = sharesToRedeem / 10n ** 24n;
+    const frac = (sharesToRedeem % 10n ** 24n).toString().padStart(24, "0");
     const sharesInput = `${whole}.${frac}`;
 
     await page.getByTestId("withdraw-amount").fill(sharesInput);

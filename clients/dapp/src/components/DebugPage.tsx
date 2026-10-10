@@ -133,7 +133,15 @@ export function DebugPage(props: DebugPageProps) {
         <DebugRow label="USDC" value={usdcAddress || "—"} testId="debug-usdc-address" />
         <DebugRow
           label="Gateway deposits"
-          value={isConnected ? (depositsPaused ? "PAUSED (withdrawals open)" : "OPEN") : "—"}
+          value={
+            isConnected
+              ? depositsPausedData === undefined
+                ? "UNKNOWN"
+                : depositsPaused
+                  ? "PAUSED (withdrawals open)"
+                  : "OPEN"
+              : "—"
+          }
           testId="debug-public-paused"
         />
         <DebugRow label="Expected code hash" value={props.expectedCodeHash ?? "—"} />

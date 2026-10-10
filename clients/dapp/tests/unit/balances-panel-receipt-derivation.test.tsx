@@ -58,7 +58,7 @@ vi.mock("../../src/lib/VaultRegistryContext", () => ({
 const TOKEN_READS: Record<string, { balance: bigint; decimals: number; symbol: string }> = {
   [USDC.toLowerCase()]: { balance: 1_000_000n, decimals: 6, symbol: "USDC" },
   // The vault IS its own receipt token — reads must be addressed to the vault.
-  [VAULT_A.toLowerCase()]: { balance: 5_000_000n, decimals: 6, symbol: "rmUSDC" },
+  [VAULT_A.toLowerCase()]: { balance: 5n * 10n ** 24n, decimals: 6, symbol: "rmUSDC" },
 };
 
 interface ReadContractSpec {
@@ -107,12 +107,12 @@ describe("BalancesPanel derives receipt-token reads from VaultRecord (issue #134
       "rmUSDC",
     );
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-amount`).textContent).toBe(
-      "5 rmUSDC",
+      "5.00 rmUSDC",
     );
   });
 
   it("still renders the plain USDC row (guards against a vacuous pass)", () => {
     render(<BalancesPanel gatewayAddress={GATEWAY} />);
-    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1 USDC");
+    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1.00 USDC");
   });
 });

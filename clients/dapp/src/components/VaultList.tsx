@@ -15,6 +15,7 @@
  */
 import type { VaultRow } from "../lib/explorerApi";
 import { useExplorer } from "../lib/ExplorerContext";
+import { formatUsdc, formatUsdcString } from "../lib/format";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import { depositStateAttr, depositStateLabel, resolveDepositState } from "../lib/vaultDepositState";
 import { IndexFreshness } from "./IndexFreshness";
@@ -28,8 +29,8 @@ function headroom(vault: VaultRow): string | null {
   try {
     const cap = BigInt(vault.deposit_cap);
     const tvl = BigInt(vault.total_assets);
-    if (cap < tvl) return "0";
-    return String(cap - tvl);
+    if (cap < tvl) return formatUsdc(0n);
+    return formatUsdc(cap - tvl);
   } catch {
     return null;
   }
@@ -93,7 +94,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                     <td data-testid="vault-list-row-name">{v.name}</td>
                     <td data-testid="vault-list-row-risk">{v.risk_label}</td>
                     <td data-testid="vault-list-row-status">{depositStateLabel(deposit)}</td>
-                    <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
+                    <td data-testid="vault-list-row-tvl">{formatUsdcString(v.total_assets)}</td>
                     <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
                     <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
                   </tr>
