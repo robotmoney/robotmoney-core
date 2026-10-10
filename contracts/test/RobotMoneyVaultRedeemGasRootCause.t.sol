@@ -441,20 +441,22 @@ contract RobotMoneyRouterRedeemGasRootCauseTest is Test {
 
     uint256 internal constant DEPOSIT_AMOUNT = 100 * 1e6;
 
-    /// @dev Weight the router equally over the first `k` vaults.
+    /// @dev Weight the router equally over the first `k` vaults, on the DEFAULT vector. The router stage leaves the default `[vaults[0]]/[10000]` and no voted
+    ///      vector (issue 1743), so each further vault is made eligible by one atomic `migrateEligibility` that re-sets the default over the grown set.
     function _weightLegs(uint256 k) internal {
-        address[] memory vs = new address[](k);
-        uint256[] memory bps = new uint256[](k);
-        uint256 used;
         for (uint256 i = 0; i < k; i++) {
-            vs[i] = vaults[i];
-            bps[i] = i == k - 1 ? 10_000 - used : 10_000 / k;
-            used += bps[i];
+            uint256 n = i + 1;
+            address[] memory vs = new address[](n);
+            uint256[] memory bps = new uint256[](n);
+            uint256 used;
+            for (uint256 j = 0; j < n; j++) {
+                vs[j] = vaults[j];
+                bps[j] = j == n - 1 ? 10_000 - used : 10_000 / n;
+                used += bps[j];
+            }
             vm.prank(admin);
-            s.registry.setRouterEligible(vaults[i], true);
+            s.registry.migrateEligibility(vaults[i], true, vs, bps);
         }
-        vm.prank(admin);
-        s.router.setWeights(vs, bps);
     }
 
     /// @dev mode 0 = router.deposit, 1 = gateway.depositTo(router), 2 = gateway.deposit (one vault).
