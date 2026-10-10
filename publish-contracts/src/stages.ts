@@ -7,7 +7,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
 import { SAFE_MANIFEST, isVaultKey } from "./core-wiring.ts";
 import type { VaultKey } from "./sheet.ts";
-import { manifestFile, type StageTable, type TableLibrary } from "./stage-table.ts";
+import { manifestFile, type StageTable, type TableCreate2Library, type TableLibrary } from "./stage-table.ts";
 
 export type StageKind = "safe" | "forge" | "prove" | "verify" | "govern";
 
@@ -24,6 +24,8 @@ export interface StageRow {
   manifest?: string;
   /** Libraries to link with `forge script --libraries` (from the table). */
   libraries: TableLibrary[];
+  /** Libraries forge deploys by itself through the CREATE2 factory inside this stage (issue 1721). Empty for the orchestration rows. */
+  create2Libraries: TableCreate2Library[];
   /** Frozen-count key. Null: the stage sends no deployer transaction. */
   countKey: string | null;
   /** Vault stages: which vault's per-vault sheet values feed the caps and exit fee. */
@@ -32,11 +34,11 @@ export interface StageRow {
   usesSafeOwners?: boolean;
 }
 
-const SAFE_ROW: StageRow = { name: "safe", kind: "safe", countKey: "safe", manifest: SAFE_MANIFEST, requiredEnv: [], optionalEnv: [], libraries: [] };
+const SAFE_ROW: StageRow = { name: "safe", kind: "safe", countKey: "safe", manifest: SAFE_MANIFEST, requiredEnv: [], optionalEnv: [], libraries: [], create2Libraries: [] };
 // The Safe control proof (core 1618): no core script, no deployer transaction. It sits just before the timelock stage (the handover).
-const PROVE_ROW: StageRow = { name: PROOF_STAGE, kind: "prove", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [] };
-const VERIFY_ROW: StageRow = { name: "verify", kind: "verify", countKey: null, requiredEnv: [], optionalEnv: [], libraries: [] };
-const GOVERN_ROW: StageRow = { name: "govern", kind: "govern", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [] };
+const PROVE_ROW: StageRow = { name: PROOF_STAGE, kind: "prove", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [], create2Libraries: [] };
+const VERIFY_ROW: StageRow = { name: "verify", kind: "verify", countKey: null, requiredEnv: [], optionalEnv: [], libraries: [], create2Libraries: [] };
+const GOVERN_ROW: StageRow = { name: "govern", kind: "govern", countKey: null, usesSafeOwners: true, requiredEnv: [], optionalEnv: [], libraries: [], create2Libraries: [] };
 
 /** The rows for a table: safe first (the Safe is an input of the vault fee recipient and the timelock), the table stages in order, then verify and govern. */
 export function buildStages(table: StageTable): StageRow[] {
@@ -44,6 +46,7 @@ export function buildStages(table: StageTable): StageRow[] {
     name: s.name, kind: "forge", script: s.script, countKey: s.name, manifest: manifestFile(s.manifest),
     requiredEnv: s.requiredEnv, optionalEnv: s.optionalEnv,
     libraries: s.libraries.map((n) => table.libraries.find((l) => l.name === n)!),
+    create2Libraries: (s.create2Libraries ?? []).map((n) => table.create2Libraries!.find((l) => l.name === n)!),
     ...(s.vault && isVaultKey(s.vault) ? { vault: s.vault } : {}),
   }));
   const handover = forge.findIndex((r) => r.name === "timelock");
