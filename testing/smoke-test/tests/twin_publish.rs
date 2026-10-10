@@ -458,11 +458,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // Issues 1485 (AC7) and 1493 (AC5): a router deposit and a router withdraw both succeed on the Twin chain after the full publish and govern run.
     // `cast_send` fails on a reverted receipt.
     //
-    // OPEN OWNER QUESTION (issue 1743 report). With the deploy fixed, the router routes by the sheet's launch vector 9500/500/0/0 over all four vaults. The
+    // KNOWN GAP, tracked by issue 1746. With the deploy fixed, the router routes by the sheet's launch vector 9500/500/0/0 over all four vaults. The
     // router calls `vault.deposit` on EVERY router-eligible leg, a 0 bps leg included (legAmount 0), and a deposit of 0 into rmAGENT reverts (the V4 swap of
     // 0), so ONE 0 bps leg reverts the whole router deposit with UsdcLegTransferFailed(rmAGENT). Before the fix the voted vector (rmUSDC alone) hid it. Fixing
     // it needs a PortfolioRouter change (skip legs whose legAmount is 0) or a different launch eligibility: both owner decisions, so this test pins the
-    // CURRENT behavior instead of hiding it. When the owner decides, replace the revert assertion with the deposit.
+    // CURRENT behavior instead of hiding it. WHEN ISSUE 1746 LANDS this revert assertion MUST FLIP to a router deposit assertion (and the direct rmUSDC deposit goes back to router.deposit).
     let user = fx.agent();
     let pk = format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY));
     let amount: u128 = 100_000_000; // 100 USDC
@@ -487,7 +487,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "deposit(uint256,uint256[])",
             &[&amount_s, "[]"],
         )
-        .expect_err("the router deposit reverts on the 0 bps rmAGENT leg (issue 1743 report)")
+        .expect_err("the router deposit reverts on the 0 bps rmAGENT leg (issue 1746)")
         .to_string()
         .to_lowercase();
     assert!(
