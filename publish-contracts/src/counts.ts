@@ -105,7 +105,8 @@ export interface ResolvedCounts { frozen?: FrozenCounts; measure: boolean; mode:
 export function resolveCounts(o: { dir: string; sha: string; measureFlag: boolean; dryRun: boolean; chainId: number; warn?: (event: string, f: Record<string, unknown>) => void }): ResolvedCounts {
   const file = frozenPath(o.dir, o.sha);
   if (o.measureFlag) return { measure: true, mode: "measure-flag", file };
-  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha).counts, measure: false, mode: "frozen", file };
+  // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on 8453 it is never counts.
+  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId !== MAINNET_CHAIN_ID }).counts, measure: false, mode: "frozen", file };
   if (o.dryRun) {
     o.warn?.("dry_run.counts_missing", { file, note: "no frozen counts for this SHA: the dry run measures them and writes nothing" });
     return { measure: true, mode: "dry-run-measure", file };

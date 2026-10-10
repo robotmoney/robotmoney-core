@@ -13,7 +13,7 @@ import { freezeCounts } from "../scripts/freeze-counts.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { COUNTS, SHA } from "./fixtures.ts";
-import { loadFrozen } from "../src/counts.ts";
+import { loadFrozen, resolveCounts } from "../src/counts.ts";
 import { LOCAL_RPC, SCRIPT, world, type World } from "./harness.ts";
 
 const OUT_FIXTURE = join(import.meta.dir, "fixtures", "build-out");
@@ -182,6 +182,9 @@ describe("a libs stage that plans zero transactions", () => {
     // the raw counts file is MARKED: it is never a frozen file (loadFrozen, the release gate and the drift check refuse it)
     expect(f.measured.adopted).toEqual(["libs"]);
     expect(() => loadFrozen(w.countsDir, SHA)).toThrow("ADOPTED stage(s) libs");
+    // the Twin run's own follow-on verbs (verify, govern) read the file back; 8453 never does
+    expect(resolveCounts({ dir: w.countsDir, sha: SHA, measureFlag: false, dryRun: false, chainId: 918453 }).frozen?.libs).toBe(0);
+    expect(() => resolveCounts({ dir: w.countsDir, sha: SHA, measureFlag: false, dryRun: false, chainId: 8453 })).toThrow("ADOPTED stage(s) libs");
     expect(loadFrozen(w.countsDir, SHA, { allowAdopted: true }).counts.libs).toBe(0);
     const drift = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "counts-drift.ts"), "--counts", join(w.dir, "c.json"), "--frozen-dir", w.countsDir], { stderr: "pipe" });
     expect(drift.exitCode).toBe(1);
