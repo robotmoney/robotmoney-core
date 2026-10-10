@@ -10,6 +10,7 @@ import {DeployUniswapV4PriceRecorder} from "../script/DeployUniswapV4PriceRecord
 import {UniswapV4PriceRecorder} from "../adapters/UniswapV4PriceRecorder.sol";
 import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
+import {claimTmpPath, releaseTmpPath} from "./helpers/TmpPaths.sol";
 
 contract RecorderDeployHarness is DeployUniswapV4PriceRecorder {
     function writeManifest(Deployed memory d, string memory path) external {
@@ -122,11 +123,10 @@ contract DeployUniswapV4PriceRecorderTest is Test {
 
     function test_manifestNamesTheRecorderAndThePool() public {
         DeployUniswapV4PriceRecorder.Deployed memory d = script.runInProcess(_shipped());
-        string memory path =
-            string.concat(vm.projectRoot(), "/deployments/test-recorder-manifest.json");
+        string memory path = claimTmpPath(vm, "v4-recorder-manifest");
         script.writeManifest(d, path);
         string memory out = vm.readFile(path);
-        vm.removeFile(path);
+        releaseTmpPath(vm, path);
         assertEq(out.readAddress(".recorder"), d.recorder);
         assertEq(out.readAddress(".pool_manager"), PM_ADDR);
         assertEq(out.readBytes32(".pool_id"), RM_POOL_ID);

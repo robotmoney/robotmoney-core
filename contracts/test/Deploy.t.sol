@@ -12,6 +12,7 @@ import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {DeployPortfolioRouter} from "../script/DeployPortfolioRouter.s.sol";
 import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
+import {claimTmpPath, releaseTmpPath} from "./helpers/TmpPaths.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {VenueEtcher} from "./helpers/VenueMocks.sol";
@@ -181,12 +182,11 @@ contract DeployTest is Test {
     function test_manifest_hasRenamedKeysAndThirdVenueEntry() public {
         CoreStages.Stack memory s = _run();
         DeployVaultManifestHarness h = new DeployVaultManifestHarness();
-        string memory path =
-            string.concat("/tmp/rm-core-s3-manifest-", vm.toString(address(h)), ".json");
+        string memory path = claimTmpPath(vm, "core-s3-manifest");
         address receiver = makeAddr("manifest-seed-receiver");
         h.writeManifest(s.vaultStage, receiver, 0, path);
         string memory json = vm.readFile(path);
-        vm.removeFile(path);
+        releaseTmpPath(vm, path);
 
         assertEq(
             json.readAddress(".moonwell_flagship_adapter"), address(s.vaultStage.moonwellAdapter)

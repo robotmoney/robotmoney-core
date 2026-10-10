@@ -1,0 +1,57 @@
+---
+title: "claimTmpPath"
+description: "Scratch-file paths for forge tests that no other test, thread or forge process shares (issue #1735)."
+---
+
+# claimTmpPath
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/helpers/TmpPaths.sol)
+
+<a id="claimtmppath-vm-string"></a>
+
+### claimTmpPath
+
+**Title:** TmpPaths
+
+Scratch-file paths for forge tests that no other test, thread or forge process shares (issue #1735).
+
+<i>
+
+Forge runs the test contracts, and the tests inside one contract, in parallel threads. Three
+facts make a "random" file name collide. `vm.randomUint` is seeded the same way for every
+test. Every test contract is deployed at the same address, so `address(this)` is not a
+salt. `setUp` runs once per test, so a path built there is shared by the tests of a
+contract unless it is claimed. The first flake of this kind was one shared manifest name:
+a sibling's `setUp` removed the file a test had just written. Two ways out:
+`claimTmpPath` takes a directory atomically (`createDir` without `recursive` fails when the
+directory exists), so concurrent callers always get different paths and `releaseTmpPath` frees it.
+`uniqueTmpPath` has no claim and no clean-up duty. It is unique only if the tag is unique to
+one test contract (it adds the wall clock for separate forge processes). The guard
+`.github/scripts/check_test_tmp_paths.py` fails CI when a tag or a /tmp literal is shared.
+
+</i>
+
+<i>
+
+Atomically claims a fresh directory under /tmp and returns a file path inside it. The caller
+must call `releaseTmpPath` when done. `tag` documents the owner.
+
+</i>
+
+```solidity
+function claimTmpPath(Vm cheats, string memory tag) returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cheats | `Vm` |  |
+| tag | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+

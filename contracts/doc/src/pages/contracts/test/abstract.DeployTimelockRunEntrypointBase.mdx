@@ -5,7 +5,7 @@ description: "`run()` hands the AGENT_ADDRESSES list it reads to the handover (i
 
 # DeployTimelockRunEntrypointBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -35,7 +35,7 @@ bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 
 <i>
 
-Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+Set in setUp from `uniqueTmpPath` with a tag that carries `_prefix()`: the subclasses below share this base, and every test contract is deployed at one address, so only `_prefix()` tells their files apart. Each subclass has its own prefix.
 
 </i>
 
@@ -116,6 +116,20 @@ function _set(string memory name, string memory value) internal;
 | ---- | ---- | ----------- |
 | name | `string` |  |
 | value | `string` |  |
+
+<a id="removesownmanifest"></a>
+
+### removesOwnManifest
+
+<i>
+
+Removes this test's own manifest once the test ends. The path is unique to this contract (see `OUT_PATH`), so nothing else is touched.
+
+</i>
+
+```solidity
+modifier removesOwnManifest();
+```
 
 <a id="setup"></a>
 

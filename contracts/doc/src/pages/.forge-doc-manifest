@@ -68,6 +68,7 @@ contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.IRouterGovernanceQuorum.mdx
 contracts/script/interface.ISafeFull.mdx
 contracts/script/library.AdapterBytecodeGuard.mdx
+contracts/test/abstract.DeployTimelockKindBase.mdx
 contracts/test/abstract.DeployTimelockRunEntrypointBase.mdx
 contracts/test/abstract.GatewayAgentPolicyFixture.mdx
 contracts/test/abstract.PositionConformanceBase.mdx
@@ -135,7 +136,9 @@ contracts/test/contract.DeployTimelockDelayFloorTest.mdx
 contracts/test/contract.DeployTimelockExpectedChainTest.mdx
 contracts/test/contract.DeployTimelockFourVaultsTest.mdx
 contracts/test/contract.DeployTimelockManifestTest.mdx
+contracts/test/contract.DeployTimelockProductionKindTest.mdx
 contracts/test/contract.DeployTimelockReceiptAdminTest.mdx
+contracts/test/contract.DeployTimelockRehearsalKindTest.mdx
 contracts/test/contract.DeployTimelockRequiredDelayTest.mdx
 contracts/test/contract.DeployTimelockRequiredIcPolicyTest.mdx
 contracts/test/contract.DeployTimelockRequiredSafeOwnersTest.mdx
@@ -143,6 +146,7 @@ contracts/test/contract.DeployTimelockRunEntrypointTest.mdx
 contracts/test/contract.DeployTimelockStrictChainGuardTest.mdx
 contracts/test/contract.DeployTimelockTest.mdx
 contracts/test/contract.DeployTimelockTwinChainDelayTest.mdx
+contracts/test/contract.DeployTimelockUnknownKindTest.mdx
 contracts/test/contract.DeployTimelockVaultListInputTest.mdx
 contracts/test/contract.DeployUniswapV4PriceRecorderTest.mdx
 contracts/test/contract.DeployVaultManifestHarness.mdx
@@ -279,7 +283,6 @@ contracts/test/contract.VaultRegistryTest.mdx
 contracts/test/contract.WeightSetterRotationTest.mdx
 contracts/test/contract.WithdrawalsNeverFrozenTest.mdx
 contracts/test/contract.ZeroLiquidityPool.mdx
-contracts/test/function.uniqueManifestPath.mdx
 contracts/test/fv/contract.CoverageMapTest.mdx
 contracts/test/fv/contract.CustodyMultiVaultTest.mdx
 contracts/test/fv/contract.DeployAssertionsTest.mdx
@@ -307,6 +310,9 @@ contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
 contracts/test/helpers/contract.SafeCallRelay.mdx
 contracts/test/helpers/contract.TestERC20.mdx
+contracts/test/helpers/function.claimTmpPath.mdx
+contracts/test/helpers/function.releaseTmpPath.mdx
+contracts/test/helpers/function.uniqueTmpPath.mdx
 contracts/test/helpers/interface.ISafeSetupCall.mdx
 contracts/test/helpers/interface.ISafeTx.mdx
 contracts/test/helpers/interface.Vm__.mdx

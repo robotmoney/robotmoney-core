@@ -249,7 +249,9 @@ export const sidebar = [
             { text: "DeployTimelockExpectedChainTest", link: "/contracts/test/contract.DeployTimelockExpectedChainTest" },
             { text: "DeployTimelockFourVaultsTest", link: "/contracts/test/contract.DeployTimelockFourVaultsTest" },
             { text: "DeployTimelockManifestTest", link: "/contracts/test/contract.DeployTimelockManifestTest" },
+            { text: "DeployTimelockProductionKindTest", link: "/contracts/test/contract.DeployTimelockProductionKindTest" },
             { text: "DeployTimelockReceiptAdminTest", link: "/contracts/test/contract.DeployTimelockReceiptAdminTest" },
+            { text: "DeployTimelockRehearsalKindTest", link: "/contracts/test/contract.DeployTimelockRehearsalKindTest" },
             { text: "DeployTimelockRequiredDelayTest", link: "/contracts/test/contract.DeployTimelockRequiredDelayTest" },
             { text: "DeployTimelockRequiredIcPolicyTest", link: "/contracts/test/contract.DeployTimelockRequiredIcPolicyTest" },
             { text: "DeployTimelockRequiredSafeOwnersTest", link: "/contracts/test/contract.DeployTimelockRequiredSafeOwnersTest" },
@@ -257,6 +259,7 @@ export const sidebar = [
             { text: "DeployTimelockStrictChainGuardTest", link: "/contracts/test/contract.DeployTimelockStrictChainGuardTest" },
             { text: "DeployTimelockTest", link: "/contracts/test/contract.DeployTimelockTest" },
             { text: "DeployTimelockTwinChainDelayTest", link: "/contracts/test/contract.DeployTimelockTwinChainDelayTest" },
+            { text: "DeployTimelockUnknownKindTest", link: "/contracts/test/contract.DeployTimelockUnknownKindTest" },
             { text: "DeployTimelockVaultListInputTest", link: "/contracts/test/contract.DeployTimelockVaultListInputTest" },
             { text: "DeployUniswapV4PriceRecorderTest", link: "/contracts/test/contract.DeployUniswapV4PriceRecorderTest" },
             { text: "DeployVaultManifestHarness", link: "/contracts/test/contract.DeployVaultManifestHarness" },
@@ -399,6 +402,7 @@ export const sidebar = [
           text: "Abstract Contracts",
           collapsed: true,
           items: [
+            { text: "DeployTimelockKindBase", link: "/contracts/test/abstract.DeployTimelockKindBase" },
             { text: "DeployTimelockRunEntrypointBase", link: "/contracts/test/abstract.DeployTimelockRunEntrypointBase" },
             { text: "GatewayAgentPolicyFixture", link: "/contracts/test/abstract.GatewayAgentPolicyFixture" },
             { text: "PositionConformanceBase", link: "/contracts/test/abstract.PositionConformanceBase" },
@@ -426,13 +430,6 @@ export const sidebar = [
           items: [
             { text: "BytecodePatch", link: "/contracts/test/library.BytecodePatch" },
             { text: "ReferenceTwap", link: "/contracts/test/library.ReferenceTwap" },
-          ],
-        },
-        {
-          text: "Functions",
-          collapsed: true,
-          items: [
-            { text: "uniqueManifestPath", link: "/contracts/test/function.uniqueManifestPath" },
           ],
         },
       ],
@@ -513,6 +510,15 @@ export const sidebar = [
             { text: "RoleHolders", link: "/contracts/test/helpers/library.RoleHolders" },
             { text: "VaultTestParams", link: "/contracts/test/helpers/library.VaultTestParams" },
             { text: "VenueEtcher", link: "/contracts/test/helpers/library.VenueEtcher" },
+          ],
+        },
+        {
+          text: "Functions",
+          collapsed: true,
+          items: [
+            { text: "claimTmpPath", link: "/contracts/test/helpers/function.claimTmpPath" },
+            { text: "releaseTmpPath", link: "/contracts/test/helpers/function.releaseTmpPath" },
+            { text: "uniqueTmpPath", link: "/contracts/test/helpers/function.uniqueTmpPath" },
           ],
         },
       ],
