@@ -3,8 +3,8 @@
 //   2. RobotMoneyGateway.committeeRegister(submitter, label) forwards to InvestmentCommitteePolicy.registerAgent: gives COMMITTEE_AGENT_ROLE (the receipt contract checks it).
 // Those two together are the whole authority to anchor a receipt (docs/technical/consensus-receipt-submitter-runbook.md section 1; rotation step 2). The old `rmpc committee register` is gone.
 //
-// THE POLICY IS A SIGNALLING-ONLY ONE. authorizeAgent needs a valid policy (the gateway refuses zero caps), so the submitter gets the smallest legal one: 1 unit of USDC per payment and
-// per window, no withdrawals, no destinations, shares to the timelock, valid for 90 days. The submitter can anchor a digest and nothing else; the policy cannot be widened without another timelock round.
+// THE POLICY IS THE SMALLEST LEGAL ONE. authorizeAgent needs a valid policy (the gateway refuses zero caps), so the submitter gets the smallest legal one: 1 unit of USDC per payment and
+// per window, no withdrawals, no destinations, shares to the timelock, valid for 90 days. AGENT_ROLE on the gateway lets the submitter anchor receipts (consensusRecordReceipt) and, with COMMITTEE_AGENT_ROLE, post allocation-signalling votes (committeeVoteSubmit). Its deposit and withdraw calls are capped at 1 raw unit and move only its own funds. There is no value path from the timelock or the Safe to the submitter, and the policy cannot be widened without another timelock round.
 // The agent OWNER recorded on chain is the timelock (the caller of authorizeAgent). This is an ADMIN action through the Safe and the timelock, not a depositor authorization.
 // Pure module: it reads no chain and sends nothing.
 import { encodeFunctionData, getAddress, parseAbi, type Address, type Hex } from "viem";

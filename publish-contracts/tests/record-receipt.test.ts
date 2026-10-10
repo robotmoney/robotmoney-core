@@ -101,6 +101,27 @@ describe("record-receipt", () => {
   });
 });
 
+describe("record-receipt refusals before any key is touched (review advisories 3 and 4)", () => {
+  test("a Safe owner, the pauser and the emergency key are refused as the submitter, nothing sent; a dedicated key passes", async () => {
+    for (const pick of [(c: RunContext) => c.sheet.safeOwners[0]!, (c: RunContext) => c.sheet.safeOwners[2]!, (c: RunContext) => c.sheet.pauser, (c: RunContext) => c.sheet.emergency]) {
+      const { ctx, st, api, inputs } = mk();
+      await expect(recordReceipt(ctx, signer(pick(ctx)), inputs, api)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("dedicated key") });
+      expect(st.sent).toEqual([]);
+    }
+    const ok = mk();
+    await expect(recordReceipt(ok.ctx, signer(), ok.inputs, ok.api)).resolves.toMatchObject({ status: 1 });
+  });
+  test("the CLI refuses record-receipt in production on 8453 before it builds the signer (no passphrase prompt)", async () => {
+    const { world } = await import("./harness.ts");
+    const w = world({ chainId: 8453 });
+    let signerBuilt = false;
+    const code = await w.run(["record-receipt", "--receipt-id", RID, "--payload-digest", DIGEST, "--payload-uri", URI], { makeSigner: () => { signerBuilt = true; throw new Error("the signer must not be built"); } });
+    expect(code).toBe(2);
+    expect(signerBuilt).toBe(false);
+    expect(w.logs().filter((l) => l.event === "run.failed").pop()!.message).toContain("rmpc receipt submit");
+  });
+});
+
 describe("record-receipt inputs and the CLI", () => {
   test("ids and digests are bytes32, the uri is http(s), nothing is guessed", () => {
     expect(assertRecordInputs({ receiptId: RID.toUpperCase().replace("0X", "0x"), payloadDigest: DIGEST, payloadUri: URI }).receiptId).toBe(RID);

@@ -58,6 +58,18 @@ describe("update-delay, batch and cancel on 8453: refused in production, allowed
       "updateDelay.schedule:update-delay", "updateDelay.execute:update-delay", "scheduleBatch:batch", "executeBatch:batch", "schedule:cancel", "cancel:cancel"]);
   });
 
+  test("batch reads the LIVE rmUSDC cap, not the sheet's, so it stays a no-op (review advisory 5)", async () => {
+    const { d, tl, manifest } = mk(REHEARSAL);
+    await go(d, tl, manifest);
+    await go(d, tl, manifest, { row: "update-delay" });
+    tl.s.reads.perDepositCap = 777n; // a setter changed the cap on chain after the sheet was frozen
+    await go(d, tl, manifest, { row: "batch" });
+    const capCall = tl.s.scheduled.get("batch")!.calls.find((c) => c.target === A.vaults.USDC)!;
+    const { decodeFunctionData: dec, parseAbi: pa } = await import("viem");
+    expect(dec({ abi: pa(["function setPerDepositCap(uint256 newCap)"]), data: capCall.data as `0x${string}` }).args).toEqual([777n]);
+    expect(d.sheet.vaults.USDC.perDepositCap).not.toBe(777n);
+  });
+
   test("the update-delay floor of the Safe tool follows the kind: 899 refused, 900 passes the floor, 172800 refused as a rehearsal delay; production keeps 172800", async () => {
     const handle = { chain: { chainId: 8453 } } as never;
     const code = async (newDelay: bigint, deploymentKind?: "rehearsal" | "production"): Promise<string> => {

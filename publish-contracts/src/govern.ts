@@ -415,16 +415,17 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       };
     }
     if (name === "batch") {
-      // one scheduleBatch round that changes nothing: the delay set to itself and one cap set to the sheet value it already has
+      // one scheduleBatch round that changes nothing: the delay set to itself and rmUSDC's cap set to the value it holds ON CHAIN now (not the sheet's, which may differ after a setter ran)
       const delay = await api.timelockMinDelay(handle, a.timelock);
+      const liveCap = await reader(handle)<bigint>(a.vaults.USDC, VAULT_ABI, "perDepositCap");
       const calls: LabelledCall[] = [
         { label: "timelock.updateDelay(unchanged)", target: a.timelock, data: encodeFunctionData({ abi: TL_ABI, functionName: "updateDelay", args: [delay] }) },
-        { label: "rmUSDC.setPerDepositCap(unchanged)", target: a.vaults.USDC, data: encodeFunctionData({ abi: VAULT_ABI, functionName: "setPerDepositCap", args: [sheet.vaults.USDC.perDepositCap] }) },
+        { label: "rmUSDC.setPerDepositCap(unchanged)", target: a.vaults.USDC, data: encodeFunctionData({ abi: VAULT_ABI, functionName: "setPerDepositCap", args: [liveCap] }) },
       ];
       return orderedPlan(calls, name, async () => {
         const bad: string[] = [];
         if ((await api.timelockMinDelay(handle, a.timelock)) !== delay) bad.push("getMinDelay changed");
-        if ((await reader(handle)<bigint>(a.vaults.USDC, VAULT_ABI, "perDepositCap")) !== sheet.vaults.USDC.perDepositCap) bad.push("rmUSDC.perDepositCap changed");
+        if ((await reader(handle)<bigint>(a.vaults.USDC, VAULT_ABI, "perDepositCap")) !== liveCap) bad.push("rmUSDC.perDepositCap changed");
         return bad;
       }, "batch scheduling proof");
     }

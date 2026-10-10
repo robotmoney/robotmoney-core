@@ -110,6 +110,36 @@ describe("evidence kind", () => {
   });
 });
 
+describe("forged evidence cannot skip the gap check (review B1)", () => {
+  test("a production unpause flagged cancelled with a 5 s gap still fails the offline gap check", () => {
+    const e = prod(); e.govern[0].execute_block_timestamp = e.govern[0].schedule_block_timestamp + 5;
+    expect(problems(e)).toContain("gap 5 s is under 172800"); // baseline
+    e.govern[0].cancelled = true;
+    const out = problems(e);
+    expect(out).toContain("gap 5 s is under 172800"); // mutation: the flag does not skip it
+    expect(out).toContain("cancelled is not a field of an executed operation");
+  });
+  test("cancelled, cancel_tx and cancel_status are refused on govern, receipt_releases and receipt_applications entries, in every kind", () => {
+    for (const k of ["cancelled", "cancel_tx", "cancel_status"]) {
+      const g = prod(); g.govern[1][k] = k === "cancelled" ? true : h(1);
+      expect(problems(g)).toContain(`${k} is not a field of an executed operation`);
+      const r = path(reh()); r.receipt_applications[0][k] = k === "cancelled" ? true : h(1);
+      expect(problems(r, R)).toContain(`${k} is not a field of an executed operation`);
+      const c = path(reh()); c.committee_registrations[0][k] = true;
+      expect(problems(c, R)).toContain(`${k} is not a field of an executed operation`);
+    }
+    const rel: any = prod(); rel.consensus_receipt = { address: a(32) };
+    rel.receipt_releases = [{ step: "release-receipt", receipt_id: RID, target: a(32), operation_id: h(820), schedule_tx: h(230), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(231), execute_status: 1, execute_block_timestamp: T0 + 5, cancelled: true }];
+    expect(problems(rel)).toContain("gap 5 s is under 172800");
+    expect(problems(rel)).toContain("cancelled is not a field");
+  });
+  test("in a rehearsal the cancel flag on an update-delay or batch row does not skip its gap, while the real cancel row is still exempt", () => {
+    const e = rows(reh()); e.rehearsal_rows[0].execute_block_timestamp = T0 + 5; e.rehearsal_rows[0].cancelled = true;
+    expect(problems(e, R)).toContain("gap 5 s is under 900");
+    expect(checkEvidence(rows(reh()), undefined, R)).toEqual([]); // mutation: the genuine cancel row has no execute and passes
+  });
+});
+
 describe("the receipt path of a rehearsal", () => {
   test("a registered submitter, a recorded receipt and the application of that same receipt pass", () => expect(checkEvidence(path(reh()), undefined, R)).toEqual([]));
   test("production refuses both lists", () => {

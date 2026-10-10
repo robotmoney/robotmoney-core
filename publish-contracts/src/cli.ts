@@ -355,6 +355,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     // record-receipt (issue 1727): --signer is the SUBMITTER. No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
     if (a.verb === "record-receipt") {
+      // Refused in production on 8453 BEFORE the signer exists: no passphrase prompt, no key load (review advisory 3).
+      if (rpcChainId === MAINNET_CHAIN_ID && sheet.kind !== "rehearsal") throw new PublishError("USAGE", "record-receipt is refused on this chain in production: production records receipts with 'rmpc receipt submit' and an HSM or KMS signer. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.");
       const ctx = buildCtx(undefined, false);
       const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri });
       const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi);

@@ -72,6 +72,13 @@ export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]
 ];
 const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
 
+/** Operations built INSIDE this module for the rehearsal cancel row. Identity-based and never serialised: a `cancelled` field in evidence JSON means nothing. */
+const INTERNAL_CANCELS = new WeakSet<object>();
+/** Entries of govern, receipt_releases, receipt_applications and committee_registrations are executed operations: a cancel field there is a forgery attempt at the gap check. */
+function forbidCancelFields(entries: any[], label: (e: any) => string, bad: (m: string) => void): void {
+  for (const e of entries) for (const k of ["cancelled", "cancel_tx", "cancel_status"]) if (e && typeof e === "object" && k in e) bad(`${label(e)}: ${k} is not a field of an executed operation (only the rehearsal cancel row in rehearsal_rows has a cancel)`);
+}
+
 /** The checks every operation of the run shares: both transactions present with status 1, one delay apart, none shared with another operation. */
 function operationProblems(operations: any[], bad: (m: string) => void, floor: number = MAINNET_DELAY_FLOOR): void {
   for (const field of ["schedule_tx", "execute_tx", "operation_id"]) {
@@ -89,7 +96,7 @@ function operationProblems(operations: any[], bad: (m: string) => void, floor: n
     if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
     if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
     if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
-    if (g.cancelled === true) continue; // a cancelled operation never executes: there is no gap to check (rehearsal cancel row)
+    if (INTERNAL_CANCELS.has(g)) continue; // only the rehearsal cancel row, built by rowOperations below, never executes. Nothing read from the evidence JSON can set this.
     const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
     if (!(gap >= floor)) bad(`govern ${g.step}: schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -213,7 +220,11 @@ function rehearsalRowProblems(ev: any, kind: DeploymentKind, bad: (m: string) =>
   return rows;
 }
 /** The rows as operations for operationProblems: cancel maps its cancel transaction onto the execute fields and skips the gap. */
-const rowOperations = (rows: any[]): any[] => rows.map((r) => ({ ...(r.step === "cancel" ? { ...r, execute_tx: r.cancel_tx, execute_status: r.cancel_status, cancelled: true } : r), step: rowLabel(r) }));
+const rowOperations = (rows: any[]): any[] => rows.map((r) => {
+  const op = { ...(r.step === "cancel" ? { ...r, execute_tx: r.cancel_tx, execute_status: r.cancel_status } : r), step: rowLabel(r) };
+  if (r.step === "cancel") INTERNAL_CANCELS.add(op);
+  return op;
+});
 
 /**
  * The deployer start nonce the final nonce is counted from. Production: 0, always (a fresh deployer; a `deployer_start_nonce` in a production evidence is refused).
@@ -285,6 +296,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, op
   }
   const applications = applicationShapeProblems(ev, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
+  forbidCancelFields([...govern, ...releases, ...applications, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
   operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);

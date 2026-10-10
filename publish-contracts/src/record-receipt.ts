@@ -7,7 +7,7 @@
 //
 // THE KEY. --signer is the SUBMITTER: the address registered by `govern --row register-committee`. It is supplied by the operator at run time. No key, passphrase or keystore
 // path is ever written to the repo, the evidence or the run manifest (only the submitter ADDRESS is). The submitter holds AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on
-// the IC policy and nothing else. Recording is signalling only (INV-4): it moves no value and sets no weight.
+// the IC policy and nothing else. Recording is signalling only (INV-4): it moves no value and sets no weight. (AGENT_ROLE also allows allocation-signalling votes and 1-unit deposits and withdrawals of the submitter's own funds.)
 //
 // BEFORE ANYTHING IS SENT it checks, on chain: the receipt contract is the one the gateway routes to, the submitter holds both roles, the receipt id is not recorded yet (or is
 // recorded with exactly this digest, uri and submitter, which is reported and not sent again). AFTER it reads the receipt back and compares id, digest, uri and submitter.
@@ -81,6 +81,10 @@ export async function recordReceipt(ctx: RunContext, signer: Signer, i: RecordIn
   }
   const a = loadRecordAddrs(ctx);
   const submitter = await signer.address();
+  // The submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else: a Safe owner or a role key is refused here, not only by the on-chain role checks.
+  const reserved = new Map<string, string>([...ctx.sheet.safeOwners.map((o, i) => [o.toLowerCase(), `Safe owner ${i + 1}`] as const), [ctx.sheet.pauser.toLowerCase(), "PAUSER_ADDRESS"], [ctx.sheet.emergency.toLowerCase(), "EMERGENCY_ADDRESS"]]);
+  const why = reserved.get(submitter.toLowerCase());
+  if (why) throw new PublishError("USAGE", `the signer ${submitter} is ${why}: the submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else. Use a dedicated key. Nothing sent.`, { submitter });
   const routed = await api.read<Address>(a.gateway, GATEWAY_RECORD_ABI, "consensusReceipt");
   if (lc(routed) !== lc(a.receipt)) throw new PublishError("GOVERN", `the gateway routes receipts to ${routed}, the run's receipt contract is ${a.receipt}: nothing sent`, { routed, receipt: a.receipt });
   if (!(await api.read<boolean>(a.gateway, GATEWAY_RECORD_ABI, "hasRole", [AGENT_ROLE, submitter]))) throw new PublishError("GOVERN", `the submitter ${submitter} does not hold AGENT_ROLE on the gateway: run govern --row register-committee --submitter ${submitter} first. Nothing sent.`, { submitter });
