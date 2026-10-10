@@ -70,6 +70,7 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
     w.chain.set(REC, "isReleased", () => over.released ?? true);
     w.chain.set(ROUTER, "getDefaultWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
     return w;
   };
   test("no application: the label is present and passes, and the sheet vector is still required", async () => {
@@ -77,7 +78,8 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     expect(ok.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
     const w = buildWorld();
     w.chain.set(ROUTER, "getDefaultWeights", [vaults(), BPS.map((x) => BigInt(x))]);
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["router: default weights equal sheet"]);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), BPS.map((x) => BigInt(x))]);
+    expect(failed(await verifyDeployment(w.opts)).sort()).toEqual(["router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
   });
   test("applied, released and on the router: every check passes, the sheet vector having been superseded", async () => {
     const r = await verifyDeployment(applied().opts);
@@ -89,7 +91,31 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     expect(failed(await verifyDeployment(applied({ released: false }).opts))).toEqual([LABEL]);
   });
   test("applied but the router holds another vector fails the label and the weights label", async () => {
-    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet"].sort());
+    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
+  });
+});
+
+describe("the voted vector must not override the launch vector (issue 1743)", () => {
+  const ACTIVE = "router: votedWeightsActive is false after deploy";
+  const EFFECTIVE = "router: effective weights equal the sheet's launch vector";
+  const vaults = () => Object.values(VAULTS).map((v) => v.address);
+  test("the healthy world passes both labels", async () => {
+    const r = await verifyDeployment(buildWorld().opts);
+    expect(r.checks.find((c) => c.label === ACTIVE)).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.label === EFFECTIVE)).toMatchObject({ ok: true });
+  });
+  test("the 8453 failure: a voted vector (100% rmUSDC) on top of the right default fails both labels and not the default label", async () => {
+    const w = buildWorld(8453);
+    w.chain.set(ROUTER, "votedWeightsActive", true);
+    w.chain.set(ROUTER, "getEffectiveWeights", [[vaults()[0]], [10000n]]);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([ACTIVE, EFFECTIVE].sort());
+    expect(r.checks.find((c) => c.label === EFFECTIVE)!.detail).toContain("want");
+  });
+  test("an unreadable getEffectiveWeights fails the effective label", async () => {
+    const w = buildWorld();
+    w.chain.set(ROUTER, "getEffectiveWeights", () => { throw new Error("execution reverted"); });
+    expect(failed(await verifyDeployment(w.opts))).toEqual([EFFECTIVE]);
   });
 });
 

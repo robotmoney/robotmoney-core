@@ -12,6 +12,7 @@ import { stageManifestName } from "../src/verify/constants.ts";
 import type { Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
+import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
@@ -61,6 +62,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
+    /** Issue 1743: a VOTED vector on the router. While set, votedWeightsActive reads true and getEffectiveWeights reads it instead of the default; an executed clearVotedWeights removes it. */
+    voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
     /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
@@ -86,6 +89,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "listVaults": return s.listed;
           case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
+          case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
+          case "votedWeightsActive": return s.voted !== undefined;
           case "depositsPaused": return s.paused.has(address);
           case "votingPeriod": return sheet.votingPeriod;
           case "executionDelay": return sheet.executionDelay;
@@ -138,6 +143,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
           if (c.target === A.governance) {
+            if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
             s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
             continue;

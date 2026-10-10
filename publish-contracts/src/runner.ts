@@ -98,6 +98,8 @@ export interface RunManifest {
   govern?: Record<string, unknown>;
   /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
   receipt_applications?: unknown[];
+  /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
+  voted_weights_clears?: unknown[];
   /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
   committee_registrations?: unknown[];
   /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */

@@ -64,7 +64,7 @@ sets initial weights, and writes a deployment JSON.
 
 In broadcast mode the broadcaster IS admin (the deployer signs
 the broadcast), so msg.sender on
-setWeights holds WEIGHT_SETTER_ROLE. No vm.prank is needed or allowed.
+setDefaultWeights holds ADMIN_ROLE. No vm.prank is needed or allowed.
 
 ```solidity
 function run() external returns (Deployed memory d);
@@ -81,7 +81,7 @@ function run() external returns (Deployed memory d);
 ### runInProcessWith
 
 In-process variant for forge tests. No broadcast, no JSON written.
-setWeights requires WEIGHT_SETTER_ROLE; this method pranks admin.
+setDefaultWeights requires ADMIN_ROLE; this method pranks admin.
 
 ```solidity
 function runInProcessWith(address admin_, address registry_, address vault_, address usdc_)

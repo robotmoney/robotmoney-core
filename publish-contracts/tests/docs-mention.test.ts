@@ -39,3 +39,18 @@ describe("docs mention the apply-receipt row (issue 1696)", () => {
     expect(DOCS["publish-contracts/README.md"]).toContain("receipt: applied receipt is released and its weights are on the router");
   });
 });
+
+// Issue 1743: the clear row and the voted-vector refusal are documented in both docs.
+describe("docs mention the clear-voted-weights row and the voted-vector refusal (issue 1743)", () => {
+  const P: [string, RegExp][] = [
+    ["the row", /--row clear-voted-weights/],
+    ["the single call", /RouterGovernance\.clearVotedWeights\(\)/],
+    ["the role", /ADMIN_ROLE/],
+    ["the refusal error", /VOTED_WEIGHTS_ACTIVE/],
+    ["the effective weights read-back", /getEffectiveWeights\(\)/],
+    ["the evidence list", /voted_weights_clears/],
+    ["the verifier labels", /router: votedWeightsActive is false after deploy/],
+    ["no contract change", /No contract change/i],
+  ];
+  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+});

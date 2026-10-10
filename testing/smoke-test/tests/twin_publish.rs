@@ -296,10 +296,12 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     // unpause rows. A third receipt (receipt-c) is recorded with its own digest, unreleased. `govern --row apply-receipt` checks it before sending,
     // schedules the batch through the real Safe, waits the real delay (one time warp on the fork) and executes it. The tool read both back; this test
     // reads them again from the chain. The Twin proves the row executes on the real contracts, not that mainnet governance works.
-    let router_weights = |fx: &Fixture| -> (Vec<String>, Vec<u64>) {
+    // Issue 1743: a VOTED vector (PortfolioRouter.setWeights) overrides the DEFAULT vector while votedWeightsActive is true, so the DEFAULT alone says nothing
+    // about routing. Every check below reads both the default vector and the EFFECTIVE vector (what deposits route by) and the voted flag.
+    let router_vector = |fx: &Fixture, sig: &str| -> (Vec<String>, Vec<u64>) {
         let raw = fx
-            .cast_call_raw(fx.router(), "getDefaultWeights()", &[])
-            .expect("read the router default weights");
+            .cast_call_raw(fx.router(), sig, &[])
+            .unwrap_or_else(|e| panic!("read the router {sig}: {e}"));
         let n = usize::from_str_radix(&word(&raw, 2), 16).expect("vault count");
         let vaults = (0..n)
             .map(|i| format!("0x{}", &word(&raw, 3 + i)[24..]))
@@ -308,6 +310,13 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             .map(|i| u64::from_str_radix(&word(&raw, 4 + n + i), 16).expect("bps"))
             .collect();
         (vaults, bps)
+    };
+    let router_weights = |fx: &Fixture| router_vector(fx, "getDefaultWeights()");
+    let effective_weights = |fx: &Fixture| router_vector(fx, "getEffectiveWeights()");
+    let voted_active = |fx: &Fixture| -> bool {
+        fx.cast_call_raw(fx.router(), "votedWeightsActive()", &[])
+            .expect("read votedWeightsActive")
+            .ends_with('1')
     };
     let c_id = fx
         .record_fixture_receipt("receipt-c.json")
@@ -342,6 +351,17 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         vec![5000, 3000, 0, 2000],
         "the router must not already hold receipt C's vector"
     );
+    // Issue 1743 (the real 8453 deploy failure): the router stage must not leave a voted vector. Effective routing after the deploy IS the sheet's launch
+    // vector, 9500/500/0/0, not 100% rmUSDC.
+    assert!(
+        !voted_active(&fx),
+        "the deploy must leave votedWeightsActive false (a voted vector would override the launch vector)"
+    );
+    assert_eq!(
+        effective_weights(&fx),
+        before,
+        "the effective routing after the deploy equals the default launch vector 9500/500/0/0"
+    );
     let applied = fx
         .apply_fixture_receipt("receipt-c.json")
         .expect("the Safe applies receipt C through the timelock");
@@ -365,6 +385,16 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         after.1,
         vec![5000, 3000, 0, 2000],
         "the router holds receipt C's vector after the batch"
+    );
+    // Issue 1743: a receipt-driven rebalance must change the EFFECTIVE routing, not only the default vector.
+    assert!(
+        !voted_active(&fx),
+        "no voted vector may override the applied receipt"
+    );
+    assert_eq!(
+        effective_weights(&fx),
+        after,
+        "the effective routing after apply-receipt equals receipt C's vector"
     );
     // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain
     // (one batch of exactly the release and the weight change, one real delay apart).

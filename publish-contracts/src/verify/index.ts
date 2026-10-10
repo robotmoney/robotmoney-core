@@ -259,6 +259,23 @@ async function deployTimeChecks(
     const want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
     return { ok: gotWeights === want, detail: gotWeights === want ? `${rVaults!.length} weights` : `got ${gotWeights}, want ${want}` };
   });
+  // Issue 1743: the DEFAULT vector alone is not what the router routes by. A voted vector (setWeights) overrides it while votedWeightsActive is true,
+  // so the deploy must leave no voted vector, and the EFFECTIVE vector (what deposits use) must be the sheet's launch vector (or the applied receipt's).
+  await c.runEq("router: votedWeightsActive is false after deploy", () => chain.read(at.router, "function votedWeightsActive() view returns (bool)"), false);
+  await c.run("router: effective weights equal the sheet's launch vector", async () => {
+    let eff: [string[], bigint[]];
+    try { eff = (await chain.read(at.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return { ok: false, detail: "getEffectiveWeights unreadable" }; }
+    const got = eff[0].map((v, i) => `${lc(v)}:${eff[1][i]}`).join(",");
+    let want: string;
+    if (appliedWant !== undefined) want = appliedWant;
+    else {
+      const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
+      const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
+      if (missing.length) return { ok: false, detail: `no manifest vault for ${missing.join(",")}` };
+      want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
+    }
+    return { ok: got === want, detail: got === want ? `${eff[0].length} effective weights` : `getEffectiveWeights is ${got}, want ${want}` };
+  });
   // Always present, so the label set is the same with and without an application. Nothing applied: nothing to check. Applied: released, and the vector is on the router.
   await c.run("receipt: applied receipt is released and its weights are on the router", async () => {
     if (!at.applied) return { ok: true, detail: "no receipt applied by govern" };
