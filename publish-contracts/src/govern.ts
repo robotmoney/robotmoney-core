@@ -1,9 +1,16 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520; extended to rmUSDC 2026-10-09, issue 1710): the unpause of each of the four vaults. The docs put exactly this
-// there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). Voting power,
-// quorum, voting period, execution delay, the vault setters, router eligibility and the router default weights are DEPLOY-TIME configuration the
-// deployer sets before the handover (the governance and basket vault stages), and the verify stage asserts them against the sheet.
+// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each of the four vaults (rmUSDC too, issue 1710: all four deploy paused). The docs put exactly this
+// there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
+// setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
+// stages), and the verify stage asserts them against the sheet. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY
+// are constructor arguments of today's RouterGovernance bytecode only: there is no voting by anyone, the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for, and
+// RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
+// deployment, when a weight-setter applyReceipt call will replace them.
+// ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696): the Safe, through the timelock, is the only body that changes any
+// contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it submits the Investment
+// Committee's consensus receipt; that submission is the rebalance: ONE timelock batch, releaseReceipt(receiptId) plus the weight change (on today's
+// bytecode RouterGovernance.setDefaultWeights(vaults, bps)), read back as isReleased and the router weights. Never part of stage 13.
 // The rows (GOVERN_ROWS):
 //   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
 //                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault

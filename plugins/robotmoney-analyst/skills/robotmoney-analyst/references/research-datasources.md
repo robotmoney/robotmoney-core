@@ -1,7 +1,7 @@
 # Research Datasources
 
 This document describes the external datasources a robotmoney-analyst agent must
-consult before creating or evaluating a governance proposal.
+consult before creating or evaluating a weight recommendation.
 
 ---
 
@@ -11,7 +11,7 @@ consult before creating or evaluating a governance proposal.
 
 The regime page is the canonical source for the current Robot Money macro and
 on-chain risk regime classification. Agents must fetch this source before
-drafting a weight-change proposal so that the proposal rationale is grounded in
+forming a weight recommendation so that the recommendation rationale is grounded in
 the current regime signal rather than stale assumptions.
 
 ### Stability
@@ -48,9 +48,9 @@ most-recent computation.
 See [snapshot-fields.md](snapshot-fields.md) for the full validation rules
 enforced by the fetch helper.
 
-### Governance-decision interpretation guide
+### Recommendation interpretation guide
 
-| `regime` value | Interpretation | Typical proposal direction |
+| `regime` value | Interpretation | Typical recommendation direction |
 |---|---|---|
 | `"risk_on"` | Macro and on-chain conditions are favourable; composite score is high | Increase weight in growth / higher-risk vaults |
 | `"neutral"` | Mixed signals; neither strong risk-on nor risk-off | Maintain existing weights or make marginal adjustments |
@@ -58,16 +58,16 @@ enforced by the fetch helper.
 
 When the composite score is near a bucket threshold (within 5 points of
 `bucket_thresholds.neutral.min` or `bucket_thresholds.neutral.max`), note
-the borderline position in the proposal rationale and recommend a conservative
+the borderline position in the recommendation rationale and recommend a conservative
 weight change.
 
 ### When to consult
 
-- **Before every proposal draft.** The regime bucket and composite score
-  must appear verbatim in the proposal rationale.
+- **Before every weight recommendation.** The regime bucket and composite score
+  must appear verbatim in the recommendation rationale.
 - When the user asks about current market conditions or whether a weight
   rebalance is appropriate.
-- When evaluating a governance proposal submitted by another party — check
+- When evaluating a weight recommendation made by another party — check
   whether the cited regime matches the current snapshot.
 
 ---
@@ -77,10 +77,10 @@ weight change.
 ### Purpose
 
 The analytics projects page documents active and completed research threads,
-methodology notes, and signal analyses that inform governance decisions. Agents
-must check this source before drafting a weight-change proposal to identify
+methodology notes, and signal analyses that inform weight recommendations. Agents
+must check this source before forming a weight recommendation to identify
 whether any open research thread directly addresses the vaults or signals
-involved in the proposed weight change.
+involved in the recommended weight change.
 
 ### Stability
 
@@ -108,22 +108,22 @@ Each research project entry on the page contains the following logical fields:
 | `signal_analyses` | Links to or inline summaries of signal studies produced by this thread |
 | `relevant_vaults` | Vaults or asset classes covered by this research (if specified) |
 
-### Governance-decision interpretation guide
+### Recommendation interpretation guide
 
 - If a research thread with `status: active` covers a vault or signal
-  referenced in a proposal, cite the thread title and its current findings in
-  the proposal rationale.
-- If a completed research thread contradicts the proposed weight direction,
+  referenced in a recommendation, cite the thread title and its current findings in
+  the recommendation rationale.
+- If a completed research thread contradicts the recommended weight direction,
   acknowledge the conflict and explain why the regime signal takes precedence
   (or why it does not).
 - If no research thread is directly relevant, state "No active research threads
-  identified for the targeted vaults" in the proposal rationale.
+  identified for the targeted vaults" in the recommendation rationale.
 
 ### When to consult
 
-- **Before every proposal draft.** Check for active research threads
-  relevant to the vaults or factors covered by the proposal.
+- **Before every weight recommendation.** Check for active research threads
+  relevant to the vaults or factors covered by the recommendation.
 - When the user asks about the analytical basis for a past or proposed weight
   change.
-- When evaluating a governance proposal submitted by another party — verify
+- When evaluating a weight recommendation made by another party — verify
   that cited methodology notes are consistent with the analytics page.

@@ -127,9 +127,11 @@ current product scope.
 
 ## Router-Weight Governance
 
-Router-weight governance means addresses with admin-assigned voting
-power vote on router weights through `RouterGovernance`. `ADMIN_ROLE`
-assigns the voting power. There is no token-based governance.
+Router-weight governance means the Safe multisig, through the
+TimelockController, applies the Investment Committee's consensus receipt
+to the router weights as one timelock operation. `WEIGHT_SETTER_ROLE`,
+held by `RouterGovernance`, is the only authority over router weights.
+There is no voting by token holders or anyone else.
 
 Router-weight governance does not control:
 

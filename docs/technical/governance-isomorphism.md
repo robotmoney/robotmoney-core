@@ -49,10 +49,10 @@ match.
 | Deploy scripts and contracts | same | same | **yes** |
 | Chain id | 918453 (or the forge test chain) | 8453 | no, allowed difference |
 | Owner keys | throwaway keys | named humans' keys | no, allowed difference |
-| Owner key custody | encrypted keystores | hardware wallets | no, allowed difference |
+| Owner key custody | encrypted keystores, passphrase read from a file | encrypted keystores, passphrase typed at a hidden prompt | no, allowed difference |
 | Timelock delay value | short, off chain 8453 only | 172800 s (48 hours), enforced as a floor on chain 8453 | no, allowed difference |
 
-Key custody legitimately differs: CI cannot hold a hardware wallet. The delay value
+Key custody legitimately differs: CI cannot type a passphrase. Owners use keystores, not hardware wallets. The delay value
 legitimately differs: the Twin chain cannot move its clock forward, so a rehearsal
 cannot wait 48 hours. A short delay proves the scripts run. It never proves the real
 delay. The real delay and the real signers are proven on Base mainnet through the
@@ -73,9 +73,13 @@ predecessor field and never a second wait.
 
 Everything else is **deploy-time configuration** that the deployer sets before the
 handover, in the deployer stages, and that the verify stage asserts against the
-sheet: voting power, quorum, voting period, execution delay, the vault setters
-(per-deposit cap, TVL cap, exit fee, fee recipient), router eligibility and the
-router default weights. A sheet that routes any of them through govern is refused.
+sheet: the vault setters (per-deposit cap, TVL cap, exit fee, fee recipient),
+router eligibility and the router default weights. A sheet that routes any of
+them through govern is refused. The one on-demand govern row after launch is
+`apply-receipt` (core 1696): the Safe releases a consensus receipt and applies its
+weights as one timelock batch. `RouterGovernance`'s constructor arguments in the
+sheet (`VOTER_*`, `QUORUM_THRESHOLD`, `VOTING_PERIOD`) parameterise today's
+bytecode only; the test deployment's voter addresses are held by nobody.
 
 The Safe tool's other operations (`updateDelay`, a no-op `scheduleBatch`, a cancel)
 are demonstrations. They run on the Twin fork (`update-delay`, `batch`, `cancel`) and
@@ -166,10 +170,10 @@ the Twin chain. SafeProxy has no immutables, so every
 proxy carries the same runtime code.
 
 The Twin chain Safe's owners are three dedicated throwaway keys, distinct from the
-submitter, the voters and the emergency key. The submitter is the agent whose
-receipts the Safe releases, the voters are RouterGovernance's approving body, and
-the emergency key is the independent hot key. The verifier asserts all of them are
-distinct.
+submitter and the emergency key. The submitter is the agent whose receipts the
+Safe releases and applies, and the emergency key is the independent hot key. The
+verifier asserts all of them are distinct. There is no voter key: the Safe through
+the timelock is the only approving body.
 
 ---
 
@@ -251,7 +255,8 @@ Normative. "Must" is binding; a violation is a release blocker.
    a rehearsal could inherit its owner set and threshold, with signatures from
    `approveHash`. This is strictly more isomorphic and should be revisited after the
    first mainnet deployment.
-2. **Scope of R9.** This document covers the Safe to TimelockController path. It does
-   not yet say anything about the `RouterGovernance` voter set, which is a separate
-   governing body with its own quorum.
+2. **Scope of R9.** This document covers the Safe to TimelockController path, and
+   that path is the whole of governance: a router-weight change is the same Safe
+   scheduling the same timelock (`apply-receipt`). There is no separate governing
+   body.
 3. **No saved fixture.** The Twin chain is a lazy fork of real Base, so there is no snapshot to re-pin and no implementation contract to warm. (This item was about the retired `snapshot-fork.ts`.)

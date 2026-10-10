@@ -4,8 +4,9 @@
 1. Every `security-model` section reference (`security-model.md` section N or
    N.M, written with the section sign or the word "section") in docs/, contracts/
    and .github/ must match a heading in docs/technical/security-model.md.
-2. docs/technical/governance-decisions.md keeps one voting-power model
-   (admin-assigned) and none of the removed lifecycle or call-path text.
+2. docs/technical/governance-decisions.md keeps one governance model (the Safe,
+   through the timelock, applies consensus receipts through the weight setter;
+   no voting by anyone) and none of the removed lifecycle or call-path text.
 3. docs/operations/manual-admin-actions.md names the IC policy, the consensus
    receipt and the basket vaults in the timelock handover.
 
@@ -61,13 +62,17 @@ def check_governance(errors: list[str]) -> None:
         "voteTallies(uint256",
         "retains `ADMIN_ROLE` as an emergency override",
         "sole `ADMIN_ROLE` holder",
+        "admin-assigned",
+        "setVotingPower",
     ):
         if banned in text:
             errors.append(f"governance-decisions.md still contains removed text: {banned}")
-    if "admin-assigned" not in text:
-        errors.append("governance-decisions.md lost the admin-assigned voting-power model")
-    if re.search(r"voting power (is|are) (derived|weighted) (from|by) (RM|token)", text):
-        errors.append("governance-decisions.md describes a token-based voting-power model")
+    if "There is no voting by token holders or anyone else" not in text:
+        errors.append("governance-decisions.md lost the no-voting governance model")
+    if "apply-receipt" not in text:
+        errors.append("governance-decisions.md lost the apply-receipt weight path")
+    if re.search(r"voting power (is|are) (derived|weighted|assigned) (from|by) (RM|token|`?ADMIN_ROLE)", text):
+        errors.append("governance-decisions.md describes a voting-power model")
 
 
 def check_manual(errors: list[str]) -> None:

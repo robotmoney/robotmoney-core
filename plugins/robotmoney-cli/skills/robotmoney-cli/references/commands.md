@@ -49,15 +49,20 @@ rmpc get-router --config <CONFIG> [--pretty]
 
 ### `rmpc get-governance`
 
-Read RouterGovernance state: active proposal, cadence params, and weights.
+Read RouterGovernance state: constructor params and weights.
 Requires `governance_address` in config.
 
 ```
 rmpc get-governance --config <CONFIG> [--pretty]
 ```
 
-Output includes: `proposal_id`, `voting_deadline`, `proposed_vaults`,
-`proposed_bps`, `votes_for`, `votes_against`, `votes_abstain`.
+Output includes `active_proposal` (always `null`: nobody holds a voter key, so there are no proposals), the `cadence_params` block (constructor arguments of today's
+bytecode, not a governance model) and the router weight vector. Router weights
+change only when `WEIGHT_SETTER_ROLE` applies the Investment Committee's
+consensus receipt through the Safe and the timelock (publish-contracts govern
+row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc` has no
+governance write command. `RouterGovernance.propose`, `vote` and `execute`
+exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 ### `rmpc get-timelock`
 
@@ -176,17 +181,24 @@ rmpc status --config <CONFIG> --payment-id <HEX> [--pretty]
 
 ## Governance write commands
 
-rmpc is not a governance signer. It has no `propose` and no `committee
-register` command. Both are governance calls that belong to the Safe and
-timelock after handover. Use `rmpc governance draft-proposal` for unsigned
-calldata and sign through the Safe with a wallet.
+rmpc is not a governance signer and has no vote command. The Safe, through the
+timelock, is the only body that changes contract configuration (the
+publish-contracts `govern` rows). `WEIGHT_SETTER_ROLE` submits the Investment
+Committee's consensus receipt, and that submission is the rebalance (govern row
+`apply-receipt`). There is no voting by anyone. rmpc has no `committee register`
+command either: seeding belongs to the Safe and timelock after handover.
+`rmpc committee vote-submit` (below) stays: it submits a signed allocation tilt
+from an agent key and is not a governance vote.
 
 ## Investment Committee write commands
 
 ### `rmpc committee vote-submit`
 
-Submit a signed allocation vote from an allowlisted committee agent.
-Routes through `RobotMoneyGateway`. Votes are signalling-only.
+Submit a signed allocation tilt from an allowlisted committee agent.
+Routes through `RobotMoneyGateway`. The name `vote-submit` is the command's
+name only: a tilt is not a vote on anything and carries no router-weight
+authority. The committee's consensus receipt is applied by `WEIGHT_SETTER_ROLE`
+through the timelock.
 
 ```
 rmpc committee --config <CONFIG> vote-submit ...
@@ -279,13 +291,12 @@ receipt id already recorded — one receipt per session per subject).
 
 ## Governance handoff commands
 
-`rmpc governance` turns a **released** consensus receipt into a draft
-`RouterGovernance.propose(vaults, bps)` call for a human to review (Project
-Fusion). This is the recommending side only: the committee that authors a
-receipt and the `RouterGovernance` voter set that must approve a weight
-change are separate governing bodies, and this command never signs, never
-takes a nonce lock, and never broadcasts a transaction — there is no code
-path here that submits anything.
+`rmpc governance` turns a **released** consensus receipt into a draft weight
+change for a human to review (Project Fusion). It is the recommending side
+only: it never signs, never takes a nonce lock, and never broadcasts a
+transaction. There is no code path here that submits anything. The weight
+change itself is applied by the Safe through the timelock (govern row
+`apply-receipt`), not by this command.
 
 ### `rmpc governance draft-proposal`
 
@@ -312,10 +323,10 @@ is ineligible, drops it and redistributes its bps across the remaining
 eligible vaults (`fallback_applied: true`), refusing with
 `ErrNoEligibleVaults` only if every vault is ineligible; and reports
 `status: "blocked_active_proposal"` with the blocking proposal id instead of
-a submittable draft when `RouterGovernance` already has an `Active` or
-`Queued` proposal. A ready draft carries `propose_calldata` — hex calldata for
-a human to submit via a Safe, or the runbook's timelock path.
-Never submitted by this command.
+a submittable draft when today's `RouterGovernance` bytecode already holds an
+active or queued proposal. A ready draft carries `propose_calldata`, the hex
+calldata of today's bytecode, for a human to review. Never submitted by this
+command.
 
 ## Investment Swarm signing identity commands
 

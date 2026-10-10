@@ -47,8 +47,9 @@ product:
   registry and the explorer API.
 - **Account layer** — watched address or connected wallet; shows portfolio
   positions, transaction history, and agent policies.
-- **Action layer** — wallet required; vault-selector deposit, multi-vault
-  withdrawal, and governance voting.
+- **Action layer** — wallet required; vault-selector deposit and multi-vault
+  withdrawal. The governance proposal surface renders nothing on mainnet: there are no proposals, because nobody holds a voter key, because router weights change only when the
+  Safe applies a consensus receipt through the timelock.
 
 Before any implementation issue begins, five questions must be resolved:
 
@@ -101,7 +102,8 @@ portfolio router ABI are missing and must be added.
 - `portfolioRouterAbi` — `deposit(...)`, `previewDeposit(uint256)`,
   `activeVaults()` per `docs/technical/portfolio-router-decisions.md` §3.1–3.2.
 - `routerGovernanceAbi` — `propose(...)`, `castVote(...)`, `execute(...)`,
-  `getProposal(uint256)` for the governance voting action.
+  `getProposal(uint256)` for the proposal surface. `RouterGovernance.propose`,
+  `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 No existing ABI in `abi.ts` needs to be changed. The edit is purely additive.
 Risk of merge conflict with other in-flight issues: moderate (other issues may
@@ -249,7 +251,7 @@ goes through RPC per implementation-plan.md §12."
 | `router.activeVaults()` | `useReadContract` | Weight routing for deposit split |
 | `router.previewDeposit(amount)` | `useReadContract` | Router deposit preview with per-leg splits |
 | USDC `allowance(owner, spender)` | `useReadContract` | Approve gate on deposit |
-| Governance `getProposal(id)` | `useReadContract` | Voting UI: quorum, deadline, execution state |
+| Governance `getProposal(id)` | `useReadContract` | Proposal surface; renders nothing on mainnet (no proposals exist) |
 
 **Explorer reads (HTTP API, display only, may be stale by one indexer tick):**
 
@@ -398,11 +400,12 @@ This scout (317)
    The `resolveExplorerApiUrl` / `fetchAgentDeposits` pattern in `explorerApi.ts`
    is the established model — extend it with typed functions per new endpoint.
 
-7. **Governance voting action.** `GovernanceVoteTab` depends on the
+7. **Governance proposal surface.** `GovernanceVoteTab` depends on the
    `RouterGovernance.sol` contract and its `castVote` / `getProposal` surface.
    That contract is deployed as of the governance phase issues (#341, #342). The
    tab is fully additive but must import `routerGovernanceAbi` from `abi.ts`
-   (added in step 1 of the serialization sequence).
+   (added in step 1 of the serialization sequence). On mainnet it renders
+   nothing: there are no proposals, because nobody holds a voter key.
 
 ---
 

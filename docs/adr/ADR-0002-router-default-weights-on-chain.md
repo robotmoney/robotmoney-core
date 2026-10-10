@@ -1,16 +1,16 @@
 # ADR-0002: Router default weights live on-chain, not derived from the front-end
 
-- **Status:** Accepted (amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-launch-default-weights-and-who-sets-active-weights))
+- **Status:** Accepted. Router default weights live on chain. The Safe multisig, through the TimelockController, is the only body that changes router weights: `WEIGHT_SETTER_ROLE` applies the Investment Committee's consensus receipt in one timelock operation (govern row `apply-receipt`, core 1696). There is no voting by anyone. See [Launch default weights and who sets active weights](#amendment--2026-10-05-launch-default-weights-and-who-sets-active-weights).
 - **Date:** 2026-05-27 (amended 2026-10-05)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
 - **Related:** `docs/development/open-questions.md` §3.9; `contracts/RouterGovernance.sol`, `contracts/PortfolioRouter.sol`; public allocation surface at `robotmoney.net/allocation`
 
 ## Context
 
-`RouterGovernance` runs an on-chain proposal/quorum/timelock cycle to
-update Portfolio Router weights. When a proposal fails quorum, the
-contract reverts with `QuorumNotReached` and weights hold at the
-status quo — there is no explicit default-weight fallback.
+`RouterGovernance` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and
+is the path by which the timelock changes router weights. Without a
+default-weight vector in contract state, the router would hold whatever
+was last written and have no explicit fallback.
 
 The product owner has stated that the public allocation surface
 (robotmoney.net/allocation) must show the *same* four-vault allocation
@@ -19,7 +19,7 @@ that the Router actually uses. Two implementations are possible:
 1. The website is the source of truth: an indexer or the contract reads
    weights from the site (directly or via an off-chain attestation).
 2. The chain is the source of truth: the website renders the on-chain
-   default vector and votes determine deviations from it.
+   default vector the timelock applies from consensus receipts.
 
 The product owner explicitly flagged the first option as unsafe: "we
 don't want to just read these numbers from the website as someone might
@@ -32,15 +32,15 @@ contract state as an admin-settable `defaultWeights` vector (one bps
 entry per Router-eligible vault, sum = 10_000). The public allocation
 page renders this vector by reading the contract; it does not feed it.
 
-The Router falls back to `defaultWeights` whenever the active proposal
-state would otherwise leave weights undefined (no proposal in flight, or
-the last proposal failed quorum). Successful proposals overwrite the
-active weight vector, leaving `defaultWeights` untouched as the
-post-vote fallback.
+The Router routes by `defaultWeights` whenever no active vector is set
+(`votedWeightsActive` false). An active vector written by `setWeights`
+overrides it and leaves `defaultWeights` untouched.
 
 Updates to `defaultWeights` flow through the same Safe → Timelock →
-`ADMIN_ROLE` path used elsewhere in the protocol; there is no
-governance vote over the default itself in the MVP.
+`ADMIN_ROLE` path used elsewhere in the protocol. On today's bytecode the
+`apply-receipt` batch writes the receipt's vector through
+`RouterGovernance.setDefaultWeights`; `RouterGovernance.propose`, `vote`
+and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 ## Amendment — 2026-10-05: Launch default weights and who sets active weights
 
@@ -52,8 +52,9 @@ Owner decisions of 2026-10-05 (mainnet plan §2.2, §3.1, §3.5):
 - **The deployer sets them before handover.** They are deploy-time
   configuration, set before the timelock stage (stage 11), not a
   governance step.
-- **After handover the timelock sets `defaultWeights` only.** Active
-  weights come only from `RouterGovernance` votes
+- **After handover the timelock is the only body that changes weights.**
+  It releases a consensus receipt and applies its weights in one
+  operation through the weight setter
   (`docs/technical/governance-isomorphism.md`).
 
 Code state when this amendment was written (`impl/core-contracts`, core
@@ -224,27 +225,26 @@ described in the runbook.
 
 - A front-end compromise cannot redirect router flow. The contract is
   authoritative; the website is a view layer.
-- Below-quorum behavior becomes explicit and inspectable on-chain
-  rather than implicit "hold the last value" semantics.
+- The fallback vector is explicit and inspectable on-chain rather than
+  implicit "hold the last value" semantics.
 - The "router weights = displayed allocation" invariant becomes a
   read-side property of the indexer/site, not a write-side constraint
   on the contract.
 
 **Negative / accepted risks.**
 
-- An admin update to `defaultWeights` takes effect at the next
-  below-quorum window without a separate governance signal. This is
-  consistent with how every other `ADMIN_ROLE` action works in the
-  protocol (Safe + Timelock) and is judged acceptable for MVP.
+- A timelock update to `defaultWeights` takes effect as soon as it
+  executes, after the timelock delay. This is consistent with how every
+  other `ADMIN_ROLE` action works in the protocol (Safe + Timelock).
 - The product loses the ability to "tweak the allocation from the
   website" — every change must go through the on-chain admin path.
   Treated as desirable, not a regression.
 
 **Out of scope of this decision.**
 
-- Continuous smoothing / governance-whiplash blending between voted and
-  default weights remains deferred. The fallback is binary (active vote
-  result if quorum reached, `defaultWeights` otherwise).
+- Continuous smoothing / blending between the active and the default
+  vector remains deferred. The fallback is binary (the active vector when
+  one is set, `defaultWeights` otherwise).
 - The specific allocation values that go into the first
   `defaultWeights` deployment are an ops decision and not recorded
   here.

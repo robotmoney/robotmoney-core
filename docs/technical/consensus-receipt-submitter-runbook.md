@@ -15,7 +15,7 @@ exists so the gap is *recorded* rather than forgotten, which is the whole of
 what issue #1247 task 4.11 asks for.
 
 Out of scope for v0.1, and each a separate decision: mainnet deployment, a Safe
-with hardware-wallet signers, `ADMIN_ROLE` transfer to a deployed
+whose owners sign with encrypted keystores, `ADMIN_ROLE` transfer to a deployed
 `TimelockController` on mainnet, an audit pass, a funded submitter key, and
 registered genesis agents.
 
@@ -39,9 +39,10 @@ compromise and it is not recoverable on chain: the remedy is a new session id
 plus a public correction, never a rewrite.
 
 **What it cannot do.** Move value, set router weights, release a receipt, or
-touch any vault. Recording is signalling-only (INV-4) and `ADMIN_ROLE` on the
-receipt contract is held by the `TimelockController` (INV-3), not by the
-submitter. A compromised submitter cannot cause a rebalance; it can pollute the
+touch any vault. Recording makes no router call (INV-4); only the Safe, through
+the `TimelockController` and the weight setter, releases a receipt and applies
+its weights, and `ADMIN_ROLE` on the receipt contract is held by the
+`TimelockController` (INV-3), not by the submitter. A compromised submitter cannot cause a rebalance; it can pollute the
 public record, which for a record whose purpose is trust is damage enough.
 
 **What a submitter attestation does *not* prove.** That each named analyst
@@ -76,7 +77,7 @@ was ever material you could copy, it is a devnet key.
 For devnet, the submitter is an ordinary `rmpc` software keystore, loaded the
 same way every other `rmpc` write command loads one: the passphrase comes
 strictly from `$RMPC_KEYSTORE_PASSPHRASE`, never from stdin and never from a
-CLI flag. `rmpc receipt` (like `committee`, `propose` and `vote`) refuses a software
+CLI flag. `rmpc receipt` (like `committee`) refuses a software
 signer for production-grade chain ids (`require_production_grade_for_write`),
 which is the mechanical guard keeping the devnet arrangement devnet-only.
 Only depositor writes (`deposit`, `withdraw`, `withdraw-router`) may use a
@@ -272,7 +273,7 @@ trusting the exit status of the command that may have timed out.
 ### 5.5 The Fusion acceptance harnesses (`scripts/fusion/`)
 
 Four scripts implement the autonomous half of §5.2–5.4. None of them holds a
-key on argv, and none of them signs a governance proposal.
+key on argv, and none of them signs anything; only the Safe, through the timelock, applies a receipt.
 
 | Script | What it does | Idempotency / restart rule |
 |---|---|---|

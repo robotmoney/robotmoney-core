@@ -13,7 +13,7 @@
     test-only secp256k1 import helper whose env-carried-secret pattern the
     committee-identity import subcommand adopts
   - `docs/technical/security-model.md` §4 (access control & admin — role
-    separation, hardware-wallet requirement for admin signing)
+    separation, keystore requirement for admin signing)
   - `docs/technical/dapp-browser-keygen-review.md` §5 (key-export UX — the
     geth-v3 keystore spec this decision amends)
   - `robotmoney-frontend` (sibling repo): `backend/src/lib/signing.ts`

@@ -22,11 +22,13 @@ This document tracks only the questions that are **still open and product/engine
 
 ## 1. Product topics
 
-### 1.A Governance and voting
+### 1.A Governance
+
+**Who changes router weights.** **Resolved.** The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock operation releases the receipt and applies its weights (govern row `apply-receipt`, core 1696). There is no voting by token holders or anyone else.
 
 **Router default-weight vector (§3.9).** **Resolved** — see [ADR-0002](../adr/ADR-0002-router-default-weights-on-chain.md) (2026-05-27).
 
-Decision: admin-settable on-chain default-weights vector that the Router falls back to below quorum, sized to the live vault set and sourced from chain state. Implemented in `PortfolioRouter.sol` with `_defaultWeightVaultList`, `_defaultWeightBps` state, `setDefaultWeights(ADMIN_ROLE)` setter, and fallback logic in routing decisions. Continuous smoothing / whiplash blending is deferred.
+Decision: on-chain default-weights vector that the Router routes by whenever no active vector is set, sized to the live vault set and sourced from chain state. Implemented in `PortfolioRouter.sol` with `_defaultWeightVaultList`, `_defaultWeightBps` state, `setDefaultWeights(ADMIN_ROLE)` setter, and fallback logic in routing decisions. Continuous smoothing / whiplash blending is deferred.
 
 **AgentTokenVault shortlist governance (§1.3, §1.4).** **Resolved** — see [ADR-0004](../adr/ADR-0004-agent-token-shortlist-governance.md) (2026-06-03).
 
