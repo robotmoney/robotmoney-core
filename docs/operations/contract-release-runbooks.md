@@ -442,6 +442,8 @@ Never part of stage 13, which stays the four vault unpauses: no default run, sta
 
 The Twin rehearsal runs the row after the unpause rows (and checks `receipt_applications` of its run manifest with `evidence-check --receipt-applications`). The Twin proves execution only: that the row executes on the real contracts through the real Safe and timelock. It is not evidence that mainnet governance works (rule b).
 
+**Run-day: public mainnet dapp checks (issue 1729).** Before the public tunnel points at the mainnet dapp, open it with a wallet on Ethereum (1) and with a wallet on the Twin chain (918453). Each must show the red "Base mainnet - real funds" banner and the "Switch your wallet to Base (chain 8453)" screen, with no deposit or withdraw control. Switch to Base: the app loads and the banner stays. The guard is described in `docs/development/stage-deployment.md`.
+
 ## 5. Per-release runbook format
 
 Each release has an operator runbook committed under `docs/runbooks/`. The

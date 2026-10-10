@@ -31,8 +31,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { vaultAbi } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
@@ -154,7 +154,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
   });
 
   // -------- write hooks --------
-  const withdrawWrite = useWriteContract();
+  const withdrawWrite = useGuardedWriteContract();
   const withdrawReceipt = useWaitForTransactionReceipt({
     hash: withdrawWrite.data as Hash | undefined,
     query: { enabled: Boolean(withdrawWrite.data) },

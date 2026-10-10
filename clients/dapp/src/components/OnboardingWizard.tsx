@@ -37,8 +37,8 @@ import {
   useChainId,
   useReadContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi, erc20Abi } from "../lib/abi";
 import {
@@ -93,7 +93,7 @@ type AuthPhase = "commit" | "reveal";
 export function OnboardingWizard(props: Props) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { writeContract, isPending } = useWriteContract();
+  const { writeContract, isPending } = useGuardedWriteContract();
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
 
   // Drip button state — per-asset status for step-1 inline feedback (issue #614).

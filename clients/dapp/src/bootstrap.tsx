@@ -65,6 +65,8 @@ import { AccountLayerView } from "./components/AccountLayerView";
 import { NavBar } from "./components/NavBar";
 import { StatusHeader } from "./components/StatusHeader";
 import { TestnetBanner } from "./components/TestnetBanner";
+import { MainnetBanner } from "./components/MainnetBanner";
+import { WrongChainGate } from "./components/WrongChainGate";
 import { VerificationBanner } from "./components/VerificationBanner";
 import { VaultList } from "./components/VaultList";
 import { VaultDetail } from "./components/VaultDetail";
@@ -174,6 +176,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
   if (isDebugRoute) {
     return (
       <>
+        <MainnetBanner envClass={cfg.envClass} />
         <TestnetBanner
           envClass={cfg.envClass}
           forkTimestamp={cfg.env.VITE_FORK_BLOCK_TIMESTAMP}
@@ -181,24 +184,27 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
         />
         <NavBar aboutOpen={aboutOpen} onToggleAbout={() => setAboutOpen((open) => !open)} />
         <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} envClass={cfg.envClass} />
-        <DebugPage
-          gatewayAddress={cfg.gateway}
-          vaultAddress={cfg.vault}
-          registryAddress={cfg.registry}
-          routerAddress={cfg.router}
-          envClass={cfg.envClass}
-          explorerApiUrl={cfg.explorerApiUrl}
-          expectedCodeHash={cfg.expectedCodeHash}
-          forkTimestamp={cfg.env.VITE_FORK_BLOCK_TIMESTAMP}
-          forkBlock={cfg.env.VITE_FORK_BLOCK_NUMBER}
-          verificationState={verificationState}
-        />
+        <WrongChainGate>
+          <DebugPage
+            gatewayAddress={cfg.gateway}
+            vaultAddress={cfg.vault}
+            registryAddress={cfg.registry}
+            routerAddress={cfg.router}
+            envClass={cfg.envClass}
+            explorerApiUrl={cfg.explorerApiUrl}
+            expectedCodeHash={cfg.expectedCodeHash}
+            forkTimestamp={cfg.env.VITE_FORK_BLOCK_TIMESTAMP}
+            forkBlock={cfg.env.VITE_FORK_BLOCK_NUMBER}
+            verificationState={verificationState}
+          />
+        </WrongChainGate>
       </>
     );
   }
 
   return (
     <>
+      <MainnetBanner envClass={cfg.envClass} />
       <TestnetBanner
         envClass={cfg.envClass}
         forkTimestamp={cfg.env.VITE_FORK_BLOCK_TIMESTAMP}
@@ -206,102 +212,104 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
       />
       <NavBar aboutOpen={aboutOpen} onToggleAbout={() => setAboutOpen((open) => !open)} />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} envClass={cfg.envClass} />
-      <StatusHeader />
-      <VerificationBanner state={verificationState} refresh={verificationRefresh} />
-      <main className="dapp-shell">
-        <div className="landing-overview">
-          <ProtocolStats />
-          <LandingPriceStrip />
-          <VaultCards
-            onSelectVault={setSelectedVault}
-            onSwitchToExplorer={() => setActiveTabId("portfolio-explorer")}
-          />
-          <BalancesPanel gatewayAddress={cfg.gateway} rmTokenAddress={cfg.rmToken} />
-        </div>
+      <WrongChainGate>
+        <StatusHeader />
+        <VerificationBanner state={verificationState} refresh={verificationRefresh} />
+        <main className="dapp-shell">
+          <div className="landing-overview">
+            <ProtocolStats />
+            <LandingPriceStrip />
+            <VaultCards
+              onSelectVault={setSelectedVault}
+              onSwitchToExplorer={() => setActiveTabId("portfolio-explorer")}
+            />
+            <BalancesPanel gatewayAddress={cfg.gateway} rmTokenAddress={cfg.rmToken} />
+          </div>
 
-        <Tabs
-          testId="dapp-surface-tabs"
-          activeTabId={activeTabId}
-          onTabChange={setActiveTabId}
-          tabs={[
-            {
-              id: "my-account",
-              label: "My Account",
-              content: (
-                <AgentsPanel
-                  gatewayAddress={cfg.gateway}
-                  vaultAddress={cfg.vault}
-                  gatewayVerificationState={verificationState}
-                  envClass={cfg.envClass}
-                  flagEnv={cfg.env}
-                  // eslint-disable-next-line no-restricted-syntax -- boundary: real clock injected here.
-                  now={Date.now()}
-                  registryAddress={cfg.registry}
-                  routerAddress={cfg.router}
-                  timelockAddress={cfg.timelock}
-                  safeAddress={cfg.safe}
-                />
-              ),
-            },
-            {
-              id: "router-governance",
-              label: "Router Governance",
-              content: (
-                <div className="tab-section-stack">
-                  <RouterView apiUrl={cfg.explorerApiUrl} />
-                  {cfg.governance ? (
-                    <GovernancePanel
-                      governanceAddress={cfg.governance}
-                      apiUrl={cfg.explorerApiUrl}
-                    />
-                  ) : (
-                    <section data-testid="governance-config-missing">
-                      <h2>Governance — Weight Proposals</h2>
-                      <p className="hint">
-                        Router governance voting is unavailable until the governance contract
-                        address is configured.
-                      </p>
-                    </section>
-                  )}
-                </div>
-              ),
-            },
-            {
-              id: "consensus-receipts",
-              label: "Consensus Receipts",
-              content: (
-                <div className="tab-section-stack">
-                  <ConsensusReceiptPanel
-                    explorerApiUrl={cfg.explorerApiUrl}
-                    vaultAddressBySymbol={cfg.vaultAddressBySymbol}
+          <Tabs
+            testId="dapp-surface-tabs"
+            activeTabId={activeTabId}
+            onTabChange={setActiveTabId}
+            tabs={[
+              {
+                id: "my-account",
+                label: "My Account",
+                content: (
+                  <AgentsPanel
+                    gatewayAddress={cfg.gateway}
+                    vaultAddress={cfg.vault}
+                    gatewayVerificationState={verificationState}
+                    envClass={cfg.envClass}
+                    flagEnv={cfg.env}
+                    // eslint-disable-next-line no-restricted-syntax -- boundary: real clock injected here.
+                    now={Date.now()}
+                    registryAddress={cfg.registry}
+                    routerAddress={cfg.router}
+                    timelockAddress={cfg.timelock}
+                    safeAddress={cfg.safe}
                   />
-                </div>
-              ),
-            },
-            {
-              id: "portfolio-explorer",
-              label: "Portfolio Explorer",
-              content: (
-                <div className="tab-section-stack">
-                  {selectedVault != null ? (
-                    <VaultDetail
-                      apiUrl={cfg.explorerApiUrl}
-                      address={selectedVault}
-                      onBack={() => setSelectedVault(null)}
+                ),
+              },
+              {
+                id: "router-governance",
+                label: "Router Governance",
+                content: (
+                  <div className="tab-section-stack">
+                    <RouterView apiUrl={cfg.explorerApiUrl} />
+                    {cfg.governance ? (
+                      <GovernancePanel
+                        governanceAddress={cfg.governance}
+                        apiUrl={cfg.explorerApiUrl}
+                      />
+                    ) : (
+                      <section data-testid="governance-config-missing">
+                        <h2>Governance — Weight Proposals</h2>
+                        <p className="hint">
+                          Router governance voting is unavailable until the governance contract
+                          address is configured.
+                        </p>
+                      </section>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                id: "consensus-receipts",
+                label: "Consensus Receipts",
+                content: (
+                  <div className="tab-section-stack">
+                    <ConsensusReceiptPanel
+                      explorerApiUrl={cfg.explorerApiUrl}
+                      vaultAddressBySymbol={cfg.vaultAddressBySymbol}
                     />
-                  ) : (
-                    <VaultList onSelectVault={setSelectedVault} />
-                  )}
-                  <AccountLayerView
-                    apiUrl={cfg.explorerApiUrl}
-                    connectedAddress={connectedAddress as Address | undefined}
-                  />
-                </div>
-              ),
-            },
-          ]}
-        />
-      </main>
+                  </div>
+                ),
+              },
+              {
+                id: "portfolio-explorer",
+                label: "Portfolio Explorer",
+                content: (
+                  <div className="tab-section-stack">
+                    {selectedVault != null ? (
+                      <VaultDetail
+                        apiUrl={cfg.explorerApiUrl}
+                        address={selectedVault}
+                        onBack={() => setSelectedVault(null)}
+                      />
+                    ) : (
+                      <VaultList onSelectVault={setSelectedVault} />
+                    )}
+                    <AccountLayerView
+                      apiUrl={cfg.explorerApiUrl}
+                      connectedAddress={connectedAddress as Address | undefined}
+                    />
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </main>
+      </WrongChainGate>
     </>
   );
 }

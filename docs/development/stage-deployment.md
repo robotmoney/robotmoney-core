@@ -102,3 +102,14 @@ Run the tooling tests with `cd scripts/stage && bun test tests`.
 ## What a Twin chain run proves
 
 A short timelock delay proves the scripts execute. It proves that only parameters differ. It does not prove the real 48 hour delay. Governance timing is proven on 8453 (runbook Q2).
+
+## Mainnet-class dapp safety: banner and wrong-chain guard (core issue 1729)
+
+These exist in the dapp and must be live before any public tunnel points at a dapp built with `VITE_ENV_CLASS=mainnet`.
+
+- **Banner.** On the mainnet class every page shows a sticky, non-dismissible banner: "Base mainnet - real funds", with the chain name and id (8453). The testnet banner is unchanged on the other classes and still renders nothing on mainnet (`MainnetBanner.tsx`).
+- **One write path.** Every transaction goes through `useGuardedWriteContract` (`clients/dapp/src/lib/useGuardedWriteContract.ts`), the only module allowed to use wagmi's `useWriteContract`. On the mainnet class a write is refused unless the connected wallet is on chain 8453, and an allowed write is pinned to chain 8453. A source-scan test fails if any other module imports the raw hook, so a new write path cannot bypass it. The Safe proposal signing is gated the same way.
+- **Wrong chain screen.** When a wallet is connected on another chain (Ethereum 1, the Twin chain 918453, anything else), the app body is replaced by "Switch your wallet to Base (chain 8453)" with a switch button. Nothing under it mounts, so no balance, price or position for the wrong chain is shown, and no write control exists. The top bar and wallet connect stay.
+- **Gateway code hash and deposits.** Human deposits, withdrawals and redeems call the vaults and the router directly. They never call the gateway, so the gateway code-hash pin (`VITE_GATEWAY_EXPECTED_CODE_HASH`) correctly gates only admin and agent writes. Pinning the vault and router code hashes for deposits is a separate decision (owner question in core issue 1729).
+- **Indexer logs.** `RpcError::Transport` text has every URL replaced by `scheme://<redacted>`, so a keyed RPC URL cannot reach logs or `indexer_runs.error`.
+
