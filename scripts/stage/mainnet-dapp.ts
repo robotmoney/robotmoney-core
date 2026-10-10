@@ -65,6 +65,7 @@ export function assertEnvReadOnly(env: Record<string, string>): void {
   if (env.VITE_FAUCET_HARNESS_PRIVATE_KEY !== "") {
     throw new MainnetDappError("faucet-key-present", "VITE_FAUCET_HARNESS_PRIVATE_KEY must be empty on 8453");
   }
+  if (env.VITE_CHAIN_ID !== String(MAINNET_CHAIN_ID)) throw new MainnetDappError("wrong-chain", `VITE_CHAIN_ID must be ${MAINNET_CHAIN_ID}`);
   if (env.VITE_ENV_CLASS !== "mainnet") throw new MainnetDappError("env-class", "VITE_ENV_CLASS must be mainnet");
   if (env.INDEXER_CHAIN_ID !== String(MAINNET_CHAIN_ID) || env.EXPLORER_API_CHAIN_ID !== String(MAINNET_CHAIN_ID)) {
     throw new MainnetDappError("wrong-chain", `INDEXER_CHAIN_ID and EXPLORER_API_CHAIN_ID must be ${MAINNET_CHAIN_ID}`);
@@ -303,6 +304,7 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_DAPP_URL: input.publicDappUrl ? origin(input.publicDappUrl) : `http://127.0.0.1:${dappPort}`,
     VITE_EXPLORER_API_URL: input.publicExplorerUrl ? origin(input.publicExplorerUrl) : `http://127.0.0.1:${explorerPort}`,
     VITE_ENV_CLASS: "mainnet",
+    VITE_CHAIN_ID: String(MAINNET_CHAIN_ID),
     VITE_FAUCET_HARNESS_PRIVATE_KEY: "",
     VITE_DEVNET_RPC_URL: "",
     VITE_GATEWAY_ADDRESS: a.gateway,
@@ -343,6 +345,12 @@ export const MAINNET_TEARDOWN_ENV: Record<string, string> = {
   VITE_FAUCET_HARNESS_PRIVATE_KEY: "",
   COMPOSE_PROFILES: "receipt-fixtures",
 };
+
+/** Refuses a compose file list (as passed to docker compose) that lacks the read-only mainnet overlay or adds a stage or chain file. */
+export function assertOverlayInFileList(files: string[]): void {
+  if (!files.includes(MAINNET_OVERLAY_REL)) throw new MainnetDappError("overlay-missing", `the compose file list must include ${MAINNET_OVERLAY_REL}`);
+  if (files.join("|") !== mainnetComposeFiles().join("|")) throw new MainnetDappError("overlay-missing", "the compose file list is not exactly the dapp file plus the mainnet overlay");
+}
 
 /** The compose files of the 8453 stack, relative to the repo root, in merge order. */
 export const mainnetComposeFiles = (): string[] => [MAINNET_DAPP_COMPOSE_REL, MAINNET_OVERLAY_REL];

@@ -40,6 +40,7 @@ services:
     build:
       args:
         VITE_ENV_CLASS: mainnet
+        VITE_CHAIN_ID: "8453"
         VITE_FAUCET_HARNESS_PRIVATE_KEY: ""
         VITE_DEVNET_RPC_URL: ""
   receipt-fixtures:

@@ -15,6 +15,8 @@ import {
   MainnetDappError,
   assertComposeReadOnly,
   assertEnvReadOnly,
+  assertOverlayInFileList,
+  mainnetComposeFiles,
   assertMergedConfigLoopback,
   assertNoSigningEnv,
   buildMainnetDappEnv,
@@ -105,6 +107,7 @@ describe("the env builder from the manifests", () => {
     expect(env.EXPLORER_API_CHAIN_ID).toBe("8453");
     expect(env.INDEXER_CHAIN_NAME).toBe("base");
     expect(env.VITE_ENV_CLASS).toBe("mainnet");
+    expect(env.VITE_CHAIN_ID).toBe("8453");
     expect(env.VITE_FAUCET_HARNESS_PRIVATE_KEY).toBe("");
     expect(env.VITE_DEVNET_RPC_URL).toBe("");
     expect(env.COMPOSE_PROFILES).toBe("");
@@ -245,6 +248,7 @@ describe("refusals on signing keys and deploy settings", () => {
     expect(refusal(() => assertEnvReadOnly({ ...env, VITE_FAUCET_HARNESS_PRIVATE_KEY: "0xabc" }))).toBe("signing-env-present");
     expect(refusal(() => assertEnvReadOnly({ ...env, VITE_ENV_CLASS: "fork" }))).toBe("env-class");
     expect(refusal(() => assertEnvReadOnly({ ...env, INDEXER_CHAIN_ID: "918453" }))).toBe("wrong-chain");
+    expect(refusal(() => assertEnvReadOnly({ ...env, VITE_CHAIN_ID: "1" }))).toBe("wrong-chain");
     expect(refusal(() => assertEnvReadOnly({ ...env, EXPLORER_API_CHAIN_ID: "1" }))).toBe("wrong-chain");
   });
 });
@@ -306,6 +310,7 @@ describe("the loopback guard on the compose files", () => {
     for (const n of overlayNames) expect(n.startsWith("dapp8453-")).toBe(true);
     for (const n of overlayNames) expect(baseNames).not.toContain(n);
     expect(overlay.text).toMatch(/VITE_ENV_CLASS:\s*mainnet/);
+    expect(overlay.text).toMatch(/VITE_CHAIN_ID:\s*"8453"/);
     expect(overlay.text).toMatch(/VITE_FAUCET_HARNESS_PRIVATE_KEY:\s*""/);
     expect(noComments(overlay.text)).not.toMatch(/chain-net|CHAIN_NET_NAME/);
     expect(MAINNET_DAPP_PROJECT).not.toBe("robotmoney-dapp");
@@ -365,6 +370,17 @@ function harness(over: { env?: Record<string, string | undefined>; configJson?: 
 const MANI = fixture("cli");
 const UP = ["dapp", "up", "--chain", "8453", "--rpc", RPC, "--manifests", MANI, "--start-block", "52401633"];
 const filesOf = (argv: string[]) => argv.filter((_, i) => argv[i - 1] === "-f").map((f) => f.replace(CORE_ROOT + "/", ""));
+
+describe("the overlay must be in the compose file list", () => {
+  test("the real list passes; a list without the overlay, with an extra file or reordered is refused", () => {
+    assertOverlayInFileList(mainnetComposeFiles());
+    const [base] = mainnetComposeFiles();
+    expect(refusal(() => assertOverlayInFileList([base!]))).toBe("overlay-missing");
+    expect(refusal(() => assertOverlayInFileList([...mainnetComposeFiles(), "testing/ethereum-testnet/config/docker-compose.dapp.stage.yaml"]))).toBe("overlay-missing");
+    expect(refusal(() => assertOverlayInFileList([...mainnetComposeFiles()].reverse()))).toBe("overlay-missing");
+    expect(refusal(() => assertOverlayInFileList([]))).toBe("overlay-missing");
+  });
+});
 
 describe("core-stack dapp --chain 8453", () => {
   test("up: config check then up, with the 8453 project, only the dapp files, no chain and no deploy job", async () => {

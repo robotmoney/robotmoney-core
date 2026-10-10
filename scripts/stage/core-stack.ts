@@ -61,7 +61,7 @@ import { parseArgs } from "node:util";
 import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
-import { MAINNET_CHAIN_ID, MAINNET_DAPP_PROJECT, MAINNET_DEFAULT_PORTS, MAINNET_TEARDOWN_ENV, MainnetDappError, assertComposeReadOnly, assertMergedConfigLoopback, assertNoSigningEnv, buildMainnetDappEnv, mainnetComposeFiles, mainnetComposeTexts, redactRpc } from "./mainnet-dapp.ts";
+import { assertOverlayInFileList, MAINNET_CHAIN_ID, MAINNET_DAPP_PROJECT, MAINNET_DEFAULT_PORTS, MAINNET_TEARDOWN_ENV, MainnetDappError, assertComposeReadOnly, assertMergedConfigLoopback, assertNoSigningEnv, buildMainnetDappEnv, mainnetComposeFiles, mainnetComposeTexts, redactRpc } from "./mainnet-dapp.ts";
 import { STAGE_TABLE, expectedManifestCount, manifestOf, missingManifests, presentManifests, publishEnv, vaultManifests, type StageTableShape } from "./stage-manifests.ts";
 
 // ─── constants ───────────────────────────────────────────────────────────────
@@ -879,7 +879,9 @@ const mainnetRefusal = (e: MainnetDappError): StackExit => new StackExit(EXIT.IN
 
 /** `docker compose` of the 8453 stack: its own project, the dapp file and the read-only overlay, and no chain or deploy file. */
 function mainnetCompose(s: Stack, args: string[]): string[] {
-  const files = mainnetComposeFiles().flatMap((rel) => ["-f", join(s.deps.repoRoot, rel)]);
+  const rels = mainnetComposeFiles();
+  assertOverlayInFileList(rels);
+  const files = rels.flatMap((rel) => ["-f", join(s.deps.repoRoot, rel)]);
   return ["docker", "compose", "--project-name", MAINNET_DAPP_PROJECT, ...files, ...args];
 }
 
