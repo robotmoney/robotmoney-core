@@ -6,7 +6,7 @@
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
-import { loadFrozen } from "./counts.ts";
+import { loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
 import { releaseTagsFor, tagKind, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
 import type { DeploymentKind } from "./chains.ts";
@@ -37,6 +37,11 @@ export interface ReleaseGateInput {
   checkShaGreen?: CheckShaGreen;
   /** Default: the tag must exist on the origin of the core checkout with the same tag object (RELEASE_TAG_REMOTE_MISMATCH). */
   remoteTag?: RemoteTagCheck;
+  /**
+   * Issue 1733: re-verifies a RECONSTRUCTED baseline (counts-reconstruct.ts) against the build and the chain at plan time. Required when the frozen file is a reconstruction:
+   * without it the gate refuses (COUNTS_MISSING), because an offline load proves only the arithmetic, not the adoption records.
+   */
+  verifyReconstructed?: (file: FrozenFile) => Promise<void>;
 }
 
 /**
@@ -58,7 +63,11 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const tag = await tagForKind(i);
   if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version>${i.kind === "rehearsal" ? "-rehearsal" : ""} tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
   await (i.remoteTag ?? ((d, t) => verifyRemoteTag(d, t)))(i.coreDir, tag);
-  loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING
+  const frozen = loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING; a reconstructed baseline is also verified against the stage table here
+  if (frozen.measured.reconstructed) {
+    if (!i.verifyReconstructed) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json is a reconstructed baseline (issue 1733) and the gate has no way to re-verify it on chain: it is refused`, { sha: i.sha });
+    await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
+  }
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
   if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453.`, { sha: i.sha });
   const env: Record<string, string> = { GITHUB_TOKEN: token };

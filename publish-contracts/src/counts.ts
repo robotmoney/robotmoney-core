@@ -4,9 +4,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
+import { verifyReconstruction, type Reconstruction } from "./counts-reconstruct.ts";
+import { getStageTable } from "./stages.ts";
 
 export type FrozenCounts = Record<string, number>;
-export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[] }; counts: FrozenCounts }
+export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[];
+  /** Issue 1733: a BASELINE rebuilt from an adopted measuring run (counts-reconstruct.ts). Not a pure measurement; verified against the stage table on every load. */
+  reconstructed?: Reconstruction }; counts: FrozenCounts }
 
 export const FROZEN_DIR = "deployments/frozen-counts";
 const SHA = /^[0-9a-f]{40}$/;
@@ -22,14 +26,28 @@ export function validateCounts(counts: unknown): FrozenCounts {
   return counts as FrozenCounts;
 }
 
+/**
+ * Reads and checks one frozen file (any path). The file must carry `sha`, must not be marked adopted, and a reconstructed baseline (issue 1733) must pass
+ * verifyReconstruction against the loaded stage table. A reconstruction that cannot be checked (no stage table loaded) is refused: nothing is assumed.
+ */
+export function loadFrozenFile(p: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
+  const j = JSON.parse(readFileSync(p, "utf8"));
+  if (j.deploySha !== sha) throw new PublishError("COUNTS_MISSING", `${p} is for DEPLOY_SHA ${j.deploySha}, not ${sha}`, { sha });
+  if (!o.allowAdopted && Array.isArray(j.measured?.adopted) && j.measured.adopted.length > 0) throw new PublishError("COUNTS_MISSING", `${p} was written by a run that ADOPTED stage(s) ${j.measured.adopted.join(", ")} (already on chain, not run): their counts were never measured, so it is not a frozen file. Rebuild the baseline from the counts.json of that run: bun publish-contracts/scripts/freeze-counts.ts --from-adopted-run counts.json --sha ${sha} --rpc <url> (issue 1733). Delete this file before rerunning.`, { sha, adopted: j.measured.adopted });
+  const file: FrozenFile = { deploySha: sha, measured: j.measured, counts: validateCounts(j.counts) };
+  if (j.measured?.reconstructed !== undefined) {
+    let table;
+    try { table = getStageTable(); } catch { throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline but no stage table is loaded, so it cannot be verified: it is refused`, { sha }); }
+    verifyReconstruction(file, table);
+  }
+  return file;
+}
+
 /** Loads the frozen counts for a DEPLOY_SHA. A missing file or a file for another SHA fails. */
 export function loadFrozen(dir: string, sha: string, o: { allowAdopted?: boolean } = {}): FrozenFile {
   const p = frozenPath(dir, sha);
-  if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), review ${FROZEN_DIR}/${sha}.json, then commit it. Nothing here guesses a count.`, { sha });
-  const j = JSON.parse(readFileSync(p, "utf8"));
-  if (j.deploySha !== sha) throw new PublishError("COUNTS_MISSING", `${p} is for DEPLOY_SHA ${j.deploySha}, not ${sha}`, { sha });
-  if (!o.allowAdopted && Array.isArray(j.measured?.adopted) && j.measured.adopted.length > 0) throw new PublishError("COUNTS_MISSING", `${p} was written by a run that ADOPTED stage(s) ${j.measured.adopted.join(", ")} (already on chain, not run): their counts were never measured, so it is not a frozen file. Measure on a fork pinned before Base block 52401633, or take the count of the adopted stage from the earlier frozen file. Delete this file before rerunning.`, { sha, adopted: j.measured.adopted });
-  return { deploySha: sha, measured: j.measured, counts: validateCounts(j.counts) };
+  if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), then commit ${FROZEN_DIR}/${sha}.json: review a measurement that ran every stage, or, when the run ADOPTED the CREATE2 libraries (every Twin fork since Base block 52401633), rebuild the baseline with freeze-counts --from-adopted-run (issue 1733). Nothing here guesses a count.`, { sha });
+  return loadFrozenFile(p, sha, o);
 }
 
 export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages ?? Object.keys(c)).reduce((a, s) => a + (c[s] ?? 0), 0);

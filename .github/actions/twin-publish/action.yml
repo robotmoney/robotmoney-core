@@ -35,6 +35,10 @@ inputs:
     description: "'true' first deploys the four CREATE2 libraries (TickMath, BasketAssetConfigGuard, TwapTickMath, BasketViews) on the Twin fork, so the run finds them all already deployed (issue 1721)."
     required: false
     default: "false"
+  pin-block:
+    description: "Optional: the Base block the Twin fork is pinned at. Recorded in counts.json (pinBlock) and, when the baseline is rebuilt from an adopted run, in measured.reconstructed.fromRun (issue 1733)."
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -47,4 +51,5 @@ runs:
         GOVERN_IN: ${{ inputs.govern }}
         REHEARSAL_IN: ${{ inputs.rehearsal }}
         PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
+        PIN_BLOCK_IN: ${{ inputs.pin-block }}
       run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"
