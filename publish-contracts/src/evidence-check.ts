@@ -19,6 +19,7 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR } from "./floors.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
+import { loadStageTable } from "./stage-table.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -144,7 +145,10 @@ function effectiveForEvidence(ev: any, frozenCounts: Record<string, number>): Re
 }
 const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?: string }[] => (Array.isArray(adoptedOf(s)?.libraries) ? adoptedOf(s).libraries : []);
 
-export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): string[] {
+/** stage -> how many libraries the stage table lets it adopt (libs: its linked libraries; a basket stage: its create2Libraries). The CLI passes it from the table. */
+export type AdoptableLibraries = Record<string, number>;
+
+export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, adoptable?: AdoptableLibraries): string[] {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
   if (ev?.chain_id !== MAINNET_CHAIN_ID) bad(`chain_id is ${ev?.chain_id}, evidence is read for ${MAINNET_CHAIN_ID}`);
@@ -169,6 +173,12 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
       }
       const libs = adoptedLibraries(s);
       if (libs.length === 0) bad(`stage ${s.stage}: adopted names no library`);
+      // the list length sets the lowest allowed deposit count, so a longer list than the table allows would lower it: capped, and no repeat
+      if (adoptable) {
+        const cap = adoptable[s.stage] ?? 0;
+        if (libs.length > cap) bad(`stage ${s.stage}: adopted lists ${libs.length} librar${libs.length === 1 ? "y" : "ies"}, the stage table lets this stage adopt ${cap}`);
+        if (new Set(libs.map((l) => lc(String(l?.address ?? "")))).size !== libs.length || new Set(libs.map((l) => l?.name)).size !== libs.length) bad(`stage ${s.stage}: adopted lists a library twice`);
+      }
       for (const l of libs) {
         if (!ADDR.test(l?.address ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no address`);
         if (!TX.test(l?.code_hash ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no code_hash (the keccak256 of its runtime code)`);
@@ -533,6 +543,12 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/** The per-stage cap from core's stage table in this checkout. */
+function adoptableFromTable(): AdoptableLibraries {
+  const t = loadStageTable(new URL("../../", import.meta.url).pathname);
+  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length]));
+}
+
 async function main() {
   const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
   if (values["receipt-applications"]) return checkApplicationsMain(values);
@@ -544,7 +560,7 @@ async function main() {
     if (values["deploy-sha"] && j.deploySha !== values["deploy-sha"]) { console.error(`evidence: frozen file is for ${j.deploySha}, not ${values["deploy-sha"]}`); process.exit(1); }
     counts = j.counts ?? j;
   }
-  const problems = [...checkEvidence(ev, counts), ...scanEvidenceFolder(join(values.evidence, ".."))];
+  const problems = [...checkEvidence(ev, counts, adoptableFromTable()), ...scanEvidenceFolder(join(values.evidence, ".."))];
   if (values.rpc && values["chain-fixture"]) { console.error("evidence: give --rpc or --chain-fixture, not both"); process.exit(2); }
   if (values["record-chain-fixture"] && !values.rpc) { console.error("evidence: --record-chain-fixture needs --rpc"); process.exit(2); }
   if ((values.rpc || values["chain-fixture"]) && !counts) { console.error("evidence: reading the chain needs --frozen FILE (and --deploy-sha SHA): the nonce is checked against the frozen counts"); process.exit(2); }

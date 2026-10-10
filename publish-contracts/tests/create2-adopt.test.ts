@@ -43,6 +43,18 @@ describe("the create2 libraries of the table and their addresses", () => {
     expect(t.create2Libraries!.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"]);
     expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["proto", "agent", "rwa"]);
   });
+  test("each basket stage lists exactly the libraries its built vault links (linkReferences of the built artifacts), so a mislisted library cannot hide a dropped creation", () => {
+    const t = getStageTable();
+    const linked = (name: string): string[] => {
+      const j = JSON.parse(readFileSync(join(OUT, `${name}.sol`, `${name}.json`), "utf8"));
+      return [...new Set([j.bytecode, j.deployedBytecode].flatMap((o: any) => Object.values<any>(o.linkReferences).flatMap((f) => Object.keys(f))))].sort();
+    };
+    for (const v of t.vaults.filter((x) => x.key !== "USDC")) {
+      const st = t.stages.find((x) => x.name === v.stage)!;
+      const listed = [...st.libraries.map((n) => t.libraries.find((l) => l.name === n)!.artifact), ...(st.create2Libraries ?? []).map((n) => t.create2Libraries!.find((l) => l.name === n)!.artifact)].sort();
+      expect(listed, v.stage).toEqual(linked(v.artifact));
+    }
+  });
   test("the resolved addresses are the ones forge deploys to on Base (the 8453 broadcast of the proto stage)", () => {
     expect(GUARD.address.toLowerCase()).toBe("0xb026a232f54d381a47a9e2640d04084830f0ae58");
     expect(TWAP.address.toLowerCase()).toBe("0x7fdc1e387486c81f97a2379ce897b202d4e815e2");

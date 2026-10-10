@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
-import { MAINNET_CHAIN_ID } from "./chains.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
 
 export type FrozenCounts = Record<string, number>;
 export interface FrozenFile { deploySha: string; measured: { chainId: number; at: string; forge?: string; /** Stages the measuring run ADOPTED (issue 1721): their counts are not measurements. */ adopted?: string[] }; counts: FrozenCounts }
@@ -105,8 +105,8 @@ export interface ResolvedCounts { frozen?: FrozenCounts; measure: boolean; mode:
 export function resolveCounts(o: { dir: string; sha: string; measureFlag: boolean; dryRun: boolean; chainId: number; warn?: (event: string, f: Record<string, unknown>) => void }): ResolvedCounts {
   const file = frozenPath(o.dir, o.sha);
   if (o.measureFlag) return { measure: true, mode: "measure-flag", file };
-  // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on 8453 it is never counts.
-  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId !== MAINNET_CHAIN_ID }).counts, measure: false, mode: "frozen", file };
+  // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on the Twin chain only (918453): every other chain, 8453 included, refuses it.
+  if (existsSync(file)) return { frozen: loadFrozen(o.dir, o.sha, { allowAdopted: o.chainId === TWIN_CHAIN_ID }).counts, measure: false, mode: "frozen", file };
   if (o.dryRun) {
     o.warn?.("dry_run.counts_missing", { file, note: "no frozen counts for this SHA: the dry run measures them and writes nothing" });
     return { measure: true, mode: "dry-run-measure", file };

@@ -492,6 +492,20 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     expect(checkEvidence(mk(6), f).join()).toContain("is below the frozen count 10 less its 3 adopted libraries");
     expect(checkEvidence(mk(11), f).join()).toContain("above the frozen count");
   });
+  test("offline: the adopted library list is capped by the stage table, so a longer list cannot lower the allowed deposit count", () => {
+    const cap = { safe: 2, libs: 1, proto: 3 };
+    expect(checkEvidence(adoptedEv(), FROZEN_WITH_LIBS, cap)).toEqual([]);
+    const forged = adoptedEv();
+    forged.stages.push({ stage: "proto", frozen_count: 10, receipt_count: 0, tx_hashes: [], receipts_status: [], adopted: { deployer_txs: 0, libraries: Array.from({ length: 10 }, (_, i) => ({ name: `L${i}`, address: a(90 + i), code_hash: keccak256(LIBCODE) })) } });
+    forged.deployer_nonce_final = 2 + 0 + 0 + 1;
+    const f = { ...FROZEN_WITH_LIBS, proto: 10 };
+    expect(checkEvidence(forged, f).join()).not.toContain("lets this stage adopt"); // without the table the lower bound is the only guard (10 - 10 = 0)
+    expect(checkEvidence(forged, f, cap).join()).toContain("the stage table lets this stage adopt 3");
+    const twice = adoptedEv(); twice.stages[1].adopted.libraries.push({ ...twice.stages[1].adopted.libraries[0] });
+    expect(checkEvidence(twice, FROZEN_WITH_LIBS, { ...cap, libs: 2 }).join()).toContain("lists a library twice");
+    const unlisted = adoptedEv(); unlisted.stages[1].stage = "recorder";
+    expect(checkEvidence(unlisted, { ...FROZEN_WITH_LIBS, recorder: 4 }, cap).join()).toContain("lets this stage adopt 0");
+  });
   test("offline: an adopted entry without a library, an address or a code hash is refused", () => {
     const none = adoptedEv(); none.stages[1].adopted.libraries = [];
     expect(checkEvidence(none, FROZEN_WITH_LIBS).join()).toContain("names no library");

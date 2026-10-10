@@ -184,7 +184,7 @@ describe("a libs stage that plans zero transactions", () => {
     expect(() => loadFrozen(w.countsDir, SHA)).toThrow("ADOPTED stage(s) libs");
     // the Twin run's own follow-on verbs (verify, govern) read the file back; 8453 never does
     expect(resolveCounts({ dir: w.countsDir, sha: SHA, measureFlag: false, dryRun: false, chainId: 918453 }).frozen?.libs).toBe(0);
-    expect(() => resolveCounts({ dir: w.countsDir, sha: SHA, measureFlag: false, dryRun: false, chainId: 8453 })).toThrow("ADOPTED stage(s) libs");
+    for (const chainId of [8453, 84532, 31337, 1, 918454]) expect(() => resolveCounts({ dir: w.countsDir, sha: SHA, measureFlag: false, dryRun: false, chainId }), String(chainId)).toThrow("ADOPTED stage(s) libs");
     expect(loadFrozen(w.countsDir, SHA, { allowAdopted: true }).counts.libs).toBe(0);
     const drift = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "counts-drift.ts"), "--counts", join(w.dir, "c.json"), "--frozen-dir", w.countsDir], { stderr: "pipe" });
     expect(drift.exitCode).toBe(1);
