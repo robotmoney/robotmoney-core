@@ -545,7 +545,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 `RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock operation releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696; on today's bytecode the batch is `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` plus `RouterGovernance.setDefaultWeights(vaults, bps)`). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
 
-`RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them.
+`RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
@@ -566,7 +566,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 |---|---|---|
 | `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum and that the length equals the registry's router-eligible count. The weight write of the `apply-receipt` batch on today's bytecode. |
 | `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. |
-| `cancel(uint256 proposalId)`, `activeProposal()`, `proposalState(uint256)` | today's bytecode only | Unused with no voters; deleted with `propose`, `vote` and `execute` before the final deployment. |
+| `cancel(uint256 proposalId)`, `activeProposal()`, `proposalState(uint256)` | today's bytecode only | Unused (the voter addresses are held by nobody); deleted with `propose`, `vote` and `execute` before the final deployment. |
 
 ### 9.2.4 Key invariants
 

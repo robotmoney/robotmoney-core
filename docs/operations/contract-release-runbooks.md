@@ -495,4 +495,4 @@ no release branch to backport from, since every deployment runs the same
 | Network | Chain id | Default per ADR-0013 | Notes |
 | --- | --- | --- | --- |
 | Robot Money Devnet | `918453` | **Yes — the default verification target.** | The Twin chain: a pinned lazy anvil fork of real Base at the upstream head minus 2 per CI run (`scripts/devnet/twin-fork.ts`, `docs/technical/full-stack-devnet.md`). Tests deploy their own vault (clean room). Full production-parity for all three yield adapters (Aave V3, Compound V3, Morpho). No lasting address record; a version tag against the Devnet documents a verification pass, not a persistent deployment. |
-| Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe/hardware-wallet signers, and a funded submitter key. |
+| Base mainnet | `8453` | The eventual real target — a separate, deliberately-costed decision (D9). | Requires an audit pass, Safe owners signing with encrypted keystores, and a funded submitter key. |

@@ -309,11 +309,9 @@ same block, `ProposalCreated` must be processed before `VoteCast`. The
 existing `handle_log` loop iterates logs in `log_index` order, which satisfies
 this as long as governance contracts emit `ProposalCreated` before any same-block
 `VoteCast` (contractually impossible: a `VoteCast` needs an open proposal, which
-starts in a separate block). On mainnet these tables stay empty: there are no
-proposals and no voters. `RouterGovernance.propose`, `vote` and `execute` exist
-in the deployed test bytecode, are unused, have no voters, and are deleted
-before the final deployment, when a weight-setter `applyReceipt` call replaces
-them.
+starts in a separate block). On mainnet these tables stay empty: there are no proposals, because nobody holds a voter key. `RouterGovernance.propose`, `vote` and `execute` exist
+in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted
+before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 ---
 

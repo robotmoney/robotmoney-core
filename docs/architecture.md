@@ -109,9 +109,8 @@ adapter selection, adapter caps, fees, or agent permissions.
 There is no voting by token holders or anyone else: no voter set, no voting
 power, no quorum, no voting period, no execution delay, no propose, vote or
 execute. `RouterGovernance.propose`, `vote` and `execute` exist in the
-deployed test bytecode, are unused, have no voters, and are deleted before
-the final deployment, when a weight-setter `applyReceipt` call replaces
-them. The call-path decisions are recorded in
+deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before
+the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. The call-path decisions are recorded in
 `docs/technical/governance-decisions.md`.
 
 The governance read surface must expose the released receipts, the
@@ -872,7 +871,7 @@ if a future ADR adds that path.
   router cap.
 - `get-governance` — governance state: the last applied weights and the
   constructor parameters of today's `RouterGovernance` bytecode (unused;
-  there are no proposals and no voters).
+  there are no proposals, because nobody holds a voter key).
 
 **Account-scope reads** (address argument required):
 
@@ -1630,7 +1629,7 @@ this architecture:
 | --- | --- | --- |
 | Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
-| Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock operation that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696; today's bytecode: `releaseReceipt` plus `RouterGovernance.setDefaultWeights`). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them. There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
+| Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock operation that releases the Investment Committee's consensus receipt and applies its vector (govern row `apply-receipt`, core 1696; today's bytecode: `releaseReceipt` plus `RouterGovernance.setDefaultWeights`). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. There is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |

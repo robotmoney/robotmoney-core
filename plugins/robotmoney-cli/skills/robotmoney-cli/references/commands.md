@@ -56,16 +56,13 @@ Requires `governance_address` in config.
 rmpc get-governance --config <CONFIG> [--pretty]
 ```
 
-Output includes `active_proposal` (always `null`: the deployment has no voters
-and no proposals), the `cadence_params` block (constructor arguments of today's
+Output includes `active_proposal` (always `null`: nobody holds a voter key, so there are no proposals), the `cadence_params` block (constructor arguments of today's
 bytecode, not a governance model) and the router weight vector. Router weights
 change only when `WEIGHT_SETTER_ROLE` applies the Investment Committee's
 consensus receipt through the Safe and the timelock (publish-contracts govern
 row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc` has no
 governance write command. `RouterGovernance.propose`, `vote` and `execute`
-exist in the deployed test bytecode, are unused, have no voters, and are
-deleted before the final deployment, when a weight-setter `applyReceipt` call
-replaces them.
+exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 ### `rmpc get-timelock`
 

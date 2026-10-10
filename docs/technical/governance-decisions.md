@@ -104,10 +104,7 @@ execute.**
 
 Weights are an outcome of the committee's consensus and the Safe's decision to
 apply it, not of a tally. `RouterGovernance.propose`, `vote` and `execute`
-exist in the deployed test bytecode, are unused, have no voters, and are
-deleted before the final deployment, when a weight-setter `applyReceipt` call
-replaces them. The mainnet test deploys
-today's bytecode with an empty voter set. rmpc has no vote command.
+exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. The mainnet test deploys today's bytecode with voter addresses nobody holds keys for. rmpc has no vote command.
 
 The IC agent's `committee vote-submit` is a signed tilt the agent sends to the
 committee session. It is not a vote on anything: it changes no contract state
@@ -274,6 +271,6 @@ function isReleased(bytes32 receiptId) external view returns (bool);
 ```
 
 `RouterGovernance.activeProposal`, `proposalState` and `cadenceParams` remain
-callable on today's bytecode and report no proposals and an empty voter set;
+callable on today's bytecode and report no proposals and voter addresses nobody holds keys for;
 they go away with the contract issue. Implementers must not change the read
 surface above without a new ADR.

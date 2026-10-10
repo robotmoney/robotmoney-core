@@ -33,8 +33,8 @@ verifier reads isReleased(receiptId) and the router weights back
 There is no voting by token holders or anyone else: no voter set, no voting
 power, no quorum, no voting period, no execution delay, no propose, vote or
 execute. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed
-test bytecode, are unused, have no voters, and are deleted before the final
-deployment, when a weight-setter `applyReceipt` call replaces them. Nothing
+test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
+deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. Nothing
 submits a weight change unattended: every rebalance is a Safe-signed timelock
 operation. This runbook is the operator's playbook for that path, end to end.
 
@@ -212,7 +212,7 @@ It then schedules ONE timelock batch through the real Safe (`scheduleBatch`):
 Safe's signers sign one transaction. The CLI exits `GOVERN_PENDING` (exit 15)
 with the ready time and the exact resume command. On 8453 the row runs only
 when named with `--row apply-receipt` and a receipt id, as a post-launch action
-with its own 172800 s delay; it is never part of stage 13 (the three basket
+with its own 172800 s delay; it is never part of stage 13 (the four vault
 unpauses). The Twin rehearsal runs the same row after the unpause rows and
 warps the delay. A Twin run proves the row executes on the real contracts; it
 is not evidence that mainnet governance works.

@@ -4,9 +4,9 @@
 // there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
 // stages), and the verify stage asserts them against the sheet. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY
-// are constructor arguments of today's RouterGovernance bytecode only: there is no voting by anyone, the mainnet test deploys with no voters, and
-// RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final
-// deployment, when a weight-setter applyReceipt call replaces them.
+// are constructor arguments of today's RouterGovernance bytecode only: there is no voting by anyone, the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for, and
+// RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
+// deployment, when a weight-setter applyReceipt call will replace them.
 // ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696): the Safe, through the timelock, is the only body that changes any
 // contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it submits the Investment
 // Committee's consensus receipt; that submission is the rebalance: ONE timelock batch, releaseReceipt(receiptId) plus the weight change (on today's

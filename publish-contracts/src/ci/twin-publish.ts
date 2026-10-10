@@ -70,10 +70,10 @@ if (env("VERIFY_IN") === "true") {
   exportVar("TWIN_VERIFY_LABELS", join(rh, "verify-labels.txt"));
 }
 if (env("GOVERN_IN") === "true") {
-  // Stage 13 (the basket unpauses through the real Safe and timelock). On the Twin fork the 48 hour wait is one time warp.
+  // Stage 13 (the four vault unpauses through the real Safe and timelock). On the Twin fork the 48 hour wait is one time warp.
   stage("govern", join(rh, "govern-rows.txt"));
   exportVar("TWIN_GOVERN_ROWS", join(rh, "govern-rows.txt"));
-  // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (the unpaused baskets). The Twin run only proves the scripts execute in this
+  // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all four vaults unpaused). The Twin run only proves the scripts execute in this
   // order: the 48 hour delay and the Safe signers are proven on 8453 through the real Safe.
   if (env("VERIFY_IN") === "true") {
     stage("verify", join(rh, "verify-labels-post-govern.txt"));
