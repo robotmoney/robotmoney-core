@@ -276,6 +276,13 @@ jobs:
       - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
         run: bash .github/scripts/tests/test_forge_test_require_executed.sh
 
+      - name: forge test scratch-file guard (no two tests share a /tmp file, core 1735)
+        # Forge runs test contracts and the tests inside one contract in parallel. A shared scratch name
+        # made DeployTimelockRunEntrypointTest flake with "failed to open file /tmp/1476-run-entrypoint-manifest-...".
+        run: |
+          python3 .github/scripts/check_test_tmp_paths.py
+          bash .github/scripts/tests/test_check_test_tmp_paths.sh
+
   # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
   # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no
   # saved state file, no golden fixture and no secret (BASE_UPSTREAM_RPC is optional).

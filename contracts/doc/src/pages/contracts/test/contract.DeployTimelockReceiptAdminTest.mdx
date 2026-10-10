@@ -4,7 +4,7 @@ title: "DeployTimelockReceiptAdminTest"
 
 # DeployTimelockReceiptAdminTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -39,6 +39,6 @@ R-02: a RECEIPT_ADMIN_ADDRESS that names the wrong account must not
 leave the deployer holding the receipt contract's admin roles.
 
 ```solidity
-function test_run_revertsWhenReceiptAdminAddressIsWrong() public;
+function test_run_revertsWhenReceiptAdminAddressIsWrong() public removesOwnManifest;
 ```
 

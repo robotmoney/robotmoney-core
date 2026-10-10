@@ -11,6 +11,7 @@ import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {BasketDeployFixture, ConstPool} from "./helpers/BasketDeployFixture.sol";
+import {claimTmpPath, releaseTmpPath} from "./helpers/TmpPaths.sol";
 
 /// @dev Zero-implementation router. Vault constructors only store the router address.
 contract StubSwapRouter is ISwapRouter {
@@ -217,11 +218,10 @@ contract DeployProtocolAssetVaultTest is BasketDeployFixture {
         (string memory json, address[] memory tokens) = _twoAssets();
         BasketVaultDeployBase.Deployed memory d = _run(json);
         ProtocolDeployHarness h = new ProtocolDeployHarness();
-        string memory path =
-            string.concat(vm.projectRoot(), "/deployments/test-protocol-manifest.json");
+        string memory path = claimTmpPath(vm, "protocol-asset-vault-manifest");
         h.writeManifestTo(path, d, json);
         string memory out = vm.readFile(path);
-        vm.removeFile(path);
+        releaseTmpPath(vm, path);
         assertEq(out.readAddress(".vault"), d.vault);
         assertEq(out.readAddress(".registry"), address(registry));
         assertTrue(out.readBool(".paused"));

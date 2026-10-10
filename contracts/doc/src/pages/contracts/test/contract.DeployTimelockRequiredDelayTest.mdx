@@ -4,7 +4,7 @@ title: "DeployTimelockRequiredDelayTest"
 
 # DeployTimelockRequiredDelayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -36,6 +36,6 @@ function _prefix() internal pure override returns (string memory);
 ### test_run_revertsWhenDelayMalformed
 
 ```solidity
-function test_run_revertsWhenDelayMalformed() public;
+function test_run_revertsWhenDelayMalformed() public removesOwnManifest;
 ```
 
