@@ -377,7 +377,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => codeWithRetry(() => run("cast", ["code", x], { env: castEnv }), { address: x, rpc: a.rpc, sleep: deps.sleep }) });
     const realFrozenDirCommitted = (d: string): Promise<void> => gitFrozenDirCommitted(coreDir, d);
-    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(coreDir, anchorPath, hash);
+    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {

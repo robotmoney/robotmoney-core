@@ -518,13 +518,13 @@ describe("the anchor must be COMMITTED (8453 plan and publish, pre-signer)", () 
     const f = join(dir, `${PREV}.json`);
     const bytes = JSON.stringify({ deploySha: PREV, counts: REF });
     writeFileSync(f, bytes);
-    expect(await msg(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toContain("is not committed at HEAD"); // untracked
+    expect(await msg(() => gitAnchorCommitted(f, fileHashOf(bytes)))).toContain("is not committed at HEAD"); // untracked
     git("add", "."); git("commit", "-q", "-m", "x");
-    expect(await kind(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toBeUndefined();
-    expect(await msg(() => gitAnchorCommitted(r, f, fileHashOf("other")))).toContain("differs");
+    expect(await kind(() => gitAnchorCommitted(f, fileHashOf(bytes)))).toBeUndefined();
+    expect(await msg(() => gitAnchorCommitted(f, fileHashOf("other")))).toContain("differs");
     writeFileSync(f, bytes + "\n"); // working tree edit: HEAD still holds the checked bytes
-    expect(await kind(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toBeUndefined();
-    expect(await msg(() => gitAnchorCommitted(r, join(tmp("pc-out-"), "x.json"), fileHashOf(bytes)))).toContain("outside the core checkout");
+    expect(await kind(() => gitAnchorCommitted(f, fileHashOf(bytes)))).toBeUndefined();
+    expect(await msg(() => gitAnchorCommitted(join(tmp("pc-out-"), "x.json"), fileHashOf(bytes)))).toContain("is not committed at HEAD"); // a file in no checkout
   });
   const A40 = "a".repeat(40);
   async function worldWithAnchor() {
@@ -655,24 +655,26 @@ describe("the counts dir of a reconstructed baseline is the committed one (final
     mkdirSync(dir, { recursive: true });
     return { r, git, dir };
   }
-  test("a counts dir outside the core checkout is refused", async () => {
-    const { r } = repo();
-    expect(await msg(() => gitFrozenDirCommitted(r, tmp("pc-out-")))).toContain("outside the core checkout");
+  test("a counts dir that is in no git work tree is refused", async () => {
+    const { r, git } = repo();
+    writeFileSync(join(r, "a"), "x"); git("add", "."); git("commit", "-q", "-m", "x");
+    expect(await msg(() => gitFrozenDirCommitted(r, tmp("pc-out-")))).toContain("not inside a git work tree");
   });
-  test("a frozen file tracked at HEAD but missing from the dir is refused (a deleted anchor cannot hide behind the 'alone in the dir' case); a complete dir passes", async () => {
+  test("the dir of the core checkout itself passes only when every frozen file in it is committed and the tree is clean; a tracked file missing from the dir is refused", async () => {
     const { r, git, dir } = repo();
     writeFileSync(join(dir, `${PREV}.json`), "{}");
     git("add", "."); git("commit", "-q", "-m", "x");
     await gitFrozenDirCommitted(r, dir);
     rmSync(join(dir, `${PREV}.json`));
-    expect(await msg(() => gitFrozenDirCommitted(r, dir))).toContain("tracked");
-    writeFileSync(join(dir, `${"1".repeat(40)}.json`), "{}"); // an untracked extra file is the anchor proof's business, not this one's
     expect(await msg(() => gitFrozenDirCommitted(r, dir))).toContain("missing from the counts dir");
+    git("checkout", "--", ".");
+    writeFileSync(join(dir, `${"1".repeat(40)}.json`), "{}"); // an untracked extra frozen file is refused: the dir is the committed one
+    expect(await msg(() => gitFrozenDirCommitted(r, dir))).toContain("not tracked at HEAD");
   });
   test("when git cannot run the refusal says so instead of 'git show: null'", async () => {
     const { r, dir } = repo();
     writeFileSync(join(dir, "x.json"), "{}");
-    expect(await msg(() => gitAnchorCommitted(r, join(dir, "x.json"), "00", "/nonexistent/git"))).toContain("git could not run");
+    expect(await msg(() => gitAnchorCommitted(join(dir, "x.json"), "00", "/nonexistent/git"))).toContain("git could not run");
     expect(await msg(() => gitFrozenDirCommitted(r, dir, "/nonexistent/git"))).toContain("git could not run");
   });
 });
