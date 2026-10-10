@@ -60,7 +60,7 @@ export async function isTwinFork(rpc: Rpc): Promise<boolean> {
   } catch { return false; }
 }
 
-async function requireTwin(rpc: Rpc): Promise<void> {
+export async function requireTwin(rpc: Rpc): Promise<void> {
   const id = await chainIdOf(rpc);
   if (id === BASE_CHAIN_ID) fail(`refusing: the RPC is chain ${BASE_CHAIN_ID} (Base mainnet), these helpers run on the Twin fork only`);
   try { await rpc("anvil_nodeInfo"); } catch { fail(`refusing: chain ${id} does not answer anvil_nodeInfo, it is not an anvil fork`); }

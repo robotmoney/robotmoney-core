@@ -14,6 +14,8 @@ export function freezeCounts(countsJsonPath: string, countsDir: string): string 
   const j = JSON.parse(readFileSync(countsJsonPath, "utf8"));
   // the artifact uploads even when the rehearsal failed, so the job records its own conclusion in counts.json (suite 28)
   if (j.rehearsal?.conclusion !== "success") throw new PublishError("USAGE", `${countsJsonPath}: the rehearsal did not conclude success (rehearsal.conclusion is ${JSON.stringify(j.rehearsal?.conclusion ?? null)}). Counts are frozen only from a green core-stages-twin-chain run.`);
+  // issue 1721: a stage the run adopted was not run, so its count in counts.json is not a measurement of what the stage sends
+  if (j.adopted && Object.keys(j.adopted).length > 0) throw new PublishError("USAGE", `${countsJsonPath}: stage(s) ${Object.keys(j.adopted).join(", ")} were adopted (already on chain), not run, so their counts were not measured. Freeze from a rehearsal that ran every stage (a Twin chain pinned before the library block).`);
   const sha = assertSha(String(j.deploySha));
   const counts = validateCounts(j.counts);
   const sum = Object.values(counts).reduce((a, b) => a + b, 0);

@@ -116,6 +116,8 @@ jobs:
           rpc-url: ${{ steps.fork.outputs.rpc-url }}
           verify: "true"
           govern: "true"
+          # issue 1721: every CREATE2 library is deployed on the fork first, the state Base is in after the real deploy: libs and the first basket stage are ADOPTED
+          predeploy-libs: "true"
       - name: Check counts.json against the stage table
         run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
       - name: Drift check against the frozen counts of this SHA

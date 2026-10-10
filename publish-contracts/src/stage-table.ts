@@ -20,15 +20,20 @@ export interface TableStage {
   manifest: string;
   /** Names from `libraries[]` to link with `forge script --libraries`. */
   libraries: string[];
+  /** Names from the top-level `create2Libraries` that forge deploys by itself (CREATE2 through the factory, ahead of the stage's first transaction) because the stage deploys a contract that links them (issue 1721). Absent: none. */
+  create2Libraries?: string[];
   vault: TableVaultKey | null;
 }
 export interface TableVault { key: TableVaultKey; stage: string; artifact: string; manifest: string }
 export interface TableLibrary { name: string; artifact: string; manifestKey: string; path: string }
+/** A library forge deploys through the CREATE2 factory inside a stage (not linked with `--libraries`, no manifest key). It may link other `create2Libraries`. */
+export interface TableCreate2Library { name: string; artifact: string; path: string }
 export interface StageTable {
   version: 1;
   stages: TableStage[];
   vaults: TableVault[];
   libraries: TableLibrary[];
+  create2Libraries?: TableCreate2Library[];
   artifacts: Record<string, string>;
 }
 
@@ -57,6 +62,11 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   }
   const libNames = new Set(t.libraries.map((l) => l.name));
   for (const s of t.stages) for (const l of s.libraries) if (!libNames.has(l)) bad(`stage ${s.name} links unknown library '${l}'`);
+  const c2 = t.create2Libraries ?? [];
+  if (!Array.isArray(c2)) bad("create2Libraries must be a list");
+  for (const l of c2) if (!l?.name || !l.artifact || !l.path) bad(`create2 library ${String(l?.name)} needs name, artifact and path`);
+  const c2Names = new Set(c2.map((l) => l.name));
+  for (const s of t.stages) if (s.create2Libraries !== undefined) { strList(s.create2Libraries, `stage ${s.name} create2Libraries`); for (const l of s.create2Libraries) if (!c2Names.has(l)) bad(`stage ${s.name} lists unknown create2 library '${l}'`); }
   for (const l of t.libraries) if (!l.name || !l.artifact || !l.manifestKey || !l.path) bad(`library ${String(l.name)} needs name, artifact, manifestKey and path`);
   for (const v of t.vaults) {
     if (!v.key || !v.artifact || !v.manifest) bad("a vault row needs key, stage, artifact and manifest");
