@@ -10,7 +10,7 @@
 //        [--cross-check <earlier frozen file> [--accept-diff stage,stage]]
 // --core-dir (default: this checkout) must be a checkout AT <sha> with forge: the libraries are rebuilt from it. --rpc is the Twin or Base RPC that holds them.
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TWIN_CHAIN_ID } from "../src/chains.ts";
 import { FROZEN_DIR, PROOF_TX_NONCES, assertSha, fileHashOf, latestOtherFrozen, loadFrozenFile, validateCounts, writeFrozen } from "../src/counts.ts";
@@ -48,6 +48,8 @@ export async function freezeFromAdoptedRun(o: {
   // the previous release. --cross-check names it; otherwise the most recent earlier frozen file of the counts dir is used. There is no way to skip it when one exists.
   let cross: { sha: string; counts: Record<string, number>; fileHash: string } | undefined;
   if (o.crossCheckPath) {
+    // the anchor must be a file of the counts dir: loadFrozen looks for it there, so a reference elsewhere would leave a baseline that never loads
+    if (dirname(resolve(o.crossCheckPath)) !== resolve(o.countsDir)) throw new PublishError("USAGE", `--cross-check ${o.crossCheckPath} is not in the counts dir ${o.countsDir}: the anchor of a baseline is a frozen file of that dir (commit it there first)`);
     const bytes = readFileSync(o.crossCheckPath);
     const old = JSON.parse(bytes.toString("utf8"));
     const f = loadFrozenFile(o.crossCheckPath, assertSha(String(old.deploySha))); // an adopted-marked or unverifiable earlier file is no reference

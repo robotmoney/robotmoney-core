@@ -192,3 +192,18 @@ export async function reconstructBaseline(o: {
   verifyReconstruction(file, table);
   return file;
 }
+
+/** `cast code` with a bounded retry (3 tries, doubling backoff). A failure after the last try is CHAIN naming the RPC origin and method, never "no code". Fails closed. */
+export async function codeWithRetry(exec: () => Promise<{ code: number; stdout: string; stderr: string }>, o: { address: string; rpc: string; sleep?: (ms: number) => Promise<void>; baseMs?: number }): Promise<string> {
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let last = "";
+  for (let i = 0; i < 3; i++) {
+    const r = await exec();
+    if (r.code === 0) return r.stdout.trim();
+    last = r.stderr.trim().split("\n").pop() ?? "";
+    if (i < 2) await sleep((o.baseMs ?? 500) * 2 ** i);
+  }
+  let origin = "the RPC";
+  try { origin = new URL(o.rpc).origin; } catch { /* keep the generic name */ }
+  throw new PublishError("CHAIN", `eth_getCode for ${o.address} failed 3 times on ${origin} (cast code: ${last}). Nothing was verified; rerun when the RPC answers`, { address: o.address });
+}

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./chains.ts";
-import { verifyReconstruction, type Reconstruction } from "./counts-reconstruct.ts";
+import { crossCheckDiff, verifyReconstruction, type Reconstruction } from "./counts-reconstruct.ts";
 import { getStageTable } from "./stages.ts";
 
 export type FrozenCounts = Record<string, number>;
@@ -68,14 +68,20 @@ export function loadFrozen(dir: string, sha: string, o: { allowAdopted?: boolean
   if (!existsSync(p)) throw new PublishError("COUNTS_MISSING", `FROZEN_COUNTS_MISSING: no frozen counts for DEPLOY_SHA ${sha}: ${p} does not exist. No counts file is committed for a SHA until its first Twin chain rehearsal has measured it. Run publish contracts --measure on the Twin chain (918453) at this SHA (refused on 8453), then commit ${FROZEN_DIR}/${sha}.json: review a measurement that ran every stage, or, when the run ADOPTED the CREATE2 libraries (every Twin fork since Base block 52401633), rebuild the baseline with freeze-counts --from-adopted-run (issue 1733). Nothing here guesses a count.`, { sha });
   const f = loadFrozenFile(p, sha, o);
   if (f.measured.reconstructed) {
-    // Issue 1733: the counts of the stages that adopted nothing come from a Twin counts.json nobody can prove untampered offline. The earlier release is the independent anchor,
-    // so a reconstructed baseline written while an earlier frozen file exists must say it was cross-checked against it (and the file must still be the one that was checked).
-    const earlier = latestOtherFrozen(dir, sha, String(f.measured.at));
+    // Issue 1733: the counts of the stages that adopted nothing come from a Twin counts.json nobody can prove untampered offline. The earlier release is the independent anchor.
+    // The rule does NOT trust `measured.at` (it can be backdated): a reconstructed file must carry crossChecked whenever ANY other frozen file exists in the dir, and the
+    // anchor it names must still be there with the bytes that were checked. One malformed <sha>.json in the dir fails this load too (fails closed).
+    const others = otherFrozenFiles(dir, sha);
     const cc = f.measured.crossChecked;
-    if (earlier && !cc) throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline with no crossChecked record, but the earlier frozen file ${earlier.sha} exists: rebuild it with freeze-counts --from-adopted-run (the cross-check against the previous release is mandatory)`, { sha, earlier: earlier.sha });
+    if (others.length > 0 && !cc) throw new PublishError("COUNTS_MISSING", `${p} is a reconstructed baseline with no crossChecked record, but other frozen file(s) exist (${others.map((o) => o.sha.slice(0, 8)).join(", ")}): rebuild it with freeze-counts --from-adopted-run (the cross-check against the previous release is mandatory)`, { sha });
     if (cc) {
       const there = join(dir, `${cc.sha}.json`);
-      if (existsSync(there) && fileHashOf(readFileSync(there)) !== cc.fileHash) throw new PublishError("COUNTS_MISSING", `${p} was cross-checked against ${cc.sha}, whose file has changed since (hash differs)`, { sha, against: cc.sha });
+      if (!existsSync(there)) throw new PublishError("COUNTS_MISSING", `${p} was cross-checked against ${cc.sha}, whose file ${there} is missing: restore the anchor file (git checkout it). A reconstructed baseline never loads without its anchor`, { sha, against: cc.sha });
+      if (fileHashOf(readFileSync(there)) !== cc.fileHash) throw new PublishError("COUNTS_MISSING", `${p} was cross-checked against ${cc.sha}, whose file has changed since (hash differs): restore the committed bytes (git checkout ${there}); an autocrlf or reformat change trips this too`, { sha, against: cc.sha });
+      // the counts must still be the anchor's counts apart from the differences that were reviewed and accepted: a forged file that names the real anchor is caught here
+      const anchor = loadFrozenFile(there, cc.sha);
+      const diff = JSON.stringify(crossCheckDiff(f.counts, anchor.counts)), accepted = JSON.stringify(f.measured.reconstructed.crossCheck?.accepted ?? []);
+      if (diff !== accepted) throw new PublishError("COUNTS_MISSING", `${p} differs from its anchor ${cc.sha} at ${diff}, the file records ${accepted} as the accepted differences`, { sha, against: cc.sha });
     }
   }
   return f;

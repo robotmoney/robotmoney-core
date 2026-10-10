@@ -1,14 +1,15 @@
 // Reconstructed baseline frozen counts (issue 1733): a new sha gets a NON-adopted frozen file rebuilt from an adopted Twin measuring run, checked against the
 // stage table, the build and the chain, and marked `measured.reconstructed`. Every refusal below has a mutation check in the PR description.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
-import { adoptableOf, crossCheckDiff, reconstructBaseline, verifyReconstruction, verifyReconstructionOnChain, type CountsJsonLike, type Reconstruction } from "../src/counts-reconstruct.ts";
+import { codeWithRetry, adoptableOf, crossCheckDiff, reconstructBaseline, verifyReconstruction, verifyReconstructionOnChain, type CountsJsonLike, type Reconstruction } from "../src/counts-reconstruct.ts";
 import { PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress, expectedLibraryRuntime } from "../src/libs-adopt.ts";
-import { assertReleaseGate } from "../src/release-gate.ts";
+import { assertReleaseGate, gitAnchorCommitted } from "../src/release-gate.ts";
 import { adoptedFromRunManifest, buildCountsJson, checkCountsJson } from "../src/ci/rehearsal-counts.ts";
 import { freezeFromAdoptedRun } from "../scripts/freeze-counts.ts";
 import { getStageTable } from "../src/stages.ts";
@@ -120,11 +121,14 @@ describe("reconstruction from an adopted measuring run", () => {
     const dir = tmp("pc-recon-");
     const countsJson = join(dir, "counts.json");
     writeFileSync(countsJson, JSON.stringify(adoptedRun()));
-    const old = join(dir, "old.json");
+    mkdirSync(join(dir, "o"));
+    const old = join(dir, "o", `${"d".repeat(40)}.json`);
     writeFileSync(old, JSON.stringify({ deploySha: "d".repeat(40), measured: { chainId: 918453, at: "x", adopted: ["libs"] }, counts: REF }));
     expect(await kind(() => freezeFromAdoptedRun({ countsJsonPath: countsJson, sha: SHA, countsDir: join(dir, "o"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: old }))).toBe("COUNTS_MISSING");
-    writeFileSync(old, JSON.stringify({ deploySha: "d".repeat(40), measured: { chainId: 918453, at: "x" }, counts: REF }));
-    await freezeFromAdoptedRun({ countsJsonPath: countsJson, sha: SHA, countsDir: join(dir, "o2"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: old });
+    mkdirSync(join(dir, "o2"));
+    const old2 = join(dir, "o2", `${"d".repeat(40)}.json`);
+    writeFileSync(old2, JSON.stringify({ deploySha: "d".repeat(40), measured: { chainId: 918453, at: "x" }, counts: REF }));
+    await freezeFromAdoptedRun({ countsJsonPath: countsJson, sha: SHA, countsDir: join(dir, "o2"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: old2 });
     expect(loadFrozen(join(dir, "o2"), SHA).measured.reconstructed!.crossCheck!.against).toBe("d".repeat(40));
   });
 });
@@ -310,7 +314,8 @@ describe("the Twin job's counts.json carries the adoption records, so the recons
     const run = adoptedRun();
     const cj = join(dir, "counts.json");
     writeFileSync(cj, JSON.stringify(run));
-    const p = await freezeFromAdoptedRun({ countsJsonPath: cj, sha: SHA, countsDir: join(dir, "f"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: REF_PATH });
+    mkdirSync(join(dir, "f")); copyFileSync(REF_PATH, join(dir, "f", "9a768bb9cc66d4485470a99a068ba7477604501a.json"));
+    const p = await freezeFromAdoptedRun({ countsJsonPath: cj, sha: SHA, countsDir: join(dir, "f"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: join(dir, "f", "9a768bb9cc66d4485470a99a068ba7477604501a.json") });
     const f = loadFrozenFile(p, SHA);
     expect(f.counts).toEqual(REF);
     expect((f.measured.reconstructed as Reconstruction).crossCheck!.accepted).toEqual([]);
@@ -391,8 +396,12 @@ describe("the cross-check against the previous release is mandatory (issue 1733 
     const t = setup({ ...REF, vault: 99 });
     writeFileSync(t.cj, JSON.stringify(adoptedRun()));
     expect(await kind(() => go(t.cj, t.frozen))).toBe("COUNT_MISMATCH"); // the auto anchor differs
-    const p = await go(t.cj, t.frozen, { crossCheckPath: REF_PATH });
-    expect(JSON.parse(readFileSync(p, "utf8")).measured.crossChecked.sha).toBe(PREV);
+    const second = `${"1".repeat(40)}.json`; // an OLDER file with the right counts: auto picks the newer (vault 99) one, the explicit path picks this one
+    writeFileSync(join(t.frozen, second), JSON.stringify({ deploySha: "1".repeat(40), measured: { chainId: 918453, at: "2020-01-01T00:00:00Z" }, counts: REF }));
+    const p = await go(t.cj, t.frozen, { crossCheckPath: join(t.frozen, second) });
+    expect(JSON.parse(readFileSync(p, "utf8")).measured.crossChecked.sha).toBe("1".repeat(40));
+    // the anchor must live in the counts dir, or the baseline could never load: a reference outside it is refused
+    expect(await kind(() => go(t.cj, t.frozen, { crossCheckPath: REF_PATH }))).toBe("USAGE");
     const empty = tmp("pc-mand-");
     const p2 = await go(t.cj, empty);
     expect(JSON.parse(readFileSync(p2, "utf8")).measured.crossChecked).toBeUndefined();
@@ -418,12 +427,55 @@ describe("the cross-check against the previous release is mandatory (issue 1733 
     writeFileSync(join(t.frozen, `${PREV}.json`), JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts: { ...REF, timelock: 44 } }));
     expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("has changed since");
   });
-  test("a LATER frozen file in the dir is not an earlier anchor, so an old baseline keeps loading after a newer release is added", async () => {
-    const dir = tmp("pc-mand-");
-    const f = await rebuild(adoptedRun());
-    writeFileSync(frozenPath(dir, SHA), JSON.stringify(f));
-    writeFileSync(frozenPath(dir, "e".repeat(40)), JSON.stringify({ deploySha: "e".repeat(40), measured: { chainId: 918453, at: "2099-01-01T00:00:00Z" }, counts: REF }));
-    expect(() => loadFrozen(dir, SHA)).not.toThrow();
+  test("a baseline that was cross-checked keeps loading after a LATER frozen file is added to the dir", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    await go(t.cj, t.frozen);
+    writeFileSync(frozenPath(t.frozen, "e".repeat(40)), JSON.stringify({ deploySha: "e".repeat(40), measured: { chainId: 918453, at: "2099-01-01T00:00:00Z" }, counts: REF }));
+    expect(() => loadFrozen(t.frozen, SHA)).not.toThrow();
+  });
+  test("BACKDATED forgery: a self-consistent reconstructed file with no crossChecked and an old `at` is refused whenever ANY other frozen file exists (the loader does not trust `at`)", async () => {
+    const t = setup();
+    const f = JSON.parse(JSON.stringify(await rebuild(adoptedRun())));
+    f.measured.at = "2000-01-01T00:00:00Z";
+    writeFileSync(frozenPath(t.frozen, SHA), JSON.stringify(f));
+    expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("no crossChecked record");
+    // alone in the dir (the very first release) it still loads
+    const alone = tmp("pc-mand-");
+    writeFileSync(frozenPath(alone, SHA), JSON.stringify(f));
+    expect(() => loadFrozen(alone, SHA)).not.toThrow();
+  });
+  test("DELETED anchor: after a good reconstruction, removing the anchor file makes the baseline unloadable (restore it), it never loads silently", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    await go(t.cj, t.frozen);
+    rmSync(join(t.frozen, `${PREV}.json`));
+    const m = await msg(() => loadFrozen(t.frozen, SHA));
+    expect(m).toContain("is missing: restore the anchor file");
+    expect(await kind(() => loadFrozen(t.frozen, SHA))).toBe("COUNTS_MISSING");
+  });
+  test("a changed anchor says to restore the committed bytes", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    await go(t.cj, t.frozen);
+    writeFileSync(join(t.frozen, `${PREV}.json`), JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts: REF }) + "\n");
+    expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("restore the committed bytes");
+  });
+  test("a forged file that names the REAL anchor with the right hash but carries other counts is refused: its counts must equal the anchor's apart from the accepted differences", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    const p = await go(t.cj, t.frozen);
+    const f = JSON.parse(readFileSync(p, "utf8"));
+    f.counts.vault = 17; f.measured.reconstructed.measuredCounts.vault = 17;
+    writeFileSync(p, JSON.stringify(f));
+    expect(await msg(() => loadFrozen(t.frozen, SHA))).toContain("differs from its anchor");
+  });
+  test("one malformed <sha>.json in the dir stops the load of a reconstructed baseline (fails closed)", async () => {
+    const t = setup();
+    writeFileSync(t.cj, JSON.stringify(adoptedRun()));
+    await go(t.cj, t.frozen);
+    writeFileSync(frozenPath(t.frozen, "f".repeat(40)), "{ not json");
+    expect(() => loadFrozen(t.frozen, SHA)).toThrow();
   });
   test("malformed or inconsistent crossChecked fields are refused offline", async () => {
     const t = setup();
@@ -449,5 +501,81 @@ describe("publish on 8453 re-verifies a reconstructed baseline itself (the order
     expect(asked).toBe(1);
     expect(signerMade).toBe(false);
     expect(w.state().calls.filter((c: any) => c.tool === "forge").length).toBe(0);
+  });
+});
+
+describe("the anchor must be COMMITTED (8453 plan and publish, pre-signer)", () => {
+  const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
+  function repo() {
+    const r = tmp("pc-git-");
+    const git = (...a: string[]) => execFileSync("git", ["-C", r, ...a], { stdio: "pipe" });
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t");
+    mkdirSync(join(r, "deployments", "frozen-counts"), { recursive: true });
+    return { r, git, dir: join(r, "deployments", "frozen-counts") };
+  }
+  test("gitAnchorCommitted: a committed file with the checked bytes passes; untracked, edited-after-commit, never-committed hash and outside-checkout files are refused", async () => {
+    const { r, git, dir } = repo();
+    const f = join(dir, `${PREV}.json`);
+    const bytes = JSON.stringify({ deploySha: PREV, counts: REF });
+    writeFileSync(f, bytes);
+    expect(await msg(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toContain("is not committed at HEAD"); // untracked
+    git("add", "."); git("commit", "-q", "-m", "x");
+    expect(await kind(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toBeUndefined();
+    expect(await msg(() => gitAnchorCommitted(r, f, fileHashOf("other")))).toContain("differs");
+    writeFileSync(f, bytes + "\n"); // working tree edit: HEAD still holds the checked bytes
+    expect(await kind(() => gitAnchorCommitted(r, f, fileHashOf(bytes)))).toBeUndefined();
+    expect(await msg(() => gitAnchorCommitted(r, join(tmp("pc-out-"), "x.json"), fileHashOf(bytes)))).toContain("outside the core checkout");
+  });
+  const A40 = "a".repeat(40);
+  async function worldWithAnchor() {
+    const w = world({ chainId: 8453, writeFrozen: false });
+    mkdirSync(w.countsDir, { recursive: true });
+    const prev = JSON.stringify({ deploySha: PREV, measured: { chainId: 918453, at: "2026-10-09T19:46:52.795Z" }, counts: REF });
+    writeFileSync(frozenPath(w.countsDir, PREV), prev);
+    const f = await rebuild(adoptedRun({ deploySha: A40 }), { sha: A40, cross: { sha: PREV, counts: REF, fileHash: fileHashOf(prev) } });
+    writeFileSync(frozenPath(w.countsDir, A40), JSON.stringify(f));
+    return w;
+  }
+  const noSigner = { makeSigner: () => { throw new Error("no signer"); } };
+  test("the plan on 8453 asks the anchor proof for the recorded path and hash; a refusal stops it with COUNTS_MISSING", async () => {
+    const w = await worldWithAnchor();
+    const seen: string[][] = [];
+    const real = console.log; console.log = () => {};
+    try {
+      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async (p: string, h: string) => { seen.push([p.split("/").pop()!, h]); } })).toBe(0);
+      expect(seen.length).toBe(1);
+      expect(seen[0]![0]).toBe(`${PREV}.json`);
+      expect(await w.run(["--stage", "plan", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } })).toBe(EXIT_CODES.COUNTS_MISSING);
+    } finally { console.log = real; }
+  });
+  test("a publish stage on 8453 asks for it too, before any signer or forge call", async () => {
+    const w = await worldWithAnchor();
+    const code = await w.run(["--stage", "libs", "--environment", "base-mainnet"], { ...noSigner, verifyReconstructed: async () => {}, anchorCommitted: async () => { throw new PublishError("COUNTS_MISSING", "not committed"); } });
+    expect(code).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(w.state().calls.filter((c: any) => c.tool === "forge").length).toBe(0);
+  });
+  test("the release gate without an anchor proof refuses a baseline that names an anchor", async () => {
+    const w = await worldWithAnchor();
+    const gate = (anchorCommitted?: () => Promise<void>) => assertReleaseGate({ sha: A40, coreDir: "/x", countsDir: w.countsDir, env: { GITHUB_TOKEN: "t" }, kind: "rehearsal", releaseTags: async () => ["release/v1-rehearsal"], remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }), verifyReconstructed: async () => {}, anchorCommitted });
+    expect(await kind(() => gate())).toBe("COUNTS_MISSING");
+    expect(await gate(async () => {})).toBe("release/v1-rehearsal");
+  });
+});
+
+describe("a rate-limited cast code is retried (3 tries, backoff) and still fails closed", () => {
+  const ok = { code: 0, stdout: "0x6001\n", stderr: "" }, bad = { code: 1, stdout: "", stderr: "Error: 429 Too Many Requests" };
+  test("two failures then success returns the code after sleeping 500 ms and 1000 ms", async () => {
+    const seq = [bad, bad, ok]; const slept: number[] = [];
+    expect(await codeWithRetry(async () => seq.shift()!, { address: "0xab", rpc: "https://rpc.example/v2/SECRET", sleep: async (ms) => { slept.push(ms); } })).toBe("0x6001");
+    expect(slept).toEqual([500, 1000]);
+  });
+  test("three failures are a CHAIN error naming the RPC origin (not the key in its path) and the method, after exactly 3 tries; nothing is read as 'no code'", async () => {
+    let n = 0;
+    const e = await (codeWithRetry(async () => { n++; return bad; }, { address: "0xab", rpc: "https://rpc.example/v2/SECRET", sleep: async () => {} }).catch((x) => x as PublishError) as unknown as Promise<PublishError>);
+    expect(n).toBe(3);
+    expect(e.kind).toBe("CHAIN");
+    expect(e.message).toContain("https://rpc.example");
+    expect(e.message).toContain("eth_getCode");
+    expect(e.message).not.toContain("SECRET");
   });
 });
