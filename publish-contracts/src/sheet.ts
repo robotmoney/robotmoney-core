@@ -40,9 +40,8 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   SHARE_RECEIVER_ADDRESS: { kind: "address" },
   RECEIPT_ADMIN_ADDRESS: { kind: "address" },
   // VOTER_ADDRESSES and VOTER_POWER (with QUORUM_THRESHOLD and VOTING_PERIOD below) are constructor arguments of today's RouterGovernance
-  // bytecode. They stay parseable until the contract issue deletes voting. There is no voting by anyone: the mainnet test deploys with no voters,
-  // and RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused, have no voters, and are deleted before the
-  // final deployment. Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt, core 1696).
+  // bytecode. They stay parseable until the contract change (issue 1698) deletes voting. There is no voting by anyone: the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for,
+  // and RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment. Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt, core 1696).
   VOTER_ADDRESSES: { kind: "address-list" },
   VOTER_POWER: { kind: "uint" },
   SAFE_OWNERS: { kind: "address-list" },

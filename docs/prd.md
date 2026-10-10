@@ -197,9 +197,7 @@ is the rebalance: one timelock operation releases the receipt and applies
 its weights (govern row `apply-receipt`, core 1696). There is no voting by
 token holders or anyone else: no voter set, no voting power, no quorum,
 no voting period, no propose, vote or execute. `RouterGovernance.propose`,
-`vote` and `execute` exist in the deployed test bytecode, are unused, have
-no voters, and are deleted before the final deployment, when a
-weight-setter `applyReceipt` call replaces them. There is no tier system
+`vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. There is no tier system
 (Observer / Participant / Analyst / Strategist) and no activity gate.
 
 1. The Investment Committee records a consensus receipt with a weight

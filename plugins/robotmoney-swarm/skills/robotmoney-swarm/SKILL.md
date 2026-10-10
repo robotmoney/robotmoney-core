@@ -4,11 +4,11 @@ description: >
   Robot Money Swarm agent skill extending robotmoney-analyst. Reads the current regime
   feed and vault holdings, forms a per-vault tilt (overweight/neutral/underweight)
   with target_weight_bps and confidence, posts a narrative rationale memo to a
-  configured public URI, then submits a signed committee vote via
-  `rmpc committee vote-submit`. Fails closed before any on-chain write when
+  configured public URI, then submits a signed committee tilt via
+  `rmpc committee vote-submit` (the command name only: there is no voting at all). Fails closed before any on-chain write when
   ic_contract_address is absent from config, the agent is not registered, or
   the rationale_uri is unreachable. Use this skill when an Investment Committee
-  agent needs to submit a vote for a specific vault based on the current regime
+  agent needs to submit a tilt for a specific vault based on the current regime
   signal. The skill MUST NOT be invoked without a valid rmpc config that includes
   ic_contract_address.
 ---
@@ -26,9 +26,9 @@ description: >
 > (`InvestmentCommitteePolicy`), and the tilt schema
 > (`schemas/committee-vote.json`). Type those exactly as written. A committee
 > "vote" is a signed per-vault tilt. It is not a vote on anything: the
-> committee does not govern, and router weights change only when
-> `WEIGHT_SETTER_ROLE` applies the committee's consensus receipt through the
-> Safe and the timelock.
+> committee does not govern. There is no voting at all: router weights change
+> only when `WEIGHT_SETTER_ROLE` submits the committee's consensus receipt, and
+> that submission, scheduled by the Safe through the timelock, is the rebalance.
 
 Canonical docs: `docs/architecture.md §5.5`, `docs/prd.md §Committee`,
 vote schema: `schemas/committee-vote.json`.
@@ -37,16 +37,16 @@ vote schema: `schemas/committee-vote.json`.
 
 Invoke this skill when:
 
-- An Investment Committee agent needs to submit a per-vault tilt vote.
+- An Investment Committee agent needs to submit a per-vault tilt.
 - The operator asks to "vote on vault X", "submit a committee tilt", or "form
-  and submit a committee vote".
+  and submit a committee tilt".
 
 Do **not** invoke this skill when:
 
 - The operator only wants to read the regime (use `robotmoney-analyst` instead).
 - The operator wants to change router weights. There is no voting by anyone:
-  `WEIGHT_SETTER_ROLE` applies the committee's consensus receipt through the
-  Safe and the timelock, and rmpc has no governance write command.
+  `WEIGHT_SETTER_ROLE` submits the committee's consensus receipt, scheduled by
+  the Safe through the timelock, and rmpc has no governance write command.
 - `ic_contract_address` is absent from the rmpc config — surface the
   `MissingICConfig` error instead.
 
@@ -58,7 +58,7 @@ Do **not** invoke this skill when:
    committee agent in the IC contract. If `rmpc committee vote-submit` returns
    `AgentNotRegistered` → surface the error and do not retry.
 3. **Rationale URI reachable.** The `rationale_uri` where the memo will be posted
-   must return HTTP 200 before the vote is submitted. If unreachable → abort
+   must return HTTP 200 before the tilt is submitted. If unreachable → abort
    with `RationaleURIUnreachable`.
 
 ## Workflow
@@ -179,4 +179,4 @@ All abort paths exit non-zero and print a named error code to stderr.
 - IC policy contract or gateway changes
 - Explorer or dapp surfaces
 - Committee agent registration (a one-time Safe and timelock action: rmpc does not register committee agents)
-- Router-weight changes (the Safe applies the consensus receipt through the timelock; rmpc has no governance write command)
+- Router-weight changes (`WEIGHT_SETTER_ROLE` submits the consensus receipt through a Safe-scheduled timelock operation; rmpc has no governance write command)

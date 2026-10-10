@@ -48,8 +48,7 @@ product:
 - **Account layer** — watched address or connected wallet; shows portfolio
   positions, transaction history, and agent policies.
 - **Action layer** — wallet required; vault-selector deposit and multi-vault
-  withdrawal. The governance proposal surface renders nothing on mainnet: there
-  are no proposals and no voters, because router weights change only when the
+  withdrawal. The governance proposal surface renders nothing on mainnet: there are no proposals, because nobody holds a voter key, because router weights change only when the
   Safe applies a consensus receipt through the timelock.
 
 Before any implementation issue begins, five questions must be resolved:
@@ -104,9 +103,7 @@ portfolio router ABI are missing and must be added.
   `activeVaults()` per `docs/technical/portfolio-router-decisions.md` §3.1–3.2.
 - `routerGovernanceAbi` — `propose(...)`, `castVote(...)`, `execute(...)`,
   `getProposal(uint256)` for the proposal surface. `RouterGovernance.propose`,
-  `vote` and `execute` exist in the deployed test bytecode, are unused, have no
-  voters, and are deleted before the final deployment, when a weight-setter
-  `applyReceipt` call replaces them.
+  `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 No existing ABI in `abi.ts` needs to be changed. The edit is purely additive.
 Risk of merge conflict with other in-flight issues: moderate (other issues may
@@ -408,7 +405,7 @@ This scout (317)
    That contract is deployed as of the governance phase issues (#341, #342). The
    tab is fully additive but must import `routerGovernanceAbi` from `abi.ts`
    (added in step 1 of the serialization sequence). On mainnet it renders
-   nothing: there are no proposals and no voters.
+   nothing: there are no proposals, because nobody holds a voter key.
 
 ---
 

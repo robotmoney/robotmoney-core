@@ -15,7 +15,7 @@ exists so the gap is *recorded* rather than forgotten, which is the whole of
 what issue #1247 task 4.11 asks for.
 
 Out of scope for v0.1, and each a separate decision: mainnet deployment, a Safe
-with hardware-wallet signers, `ADMIN_ROLE` transfer to a deployed
+whose owners sign with encrypted keystores, `ADMIN_ROLE` transfer to a deployed
 `TimelockController` on mainnet, an audit pass, a funded submitter key, and
 registered genesis agents.
 

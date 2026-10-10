@@ -107,8 +107,7 @@ rmpc get-governance --config ./config.toml [--pretty]
 Reads the configured `RouterGovernance` contract (requires `governance_address`
 in the operator config). Returns:
 
-- `active_proposal` — always `null`: the deployment has no voters and no
-  proposals.
+- `active_proposal` — always `null`: nobody holds a voter key, so there are no proposals.
 - `cadence` — constructor arguments of today's `RouterGovernance` bytecode
   (quorum threshold, execution delay, voting period), printed as read. They are
   not a governance model: there is no voting by anyone.

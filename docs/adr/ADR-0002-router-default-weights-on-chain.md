@@ -40,9 +40,7 @@ Updates to `defaultWeights` flow through the same Safe → Timelock →
 `ADMIN_ROLE` path used elsewhere in the protocol. On today's bytecode the
 `apply-receipt` batch writes the receipt's vector through
 `RouterGovernance.setDefaultWeights`; `RouterGovernance.propose`, `vote`
-and `execute` exist in the deployed test bytecode, are unused, have no
-voters, and are deleted before the final deployment, when a weight-setter
-`applyReceipt` call replaces them.
+and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 ## Amendment — 2026-10-05: Launch default weights and who sets active weights
 

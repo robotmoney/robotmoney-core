@@ -229,7 +229,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS · `RouterGovernance` min-delay (prior M-9 fix) · symbolic.
 
 > **`GOV-3` — Router weights change only through the timelock.**
-> 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE`; a weight change is one timelock operation (`apply-receipt`). `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused, have no voters, and are deleted before the final deployment, when a weight-setter `applyReceipt` call replaces them · deploy-assertion.
+> 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE`; a weight change is one timelock operation (`apply-receipt`). `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them · deploy-assertion.
 
 > **`GOV-4` — A weight vector that would render router deposits non-executable can never be applied (no self-DoS).**
 > ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_proposalCannotSelfDosRouter`.

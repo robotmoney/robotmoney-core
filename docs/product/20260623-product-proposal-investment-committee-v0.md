@@ -71,7 +71,7 @@
 > anchor rehearses the mechanism on a chain nobody else reads. Until the
 > contracts are live on Base behind a real Safe and timelock, the dapp must not
 > describe the record as tamper-proof or censorship-resistant in the present
-> tense. Going live additionally requires a Safe with hardware-wallet signers,
+> tense. Going live additionally requires a Safe whose owners sign with encrypted keystores,
 > `ADMIN_ROLE` transferred to a deployed `TimelockController` on all five
 > protocol contracts (`docs/architecture.md:1226`), an audit pass, a funded
 > submitter key with a custody and rotation story, and registered genesis agents —
@@ -537,8 +537,8 @@ schedules one batch that releases the hash-verified receipt and applies its
 weight vector through the weight setter; the tool checks before sending that
 the bps sum to 10000 and that the vault list equals the registry's
 router-eligible list. `RouterGovernance.propose`, `vote` and `execute` exist in
-the deployed test bytecode, are unused, have no voters, and are deleted before
-the final deployment, when a weight-setter `applyReceipt` call replaces them.
+the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before
+the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
 
 #### Governance topology (this repo has more than one governing body)
 
@@ -548,7 +548,7 @@ included. Two roles sit beside it with no configuration authority:
 
 | Body | Membership | Governs |
 |---|---|---|
-| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, hardware wallets required (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the `apply-receipt` batch) |
+| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, owners sign with encrypted keystores and a typed passphrase (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the `apply-receipt` batch) |
 | **Committee agents** | `COMMITTEE_AGENT_ROLE` holders registered by the timelock | Nothing on chain: they record tilts and the consensus receipt as signed recommendations |
 | **Guardian** | Lower quorum than the full Safe; may pause, may **not** unpause (`docs/technical/security-model.md:212`) | Emergency pause |
 

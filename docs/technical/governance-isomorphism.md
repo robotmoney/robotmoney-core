@@ -49,10 +49,10 @@ match.
 | Deploy scripts and contracts | same | same | **yes** |
 | Chain id | 918453 (or the forge test chain) | 8453 | no, allowed difference |
 | Owner keys | throwaway keys | named humans' keys | no, allowed difference |
-| Owner key custody | encrypted keystores | hardware wallets | no, allowed difference |
+| Owner key custody | encrypted keystores, passphrase read from a file | encrypted keystores, passphrase typed at a hidden prompt | no, allowed difference |
 | Timelock delay value | short, off chain 8453 only | 172800 s (48 hours), enforced as a floor on chain 8453 | no, allowed difference |
 
-Key custody legitimately differs: CI cannot hold a hardware wallet. The delay value
+Key custody legitimately differs: CI cannot type a passphrase. Owners use keystores, not hardware wallets. The delay value
 legitimately differs: the Twin chain cannot move its clock forward, so a rehearsal
 cannot wait 48 hours. A short delay proves the scripts run. It never proves the real
 delay. The real delay and the real signers are proven on Base mainnet through the
@@ -79,7 +79,7 @@ them through govern is refused. The one on-demand govern row after launch is
 `apply-receipt` (core 1696): the Safe releases a consensus receipt and applies its
 weights as one timelock batch. `RouterGovernance`'s constructor arguments in the
 sheet (`VOTER_*`, `QUORUM_THRESHOLD`, `VOTING_PERIOD`) parameterise today's
-bytecode only; the test deployment has no voters.
+bytecode only; the test deployment's voter addresses are held by nobody.
 
 The Safe tool's other operations (`updateDelay`, a no-op `scheduleBatch`, a cancel)
 are demonstrations. They run on the Twin fork (`update-delay`, `batch`, `cancel`) and

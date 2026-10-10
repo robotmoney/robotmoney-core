@@ -154,8 +154,7 @@ rmpc get-governance --config <CONFIG> --pretty
 ```
 
 Surface the router weight vector. `active_proposal` is always `null` and the
-`cadence_params` block holds constructor arguments of today's bytecode: the
-deployment has no voters and no proposals.
+`cadence_params` block holds constructor arguments of today's bytecode: nobody holds a voter key, so there are no proposals.
 
 ### get-weights
 
