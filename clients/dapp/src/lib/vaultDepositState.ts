@@ -34,18 +34,36 @@ const REGISTRY_DEPOSITS_PAUSED = 1;
 const REGISTRY_RETIRED = 2;
 
 export type DepositState =
-  | { readonly kind: "open" }
+  | { readonly kind: "open"; readonly source: "chain" }
+  | { readonly kind: "open"; readonly source: "index"; readonly block: number }
   | { readonly kind: "paused"; readonly source: "registry" | "chain" | "explorer" }
   | { readonly kind: "retired" }
   | { readonly kind: "unknown" };
+
+/** The index is stale past this many blocks between the chain head and its last indexed block (about a minute on Base). */
+export const EXPLORER_STALE_AFTER_BLOCKS = 30;
 
 export interface DepositStateInput {
   /** The registry (or explorer `status`) value: 0 Active, 1 DepositsPaused, 2 Retired. */
   readonly registryStatus: number;
   /** The explorer's `deposits_paused`; null or undefined when it has no snapshot. */
   readonly explorerPaused?: boolean | null;
+  /** The explorer's `block_number`: the block its answer is as of. 0, null or undefined means nothing indexed. */
+  readonly explorerBlock?: number | null;
+  /** The explorer's `chain_head_block`. */
+  readonly explorerHead?: number | null;
   /** The vault's `depositsPaused()` read from the chain; undefined when it could not be read. */
   readonly chainPaused?: boolean;
+}
+
+/** Is the explorer's answer provably fresh? An unindexed explorer (block 0 or null) or one far behind the head is not. */
+export function explorerFresh(
+  block: number | null | undefined,
+  head: number | null | undefined,
+): boolean {
+  if (block == null || block <= 0) return false;
+  if (head != null && head > 0 && head - block > EXPLORER_STALE_AFTER_BLOCKS) return false;
+  return true;
 }
 
 export function resolveDepositState(input: DepositStateInput): DepositState {
@@ -53,24 +71,28 @@ export function resolveDepositState(input: DepositStateInput): DepositState {
   if (input.registryStatus === REGISTRY_DEPOSITS_PAUSED)
     return { kind: "paused", source: "registry" };
   if (input.chainPaused === true) return { kind: "paused", source: "chain" };
-  if (input.chainPaused === false) return { kind: "open" };
+  if (input.chainPaused === false) return { kind: "open", source: "chain" };
+  // The chain could not be asked (no wallet, wrong chain, failed read). Only the index is left. A pause
+  // from the index is trusted at any age (closed is the safe answer); an open from the index counts only
+  // while the index is fresh, and is always labelled as index-derived.
   if (input.explorerPaused === true) return { kind: "paused", source: "explorer" };
-  if (input.explorerPaused === false) return { kind: "open" };
+  if (input.explorerPaused === false && explorerFresh(input.explorerBlock, input.explorerHead)) {
+    return { kind: "open", source: "index", block: input.explorerBlock as number };
+  }
   return { kind: "unknown" };
 }
 
 /** True only when deposits are known to be open. Unknown is not open. */
 export const depositsOpen = (s: DepositState): boolean => s.kind === "open";
 
-/** Deposits are known to be closed. A form disables its deposit button on this. Unknown only warns: the simulation still refuses a deposit the contract rejects. */
-export const depositsBlocked = (s: DepositState): boolean =>
-  s.kind === "paused" || s.kind === "retired";
+/** A deposit form is enabled ONLY in the known-open state. Paused, retired and unknown all disable it. */
+export const depositsBlocked = (s: DepositState): boolean => s.kind !== "open";
 
 /** The one status label a card, a list row, a detail page or a form shows. "Active" only when deposits are open. */
 export function depositStateLabel(s: DepositState): string {
   switch (s.kind) {
     case "open":
-      return "Active";
+      return s.source === "index" ? `Active (per index, block ${s.block})` : "Active";
     case "paused":
       return "Deposits paused / closed";
     case "retired":
@@ -90,9 +112,12 @@ export function depositStateReason(s: DepositState): string | null {
     case "retired":
       return "This vault is retired and takes no deposits. Withdraw and redeem stay open.";
     case "unknown":
-      return "The dapp could not read whether deposits are open. Treat deposits as closed until it can.";
+      return "Deposit state unknown: cannot confirm deposits are open. Deposits stay disabled until they can be confirmed. Withdraw and redeem stay open.";
   }
 }
 
 /** The data attribute value tests and styles switch on. */
 export const depositStateAttr = (s: DepositState): string => s.kind;
+
+/** Where an open answer came from: `chain` (live read) or `index` (explorer snapshot). Empty for other states. */
+export const depositStateSource = (s: DepositState): string => (s.kind === "open" ? s.source : "");

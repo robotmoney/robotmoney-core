@@ -48,8 +48,8 @@ import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { DepositsClosedNotice } from "./DepositsClosedNotice";
-import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
-import type { DepositState } from "../lib/vaultDepositState";
+import { useDepositState } from "../lib/useDepositStates";
+import { depositsBlocked } from "../lib/vaultDepositState";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
 import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
@@ -160,13 +160,11 @@ export function DepositWithdrawTab(props: Props) {
 
   const depositAssets = parseUsdcAmount(depositInput);
 
-  // Deposits closed on the vault being deposited into (issue 1731): the vault's own `depositsPaused()`.
-  // The deposit side only. The withdraw form below never reads this, because `pauseDeposits()` leaves exits open.
-  const { byAddress: depositPausedBy } = useVaultsDepositsPaused([depositVault]);
-  const depositsClosed = depositPausedBy.get(depositVault.toLowerCase()) === true;
-  const depositClosedState: DepositState = depositsClosed
-    ? { kind: "paused", source: "chain" }
-    : { kind: "open" };
+  // Deposits are enabled ONLY in the known-open state of the vault being deposited into (issue 1731): its
+  // live `depositsPaused()`, else the fresh explorer snapshot. Paused, retired and unknown all disable the form.
+  // The withdraw form below never reads this, because `pauseDeposits()` leaves exits open.
+  const depositClosedState = useDepositState(depositVault);
+  const depositsClosed = depositsBlocked(depositClosedState);
   const withdrawShares = parseUsdcAmount(withdrawInput);
 
   // -------- allowance read --------

@@ -77,6 +77,8 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                 const deposit = resolveDepositState({
                   registryStatus: v.status,
                   explorerPaused: v.deposits_paused,
+                  explorerBlock: blockNumber,
+                  explorerHead: chainHeadBlock,
                   chainPaused: chainPaused.get(v.address.toLowerCase()),
                 });
                 return (

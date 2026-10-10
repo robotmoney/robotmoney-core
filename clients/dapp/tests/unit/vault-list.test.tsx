@@ -105,7 +105,7 @@ describe("VaultList — table rendering", () => {
 
     expect(nameEls[0].textContent).toBe("Robot Money USDC");
     expect(riskEls[0].textContent).toBe("STABLE_YIELD");
-    expect(statusEls[0].textContent).toBe("Active");
+    expect(statusEls[0].textContent).toBe("Active (per index, block 1000)");
     expect(statusEls[3].textContent).toBe("Deposits paused / closed");
   });
 

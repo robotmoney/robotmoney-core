@@ -80,6 +80,35 @@ export function judgeServed(args: {
   return checks;
 }
 
+/** What one HTTP fetch gave: a status, or null plus a message when the request itself failed (DNS, refused, timeout). */
+export interface HttpResult {
+  status: number | null;
+  error?: string;
+}
+
+/**
+ * A named failure for a fetch that did not return 2xx, or null when it did. `notFoundOk` is for /config.json,
+ * where a real 404 means "no runtime config is served", which is a valid deployment (the dapp then uses its
+ * build time values). Every other non-2xx and every failed request is a FAIL that names the URL path.
+ */
+export function httpFailure(name: string, r: HttpResult, notFoundOk = false): Check | null {
+  if (r.status === null) {
+    return { name, ok: false, detail: `the request failed: ${r.error ?? "no response"}` };
+  }
+  if (r.status >= 200 && r.status < 300) return null;
+  if (notFoundOk && r.status === 404) return null;
+  return { name, ok: false, detail: `HTTP ${r.status}, expected 2xx` };
+}
+
+async function get(url: string): Promise<{ res: HttpResult; text: string; contentType: string | null }> {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    return { res: { status: r.status }, text: await r.text(), contentType: r.headers.get("content-type") };
+  } catch (e) {
+    return { res: { status: null, error: (e as Error).message }, text: "", contentType: null };
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const base = argv[0]?.replace(/\/+$/, "");
   const expectedClass = argv[1] ?? "mainnet";
@@ -87,12 +116,30 @@ async function main(argv: string[]): Promise<number> {
     console.error("usage: bun scripts/stage/dapp-served-check.ts <dapp url> [expected class, default mainnet]");
     return 2;
   }
-  const cfg = await fetch(`${base}/config.json`);
-  const html = await (await fetch(`${base}/`)).text();
-  const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+\.js)"/g)].map((m) => m[1]!);
+  const checks: Check[] = [];
+  const cfg = await get(`${base}/config.json`);
+  const cfgFail = httpFailure("fetch /config.json", cfg.res, true);
+  if (cfgFail) checks.push(cfgFail);
+  const page = await get(`${base}/`);
+  const pageFail = httpFailure("fetch /", page.res);
+  if (pageFail) checks.push(pageFail);
+  const assets = [...page.text.matchAll(/(?:src|href)="(\/assets\/[^"]+\.js)"/g)].map((m) => m[1]!);
+  if (!pageFail && assets.length === 0) checks.push({ name: "bundle class", ok: false, detail: "the page names no /assets/*.js bundle" });
   let bundleText = "";
-  for (const a of assets) bundleText += await (await fetch(`${base}${a}`)).text();
-  const checks = judgeServed({ configBody: await cfg.text(), configContentType: cfg.headers.get("content-type"), bundleText, expectedClass });
+  let bundleOk = !pageFail && assets.length > 0;
+  for (const a of assets) {
+    const b = await get(`${base}${a}`);
+    const f = httpFailure(`fetch ${a}`, b.res);
+    if (f) {
+      checks.push(f);
+      bundleOk = false;
+    } else bundleText += b.text;
+  }
+  if (!cfgFail) {
+    const body = cfg.res.status === 404 ? "" : cfg.text;
+    checks.push(...judgeServed({ configBody: body, configContentType: cfg.contentType, bundleText, expectedClass }).slice(0, 1));
+  }
+  if (bundleOk) checks.push(...judgeServed({ configBody: "{}", configContentType: "application/json", bundleText, expectedClass }).slice(1));
   for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"} ${c.name}: ${c.detail}`);
   return checks.every((c) => c.ok) ? 0 : 1;
 }

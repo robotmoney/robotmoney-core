@@ -167,7 +167,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   const [state, setState] = useState<State>({ phase: "loading" });
   // The deposit state of this vault: the registry status of the detail row, the explorer's snapshot flag
   // from the shared vault list, and the vault's own flag read from the chain (issue 1731).
-  const { vaults: listedVaults, chainHeadBlock } = useExplorer();
+  const { vaults: listedVaults, blockNumber: listBlock, chainHeadBlock } = useExplorer();
   const { byAddress: chainPaused } = useVaultsDepositsPaused([address]);
 
   useEffect(() => {
@@ -203,6 +203,8 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
     explorerPaused:
       vault.deposits_paused ??
       listedVaults.find((v) => v.address.toLowerCase() === address.toLowerCase())?.deposits_paused,
+    explorerBlock: vault.deposits_paused != null ? block_number : listBlock,
+    explorerHead: chainHeadBlock,
     chainPaused: chainPaused.get(address.toLowerCase()),
   });
 

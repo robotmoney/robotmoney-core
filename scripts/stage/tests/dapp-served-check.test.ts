@@ -1,6 +1,6 @@
 // Core issue 1731: the served /config.json check is a JSON parse, and the bundle class check is the real one.
 import { describe, expect, test } from "bun:test";
-import { bundleEnvClass, classifyServedConfig, judgeServed } from "../dapp-served-check.ts";
+import { bundleEnvClass, classifyServedConfig, httpFailure, judgeServed } from "../dapp-served-check.ts";
 
 const SPA = '<!doctype html><html><head><title>Robot Money</title></head><body><div id="root"></div><script src="/assets/index-abc.js"></script></body></html>';
 
@@ -56,5 +56,29 @@ describe("judgeServed", () => {
   test("a served document carrying VITE_ENV_CLASS fails", () => {
     const [cfg] = judgeServed({ configBody: '{"VITE_ENV_CLASS":"mainnet"}', configContentType: "application/json", bundleText: bundle, expectedClass: "mainnet" });
     expect(cfg!.ok).toBe(false);
+  });
+});
+
+describe("httpFailure", () => {
+  test("2xx is no failure", () => {
+    expect(httpFailure("x", { status: 200 })).toBeNull();
+    expect(httpFailure("x", { status: 204 })).toBeNull();
+  });
+  test("a non-2xx is a named failure", () => {
+    for (const status of [301, 403, 404, 500, 502]) {
+      const f = httpFailure("fetch /", { status });
+      expect(f).toMatchObject({ name: "fetch /", ok: false });
+      expect(f!.detail).toContain(`HTTP ${status}`);
+    }
+  });
+  test("a request that failed outright is a named failure with the message", () => {
+    const f = httpFailure("fetch /", { status: null, error: "connection refused" });
+    expect(f).toMatchObject({ ok: false });
+    expect(f!.detail).toContain("connection refused");
+  });
+  test("a 404 is allowed only where 'not served' is a valid answer (/config.json)", () => {
+    expect(httpFailure("fetch /config.json", { status: 404 }, true)).toBeNull();
+    expect(httpFailure("fetch /config.json", { status: 500 }, true)).not.toBeNull();
+    expect(httpFailure("fetch /", { status: 404 })).not.toBeNull();
   });
 });

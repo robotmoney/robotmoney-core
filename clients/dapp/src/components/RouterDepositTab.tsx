@@ -38,8 +38,8 @@ import {
 } from "../lib/routerPreview";
 import { TxPreview } from "./TxPreview";
 import { DepositsClosedNotice } from "./DepositsClosedNotice";
-import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
-import type { DepositState } from "../lib/vaultDepositState";
+import { useDepositStates } from "../lib/useDepositStates";
+import { depositsBlocked, type DepositState } from "../lib/vaultDepositState";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
 import { ProportionPreview } from "./shared";
 
@@ -119,15 +119,21 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     depositAssets !== null && legs.length > 0 ? buildRouterPreview(depositAssets, legs, ctx) : null;
 
   // -------- deposits closed on a leg vault (issue 1731) --------
-  // The router deposit is all-or-revert across its legs. A leg vault whose own `depositsPaused()` is true
-  // closes the whole router deposit, whatever its registry status says. Withdraw and redeem are not touched.
+  // The router deposit is all-or-revert across its legs, so it is enabled ONLY when every leg vault is in the
+  // known-open state. A leg that is paused, retired or unknown closes the whole router deposit. Withdraw and
+  // redeem are not touched.
   const legVaults = legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string");
-  const { byAddress: legPaused } = useVaultsDepositsPaused(legVaults);
-  const pausedLegCount = legVaults.filter((v) => legPaused.get(v.toLowerCase()) === true).length;
+  const legStates = useDepositStates(legVaults);
+  const closedLegs = legVaults.filter((v) => {
+    const st = legStates.get(v.toLowerCase());
+    return !st || depositsBlocked(st);
+  });
+  const pausedLegCount = closedLegs.length;
   const routerDepositsClosed = pausedLegCount > 0;
+  const firstClosed = closedLegs[0] && legStates.get(closedLegs[0].toLowerCase());
   const closedState: DepositState = routerDepositsClosed
-    ? { kind: "paused", source: "chain" }
-    : { kind: "open" };
+    ? (firstClosed ?? { kind: "unknown" })
+    : { kind: "open", source: "chain" };
 
   // -------- getEffectiveWeights() live check (AC §7) --------
   // Compare the vault list from preview to the router's current effective

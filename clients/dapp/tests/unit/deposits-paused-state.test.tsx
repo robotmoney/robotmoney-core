@@ -15,7 +15,9 @@ import { VaultList } from "../../src/components/VaultList";
 import { ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type { FetchLike, VaultsResponse } from "../../src/lib/explorerApi";
 import {
+  EXPLORER_STALE_AFTER_BLOCKS,
   depositStateLabel,
+  depositStateReason,
   depositsBlocked,
   resolveDepositState,
 } from "../../src/lib/vaultDepositState";
@@ -27,6 +29,8 @@ const B = "0x2222222222222222222222222222222222222222";
 
 function vaultsBody(
   rows: { address: string; status?: number; deposits_paused?: boolean | null }[],
+  block = 1000,
+  head: number | null = 1008,
 ): VaultsResponse {
   return {
     vaults: rows.map((r, i) => ({
@@ -41,8 +45,8 @@ function vaultsBody(
       indexed_at: "2026-10-10T00:00:00Z",
       ...(r.deposits_paused === undefined ? {} : { deposits_paused: r.deposits_paused }),
     })),
-    block_number: 1000,
-    chain_head_block: 1008,
+    block_number: block,
+    chain_head_block: head,
     indexed_at: "2026-10-10T00:00:00Z",
   };
 }
@@ -90,19 +94,107 @@ describe("resolveDepositState (pure)", () => {
       resolveDepositState({ registryStatus: 0, chainPaused: false, explorerPaused: true }).kind,
     ).toBe("open");
   });
-  it("the explorer flag is used when the chain cannot be read", () => {
+  it("the explorer flag is used when the chain cannot be read: paused at any age, open only while fresh", () => {
     expect(resolveDepositState({ registryStatus: 0, explorerPaused: true })).toEqual({
       kind: "paused",
       source: "explorer",
     });
-    expect(resolveDepositState({ registryStatus: 0, explorerPaused: false }).kind).toBe("open");
+    // A pause from a stale or unindexed explorer is still a pause: closed is the safe answer.
+    expect(
+      resolveDepositState({
+        registryStatus: 0,
+        explorerPaused: true,
+        explorerBlock: 0,
+        explorerHead: 9999,
+      }).kind,
+    ).toBe("paused");
+    expect(
+      resolveDepositState({
+        registryStatus: 0,
+        explorerPaused: false,
+        explorerBlock: 1000,
+        explorerHead: 1005,
+      }),
+    ).toEqual({ kind: "open", source: "index", block: 1000 });
   });
-  it("nothing known is unknown, never open", () => {
+  it("an open answer that comes only from the index is labelled as index-derived", () => {
+    const s = resolveDepositState({
+      registryStatus: 0,
+      explorerPaused: false,
+      explorerBlock: 1000,
+      explorerHead: 1005,
+    });
+    expect(depositStateLabel(s)).toBe("Active (per index, block 1000)");
+    expect(depositStateLabel(resolveDepositState({ registryStatus: 0, chainPaused: false }))).toBe(
+      "Active",
+    );
+  });
+  it("a stale or unindexed explorer open is UNKNOWN, not Active", () => {
+    for (const [block, head] of [
+      [1000, 1000 + EXPLORER_STALE_AFTER_BLOCKS + 1],
+      [1000, 5000],
+      [0, 1000],
+      [null, 1000],
+      [undefined, undefined],
+    ] as const) {
+      expect(
+        resolveDepositState({
+          registryStatus: 0,
+          explorerPaused: false,
+          explorerBlock: block,
+          explorerHead: head,
+        }).kind,
+      ).toBe("unknown");
+    }
+    // At the threshold it is still fresh.
+    expect(
+      resolveDepositState({
+        registryStatus: 0,
+        explorerPaused: false,
+        explorerBlock: 1000,
+        explorerHead: 1000 + EXPLORER_STALE_AFTER_BLOCKS,
+      }).kind,
+    ).toBe("open");
+  });
+  it("a chain read of true always beats an explorer false, fresh or not; registry paused or retired always wins", () => {
+    for (const explorerBlock of [0, 1000]) {
+      expect(
+        resolveDepositState({
+          registryStatus: 0,
+          chainPaused: true,
+          explorerPaused: false,
+          explorerBlock,
+          explorerHead: 1000,
+        }).kind,
+      ).toBe("paused");
+    }
+    expect(
+      resolveDepositState({
+        registryStatus: 1,
+        chainPaused: false,
+        explorerPaused: false,
+        explorerBlock: 1,
+        explorerHead: 1,
+      }).kind,
+    ).toBe("paused");
+    expect(resolveDepositState({ registryStatus: 2, chainPaused: false }).kind).toBe("retired");
+  });
+  it("every state except open disables a form; unknown says why", () => {
     const s = resolveDepositState({ registryStatus: 0, explorerPaused: null });
     expect(s.kind).toBe("unknown");
     expect(depositStateLabel(s)).toBe("Deposit state unknown");
-    expect(depositsBlocked(s)).toBe(false);
-    expect(resolveDepositState({ registryStatus: 0 }).kind).toBe("unknown");
+    expect(depositStateReason(s)).toContain("cannot confirm deposits are open");
+    for (const st of [
+      resolveDepositState({ registryStatus: 0 }),
+      resolveDepositState({ registryStatus: 1 }),
+      resolveDepositState({ registryStatus: 2 }),
+      resolveDepositState({ registryStatus: 0, chainPaused: true }),
+    ]) {
+      expect(depositsBlocked(st)).toBe(true);
+    }
+    expect(depositsBlocked(resolveDepositState({ registryStatus: 0, chainPaused: false }))).toBe(
+      false,
+    );
   });
   it("the label is Active only for open", () => {
     for (const input of [
@@ -215,6 +307,50 @@ describe("VaultCards on a fake chain", () => {
     await findAllByTestId("landing-vault-card");
     await waitFor(() => expect(statuses(container)).toEqual(["Deposits paused / closed"]));
     expect(fake.calls.filter((c) => c.method === "eth_call")).toHaveLength(0);
+  });
+
+  it("with no chain read, a fresh explorer open is labelled 'Active (per index, block N)' and marked index-derived", async () => {
+    const { container, findAllByTestId } = await renderOnFakeChain(
+      cardsFor(vaultsBody([{ address: A, deposits_paused: false }])),
+      makeFakeChain({}),
+    );
+    await findAllByTestId("landing-vault-card");
+    await waitFor(() => expect(statuses(container)).toEqual(["Active (per index, block 1000)"]));
+    const card = container.querySelector('[data-testid="landing-vault-card"]')!;
+    expect(card.getAttribute("data-deposit-source")).toBe("index");
+  });
+
+  it("with no chain read, a STALE explorer open (500 blocks behind) is unknown, not Active", async () => {
+    const { container, findAllByTestId } = await renderOnFakeChain(
+      cardsFor(vaultsBody([{ address: A, deposits_paused: false }], 1000, 1500)),
+      makeFakeChain({}),
+    );
+    await findAllByTestId("landing-vault-card");
+    await waitFor(() => expect(statuses(container)).toEqual(["Deposit state unknown"]));
+    expect(container.textContent).not.toContain("Active");
+  });
+
+  it("an unindexed explorer (block 0) open is unknown", async () => {
+    const { container, findAllByTestId } = await renderOnFakeChain(
+      cardsFor(vaultsBody([{ address: A, deposits_paused: false }], 0, null)),
+      makeFakeChain({}),
+    );
+    await findAllByTestId("landing-vault-card");
+    await waitFor(() => expect(statuses(container)).toEqual(["Deposit state unknown"]));
+  });
+
+  it("a live chain read of false is plain 'Active' (not index-derived) and beats a stale index", async () => {
+    const { container, findAllByTestId } = await renderOnFakeChain(
+      cardsFor(vaultsBody([{ address: A, deposits_paused: false }], 1000, 1500)),
+      makeFakeChain({ [A]: false }),
+    );
+    await findAllByTestId("landing-vault-card");
+    await waitFor(() => expect(statuses(container)).toEqual(["Active"]));
+    expect(
+      container
+        .querySelector('[data-testid="landing-vault-card"]')!
+        .getAttribute("data-deposit-source"),
+    ).toBe("chain");
   });
 
   it("on the mainnet class with a wallet on Base it reads the chain", async () => {

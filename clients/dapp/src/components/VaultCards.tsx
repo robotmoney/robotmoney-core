@@ -37,6 +37,7 @@ import {
   depositStateAttr,
   depositStateLabel,
   depositStateReason,
+  depositStateSource,
   resolveDepositState,
 } from "../lib/vaultDepositState";
 
@@ -101,6 +102,8 @@ export function VaultCards({ onSelectVault, onSwitchToExplorer }: VaultCardsProp
             const deposit = resolveDepositState({
               registryStatus: vault.status,
               explorerPaused: vault.deposits_paused,
+              explorerBlock: blockNumber,
+              explorerHead: chainHeadBlock,
               chainPaused: chainPaused.get(vault.address.toLowerCase()),
             });
             return (
@@ -116,6 +119,7 @@ export function VaultCards({ onSelectVault, onSwitchToExplorer }: VaultCardsProp
                 data-testid="landing-vault-card"
                 data-vault-active={isActive ? "true" : "false"}
                 data-deposit-state={depositStateAttr(deposit)}
+                data-deposit-source={depositStateSource(deposit)}
               >
                 <div>
                   <p className="vault-card-kicker" data-testid="landing-vault-card-risk">

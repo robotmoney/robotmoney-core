@@ -159,7 +159,9 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
     const cards = await findAllByTestId("landing-vault-card");
     const active = cards.filter((c) => c.getAttribute("data-vault-active") === "true");
     for (const card of active) {
-      expect(within(card).getByTestId("landing-vault-card-status").textContent).toBe("Active");
+      expect(within(card).getByTestId("landing-vault-card-status").textContent).toBe(
+        "Active (per index, block 1000)",
+      );
       expect(within(card).getByTestId("landing-vault-card-tvl")).toBeTruthy();
     }
   });

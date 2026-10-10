@@ -22,7 +22,7 @@ export const DEPOSITS_PAUSED_SELECTOR = toFunctionSelector("depositsPaused()");
 
 export interface FakeChain {
   /** Every `{method, to}` the transport saw. */
-  readonly calls: { method: string; to?: string }[];
+  readonly calls: { method: string; to?: string; data?: string }[];
   /** `depositsPaused()` answers by lowercase address. Set a key to `undefined` or omit it to make the call revert. */
   paused: Record<string, boolean | undefined>;
   /** Answers any other `eth_call` (target lowercase, calldata). Return undefined to revert. */
@@ -41,6 +41,8 @@ export interface RenderOpts {
   readonly env?: Record<string, string>;
   /** Connect the mock wallet before rendering. */
   readonly connected?: boolean;
+  /** The chain the connected wallet is on, when it is not `chainId` (a wrong-chain wallet). */
+  readonly walletChainId?: number;
 }
 
 export async function renderOnFakeChain(
@@ -57,7 +59,7 @@ export async function renderOnFakeChain(
   });
   const request = async ({ method, params }: { method: string; params?: unknown[] }) => {
     const first = (params?.[0] ?? {}) as { to?: string; data?: string };
-    fake.calls.push({ method, to: first.to });
+    fake.calls.push({ method, to: first.to, data: first.data });
     if (method === "eth_chainId") return `0x${chainId.toString(16)}`;
     if (method === "eth_accounts" || method === "eth_requestAccounts") {
       return ["0x1111111111111111111111111111111111111111"];
@@ -77,14 +79,27 @@ export async function renderOnFakeChain(
     }
     throw new Error(`fake chain: unsupported ${method}`);
   };
+  const walletChainId = opts.walletChainId ?? chainId;
+  const otherChain =
+    walletChainId === chainId
+      ? undefined
+      : defineChain({
+          id: walletChainId,
+          name: "Other",
+          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+          rpcUrls: { default: { http: ["http://other.invalid"] } },
+        });
   const config = createConfig({
-    chains: [chain],
+    chains: otherChain ? [chain, otherChain] : [chain],
     connectors: [mock({ accounts: ["0x1111111111111111111111111111111111111111"] as const })],
-    transports: { [chainId]: custom({ request }) },
+    transports: {
+      [chainId]: custom({ request }),
+      ...(otherChain ? { [walletChainId]: custom({ request }) } : {}),
+    },
     storage: null,
   });
   if (opts.connected) {
-    await connect(config, { connector: config.connectors[0]! });
+    await connect(config, { connector: config.connectors[0]!, chainId: walletChainId });
   }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rendered = rtlRender(

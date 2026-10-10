@@ -242,7 +242,7 @@ describe("VaultList", () => {
     expect(names).toContain("Beta Vault");
 
     const statuses = getAllByTestId("vault-list-row-status").map((n) => n.textContent);
-    expect(statuses).toContain("Active");
+    expect(statuses).toContain("Active (per index, block 1000)");
     expect(statuses).toContain("Deposits paused / closed");
   });
 
@@ -334,7 +334,7 @@ describe("VaultDetail", () => {
     );
     await waitFor(() => expect(getByTestId("vault-detail-name").textContent).toBe("Alpha Vault"));
     expect(getByTestId("vault-detail-risk").textContent).toBe("stable-yield");
-    expect(getByTestId("vault-detail-status").textContent).toBe("Active");
+    expect(getByTestId("vault-detail-status").textContent).toBe("Active (per index, block 1000)");
     expect(getByTestId("vault-detail-cap").textContent).toBe("1000000000");
   });
 

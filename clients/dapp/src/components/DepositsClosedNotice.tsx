@@ -23,7 +23,8 @@ export function DepositsClosedNotice(props: {
       style={{ color: props.state.kind === "unknown" ? "orange" : "red", fontWeight: 600 }}
     >
       {props.scope ? `${props.scope}: ` : ""}
-      {depositStateLabel(props.state)}. {reason}
+      {props.state.kind === "unknown" ? "" : `${depositStateLabel(props.state)}. `}
+      {reason}
     </p>
   );
 }
