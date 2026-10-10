@@ -1248,8 +1248,8 @@ the question with re-evaluation triggers; that door is now closed.
 **Committee agent skill.** The published committee-agent
 skill/plugin is an extension of `robotmoney-analyst`: it reuses the
 analyst's regime/market datasources and adds "form a per-vault tilt → post
-the rationale memo to a public link → sign and submit the vote via `rmpc
-committee vote-submit`." It is a thin skill over the same `rmpc`
+the rationale memo to a public link → sign and submit the allocation signal via `rmpc
+committee vote-submit` (the command name only)." It is a thin skill over the same `rmpc`
 process-per-call boundary — it has no signing authority of its own, and
 proprietary allocation methods stay out of the published surface. Like the
 analyst skill it fails closed (missing IC config, unregistered agent, or a

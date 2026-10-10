@@ -63,7 +63,7 @@ Defaults that keep core's vector working without extra flags:
 
 - No `--core-dir`: the repo root (the nearest parent of the working directory, else of this package, with `scripts/deploy/stage-table.json`). `--core-dir` is only for a checkout elsewhere.
 - No `--counts-dir`: `deployments/frozen-counts` in the working directory if it exists, else this repo's.
-- No `--owner-signer` on chain 918453: the rehearsal's own `SAFE_OWNER_A`, `SAFE_OWNER_B` and `SAFE_OWNER_C` keystores beside the `DEPLOYER` keystore, under the same passphrase file (the layout `src/rehearsal/keys.ts` writes). Never on 8453, where the owners are `--owner-signer` hardware wallets.
+- No `--owner-signer` on chain 918453: the rehearsal's own `SAFE_OWNER_A`, `SAFE_OWNER_B` and `SAFE_OWNER_C` keystores beside the `DEPLOYER` keystore, under the same passphrase file (the layout `src/rehearsal/keys.ts` writes). Never on 8453, where the owners are `--owner-signer keystore:PATH` specs, each opened with a passphrase typed at a hidden prompt (the signer tool still accepts `ledger` and `trezor` specs, but the owner rule is keystores).
 - An unattended run (stdin null) needs `YES=1` in the inherited environment. Without it the CLI refuses with exit 17 and sends nothing. `YES=1` is refused on 8453.
 
 The test doubles in that test (stub forge and cast, a fake Safe API and timelock) stand in for tools and the chain. They check the CLI surface. They are no evidence for the Safe, its signers or governance: that is proven on the real deployment (devops `CLAUDE.md`, item b).
