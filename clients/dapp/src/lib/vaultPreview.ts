@@ -74,7 +74,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
             gloss: `shares -> ${shorten(action.receiver)}`,
           },
         ];
-        effect = `Vault pulls ${formatUsdc(action.assets)} USDC from caller and mints rmUSDC shares to ${shorten(action.receiver)}.`;
+        effect = `Vault pulls ${formatUsdc(action.assets)} from caller and mints rmUSDC shares to ${shorten(action.receiver)}.`;
         break;
       }
       case "vaultRedeem": {
@@ -146,10 +146,8 @@ function formatUsdc(raw: bigint): string {
 }
 
 /**
- * Vault shares share the underlying's 6-decimal scale plus the
- * ERC-4626 `_decimalsOffset` (see RobotMoneyVault.sol). For preview
- * display we treat shares as 6dp — the absolute precision matters
- * less than the order of magnitude for the operator sanity check.
+ * Vault shares are scaled by the vault's `decimals()` (6) plus the ERC-4626
+ * `_decimalsOffset` (18, see RobotMoneyVault.sol): format.ts SHARE_DECIMALS.
  */
 function formatShares(raw: bigint): string {
   return _formatShares(raw, "rmUSDC");

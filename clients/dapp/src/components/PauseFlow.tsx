@@ -92,8 +92,11 @@ export function PauseFlow(props: PauseFlowProps) {
     <section data-testid="pause-flow" className="pause-flow">
       <h2>Pause / Unpause Deposits</h2>
       <p data-testid="pause-flow-state">
-        Gateway deposits: <code>{depositsPaused ? "PAUSED" : "OPEN"}</code> · withdrawals:{" "}
-        <code>OPEN</code> · chain <code>{chainId}</code>
+        Gateway deposits:{" "}
+        <code>
+          {depositsPausedData === undefined ? "UNKNOWN" : depositsPaused ? "PAUSED" : "OPEN"}
+        </code>{" "}
+        · withdrawals: <code>OPEN</code> · chain <code>{chainId}</code>
       </p>
       <p className="hint" data-testid="pause-flow-scope">
         A deposit pause stops new deposits only. Withdrawals stay open while deposits are paused.

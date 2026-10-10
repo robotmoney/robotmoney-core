@@ -109,14 +109,14 @@ const positionsFixture: AccountPositionsResponse = {
       vault_address: VAULT_A,
       vault_name: "Alpha Vault",
       risk_label: "stable-yield",
-      shares: "500000",
+      shares: "500000000000000000000000",
       block_number: 1000,
     },
     {
       vault_address: VAULT_B,
       vault_name: "Beta Vault",
       risk_label: "growth",
-      shares: "250000",
+      shares: "250000000000000000000000",
       block_number: 1000,
     },
   ],
@@ -153,7 +153,7 @@ describe("PortfolioPosition", () => {
     expect(vaultNames).toEqual(["Alpha Vault", "Beta Vault"]);
 
     const shares = getAllByTestId("portfolio-position-row-shares").map((n) => n.textContent);
-    expect(shares).toEqual(["500000", "250000"]);
+    expect(shares).toEqual(["0.50 rmUSDC", "0.25 rmUSDC"]);
 
     // Address is surfaced.
     expect(getByTestId("portfolio-position-address").textContent).toContain(WATCHED);
@@ -177,7 +177,7 @@ describe("PortfolioPosition", () => {
     });
 
     const usdcCells = getAllByTestId("portfolio-position-row-usdc").map((n) => n.textContent);
-    expect(usdcCells).toEqual(["500000", "250000"]);
+    expect(usdcCells).toEqual(["0.50 USDC", "0.25 USDC"]);
   });
 
   it("composite total equals sum of per-vault USDC values", async () => {
@@ -343,7 +343,7 @@ describe("TransactionHistory", () => {
     expect(vaults).toEqual([VAULT_A, VAULT_B]);
 
     const amounts = getAllByTestId("transaction-history-row-amount").map((n) => n.textContent);
-    expect(amounts).toEqual(["1000000", "500000"]);
+    expect(amounts).toEqual(["1.00 USDC", "0.50 USDC"]);
   });
 
   it("shows empty state when no events", async () => {

@@ -25,7 +25,12 @@ import { useReadContract } from "wagmi";
 import type { FetchLike, VaultDetailRow } from "../lib/explorerApi";
 import { fetchVaultDetail } from "../lib/explorerApi";
 import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
-import { formatTokenBalance } from "../lib/format";
+import {
+  formatSharesString,
+  formatTokenBalance,
+  formatUsdcString,
+  USDC_DECIMALS,
+} from "../lib/format";
 import { useExplorer } from "../lib/ExplorerContext";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
@@ -57,7 +62,9 @@ function AssetRow({ token, active, balance, label }: AssetRowProps) {
         <span data-testid="vault-detail-composition-active">{active ? "active" : "inactive"}</span>
       )}
       {balance != null && (
-        <span data-testid="vault-detail-composition-balance">{formatTokenBalance(balance, 6)}</span>
+        <span data-testid="vault-detail-composition-balance">
+          {formatTokenBalance(balance, USDC_DECIMALS)}
+        </span>
       )}
     </li>
   );
@@ -241,7 +248,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
         <div className="stat-card">
           <p className="stat-label">Deposit Cap</p>
           <p data-testid="vault-detail-cap" className="stat-value font-mono">
-            {vault.deposit_cap}
+            {formatUsdcString(vault.deposit_cap)}
           </p>
         </div>
         <div className="stat-card">
@@ -275,8 +282,10 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
               {vault.tvl_history.map((pt) => (
                 <tr key={pt.block_number} data-testid="vault-detail-tvl-row">
                   <td data-testid="vault-detail-tvl-block">{pt.block_number}</td>
-                  <td data-testid="vault-detail-tvl-assets">{pt.total_assets}</td>
-                  <td data-testid="vault-detail-tvl-supply">{pt.total_supply}</td>
+                  <td data-testid="vault-detail-tvl-assets">{formatUsdcString(pt.total_assets)}</td>
+                  <td data-testid="vault-detail-tvl-supply">
+                    {formatSharesString(pt.total_supply, "rmUSDC")}
+                  </td>
                 </tr>
               ))}
             </tbody>

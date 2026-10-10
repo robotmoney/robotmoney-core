@@ -199,7 +199,7 @@ describe("VaultCards — TVL display and polling", () => {
       </ExplorerProvider>,
     );
     await waitFor(async () => {
-      expect((await findByTestId2("landing-vault-card-tvl")).textContent).toBe("0");
+      expect((await findByTestId2("landing-vault-card-tvl")).textContent).toBe("0.00 USDC");
     });
   });
 
@@ -234,13 +234,13 @@ describe("VaultCards — TVL display and polling", () => {
 
     // Initial fetch shows "0".
     await waitFor(async () => {
-      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
+      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0.00 USDC");
     });
 
     // After one poll interval the context re-fetches and VaultCards displays the non-zero TVL.
     await waitFor(
       async () => {
-        expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5000000000");
+        expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5,000.00 USDC");
       },
       { timeout: 2_000 },
     );

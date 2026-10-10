@@ -70,20 +70,20 @@ describe("validateEthereumAddress", () => {
 describe("formatUsdc", () => {
   it("formats 1 USDC (base units) correctly, stripping trailing zeros", () => {
     // centralized formatter strips trailing zeros: 1_000_000 → "1 USDC"
-    expect(formatUsdc(1_000_000n)).toBe("1 USDC");
+    expect(formatUsdc(1_000_000n)).toBe("1.00 USDC");
   });
 
   it("formats 0 USDC", () => {
-    expect(formatUsdc(0n)).toBe("0 USDC");
+    expect(formatUsdc(0n)).toBe("0.00 USDC");
   });
 
   it("formats a fractional USDC amount, stripping trailing zeros", () => {
     // 500_000 base units = 0.5 USDC (trailing zeros stripped)
-    expect(formatUsdc(500_000n)).toBe("0.5 USDC");
+    expect(formatUsdc(500_000n)).toBe("0.50 USDC");
   });
 
   it("formats 100 USDC (100_000_000 base units)", () => {
-    expect(formatUsdc(100_000_000n)).toBe("100 USDC");
+    expect(formatUsdc(100_000_000n)).toBe("100.00 USDC");
   });
 });
 

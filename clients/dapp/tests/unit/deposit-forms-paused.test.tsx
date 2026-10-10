@@ -218,6 +218,16 @@ function routerResponder(fake: ReturnType<typeof makeFakeChain>) {
   fake.respond = (to, data) => {
     if (
       to === ROUTER.toLowerCase() &&
+      data.startsWith(toFunctionSelector("getEffectiveWeights()"))
+    ) {
+      return encodeFunctionResult({
+        abi: routerAbi,
+        functionName: "getEffectiveWeights",
+        result: [[VAULT], [10000n]],
+      });
+    }
+    if (
+      to === ROUTER.toLowerCase() &&
       data.startsWith(toFunctionSelector("previewDeposit(uint256)"))
     ) {
       return encodeFunctionResult({
@@ -312,11 +322,18 @@ describe.each(SCENARIOS.filter((sc) => sc.singleOnly !== true))(
         opts,
       );
       const amount = () => tid(container, "router-deposit-tab-amount") as HTMLInputElement;
-      fireEvent.change(amount(), { target: { value: "1" } });
       if (sc.expectEnabled) {
+        // The input is closed until the leg vaults (getEffectiveWeights) are known to be open.
+        await waitFor(() => expect(amount().disabled).toBe(false));
+        fireEvent.change(amount(), { target: { value: "1" } });
         await waitFor(() =>
           expect(
-            fake.calls.some((c) => c.method === "eth_call" && c.to === ROUTER.toLowerCase()),
+            fake.calls.some(
+              (c) =>
+                c.method === "eth_call" &&
+                c.to === ROUTER.toLowerCase() &&
+                c.data?.startsWith(toFunctionSelector("previewDeposit(uint256)")),
+            ),
           ).toBe(true),
         );
         await act(async () => {
@@ -328,6 +345,8 @@ describe.each(SCENARIOS.filter((sc) => sc.singleOnly !== true))(
         await waitFor(() =>
           expect(tid(container, "router-deposits-closed")?.textContent ?? "").toMatch(sc.notice!),
         );
+        // The notice is up with NO amount typed: it must not wait for a preview.
+        expect(amount().value).toBe("");
         expect(amount().disabled).toBe(true);
         expect((tid(container, "router-deposit-tab-submit") as HTMLButtonElement).disabled).toBe(
           true,

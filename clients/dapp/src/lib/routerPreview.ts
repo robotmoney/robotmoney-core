@@ -177,7 +177,7 @@ export function buildRouterPreview(
 
   const effect = hasUnavailable
     ? `One or more vault legs are unavailable. The router will revert if you sign now. Review the unavailable legs below before proceeding.`
-    : `Portfolio Router splits ${formatUsdc(amount)} USDC across ${legs.length} vault(s): ${legSummary}.`;
+    : `Portfolio Router splits ${formatUsdc(amount)} across ${legs.length} vault(s): ${legSummary}.`;
 
   return {
     ok: true,
@@ -189,7 +189,7 @@ export function buildRouterPreview(
       {
         name: "amount",
         raw: amount.toString(),
-        gloss: `${formatUsdc(amount)} total USDC split across ${legs.length} vault(s)`,
+        gloss: `${formatUsdc(amount)} total split across ${legs.length} vault(s)`,
       },
       {
         name: "minSharesPerLeg",

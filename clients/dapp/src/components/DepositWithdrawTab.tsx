@@ -55,7 +55,14 @@ import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
-import { formatUsdc, formatShares } from "../lib/format";
+import {
+  formatUsdc,
+  formatShares,
+  formatInputAmount,
+  parseSharesAmount,
+  parseUsdcAmount,
+  SHARE_DECIMALS,
+} from "../lib/format";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -72,26 +79,6 @@ type Props = Readonly<{
    */
   explorerApiUrl?: string;
 }>;
-
-/**
- * Parse a human-typed amount (e.g. "1.5") into a 6-decimal bigint, the
- * unit RobotMoneyVault and USDC use. Returns `null` on any input the
- * user could not have intended as a positive USDC amount (empty,
- * non-numeric, negative, more than 6 fractional digits).
- *
- * Kept pure and exported so the vitest can exercise the amount logic
- * without rendering the component (see test plan).
- */
-export function parseUsdcAmount(input: string): bigint | null {
-  const trimmed = input.trim();
-  if (trimmed === "") return null;
-  if (!/^\d+(\.\d{1,6})?$/.test(trimmed)) return null;
-  const [whole, frac = ""] = trimmed.split(".");
-  const padded = (frac + "000000").slice(0, 6);
-  const value = BigInt(whole) * 1_000_000n + BigInt(padded || "0");
-  if (value === 0n) return null;
-  return value;
-}
 
 // formatUsdcPreview is an alias for the centralized formatUsdc.
 const formatUsdcPreview = formatUsdc;
@@ -165,7 +152,7 @@ export function DepositWithdrawTab(props: Props) {
   // The withdraw form below never reads this, because `pauseDeposits()` leaves exits open.
   const depositClosedState = useDepositState(depositVault);
   const depositsClosed = depositsBlocked(depositClosedState);
-  const withdrawShares = parseUsdcAmount(withdrawInput);
+  const withdrawShares = parseSharesAmount(withdrawInput);
 
   // -------- allowance read --------
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
@@ -426,8 +413,12 @@ export function DepositWithdrawTab(props: Props) {
             onSelect={(vault, sharesStr) => {
               setSelectedVault(vault);
               // Pre-fill the input with the full position balance so the
-              // user can adjust if desired. The input accepts decimal strings.
-              setWithdrawInput(sharesStr);
+              // user can adjust if desired. The explorer sends raw shares; the input takes decimal shares.
+              setWithdrawInput(
+                /^\d+$/.test(sharesStr)
+                  ? formatInputAmount(BigInt(sharesStr), SHARE_DECIMALS)
+                  : sharesStr,
+              );
             }}
           />
         )}

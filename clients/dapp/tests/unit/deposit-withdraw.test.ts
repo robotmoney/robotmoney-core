@@ -9,7 +9,7 @@
  *     refusal path and a structural decoder mismatch.
  */
 import { describe, it, expect } from "vitest";
-import { parseUsdcAmount } from "../../src/components/DepositWithdrawTab";
+import { parseUsdcAmount } from "../../src/lib/format";
 import { buildVaultPreview, type VaultPreviewContext } from "../../src/lib/vaultPreview";
 
 const vault = "0x3333333333333333333333333333333333333333" as const;

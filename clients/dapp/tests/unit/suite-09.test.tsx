@@ -269,7 +269,7 @@ describe("VaultList", () => {
 
     const headrooms = getAllByTestId("vault-list-row-headroom").map((n) => n.textContent);
     // Alpha: 1000000000 - 99999999 = 900000001
-    expect(headrooms[0]).toBe("900000001");
+    expect(headrooms[0]).toBe("900.000001 USDC");
     // Beta: no total_assets → —
     expect(headrooms[1]).toBe("—");
   });
@@ -350,7 +350,7 @@ describe("VaultDetail", () => {
     await waitFor(() => expect(getByTestId("vault-detail-name").textContent).toBe("Alpha Vault"));
     expect(getByTestId("vault-detail-risk").textContent).toBe("stable-yield");
     expect(getByTestId("vault-detail-status").textContent).toBe("Active (per index, block 1000)");
-    expect(getByTestId("vault-detail-cap").textContent).toBe("1000000000");
+    expect(getByTestId("vault-detail-cap").textContent).toBe("1,000.00 USDC");
   });
 
   it("renders TVL history rows from explorer API", async () => {
@@ -365,7 +365,7 @@ describe("VaultDetail", () => {
 
     const rows = getAllByTestId("vault-detail-tvl-row");
     expect(rows).toHaveLength(1);
-    expect(getAllByTestId("vault-detail-tvl-assets")[0].textContent).toBe("99999999");
+    expect(getAllByTestId("vault-detail-tvl-assets")[0].textContent).toBe("99.999999 USDC");
     expect(getAllByTestId("vault-detail-tvl-block")[0].textContent).toBe("500");
   });
 
@@ -598,7 +598,7 @@ describe("ProtocolStats", () => {
       </ExplorerProvider>,
     );
     await waitFor(() => {
-      expect(getByTestId("protocol-stats-tvl").textContent).toBe("99999999");
+      expect(getByTestId("protocol-stats-tvl").textContent).toBe("99.999999 USDC");
       expect(getByTestId("protocol-stats-depositors").textContent).toBe("1");
     });
   });

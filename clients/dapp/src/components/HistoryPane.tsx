@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
+import { formatUsdcString } from "../lib/format";
 import {
   fetchAgentDeposits,
   type DepositRow,
@@ -105,7 +106,7 @@ export function HistoryPane(props: HistoryPaneProps) {
                       <td data-testid="history-pane-row-indexed-at">{row.indexed_at}</td>
                       <td data-testid="history-pane-row-tx">{row.tx_hash}</td>
                       <td data-testid="history-pane-row-payment-id">{row.payment_id}</td>
-                      <td data-testid="history-pane-row-amount">{row.amount}</td>
+                      <td data-testid="history-pane-row-amount">{formatUsdcString(row.amount)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -250,8 +250,8 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     const tvlText = await tvl.textContent();
     expect(
       tvlText?.trim(),
-      `ProtocolStats TVL must be a parseable number (got "${tvlText}")`,
-    ).toMatch(/^\d+(\.\d+)?$/);
+      `ProtocolStats TVL must be a formatted USDC amount (got "${tvlText}")`,
+    ).toMatch(/^\d{1,3}(,\d{3})*(\.\d+)? USDC$/);
 
     const depText = await depositors.textContent();
     expect(
