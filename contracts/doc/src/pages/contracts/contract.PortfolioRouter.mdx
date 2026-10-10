@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d10083c3fcb22c22a537433d925e50d14ee0f882/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -581,7 +581,7 @@ A leg is available iff its registry status is `Active` and it is
 router-eligible (asset == USDC + eligibility flag) — exactly the
 availability dimension `previewDeposit` reports. The amount is split
 across ONLY the available legs in proportion to their bps, with the
-rounding remainder assigned to the last available leg so the router
+rounding remainder assigned to the last available leg WITH NON-ZERO BPS so the router
 holds zero USDC after a successful deposit. Unavailable legs get
 amount 0. This single predicate is shared by `previewDeposit` and
 `_executeLegs` so the two can never diverge on availability (RTR-5).
@@ -667,7 +667,7 @@ function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` | Total USDC to deposit. Must be pre-approved. |
-| minSharesPerLeg | `uint256[]` | Minimum shares the caller accepts per leg.<br/>Length must equal the number of active legs (non-<br/>paused, non-retired). Pass an empty array to skip<br/>slippage protection. |
+| minSharesPerLeg | `uint256[]` | Minimum shares the caller accepts per leg.<br/>Length must equal the number of active legs (non-<br/>paused, non-retired). Pass an empty array to skip<br/>slippage protection.<br/>The floor is NOT enforced on a skipped leg (an<br/>unavailable leg or a leg whose computed amount is<br/>0): it is never called and returns 0 shares. |
 
 **Returns**
 
@@ -698,7 +698,7 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 | ---- | ---- | ----------- |
 | receiver | `address` | Address that receives minted vault shares. |
 | amount | `uint256` | Total USDC to deposit. Must be pre-approved. |
-| minSharesPerLeg | `uint256[]` | Minimum shares the caller accepts per leg.<br/>Length must equal the number of active legs (non-<br/>paused, non-retired). Pass an empty array to skip<br/>slippage protection. |
+| minSharesPerLeg | `uint256[]` | Minimum shares the caller accepts per leg.<br/>Length must equal the number of active legs (non-<br/>paused, non-retired). Pass an empty array to skip<br/>slippage protection.<br/>The floor is NOT enforced on a skipped leg (an<br/>unavailable leg or a leg whose computed amount is<br/>0): it is never called and returns 0 shares. |
 
 **Returns**
 

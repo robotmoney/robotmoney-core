@@ -687,7 +687,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      router-eligible (asset == USDC + eligibility flag) — exactly the
     ///      availability dimension `previewDeposit` reports. The amount is split
     ///      across ONLY the available legs in proportion to their bps, with the
-    ///      rounding remainder assigned to the last available leg so the router
+    ///      rounding remainder assigned to the last available leg WITH NON-ZERO BPS so the router
     ///      holds zero USDC after a successful deposit. Unavailable legs get
     ///      amount 0. This single predicate is shared by `previewDeposit` and
     ///      `_executeLegs` so the two can never diverge on availability (RTR-5).
@@ -720,7 +720,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         // Second pass: split `amount` across the available legs by their bps share
         // of `availableBps` (NOT BPS_DENOMINATOR), and find the last available leg
-        // so the rounding remainder lands somewhere the router actually deposits.
+        // WITH NON-ZERO BPS so the rounding remainder lands on a leg the router
+        // actually deposits into.
         uint256 allocated;
         uint256 lastAvailable;
         for (uint256 i = 0; i < n; i++) {
@@ -763,6 +764,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
+    ///                          The floor is NOT enforced on a skipped leg (an
+    ///                          unavailable leg or a leg whose computed amount is
+    ///                          0): it is never called and returns 0 shares.
     function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -783,6 +787,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
+    ///                          The floor is NOT enforced on a skipped leg (an
+    ///                          unavailable leg or a leg whose computed amount is
+    ///                          0): it is never called and returns 0 shares.
     function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -1008,8 +1015,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         if (!anyAvailable) revert NoWeightsSet();
 
         // Zero-amount legs are skipped by `_executeLegs` (issue 1746). If every
-        // leg is zero (only possible for `amount == 0`) nothing would be minted,
-        // so revert with a named error instead of a silent no-op deposit.
+        // leg is zero nothing would be minted, so revert with a named error
+        // instead of a silent no-op deposit. That happens for `amount == 0`, and
+        // when `availableBps == 0` (only 0 bps legs are available, so
+        // `_availabilityAndAmounts` assigns every leg 0).
         {
             bool anyFunded;
             for (uint256 i = 0; i < n; i++) {

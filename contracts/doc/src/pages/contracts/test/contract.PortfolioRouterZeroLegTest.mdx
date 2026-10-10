@@ -5,7 +5,7 @@ description: "Issue 1746: an Active, router-eligible leg whose computed amount i
 
 # PortfolioRouterZeroLegTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d10083c3fcb22c22a537433d925e50d14ee0f882/contracts/test/PortfolioRouterZeroLeg.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/test/PortfolioRouterZeroLeg.t.sol)
 
 **Inherits:** Test
 
@@ -223,6 +223,34 @@ function testFuzz_zeroLegs_sumInvariantAndNoCalls(
 | w0 | `uint16` |  |
 | w1 | `uint16` |  |
 | w2 | `uint16` |  |
+
+<a id="testfuzz_amountsnear2pow128-uint256-uint16-uint16"></a>
+
+### testFuzz_amountsNear2pow128
+
+Near 2^128 the split still sums exactly and zero legs are still never called.
+
+```solidity
+function testFuzz_amountsNear2pow128(uint256 delta, uint16 w0, uint16 w1) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| delta | `uint256` |  |
+| w0 | `uint16` |  |
+| w1 | `uint16` |  |
+
+<a id="test_amountnearuint256max_revertsoncheckedarithmetic"></a>
+
+### test_amountNearUint256Max_revertsOnCheckedArithmetic
+
+Near uint256 max the checked multiplication `amount * bps` reverts (no wrap).
+
+```solidity
+function test_amountNearUint256Max_revertsOnCheckedArithmetic() public;
+```
 
 ## Events
 

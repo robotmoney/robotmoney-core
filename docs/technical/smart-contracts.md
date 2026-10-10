@@ -479,7 +479,7 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
 1. Reads the active weight vector (voted weights if active; otherwise default weights).
 2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
-3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg that has a non-zero weight, so it never lands on a 0 bps leg. Skipped legs get 0.
+3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg WITH NON-ZERO BPS, so it never lands on a 0 bps leg. Skipped legs get 0.
 4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg whose `legAmount` is non-zero (`_executeLeg`). A leg whose computed amount is 0 (a 0 bps weight, or a small weight that rounds to 0 on a tiny deposit) is skipped like an unavailable leg: no approval, no vault call, no event (issue 1746). Without this, one Active, eligible 0 bps leg such as rmAGENT (whose `deposit(0)` reverts) would revert the whole router deposit over the 9500/500/0/0 launch vector. `previewDeposit` reports such a leg as available with `legAmount` 0 and `estShares` 0.
 5. Emits `RouterDeposit` per deposited leg and returns the shares minted per leg (0 for a skipped leg).
 
@@ -512,7 +512,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 |---|---|---|
 | Global cap | `setRouterCap(uint256)` | Hard ceiling on total USDC per deposit. 0 = uncapped. |
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
-| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any leg returns fewer shares than specified. |
+| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. The floor is NOT enforced on a skipped leg (unavailable, or computed amount 0): it is never called and returns 0 shares. Before issue 1746 a 0 bps eligible leg was called with `deposit(0)` and a non-zero floor on it tripped. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |

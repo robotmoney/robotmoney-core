@@ -4,7 +4,7 @@ title: "ZeroLegHandler"
 
 # ZeroLegHandler
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32d5d0768371a3cc2e40a1221d41581d9eb9abc6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
 
 **Inherits:** Test
 
@@ -26,6 +26,12 @@ PortfolioRouter public immutable router;
 
 ```solidity
 address public immutable admin;
+```
+
+### registry
+
+```solidity
+VaultRegistry public immutable registry;
 ```
 
 ## State Variables
@@ -60,9 +66,15 @@ bool public zeroLegWasCalled;
 bool public depositReverted;
 ```
 
+### noFundedSeen
+
+```solidity
+uint256 public noFundedSeen;
+```
+
 ## Functions
 
-<a id="constructor-mockusdc-portfoliorouter-address-strictzerorevertvault-4"></a>
+<a id="constructor-mockusdc-portfoliorouter-address-strictzerorevertvault-4-vaultregistry"></a>
 
 ### constructor
 
@@ -71,7 +83,8 @@ constructor(
         MockUSDC usdc_,
         PortfolioRouter router_,
         address admin_,
-        StrictZeroRevertVault[4] memory v_
+        StrictZeroRevertVault[4] memory v_,
+        VaultRegistry registry_
     );
 ```
 
@@ -83,6 +96,7 @@ constructor(
 | router_ | `PortfolioRouter` |  |
 | admin_ | `address` |  |
 | v_ | `StrictZeroRevertVault[4]` |  |
+| registry_ | `VaultRegistry` |  |
 
 <a id="setweights-uint16-uint16-uint16"></a>
 
@@ -99,6 +113,36 @@ function setWeights(uint16 w0, uint16 w1, uint16 w2) external;
 | w0 | `uint16` |  |
 | w1 | `uint16` |  |
 | w2 | `uint16` |  |
+
+<a id="setpaused-uint8-bool"></a>
+
+### setPaused
+
+```solidity
+function setPaused(uint8 idx, bool paused) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idx | `uint8` |  |
+| paused | `bool` |  |
+
+<a id="seteligible-uint8-bool"></a>
+
+### setEligible
+
+```solidity
+function setEligible(uint8 idx, bool eligible) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idx | `uint8` |  |
+| eligible | `bool` |  |
 
 <a id="deposit-uint256"></a>
 

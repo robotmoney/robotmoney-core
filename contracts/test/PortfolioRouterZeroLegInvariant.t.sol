@@ -8,7 +8,10 @@
 //   - the router holds no USDC (no funds stranded, the leg amounts plus the remainder
 //     equal the deposit);
 //   - every deposited base unit is held by exactly one vault (no funds lost);
-//   - a vault whose weight was 0 at deposit time was never called.
+//   - a vault whose weight was 0 at deposit time was never called;
+//   - the outcome of every deposit matches the model: success when some available leg
+//     has weight, NoFundedLeg when only 0 bps legs are available, NoWeightsSet when no
+//     leg is available. The handler also pauses/unpauses vaults and toggles eligibility.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -29,13 +32,17 @@ contract ZeroLegHandler is Test {
     uint256 public deposits;
     bool public zeroLegWasCalled;
     bool public depositReverted;
+    VaultRegistry public immutable registry;
+    uint256 public noFundedSeen;
 
     constructor(
         MockUSDC usdc_,
         PortfolioRouter router_,
         address admin_,
-        StrictZeroRevertVault[4] memory v_
+        StrictZeroRevertVault[4] memory v_,
+        VaultRegistry registry_
     ) {
+        registry = registry_;
         usdc = usdc_;
         router = router_;
         admin = admin_;
@@ -54,12 +61,39 @@ contract ZeroLegHandler is Test {
             bps[i] = w[i];
         }
         vm.prank(admin);
-        router.setWeights(vaults, bps);
+        // Reverts when a listed vault is paused or ineligible: the vector then stays as is.
+        try router.setWeights(vaults, bps) {} catch {}
+    }
+
+    function setPaused(uint8 idx, bool paused) external {
+        vm.prank(admin);
+        registry.setVaultStatus(
+            address(v[idx % 4]),
+            paused ? VaultRegistry.VaultStatus.DepositsPaused : VaultRegistry.VaultStatus.Active
+        );
+    }
+
+    function setEligible(uint8 idx, bool eligible) external {
+        vm.prank(admin);
+        try registry.setRouterEligible(address(v[idx % 4]), eligible) {} catch {}
     }
 
     function deposit(uint256 amount) external {
-        amount = bound(amount, 1, 1e13);
-        (, uint256[] memory bps) = router.getEffectiveWeights();
+        // Tiny amounts (1..3 base units) are fuzzed together with large ones.
+        amount = amount % 4 == 0 ? bound(amount, 1, 3) : bound(amount, 1, 1e13);
+        (address[] memory vaults, uint256[] memory bps) = router.getEffectiveWeights();
+
+        // Model: which legs are available, and their summed weight.
+        uint256 availableBps;
+        bool anyAvailable;
+        for (uint256 i = 0; i < vaults.length; i++) {
+            (, VaultRegistry.VaultStatus st) = registry.getVault(vaults[i]);
+            if (st == VaultRegistry.VaultStatus.Active && router.isRouterEligible(vaults[i])) {
+                anyAvailable = true;
+                availableBps += bps[i];
+            }
+        }
+
         uint256[4] memory callsBefore;
         for (uint256 i = 0; i < 4; i++) {
             callsBefore[i] = v[i].depositCalls();
@@ -69,18 +103,29 @@ contract ZeroLegHandler is Test {
         usdc.mint(user, amount);
         vm.startPrank(user);
         usdc.approve(address(router), amount);
-        try router.deposit(amount, new uint256[](0)) {}
-        catch {
-            vm.stopPrank();
-            depositReverted = true;
-            return;
-        }
+        (bool ok, bytes memory ret) =
+            address(router).call(abi.encodeCall(router.deposit, (amount, new uint256[](0))));
         vm.stopPrank();
 
-        totalDeposited += amount;
-        deposits++;
+        if (ok) {
+            if (!anyAvailable || availableBps == 0) depositReverted = true; // must have reverted
+            totalDeposited += amount;
+            deposits++;
+        } else {
+            bytes4 sel = ret.length >= 4 ? bytes4(ret) : bytes4(0);
+            if (!anyAvailable) {
+                if (sel != PortfolioRouter.NoWeightsSet.selector) depositReverted = true;
+            } else if (availableBps == 0) {
+                if (sel != PortfolioRouter.NoFundedLeg.selector) depositReverted = true;
+                else noFundedSeen++;
+            } else {
+                depositReverted = true; // a valid deposit reverted
+            }
+        }
         for (uint256 i = 0; i < 4; i++) {
-            if (bps[i] == 0 && v[i].depositCalls() != callsBefore[i]) zeroLegWasCalled = true;
+            if (i < bps.length && bps[i] == 0 && v[i].depositCalls() != callsBefore[i]) {
+                zeroLegWasCalled = true;
+            }
         }
     }
 }
@@ -107,13 +152,15 @@ contract PortfolioRouterZeroLegInvariantTest is StdInvariant, Test {
             registry.setRouterEligible(address(v[i]), true);
             vm.stopPrank();
         }
-        handler = new ZeroLegHandler(usdc, router, admin, v);
+        handler = new ZeroLegHandler(usdc, router, admin, v, registry);
         // The launch vector first, so deposits are live before the handler rewrites it.
         handler.setWeights(9500, 500, 0);
 
-        bytes4[] memory selectors = new bytes4[](2);
+        bytes4[] memory selectors = new bytes4[](4);
         selectors[0] = ZeroLegHandler.setWeights.selector;
         selectors[1] = ZeroLegHandler.deposit.selector;
+        selectors[2] = ZeroLegHandler.setPaused.selector;
+        selectors[3] = ZeroLegHandler.setEligible.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -132,7 +179,7 @@ contract PortfolioRouterZeroLegInvariantTest is StdInvariant, Test {
         assertEq(held, handler.totalDeposited(), "funds lost or created");
     }
 
-    /// @notice A deposit over a valid vector (any zeros) never reverts.
+    /// @notice Every deposit matches the model: valid ones succeed, all-unavailable reverts NoWeightsSet, only-0-bps-available reverts NoFundedLeg.
     function invariant_depositNeverReverts() public view {
         assertFalse(handler.depositReverted(), "a valid router deposit reverted");
     }

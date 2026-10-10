@@ -3,7 +3,7 @@
 // Implements: issue #1746 — PortfolioRouter must skip zero-amount legs
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, stdError} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -327,5 +327,36 @@ contract PortfolioRouterZeroLegTest is Test {
         }
         assertEq(sharesSum, amount, "no funds lost");
         assertEq(usdc.balanceOf(address(router)), 0, "no funds stranded");
+    }
+
+    // ─── Huge amounts ────────────────────────────────────────────────────────
+
+    /// Near 2^128 the split still sums exactly and zero legs are still never called.
+    function testFuzz_amountsNear2pow128(uint256 delta, uint16 w0, uint16 w1) public {
+        uint256 amount = (uint256(1) << 128) - 1 - bound(delta, 0, 1 << 100);
+        uint256 a = bound(uint256(w0), 0, 10_000);
+        uint256 b = bound(uint256(w1), 0, 10_000 - a);
+        _setWeights(a, b, 0, 10_000 - a - b);
+        uint256[] memory shares = _deposit(amount);
+        uint256 sum;
+        for (uint256 i = 0; i < 4; i++) {
+            sum += shares[i];
+            if (shares[i] == 0) assertEq(v[i].depositCalls(), 0);
+        }
+        assertEq(sum, amount);
+        assertEq(usdc.balanceOf(address(router)), 0);
+    }
+
+    /// Near uint256 max the checked multiplication `amount * bps` reverts (no wrap).
+    function test_amountNearUint256Max_revertsOnCheckedArithmetic() public {
+        _setWeights(9500, 500, 0, 0);
+        uint256 amount = type(uint256).max - 5;
+        vm.expectRevert(stdError.arithmeticError);
+        router.previewDeposit(amount);
+        _fund(amount);
+        vm.prank(depositor);
+        vm.expectRevert(stdError.arithmeticError);
+        router.deposit(amount, new uint256[](0));
+        assertEq(usdc.balanceOf(depositor), amount, "the revert returned the USDC");
     }
 }

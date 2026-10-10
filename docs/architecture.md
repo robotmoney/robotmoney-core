@@ -302,7 +302,8 @@ Readers that compare against the live vector treat a missing vault as 0 bps
 `_isDepositable` requires registry status `Active` and `isRouterEligible`.
 A leg that fails it is skipped. The full amount is split pro rata across the
 remaining legs, by each leg's share of the available bps, and the rounding
-remainder goes to the last available leg. No USDC is left with the router
+remainder goes to the last available leg with non-zero bps. A leg whose
+computed amount is 0 is skipped like an unavailable leg (issue 1746). No USDC is left with the router
 and none is returned to the user (`_executeLegs` checks the router's USDC
 balance against its pre-deposit snapshot). `previewDeposit` runs the same
 pass, so preview and execute agree on which legs are skipped (RTR-5).

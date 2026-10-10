@@ -4,7 +4,7 @@ title: "PortfolioRouterZeroLegInvariantTest"
 
 # PortfolioRouterZeroLegInvariantTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32d5d0768371a3cc2e40a1221d41581d9eb9abc6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
 
 **Inherits:** StdInvariant, Test
 
@@ -80,7 +80,7 @@ function invariant_depositsEqualVaultHoldings() public view;
 
 ### invariant_depositNeverReverts
 
-A deposit over a valid vector (any zeros) never reverts.
+Every deposit matches the model: valid ones succeed, all-unavailable reverts NoWeightsSet, only-0-bps-available reverts NoFundedLeg.
 
 ```solidity
 function invariant_depositNeverReverts() public view;
