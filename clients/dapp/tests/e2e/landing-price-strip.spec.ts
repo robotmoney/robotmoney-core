@@ -70,7 +70,7 @@ test("landing price strip prices sit inside their sanity bands", async ({ page }
 
   for (const pair of pairs) {
     const value = page.getByTestId(`landing-price-cell-${pair.id}-value`);
-    await expect(value).not.toHaveText("unavailable");
+    await expect(value).not.toHaveText(/unavailable/);
     // Poll the numeric read so a transient loading/blank cell does not fail
     // the one-shot assertion (the price feed paints asynchronously).
     await expect
@@ -129,7 +129,8 @@ test("landing price strip isolates per-cell errors against real fork", async ({ 
     // 'unavailable'.
     expect(value.trim().length).toBeGreaterThan(0);
     if (flag === "true") {
-      expect(value).toBe("unavailable");
+      // Issue 1731: an unavailable cell names its source: "price unavailable (wallet RPC: ...)".
+      expect(value).toMatch(/^(price )?unavailable/);
       unavailableCells.push(id);
     }
   }

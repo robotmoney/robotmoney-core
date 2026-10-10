@@ -28,7 +28,7 @@
 
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
-    IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
+    IPortfolioRouterEvents, IRouterGovernanceEvents, ITimelockEvents, IVaultEvents, IVaultReads,
     IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
@@ -85,6 +85,14 @@ pub struct IndexerConfig {
     /// digest, and writes to the `consensus_receipts` table
     /// (issue #1247, docs/architecture.md §4.9).
     pub consensus_receipt: Option<Address>,
+    /// Optional TimelockController address. When set, the indexer registers it in `contracts` (kind
+    /// `timelock`) and ingests `CallScheduled`, `CallExecuted`, `Cancelled` and `MinDelayChange` into
+    /// `admin_events` (issue #1731).
+    pub timelock: Option<Address>,
+    /// Optional Safe address. When set, the indexer registers it in `contracts` (kind `safe`) and ingests
+    /// `ExecutionSuccess`, `ExecutionFailure`, `AddedOwner`, `RemovedOwner` and `ChangedThreshold` into
+    /// `admin_events` (issue #1731).
+    pub safe: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -134,6 +142,11 @@ impl IndexerConfig {
                 addrs.push(cr);
             }
         }
+        for a in [self.timelock, self.safe].into_iter().flatten() {
+            if !addrs.contains(&a) {
+                addrs.push(a);
+            }
+        }
         addrs
     }
 
@@ -177,6 +190,12 @@ impl IndexerConfig {
         if let Some(cr) = self.consensus_receipt {
             push(cr, "consensus_receipt");
         }
+        if let Some(t) = self.timelock {
+            push(t, "timelock");
+        }
+        if let Some(sf) = self.safe {
+            push(sf, "safe");
+        }
         out
     }
 }
@@ -190,6 +209,12 @@ pub struct IndexerOutcome {
     pub rows_inserted: i64,
     pub reorg_detected: bool,
     pub error: Option<String>,
+    /// The chain head (`eth_blockNumber`) this tick saw. `None` when the tick failed before reading it.
+    /// The explorer reports it next to the last indexed block so a reader can see how far behind the index is.
+    pub chain_head_block: Option<i64>,
+    /// True when the tick failed because an endpoint refused the request (HTTP 401 or 403). That is a final
+    /// answer that retrying every tick cannot change, so the caller backs off instead of hammering.
+    pub refused: bool,
 }
 
 /// How many ticks of runway still count as "converging" for the lag warning
@@ -206,6 +231,23 @@ pub struct IndexerOutcome {
 /// it scale with `max_blocks_per_tick`: raising the per-tick cap raises the gap
 /// an operator may legitimately be behind by.
 pub const CONVERGENCE_TICK_BUDGET: u64 = 300;
+
+/// Longest wait between ticks while an endpoint keeps refusing the indexer (HTTP 401 or 403).
+pub const REFUSAL_BACKOFF_CAP_SECS: u64 = 300;
+
+/// The wait after the `consecutive`-th refusal in a row: the tick interval doubled per refusal, capped at
+/// [`REFUSAL_BACKOFF_CAP_SECS`]. A refusal is a final answer, so the indexer slows down instead of asking
+/// every tick.
+pub fn refusal_backoff(consecutive: u32, tick_seconds: u64) -> std::time::Duration {
+    let factor = 1u64
+        .checked_shl(consecutive.saturating_sub(1).min(16))
+        .unwrap_or(u64::MAX);
+    let secs = tick_seconds
+        .max(1)
+        .saturating_mul(factor)
+        .min(REFUSAL_BACKOFF_CAP_SECS);
+    std::time::Duration::from_secs(secs)
+}
 
 /// One `eth_getCode` probe, classified.
 ///
@@ -876,6 +918,9 @@ pub async fn run_once(
         Ok(mut o) => {
             o.run_id = run_id;
             o.from_block = from_block;
+            if let Some(head) = o.chain_head_block {
+                db.set_run_chain_head(run_id, head).await?;
+            }
             db.finish_run(
                 run_id,
                 o.to_block,
@@ -889,6 +934,7 @@ pub async fn run_once(
         }
         Err(e) => {
             let msg = format!("{e}");
+            let refused = matches!(&e, IndexerError::Rpc(RpcError::Refused { .. }));
             // Persist the post-rollback cursor, not the pre-reorg one.  Note
             // this run row is `error IS NOT NULL` so it is excluded from the
             // `last_indexed_block()` MAX; the durable cursor reconciliation
@@ -906,6 +952,8 @@ pub async fn run_once(
                 rows_inserted: 0,
                 reorg_detected: false,
                 error: Some(msg),
+                chain_head_block: None,
+                refused,
             }
         }
     };
@@ -978,12 +1026,14 @@ async fn run_inner(
         );
     }
 
+    let chain_head_block = i64::try_from(tip).ok();
     if (from_block as u64) > safe_head {
         return Ok(IndexerOutcome {
             to_block: None,
             last_indexed_block: last_indexed,
             rows_inserted: 0,
             reorg_detected,
+            chain_head_block,
             ..Default::default()
         });
     }
@@ -999,6 +1049,7 @@ async fn run_inner(
             last_indexed_block: last_indexed,
             rows_inserted: 0,
             reorg_detected,
+            chain_head_block,
             ..Default::default()
         });
     }
@@ -1135,6 +1186,19 @@ async fn run_inner(
             rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn).await;
         }
     }
+    // A DepositsPaused or DepositsUnpaused log from a vault changes what `/v1/vaults` reports as
+    // `deposits_paused`, so take a snapshot at that block. Without this the flag stays at the last
+    // heartbeat (up to SNAPSHOT_HEARTBEAT_BLOCKS old) after a pause or an unpause.
+    for log in &logs {
+        let is_pause_log = log
+            .topics
+            .first()
+            .is_some_and(|t| *t == topics.deposits_paused || *t == topics.deposits_unpaused);
+        if is_pause_log && log.address != cfg.gateway && heartbeat_vaults.contains(&log.address) {
+            rows_inserted +=
+                snapshot_vault_or_skip(db, rpc, cfg.chain_id, log.address, log.block_number).await;
+        }
+    }
     // Snapshot all registered vaults for every block where the router processed deposits.
     for bn in &router_event_blocks {
         for vault in &heartbeat_vaults {
@@ -1182,8 +1246,155 @@ async fn run_inner(
         last_indexed_block: Some(target as i64),
         rows_inserted,
         reorg_detected,
+        chain_head_block,
         ..Default::default()
     })
+}
+
+/// Decode a Timelock or Safe log into an `admin_events` row. `None` when the log is not one of these events
+/// or was not emitted by the configured Timelock or Safe.
+pub fn admin_event_of(
+    cfg: &IndexerConfig,
+    topics: &Topics,
+    log: &LogEntry,
+) -> Result<Option<AdminEvent>, IndexerError> {
+    let Some(&topic0) = log.topics.first() else {
+        return Ok(None);
+    };
+    let word =
+        |i: usize| -> Option<[u8; 32]> { log.data.get(i * 32..i * 32 + 32)?.try_into().ok() };
+    let u256_at = |i: usize| word(i).map(|w| U256::from_be_bytes(w).to_string());
+    let addr_at = |i: usize| word(i).map(|w| format!("{:#x}", Address::from_slice(&w[12..])));
+    if Some(log.address) == cfg.timelock {
+        let al = into_alloy_log(log);
+        let (name, op_id, detail) = if topic0 == topics.timelock_call_scheduled {
+            let d = ITimelockEvents::CallScheduled::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("CallScheduled: {e}")))?;
+            (
+                "CallScheduled",
+                Some(d.id.0),
+                serde_json::json!({
+                    "index": d.index.to_string(),
+                    "target": format!("{:#x}", d.target),
+                    "value": d.value.to_string(),
+                    "data": format!("0x{}", alloy_primitives::hex::encode(&d.data.data)),
+                    "predecessor": format!("{:#x}", d.predecessor),
+                    "delay": d.delay.to_string(),
+                }),
+            )
+        } else if topic0 == topics.timelock_call_executed {
+            let d = ITimelockEvents::CallExecuted::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("CallExecuted: {e}")))?;
+            (
+                "CallExecuted",
+                Some(d.id.0),
+                serde_json::json!({
+                    "index": d.index.to_string(),
+                    "target": format!("{:#x}", d.target),
+                    "value": d.value.to_string(),
+                    "data": format!("0x{}", alloy_primitives::hex::encode(&d.data.data)),
+                }),
+            )
+        } else if topic0 == topics.timelock_cancelled {
+            let d = ITimelockEvents::Cancelled::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("Cancelled: {e}")))?;
+            ("Cancelled", Some(d.id.0), serde_json::json!({}))
+        } else if topic0 == topics.timelock_min_delay_change {
+            let d = ITimelockEvents::MinDelayChange::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("MinDelayChange: {e}")))?;
+            (
+                "MinDelayChange",
+                None,
+                serde_json::json!({
+                    "old_delay": d.oldDuration.to_string(),
+                    "new_delay": d.newDuration.to_string(),
+                }),
+            )
+        } else {
+            return Ok(None);
+        };
+        return Ok(Some(AdminEvent {
+            contract_kind: "timelock",
+            event_name: name,
+            op_id,
+            detail,
+        }));
+    }
+    if Some(log.address) == cfg.safe {
+        // Safe 1.3 puts the transaction hash in the data, Safe 1.4 in topic 1. Both carry payment in data.
+        let (name, op_id, detail) =
+            if topic0 == topics.safe_execution_success || topic0 == topics.safe_execution_failure {
+                let name = if topic0 == topics.safe_execution_success {
+                    "ExecutionSuccess"
+                } else {
+                    "ExecutionFailure"
+                };
+                let (hash, payment) = if log.topics.len() >= 2 {
+                    (Some(log.topics[1].0), u256_at(0))
+                } else {
+                    (word(0), u256_at(1))
+                };
+                (
+                    name,
+                    hash,
+                    serde_json::json!({ "payment": payment.unwrap_or_default() }),
+                )
+            } else if topic0 == topics.safe_added_owner || topic0 == topics.safe_removed_owner {
+                let name = if topic0 == topics.safe_added_owner {
+                    "AddedOwner"
+                } else {
+                    "RemovedOwner"
+                };
+                (name, None, serde_json::json!({ "owner": addr_at(0) }))
+            } else if topic0 == topics.safe_changed_threshold {
+                (
+                    "ChangedThreshold",
+                    None,
+                    serde_json::json!({ "threshold": u256_at(0) }),
+                )
+            } else {
+                return Ok(None);
+            };
+        return Ok(Some(AdminEvent {
+            contract_kind: "safe",
+            event_name: name,
+            op_id,
+            detail,
+        }));
+    }
+    Ok(None)
+}
+
+/// One Timelock or Safe event, ready for `Db::insert_admin_event`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdminEvent {
+    pub contract_kind: &'static str,
+    pub event_name: &'static str,
+    /// Timelock operation id, or Safe transaction hash.
+    pub op_id: Option<[u8; 32]>,
+    pub detail: serde_json::Value,
+}
+
+async fn handle_admin_log(
+    db: &Db,
+    cfg: &IndexerConfig,
+    topics: &Topics,
+    log: &LogEntry,
+) -> Result<Option<u64>, IndexerError> {
+    let Some(ev) = admin_event_of(cfg, topics, log)? else {
+        return Ok(None);
+    };
+    let n = db
+        .insert_admin_event(
+            cfg.chain_id,
+            log.block_number as i64,
+            log.log_index as i32,
+            log.tx_hash.0,
+            log.address.into_array(),
+            &ev,
+        )
+        .await?;
+    Ok(Some(n))
 }
 
 /// Walk back from `start` until we find a block whose stored hash
@@ -2016,6 +2227,12 @@ pub async fn handle_log(
     // below. Only the configured ConsensusRecommendationReceipt deployment may
     // write the receipt register, so check the address before decoding rather
     // than trusting the topic.
+    // Timelock and Safe governance events (issue #1731). The topic-0s are generic hashes, so the emitter
+    // must be the configured Timelock or Safe before anything is written.
+    if let Some(n) = handle_admin_log(db, cfg, topics, log).await? {
+        return Ok(n);
+    }
+
     if (topic0 == topics.consensus_receipt_recorded || topic0 == topics.consensus_receipt_released)
         && Some(log.address) != cfg.consensus_receipt
     {
@@ -2513,15 +2730,16 @@ async fn snapshot_vault_address(
     let tvl_cap = call_u256(rpc, vault, IVaultReads::tvlCapCall {}.abi_encode(), block)
         .await
         .unwrap_or(U256::ZERO);
-    // `depositsPaused()` exists on every vault, the v1 vault included.
+    // `depositsPaused()` exists on every vault, the v1 vault included. A failed read skips the snapshot
+    // (the caller retries on the next heartbeat) rather than recording "not paused": the explorer shows
+    // this flag next to the vault, and "open" must never be a guess.
     let deposits_paused = call_bool(
         rpc,
         vault,
         IVaultReads::depositsPausedCall {}.abi_encode(),
         block,
     )
-    .await
-    .unwrap_or(false);
+    .await?;
 
     db.insert_vault_snapshot(
         chain_id,
@@ -2988,6 +3206,8 @@ mod tests {
             portfolio_router: Some(router),
             investment_committee: None,
             consensus_receipt: None,
+            timelock: None,
+            safe: None,
             max_blocks_per_tick: 100,
             start_block: None,
             end_block: None,
@@ -3015,6 +3235,8 @@ mod tests {
             portfolio_router: None,
             investment_committee: None,
             consensus_receipt: None,
+            timelock: None,
+            safe: None,
             max_blocks_per_tick: 1000,
             start_block: Some(52_401_633),
             end_block: None,
@@ -3038,5 +3260,169 @@ mod tests {
             None,
             "unset keeps the getCode derivation"
         );
+    }
+
+    // ── issue 1731: refusal backoff, Timelock and Safe event decoding ────────
+
+    #[test]
+    fn refusal_backoff_doubles_from_the_tick_interval_and_is_capped() {
+        use std::time::Duration;
+        assert_eq!(refusal_backoff(1, 12), Duration::from_secs(12));
+        assert_eq!(refusal_backoff(2, 12), Duration::from_secs(24));
+        assert_eq!(refusal_backoff(3, 12), Duration::from_secs(48));
+        assert_eq!(refusal_backoff(6, 12), Duration::from_secs(300));
+        assert_eq!(refusal_backoff(u32::MAX, 12), Duration::from_secs(300));
+        assert_eq!(refusal_backoff(1, 0), Duration::from_secs(1));
+    }
+
+    fn admin_cfg() -> IndexerConfig {
+        IndexerConfig {
+            chain_id: 8453,
+            chain_name: "base".into(),
+            rpc_label: "t".into(),
+            gateway: Address::from([0x11; 20]),
+            vault: Address::from([0x22; 20]),
+            registry: None,
+            router_governance: None,
+            portfolio_router: None,
+            investment_committee: None,
+            consensus_receipt: None,
+            timelock: Some(Address::from([0x7a; 20])),
+            safe: Some(Address::from([0x5e; 20])),
+            max_blocks_per_tick: 1000,
+            start_block: None,
+            end_block: None,
+            feature_flags: 0,
+        }
+    }
+
+    fn raw_log(address: Address, topics: Vec<alloy_primitives::B256>, data: Vec<u8>) -> LogEntry {
+        LogEntry {
+            address,
+            topics,
+            data: Bytes::from(data),
+            block_number: 10,
+            block_hash: alloy_primitives::B256::ZERO,
+            tx_hash: alloy_primitives::B256::ZERO,
+            tx_index: 0,
+            log_index: 0,
+        }
+    }
+
+    #[test]
+    fn timelock_and_safe_are_watched_and_listed_as_contracts() {
+        let cfg = admin_cfg();
+        let watched = cfg.watched_addresses();
+        assert!(watched.contains(&cfg.timelock.unwrap()));
+        assert!(watched.contains(&cfg.safe.unwrap()));
+        let kinds = cfg.configured_contracts();
+        assert!(kinds.contains(&(cfg.timelock.unwrap(), "timelock")));
+        assert!(kinds.contains(&(cfg.safe.unwrap(), "safe")));
+        let mut none = admin_cfg();
+        none.timelock = None;
+        none.safe = None;
+        assert_eq!(none.watched_addresses().len(), 2);
+        assert!(none
+            .configured_contracts()
+            .iter()
+            .all(|(_, k)| *k != "timelock" && *k != "safe"));
+    }
+
+    #[test]
+    fn call_scheduled_from_the_timelock_decodes_and_from_anyone_else_is_ignored() {
+        use alloy_primitives::{FixedBytes, B256};
+        use alloy_sol_types::SolEvent as _;
+        let cfg = admin_cfg();
+        let topics = Topics::new();
+        let ev = ITimelockEvents::CallScheduled {
+            id: FixedBytes([0xab; 32]),
+            index: U256::from(0),
+            target: Address::from([0x99; 20]),
+            value: U256::from(0),
+            data: Bytes::from(vec![0xde, 0xad]),
+            predecessor: B256::ZERO,
+            delay: U256::from(172_800u64),
+        };
+        let ld = ev.encode_log_data();
+        let log = raw_log(
+            cfg.timelock.unwrap(),
+            ld.topics().to_vec(),
+            ld.data.to_vec(),
+        );
+        let got = admin_event_of(&cfg, &topics, &log)
+            .unwrap()
+            .expect("decoded");
+        assert_eq!(got.contract_kind, "timelock");
+        assert_eq!(got.event_name, "CallScheduled");
+        assert_eq!(got.op_id, Some([0xab; 32]));
+        assert_eq!(got.detail["delay"], "172800");
+        assert_eq!(got.detail["data"], "0xdead");
+        let other = raw_log(
+            Address::from([0x01; 20]),
+            ld.topics().to_vec(),
+            ld.data.to_vec(),
+        );
+        assert_eq!(admin_event_of(&cfg, &topics, &other).unwrap(), None);
+    }
+
+    #[test]
+    fn safe_execution_success_decodes_for_safe_13_and_14_layouts() {
+        use alloy_primitives::B256;
+        let cfg = admin_cfg();
+        let topics = Topics::new();
+        let safe = cfg.safe.unwrap();
+        let payment = U256::from(7u64).to_be_bytes::<32>().to_vec();
+        // Safe 1.4: txHash is indexed (topic 1), data is the payment.
+        let v14 = raw_log(
+            safe,
+            vec![topics.safe_execution_success, B256::from([0xcd; 32])],
+            payment.clone(),
+        );
+        let got = admin_event_of(&cfg, &topics, &v14).unwrap().unwrap();
+        assert_eq!(
+            (got.contract_kind, got.event_name),
+            ("safe", "ExecutionSuccess")
+        );
+        assert_eq!(got.op_id, Some([0xcd; 32]));
+        assert_eq!(got.detail["payment"], "7");
+        // Safe 1.3: both arguments in the data.
+        let mut data13 = vec![0xcd; 32];
+        data13.extend_from_slice(&payment);
+        let v13 = raw_log(safe, vec![topics.safe_execution_failure], data13);
+        let got = admin_event_of(&cfg, &topics, &v13).unwrap().unwrap();
+        assert_eq!(got.event_name, "ExecutionFailure");
+        assert_eq!(got.op_id, Some([0xcd; 32]));
+        assert_eq!(got.detail["payment"], "7");
+    }
+
+    #[test]
+    fn safe_owner_and_threshold_events_decode() {
+        let cfg = admin_cfg();
+        let topics = Topics::new();
+        let safe = cfg.safe.unwrap();
+        let mut owner_word = vec![0u8; 12];
+        owner_word.extend_from_slice(&[0x42; 20]);
+        let added = raw_log(safe, vec![topics.safe_added_owner], owner_word);
+        let got = admin_event_of(&cfg, &topics, &added).unwrap().unwrap();
+        assert_eq!(got.event_name, "AddedOwner");
+        assert_eq!(
+            got.detail["owner"],
+            format!("{:#x}", Address::from([0x42; 20]))
+        );
+        let thr = raw_log(
+            safe,
+            vec![topics.safe_changed_threshold],
+            U256::from(3u64).to_be_bytes::<32>().to_vec(),
+        );
+        let got = admin_event_of(&cfg, &topics, &thr).unwrap().unwrap();
+        assert_eq!(got.event_name, "ChangedThreshold");
+        assert_eq!(got.detail["threshold"], "3");
+        // A Safe event topic from the Timelock address is not a Timelock event.
+        let wrong = raw_log(
+            cfg.timelock.unwrap(),
+            vec![topics.safe_changed_threshold],
+            U256::from(3u64).to_be_bytes::<32>().to_vec(),
+        );
+        assert_eq!(admin_event_of(&cfg, &topics, &wrong).unwrap(), None);
     }
 }

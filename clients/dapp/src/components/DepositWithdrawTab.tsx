@@ -47,6 +47,9 @@ import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { useDepositState } from "../lib/useDepositStates";
+import { depositsBlocked } from "../lib/vaultDepositState";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
 import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
@@ -156,6 +159,12 @@ export function DepositWithdrawTab(props: Props) {
   const [selectedVault, setSelectedVault] = useState<Address | undefined>(props.vaultAddress);
 
   const depositAssets = parseUsdcAmount(depositInput);
+
+  // Deposits are enabled ONLY in the known-open state of the vault being deposited into (issue 1731): its
+  // live `depositsPaused()`, else the fresh explorer snapshot. Paused, retired and unknown all disable the form.
+  // The withdraw form below never reads this, because `pauseDeposits()` leaves exits open.
+  const depositClosedState = useDepositState(depositVault);
+  const depositsClosed = depositsBlocked(depositClosedState);
   const withdrawShares = parseUsdcAmount(withdrawInput);
 
   // -------- allowance read --------
@@ -214,7 +223,8 @@ export function DepositWithdrawTab(props: Props) {
     functionName: "deposit",
     args: depositAction ? [depositAction.assets, depositAction.receiver] : undefined,
     query: {
-      enabled: isConnected && depositPreview?.ok === true && allowanceOk === true,
+      enabled:
+        isConnected && depositPreview?.ok === true && allowanceOk === true && !depositsClosed,
       retry: 5,
     },
   });
@@ -346,6 +356,11 @@ export function DepositWithdrawTab(props: Props) {
         <section data-testid="deposit-form">
           <h2>Deposit USDC</h2>
           <p>Approve USDC, then deposit into the vault to receive rmUSDC shares.</p>
+          <DepositsClosedNotice
+            state={depositClosedState}
+            scope="This vault"
+            testId="deposit-closed-notice"
+          />
           <label>
             Amount (USDC)
             <input
@@ -354,6 +369,7 @@ export function DepositWithdrawTab(props: Props) {
               onChange={(e) => setDepositInput(e.target.value)}
               placeholder="0.00"
               inputMode="decimal"
+              disabled={depositsClosed}
             />
           </label>
           {depositPreview && <TxPreview preview={depositPreview} />}
@@ -362,7 +378,7 @@ export function DepositWithdrawTab(props: Props) {
               type="button"
               data-testid="deposit-approve"
               onClick={onApprove}
-              disabled={!isConnected || !approveSim || isPending}
+              disabled={!isConnected || !approveSim || isPending || depositsClosed}
             >
               Approve USDC for vault
             </button>
@@ -376,6 +392,7 @@ export function DepositWithdrawTab(props: Props) {
               !depositSim ||
               !allowanceOk ||
               isPending ||
+              depositsClosed ||
               depositPreview?.ok !== true
             }
           >

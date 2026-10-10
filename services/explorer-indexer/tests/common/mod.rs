@@ -164,8 +164,14 @@ pub struct StubRpcServer {
     /// Every JSON-RPC request body received, in arrival order. Lets tests assert
     /// what the indexer actually requested (e.g. the `eth_getLogs` address set).
     requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Optional per-calldata answer for `eth_call` (issue 1731): `Ok(result hex)` or `Err(message)` for a
+    /// JSON-RPC error. When unset, `eth_call` answers from the fixed `handlers` table like every other method.
+    call_hook: Arc<Mutex<Option<CallHook>>>,
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
+
+/// Answers one `eth_call` from its calldata (`0x...`): the result hex, or an error message.
+pub type CallHook = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 impl StubRpcServer {
     pub async fn start() -> Self {
@@ -175,11 +181,13 @@ impl StubRpcServer {
         let handlers: Arc<Mutex<HashMap<String, serde_json::Value>>> = Arc::default();
         let fail = Arc::new(AtomicBool::new(false));
         let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+        let call_hook: Arc<Mutex<Option<CallHook>>> = Arc::default();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let h2 = handlers.clone();
         let f2 = fail.clone();
         let r2 = requests.clone();
+        let c2 = call_hook.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -189,6 +197,7 @@ impl StubRpcServer {
                         let h = h2.clone();
                         let f = f2.clone();
                         let r = r2.clone();
+                        let ch = c2.clone();
                         tokio::spawn(async move {
                             let mut buf = vec![0u8; 16 * 1024];
                             let n = match sock.read(&mut buf).await { Ok(n) => n, Err(_) => return };
@@ -204,7 +213,27 @@ impl StubRpcServer {
                             };
                             r.lock().unwrap().push(req.clone());
                             let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
-                            let resp = if f.load(Ordering::SeqCst) {
+                            let hooked = if method == "eth_call" {
+                                let data = req["params"][0]["data"].as_str().unwrap_or("").to_string();
+                                let hook = ch.lock().unwrap().clone();
+                                hook.map(|h| h(&data))
+                            } else {
+                                None
+                            };
+                            let resp = if let Some(answer) = hooked {
+                                match answer {
+                                    Ok(result) => serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": req.get("id").cloned().unwrap_or(serde_json::json!(1)),
+                                        "result": result,
+                                    }),
+                                    Err(message) => serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": req.get("id").cloned().unwrap_or(serde_json::json!(1)),
+                                        "error": { "code": 3, "message": message }
+                                    }),
+                                }
+                            } else if f.load(Ordering::SeqCst) {
                                 serde_json::json!({
                                     "jsonrpc": "2.0",
                                     "id": req.get("id").cloned().unwrap_or(serde_json::json!(1)),
@@ -237,6 +266,7 @@ impl StubRpcServer {
             handlers,
             fail,
             requests,
+            call_hook,
             shutdown: shutdown_tx,
         }
     }
@@ -251,6 +281,11 @@ impl StubRpcServer {
             .lock()
             .unwrap()
             .insert(method.to_string(), value);
+    }
+
+    /// Answer every `eth_call` from its calldata (see [`CallHook`]).
+    pub fn set_call_hook(&self, hook: CallHook) {
+        *self.call_hook.lock().unwrap() = Some(hook);
     }
 
     pub fn force_failure(&self, on: bool) {

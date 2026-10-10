@@ -266,6 +266,8 @@ fn cfg() -> IndexerConfig {
         consensus_receipt: None,
         // Small on purpose: one tick must advance a knowable amount, so the
         // asserted `from_block` of the NEXT tick is unambiguous.
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 10,
         start_block: None,
         end_block: None,

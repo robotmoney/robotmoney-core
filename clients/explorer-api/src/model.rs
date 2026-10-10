@@ -21,8 +21,38 @@ pub struct Freshness {
 #[derive(Debug, Serialize)]
 pub struct Health {
     pub status: &'static str,
+    /// Highest block a successful indexer run committed for this chain; null until one has.
     pub last_indexed_block: Option<i64>,
+    /// Chain head the indexer last saw (`eth_blockNumber`); null until a tick has read it.
+    pub chain_head_block: Option<i64>,
     pub reorg_count: i32,
+}
+
+/// One Timelock or Safe event (`admin_events`).
+#[derive(Debug, Serialize)]
+pub struct AdminEventEntry {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: String,
+    /// The Timelock or Safe that emitted it.
+    pub contract: String,
+    /// `timelock` or `safe`.
+    pub contract_kind: String,
+    pub event_name: String,
+    /// Timelock operation id, or Safe transaction hash.
+    pub op_id: Option<String>,
+    /// The decoded event arguments.
+    pub detail: serde_json::Value,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response for GET /v1/governance/admin-events.
+#[derive(Debug, Serialize)]
+pub struct AdminEventsResponse {
+    pub events: Vec<AdminEventEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +174,10 @@ pub struct Vault {
     pub total_assets: Option<String>,
     /// Most recent `exit_fee_bps` from vault_snapshots; null when no snapshot exists.
     pub exit_fee_bps: Option<i64>,
+    /// `depositsPaused()` of the vault as of its most recent snapshot; null when no snapshot exists, which
+    /// a client must read as "unknown", never as "open". The registry `status` above is lifecycle state and
+    /// does not follow a `pauseDeposits()` call on the vault.
+    pub deposits_paused: Option<bool>,
     pub indexed_at: DateTime<Utc>,
 }
 
@@ -153,6 +187,8 @@ pub struct VaultsResponse {
     pub vaults: Vec<Vault>,
     #[serde(flatten)]
     pub freshness: Freshness,
+    /// Chain head the indexer last saw; null until a tick has read it.
+    pub chain_head_block: Option<i64>,
 }
 
 /// Historical TVL data point from `vault_snapshots`.
@@ -218,6 +254,8 @@ pub struct VaultDetail {
     /// 0 = Active, 1 = Paused, 2 = Retired.
     pub status: i16,
     pub deposit_cap: String,
+    /// `depositsPaused()` as of the latest snapshot; null when there is none (read as unknown, never open).
+    pub deposits_paused: Option<bool>,
     /// TVL history from vault_snapshots (up to 500 rows, ascending by block).
     pub tvl_history: Vec<VaultTvlPoint>,
     /// Adapter allocation history from adapter_allocations (up to 500 rows, ascending by block).
@@ -369,6 +407,8 @@ pub struct StatsResponse {
     pub activity_feed: Vec<ActivityEvent>,
     #[serde(flatten)]
     pub freshness: Freshness,
+    /// Chain head the indexer last saw; null until a tick has read it.
+    pub chain_head_block: Option<i64>,
 }
 
 // ─── GET /v1/router/state ────────────────────────────────────────────────────

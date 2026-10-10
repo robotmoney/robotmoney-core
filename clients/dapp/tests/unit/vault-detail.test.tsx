@@ -23,6 +23,10 @@ import type { FetchLike, VaultDetailResponse } from "../../src/lib/explorerApi";
 // Wagmi mock — useReadContract for basket vaults returns isLoading:true so
 // composition tests assert on the loading state without a live RPC.
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
   createConfig: () => ({}),
   http: () => ({}),

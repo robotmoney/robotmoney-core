@@ -167,6 +167,22 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --bin indexer -- --nocapture
 
+      # Core 1731: an RPC endpoint that answers HTTP 401 or 403 is a named, actionable, non-retried
+      # refusal (rpc_refused: loopback fake server, no Postgres), and the Timelock and Safe events,
+      # the chain head on every tick, the refusal outcome and the paused-flag snapshots are indexed
+      # (admin_events_and_progress: Postgres testcontainer). The lib steps run the pure decoders and the
+      # refusal backoff. Each is wrapped in the executed-count guard so zero collected tests is RED.
+      - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issue 1731)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test rpc_refused -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ --nocapture
+
       # Two targets that landed on fusion/deployment-workflow without a job
       # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
       # no workflow executes, which is how they surfaced when the branch came
@@ -332,6 +348,15 @@ jobs:
             --test router_introspection \
             --test cors \
             --test canonical_schema -- --test-threads=1 --nocapture
+
+      # Core 1731: the index cursor and chain head are not read from the newest (in-flight or failed) run
+      # row, vaults carry their own deposits_paused flag, and the Safe, the timelock and their events are
+      # listed. Testcontainer Postgres, same Docker check as above.
+      - name: explorer-api index cursor, chain head, deposits_paused, admin events (issue 1731)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
+            --test progress_and_admin -- --test-threads=1 --nocapture
 
       # Issue #1430: the compiled explorer-api binary refuses a stale schema
       # (exit non-zero, naming both versions) and serves on a matching one.

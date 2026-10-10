@@ -28,9 +28,12 @@ import {
   LandingPriceStrip,
   LandingPriceStripView,
   cellTestId,
+  priceReadFailureReason,
+  priceSourceBlockedReason,
   type PriceCellState,
 } from "../../src/components/LandingPriceStrip";
 import { ExplorerContext } from "../../src/lib/ExplorerContext";
+import { RuntimeConfigProvider } from "../../src/lib/RuntimeConfigContext";
 import { sqrtPriceX96ToPrice } from "../../src/lib/uniswapV3";
 import { PRICE_STRIP_PAIRS, resolvePoolConfig } from "../../src/lib/dexPools";
 
@@ -38,9 +41,34 @@ import { PRICE_STRIP_PAIRS, resolvePoolConfig } from "../../src/lib/dexPools";
 // directly. The pure LandingPriceStripView tests are unaffected because the
 // view component imports no wagmi hooks. The real WagmiProvider in
 // render.tsx/TestProviders is preserved via vi.importActual (see render.tsx).
+// What every pool read returns in the container tests below (issue 1731). vi.hoisted keeps it reachable from
+// the hoisted vi.mock factory.
+interface PoolRead {
+  data: unknown;
+  error: unknown;
+  isError: boolean;
+  isLoading: boolean;
+}
+interface MockPoolRead {
+  current: PoolRead;
+  /** Every option object `useReadContract` was called with. */
+  calls: unknown[];
+  account: { chainId: number | undefined; isConnected: boolean };
+}
+const mockPoolRead = vi.hoisted((): MockPoolRead => {
+  const current: PoolRead = { data: undefined, error: null, isError: false, isLoading: true };
+  return { current, calls: [], account: { chainId: undefined, isConnected: false } };
+});
+
 vi.mock("wagmi", () => ({
   useChainId: () => 8453,
-  useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
+  // The write guard (useWriteChainGuard) reads the connected chain: none here, class "not-applicable".
+  useAccount: () => mockPoolRead.account,
+  useWriteContract: () => ({ writeContract: () => undefined, data: undefined, isPending: false }),
+  useReadContract: (opts: unknown) => {
+    mockPoolRead.calls.push(opts);
+    return mockPoolRead.current;
+  },
   // Stubs for transitively-imported wagmi symbols in lib/wagmi.ts:
   createConfig: () => ({}),
   http: () => ({}),
@@ -210,6 +238,7 @@ const EXPLORER_NULL_VALUE: import("../../src/lib/ExplorerContext").ExplorerConte
   vaults: [],
   stats: null,
   blockNumber: null,
+  chainHeadBlock: null,
   vaultsLoading: false,
   statsLoading: false,
   vaultsError: null,
@@ -235,5 +264,172 @@ describe("LandingPriceStrip container — ExplorerContext blockNumber wiring (is
       </ExplorerContext.Provider>,
     );
     expect(screen.getByTestId("landing-price-strip-freshness").textContent).toBe("Block —");
+  });
+});
+
+// ─── Issue 1731: a clear "price unavailable (source)" state, and a good price survives a failed refetch ───
+
+describe("LandingPriceStripView — price unavailable (source) and stale prices (issue 1731)", () => {
+  it("names the failing source in the cell and keeps the other cells untouched", () => {
+    const cells = makeCells({
+      "eth-usd": {
+        unavailable: true,
+        price: null,
+        unavailableReason:
+          "wallet RPC: connect a wallet on Base, prices are read through your wallet",
+      },
+    });
+    render(<LandingPriceStripView cells={cells} blockNumber={100} />);
+    const failed = screen.getByTestId(`${cellTestId("eth-usd")}-value`);
+    expect(failed.textContent).toBe(
+      "price unavailable (wallet RPC: connect a wallet on Base, prices are read through your wallet)",
+    );
+    expect(screen.getByTestId(`${cellTestId("weth-usdc")}-value`).textContent).not.toContain(
+      "unavailable",
+    );
+  });
+
+  it("a stale cell still shows its last good price and says it may be old", () => {
+    const cells = makeCells({ "eth-usd": { price: 2500, stale: true } });
+    render(<LandingPriceStripView cells={cells} blockNumber={100} />);
+    const cell = screen.getByTestId(cellTestId("eth-usd"));
+    expect(cell.getAttribute("data-cell-unavailable")).toBe("false");
+    expect(cell.getAttribute("data-cell-stale")).toBe("true");
+    const text = screen.getByTestId(`${cellTestId("eth-usd")}-value`).textContent ?? "";
+    expect(text).toContain("2,500");
+    expect(text).toContain("may be old");
+  });
+
+  it("shows the staleness hint in the heading when the indexer is far behind the head", () => {
+    render(
+      <LandingPriceStripView cells={makeCells({})} blockNumber={1000} chainHeadBlock={1500} />,
+    );
+    expect(screen.getByTestId("landing-price-strip-freshness").textContent).toContain(
+      "indexer 500 blocks behind",
+    );
+  });
+
+  it("blocked sources and read failures have words, and no URL reaches a cell", () => {
+    expect(priceSourceBlockedReason({ kind: "not-connected", targetChainId: 8453 })).toContain(
+      "connect a wallet on Base",
+    );
+    expect(
+      priceSourceBlockedReason({ kind: "wrong-chain", targetChainId: 8453, connectedChainId: 1 }),
+    ).toContain("chain 1");
+    expect(priceSourceBlockedReason({ kind: "ok", targetChainId: 8453 })).toBeUndefined();
+    expect(priceSourceBlockedReason({ kind: "not-applicable" })).toBeUndefined();
+    const failure = priceReadFailureReason(
+      new Error("HTTP request failed. URL: https://base-rpc.example/v2/SECRET-KEY"),
+    );
+    expect(failure).toContain("wallet RPC: read failed");
+    expect(failure).not.toContain("SECRET-KEY");
+  });
+});
+
+describe("LandingPriceStrip container — a failed read never blanks a good price (issue 1731)", () => {
+  const ONE = [2n ** 96n, 0, 0, 0, 0, 0, true];
+  const renderStrip = () =>
+    render(
+      <ExplorerContext.Provider value={{ ...EXPLORER_NULL_VALUE, blockNumber: 1000 }}>
+        <LandingPriceStrip />
+      </ExplorerContext.Provider>,
+    );
+
+  it("a good read shows the price, not stale", () => {
+    mockPoolRead.current = { data: ONE, error: null, isError: false, isLoading: false };
+    renderStrip();
+    const cell = screen.getByTestId(cellTestId("eth-usd"));
+    expect(cell.getAttribute("data-cell-unavailable")).toBe("false");
+    expect(cell.getAttribute("data-cell-stale")).toBe("false");
+  });
+
+  it("an error on a refetch with a price already held keeps the price and marks it may be old", () => {
+    mockPoolRead.current = {
+      data: ONE,
+      error: new Error("HTTP request failed"),
+      isError: true,
+      isLoading: false,
+    };
+    renderStrip();
+    const cell = screen.getByTestId(cellTestId("eth-usd"));
+    expect(cell.getAttribute("data-cell-unavailable")).toBe("false");
+    expect(cell.getAttribute("data-cell-stale")).toBe("true");
+    expect(screen.getByTestId(`${cellTestId("eth-usd")}-value`).textContent).toContain(
+      "may be old",
+    );
+  });
+
+  it("an error with no price to show says 'price unavailable (wallet RPC: read failed ...)'", () => {
+    mockPoolRead.current = {
+      data: undefined,
+      error: new Error("HTTP request failed. URL: https://rpc.example/v2/SECRET"),
+      isError: true,
+      isLoading: false,
+    };
+    renderStrip();
+    const text = screen.getByTestId(`${cellTestId("eth-usd")}-value`).textContent ?? "";
+    expect(text).toMatch(/^price unavailable \(wallet RPC: read failed/);
+    expect(text).not.toContain("SECRET");
+    expect(screen.getByTestId(cellTestId("eth-usd")).getAttribute("data-cell-unavailable")).toBe(
+      "true",
+    );
+  });
+});
+
+describe("LandingPriceStrip container — the read runs only where the wallet can answer for Base (issue 1731)", () => {
+  const ONE = [2n ** 96n, 0, 0, 0, 0, 0, true];
+  const renderOn = (env: Record<string, string>) =>
+    render(
+      <RuntimeConfigProvider config={env}>
+        <ExplorerContext.Provider value={{ ...EXPLORER_NULL_VALUE, blockNumber: 1000 }}>
+          <LandingPriceStrip />
+        </ExplorerContext.Provider>
+      </RuntimeConfigProvider>,
+    );
+  const enabledFlags = () =>
+    mockPoolRead.calls.map((c) => (c as { query?: { enabled?: boolean } }).query?.enabled);
+
+  it("mainnet class, no wallet: no pool read is enabled and each cell says to connect a wallet on Base", () => {
+    mockPoolRead.calls = [];
+    mockPoolRead.account = { chainId: undefined, isConnected: false };
+    mockPoolRead.current = { data: ONE, error: null, isError: false, isLoading: false };
+    renderOn({ VITE_ENV_CLASS: "mainnet" });
+    expect(enabledFlags().length).toBeGreaterThan(0);
+    expect(enabledFlags().every((e) => e === false)).toBe(true);
+    const text = screen.getByTestId(`${cellTestId("eth-usd")}-value`).textContent ?? "";
+    expect(text).toContain("price unavailable (wallet RPC: connect a wallet on Base");
+  });
+
+  it("mainnet class, wallet on another chain: not read, and the cell names the chain", () => {
+    mockPoolRead.calls = [];
+    mockPoolRead.account = { chainId: 1, isConnected: true };
+    renderOn({ VITE_ENV_CLASS: "mainnet" });
+    expect(enabledFlags().every((e) => e === false)).toBe(true);
+    expect(screen.getByTestId(`${cellTestId("eth-usd")}-value`).textContent).toContain(
+      "your wallet is on chain 1",
+    );
+  });
+
+  it("mainnet class, wallet on Base: the read is enabled and pinned to chain 8453", () => {
+    mockPoolRead.calls = [];
+    mockPoolRead.account = { chainId: 8453, isConnected: true };
+    renderOn({ VITE_ENV_CLASS: "mainnet" });
+    expect(enabledFlags().every((e) => e === true)).toBe(true);
+    expect(mockPoolRead.calls.every((c) => (c as { chainId?: number }).chainId === 8453)).toBe(
+      true,
+    );
+    expect(screen.getByTestId(cellTestId("eth-usd")).getAttribute("data-cell-unavailable")).toBe(
+      "false",
+    );
+  });
+
+  it("other classes keep reading through the provider, unpinned", () => {
+    mockPoolRead.calls = [];
+    mockPoolRead.account = { chainId: undefined, isConnected: false };
+    renderOn({});
+    expect(enabledFlags().every((e) => e === true)).toBe(true);
+    expect(mockPoolRead.calls.every((c) => (c as { chainId?: number }).chainId === undefined)).toBe(
+      true,
+    );
   });
 });

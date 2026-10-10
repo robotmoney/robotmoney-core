@@ -53,6 +53,10 @@ const MIGRATIONS: &[&str] = &[
     include_str!(
         "../../../services/explorer-indexer/migrations/0016_consensus_receipts_contract_scope.sql"
     ),
+    // Issue 1731: indexer_runs.chain_head_block and admin_events.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0017_admin_events_and_chain_head.sql"
+    ),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from

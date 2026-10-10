@@ -11,6 +11,7 @@
  *
  * issue #318 — protocol layer.
  */
+import { IndexFreshness } from "./IndexFreshness";
 import { useExplorer } from "../lib/ExplorerContext";
 
 export function ProtocolStats() {
@@ -66,7 +67,11 @@ export function ProtocolStats() {
         </div>
       )}
 
-      <p data-testid="protocol-stats-freshness">Block {stats.block_number}</p>
+      <IndexFreshness
+        blockNumber={stats.block_number}
+        chainHeadBlock={stats.chain_head_block}
+        testId="protocol-stats-freshness"
+      />
     </section>
   );
 }

@@ -90,12 +90,21 @@ export interface VaultRow {
   readonly deposit_cap: string;
   readonly total_assets: string | null;
   readonly exit_fee_bps: number | null;
+  /**
+   * The vault's own `depositsPaused()` as of the indexer's latest snapshot; null when it has none. The registry
+   * `status` above does not follow `pauseDeposits()`, so a vault can be status 0 with this true (issue 1731).
+   * Optional so an older explorer that does not send it reads as "unknown", never as "open".
+   */
+  readonly deposits_paused?: boolean | null;
   readonly indexed_at: string;
 }
 
 export interface VaultsResponse {
   readonly vaults: readonly VaultRow[];
+  /** The last block the indexer committed; 0 when it has indexed nothing yet. */
   readonly block_number: number;
+  /** The chain head the indexer last saw; null/absent until a tick has read it (issue 1731). */
+  readonly chain_head_block?: number | null;
   readonly indexed_at: string;
 }
 
@@ -113,6 +122,8 @@ export interface VaultDetailRow {
   readonly risk_label: string;
   readonly status: number;
   readonly deposit_cap: string;
+  /** The vault's `depositsPaused()` at its latest snapshot; null/absent when unknown (issue 1731). */
+  readonly deposits_paused?: boolean | null;
   readonly tvl_history: readonly VaultTvlPoint[];
   readonly indexed_at: string;
 }
@@ -227,6 +238,8 @@ export interface StatsResponse {
   readonly unique_depositors: number;
   readonly activity_feed: readonly ActivityEvent[];
   readonly block_number: number;
+  /** The chain head the indexer last saw; null/absent until a tick has read it (issue 1731). */
+  readonly chain_head_block?: number | null;
   readonly indexed_at: string;
 }
 

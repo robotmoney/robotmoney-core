@@ -37,6 +37,9 @@ import {
   type LegPreview,
 } from "../lib/routerPreview";
 import { TxPreview } from "./TxPreview";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { useDepositStates } from "../lib/useDepositStates";
+import { depositsBlocked, type DepositState } from "../lib/vaultDepositState";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
 import { ProportionPreview } from "./shared";
 
@@ -115,6 +118,23 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const routerPreview =
     depositAssets !== null && legs.length > 0 ? buildRouterPreview(depositAssets, legs, ctx) : null;
 
+  // -------- deposits closed on a leg vault (issue 1731) --------
+  // The router deposit is all-or-revert across its legs, so it is enabled ONLY when every leg vault is in the
+  // known-open state. A leg that is paused, retired or unknown closes the whole router deposit. Withdraw and
+  // redeem are not touched.
+  const legVaults = legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string");
+  const legStates = useDepositStates(legVaults);
+  const closedLegs = legVaults.filter((v) => {
+    const st = legStates.get(v.toLowerCase());
+    return !st || depositsBlocked(st);
+  });
+  const pausedLegCount = closedLegs.length;
+  const routerDepositsClosed = pausedLegCount > 0;
+  const firstClosed = closedLegs[0] && legStates.get(closedLegs[0].toLowerCase());
+  const closedState: DepositState = routerDepositsClosed
+    ? (firstClosed ?? { kind: "unknown" })
+    : { kind: "open", source: "chain" };
+
   // -------- getEffectiveWeights() live check (AC §7) --------
   // Compare the vault list from preview to the router's current effective
   // weight vector — the same vector `previewDeposit` itself routes by, so this
@@ -166,6 +186,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     routerPreview?.ok === true &&
     !hasUnavailable &&
     allowanceOk &&
+    !routerDepositsClosed &&
     !vaultListChanged;
 
   // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
@@ -230,8 +251,15 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           onChange={(e) => setAmountInput(e.target.value)}
           placeholder="0.00"
           inputMode="decimal"
+          disabled={routerDepositsClosed}
         />
       </label>
+
+      <DepositsClosedNotice
+        state={closedState}
+        scope={`Router deposit (${pausedLegCount} of ${legVaults.length} leg vaults closed)`}
+        testId="router-deposits-closed"
+      />
 
       {/* Per-leg breakdown table (AC §6) */}
       {legs.length > 0 && <ProportionPreview legs={legs} />}
@@ -260,7 +288,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           type="button"
           data-testid="router-deposit-tab-approve"
           onClick={onApprove}
-          disabled={!isConnected || !approveSim || isPending}
+          disabled={!isConnected || !approveSim || isPending || routerDepositsClosed}
         >
           Approve USDC for router
         </button>
@@ -277,6 +305,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           isPending ||
           routerPreview?.ok !== true ||
           hasUnavailable === true ||
+          routerDepositsClosed ||
           vaultListChanged === true
         }
       >

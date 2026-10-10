@@ -191,6 +191,8 @@ fn base_cfg(end_block: u64) -> IndexerConfig {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: Some(receipt_addr()),
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 100,
         start_block: None,
         end_block: Some(end_block),

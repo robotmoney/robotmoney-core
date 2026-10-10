@@ -170,6 +170,8 @@ fn base_cfg(_stub: &StubRpcServer) -> IndexerConfig {
         portfolio_router: None,
         investment_committee: Some(ic_addr()),
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 100,
         start_block: None,
         end_block: Some(10),
