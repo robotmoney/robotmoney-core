@@ -362,6 +362,139 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         before,
         "the effective routing after the deploy equals the default launch vector 9500/500/0/0"
     );
+    // Issue 1743, the clear row on the REAL contracts. The seam is HONEST governance, no impersonation: a voted vector is created the way production creates
+    // one. The timelock (through the real Safe) calls RouterGovernance.propose, the two Twin voters (their throwaway keystores, voting power set at deploy,
+    // quorum 2) vote, the voting period and execution delay pass by time warp, and anyone executes, which calls router.setWeights. Then apply-receipt
+    // must REFUSE, `govern --row clear-voted-weights` runs through the real Safe and timelock, and the router reads votedWeightsActive false and
+    // effective == default again.
+    {
+        let gov = fx.governance_hex().to_string();
+        let rpc = fx.rpc_url().to_string();
+        let vault_list: Vec<String> = [
+            fx.vault(),
+            fx.proto_vault(),
+            fx.agent_vault(),
+            fx.rwa_vault(),
+        ]
+        .iter()
+        .map(|a| format!("{a:#x}"))
+        .collect();
+        let voted_bps = [8000u64, 1000, 500, 500];
+        let list = format!("[{}]", vault_list.join(","));
+        let bps_arg = format!(
+            "[{}]",
+            voted_bps
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let calldata = Command::new("cast")
+            .args(["calldata", "propose(address[],uint256[])", &list, &bps_arg])
+            .output()
+            .expect("cast on PATH");
+        assert!(calldata.status.success(), "cast calldata propose failed");
+        let calldata = String::from_utf8_lossy(&calldata.stdout).trim().to_string();
+        fx.published()
+            .govern_call("voted-vector-propose", &gov, &calldata)
+            .expect("the timelock proposes a voted vector through the real Safe");
+        let pid_raw = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                &rpc,
+                &gov,
+                "currentProposalId()(uint256)",
+            ])
+            .output()
+            .expect("cast on PATH");
+        let pid = String::from_utf8_lossy(&pid_raw.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            !pid.is_empty() && pid != "0",
+            "a proposal must exist, got '{pid}'"
+        );
+        let keys = &fx.published().keys;
+        for voter in ["VOTER1", "VOTER2"] {
+            let out = Command::new("cast")
+                .args(["send", "--rpc-url", &rpc, "--keystore"])
+                .arg(keys.key_dir.join(voter))
+                .arg("--password-file")
+                .arg(&keys.password_file)
+                .args([&gov, "vote(uint256)", &pid])
+                .output()
+                .expect("cast on PATH");
+            assert!(
+                out.status.success(),
+                "{voter} vote failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        // voting period (3600) plus execution delay (3600) of the Twin sheet, plus a margin
+        fx.warp(7300)
+            .expect("warp past the voting period and delay");
+        let exec = fx.cast_send(
+            &format!("0x{}", hex::encode(smoke_test::AGENT_PRIVATE_KEY)),
+            fx.governance(),
+            "execute(uint256)",
+            &[&pid],
+        );
+        exec.expect("anyone executes the passed proposal: router.setWeights");
+        assert!(
+            voted_active(&fx),
+            "the passed proposal must leave a voted vector active"
+        );
+        assert_eq!(
+            effective_weights(&fx).1,
+            voted_bps.to_vec(),
+            "the voted vector overrides the default"
+        );
+        assert_eq!(
+            router_weights(&fx),
+            before,
+            "the default vector is untouched by the vote"
+        );
+        // apply-receipt refuses while the voted vector is active, and sends nothing
+        let refusal = fx
+            .apply_fixture_receipt("receipt-c.json")
+            .expect_err("apply-receipt must refuse while a voted vector is active")
+            .to_string();
+        assert!(
+            refusal.contains("VOTED_WEIGHTS_ACTIVE"),
+            "the refusal must name VOTED_WEIGHTS_ACTIVE, got: {refusal}"
+        );
+        assert!(
+            !c_released(&fx),
+            "the refused apply-receipt must not release receipt C"
+        );
+        // the clear row, through the real Safe and timelock
+        let cleared = fx
+            .published()
+            .govern("clear-voted-weights", &[])
+            .expect("the Safe clears the voted vector through the timelock");
+        assert_eq!(
+            cleared.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+            vec!["clear-voted-weights", "clear-voted-weights"],
+            "one scheduled line and one executed line"
+        );
+        assert!(
+            !voted_active(&fx),
+            "votedWeightsActive must read false after the clear"
+        );
+        assert_eq!(
+            effective_weights(&fx),
+            router_weights(&fx),
+            "effective equals default after the clear"
+        );
+        assert_eq!(
+            effective_weights(&fx),
+            before,
+            "effective is the launch vector again"
+        );
+    }
     let applied = fx
         .apply_fixture_receipt("receipt-c.json")
         .expect("the Safe applies receipt C through the timelock");
