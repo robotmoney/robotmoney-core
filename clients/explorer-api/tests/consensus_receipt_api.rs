@@ -57,6 +57,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!(
         "../../../services/explorer-indexer/migrations/0017_admin_events_and_chain_head.sql"
     ),
+    // Issue 1741: vault_snapshots.tvl_cap nullable, per_deposit_cap.
+    include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from

@@ -2,15 +2,16 @@
 //   1. an annotated release/<version> tag points at DEPLOY_SHA, and the remote holds the same tag object (RELEASE_SHA_UNTAGGED, RELEASE_TAG_REMOTE_MISMATCH)
 //      The TAG KIND must match the deployment kind of the sheet (issue 1727): a production plan needs release/<version>, a rehearsal plan needs release/<version>-rehearsal.
 //      A rehearsal tag never satisfies a production plan and the reverse (RELEASE_TAG_KIND).
-//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING)
+//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING). A reconstructed baseline is also proven committed in the COUNTS checkout (issue 1740, gitFrozenDirCommitted)
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { anchorChainOf, fileHashOf, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
+import { gitEnv } from "./git-env.ts";
 import { releaseTagsFor, tagKind, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
 import type { DeploymentKind } from "./chains.ts";
 
@@ -46,27 +47,66 @@ export interface ReleaseGateInput {
    */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
   /**
-   * Issue 1733: proves the anchor file of a reconstructed baseline (measured.crossChecked) is COMMITTED at the checkout's HEAD with the bytes that were checked, so deleting or
+   * Issue 1733: proves the anchor file of a reconstructed baseline (measured.crossChecked) is COMMITTED at the HEAD of the counts checkout with the bytes that were checked, so deleting or
    * swapping it in the working tree cannot hide the cross-check. Required when the file has a crossChecked record (COUNTS_MISSING without it). Default seam in the CLI: gitAnchorCommitted.
    */
   anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
   /**
-   * Issue 1733: the counts dir of a reconstructed baseline must be INSIDE the core checkout and hold every frozen file tracked at HEAD (a tracked file missing from the dir is a
-   * deleted anchor). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
+   * Issue 1733 and 1740: the counts dir of a reconstructed baseline must be a clean dir of a checkout at the release sha or a descendant of it, tracking every frozen file in it with the
+   * same bytes (gitFrozenDirCommitted). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
    */
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
 }
 
-/** The counts dir must lie inside the git checkout `coreDir`, and every `<40 hex>.json` tracked in it at HEAD must exist in the working dir. */
-export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, git = "git"): Promise<void> {
-  const rel = relative(resolve(coreDir), resolve(countsDir));
-  if (rel.startsWith("..") || rel === "") throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is outside the core checkout ${coreDir}: a reconstructed baseline needs the committed frozen-counts dir of the checkout, so its anchors can be proven committed`);
-  const r = spawnSync(git, ["-C", coreDir, "ls-tree", "--name-only", "HEAD", `${rel}/`], { maxBuffer: 1 << 24 });
-  if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): the frozen files tracked in ${rel} cannot be listed`);
-  if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `git ls-tree HEAD ${rel} failed in ${coreDir}: ${String(r.stderr).trim().split("\n").pop() ?? ""}`);
-  for (const line of String(r.stdout).split("\n")) {
-    const name = line.split("/").pop() ?? "";
-    if (/^[0-9a-f]{40}\.json$/.test(name) && !existsSync(resolve(countsDir, name))) throw new PublishError("COUNTS_MISSING", `${name} is tracked in ${rel} at HEAD but missing from the counts dir ${countsDir}: restore it (git checkout)`);
+const DUBIOUS = "git refuses a checkout owned by another user (safe.directory): the counts checkout must be owned by the operator";
+/** `git --no-replace-objects -C dir args`: the output, or the refusal. A git that cannot run, and a git that fails, are told apart. */
+function gitRead(git: string, dir: string, args: string[], what: string): { ok: boolean; out: Buffer; err: string } {
+  const r = spawnSync(git, ["--no-replace-objects", "-C", dir, ...args], { maxBuffer: 1 << 24, env: gitEnv() });
+  if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): ${what}`);
+  const stderr = String(r.stderr);
+  const last = stderr.trim().split("\n").pop() ?? "";
+  return { ok: r.status === 0, out: r.stdout, err: /dubious ownership/.test(stderr) ? `${last} (${DUBIOUS})` : last };
+}
+
+export interface FrozenDirOptions { git?: string; /** Also require HEAD of the counts checkout to be an ancestor of (or equal to) its local refs/remotes/origin/dev. */ requireOriginDev?: boolean }
+
+/**
+ * Issue 1740: the counts dir of a reconstructed baseline is a directory of a git checkout of THIS repository, and that checkout proves the dir.
+ * A baseline is named by the DEPLOY sha X, so its file can never be in the checkout at X (it holds X, the hash of a tree that would hold it). The release flow tags X, then merges the file
+ * as a data-only commit Y after the tag. The operator runs the code from a clean checkout at X (`coreDir`) and the counts from a clean checkout at Y or later (`countsDir`). The proofs,
+ * all run in the COUNTS checkout, nothing is read from the core checkout but its HEAD:
+ *   1. countsDir is inside a git work tree, and the HEAD of that work tree is X or a descendant of X (so it holds X's whole history: the same repository, and the data came after the tag);
+ *   2. every `<40 hex>.json` in the dir is tracked at HEAD with the same bytes (the baseline X.json, every anchor, any extra file), and every one tracked at HEAD is in the dir (no deleted anchor);
+ *   3. the dir is clean: nothing modified and nothing untracked under it.
+ */
+export async function gitFrozenDirCommitted(coreDir: string, countsDir: string, opt: FrozenDirOptions | string = {}): Promise<void> {
+  const o: FrozenDirOptions = typeof opt === "string" ? { git: opt } : opt;
+  const git = o.git ?? "git";
+  const head = gitRead(git, coreDir, ["rev-parse", "HEAD"], `the commit of the core checkout ${coreDir} cannot be read`);
+  const x = head.out.toString().trim();
+  if (!head.ok || !/^[0-9a-f]{40}$/.test(x)) throw new PublishError("COUNTS_MISSING", `cannot read HEAD of the core checkout ${coreDir}: ${head.err}`);
+  const top = gitRead(git, countsDir, ["rev-parse", "--is-inside-work-tree"], `the counts dir ${countsDir} cannot be proven committed`);
+  if (!top.ok) throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is not inside a git work tree (${top.err}): a reconstructed baseline needs the committed frozen-counts dir of a checkout of this repository at the release sha ${x} or a later commit`);
+  const anc = gitRead(git, countsDir, ["merge-base", "--is-ancestor", x, "HEAD"], `the history of the counts checkout ${countsDir} cannot be read`);
+  if (!anc.ok) throw new PublishError("COUNTS_MISSING", `HEAD of the counts checkout ${countsDir} is not a descendant of the release sha ${x} of the core checkout (or does not contain it): the counts come from a checkout of the same repository at ${x} or a later commit (the data-only commit that adds the baseline), not from an older or another repository`);
+  const ls = gitRead(git, countsDir, ["ls-tree", "--name-only", "HEAD"], `the frozen files tracked in ${countsDir} cannot be listed`);
+  if (!ls.ok) throw new PublishError("COUNTS_MISSING", `git ls-tree HEAD failed in ${countsDir}: ${ls.err}`);
+  const frozen = /^[0-9a-f]{40}\.json$/;
+  const tracked = new Set(ls.out.toString().split("\n").filter((n) => frozen.test(n)));
+  const onDisk = readdirSync(resolve(countsDir)).filter((n) => frozen.test(n));
+  for (const name of tracked) if (!onDisk.includes(name)) throw new PublishError("COUNTS_MISSING", `${name} is tracked at HEAD of ${countsDir} but missing from the counts dir: restore it (git checkout)`);
+  for (const name of onDisk) {
+    if (!tracked.has(name)) throw new PublishError("COUNTS_MISSING", `${name} in the counts dir ${countsDir} is not tracked at HEAD: commit it (the data-only commit after the release tag) and run from that checkout`);
+    const committed = gitRead(git, countsDir, ["show", `HEAD:./${name}`], `${name} cannot be compared with its committed bytes`);
+    if (!committed.ok || !committed.out.equals(readFileSync(resolve(countsDir, name)))) throw new PublishError("COUNTS_MISSING", `${name} in the counts dir ${countsDir} differs from the committed bytes at HEAD: restore the committed bytes (git checkout)`);
+  }
+  const st = gitRead(git, countsDir, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", "."], `the counts dir ${countsDir} cannot be checked for changes`);
+  if (!st.ok) throw new PublishError("COUNTS_MISSING", `git status failed in ${countsDir}: ${st.err}`);
+  const dirty = st.out.toString().split("\n").filter((l) => l.trim() !== "");
+  if (dirty.length > 0) throw new PublishError("COUNTS_MISSING", `the counts dir ${countsDir} is not clean (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. Commit or remove it (ignored files count too), the counts are read from a clean checkout`);
+  if (o.requireOriginDev) {
+    const od = gitRead(git, countsDir, ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/dev"], `the counts checkout ${countsDir} cannot be compared with origin/dev`);
+    if (!od.ok) throw new PublishError("COUNTS_MISSING", `HEAD of the counts checkout ${countsDir} is not reachable from its origin/dev (--counts-require-origin-dev): run 'git fetch origin dev' there and use a reviewed commit that is merged to dev (${od.err || "no refs/remotes/origin/dev"})`);
   }
 }
 
@@ -81,13 +121,13 @@ export async function assertBaselineCommitted(o: { countsDir: string; sha: strin
   }
 }
 
-/** The anchor file at `abs` must be a tracked file of the git checkout `coreDir`, equal at HEAD to the bytes whose sha256 is `expectedHash`. */
-export async function gitAnchorCommitted(coreDir: string, abs: string, expectedHash: string, git = "git"): Promise<void> {
-  const rel = relative(resolve(coreDir), resolve(abs));
-  if (rel.startsWith("..") || rel === "") throw new PublishError("COUNTS_MISSING", `the anchor file ${abs} is outside the core checkout ${coreDir}: it cannot be proven committed`);
-  const r = spawnSync(git, ["-C", coreDir, "show", `HEAD:${rel}`], { maxBuffer: 1 << 24 });
+/** The anchor file at `abs` must be a tracked file of the git checkout that holds it, equal at HEAD to the bytes whose sha256 is `expectedHash` (the counts checkout, not the core checkout). */
+export async function gitAnchorCommitted(abs: string, expectedHash: string, git = "git"): Promise<void> {
+  const file = resolve(abs);
+  const rel = basename(file);
+  const r = spawnSync(git, ["--no-replace-objects", "-C", dirname(file), "show", `HEAD:./${rel}`], { maxBuffer: 1 << 24, env: gitEnv() });
   if (r.error || r.status === null) throw new PublishError("COUNTS_MISSING", `git could not run (${r.error?.message ?? "killed by a signal"}): the anchor file ${rel} cannot be proven committed`);
-  if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `the anchor file ${rel} is not committed at HEAD of ${coreDir} (git show: ${String(r.stderr).trim().split("\n").pop() ?? ""}): commit the earlier frozen file the baseline was cross-checked against`);
+  if (r.status !== 0) throw new PublishError("COUNTS_MISSING", `the anchor file ${file} is not committed at HEAD of its checkout (git show: ${String(r.stderr).trim().split("\n").pop() ?? ""}): commit the earlier frozen file the baseline was cross-checked against`);
   if (fileHashOf(r.stdout) !== expectedHash) throw new PublishError("COUNTS_MISSING", `the anchor file ${rel} committed at HEAD differs from the bytes the baseline was cross-checked against: restore the committed bytes`);
 }
 

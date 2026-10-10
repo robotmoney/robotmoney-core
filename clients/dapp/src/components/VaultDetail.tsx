@@ -28,12 +28,15 @@ import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
 import {
   formatSharesString,
   formatTokenBalance,
+  formatUsdcCapString,
   formatUsdcString,
   USDC_DECIMALS,
 } from "../lib/format";
 import { useExplorer } from "../lib/ExplorerContext";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
+  HEADROOM_LABEL,
+  headroomCell,
   depositStateAttr,
   depositStateLabel,
   depositStateReason,
@@ -168,7 +171,13 @@ interface VaultDetailProps {
 type State =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | { phase: "ok"; vault: VaultDetailRow; block_number: number };
+  | {
+      phase: "ok";
+      vault: VaultDetailRow;
+      /** The index block (the last block the indexer committed), not the snapshot block. */
+      block_number: number;
+      chain_head_block: number | null;
+    };
 
 export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
@@ -181,7 +190,14 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
     setState({ phase: "loading" });
     const ac = new AbortController();
     fetchVaultDetail(apiUrl, address, { fetchImpl, signal: ac.signal })
-      .then((res) => setState({ phase: "ok", vault: res.vault, block_number: res.block_number }))
+      .then((res) =>
+        setState({
+          phase: "ok",
+          vault: res.vault,
+          block_number: res.block_number,
+          chain_head_block: res.chain_head_block ?? null,
+        }),
+      )
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
         setState({ phase: "error", message: String(err) });
@@ -205,13 +221,15 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   }
 
   const { vault, block_number } = state;
+  // The head the detail response saw, else the shared list's. The lag line compares the INDEX block with it.
+  const headBlock = state.chain_head_block ?? chainHeadBlock;
   const deposit = resolveDepositState({
     registryStatus: vault.status,
     explorerPaused:
       vault.deposits_paused ??
       listedVaults.find((v) => v.address.toLowerCase() === address.toLowerCase())?.deposits_paused,
     explorerBlock: vault.deposits_paused != null ? block_number : listBlock,
-    explorerHead: chainHeadBlock,
+    explorerHead: headBlock,
     chainPaused: chainPaused.get(address.toLowerCase()),
   });
 
@@ -246,9 +264,21 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
           )}
         </div>
         <div className="stat-card">
-          <p className="stat-label">Deposit Cap</p>
+          <p className="stat-label">TVL Cap</p>
           <p data-testid="vault-detail-cap" className="stat-value font-mono">
-            {formatUsdcString(vault.deposit_cap)}
+            {formatUsdcCapString(vault.tvl_cap)}
+          </p>
+        </div>
+        <div className="stat-card">
+          <p className="stat-label">Per-deposit Cap</p>
+          <p data-testid="vault-detail-per-deposit-cap" className="stat-value font-mono">
+            {formatUsdcCapString(vault.per_deposit_cap)}
+          </p>
+        </div>
+        <div className="stat-card">
+          <p className="stat-label">{HEADROOM_LABEL}</p>
+          <p data-testid="vault-detail-headroom" className="stat-value font-mono">
+            {headroomCell(vault.headroom, deposit)}
           </p>
         </div>
         <div className="stat-card">
@@ -314,7 +344,8 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
 
       <IndexFreshness
         blockNumber={block_number}
-        chainHeadBlock={chainHeadBlock}
+        chainHeadBlock={headBlock}
+        snapshotBlock={vault.snapshot_block ?? vault.tvl_history.at(-1)?.block_number}
         testId="vault-detail-freshness"
       />
     </section>

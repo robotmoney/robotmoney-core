@@ -95,6 +95,7 @@ export const USAGE = `publish contracts
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's)
+  --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
@@ -151,7 +152,7 @@ export interface CliDeps {
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
   /** With --row apply-receipt only: the receipt payload file. */
@@ -173,7 +174,7 @@ export function parseCli(argv: string[]): Parsed {
       options: {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
-        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
+        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
         measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
       },
     }));
@@ -231,7 +232,7 @@ export function parseCli(argv: string[]): Parsed {
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
-    countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
+    countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri,
   };
 }
@@ -379,8 +380,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => codeWithRetry(() => run("cast", ["code", x], { env: castEnv }), { address: x, rpc: a.rpc, sleep: deps.sleep }) });
-    const realFrozenDirCommitted = (d: string): Promise<void> => gitFrozenDirCommitted(coreDir, d);
-    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(coreDir, anchorPath, hash);
+    const realFrozenDirCommitted = async (d: string): Promise<void> => {
+      try { await gitFrozenDirCommitted(coreDir, d, { requireOriginDev: a.countsRequireOriginDev }); } catch (e) {
+        if (a.countsDir || !isPublishError(e)) throw e;
+        // the default counts dir is the one of the core checkout at the release sha: it can never track the baseline named by that sha (issue 1740)
+        throw new PublishError(e.kind, `${e.message} No --counts-dir was given and the default counts dir ${d} is under the core checkout: pass --counts-dir <a clean checkout of dev at Y >= the release sha that tracks the baseline file>/deployments/frozen-counts`);
+      }
+    };
+    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {

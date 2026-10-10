@@ -4,8 +4,10 @@
  * VaultList — reads GET /v1/vaults and renders all registered vaults.
  *
  * Works without a connected wallet. Each row shows the vault name,
- * risk_label, status badge, TVL (total_assets), exit_fee_bps, and
- * deposit_cap_headroom (deposit_cap − total_assets when both are present).
+ * risk_label, status badge, TVL (total_assets), exit_fee_bps, the TVL cap,
+ * the per-deposit cap, and the headroom the explorer computed from the vault's own
+ * `tvlCap()` and `perDepositCap()` (issue 1741). A cap the explorer could not read
+ * shows "unknown", never 0.
  *
  * Data comes from ExplorerContext (shared polling loop in main.tsx), so this
  * component always displays the same block_number as VaultCards — no
@@ -13,27 +15,20 @@
  *
  * issue #318 — protocol layer.
  */
-import type { VaultRow } from "../lib/explorerApi";
 import { useExplorer } from "../lib/ExplorerContext";
-import { formatUsdc, formatUsdcString } from "../lib/format";
+import { formatUsdcCapString, formatUsdcString } from "../lib/format";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
-import { depositStateAttr, depositStateLabel, resolveDepositState } from "../lib/vaultDepositState";
+import {
+  HEADROOM_LABEL,
+  depositStateAttr,
+  depositStateLabel,
+  headroomCell,
+  resolveDepositState,
+} from "../lib/vaultDepositState";
 import { IndexFreshness } from "./IndexFreshness";
 
 interface VaultListProps {
   onSelectVault?: (address: string) => void;
-}
-
-function headroom(vault: VaultRow): string | null {
-  if (vault.total_assets == null) return null;
-  try {
-    const cap = BigInt(vault.deposit_cap);
-    const tvl = BigInt(vault.total_assets);
-    if (cap < tvl) return formatUsdc(0n);
-    return formatUsdc(cap - tvl);
-  } catch {
-    return null;
-  }
 }
 
 export function VaultList({ onSelectVault }: VaultListProps) {
@@ -70,7 +65,9 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                 <th>Status</th>
                 <th>TVL</th>
                 <th>Exit Fee (bps)</th>
-                <th>Headroom</th>
+                <th>TVL Cap</th>
+                <th>Per-deposit Cap</th>
+                <th>{HEADROOM_LABEL}</th>
               </tr>
             </thead>
             <tbody>
@@ -96,7 +93,13 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                     <td data-testid="vault-list-row-status">{depositStateLabel(deposit)}</td>
                     <td data-testid="vault-list-row-tvl">{formatUsdcString(v.total_assets)}</td>
                     <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
-                    <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
+                    <td data-testid="vault-list-row-tvl-cap">{formatUsdcCapString(v.tvl_cap)}</td>
+                    <td data-testid="vault-list-row-per-deposit-cap">
+                      {formatUsdcCapString(v.per_deposit_cap)}
+                    </td>
+                    <td data-testid="vault-list-row-headroom">
+                      {headroomCell(v.headroom, deposit)}
+                    </td>
                   </tr>
                 );
               })}

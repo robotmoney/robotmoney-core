@@ -509,7 +509,8 @@ async fn migration_preserves_existing_vault_snapshots() {
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             50,
-            U256::ZERO,
+            Some(U256::ZERO),
+            None,
             false,
         )
         .await
@@ -619,7 +620,8 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
             U256::from(500_000u64),
             U256::from(500_000u64),
             50,
-            U256::ZERO,
+            Some(U256::ZERO),
+            None,
             false,
         )
         .await
