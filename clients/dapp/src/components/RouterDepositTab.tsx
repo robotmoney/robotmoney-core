@@ -37,6 +37,9 @@ import {
   type LegPreview,
 } from "../lib/routerPreview";
 import { TxPreview } from "./TxPreview";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
+import type { DepositState } from "../lib/vaultDepositState";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
 import { ProportionPreview } from "./shared";
 
@@ -115,6 +118,17 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const routerPreview =
     depositAssets !== null && legs.length > 0 ? buildRouterPreview(depositAssets, legs, ctx) : null;
 
+  // -------- deposits closed on a leg vault (issue 1731) --------
+  // The router deposit is all-or-revert across its legs. A leg vault whose own `depositsPaused()` is true
+  // closes the whole router deposit, whatever its registry status says. Withdraw and redeem are not touched.
+  const legVaults = legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string");
+  const { byAddress: legPaused } = useVaultsDepositsPaused(legVaults);
+  const pausedLegCount = legVaults.filter((v) => legPaused.get(v.toLowerCase()) === true).length;
+  const routerDepositsClosed = pausedLegCount > 0;
+  const closedState: DepositState = routerDepositsClosed
+    ? { kind: "paused", source: "chain" }
+    : { kind: "open" };
+
   // -------- getEffectiveWeights() live check (AC §7) --------
   // Compare the vault list from preview to the router's current effective
   // weight vector — the same vector `previewDeposit` itself routes by, so this
@@ -166,6 +180,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     routerPreview?.ok === true &&
     !hasUnavailable &&
     allowanceOk &&
+    !routerDepositsClosed &&
     !vaultListChanged;
 
   // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
@@ -230,8 +245,15 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           onChange={(e) => setAmountInput(e.target.value)}
           placeholder="0.00"
           inputMode="decimal"
+          disabled={routerDepositsClosed}
         />
       </label>
+
+      <DepositsClosedNotice
+        state={closedState}
+        scope={`Router deposit (${pausedLegCount} of ${legVaults.length} leg vaults closed)`}
+        testId="router-deposits-closed"
+      />
 
       {/* Per-leg breakdown table (AC §6) */}
       {legs.length > 0 && <ProportionPreview legs={legs} />}
@@ -260,7 +282,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           type="button"
           data-testid="router-deposit-tab-approve"
           onClick={onApprove}
-          disabled={!isConnected || !approveSim || isPending}
+          disabled={!isConnected || !approveSim || isPending || routerDepositsClosed}
         >
           Approve USDC for router
         </button>
@@ -277,6 +299,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           isPending ||
           routerPreview?.ok !== true ||
           hasUnavailable === true ||
+          routerDepositsClosed ||
           vaultListChanged === true
         }
       >

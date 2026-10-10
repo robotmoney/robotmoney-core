@@ -48,6 +48,8 @@ const rec: Recorders = {
 };
 
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
   useAccount: () => ({ address: USER, isConnected: true }),
   useReadContract: (opts: {
     functionName?: string;

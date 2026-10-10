@@ -48,6 +48,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money USDC",
       risk_label: "STABLE_YIELD",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "5000000000",
       exit_fee_bps: 10,
@@ -59,6 +60,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Protocol",
       risk_label: "VOLATILE",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "2000000000",
       exit_fee_bps: 25,
@@ -70,6 +72,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Agent Tokens",
       risk_label: "SPECULATIVE",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "1000000000",
       exit_fee_bps: 25,
@@ -100,6 +103,7 @@ function makeVaultFixture(total_assets: string | null): VaultsResponse {
         name: "Robot Money USDC",
         risk_label: "STABLE_YIELD",
         status: 0,
+        deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
         deposit_cap: "10000000000000",
         total_assets,
         exit_fee_bps: 10,

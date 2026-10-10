@@ -26,12 +26,15 @@ import type { FetchLike, VaultDetailRow } from "../lib/explorerApi";
 import { fetchVaultDetail } from "../lib/explorerApi";
 import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
 import { formatTokenBalance } from "../lib/format";
-
-const STATUS_LABEL: Record<number, string> = {
-  0: "Active",
-  1: "Deposits paused",
-  2: "Retired",
-};
+import { useExplorer } from "../lib/ExplorerContext";
+import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
+import {
+  depositStateAttr,
+  depositStateLabel,
+  depositStateReason,
+  resolveDepositState,
+} from "../lib/vaultDepositState";
+import { IndexFreshness } from "./IndexFreshness";
 
 /** Render the last 6 hex chars of an address as 0x...XXXXXX. */
 function shortAddr(addr: string): string {
@@ -162,6 +165,10 @@ type State =
 
 export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
+  // The deposit state of this vault: the registry status of the detail row, the explorer's snapshot flag
+  // from the shared vault list, and the vault's own flag read from the chain (issue 1731).
+  const { vaults: listedVaults, chainHeadBlock } = useExplorer();
+  const { byAddress: chainPaused } = useVaultsDepositsPaused([address]);
 
   useEffect(() => {
     setState({ phase: "loading" });
@@ -191,6 +198,13 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   }
 
   const { vault, block_number } = state;
+  const deposit = resolveDepositState({
+    registryStatus: vault.status,
+    explorerPaused:
+      vault.deposits_paused ??
+      listedVaults.find((v) => v.address.toLowerCase() === address.toLowerCase())?.deposits_paused,
+    chainPaused: chainPaused.get(address.toLowerCase()),
+  });
 
   return (
     <section data-testid="vault-detail" className="vault-detail">
@@ -209,9 +223,18 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
         </div>
         <div className="stat-card">
           <p className="stat-label">Status</p>
-          <p data-testid="vault-detail-status" className="stat-value">
-            {STATUS_LABEL[vault.status] ?? String(vault.status)}
+          <p
+            data-testid="vault-detail-status"
+            className="stat-value"
+            data-deposit-state={depositStateAttr(deposit)}
+          >
+            {depositStateLabel(deposit)}
           </p>
+          {deposit.kind !== "open" && (
+            <p className="hint" data-testid="vault-detail-deposits-closed">
+              {depositStateReason(deposit)}
+            </p>
+          )}
         </div>
         <div className="stat-card">
           <p className="stat-label">Deposit Cap</p>
@@ -278,7 +301,11 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
         </div>
       )}
 
-      <p data-testid="vault-detail-freshness">Block {block_number}</p>
+      <IndexFreshness
+        blockNumber={block_number}
+        chainHeadBlock={chainHeadBlock}
+        testId="vault-detail-freshness"
+      />
     </section>
   );
 }

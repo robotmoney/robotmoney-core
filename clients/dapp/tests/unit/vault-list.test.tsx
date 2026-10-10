@@ -36,6 +36,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money USDC",
       risk_label: "STABLE_YIELD",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "5000000000",
       exit_fee_bps: 10,
@@ -47,6 +48,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Protocol",
       risk_label: "VOLATILE",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "2000000000",
       exit_fee_bps: 25,
@@ -58,6 +60,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Agent Tokens",
       risk_label: "SPECULATIVE",
       status: 0,
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
       deposit_cap: "10000000000000",
       total_assets: "1000000000",
       exit_fee_bps: 25,
@@ -103,7 +106,7 @@ describe("VaultList — table rendering", () => {
     expect(nameEls[0].textContent).toBe("Robot Money USDC");
     expect(riskEls[0].textContent).toBe("STABLE_YIELD");
     expect(statusEls[0].textContent).toBe("Active");
-    expect(statusEls[3].textContent).toBe("Deposits paused");
+    expect(statusEls[3].textContent).toBe("Deposits paused / closed");
   });
 
   it("no Assets toggle button is present (VaultListRowAssets retired in #941)", async () => {

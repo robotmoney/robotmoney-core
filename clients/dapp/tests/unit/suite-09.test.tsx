@@ -23,6 +23,10 @@ import { VaultDetail } from "../../src/components/VaultDetail";
 // still receives the real wagmi module; only component-source imports are
 // replaced by this mock (useReadContract returns isLoading:true).
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
   createConfig: () => ({}),
   http: () => ({}),
@@ -54,6 +58,7 @@ const vaultsFixture: VaultsResponse = {
       name: "Alpha Vault",
       risk_label: "stable-yield",
       status: 0,
+      deposits_paused: false,
       deposit_cap: "1000000000",
       total_assets: "99999999",
       exit_fee_bps: 25,
@@ -82,6 +87,7 @@ const vaultDetailFixture: VaultDetailResponse = {
     name: "Alpha Vault",
     risk_label: "stable-yield",
     status: 0,
+    deposits_paused: false,
     deposit_cap: "1000000000",
     tvl_history: [
       {
@@ -237,7 +243,7 @@ describe("VaultList", () => {
 
     const statuses = getAllByTestId("vault-list-row-status").map((n) => n.textContent);
     expect(statuses).toContain("Active");
-    expect(statuses).toContain("Deposits paused");
+    expect(statuses).toContain("Deposits paused / closed");
   });
 
   it("renders without a connected wallet — no wagmi hooks used", async () => {
@@ -381,6 +387,7 @@ describe("VaultDetail", () => {
         name: "deSPXA RWA Vault",
         risk_label: "SPECULATIVE",
         status: 0,
+        deposits_paused: false,
         deposit_cap: "1000000000",
         tvl_history: [],
         indexed_at: "2026-01-01T12:00:00Z",

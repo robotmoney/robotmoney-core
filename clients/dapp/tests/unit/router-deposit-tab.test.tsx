@@ -96,6 +96,8 @@ const mockState: WagmiMockState = {
 let capturedDepositArgs: readonly unknown[] | undefined;
 
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
   useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };

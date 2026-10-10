@@ -108,6 +108,8 @@ interface WagmiMockState {
   liveVaultRecord: readonly [unknown, number] | undefined;
   approveSim: unknown;
   depositSim: unknown;
+  /** The selected vault's own `depositsPaused()` (issue 1731); undefined = not read. */
+  vaultDepositsPaused: boolean | undefined;
 }
 
 const mockState: WagmiMockState = {
@@ -119,15 +121,19 @@ const mockState: WagmiMockState = {
   liveVaultRecord: [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const, // Active
   approveSim: undefined,
   depositSim: { request: {} }, // valid sim = submit enabled
+  vaultDepositsPaused: undefined,
 };
 
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
   useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };
     if (opts.functionName === "balanceOf") return { data: mockState.usdcBalance };
     if (opts.functionName === "previewDeposit") return { data: mockState.previewDepositShares };
     if (opts.functionName === "getVault") return { data: mockState.liveVaultRecord };
+    if (opts.functionName === "depositsPaused") return { data: mockState.vaultDepositsPaused };
     return { data: undefined };
   },
   useSimulateContract: (opts: { functionName?: string }) => {
@@ -281,6 +287,33 @@ describe("VaultSelectorDepositTab submit disabled when vault deposits are paused
     // Core 1494: the banner says deposits are paused and withdrawals stay open.
     expect(warning.textContent).toMatch(/Deposits into this vault are paused/);
     expect(warning.textContent).toMatch(/Withdrawals stay open/);
+  });
+
+  // Issue 1731: the registry says Active while the vault's own pause switch is set.
+  it("raises the warning when the registry says Active but the vault's depositsPaused() is true", () => {
+    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+    mockState.vaultDepositsPaused = true;
+    try {
+      renderTab();
+      const warning = screen.getByTestId("vault-paused-warning");
+      expect(warning.textContent).toMatch(/Deposits paused \/ closed/);
+      expect(warning.textContent).toMatch(/Withdrawals stay open/);
+      const submit = screen.getByTestId("vault-selector-deposit-submit") as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+    } finally {
+      mockState.vaultDepositsPaused = undefined;
+    }
+  });
+
+  it("does NOT raise the warning when the registry is Active and depositsPaused() is false", () => {
+    mockState.liveVaultRecord = [{ name: "", asset: ASSET, registeredAt: 0n }, 0] as const;
+    mockState.vaultDepositsPaused = false;
+    try {
+      renderTab();
+      expect(screen.queryByTestId("vault-paused-warning")).toBeNull();
+    } finally {
+      mockState.vaultDepositsPaused = undefined;
+    }
   });
 
   it("does NOT raise the paused warning when the live status output is Active", () => {
