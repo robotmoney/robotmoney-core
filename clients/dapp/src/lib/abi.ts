@@ -512,6 +512,35 @@ export const routerAbi = [
       { name: "bps", type: "uint256[]" },
     ],
   },
+  // Weight vectors (issue 1741). `getEffectiveWeights()` is the vector the router routes by: the voted vector
+  // (`getWeights()`) when `votedWeightsActive()`, otherwise the default vector (`getDefaultWeights()`).
+  {
+    type: "function",
+    name: "votedWeightsActive",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "getWeights",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "vaults", type: "address[]" },
+      { name: "bps", type: "uint256[]" },
+    ],
+  },
+  {
+    type: "function",
+    name: "getDefaultWeights",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "vaults", type: "address[]" },
+      { name: "bps", type: "uint256[]" },
+    ],
+  },
   // Router-eligibility view (issue #426): true if the vault's ERC-4626
   // `asset()` equals the router's USDC. Distinct from VaultRegistry status —
   // registry status describes lifecycle (Active/DepositsPaused/Retired) while router

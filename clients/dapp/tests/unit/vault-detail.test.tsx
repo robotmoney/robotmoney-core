@@ -56,7 +56,7 @@ function makeVaultDetailFixture(overrides: {
       name: overrides.name ?? "Test Vault",
       risk_label: overrides.risk_label,
       status: overrides.status ?? 0,
-      deposit_cap: "1000000000",
+      tvl_cap: "1000000000",
       tvl_history: [],
       indexed_at: "2026-01-01T12:00:00Z",
     },

@@ -107,7 +107,7 @@ function protocolAssetVaultFixture(): VaultDetailResponse {
       name: "Robot Money Protocol",
       risk_label: "VOLATILE",
       status: 0,
-      deposit_cap: "1000000000",
+      tvl_cap: "1000000000",
       tvl_history: [],
       indexed_at: "2026-01-01T12:00:00Z",
     },

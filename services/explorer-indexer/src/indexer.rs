@@ -1216,8 +1216,9 @@ async fn run_inner(
         // zero so we can force a re-snapshot for vaults that were registered
         // before deposits arrived (e.g. extra demo vaults seeded via the
         // PortfolioRouter after an indexer that didn't watch it).
-        let last_snap: Option<(i64, String)> = sqlx::query_as(
-            "SELECT block_number, CAST(total_assets AS text) FROM vault_snapshots \
+        let last_snap: Option<(i64, String, bool)> = sqlx::query_as(
+            "SELECT block_number, CAST(total_assets AS text), (tvl_cap IS NULL OR per_deposit_cap IS NULL) \
+             FROM vault_snapshots \
              WHERE chain_id = $1 AND contract = $2 \
              ORDER BY block_number DESC LIMIT 1",
         )
@@ -1227,12 +1228,14 @@ async fn run_inner(
         .await
         .map_err(DbError::from)?;
         let needs_heartbeat = match &last_snap {
-            Some((prev, total_assets)) => {
+            Some((prev, total_assets, caps_unknown)) => {
                 let behind = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
                 // Re-snapshot more aggressively when TVL shows zero — the
                 // vault may have received deposits since the last snapshot.
                 let zero_tvl = total_assets == "0" || total_assets.is_empty();
-                behind || zero_tvl
+                // A snapshot whose caps are unknown (a failed read, or a row from before migration 0018) is
+                // retried on the next tick so the explorer serves the real caps within one tick (issue 1741).
+                behind || zero_tvl || *caps_unknown
             }
             None => true,
         };
@@ -2727,9 +2730,21 @@ async fn snapshot_vault_address(
     )
     .await
     .unwrap_or(U256::ZERO);
+    // Both caps are public getters on RobotMoneyVault and on every BasketVault. A failed read is `None` (stored
+    // NULL, served as unknown), never 0: a zero cap would read as "deposits impossible" (issue 1741).
     let tvl_cap = call_u256(rpc, vault, IVaultReads::tvlCapCall {}.abi_encode(), block)
         .await
-        .unwrap_or(U256::ZERO);
+        .map_err(|e| tracing::warn!(vault = %vault, block, error = %e, "tvlCap() read failed; stored as unknown"))
+        .ok();
+    let per_deposit_cap = call_u256(
+        rpc,
+        vault,
+        IVaultReads::perDepositCapCall {}.abi_encode(),
+        block,
+    )
+    .await
+    .map_err(|e| tracing::warn!(vault = %vault, block, error = %e, "perDepositCap() read failed; stored as unknown"))
+    .ok();
     // `depositsPaused()` exists on every vault, the v1 vault included. A failed read skips the snapshot
     // (the caller retries on the next heartbeat) rather than recording "not paused": the explorer shows
     // this flag next to the vault, and "open" must never be a guess.
@@ -2749,6 +2764,7 @@ async fn snapshot_vault_address(
         total_supply,
         exit_fee_bps.try_into().unwrap_or(0i64),
         tvl_cap,
+        per_deposit_cap,
         deposits_paused,
     )
     .await

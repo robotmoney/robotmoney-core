@@ -59,7 +59,10 @@ const vaultsFixture: VaultsResponse = {
       risk_label: "stable-yield",
       status: 0,
       deposits_paused: false,
-      deposit_cap: "1000000000",
+      tvl_cap: "1000000000",
+      per_deposit_cap: "100000000",
+      headroom: "900000001",
+      snapshot_block: 500,
       total_assets: "99999999",
       exit_fee_bps: 25,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -70,7 +73,10 @@ const vaultsFixture: VaultsResponse = {
       name: "Beta Vault",
       risk_label: "growth",
       status: 1,
-      deposit_cap: "500000000",
+      tvl_cap: "500000000",
+      per_deposit_cap: null,
+      headroom: null,
+      snapshot_block: null,
       total_assets: null,
       exit_fee_bps: null,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -89,7 +95,10 @@ const vaultDetailFixture: VaultDetailResponse = {
     risk_label: "stable-yield",
     status: 0,
     deposits_paused: false,
-    deposit_cap: "1000000000",
+    tvl_cap: "1000000000",
+    per_deposit_cap: "100000000",
+    headroom: "900000001",
+    snapshot_block: 500,
     tvl_history: [
       {
         block_number: 500,
@@ -268,10 +277,27 @@ describe("VaultList", () => {
     await waitFor(() => getAllByTestId("vault-list-row-headroom"));
 
     const headrooms = getAllByTestId("vault-list-row-headroom").map((n) => n.textContent);
-    // Alpha: 1000000000 - 99999999 = 900000001
+    // Alpha: the explorer's headroom (1000000000 - 99999999 = 900000001), not a figure computed here.
     expect(headrooms[0]).toBe("900.000001 USDC");
-    // Beta: no total_assets → —
-    expect(headrooms[1]).toBe("—");
+    // Beta is registry-paused: deposits are closed, so no headroom number is shown (issue 1741).
+    expect(headrooms[1]).toBe("n/a (deposits closed)");
+  });
+
+  it("renders the TVL cap and the per-deposit cap, unknown when null", async () => {
+    const { getAllByTestId } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
+    );
+    await waitFor(() => getAllByTestId("vault-list-row-tvl-cap"));
+    expect(getAllByTestId("vault-list-row-tvl-cap").map((n) => n.textContent)).toEqual([
+      "1,000.00 USDC",
+      "500.00 USDC",
+    ]);
+    expect(getAllByTestId("vault-list-row-per-deposit-cap").map((n) => n.textContent)).toEqual([
+      "100.00 USDC",
+      "unknown",
+    ]);
   });
 
   it("shows risk_label per vault", async () => {
@@ -351,6 +377,8 @@ describe("VaultDetail", () => {
     expect(getByTestId("vault-detail-risk").textContent).toBe("stable-yield");
     expect(getByTestId("vault-detail-status").textContent).toBe("Active (per index, block 1000)");
     expect(getByTestId("vault-detail-cap").textContent).toBe("1,000.00 USDC");
+    expect(getByTestId("vault-detail-per-deposit-cap").textContent).toBe("100.00 USDC");
+    expect(getByTestId("vault-detail-headroom").textContent).toBe("900.000001 USDC");
   });
 
   it("renders TVL history rows from explorer API", async () => {
@@ -392,6 +420,10 @@ describe("VaultDetail", () => {
     await waitFor(() => {
       expect(getByTestId("vault-detail-freshness").textContent).toContain("1000");
     });
+    // The snapshot block is labelled separately; it is not the index block (issue 1741).
+    expect(getByTestId("vault-detail-freshness-snapshot").textContent).toBe(
+      "Latest snapshot block 500",
+    );
   });
 
   it("renders issuer freeze-control disclosure when risk_label is SPECULATIVE", async () => {
@@ -403,7 +435,7 @@ describe("VaultDetail", () => {
         risk_label: "SPECULATIVE",
         status: 0,
         deposits_paused: false,
-        deposit_cap: "1000000000",
+        tvl_cap: "1000000000",
         tvl_history: [],
         indexed_at: "2026-01-01T12:00:00Z",
       },
@@ -441,83 +473,13 @@ describe("VaultDetail", () => {
 // ─── RouterView ───────────────────────────────────────────────────────────────
 
 describe("RouterView", () => {
-  it("renders current weights table with bps", async () => {
-    const { getByTestId, getAllByTestId } = render(
+  it("says the weights are unknown, and labels nothing, without a router address", async () => {
+    const { getByTestId, queryByTestId } = render(
       <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
     );
-    await waitFor(() => expect(getByTestId("router-view-weights-table")).toBeTruthy());
-
-    const rows = getAllByTestId("router-view-weight-row");
-    expect(rows).toHaveLength(2);
-    // Raw bps values are in the router-view-weight-bps-raw span.
-    const rawBps = getAllByTestId("router-view-weight-bps-raw").map((n) => n.textContent);
-    expect(rawBps).toEqual(["5000", "5000"]);
-  });
-
-  it("displays bps as both raw value and percentage", async () => {
-    const { getAllByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
-    );
-    await waitFor(() => getAllByTestId("router-view-weight-bps-raw"));
-
-    const rawBps = getAllByTestId("router-view-weight-bps-raw").map((n) => n.textContent);
-    expect(rawBps).toEqual(["5000", "5000"]);
-
-    const pctBps = getAllByTestId("router-view-weight-bps-pct").map((n) => n.textContent);
-    // 5000 bps = 50.00%
-    expect(pctBps).toEqual(["50.00%", "50.00%"]);
-  });
-
-  it("resolves vault addresses to human-readable names from /v1/vaults", async () => {
-    const { getAllByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
-    );
-    await waitFor(() => getAllByTestId("router-view-weight-vault"));
-
-    const vaultCells = getAllByTestId("router-view-weight-vault").map((n) => n.textContent);
-    // vaultsFixture maps VAULT_A_ADDR → "Alpha Vault", VAULT_B_ADDR → "Beta Vault".
-    expect(vaultCells).toContain("Alpha Vault");
-    expect(vaultCells).toContain("Beta Vault");
-  });
-
-  it("renders a proportion bar for each weight entry", async () => {
-    const { getAllByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
-    );
-    await waitFor(() => getAllByTestId("router-view-weight-bar"));
-
-    const bars = getAllByTestId("router-view-weight-bar");
-    expect(bars).toHaveLength(2);
-    // Each bar should have a non-empty width style reflecting the bps percentage.
-    for (const bar of bars) {
-      const width = (bar as HTMLElement).style.width;
-      expect(width).toBeTruthy();
-      expect(width).toContain("%");
-    }
-  });
-
-  it("labels weights as 'Effective (voted)' when a governance proposal is open", async () => {
-    const { getByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
-    );
-    // proposalsFixture has an "open" proposal.
-    await waitFor(() =>
-      expect(getByTestId("router-view-weight-source").textContent).toBe("Effective (voted)"),
-    );
-  });
-
-  it("labels weights as 'Effective (default)' when no open proposal exists", async () => {
-    const noOpen: ProposalsResponse = {
-      proposals: [{ ...proposalsFixture.proposals[0], status: "executed" }],
-      block_number: 850,
-      indexed_at: "2026-01-01T12:00:00Z",
-    };
-    const { getByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch(routerWeightsFixture, noOpen)} />,
-    );
-    await waitFor(() =>
-      expect(getByTestId("router-view-weight-source").textContent).toBe("Effective (default)"),
-    );
+    await waitFor(() => expect(getByTestId("router-view-weights-unknown")).toBeTruthy());
+    expect(queryByTestId("router-view-weight-source")).toBeNull();
+    expect(queryByTestId("router-view-weights-table")).toBeNull();
   });
 
   it("renders pending open proposal description", async () => {
@@ -541,30 +503,6 @@ describe("RouterView", () => {
 
     const { getByTestId } = render(<RouterView apiUrl="http://api" fetchImpl={noOpenFetch} />);
     await waitFor(() => expect(getByTestId("router-view-no-proposal")).toBeTruthy());
-  });
-
-  it("shows empty-state only when current_weights is truly empty", async () => {
-    const emptyWeights: RouterWeightsResponse = {
-      current_weights: [],
-      history: [],
-      block_number: 0,
-      indexed_at: "2026-01-01T12:00:00Z",
-    };
-    const { getByTestId, queryByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch(emptyWeights)} />,
-    );
-    await waitFor(() => expect(getByTestId("router-view-weights-empty")).toBeTruthy());
-    expect(queryByTestId("router-view-weights-table")).toBeNull();
-    // Weight source label is only shown when weights are present.
-    expect(queryByTestId("router-view-weight-source")).toBeNull();
-  });
-
-  it("does not show empty-state when current_weights is non-empty", async () => {
-    const { getByTestId, queryByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
-    );
-    await waitFor(() => expect(getByTestId("router-view-weights-table")).toBeTruthy());
-    expect(queryByTestId("router-view-weights-empty")).toBeNull();
   });
 
   it("renders weight history rows", async () => {
