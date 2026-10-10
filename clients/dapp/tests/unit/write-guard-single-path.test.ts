@@ -36,7 +36,27 @@ const FORBIDDEN_NAMES = new Set([
   "useWalletClient",
   "createWalletClient",
   "getWalletClient",
+  // Every other send/sign/write/client-returning export of wagmi 2.19 and viem (checked against the
+  // installed exports): a client or sender from any of these can write without the guard.
+  "writeContractSync",
+  "sendTransactionSync",
+  "sendCalls",
+  "sendCallsSync",
+  "deployContract",
+  "getClient",
+  "getConnectorClient",
+  "walletActions",
+  "useClient",
+  "useConnectorClient",
+  "useSendCalls",
+  "useSendCallsSync",
+  "useSendTransactionSync",
+  "useWriteContracts",
+  "useDeployContract",
 ]);
+
+/** Whole packages that may not be imported outside the guard. The repo uses none of them today. */
+const FORBIDDEN_PACKAGES = /^(@wagmi\/|ethers($|\/)|@ethersproject\/|web3($|\/))/;
 
 /** Signing and sending JSON-RPC methods. */
 const RAW_METHOD =
@@ -104,6 +124,7 @@ export function importViolations(rawText: string): string[] {
   const statement = /\b(import|export)\b([^;'"`]*?)\bfrom\s*["']([^"']+)["']/g;
   for (const m of text.matchAll(statement)) {
     const [, kind, clause, spec] = m;
+    if (FORBIDDEN_PACKAGES.test(spec)) out.push(`${kind} from ${spec}`);
     if (!isWagmiOrViem(spec)) continue;
     if (/^(wagmi|viem)\/actions\b/.test(spec)) out.push(`${kind} from ${spec}`);
     if (/\*\s*as\b/.test(clause)) out.push(`namespace ${kind} from ${spec}`);
@@ -118,9 +139,9 @@ export function importViolations(rawText: string): string[] {
       if (FORBIDDEN_NAMES.has(original)) out.push(`${original} from ${spec}`);
     }
   }
-  // dynamic import() and require() of wagmi/viem, in any shape
+  // dynamic import() and require() of wagmi/viem or the forbidden packages, in any shape
   for (const m of text.matchAll(/\b(import|require)\s*\(\s*([^)]*)\)/g)) {
-    if (/["'`](wagmi|viem)(\/|["'`])/.test(m[2]) || !/^["'`]/.test(m[2].trim())) {
+    if (/["'`](wagmi|viem|@wagmi|ethers)(\/|["'`])/.test(m[2]) || !/^["'`]/.test(m[2].trim())) {
       out.push(`${m[1]}(${m[2].trim()})`);
     }
   }
@@ -186,6 +207,16 @@ describe("single guarded write path", () => {
       `import { createWalletClient } from "viem";`,
       `import { sendTransaction } from 'viem/actions';`,
       `import {\n  useSignTypedData,\n} from "wagmi";`,
+      `import { useConnectorClient } from "wagmi";`,
+      `import { useClient as c } from "wagmi";`,
+      `import { useSendCalls } from "wagmi";`,
+      `import { sendCallsSync } from "wagmi";`,
+      `import { getConnectorClient } from "wagmi";`,
+      `import { core } from "@wagmi/core";`,
+      `import { ethers } from "ethers";`,
+      `import { Wallet } from "@ethersproject/wallet";`,
+      `const e = await import("ethers");`,
+      `const w = require("@wagmi/core");`,
     ];
     for (const src of bad) expect(importViolations(src), src).not.toEqual([]);
     const good = [
