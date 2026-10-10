@@ -9,7 +9,7 @@ import { parseSheet } from "../src/sheet.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import { stageManifestName } from "../src/verify/constants.ts";
-import type { Signer } from "../src/safe/index.ts";
+import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
@@ -67,6 +67,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
     /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
+    /** Issue 1750: what the --submitter is on chain. A canonical 2-of-3 Safe by default; null is a key (no code); a function decides per address. */
+    submitterKind: undefined as undefined | null | ((a: Address) => unknown),
     agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
@@ -110,6 +112,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   };
   const bundle = (action: string, id: Hex) => ({ safe_tx_hash: keccak256(toBytes(`${action}${id}${s.nonce}`)), nonce: s.nonce, action, signatures: [] as unknown[], timelock_operation_id: id });
   const api: GovernApi = {
+    inspectSubmitter: (async (_h: unknown, who: Address) => {
+      if (s.submitterKind === null) return null;
+      if (typeof s.submitterKind === "function") return s.submitterKind(who);
+      return { address: who, owners: sheet.safeOwners, threshold: 2, code_hash: SAFE_141.proxyCodehash };
+    }) as never,
     connectSafe: (async () => handle) as never,
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,

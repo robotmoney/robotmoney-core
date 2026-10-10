@@ -25,3 +25,17 @@ describe("docs for the rehearsal kind (issue 1727)", () => {
     expect(README).toContain("release tag kind 28");
   });
 });
+
+// Issue 1750: the submitter is a multisig. The three docs say so, plainly, and name the owner-key overlap.
+const SUBMITTER_RUNBOOK = readFileSync(join(ROOT, "docs", "technical", "consensus-receipt-submitter-runbook.md"), "utf8");
+describe("docs for the multisig submitter (issue 1750)", () => {
+  const ALL: [string, RegExp][] = [
+    ["a multisig, no single key", /no single key/], ["the owner decision date", /2026-10-10/], ["SafeL2 1.4.1", /SafeL2 1\.4\.1/], ["the submitter flag", /--submitter/],
+    ["the same owner keys control both Safes", /same three owner keys control BOTH Safes/], ["the separation is the multisig and the nonces", /nonce/], ["the deployer pays gas", /gas/],
+  ];
+  for (const [what, re] of ALL) {
+    test(`the submitter runbook documents ${what}`, () => expect(SUBMITTER_RUNBOOK).toMatch(re));
+    test(`the release runbook documents ${what}`, () => expect(RUNBOOK).toMatch(re));
+  }
+  for (const [what, re] of ALL.slice(0, 5)) test(`the README documents ${what}`, () => expect(README).toMatch(re));
+});

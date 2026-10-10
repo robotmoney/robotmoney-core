@@ -48,6 +48,7 @@ import { PublishError } from "./errors.ts";
 import { REGISTER_ROW, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls, registerReadBackProblems, registerRecordKey } from "./committee-register.ts";
 import { ADMIN_ROLE, AGENT_ROLE, DEPOSIT_PAUSER_ROLE } from "./verify/constants.ts";
 import { COMMITTEE_AGENT_ROLE } from "./record-receipt.ts";
+import { forbiddenSubmitters, inspectSubmitterSafe, chainFromClient, submitterSafeEvidence, type SubmitterSafeEvidence, type SubmitterSafeInfo } from "./submitter-safe.ts";
 import type { DeploymentKind } from "./chains.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
@@ -202,8 +203,11 @@ export interface GovernApi {
   signTx: typeof signTx;
   executeTx: typeof executeTx;
   verifyTimelockEffect: typeof verifyTimelockEffect;
+  /** Issue 1750: what the --submitter is on chain. `null`: no code (a single key). A contract that is not a canonical SafeL2 1.4.1 multisig throws USAGE. Reads only. */
+  inspectSubmitter: (handle: SafeHandle, submitter: Address, forbidden: ReadonlyMap<string, string>) => Promise<SubmitterSafeInfo | null>;
 }
-export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect };
+export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect,
+  inspectSubmitter: (handle, submitter, forbidden) => inspectSubmitterSafe(chainFromClient(handle.client as never), submitter, forbidden) };
 
 export type GovernPhase = "scheduled" | "executed" | "cancelled";
 
@@ -669,10 +673,15 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const read = async <T,>(addr: Address, abi: readonly unknown[], fn: string, args: unknown[] = []): Promise<T> => rd<T>(addr, abi, fn, args);
     if (!rowComplete(state[name])) {
       const cur = state[name];
+      let submitterSafe: SubmitterSafeEvidence | undefined = (cur as { register?: { submitter_safe?: SubmitterSafeEvidence } } | undefined)?.register?.submitter_safe;
       if (cur?.scheduled === undefined) {
         // Nothing of this round is on the timelock yet: refuse what can only revert, before the Safe schedules it and the delay is spent.
         const owners = new Set([...sheet.safeOwners, sheet.admin, sheet.pauser, sheet.emergency, a.safe, a.timelock].map((x) => x.toLowerCase()));
         if (owners.has(submitter.toLowerCase())) throw new PublishError("USAGE", `--submitter ${submitter} is a Safe owner, a role key, the Safe or the timelock: the submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else`, { submitter });
+        // Issue 1750 (owner decision 2026-10-10): the submitter is a multisig, a separate canonical SafeL2 1.4.1 Safe. On 8453 a key (no code) is refused.
+        const kind = await api.inspectSubmitter(handle, submitter, forbiddenSubmitters({ governingSafe: a.safe, timelock: a.timelock, admin: sheet.admin, pauser: sheet.pauser, emergency: sheet.emergency }));
+        if (kind === null && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", `--submitter ${submitter} has no code: it is a single key. On 8453 the consensus receipt submitter is a multisig (a SafeL2 1.4.1 proxy with threshold 2 or more, separate from the governing Safe). Nothing scheduled.`, { submitter });
+        submitterSafe = kind === null ? undefined : submitterSafeEvidence(kind);
         if ((await read<Address>(gateway, GATEWAY_REGISTER_ABI, "icPolicy")).toLowerCase() !== icPolicy.toLowerCase()) throw new PublishError("GOVERN", `the gateway's icPolicy is not the run's IC policy ${icPolicy}: committeeRegister would reach another contract`, { icPolicy });
         if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway: it is registered or is a depositor's agent, nothing to schedule`, { submitter });
         if (/^0x0{40}$/.test(await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter])) === false) throw new PublishError("GOVERN", `${submitter} already has an agent owner on the gateway: authorizeAgent would revert AgentAlreadyOwned`, { submitter });
@@ -691,7 +700,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), committeeRole: await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter]),
         label: await read<string>(icPolicy, IC_REGISTER_ABI, "agentId", [submitter]), wantLabel: agentLabel, owner: await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]), timelock: a.timelock,
       });
-      state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString() } } as RowRecord;
+      state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString(), ...(submitterSafe ? { submitter_safe: submitterSafe } : {}) } } as RowRecord;
       await round(name, {
         id, description: `register committee submitter ${submitter}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REGISTER_ROW}: ${calls.map((c) => c.label).join("; ")}` }),

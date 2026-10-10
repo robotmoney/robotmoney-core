@@ -23,7 +23,7 @@ registered genesis agents.
 
 ## 1. What the key is and what it can do
 
-The **submitter** is a single EOA that holds:
+The **submitter** is an account that holds (an EOA in the original v0.1 design, a multisig Safe from issue 1750, see §1.1):
 
 - `AGENT_ROLE` on `RobotMoneyGateway`, and
 - `COMMITTEE_AGENT_ROLE` on `InvestmentCommitteePolicy`.
@@ -49,6 +49,29 @@ signed. The chain proves the committee produced the recommendation and that one
 submitter attested to it; the analysts' ed25519 signatures are payload data
 verified off-chain (ADR-0012 §5). This is exactly why the off-chain
 verification below is load-bearing rather than cosmetic.
+
+### 1.1 The submitter is a multisig (issue 1750, owner decision 2026-10-10)
+
+Owner decision 2026-10-10: **no single key anchors a receipt.** For the Base mainnet rehearsal and every later run on the `publish-contracts` surface the submitter is not an
+EOA. It is a **second Safe**, a SafeL2 1.4.1 proxy separate from the governing Safe, that holds the two roles above and nothing else. Everything in §1 about what the
+submitter can and cannot do holds unchanged for a contract account: the contracts check only the roles, never `msg.sender`, `tx.origin`, `isContract` or a signature
+(`contracts/test/ConsensusReceiptSafeSubmitter.t.sol` proves it with a real Safe, including the 1-raw-unit deposit cap and the disabled withdrawals).
+
+- **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
+  no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
+- **Register it:** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
+- **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
+  sign, the deployer executes and pays the gas. It refuses fewer owner signers than the threshold, a Safe that differs from `--submitter`, and a Safe transaction without
+  `ExecutionSuccess`. It reads the receipt back and requires the stored submitter to be the Safe.
+- **Plainly: the same three owner keys control BOTH Safes** (the governing Safe and the submitter Safe). Proposing and approving are separated by the multisig (two of three
+  signatures) and by each Safe's own nonce, not by different keys. A compromise of two owner keys is a compromise of both Safes. This is the owner's accepted trade-off for the
+  rehearsal. The custody requirements of §2 (HSM or KMS, dedicated host, append-only signing log) describe a *single-key* submitter and are replaced, for the owners' keys, by
+  the hardware wallets of the governing Safe's own runbook.
+- **Rotation (§3)** is unchanged in shape: register a new submitter Safe, record one receipt through it, revoke the old one. The old Safe stays a valid record of what it attested.
+- **Evidence** carries `submitter_safe` (threshold, owners, proxy code hash, and for a record the Safe transaction hash, nonce and signers). `evidence-check` refuses a
+  recorded receipt on 8453 without it.
+
+Sections 2 to 5 below were written for a single-key submitter. Read "the key" as "the owner keys that sign for the submitter Safe" where a rehearsal is meant.
 
 ---
 

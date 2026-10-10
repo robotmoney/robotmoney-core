@@ -25,7 +25,7 @@ function stubs(): Record<string, string> {
       }`),
     TWIN_PREDEPLOY: f("predeploy.js", `require("node:fs").appendFileSync(process.env.STUB_LOG, "predeploy " + process.argv.slice(2).filter((x) => x.startsWith("--")).join(" ") + "\\n"); if (process.env.STUB_FAIL === "predeploy") { console.error("stub: predeploy failed"); process.exit(3); }`),
     TWIN_REHEARSAL_CLI: f("rehearsal.js", `
-      if (process.argv[2] === "keys") console.log("ADMIN_ADDRESS=0x00000000000000000000000000000000000000aa");`),
+      if (process.argv[2] === "keys") console.log("ADMIN_ADDRESS=0x00000000000000000000000000000000000000aa\\nSAFE_OWNERS=0x00000000000000000000000000000000000000a1,0x00000000000000000000000000000000000000a2,0x00000000000000000000000000000000000000a3");`),
     TWIN_MERGE_SHEET: f("merge.js", `
       const a = process.argv; require("node:fs").writeFileSync(a[a.indexOf("--out") + 1], "X=1\\n");`),
     CAST: f("cast", `#!/usr/bin/env bash\necho "$STUB_NONCE"\n`, 0o755),
@@ -112,6 +112,11 @@ describe("twin-publish in the rehearsal kind (issue 1727)", () => {
           fs.writeFileSync(m + "/governance.json", JSON.stringify({ governance: "0x00000000000000000000000000000000000000c2" }));
           fs.writeFileSync(m + "/timelock.json", JSON.stringify({ timelock: "0x00000000000000000000000000000000000000c3" }));
         }`),
+      TWIN_SAFE_CLI: f("safe-cli.js", `
+        const fs = require("node:fs");
+        const a = process.argv.slice(2), v = (k) => a[a.indexOf(k) + 1];
+        fs.appendFileSync(process.env.STUB_LOG, "safe-cli " + a.join(" ") + "\\n");
+        fs.writeFileSync(v("--out"), JSON.stringify({ safe: "0x00000000000000000000000000000000005afe01", threshold: 2, owners: v("--owners").split(",") }));`),
       TWIN_EVIDENCE_CHECK: f("evidence.js", `require("node:fs").appendFileSync(process.env.STUB_LOG, "line evidence " + process.argv.slice(2).join(" ") + "\\n");`),
       CAST: f("cast", `#!/usr/bin/env bash
 echo "cast $*" >> "$STUB_LOG"
@@ -140,7 +145,7 @@ fi
     expect(frag).toMatch(/^TIMELOCK_MIN_DELAY=900$/m);
     expect(frag).toMatch(/^GOVERN_NEW_DELAY=1800$/m);
     expect(frag).toMatch(/^SAFE_SALT_NONCE=[0-9]+$/m);
-    expect(existsSync(join(run, "keys", "SUBMITTER"))).toBe(true);
+    expect(existsSync(join(run, "keys", "SUBMITTER"))).toBe(false); // issue 1750: the submitter is a Safe, no single key is minted for it
   });
   test("a start nonce that is not part of the final nonce fails the counts check (the production sum alone is wrong for a non-fresh deployer)", () => {
     const r = rehearsalRun({ STUB_NONCE: String(sum + 1) });
@@ -156,7 +161,16 @@ fi
     expect(cli.map((l) => verb(l) + (row(l) ? ":" + row(l) : ""))).toEqual(["publish", "verify", "govern", "verify", "govern:register-committee", "record-receipt", "govern:apply-receipt", "verify"]);
     const reg = cli[4]!, rec = cli[5]!, app = cli[6]!;
     const submitterAddr = /--submitter (0x[0-9a-fA-F]{40})/.exec(reg)![1]!;
-    expect(rec).toContain("keystore:"); expect(rec).toContain("/keys/SUBMITTER:"); // the SUBMITTER signs the record, not the deployer
+    expect(submitterAddr).toBe("0x00000000000000000000000000000000005afe01"); // the Safe the Safe tool created
+    // issue 1750: the submitter Safe is created from the SAME owners, threshold 2, a salt one above the governing Safe's, by the deployer
+    const create = r.logText.split("\n").find((l) => l.startsWith("safe-cli create"))!;
+    expect(create).toMatch(/--threshold 2 /);
+    expect(create).toContain("/keys/DEPLOYER:");
+    const salt = Number(/SAFE_SALT_NONCE=([0-9]+)/.exec(readFileSync(join(r.exported.TWIN_RUN_DIR!, "fragment.env"), "utf8"))![1]);
+    expect(create).toContain(`--salt-nonce ${salt + 1}`);
+    expect(rec).toContain("/keys/DEPLOYER:"); // the DEPLOYER pays the gas of the record: no SUBMITTER key exists
+    expect(rec).not.toContain("SUBMITTER");
+    expect(rec).toContain(`--submitter ${submitterAddr}`);
     expect(reg).toContain("/keys/DEPLOYER:");
     const rid = /--receipt-id (0x[0-9a-f]{64})/.exec(rec)![1]!;
     expect(app).toContain(`--receipt-id ${rid}`); // the receipt the Safe applies is the one the submitter recorded
@@ -168,18 +182,19 @@ fi
     const { keccak256 } = require("viem");
     expect(rec).toContain(`--payload-digest ${keccak256(new Uint8Array(body))}`);
     // the SUBMITTER was funded by a plain transfer from the deployer, and the receipt path is checked as a rehearsal
-    expect(r.logText).toContain(`cast send ${submitterAddr}`);
+    expect(r.logText).not.toContain(`cast send ${submitterAddr}`); // the Safe needs no gas of its own
     expect(r.logText).toMatch(/line evidence --receipt-applications .*publish-run\.json --deployment-kind rehearsal --consensus-receipt 0x0*c1 --governance 0x0*c2 --timelock 0x0*c3/);
     expect(r.exported.TWIN_RECEIPT_ID).toBe(rid);
     expect(r.exported.TWIN_RECEIPT_SUBMITTER).toBe(submitterAddr);
     expect(existsSync(r.exported.TWIN_VERIFY_LABELS_POST_APPLY!)).toBe(true);
   });
-  test("the deployer's self-transfer happens before publish, the submitter's gas after the second verify", () => {
+  test("the deployer's self-transfer happens before publish; the submitter Safe is created after the second verify and needs no gas transfer", () => {
     const r = rehearsalRun();
-    const order = r.logText.split("\n").filter((l) => /^(cast send|line (publish|verify|govern|record-receipt))/.test(l)).map((l) => l.replace(/ 0x[0-9a-fA-F]{40}.*/, "").split(" --")[0]!);
+    const order = r.logText.split("\n").filter((l) => /^(cast send|safe-cli create|line (publish|verify|govern|record-receipt))/.test(l)).map((l) => l.replace(/ 0x[0-9a-fA-F]{40}.*/, "").split(" --")[0]!);
     expect(order[0]).toBe("cast send"); // moves the deployer nonce
     expect(order[1]).toBe("line publish");
-    expect(order.indexOf("cast send", 1)).toBeGreaterThan(order.lastIndexOf("line verify", order.indexOf("line govern")));
+    expect(order.indexOf("cast send", 1)).toBe(-1); // issue 1750: no gas goes to the submitter, it is a Safe and the deployer pays
+    expect(order.indexOf("safe-cli create")).toBeGreaterThan(order.lastIndexOf("line verify", order.indexOf("line govern")));
   });
   test("production Twin run (REHEARSAL_IN unset) is unchanged: no self-transfer, no submitter, the four verbs", () => {
     const r = runScript({});
