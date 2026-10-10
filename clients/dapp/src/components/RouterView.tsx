@@ -4,20 +4,34 @@
  * RouterView — reads GET /v1/router/weights, GET /v1/governance/proposals,
  * and GET /v1/vaults.
  *
- * Shows current Portfolio Router weight vector, the pending governance
- * proposal (if any), and the full weight-change history.
- * Works without a connected wallet.
+ * Shows the Portfolio Router weights, the pending governance proposal (if
+ * any), and the weight-change history. Works without a connected wallet.
+ *
+ * Weights come from the ROUTER ITSELF (issue 1741), read through wagmi (no
+ * wallet needed), at the latest block, refetched every WEIGHTS_REFETCH_MS:
+ *   - `getEffectiveWeights()` + `votedWeightsActive()` give the vector the
+ *     router routes by and which kind it is: "Effective: voted" when
+ *     `votedWeightsActive()` is true, "Effective: default" when it is false.
+ *   - `getWeights()` is the voted vector, `getDefaultWeights()` the default one;
+ *     both are shown so the two can never be mistaken for each other.
+ * The explorer API is NOT the source of the effective weights: its
+ * `current_weights` was the last WeightsSet OR DefaultWeightsSet event, so a
+ * later default-vector change displayed as the effective vector while the
+ * voted vector still overrode it. The explorer supplies the vault names, the
+ * pending proposal and the weight-change history only. When the router cannot
+ * be read the tab says "unknown" and shows no label.
  *
  * Enhancements (issue #615):
  * - Resolves vault hex addresses to human-readable names via /v1/vaults.
  * - Displays bps as both raw value and percentage (bps / 100).
  * - Renders a proportional bar for each weight entry.
- * - Labels the weight source: "Effective (default)" when no governance
- *   proposal is active, "Effective (voted)" when a passed vote is in effect.
  *
  * issue #318 — protocol layer.
  */
 import { useEffect, useState } from "react";
+import { useReadContracts } from "wagmi";
+import type { Address } from "viem";
+import { routerAbi } from "../lib/abi";
 import type {
   FetchLike,
   RouterWeightsResponse,
@@ -28,9 +42,26 @@ import type {
 import { fetchRouterWeights, fetchProposals, fetchVaults } from "../lib/explorerApi";
 import { formatPercentFromNumber } from "../lib/format";
 
+/** How often the router weights are read again, in ms (the same cadence as the router deposit tab). */
+export const WEIGHTS_REFETCH_MS = 12_000;
+
 interface RouterViewProps {
   apiUrl: string;
   fetchImpl?: FetchLike;
+  /** The PortfolioRouter. Absent means the weights cannot be read: the tab says so and labels nothing. */
+  routerAddress?: Address;
+}
+
+type Vector = readonly { readonly vault: string; readonly bps: number }[];
+
+/** A `(address[] vaults, uint256[] bps)` return as a vector; undefined when it is not that shape. */
+function toVector(raw: unknown): Vector | undefined {
+  if (!Array.isArray(raw) || raw.length !== 2) return undefined;
+  const [vaults, bps] = raw as [unknown, unknown];
+  if (!Array.isArray(vaults) || !Array.isArray(bps) || vaults.length !== bps.length) {
+    return undefined;
+  }
+  return vaults.map((v, i) => ({ vault: String(v), bps: Number(bps[i]) }));
 }
 
 type State =
@@ -43,8 +74,15 @@ type State =
       vaultNames: Record<string, string>;
     };
 
-export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
+export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
+  const chain = useReadContracts({
+    allowFailure: true,
+    contracts: (
+      ["getEffectiveWeights", "votedWeightsActive", "getWeights", "getDefaultWeights"] as const
+    ).map((functionName) => ({ address: routerAddress as Address, abi: routerAbi, functionName })),
+    query: { enabled: routerAddress != null, refetchInterval: WEIGHTS_REFETCH_MS },
+  });
 
   useEffect(() => {
     const ac = new AbortController();
@@ -77,92 +115,168 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
     return () => ac.abort();
   }, [apiUrl, fetchImpl]);
 
-  if (state.phase === "loading") {
-    return (
-      <section data-testid="router-view">
-        <p data-testid="router-view-loading">Loading router state…</p>
-      </section>
-    );
-  }
-  if (state.phase === "error") {
-    return (
-      <section data-testid="router-view">
-        <p data-testid="router-view-error">{state.message}</p>
-      </section>
-    );
-  }
-
-  const { weights, pendingProposal, vaultNames } = state;
-
+  const names = state.phase === "ok" ? state.vaultNames : {};
   /**
    * Resolve a vault address to its human-readable name.
    * Falls back to the raw hex address when the vault is not in the registry.
    */
   function resolveVaultName(address: string): string {
-    return vaultNames[address.toLowerCase()] ?? address;
+    return names[address.toLowerCase()] ?? address;
   }
 
-  /**
-   * Weight source label: "Effective (voted)" when a governance proposal
-   * is active (status == "open"); "Effective (default)" otherwise.
-   */
-  const weightSourceLabel = pendingProposal != null ? "Effective (voted)" : "Effective (default)";
+  // The four router reads: effective vector, voted flag, voted vector, default vector (in that order).
+  const [effectiveR, activeR, votedR, defaultR] = chain.data ?? [];
+  const effective = effectiveR?.status === "success" ? toVector(effectiveR.result) : undefined;
+  const votedActive = activeR?.status === "success" ? activeR.result : undefined;
+  const voted = votedR?.status === "success" ? toVector(votedR.result) : undefined;
+  const defaults = defaultR?.status === "success" ? toVector(defaultR.result) : undefined;
+  const chainLoading = routerAddress != null && chain.isLoading;
+  // The label needs BOTH the effective vector and the flag. One of them missing is "unknown", never a guess.
+  const source: "voted" | "default" | null =
+    effective !== undefined && typeof votedActive === "boolean"
+      ? votedActive
+        ? "voted"
+        : "default"
+      : null;
 
   return (
     <section data-testid="router-view" className="router-view">
       <h2>Portfolio Router</h2>
 
       <h3>Current Weights</h3>
-      {weights.current_weights.length === 0 ? (
-        <p data-testid="router-view-weights-empty">No weights set yet.</p>
+      {chainLoading ? (
+        <p data-testid="router-view-weights-loading">Reading the router…</p>
+      ) : source === null || effective === undefined ? (
+        <p data-testid="router-view-weights-unknown" role="alert">
+          Effective weights unknown:{" "}
+          {routerAddress == null
+            ? "the router address is not configured."
+            : "the router could not be read."}
+        </p>
       ) : (
         <>
-          <p data-testid="router-view-weight-source" className="weight-source-label">
-            {weightSourceLabel}
+          <p
+            data-testid="router-view-weight-source"
+            data-weight-source={source}
+            className="weight-source-label"
+          >
+            {source === "voted" ? "Effective: voted" : "Effective: default"}
           </p>
-          <div className="table-scroll">
-            <table data-testid="router-view-weights-table">
-              <thead>
-                <tr>
-                  <th>Vault</th>
-                  <th>Weight (bps)</th>
-                  <th>Allocation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {weights.current_weights.map((w) => (
-                  <tr key={w.vault} data-testid="router-view-weight-row">
-                    <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
-                    <td data-testid="router-view-weight-bps">
-                      <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
-                      {" bps ("}
-                      <span data-testid="router-view-weight-bps-pct">
-                        {formatPercentFromNumber(w.bps)}
-                      </span>
-                      {")"}
-                    </td>
-                    <td data-testid="router-view-weight-bar-cell">
-                      <div
-                        data-testid="router-view-weight-bar"
-                        className="weight-bar"
-                        style={{
-                          width: formatPercentFromNumber(w.bps),
-                          background: "var(--accent, #4f8ef7)",
-                          height: "0.75em",
-                          borderRadius: "2px",
-                          minWidth: "2px",
-                        }}
-                        title={`${formatPercentFromNumber(w.bps)}`}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <p className="hint" data-testid="router-view-weights-note">
+            Read from the router itself (getEffectiveWeights, votedWeightsActive) at its latest
+            block, refreshed every {WEIGHTS_REFETCH_MS / 1000} s.
+          </p>
+          <WeightTable
+            vector={effective}
+            testPrefix="router-view-weight"
+            tableTestId="router-view-weights-table"
+            emptyTestId="router-view-weights-empty"
+            emptyText="The router has no weights set."
+            resolveVaultName={resolveVaultName}
+          />
+          <h4>Voted vector {votedActive ? "(in effect)" : "(not in effect)"}</h4>
+          {voted === undefined ? (
+            <p data-testid="router-view-voted-unknown">unknown</p>
+          ) : (
+            <WeightTable
+              vector={voted}
+              testPrefix="router-view-voted-weight"
+              tableTestId="router-view-voted-table"
+              emptyTestId="router-view-voted-empty"
+              emptyText="No voted vector: no proposal has set weights."
+              resolveVaultName={resolveVaultName}
+            />
+          )}
+          <h4>Default vector {votedActive ? "(overridden by the voted vector)" : "(in effect)"}</h4>
+          {defaults === undefined ? (
+            <p data-testid="router-view-default-unknown">unknown</p>
+          ) : (
+            <WeightTable
+              vector={defaults}
+              testPrefix="router-view-default-weight"
+              tableTestId="router-view-default-table"
+              emptyTestId="router-view-default-empty"
+              emptyText="No default vector set."
+              resolveVaultName={resolveVaultName}
+            />
+          )}
         </>
       )}
 
+      {state.phase === "loading" && <p data-testid="router-view-loading">Loading router state…</p>}
+      {state.phase === "error" && <p data-testid="router-view-error">{state.message}</p>}
+      {state.phase === "ok" && (
+        <ExplorerSections
+          weights={state.weights}
+          pendingProposal={state.pendingProposal}
+          resolveVaultName={resolveVaultName}
+        />
+      )}
+    </section>
+  );
+}
+
+function WeightTable(props: {
+  readonly vector: Vector;
+  readonly testPrefix: string;
+  readonly tableTestId: string;
+  readonly emptyTestId: string;
+  readonly emptyText: string;
+  readonly resolveVaultName: (address: string) => string;
+}) {
+  const { vector, testPrefix, resolveVaultName } = props;
+  if (vector.length === 0) return <p data-testid={props.emptyTestId}>{props.emptyText}</p>;
+  return (
+    <div className="table-scroll">
+      <table data-testid={props.tableTestId}>
+        <thead>
+          <tr>
+            <th>Vault</th>
+            <th>Weight (bps)</th>
+            <th>Allocation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vector.map((w) => (
+            <tr key={w.vault} data-testid={`${testPrefix}-row`}>
+              <td data-testid={`${testPrefix}-vault`}>{resolveVaultName(w.vault)}</td>
+              <td data-testid={`${testPrefix}-bps`}>
+                <span data-testid={`${testPrefix}-bps-raw`}>{w.bps}</span>
+                {" bps ("}
+                <span data-testid={`${testPrefix}-bps-pct`}>{formatPercentFromNumber(w.bps)}</span>
+                {")"}
+              </td>
+              <td data-testid={`${testPrefix}-bar-cell`}>
+                <div
+                  data-testid={`${testPrefix}-bar`}
+                  className="weight-bar"
+                  style={{
+                    width: formatPercentFromNumber(w.bps),
+                    background: "var(--accent, #4f8ef7)",
+                    height: "0.75em",
+                    borderRadius: "2px",
+                    minWidth: "2px",
+                  }}
+                  title={`${formatPercentFromNumber(w.bps)}`}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The pending proposal and the indexed weight-change history: what the explorer knows. */
+function ExplorerSections(props: {
+  readonly weights: RouterWeightsResponse;
+  readonly pendingProposal: ProposalSummary | null;
+  readonly resolveVaultName: (address: string) => string;
+}) {
+  const { weights, pendingProposal, resolveVaultName } = props;
+  return (
+    <>
       <h3>Pending Proposal</h3>
       {pendingProposal == null ? (
         <p data-testid="router-view-no-proposal">No pending proposal.</p>
@@ -216,7 +330,9 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
         </div>
       )}
 
-      <p data-testid="router-view-freshness">Block {weights.block_number}</p>
-    </section>
+      <p data-testid="router-view-freshness">
+        Weight history indexed to block {weights.block_number}
+      </p>
+    </>
   );
 }

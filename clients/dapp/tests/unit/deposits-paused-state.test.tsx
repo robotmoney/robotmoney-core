@@ -39,7 +39,7 @@ function vaultsBody(
       name: `Vault ${i}`,
       risk_label: "STABLE_YIELD",
       status: r.status ?? 0,
-      deposit_cap: "0",
+      tvl_cap: "0",
       total_assets: "1000000",
       exit_fee_bps: 0,
       indexed_at: "2026-10-10T00:00:00Z",

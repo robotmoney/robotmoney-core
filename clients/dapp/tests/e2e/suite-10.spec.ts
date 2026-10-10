@@ -272,12 +272,19 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
     await expect(page.getByTestId("router-view-error")).not.toBeVisible();
 
-    // Either the weights table or the empty-state must render.
+    // Issue 1741: the weights come from the router. Either the table (with an "Effective: voted|default" label),
+    // the router's empty state, or the "unknown" notice must render; the old explorer-derived label is gone.
     const weightsTable = page.getByTestId("router-view-weights-table");
     const weightsEmpty = page.getByTestId("router-view-weights-empty");
-    const hasWeights = await weightsTable.isVisible().catch(() => false);
-    const hasEmpty = await weightsEmpty.isVisible().catch(() => false);
-    expect(hasWeights || hasEmpty, "router view must render weights or empty state").toBe(true);
+    const weightsUnknown = page.getByTestId("router-view-weights-unknown");
+    await expect(weightsTable.or(weightsEmpty).or(weightsUnknown).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    if (await weightsTable.isVisible().catch(() => false)) {
+      await expect(page.getByTestId("router-view-weight-source")).toHaveText(
+        /^Effective: (voted|default)$/,
+      );
+    }
   });
 
   test("VaultDetail renders when vault row is clicked", async ({ page }) => {

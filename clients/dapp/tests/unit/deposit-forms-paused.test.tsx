@@ -195,7 +195,7 @@ function explorerFor(sc: Scenario) {
             name: "V",
             risk_label: "STABLE_YIELD",
             status: e.status ?? 0,
-            deposit_cap: "0",
+            tvl_cap: "0",
             total_assets: "1",
             exit_fee_bps: 0,
             deposits_paused: e.paused ?? null,

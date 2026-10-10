@@ -37,6 +37,9 @@ issues #654, #661, #675, and #695.
 ### Index cursor, chain head and deposit state (issue 1731)
 
 - `block_number` of `/v1/vaults`, `/v1/stats` and the other freshness headers, and `last_indexed_block` of `/health`, are the highest block an indexer run that finished **without an error** committed for the service's chain. They are never read from the newest `indexer_runs` row, which is the tick in flight or a failed tick. `block_number` 0 means nothing is indexed yet; `/health` then reports `last_indexed_block: null`.
+- Vault caps (issue 1741). `GET /v1/vaults` and `GET /v1/vaults/:address` serve, per vault, `tvl_cap` (the vault's `tvlCap()`), `per_deposit_cap` (`perDepositCap()`), `headroom` (`max(tvl_cap - total_assets, 0)`) and `snapshot_block`, all from the vault's latest `vault_snapshots` row and all in asset base units (USDC, 6 decimals) as decimal strings. `RobotMoneyVault` and every `BasketVault` declare both caps as `uint256 public`. A cap the indexer could not read is `null`, never `"0"`, and a `null` cap or `total_assets` makes `headroom` `null`: a client must show `null` as unknown. A real `"0"` means the chain reported 0 (a wound-down vault). `2^256-1` is the contract's "no cap" value. The registry `deposit_cap` field (always 0, the contract no longer has it) is gone. The caps are as of `snapshot_block`, which trails the index block by up to the snapshot heartbeat (a snapshot with an unknown cap is retaken on the next tick).
+- `GET /v1/vaults/:address` freshness (issue 1741): `block_number` is the index block (the same value as `/health` `last_indexed_block`), `chain_head_block` is the head the indexer last saw, and `vault.snapshot_block` is the block of the latest vault snapshot. `block_number` used to be the snapshot block, which made a healthy indexer look thousands of blocks behind. A client measures the lag as `chain_head_block - block_number` and labels `snapshot_block` separately.
+- `GET /v1/router/weights` `current_weights` is the weight vector of the last `WeightsSet` **or** `DefaultWeightsSet` event, not the vector the router routes by. A passed vote (`WeightsSet`, `votedWeightsActive() == true`) overrides the default vector. The effective weights are read from the router itself (`getEffectiveWeights()`, `votedWeightsActive()`, `getWeights()`, `getDefaultWeights()`); the dapp's Router Governance tab does so and labels them `Effective: voted` or `Effective: default`.
 - `chain_head_block` (on `/health`, `/v1/vaults` and `/v1/stats`) is the head the indexer last saw. `chain_head_block - block_number` is the lag (about 5 when healthy, because the indexer waits 5 confirmations). It is `null` until a tick has read a head.
 - `GET /v1/vaults` rows carry `deposits_paused`: the vault's `depositsPaused()` at its latest snapshot, `null` when it has none (read that as unknown, never as open). `status` is the registry lifecycle status and does not follow `pauseDeposits()`.
 - `GET /v1/governance/admin-events` lists, newest first (at most 500), the events of the Timelock (`CallScheduled`, `CallExecuted`, `Cancelled`, `MinDelayChange`) and of the Safe (`ExecutionSuccess`, `ExecutionFailure`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`) when the indexer is given `INDEXER_TIMELOCK` and `INDEXER_SAFE`. Each entry has `block_number`, `log_index`, `tx_hash`, `contract`, `contract_kind` (`timelock` or `safe`), `event_name`, `op_id` (timelock operation id or Safe transaction hash) and `detail` (the decoded arguments). Both contracts are listed by `/v1/chains/:chain_id/contracts` with kinds `timelock` and `safe`.
@@ -257,10 +260,15 @@ Events are interleaved in ascending `(block_number, log_index)` order.
     "address": "0x...",
     "name": "...",
     "risk_label": "...",
-    "status": "active",
-    "deposit_cap": "...",
+    "status": 0,
+    "tvl_cap": "1000000000",
+    "per_deposit_cap": "100000000",
+    "headroom": "998999955",
+    "snapshot_block": 52401831,
     "tvl_history": [ ... ]
-  }
+  },
+  "block_number": 52424271,
+  "chain_head_block": 52424276
 }
 ```
 
@@ -271,8 +279,11 @@ Events are interleaved in ascending `(block_number, log_index)` order.
     "address": "0x...",
     "name": "...",
     "risk_label": "...",
-    "status": "active",
-    "deposit_cap": "...",
+    "status": 0,
+    "tvl_cap": "1000000000",
+    "per_deposit_cap": "100000000",
+    "headroom": "998999955",
+    "snapshot_block": 52401831,
     "tvl_history": [ ... ],
     "adapter_allocation_history": [
       {

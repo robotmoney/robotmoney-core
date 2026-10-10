@@ -290,3 +290,168 @@ async fn the_safe_and_the_timelock_are_listed_and_their_events_are_served() {
     assert_eq!(events[1]["op_id"], format!("0x{}", "ab".repeat(32)));
     assert_eq!(ev["block_number"], 1000);
 }
+
+/// Seed one registered vault with an optional snapshot at block 900:
+/// (total_assets, tvl_cap, per_deposit_cap). Registry `deposit_cap` is 0, as the indexer writes it.
+async fn seed_vault(
+    pool: &PgPool,
+    byte: u8,
+    name: &str,
+    snapshot: Option<(&str, Option<&str>, Option<&str>)>,
+) -> String {
+    let t = Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 0).unwrap();
+    let addr = vec![byte; 20];
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', 1)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&addr)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+                             registered_at, registered_block, registered_tx) \
+         VALUES ($1, $2, $3, 'STABLE_YIELD', 0, 0, 1, 1, $4)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&addr)
+    .bind(name)
+    .bind(vec![byte; 32])
+    .execute(pool)
+    .await
+    .unwrap();
+    if let Some((assets, tvl_cap, per_deposit_cap)) = snapshot {
+        sqlx::query(
+            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                          exit_fee_bps, tvl_cap, per_deposit_cap, paused, indexed_at) \
+             VALUES ($1, $2, 900, $3::NUMERIC, 1, 0, $4::NUMERIC, $5::NUMERIC, false, $6)",
+        )
+        .bind(PRIMARY_CHAIN_ID)
+        .bind(&addr)
+        .bind(assets)
+        .bind(tvl_cap)
+        .bind(per_deposit_cap)
+        .bind(t)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    format!("0x{}", hex::encode(addr))
+}
+
+#[tokio::test]
+async fn vaults_serve_the_real_caps_and_a_headroom_and_null_when_a_cap_is_unknown() {
+    let s = boot().await;
+    run(&s.pool, true, None, Some(1000), Some(1010)).await;
+    // The rehearsal numbers: USDC vault TVL cap 1000 USDC, per-deposit cap 100 USDC, 1.000045 USDC deposited.
+    let usdc = seed_vault(
+        &s.pool,
+        0xb1,
+        "Usdc",
+        Some(("1000045", Some("1000000000"), Some("100000000"))),
+    )
+    .await;
+    // Agent Tokens: 100 USDC TVL cap, 15 USDC per-deposit cap.
+    let agent = seed_vault(
+        &s.pool,
+        0xb2,
+        "Agent",
+        Some(("0", Some("100000000"), Some("15000000"))),
+    )
+    .await;
+    // Over the cap (a cap lowered below the NAV): headroom is 0, never negative.
+    let over = seed_vault(
+        &s.pool,
+        0xb3,
+        "Over",
+        Some(("2000000000", Some("1000000000"), Some("100000000"))),
+    )
+    .await;
+    // A failed tvlCap() read is NULL: the cap AND the headroom are unknown, not 0.
+    let unknown = seed_vault(
+        &s.pool,
+        0xb4,
+        "Unknown",
+        Some(("5", None, Some("100000000"))),
+    )
+    .await;
+    let none = seed_vault(&s.pool, 0xb5, "NoSnapshot", None).await;
+
+    let body = get(&s, "/v1/vaults").await;
+    let by_name = |n: &str| {
+        body["vaults"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == n)
+            .unwrap_or_else(|| panic!("{n} missing in {body}"))
+            .clone()
+    };
+    let u = by_name("Usdc");
+    assert_eq!(u["tvl_cap"], "1000000000");
+    assert_eq!(u["per_deposit_cap"], "100000000");
+    assert_eq!(u["headroom"], "998999955");
+    assert_eq!(u["snapshot_block"], 900);
+    assert!(
+        u.get("deposit_cap").is_none(),
+        "the registry deposit_cap (always 0) is gone from the wire: {u}"
+    );
+    let a = by_name("Agent");
+    assert_eq!(a["tvl_cap"], "100000000");
+    assert_eq!(a["per_deposit_cap"], "15000000");
+    assert_eq!(a["headroom"], "100000000");
+    assert_eq!(by_name("Over")["headroom"], "0");
+    let k = by_name("Unknown");
+    assert!(k["tvl_cap"].is_null(), "{k}");
+    assert!(
+        k["headroom"].is_null(),
+        "unknown cap is not zero headroom: {k}"
+    );
+    assert_eq!(k["per_deposit_cap"], "100000000");
+    let n = by_name("NoSnapshot");
+    for f in ["tvl_cap", "per_deposit_cap", "headroom", "snapshot_block"] {
+        assert!(n[f].is_null(), "{f} of a vault with no snapshot: {n}");
+    }
+
+    // The detail endpoint serves the same numbers, and the index block is the cursor (1000), not the snapshot (900).
+    let d = get(&s, &format!("/v1/vaults/{usdc}")).await;
+    assert_eq!(d["vault"]["tvl_cap"], "1000000000");
+    assert_eq!(d["vault"]["per_deposit_cap"], "100000000");
+    assert_eq!(d["vault"]["headroom"], "998999955");
+    assert_eq!(d["vault"]["snapshot_block"], 900);
+    assert_eq!(d["block_number"], 1000, "the index block: {d}");
+    assert_eq!(d["chain_head_block"], 1010);
+    assert_eq!(
+        d["vault"]["tvl_history"][0]["block_number"], 900,
+        "the history still carries the snapshot block"
+    );
+    let over_d = get(&s, &format!("/v1/vaults/{over}")).await;
+    assert_eq!(over_d["vault"]["headroom"], "0");
+    let unknown_d = get(&s, &format!("/v1/vaults/{unknown}")).await;
+    assert!(unknown_d["vault"]["tvl_cap"].is_null());
+    assert!(unknown_d["vault"]["headroom"].is_null());
+    let none_d = get(&s, &format!("/v1/vaults/{none}")).await;
+    assert!(none_d["vault"]["tvl_cap"].is_null());
+    assert!(none_d["vault"]["snapshot_block"].is_null());
+    assert_eq!(none_d["block_number"], 1000);
+    let _ = agent;
+}
+
+#[tokio::test]
+async fn vault_detail_block_number_is_the_cursor_even_when_the_last_snapshot_is_old() {
+    let s = boot().await;
+    // The indexer is at 52424271 with the head at 52424276, the last snapshot of the vault is 22k blocks old.
+    run(&s.pool, true, None, Some(52_424_271), Some(52_424_276)).await;
+    let addr = seed_vault(
+        &s.pool,
+        0xc1,
+        "Usdc",
+        Some(("1000045", Some("1000000000"), Some("100000000"))),
+    )
+    .await;
+    let d = get(&s, &format!("/v1/vaults/{addr}")).await;
+    assert_eq!(d["block_number"], 52_424_271, "the index block: {d}");
+    assert_eq!(d["chain_head_block"], 52_424_276);
+    assert_eq!(d["vault"]["snapshot_block"], 900);
+}

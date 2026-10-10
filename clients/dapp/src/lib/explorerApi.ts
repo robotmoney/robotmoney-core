@@ -87,7 +87,17 @@ export interface VaultRow {
   readonly risk_label: string;
   /** 0 = Active, 1 = DepositsPaused (deposits stopped; withdrawals stay open), 2 = Retired */
   readonly status: number;
-  readonly deposit_cap: string;
+  /**
+   * `tvlCap()` as of the vault's latest snapshot, raw USDC; null/absent when the indexer could not read it.
+   * Unknown is not 0 (issue 1741). Older explorers sent a registry `deposit_cap` that was always 0: it is gone.
+   */
+  readonly tvl_cap?: string | null;
+  /** `perDepositCap()` as of the latest snapshot; null/absent when unknown. */
+  readonly per_deposit_cap?: string | null;
+  /** `max(tvl_cap - total_assets, 0)` computed by the explorer; null/absent when either side is unknown. */
+  readonly headroom?: string | null;
+  /** Block of the snapshot the TVL, caps and pause flag come from. NOT the index block. */
+  readonly snapshot_block?: number | null;
   readonly total_assets: string | null;
   readonly exit_fee_bps: number | null;
   /**
@@ -121,7 +131,14 @@ export interface VaultDetailRow {
   readonly name: string;
   readonly risk_label: string;
   readonly status: number;
-  readonly deposit_cap: string;
+  /** `tvlCap()` at the latest snapshot; null/absent when unknown (issue 1741). */
+  readonly tvl_cap?: string | null;
+  /** `perDepositCap()` at the latest snapshot; null/absent when unknown. */
+  readonly per_deposit_cap?: string | null;
+  /** `max(tvl_cap - total_assets, 0)`; null/absent when either side is unknown. */
+  readonly headroom?: string | null;
+  /** Block of the latest vault snapshot; null/absent when there is none. NOT the index block. */
+  readonly snapshot_block?: number | null;
   /** The vault's `depositsPaused()` at its latest snapshot; null/absent when unknown (issue 1731). */
   readonly deposits_paused?: boolean | null;
   readonly tvl_history: readonly VaultTvlPoint[];
@@ -130,7 +147,10 @@ export interface VaultDetailRow {
 
 export interface VaultDetailResponse {
   readonly vault: VaultDetailRow;
+  /** The index block: the last block the indexer committed (issue 1741). Not the snapshot block. */
   readonly block_number: number;
+  /** The chain head the indexer last saw; null/absent until a tick has read it. */
+  readonly chain_head_block?: number | null;
   readonly indexed_at: string;
 }
 
