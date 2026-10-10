@@ -84,6 +84,8 @@ export interface VerifySheet {
   safeThreshold: number;
   /** Timelock delay in seconds the sheet asked for. */
   timelockDelay: number;
+  /** Issue 1727: the deployment kind of the run (the sheet's DEPLOYMENT_KIND). Absent means production, the strictest reading: the 172800 s floor on 8453. */
+  deploymentKind?: "production" | "rehearsal";
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
   governance: GovernanceSheet;
@@ -113,6 +115,11 @@ export interface VerifyOptions {
    * gas for the Safe execTransaction calls from the deployer keystore, so the live nonce then exceeds the frozen sum by design.
    */
   deployerNonceAtDeployEnd?: number;
+  /**
+   * Issue 1727, rehearsal only: the deployer nonce the run manifest recorded at the first deployer stage. The expected nonce is this plus the summed frozen counts
+   * plus the prove-control transaction. Absent (production): 0, a fresh deployer.
+   */
+  deployerStartNonce?: number;
   /**
    * The Safe control proof the run manifest recorded (core 1618): the execTransaction hash and the Safe nonce it used. The verifier reads the
    * transaction back from the chain. Absent: the proof label fails (a deploy without the prove-control step is not accepted).

@@ -8,7 +8,8 @@
 //   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
 //                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
 //                                               on demand (`--row unpause-X`, a new numbered round, issue 1667).
-//   update-delay, batch, cancel                 Twin-only demonstrations of the Safe tool. Refused with USAGE on 8453.
+//   update-delay, batch, cancel                 Demonstrations of the Safe tool. Refused with USAGE on 8453, except in a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal, issue 1727):
+//                                               there they run on 8453 as explicit `--row` runs, in order after the four unpauses, never as part of stage 13.
 // A run schedules every unpause the sheet asks for (GOVERN_UNPAUSE_VAULTS), waits ONE timelock delay, then executes each and reads depositsPaused() back.
 // An operation declared dependent on another carries that operation's id as the timelock predecessor and runs in the same resume (no second wait).
 // On demand, outside the matrix (it never blocks or completes the govern stage):
@@ -38,6 +39,10 @@ import { readFileSync } from "node:fs";
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
 import { PublishError } from "./errors.ts";
+import { REGISTER_ROW, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls, registerReadBackProblems, registerRecordKey } from "./committee-register.ts";
+import { ADMIN_ROLE, AGENT_ROLE, DEPOSIT_PAUSER_ROLE } from "./verify/constants.ts";
+import { COMMITTEE_AGENT_ROLE } from "./record-receipt.ts";
+import type { DeploymentKind } from "./chains.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
@@ -90,6 +95,12 @@ export const UNPAUSE_USDC_ROW = "unpause-USDC";
 export type PlannedRow = GovernRowName;
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
 export const isTwinOnlyRow = (row: string): boolean => (TWIN_ONLY_ROWS as readonly string[]).includes(row);
+/**
+ * Issue 1727: update-delay, batch and cancel are refused on 8453 UNLESS the sheet is a rehearsal (DEPLOYMENT_KIND=rehearsal). Each is a no-op or a bounded delay
+ * change through the real Safe and the real timelock, so a rehearsal exercises the Safe tool on real contracts. Production keeps them refused. On a rehearsal they
+ * are explicit `--row` runs: stage 13 on 8453 stays the four unpauses, and the later rows keep their order (update-delay, batch, cancel) after the unpauses.
+ */
+export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKind): boolean => isTwinOnlyRow(row) && chainId === BASE_CHAIN_ID && kind !== "rehearsal";
 /** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
 export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? UNPAUSE_ROWS : GOVERN_ROWS);
 /**
@@ -125,6 +136,7 @@ export const loadReceiptAddr = (ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): PlannedRow {
   if (row === RECEIPT_ROW) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is the on-demand receipt release: it needs --receipt-id 0x<bytes32>`);
+  if (row === REGISTER_ROW) throw new PublishError("USAGE", `--row ${REGISTER_ROW} is the on-demand committee submitter registration: it needs --submitter 0x<address>`);
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
@@ -174,6 +186,9 @@ export type GovernPhase = "scheduled" | "executed" | "cancelled";
 export interface GovernRowLine { row: string; phase: GovernPhase; txHash: string; status: 0 | 1; readyAt: number }
 
 export interface GovernOpts {
+  /** With --row register-committee only (issue 1727): the submitter's address and its label on the IC policy. */
+  submitter?: string;
+  agentLabel?: string;
   ownerSigners: Signer[];
   /** Pays gas for execTransaction. Holds no role. */
   sender: Signer;
@@ -340,9 +355,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (o.call && o.receiptId !== undefined) throw new PublishError("USAGE", "a generic timelock call and --receipt-id are mutually exclusive");
   const releasing = o.row === RECEIPT_ROW;
   const applying = o.row === APPLY_ROW;
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying ? undefined : resolveGovernRow(o.row);
-  if (selected !== undefined && isTwinOnlyRow(selected) && ctx.chainId === BASE_CHAIN_ID) {
-    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW})`);
+  const registering = o.row === REGISTER_ROW;
+  if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
+  if (registering && ctx.chainId === BASE_CHAIN_ID && ctx.sheet.kind !== "rehearsal") {
+    throw new PublishError("USAGE", `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW} and ${APPLY_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`);
+  }
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering ? undefined : resolveGovernRow(o.row);
+  if (selected !== undefined && twinOnlyRefused(selected, ctx.chainId, ctx.sheet.kind)) {
+    throw new PublishError("USAGE", `--row ${selected} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW} and --row ${APPLY_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`);
   }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
@@ -389,8 +409,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       return {
         id: await api.operationId(handle, { timelock: a.timelock, calls: [inner], salt: s, form: "single" }),
         description: `updateDelay to ${newDelay}`,
-        schedule: () => api.updateTimelockDelay(handle, { timelock: a.timelock, newDelay, phase: "schedule", salt: s, description: `update-delay: updateDelay to ${newDelay}` }),
-        execute: () => api.updateTimelockDelay(handle, { timelock: a.timelock, newDelay, phase: "execute", salt: s, description: `update-delay: execute updateDelay to ${newDelay}` }),
+        schedule: () => api.updateTimelockDelay(handle, { timelock: a.timelock, newDelay, phase: "schedule", salt: s, deploymentKind: sheet.kind, description: `update-delay: updateDelay to ${newDelay}` }),
+        execute: () => api.updateTimelockDelay(handle, { timelock: a.timelock, newDelay, phase: "execute", salt: s, deploymentKind: sheet.kind, description: `update-delay: execute updateDelay to ${newDelay}` }),
         readBack: async () => { const now = await api.timelockMinDelay(handle, a.timelock); return now === newDelay ? [] : [`getMinDelay is ${now}, want ${newDelay}`]; },
       };
     }
@@ -596,6 +616,75 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
   }
 
+  /** The evidence entry of an executed registration round (`committee_registrations` of the run manifest, checked by evidence-check). */
+  async function recordRegistration(name: string): Promise<void> {
+    const r = state[name] as (RowRecord & { register?: { submitter: string; agent_label: string; gateway: string; ic_policy: string; valid_until: string } }) | undefined;
+    if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash || !r.register) return;
+    const at = async (hash: string): Promise<number> => {
+      const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+      return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+    };
+    const entry = {
+      step: REGISTER_ROW, ...r.register, timelock: a.timelock,
+      operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
+      execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
+    };
+    const list = ((manifest as { committee_registrations?: { submitter?: string }[] }).committee_registrations ??= []);
+    const i = list.findIndex((x) => x.submitter?.toLowerCase() === entry.submitter.toLowerCase());
+    if (i >= 0) list[i] = entry; else list.push(entry);
+    save();
+  }
+
+  if (registering) {
+    // Issue 1727: ONE timelock batch, authorizeAgent + committeeRegister for the consensus receipt submitter. Never part of the matrix. Rehearsal and Twin only.
+    const submitter = assertSubmitter(o.submitter);
+    const agentLabel = assertAgentLabel(o.agentLabel);
+    const gateway = readManifestField(ctx, manifestRef("gateway", "gateway")) as Address;
+    const icPolicy = readManifestField(ctx, manifestRef("ic-policy", "policy")) as Address;
+    const name = registerRecordKey(submitter);
+    const rd = reader(handle);
+    const read = async <T,>(addr: Address, abi: readonly unknown[], fn: string, args: unknown[] = []): Promise<T> => rd<T>(addr, abi, fn, args);
+    if (!rowComplete(state[name])) {
+      const cur = state[name];
+      if (cur?.scheduled === undefined) {
+        // Nothing of this round is on the timelock yet: refuse what can only revert, before the Safe schedules it and the delay is spent.
+        const owners = new Set([...sheet.safeOwners, sheet.admin, sheet.pauser, sheet.emergency, a.safe, a.timelock].map((x) => x.toLowerCase()));
+        if (owners.has(submitter.toLowerCase())) throw new PublishError("USAGE", `--submitter ${submitter} is a Safe owner, a role key, the Safe or the timelock: the submitter holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else`, { submitter });
+        if ((await read<Address>(gateway, GATEWAY_REGISTER_ABI, "icPolicy")).toLowerCase() !== icPolicy.toLowerCase()) throw new PublishError("GOVERN", `the gateway's icPolicy is not the run's IC policy ${icPolicy}: committeeRegister would reach another contract`, { icPolicy });
+        if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway: it is registered or is a depositor's agent, nothing to schedule`, { submitter });
+        if (/^0x0{40}$/.test(await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter])) === false) throw new PublishError("GOVERN", `${submitter} already has an agent owner on the gateway: authorizeAgent would revert AgentAlreadyOwned`, { submitter });
+        for (const [nm, r] of [["ADMIN_ROLE", ADMIN_ROLE], ["DEPOSIT_PAUSER_ROLE", DEPOSIT_PAUSER_ROLE]] as const) {
+          if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [r, submitter])) throw new PublishError("GOVERN", `${submitter} holds ${nm} on the gateway: role separation refuses it as an agent`, { submitter });
+        }
+      }
+      // validUntil is fixed at the FIRST plan and read back from the manifest after that, so a resume rebuilds the same calldata and finds the same operation id
+      const validUntil = BigInt((state[name] as { register?: { valid_until?: string } } | undefined)?.register?.valid_until ?? (await chainTime(handle)) + BigInt(SUBMITTER_POLICY_SECONDS));
+      const calls = buildRegisterCalls(gateway, a.timelock, submitter, agentLabel, validUntil);
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      const id = await api.operationId(handle, p);
+      const prior = state[name]?.scheduled?.operation_id;
+      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: REGISTER_ROW, submitter, prior, id });
+      const readBack = async () => registerReadBackProblems({
+        agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), committeeRole: await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter]),
+        label: await read<string>(icPolicy, IC_REGISTER_ABI, "agentId", [submitter]), wantLabel: agentLabel, owner: await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]), timelock: a.timelock,
+      });
+      state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString() } } as RowRecord;
+      await round(name, {
+        id, description: `register committee submitter ${submitter}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REGISTER_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${REGISTER_ROW} execute` }),
+      }, REGISTER_ROW);
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, REGISTER_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, REGISTER_ROW, "executed", r.executed);
+    }
+    await recordRegistration(name);
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: REGISTER_ROW, submitter });
+    return { rows: [name], skipped: [], opIds };
+  }
+
   if (applying) {
     // Issue 1696: ONE timelock batch, releaseReceipt + the router weight change. Never part of the matrix, on 8453 only when named with a receipt id and a payload.
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32>`);
@@ -713,7 +802,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);

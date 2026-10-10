@@ -56,6 +56,7 @@ const RULES: Rule[] = [
   [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(subject(m[1]).toLowerCase(), "0x6000"); }],
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
+  [/^deployment kind: the timelock delay agrees with the kind$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^timelock: min delay equals sheet$/, (w) => { w.sheet.timelockDelay = 999_999; }],
   [/^timelock: manifest executorPolicy is open$/, (w) => editManifest(w, timelockFile(), (o) => { o.executorPolicy = "safe"; })],
   [/^timelock: manifest cancellerPolicy is safe-only$/, (w) => editManifest(w, timelockFile(), (o) => { o.cancellerPolicy = "any-signer"; })],

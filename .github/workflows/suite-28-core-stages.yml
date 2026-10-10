@@ -116,6 +116,9 @@ jobs:
           rpc-url: ${{ steps.fork.outputs.rpc-url }}
           verify: "true"
           govern: "true"
+          # Issue 1727: the Twin chain runs the REHEARSAL kind of the Base mainnet rehearsal (900 s timelock, non-fresh deployer, new Safe salt) and
+          # the receipt path with a REAL recorded receipt (register the submitter, record through the gateway, apply with the Safe, read back).
+          rehearsal: "true"
       - name: Check counts.json against the stage table
         run: bun publish-contracts/src/ci/rehearsal-counts.ts check --file "$TWIN_COUNTS_JSON"
       - name: Drift check against the frozen counts of this SHA

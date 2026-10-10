@@ -422,7 +422,7 @@ stage 13, which stays the four vault unpauses. Run `govern --row release-receipt
 with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
 the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
 48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
-under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only.
+under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only in production; a Base mainnet rehearsal (4.10) may run them.
 
 ### 4.9. Post-launch receipt application (the Safe applies a rebalance)
 
@@ -441,6 +441,62 @@ Refusals. Each exits `USAGE` (exit 2) before anything is sent, so no delay is sp
 Never part of stage 13, which stays the four vault unpauses: no default run, stage run or numbered `--row` reaches it. On 8453 it runs only when named with `--row apply-receipt`, a receipt id and a payload, as a post-launch action with its own 172800 s delay: the first run schedules and exits `GOVERN_PENDING` (exit 15) with the resume command, the same command after the delay executes it. An operation the operator cancelled through the Safe is scheduled again by the same command, with a newer sequence number. Record the operation under `receipt_applications` in the evidence file (with `governance.address`): `evidence-check` accepts it only as one batch of exactly the release and the weight change, one delay apart. Whether the mainnet test deployment runs this row after the unpause round is an open owner decision, default: no.
 
 The Twin rehearsal runs the row after the unpause rows (and checks `receipt_applications` of its run manifest with `evidence-check --receipt-applications`). The Twin proves execution only: that the row executes on the real contracts through the real Safe and timelock. It is not evidence that mainnet governance works (rule b).
+
+### 4.10. Base mainnet REHEARSAL with a 900 s timelock (issue 1727)
+
+Owner decision 2026-10-10 (reverses the 2026-10-02 rule that a short-delay run is never evidence, for REHEARSALS only). The main goal is to test governance and the router rebalance driven by Investment Committee consensus receipts, end to end on real 8453 contracts, with the full receipt path and no fixture. The rehearsal REUSES the keys of the first rehearsal (deployer, pauser, emergency, Safe owners A, B and C) and deploys NEW contract addresses. Production is untouched: its 172800 s floor and its fresh-deployer accounting are unchanged and pinned by tests.
+
+**Selecting the mode.** One sheet line, `DEPLOYMENT_KIND=rehearsal`. It is never read from the environment and there is no flag, because the sheet is the reviewed input that also reaches forge (`DeployTimelock.s.sol` enforces the same floor from the same value), is diffed by the isomorphism report and is copied into the run record. Absent or `production` is production. Any other value is a sheet error. Start from `deployments/base-8453-rehearsal/stage-sheet.example.env` (public placeholder addresses only: type the real public addresses of the reused keys, a NEW `SAFE_SALT_NONCE`, the 8453 caps from the first rehearsal sheet).
+
+**Floors, production against rehearsal** (every other floor stays):
+
+| Floor | Production (default, unchanged) | Rehearsal (explicit) |
+| --- | --- | --- |
+| `TIMELOCK_MIN_DELAY`, sheet and `floors.ts` | at least 172800 on 8453, at least 1 elsewhere | 900 to 172799 on every chain (172800 or more is refused: the chain could not tell it from production) |
+| `GOVERN_NEW_DELAY` | 3600 to 2592000, and the chain floor | 900 to 172799 |
+| `DeployTimelock.s.sol` | `MIN_PRODUCTION_DELAY` 172800 on chain 8453 | `MIN_REHEARSAL_DELAY` 900, below 172800, when `DEPLOYMENT_KIND=rehearsal` is set (the runner sets it from the sheet only) |
+| Safe tool `updateDelay` | floor 172800 on 8453 | floor 900, below 172800 |
+| verifier | delay at least 172800 on 8453, label `deployment kind: the timelock delay agrees with the kind` | delay 900 to 172799 (a rehearsal verify against 172800 fails, a production verify against 900 fails) |
+| `evidence-check` | floor 172800, kind production | `--deployment-kind rehearsal`: floor 900. Rehearsal evidence checked as production fails, and the reverse |
+| release tag | annotated `release/<version>` (no `rehearsal` in the name) | annotated `release/<version>-rehearsal`. A mismatch fails `RELEASE_TAG_KIND` (exit 28) before any signer exists |
+
+**What records the kind.** The run manifest (`deploymentKind`), the evidence (`deployment_kind`), the verifier label detail and the `verify.deployment_kind` log event (`[rehearsal 900s]`), the isomorphism notes, `timelock.json` (`deployment_kind`), the tag name, and the timelock `minDelay` itself on chain (900).
+
+**Per row, on 8453 in a rehearsal:**
+
+| Row | Rehearsal on 8453 | Why |
+| --- | --- | --- |
+| `unpause-USDC`, `-PROTO`, `-AGENT`, `-RWA` | yes, stage 13, run first | the launch path, unchanged |
+| `register-committee --submitter ADDR` | yes, rehearsal and Twin only, on demand | the ADMIN_ROLE action that lets a submitter anchor receipts: one batch of `gateway.authorizeAgent` (AGENT_ROLE, a signalling-only 1-unit policy owned by the timelock, 90 days) and `gateway.committeeRegister` (COMMITTEE_AGENT_ROLE on the IC policy). Refused on 8453 in production: adding it to the production surface is a separate owner decision |
+| `release-receipt` | yes, as in production | already allowed, delay is the mode floor |
+| `apply-receipt` | yes, as in production | releaseReceipt and the router weights in one batch; read back |
+| `update-delay` | yes, explicit `--row`, after the four unpauses | exercises the Safe tool timelock path on real contracts; the new delay stays 900 to 172799 and the verifier follows the executed delay |
+| `batch` | yes, explicit `--row`, after `update-delay` | a no-op `scheduleBatch` (updateDelay to the current value, rmUSDC cap to its current value): no state change |
+| `cancel` | yes, explicit `--row`, after `batch` | schedules a no-op and cancels it: no state change |
+| generic `--call-*` | no | a test verb, refused on 8453 in every kind |
+
+Stage 13 on 8453 stays the four unpauses in every kind. In production `update-delay`, `batch` and `cancel` are refused with `USAGE` exactly as before. Rehearsal evidence for them goes in `rehearsal_rows`, which a production evidence may not carry.
+
+**The receipt path (no fixture).** After the four unpauses:
+
+1. Register the submitter through the Safe and the timelock: `govern --row register-committee --submitter 0x<submitter> --agent-label NAME`. It schedules, exits `GOVERN_PENDING` (15) with the resume command, and the same command after the 900 s delay executes and reads `AGENT_ROLE`, `COMMITTEE_AGENT_ROLE`, the label and the agent owner back. Evidence: `committee_registrations`.
+2. A submitter anchors a REAL receipt through the gateway: first `rmpc receipt verify` (read-only, no signer) checks every analyst signature off chain and prints `receipt_id` and `payload_digest`; then `publish-contracts record-receipt --signer <submitter signer> --receipt-id ID --payload-digest DIGEST --payload-uri URL` calls `RobotMoneyGateway.consensusRecordReceipt(receiptId, payloadDigest, payloadUri)`. `rmpc receipt submit` refuses a software signer on 8453 (`ErrProductionSignerRequired`: only HSM or KMS count and none is implemented), so a rehearsal records through this verb; production keeps rmpc with an HSM or KMS. The verb checks the roles, the gateway routing and that the id is not recorded with other data before it sends, reads the receipt back, and writes `recorded_receipts` (id, digest, uri, submitter ADDRESS, transaction; never a key).
+3. The Safe applies it: `govern --row apply-receipt --receipt-id ID --payload FILE`, where FILE is the exact bytes whose `keccak256` is the recorded digest. `isReleased` and the router weights are read back.
+4. `verify` again, then `evidence-check --receipt-applications <publish-run.json> --deployment-kind rehearsal ...` traces the application to a recorded receipt with the same digest by a registered submitter.
+
+**Which key is the submitter. OWNER QUESTION.** No protocol agent key exists (the deploy authorizes no agent) and the submitter must hold AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else. Role separation forbids the pauser (DEPOSIT_PAUSER) and the Safe owners, the role keys and the Safe are refused by the row. Design: the operator supplies the submitter signer at run time (`--signer`, a hardware wallet or a keystore whose passphrase is typed at the hidden prompt), nothing about it is written to the repo, the sheet or the evidence but its address. The owner should confirm which EOA that is: recommended a dedicated key, funded with about 0.001 ETH by a plain transfer from the deployer. Reusing the deployer as the submitter is possible (it holds no role after the handover) but mixes the funded deploy key with the attestation key, which the submitter runbook (section 2, C-4 and C-5) argues against.
+
+**Deployer nonce (not fresh).** The deployer is at about nonce 118 and moves on. In rehearsal mode the run manifest records `deployerStartNonce` at the FIRST deployer stage, before the first transaction. Every later stage must start at the recorded start plus the stages' counts before it (plus the prove-control transaction after it); a stray deployer transaction before, between or after stages is refused; the end nonce is start plus the summed counts plus the proof; the verifier and `evidence-check` (`deployer_start_nonce`) count from the same start. The recorded start is read from the manifest on resume, cross-checked against the first stage's own record and, before any stage has started, against the chain: it is never rewritten. The frozen per-stage counts are deltas and do not change. Production stays absolute from nonce 0.
+
+**New Safe.** The same owners, threshold and `SAFE_SALT_NONCE` predict the first rehearsal's Safe. A rehearsal sheet therefore REQUIRES an explicit `SAFE_SALT_NONCE`, and the Safe stage refuses a predicted address that already holds code with `SAFE_SALT_NONCE_REUSED` (exit 19) before anything is sent. Only a `--resume` of the same run, whose manifest recorded that address, adopts an existing Safe.
+
+**Libraries.** All four CREATE2 libraries already sit on 8453 from the first rehearsal: tick_math is deployed by the libs stage, and TwapTickMath, BasketViews and BasketAssetConfigGuard by the PROTO stage. A second deployment therefore finds them all, and the libs stage and the PROTO stage simulate fewer transactions than their frozen counts (the PROTO frozen count changes). This needs the libs-adopt work (issue 1721, PR 1722): adoption of a CREATE2 creation inside any stage, with per-stage partial-adoption nonce accounting through `effectiveCounts`. Merge it first; the relative start-nonce accounting of this section is built on top of it and is not duplicated here. A run that adopts any stage consumes frozen counts but can never produce them: use the frozen counts of the tagged SHA (9a768bb9) as the delta source and never measure on 8453. The Twin proof pre-deploys the libraries with the 1722 test helper once it lands. Fold in 1723 (read-after-write safe reads) and 1724 (getLogs scan) as their PRs merge: they are separate issues and are not duplicated here.
+
+**Funding for a new run** (fee-estimate numbers, 114 transactions plus stage 13 at 5x margin): about 0.00234 ETH for the tool plus 0.0000242 ETH for stage 13, recommended 0.00237 ETH, and the extra Safe `execTransaction` gas of the rehearsal rows (about 14 more Safe transactions, well under 0.0003 ETH) plus about 0.001 ETH for the submitter. The owner funds about 0.005 ETH in total. USDC: 1 for the seed plus 1 per vault test deposit times 4, so 5 USDC. The reused deployer holds 0.00456 ETH (enough) and 4.5 USDC (0.5 USDC short; the first rehearsal's second sitting needs 4 USDC and returns most of it).
+
+**Key tool steps.** No key is generated: the first rehearsal's keystores are reused. 1) `publish-contracts ops fee-estimate` for the numbers above at the tagged SHA. 2) Copy the example sheet, type the public addresses, set a NEW `SAFE_SALT_NONCE`. 3) Tag `release/<version>-rehearsal` on the Twin-rehearsed SHA (the plan owner cuts it; never move `release/v0.4.0-base`). 4) `publish --stage plan` (the gate checks the rehearsal tag), then `publish`, `verify`, `govern`, `verify` as usual with the deployer keystore typed at the hidden prompt and the three Safe owner signers. 5) The receipt path above. 6) `update-delay`, `batch`, `cancel` rows in that order. 7) Evidence with `deployment_kind: rehearsal`, `deployer_start_nonce`, `rehearsal_rows`, `committee_registrations`, `recorded_receipts` and `receipt_applications`, checked with `evidence-check --deployment-kind rehearsal`. The mode is selected explicitly in the sheet and by the `-rehearsal` tag; nothing selects it by default.
+
+The Twin job (`core-stages-twin-chain`) runs this whole path in the rehearsal kind at 900 s with a REAL recorded receipt: a non-fresh deployer, a new salt, the four unpauses and the other rows, `register-committee`, `record-receipt` by a throwaway SUBMITTER key, `apply-receipt`, a third `verify` and the receipt-path evidence check. The Twin proves execution only; it is not evidence that mainnet governance works.
 
 ## 5. Per-release runbook format
 

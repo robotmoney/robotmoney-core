@@ -5,6 +5,7 @@ import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
 import { resumeCommand } from "./govern.ts";
 import { MAINNET_CHAIN_ID } from "./floors.ts";
+import { kindLabel } from "./chains.ts";
 import { governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { RECORDER_STAGE, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
@@ -94,7 +95,7 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
   }
   return {
     chainId: ctx.chainId, deployer: s.admin, pauser: s.pauser, emergency: s.emergency, safeOwners: s.safeOwners, safeThreshold: s.safeThreshold,
-    timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), vaults,
+    timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), deploymentKind: s.kind, vaults,
     governance: { voters: s.voters, voterPower: s.voterPower, quorum: s.quorum, votingPeriod: s.votingPeriod, executionDelay: s.executionDelay },
     defaultWeights: (["USDC", ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
   };
@@ -166,6 +167,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
+    ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
@@ -185,6 +187,8 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     report.checks.push(...s.checks);
     report.ok = report.ok && s.ok;
   }
+  // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
+  ctx.log.log("info", "verify.deployment_kind", { deployment_kind: ctx.sheet.kind, label: kindLabel(ctx.sheet.kind, expectedTimelockDelay(manifest, ctx.sheet)) });
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });
   // stdout: the verifier labels, one per line under [verify], the format of deployments/base-8453/verifier-labels.txt, so a caller can diff stage against mainnet.
   // Pass or fail is the exit code (and the verify.check log lines on stderr).

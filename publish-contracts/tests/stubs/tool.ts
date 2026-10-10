@@ -10,6 +10,7 @@ interface Cfg {
   failBroadcast?: string;                  // script file whose first broadcast dies halfway
   failBroadcastOutput?: { stdout?: string; stderr?: string }; // what that failing broadcast prints (default: a dropped RPC on stdout)
   castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>; // cast subcommand -> its canned reply (receipt, call)
+  emptyCode?: string[];                    // addresses `cast code` answers 0x for (no code). Default: the Safe the fake Safe API predicts, a fresh address (issue 1727); [] gives it code
   simFails?: string;                       // script file whose simulation fails
   chainId: number;
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
@@ -46,7 +47,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (cmd === "client") out("stub-node/1.0");
     if (cmd === "block-number") out("100");
     if (cmd === "rpc") out("null");
-    if (cmd === "code") out(STUB_CODE);
+    if (cmd === "code") out((cfg.emptyCode ?? ["0x00000000000000000000000000000000000050fe"]).includes((a0 ?? "").toLowerCase()) ? "0x" : STUB_CODE);
     if (cmd === "codehash") out(`0x${"ab".repeat(32)}`);
     out(`stub cast: unsupported ${cmd}`, 1);
   }

@@ -28,6 +28,6 @@ describe("tree check", () => {
   });
   test("the mainnet stage env (REHEARSAL, ALLOW_SHORT_TIMELOCK_DELAY) appears in no shipped TypeScript source except as a refusal", () => {
     const src = readFileSync(join(REPO, "publish-contracts", "src", "floors.ts"), "utf8");
-    expect(src).not.toMatch(/ALLOW_SHORT_TIMELOCK_DELAY|REHEARSAL/);
+    expect(src).not.toMatch(/ALLOW_SHORT_TIMELOCK_DELAY|\bREHEARSAL\b/);
   });
 });

@@ -4,6 +4,7 @@
 import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { PROOF_TX_NONCES } from "../counts.ts";
+import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
@@ -160,11 +161,20 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
 
   // ---- timelock
-  const floor = minDelayFloor(sheet.chainId);
+  const kind = sheet.deploymentKind ?? "production";
+  const floor = minDelayFloor(sheet.chainId, kind);
   let delay = 0n;
   await c.run("timelock: min delay at least chain floor", async () => {
     delay = BigInt((await chain.read(tl, "function getMinDelay() view returns (uint256)")) as bigint);
-    return { ok: delay >= BigInt(floor), detail: `delay ${delay}, floor ${floor}` };
+    return { ok: delay >= BigInt(floor), detail: `delay ${delay}, floor ${floor} (deployment kind ${kind})` };
+  });
+  // Issue 1727: the kind and the delay on chain must agree, so a rehearsal can never be read as production. A production verify against a delay below the production
+  // floor fails above (and here). A rehearsal verify against a delay at or above the production floor fails here. The label states the kind and the delay.
+  // The label text is the same for both kinds (the Twin and mainnet label sets stay identical); the kind and the delay are in the detail and in the verify.deployment_kind log event.
+  await c.run("deployment kind: the timelock delay agrees with the kind", async () => {
+    if (kind === "production") return { ok: delay >= BigInt(minDelayFloor(sheet.chainId, "production")), detail: `${kindLabel(kind, delay)} a production deployment needs a delay of at least ${minDelayFloor(sheet.chainId, "production")}, the chain reads ${delay}` };
+    const why = rehearsalDelayProblem(delay);
+    return { ok: why === "", detail: why === "" ? `${kindLabel(kind, delay)} rehearsal delay ${delay}` : `${kindLabel(kind, delay)} rehearsal: ${why}` };
   });
   await c.run("timelock: min delay equals sheet", async () => ({ ok: delay === BigInt(sheet.timelockDelay), detail: `delay ${delay}, sheet ${sheet.timelockDelay}` }));
   // Policy (core 1521): PROPOSER_ROLE and CANCELLER_ROLE are the Safe only. EXECUTOR_ROLE is open (address(0)).
@@ -207,7 +217,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   // ---- deployer nonce equals the sum of the frozen counts
   await c.run("deployer: nonce equals sum of frozen counts", async () => {
     // the deployer also sent the one prove-control transaction (core 1712), which is outside every stage count
-    const want = Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
+    // rehearsal (issue 1727): the deployer was not fresh, the run manifest recorded the nonce it started at. Production has no start: 0.
+    const start = kind === "rehearsal" ? (opts.deployerStartNonce ?? Number.NaN) : 0;
+    const want = start + Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     const got = await chain.nonce(D);
     const frozen = Object.keys(opts.frozenCounts).length > 0;
     // After govern the deployer has paid Safe execTransaction gas, so the live nonce is above the sum. The runner's own record of the nonce

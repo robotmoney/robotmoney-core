@@ -10,6 +10,9 @@ import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
 import { assertFloors, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { kindLabel } from "./chains.ts";
+import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
+import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from "./counts.ts";
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
@@ -34,7 +37,7 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
-export const VERBS = ["publish", "verify", "govern", "pause-all"] as const;
+export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt"] as const;
 export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
@@ -43,6 +46,8 @@ export const USAGE = `publish contracts
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
+                       record-receipt = the registered committee SUBMITTER (--signer) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
+                                 from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
@@ -67,7 +72,15 @@ export const USAGE = `publish contracts
                      releaseReceipt plus the router weight change for the payload's vector, refused with USAGE (nothing sent) unless the receipt is recorded and
                      unreleased, the payload's keccak256 equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
-  --receipt-id ID    govern with --row release-receipt or --row apply-receipt only: the bytes32 receipt id.
+                     --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,
+                     gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
+                     Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
+                     In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
+  --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
+  --payload-digest D record-receipt only: the bytes32 keccak256 of the receipt's canonical bytes (payload_digest of 'rmpc receipt verify').
+  --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
+  --submitter ADDR   govern --row register-committee only: the submitter's address (the operator supplies the key at record time; the key is never written anywhere).
+  --agent-label NAME govern --row register-committee only: the label on the IC policy (default committee-submitter).
   --payload FILE     govern with --row apply-receipt only: the receipt payload file (its keccak256 is the anchored payloadDigest).
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
@@ -115,8 +128,12 @@ export interface CliDeps {
   usdcCodeHash?: string;
   /** Test seams: the contracts-freeze gate of the 8453 plan job (core 1524): the release tag read and check-sha-green. Defaults: the real ones. */
   releaseTag?: (coreDir: string, sha: string) => Promise<string | null>;
+  releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
+  /** Test seams for the record-receipt verb: the whole step, or only its chain reads and send. */
+  recordReceipt?: typeof recordReceipt;
+  recordApi?: RecordApi;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
 }
@@ -128,6 +145,12 @@ export interface Parsed {
   receiptId?: string;
   /** With --row apply-receipt only: the receipt payload file. */
   payload?: string;
+  /** With --row register-committee only: the submitter and its label. */
+  submitter?: string;
+  agentLabel?: string;
+  /** record-receipt only. */
+  payloadDigest?: string;
+  payloadUri?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -140,7 +163,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -160,16 +183,22 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
-    if (row !== RECEIPT_ROW && row !== APPLY_ROW) {
-      const resolved = resolveGovernRow(row); // an unknown row fails here, before any work
-      if (isTwinOnlyRow(resolved) && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `--row ${resolved} is a Twin-fork demonstration of the Safe tool: it is refused on chain ${MAINNET_CHAIN_ID}\n${USAGE}`);
-    }
+    // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
+    if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW) resolveGovernRow(row);
   }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
+  const submitter = v.submitter as string | undefined;
+  const agentLabel = v["agent-label"] as string | undefined;
+  if (row === REGISTER_ROW) { assertSubmitter(submitter); assertAgentLabel(agentLabel); }
+  else if (submitter !== undefined || agentLabel !== undefined) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only\n${USAGE}`);
+  const payloadDigest = v["payload-digest"] as string | undefined;
+  const payloadUri = v["payload-uri"] as string | undefined;
+  if (verb === "record-receipt") assertRecordInputs({ receiptId: receiptIdRaw, payloadDigest, payloadUri });
+  else if (payloadDigest !== undefined || payloadUri !== undefined) throw new PublishError("USAGE", `--payload-digest and --payload-uri go with the record-receipt verb only\n${USAGE}`);
   if (row === RECEIPT_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>\n${USAGE}`);
   if (row === APPLY_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32> and --payload FILE\n${USAGE}`);
-  if (receiptIdRaw !== undefined) {
+  if (receiptIdRaw !== undefined && verb !== "record-receipt") {
     if (row !== RECEIPT_ROW && row !== APPLY_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only (or --row ${APPLY_ROW})\n${USAGE}`);
     receiptId = assertReceiptId(receiptIdRaw);
   }
@@ -186,13 +215,13 @@ export function parseCli(argv: string[]): Parsed {
     if (!/^0x([0-9a-fA-F]{2})+$/.test(data)) throw new PublishError("USAGE", "--call-data must be 0x-prefixed hex calldata");
     call = { label, target, data };
   }
-  if (stage !== "plan") need("signer", v.signer);
+  if (stage !== "plan") need("signer", v.signer); // for record-receipt it is the submitter
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId, payload,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri,
   };
 }
 
@@ -276,7 +305,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
     assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
-    log.log("info", "run.checks_ok", { chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
+    if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
+    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
     const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
@@ -323,10 +353,19 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
     }
+    // record-receipt (issue 1727): --signer is the SUBMITTER. No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
+    if (a.verb === "record-receipt") {
+      const ctx = buildCtx(undefined, false);
+      const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri });
+      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi);
+      console.log(JSON.stringify({ event: "record_receipt", ...rec }));
+      log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
+      return 0;
+    }
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
     // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
     if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
@@ -372,7 +411,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

@@ -10,11 +10,12 @@ import { PROOF_TX_NONCES, loadFrozen } from "../counts.ts";
 import { loadStageTable } from "../stage-table.ts";
 import { useStageTable, DEPLOYER_STAGES } from "../stages.ts";
 
-export interface CountsJson { deploySha: string; chainId: number; counts: Record<string, number>; deployerNonce: number }
+/** `deployerStartNonce` (issue 1727, rehearsal kind only): the deployer was not fresh, so the nonce is that start plus the sum of the counts plus the prove-control transaction. Absent: a fresh deployer, start 0. */
+export interface CountsJson { deploySha: string; chainId: number; counts: Record<string, number>; deployerNonce: number; deployerStartNonce?: number }
 
-export function buildCountsJson(countsDir: string, sha: string, nonce: number): CountsJson {
+export function buildCountsJson(countsDir: string, sha: string, nonce: number, startNonce?: number): CountsJson {
   const f = loadFrozen(countsDir, sha);
-  return { deploySha: sha, chainId: f.measured.chainId, counts: f.counts, deployerNonce: nonce };
+  return { deploySha: sha, chainId: f.measured.chainId, counts: f.counts, deployerNonce: nonce, ...(startNonce ? { deployerStartNonce: startNonce } : {}) };
 }
 
 /** Returns the problems of a counts.json: the keys must equal the deployer stage names and the nonce the sum of the counts plus the prove-control transaction. */
@@ -26,17 +27,19 @@ export function checkCountsJson(j: CountsJson, stageKeys: string[]): string[] {
   for (const k of have) if (!want.includes(k)) errs.push(`counts has an entry for ${k}, which is not a stage`);
   for (const [k, v] of Object.entries(j.counts ?? {})) if (!Number.isInteger(v) || v < 0) errs.push(`count of ${k} is not a non-negative integer`);
   const sum = Object.values(j.counts ?? {}).reduce((a, b) => a + b, 0);
-  if (j.deployerNonce !== sum + PROOF_TX_NONCES) errs.push(`deployerNonce ${j.deployerNonce} differs from the sum of counts ${sum} plus the prove-control transaction (${PROOF_TX_NONCES})`);
+  const start = j.deployerStartNonce ?? 0;
+  if (!Number.isInteger(start) || start < 0) errs.push(`deployerStartNonce ${String(j.deployerStartNonce)} is not a non-negative integer`);
+  else if (j.deployerNonce !== start + sum + PROOF_TX_NONCES) errs.push(`deployerNonce ${j.deployerNonce} differs from ${start ? `the start nonce ${start} plus ` : ""}the sum of counts ${sum} plus the prove-control transaction (${PROOF_TX_NONCES})`);
   return errs;
 }
 
 if (import.meta.main) {
-  const { positionals, values: v } = parseArgs({ allowPositionals: true, options: { "counts-dir": { type: "string" }, sha: { type: "string" }, nonce: { type: "string" }, out: { type: "string" }, file: { type: "string" } } });
+  const { positionals, values: v } = parseArgs({ allowPositionals: true, options: { "counts-dir": { type: "string" }, sha: { type: "string" }, nonce: { type: "string" }, "start-nonce": { type: "string" }, out: { type: "string" }, file: { type: "string" } } });
   try {
     if (positionals[0] === "build") {
       const nonce = Number(v.nonce);
       if (!v["counts-dir"] || !v.sha || !v.out || !Number.isInteger(nonce)) throw new Error("build needs --counts-dir --sha --nonce --out");
-      writeFileSync(v.out, JSON.stringify(buildCountsJson(v["counts-dir"], v.sha, nonce), null, 2) + "\n");
+      writeFileSync(v.out, JSON.stringify(buildCountsJson(v["counts-dir"], v.sha, nonce, v["start-nonce"] === undefined ? undefined : Number(v["start-nonce"])), null, 2) + "\n");
     } else if (positionals[0] === "check") {
       if (!v.file) throw new Error("check needs --file");
       const root = new URL("../../../", import.meta.url).pathname;

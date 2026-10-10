@@ -11,6 +11,7 @@ import { loadManifests } from "./verify/manifests.ts";
 import { coreContracts } from "./verify/constants.ts";
 import { getStageTable } from "./stages.ts";
 import { delayFloor, MAINNET_DELAY_FLOOR } from "./floors.ts";
+import { kindLabel } from "./chains.ts";
 
 /** HEAD commit of a checkout, read from .git without spawning git. Handles worktrees and packed refs. */
 export function readGitHead(dir: string): string | undefined {
@@ -111,10 +112,11 @@ export async function buildIsomorphismReport(ctx: RunContext, o: IsoOpts = {}): 
     for (const [name, addr] of Object.entries(named)) codehashes[name] = await castOut(ctx, ["codehash", addr]).catch(() => "unreadable");
   }
   const notes: string[] = [];
+  notes.push(`deployment kind: ${kindLabel(ctx.sheet.kind, ctx.sheet.timelockMinDelay)}${ctx.sheet.kind === "rehearsal" ? " (a rehearsal, never a production deployment)" : ""}`);
   if (ctx.sheet.timelockMinDelay < BigInt(MAINNET_DELAY_FLOOR)) {
     notes.push(`TIMELOCK_MIN_DELAY ${ctx.sheet.timelockMinDelay} is below ${MAINNET_DELAY_FLOOR}: a short-delay run proves the scripts execute and that only parameters differ. It does not prove the real delay. Governance timing is proven on 8453 at 48 hours (runbook Q2).`);
   }
-  notes.push(`delay floor on chain ${ctx.chainId}: ${delayFloor(ctx.chainId)} s`);
+  notes.push(`delay floor on chain ${ctx.chainId} for kind ${ctx.sheet.kind}: ${delayFloor(ctx.chainId, ctx.sheet.kind)} s`);
   return {
     chainId: ctx.chainId, coreSha: ctx.coreSha, coreHead: readGitHead(ctx.coreDir), devopsSha: readGitHead(o.devopsDir ?? join(import.meta.dir, "..", "..")),
     environment: ctx.environment,

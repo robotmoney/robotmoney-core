@@ -40,7 +40,7 @@ export const sumCounts = (c: FrozenCounts, stages?: string[]): number => (stages
 export const PROOF_TX_NONCES = 1;
 
 /** The deployer nonce at the end of the deploy stages: the summed frozen counts plus the one prove-control transaction. */
-export const finalDeployerNonce = (c: FrozenCounts): number => sumCounts(c) + PROOF_TX_NONCES;
+export const finalDeployerNonce = (c: FrozenCounts, startNonce = 0): number => startNonce + sumCounts(c) + PROOF_TX_NONCES;
 
 /** The count of one stage. A stage with no frozen entry fails: nothing is guessed. */
 export function countFor(c: FrozenCounts, stage: string): number {
@@ -49,10 +49,14 @@ export function countFor(c: FrozenCounts, stage: string): number {
   return n;
 }
 
-/** The deployer nonce must equal the summed frozen counts plus the prove-control transaction (or, for a named subset of stages, their sum). Any difference fails. */
-export function checkNonce(actual: number, c: FrozenCounts, stages?: string[]): void {
-  const want = stages ? sumCounts(c, stages) : finalDeployerNonce(c);
-  if (actual !== want) throw new PublishError("NONCE", `the deployer nonce is ${actual}, the summed frozen counts say ${want}${stages ? "" : ` (${PROOF_TX_NONCES} of them is the prove-control transaction)`}`, { actual, want });
+/**
+ * The deployer nonce must equal the summed frozen counts plus the prove-control transaction (or, for a named subset of stages, their sum). Any difference fails.
+ * `startNonce` (issue 1727) is the deployer nonce the run started at: 0 for a fresh deployer (production, always), the nonce the run manifest recorded at the
+ * first deployer stage for a rehearsal that reuses a deployer.
+ */
+export function checkNonce(actual: number, c: FrozenCounts, stages?: string[], startNonce = 0): void {
+  const want = startNonce + (stages ? sumCounts(c, stages) : sumCounts(c) + PROOF_TX_NONCES);
+  if (actual !== want) throw new PublishError("NONCE", `the deployer nonce is ${actual}, the summed frozen counts say ${want}${startNonce ? ` (start nonce ${startNonce} recorded at the first stage)` : ""}${stages ? "" : ` (${PROOF_TX_NONCES} of them is the prove-control transaction)`}`, { actual, want, startNonce });
 }
 
 /** Writes a measured counts file. Refuses to change an existing file: a frozen file is reviewed data. */

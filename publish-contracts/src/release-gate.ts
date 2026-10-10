@@ -1,12 +1,15 @@
 // The contracts-freeze gate of the mainnet plan job (core 1524). On chain 8453 the plan refuses unless, in this order:
 //   1. an annotated release/<version> tag points at DEPLOY_SHA, and the remote holds the same tag object (RELEASE_SHA_UNTAGGED, RELEASE_TAG_REMOTE_MISMATCH)
+//      The TAG KIND must match the deployment kind of the sheet (issue 1727): a production plan needs release/<version>, a rehearsal plan needs release/<version>-rehearsal.
+//      A rehearsal tag never satisfies a production plan and the reverse (RELEASE_TAG_KIND).
 //   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING)
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
 import { loadFrozen } from "./counts.ts";
 import { PublishError } from "./errors.ts";
-import { releaseTagFor, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
+import { releaseTagsFor, tagKind, verifyRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
+import type { DeploymentKind } from "./chains.ts";
 
 export const CHECK_SHA_GREEN_SCRIPT = join("scripts", "ci", "check-sha-green.ts");
 export interface CiGreenResult { code: number; output: string }
@@ -26,17 +29,34 @@ export const spawnCheckShaGreen: CheckShaGreen = async (i) => {
 
 export interface ReleaseGateInput {
   sha: string; coreDir: string; countsDir: string; env: Record<string, string | undefined>;
-  /** Test seams. Defaults: the real git tag read and the real check-sha-green. */
+  /** The deployment kind of the sheet (issue 1727). Required: there is no default, so a caller cannot forget it. */
+  kind: DeploymentKind;
+  /** Test seams. Defaults: the real git tag read and the real check-sha-green. `releaseTag` names the one tag found at the sha (or none); `releaseTags` names every tag found. */
   releaseTag?: (coreDir: string, sha: string) => Promise<string | null>;
+  releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   /** Default: the tag must exist on the origin of the core checkout with the same tag object (RELEASE_TAG_REMOTE_MISMATCH). */
   remoteTag?: RemoteTagCheck;
 }
 
-/** Returns the release tag name. Throws RELEASE_SHA_UNTAGGED, COUNTS_MISSING or CI_NOT_GREEN. */
+/**
+ * The release tag of the sha that satisfies the deployment kind. Throws RELEASE_SHA_UNTAGGED when no annotated release tag points at the sha, and
+ * RELEASE_TAG_KIND when tags exist but none is of the kind the sheet asks for.
+ */
+export async function tagForKind(i: Pick<ReleaseGateInput, "sha" | "coreDir" | "kind" | "releaseTag" | "releaseTags">): Promise<string | null> {
+  const found = i.releaseTags ? await i.releaseTags(i.coreDir, i.sha) : i.releaseTag ? [await i.releaseTag(i.coreDir, i.sha)].filter((t): t is string => !!t) : await releaseTagsFor(i.coreDir, i.sha);
+  if (found.length === 0) return null;
+  const match = found.filter((t) => tagKind(t) === i.kind).sort()[0];
+  if (match) return match;
+  const want = i.kind === "rehearsal" ? "release/<version>-rehearsal" : "release/<version> (no -rehearsal suffix)";
+  const have = found.map((t) => `${t} (${tagKind(t)})`).join(", ");
+  throw new PublishError("RELEASE_TAG_KIND", `the sheet says DEPLOYMENT_KIND ${i.kind} and needs an annotated ${want} tag at ${i.sha}, but the tag(s) there are: ${have}. A rehearsal tag never satisfies a production deployment and a production tag never satisfies a rehearsal.`, { sha: i.sha, kind: i.kind, tags: found });
+}
+
+/** Returns the release tag name. Throws RELEASE_SHA_UNTAGGED, RELEASE_TAG_KIND, COUNTS_MISSING or CI_NOT_GREEN. */
 export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
-  const tag = await (i.releaseTag ?? releaseTagFor)(i.coreDir, i.sha);
-  if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version> tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
+  const tag = await tagForKind(i);
+  if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version>${i.kind === "rehearsal" ? "-rehearsal" : ""} tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
   await (i.remoteTag ?? ((d, t) => verifyRemoteTag(d, t)))(i.coreDir, tag);
   loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;

@@ -116,7 +116,7 @@ describe("label drift", () => {
     const main = buildWorld(8453);
     main.chain.set(TIMELOCK, "getMinDelay", 60n);
     main.sheet.timelockDelay = 60;
-    expect(failed(await verifyDeployment(main.opts))).toEqual(["timelock: min delay at least chain floor"]);
+    expect(failed(await verifyDeployment(main.opts))).toEqual(["timelock: min delay at least chain floor", "deployment kind: the timelock delay agrees with the kind"]);
   });
 });
 

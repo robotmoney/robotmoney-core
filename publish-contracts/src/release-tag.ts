@@ -1,6 +1,15 @@
 // The release tag of a DEPLOY_SHA (core 1524). The contracts-freeze gate: the mainnet plan job runs only at a SHA that an annotated
 // `release/<version>` tag points at. A lightweight tag, a tag on another SHA and no tag are all "no release tag".
 import { PublishError } from "./errors.ts";
+import type { DeploymentKind } from "./chains.ts";
+
+/** The suffix that makes a release tag a REHEARSAL tag (issue 1727): release/<version>-rehearsal. A production tag is release/<version> with no mention of rehearsal. */
+export const REHEARSAL_TAG_SUFFIX = "-rehearsal";
+/** `rehearsal`: ends in -rehearsal. `ambiguous`: mentions rehearsal anywhere else (satisfies neither kind). `production`: everything else. */
+export function tagKind(tag: string): DeploymentKind | "ambiguous" {
+  if (tag.endsWith(REHEARSAL_TAG_SUFFIX)) return "rehearsal";
+  return /rehearsal/i.test(tag) ? "ambiguous" : "production";
+}
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 export type GitRunner = (args: string[]) => Promise<GitResult>;
