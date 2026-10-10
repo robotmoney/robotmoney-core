@@ -11,13 +11,14 @@
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
-import { decodeEventLog, encodeFunctionData, parseAbi, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, type Hex } from "viem";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR } from "./floors.ts";
 import { assertOwnerExceptions } from "./plan.ts";
-import { finalDeployerNonce } from "./counts.ts";
+import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
+import { LIBS_STAGE } from "./core-wiring.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -121,6 +122,27 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
   return p;
 }
 
+/**
+ * An ADOPTED stage (issue 1721): the libs stage, when the CREATE2 library already sat on chain, so the deployer sent nothing for it. The stage entry carries
+ * `adopted: { libraries: [{ name, address, code_hash }], deployer_txs }`. `deployer_txs` is what this deployer sent (0 on a Twin fork, the whole frozen count on a
+ * resume that had already landed it) and is the stage's contribution to the deployer nonce. Only the libs stage can be adopted.
+ */
+const adoptedOf = (s: any): any => (s?.adopted === undefined || s.adopted === null ? undefined : s.adopted);
+/** stage -> deployer transactions, for the stages the evidence records as adopted. Malformed entries are skipped here and named by checkEvidence. */
+export function adoptedTxsOfEvidence(ev: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of Array.isArray(ev?.stages) ? ev.stages : []) {
+    const a = adoptedOf(s);
+    if (a && s.stage === LIBS_STAGE && Number.isInteger(a.deployer_txs)) out[s.stage] = a.deployer_txs;
+  }
+  return out;
+}
+/** The frozen counts with every adopted stage counted at the transactions the deployer sent. An impossible adopted entry leaves the counts as frozen, so the nonce check still fails on it. */
+function effectiveForEvidence(ev: any, frozenCounts: Record<string, number>): Record<string, number> {
+  try { return effectiveCounts(frozenCounts, adoptedTxsOfEvidence(ev)); } catch { return frozenCounts; }
+}
+const adoptedLibraries = (s: any): { name?: string; address?: string; code_hash?: string }[] => (Array.isArray(adoptedOf(s)?.libraries) ? adoptedOf(s).libraries : []);
+
 export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): string[] {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
@@ -133,8 +155,26 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
   for (const s of stages) {
     const hashes: unknown[] = Array.isArray(s.tx_hashes) ? s.tx_hashes : [];
     const st: unknown[] = Array.isArray(s.receipts_status) ? s.receipts_status : [];
-    if (s.frozen_count !== s.receipt_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from receipt_count ${s.receipt_count}`);
-    if (frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.receipt_count) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+    const adopted = adoptedOf(s);
+    if (adopted !== undefined) {
+      // an adopted stage sent no (or fewer) transactions: its frozen count is not demanded of the receipts, its deployer_txs is
+      if (s.stage !== LIBS_STAGE) bad(`stage ${s.stage}: only the ${LIBS_STAGE} stage can be adopted`);
+      if (!Number.isInteger(adopted.deployer_txs) || adopted.deployer_txs < 0) bad(`stage ${s.stage}: adopted.deployer_txs is not a non-negative integer`);
+      else {
+        if (s.receipt_count !== adopted.deployer_txs) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from adopted.deployer_txs ${adopted.deployer_txs}`);
+        if (s.frozen_count !== undefined && frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.frozen_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+        if (frozenCounts && s.stage in frozenCounts && adopted.deployer_txs > frozenCounts[s.stage]!) bad(`stage ${s.stage}: adopted.deployer_txs ${adopted.deployer_txs} is above the frozen count ${frozenCounts[s.stage]}`);
+      }
+      const libs = adoptedLibraries(s);
+      if (libs.length === 0) bad(`stage ${s.stage}: adopted names no library`);
+      for (const l of libs) {
+        if (!ADDR.test(l?.address ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no address`);
+        if (!TX.test(l?.code_hash ?? "")) bad(`stage ${s.stage}: adopted library ${l?.name} has no code_hash (the keccak256 of its runtime code)`);
+      }
+    } else {
+      if (s.frozen_count !== s.receipt_count) bad(`stage ${s.stage}: frozen_count ${s.frozen_count} differs from receipt_count ${s.receipt_count}`);
+      if (frozenCounts && s.stage in frozenCounts && frozenCounts[s.stage] !== s.receipt_count) bad(`stage ${s.stage}: receipt_count ${s.receipt_count} differs from the frozen file (${frozenCounts[s.stage]})`);
+    }
     if (hashes.length !== s.receipt_count) bad(`stage ${s.stage}: ${hashes.length} tx hashes for ${s.receipt_count} receipts`);
     hashes.forEach((h, i) => { if (typeof h !== "string" || !TX.test(h)) bad(`stage ${s.stage}: tx hash ${i} is missing or malformed`); });
     if (st.length !== hashes.length) bad(`stage ${s.stage}: ${st.length} receipt statuses for ${hashes.length} tx hashes`);
@@ -178,7 +218,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>): s
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
-  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(frozenCounts)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(frozenCounts)}`);
+  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts))) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts))}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
@@ -191,6 +231,8 @@ export interface ChainReader {
   getTransactionCount(a: { address: `0x${string}` }): Promise<number>;
   getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }>;
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
+  /** Runtime code at an address (viem getCode). Needed only when the evidence records an adopted stage. */
+  getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
   readContract(a: { address: `0x${string}`; abi: any; functionName: string }): Promise<unknown>;
 }
 
@@ -221,7 +263,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   const bad = (m: string) => p.push(m);
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
-  const want = finalDeployerNonce(frozenCounts);
+  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts));
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
   if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction say ${want}`);
 
@@ -233,6 +275,16 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
   };
   for (const s of ev.stages ?? []) for (const [i, h] of (s.tx_hashes ?? []).entries()) await status(`stage ${s.stage} tx ${i}`, h);
+  // An adopted stage is believed only when the chain holds the recorded code: keccak256 of the runtime code at each adopted address equals the recorded code_hash.
+  for (const s of ev.stages ?? []) for (const l of adoptedLibraries(s)) {
+    if (!ADDR.test(l?.address ?? "") || !TX.test(l?.code_hash ?? "")) continue; // the offline check already named it
+    if (!chain.getCode) { bad(`stage ${s.stage}: adopted library ${l.name}: this chain reader cannot read code, so the adoption is not proven`); continue; }
+    try {
+      const code = await chain.getCode({ address: l.address as `0x${string}` });
+      if (!code || code === "0x") bad(`stage ${s.stage}: adopted library ${l.name} has no code at ${l.address} on chain`);
+      else if (lc(keccak256(code)) !== lc(l.code_hash!)) bad(`stage ${s.stage}: adopted library ${l.name}: the code hash on chain at ${l.address} is ${keccak256(code)}, the evidence says ${l.code_hash}`);
+    } catch (e) { bad(`stage ${s.stage}: adopted library ${l.name}: code not readable on chain (${(e as Error).message})`); }
+  }
   if (ev.safe?.creation_tx) await status("safe creation", ev.safe.creation_tx);
 
   try {
@@ -374,6 +426,8 @@ export interface ChainFixture {
   receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[] }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
+  /** Runtime code by lower-case address, recorded for the adopted libraries only (issue 1721). Optional: older fixtures have none. */
+  codes?: Record<string, string>;
 }
 
 const readKey = (address: string, fn: string) => `${lc(address)}:${fn}`;
@@ -389,6 +443,7 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
       return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs };
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
+    getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
     readContract: async ({ address, functionName }) => {
       const k = readKey(address, functionName);
       return k in fx.reads ? fx.reads[k] : miss(`read ${k}`);
@@ -412,6 +467,11 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
       const b = await inner.getBlock(a);
       fixture.blocks[a.blockNumber.toString()] = Number(b.timestamp);
       return b;
+    },
+    getCode: async (a) => {
+      const c = await inner.getCode!(a);
+      (fixture.codes ??= {})[lc(a.address)] = c ?? "0x";
+      return c;
     },
     readContract: async (a) => {
       const v = await inner.readContract(a);

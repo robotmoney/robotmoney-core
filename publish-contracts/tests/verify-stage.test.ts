@@ -129,6 +129,16 @@ describe("stage 12: the one verifier", () => {
     await expect(runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest, deps as never)).rejects.toMatchObject({ kind: "VERIFY" });
   });
 
+  test("an adopted libs stage (issue 1721) reaches the verifier at the transactions the deployer sent: the nonce check expects the sum minus the libs count", async () => {
+    const { ctx } = setup();
+    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+    manifest.stages.libs = { status: "done", adopted: true, adoption: { deployerTxs: 0, factory: "0x4e59b44847b379578588920cA78FbF26c0B4956C", libraries: [] }, startedAt: "t" } as never;
+    let seen: any;
+    const deps = { verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }] }; }, verifySources: async () => { throw new Error("no explorer on the Twin chain"); } };
+    await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest, deps as never);
+    expect(seen.frozenCounts).toEqual({ ...COUNTS, libs: 0 });
+  });
+
   test("a passing run records the stage and passes the frozen counts and the first block to the verifier", async () => {
     const { ctx } = setup();
     const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };

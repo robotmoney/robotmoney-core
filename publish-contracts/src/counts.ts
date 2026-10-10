@@ -42,6 +42,26 @@ export const PROOF_TX_NONCES = 1;
 /** The deployer nonce at the end of the deploy stages: the summed frozen counts plus the one prove-control transaction. */
 export const finalDeployerNonce = (c: FrozenCounts): number => sumCounts(c) + PROOF_TX_NONCES;
 
+/**
+ * Adopted stages (issue 1721). A stage whose contracts already sit on chain (the permissionless CREATE2 libraries) plans zero transactions, so the stage is
+ * ADOPTED rather than run. `adopted` maps the stage to the number of transactions THIS deployer really sent for it: 0 on a Twin fork (the library came with the
+ * pinned mainnet state), the whole frozen count on a resume where the deployer's own transaction had already landed.
+ * The expected deployer nonce counts that number and not the frozen count. With nothing adopted the frozen counts come back untouched, so the normal path is unchanged.
+ */
+export type AdoptedTxs = Record<string, number>;
+export function effectiveCounts(c: FrozenCounts, adopted: AdoptedTxs = {}): FrozenCounts {
+  const keys = Object.keys(adopted);
+  if (keys.length === 0) return c;
+  const out: FrozenCounts = { ...c };
+  for (const k of keys) {
+    const sent = adopted[k];
+    if (!(k in c)) throw new PublishError("LIBS_ADOPTION", `stage '${k}' is recorded as adopted but has no frozen count`, { stage: k });
+    if (!Number.isInteger(sent) || sent! < 0 || sent! > c[k]!) throw new PublishError("LIBS_ADOPTION", `stage '${k}' is adopted with ${String(sent)} deployer transactions, outside 0 to its count ${c[k]}`, { stage: k, sent, count: c[k] });
+    out[k] = sent!;
+  }
+  return out;
+}
+
 /** The count of one stage. A stage with no frozen entry fails: nothing is guessed. */
 export function countFor(c: FrozenCounts, stage: string): number {
   const n = c[stage];

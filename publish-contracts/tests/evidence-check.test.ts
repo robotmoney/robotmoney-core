@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { releaseCalldata } from "../src/evidence-check.ts";
+import { keccak256 } from "viem";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
@@ -443,3 +444,73 @@ describe("issue 1667: rmUSDC and re-paused vaults come back through numbered Saf
   });
 });
 function encodeFunctionDataSetCap(): string { return encodeFunctionData({ abi: parseAbi(["function setPerDepositCap(uint256 newCap)"]), functionName: "setPerDepositCap", args: [1n] }); }
+
+// ---- an adopted libs stage (issue 1721): the library already sat on chain, the deployer sent nothing for it ----
+const LIBCODE = "0x73" + "11".repeat(20) + "3014608060405260" as Hex;
+const FROZEN_WITH_LIBS = { safe: 2, libs: 4 };
+const adoptedEv = (txs = 0) => {
+  const e: any = good();
+  e.stages.push({ stage: "libs", frozen_count: 4, receipt_count: txs, tx_hashes: Array.from({ length: txs }, (_, i) => h(40 + i)), receipts_status: Array.from({ length: txs }, () => 1),
+    adopted: { deployer_txs: txs, libraries: [{ name: "tick_math", address: a(77), code_hash: keccak256(LIBCODE) }] } });
+  e.deployer_nonce_final = 2 + txs + 1;
+  return e;
+};
+const codeChain = (e: any, code: Hex | undefined = LIBCODE, nonce = 3): ChainReader => ({ ...stub(e, { nonce }), getCode: async () => code });
+describe("evidence check: an adopted libs stage (issue 1721)", () => {
+  test("offline: an adopted libs stage with zero receipts passes, the frozen count of 4 is not demanded of it", () => {
+    expect(checkEvidence(adoptedEv(), FROZEN_WITH_LIBS)).toEqual([]);
+  });
+  test("offline: the nonce is the frozen sum minus the libs count (the adopted stage contributes what the deployer sent) plus the prove-control transaction", () => {
+    const e = adoptedEv(); e.deployer_nonce_final = 2 + 4 + 1; // the un-adjusted sum
+    expect(checkEvidence(e, FROZEN_WITH_LIBS).join()).toContain("deployer_nonce_final");
+    const e2 = adoptedEv(); e2.deployer_nonce_final = 2 + 0 + 1 + 1; // a stray extra deployer transaction
+    expect(checkEvidence(e2, FROZEN_WITH_LIBS).join()).toContain("deployer_nonce_final");
+  });
+  test("offline: a resume that had already landed the deployer's own libs transaction is adopted with deployer_txs 4 and the normal sum", () => {
+    expect(checkEvidence(adoptedEv(4), FROZEN_WITH_LIBS)).toEqual([]);
+  });
+  test("offline: deployer_txs above the frozen count, a receipt_count that disagrees with it, and a stage other than libs are refused", () => {
+    const over = adoptedEv(5); over.stages[1].frozen_count = 4;
+    expect(checkEvidence(over, FROZEN_WITH_LIBS).join()).toContain("above the frozen count");
+    const split = adoptedEv(); split.stages[1].receipt_count = 1; split.stages[1].tx_hashes = [h(40)]; split.stages[1].receipts_status = [1];
+    expect(checkEvidence(split, FROZEN_WITH_LIBS).join()).toContain("differs from adopted.deployer_txs");
+    const wrong = adoptedEv(); wrong.stages[1].stage = "recorder";
+    expect(checkEvidence(wrong, { ...FROZEN_WITH_LIBS, recorder: 6 }).join()).toContain("only the libs stage can be adopted");
+  });
+  test("offline: an adopted entry without a library, an address or a code hash is refused", () => {
+    const none = adoptedEv(); none.stages[1].adopted.libraries = [];
+    expect(checkEvidence(none, FROZEN_WITH_LIBS).join()).toContain("names no library");
+    const noHash = adoptedEv(); delete noHash.stages[1].adopted.libraries[0].code_hash;
+    expect(checkEvidence(noHash, FROZEN_WITH_LIBS).join()).toContain("no code_hash");
+    const noAddr = adoptedEv(); noAddr.stages[1].adopted.libraries[0].address = "0x1";
+    expect(checkEvidence(noAddr, FROZEN_WITH_LIBS).join()).toContain("no address");
+  });
+  test("offline: a non-adopted stage is still held to frozen_count == receipt_count == the frozen file", () => {
+    const e = good(); e.stages[0].receipt_count = 3;
+    expect(checkEvidence(e, { safe: 2 }).join()).toContain("receipt_count");
+  });
+  test("on chain: the code at the adopted address must hash to the recorded code_hash; a matching hash passes", async () => {
+    const e = adoptedEv();
+    expect(await checkEvidenceOnChain(e, codeChain(e), FROZEN_WITH_LIBS)).toEqual([]);
+  });
+  test("on chain: a forged adopted flag whose hash does not match the chain is refused (other code, no code, an unreadable code)", async () => {
+    const e = adoptedEv();
+    expect((await checkEvidenceOnChain(e, codeChain(e, "0x73" + "22".repeat(20) + "3014" as Hex), FROZEN_WITH_LIBS)).join()).toContain("code hash on chain");
+    expect((await checkEvidenceOnChain(e, codeChain(e, "0x"), FROZEN_WITH_LIBS)).join()).toContain("has no code");
+    const noReader = stub(e, { nonce: 3 });
+    expect((await checkEvidenceOnChain(e, noReader, FROZEN_WITH_LIBS)).join()).toContain("cannot read code");
+  });
+  test("on chain: the on-chain deployer nonce uses the adopted count too, so a stray extra transaction is refused", async () => {
+    const e = adoptedEv();
+    expect(await checkEvidenceOnChain(e, codeChain(e, LIBCODE, 3), FROZEN_WITH_LIBS)).toEqual([]);
+    expect((await checkEvidenceOnChain(e, codeChain(e, LIBCODE, 4), FROZEN_WITH_LIBS)).join()).toContain("deployer nonce on chain is 4");
+    expect((await checkEvidenceOnChain(e, codeChain(e, LIBCODE, 7), FROZEN_WITH_LIBS)).join()).toContain("deployer nonce on chain is 7");
+  });
+  test("a recorded fixture keeps the adopted library's code, so the offline check reads it back", async () => {
+    const e = adoptedEv();
+    const { reader, fixture } = recordingChainReader(codeChain(e));
+    expect(await checkEvidenceOnChain(e, reader, FROZEN_WITH_LIBS)).toEqual([]);
+    expect(fixture.codes?.[a(77)]).toBe(LIBCODE);
+    expect(await checkEvidenceOnChain(e, chainReaderFromFixture(JSON.parse(JSON.stringify(fixture))), FROZEN_WITH_LIBS)).toEqual([]);
+  });
+});

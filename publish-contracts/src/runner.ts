@@ -8,7 +8,8 @@ import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
-import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts";
+import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
+import { CREATE2_FACTORY, verifyAdoptedLibraries, type AdoptionRecord } from "./libs-adopt.ts";
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
@@ -66,6 +67,10 @@ export interface StageRecord {
   lastBlock?: number;
   startedAt: string;
   finishedAt?: string;
+  /** Libs stage (issue 1721): the stage planned zero transactions because the libraries already sit on chain with the build's code. Set only by libs adoption. */
+  adopted?: boolean;
+  /** With adopted: which libraries, at which addresses and code hashes, and how many transactions this deployer sent for the stage. */
+  adoption?: AdoptionRecord;
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
   safe?: string;
   [k: string]: unknown;
@@ -105,6 +110,13 @@ export interface PauseEntry {
 }
 
 export const manifestPath = (evidenceDir: string): string => join(evidenceDir, "publish-run.json");
+
+/** The deployer transactions each ADOPTED stage really sent, from the run manifest (issue 1721). Empty when no stage was adopted. */
+export function adoptedTxs(manifest: Pick<RunManifest, "stages">): AdoptedTxs {
+  const out: AdoptedTxs = {};
+  for (const [name, rec] of Object.entries(manifest.stages)) if (rec.status === "done" && rec.adopted === true && rec.adoption) out[name] = rec.adoption.deployerTxs;
+  return out;
+}
 
 export function loadRunManifest(evidenceDir: string): RunManifest | undefined {
   const p = manifestPath(evidenceDir);
@@ -632,6 +644,38 @@ export async function controlProofGate(ctx: RunContext, row: StageRow, manifest:
   ctx.log.log("info", "stage.control_proof_ok", { stage: row.name, safe, tx_hash: rec.txHash, signers: rec.signers.length });
 }
 
+/**
+ * The libs stage planned zero transactions (issue 1721). It is ADOPTED only when every library of the stage sits at the address the build predicts
+ * (CREATE2 factory, salt 0, creation code) AND holds exactly the build's runtime code (keccak256 compared). Anything else is LIBS_ADOPTION and nothing is sent.
+ * The deployer nonce must still sit where the stage started (0 transactions sent by this deployer: a Twin fork) or have moved by the whole frozen count
+ * (the deployer's own transaction already landed: a resume). Any other movement is a stray transaction (NONCE). The record keeps the transactions this
+ * deployer really sent as `adopted.deployerTxs`: the nonce expectations of every later check count that number, not the frozen count.
+ * No dry-run file, no transaction count and no broadcast: none of the three exist for a stage that sent nothing.
+ */
+async function adoptLibsStage(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, deployer: string, outPath: string, expectedCount: number | undefined, simStdout: string): Promise<void> {
+  if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("LIBS_ADOPTION", `libs adoption: the simulation of ${row.name} planned zero transactions and wrote no manifest ${outPath}, so no library address is known. Nothing was sent. forge: ${forgeFailureTail(simStdout, "", outputSecrets(ctx))}`, { stage: row.name });
+  let libs: Record<string, unknown>;
+  try { libs = JSON.parse(readFileSync(outPath, "utf8")); } catch (e) { throw new PublishError("LIBS_ADOPTION", `libs adoption: ${outPath} is not valid JSON (${(e as Error).message}). Nothing was sent.`, { stage: row.name }); }
+  const libraries = await verifyAdoptedLibraries({ libraries: getStageTable().libraries, manifest: libs, outDir: join(ctx.coreDir, "out"), getCode: async (a) => castOut(ctx, ["code", a]) });
+  const nonce = await deployerNonce(ctx, deployer);
+  const sent = nonce - rec.startNonce!;
+  const allowed = expectedCount === undefined ? [0] : [0, expectedCount];
+  if (!allowed.includes(sent)) throw new PublishError("NONCE", `libs adoption: the deployer nonce moved by ${sent} since the stage started (${rec.startNonce} to ${nonce}), a libs stage that sent nothing allows ${allowed.join(" or ")}. A stray or partial transaction? Nothing was sent.`, { stage: row.name, sent, start: rec.startNonce, nonce });
+  rec.adopted = true;
+  rec.adoption = { libraries, factory: CREATE2_FACTORY, deployerTxs: sent };
+  rec.dryRunCount = 0;
+  rec.endNonce = nonce;
+  rec.count = expectedCount ?? sent;
+  rec.status = "done";
+  rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
+  if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = 0;
+  ctx.log.log("info", "stage.libs_adopted", { stage: row.name, libraries: libraries.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })), deployer_txs: sent, expected_count: expectedCount ?? null, note: "zero transactions planned: the libraries already hold the build's runtime code" });
+  if (ctx.dryRun) return; // a dry run never persists the run manifest; the libs manifest the simulation wrote stays for the later stages
+  manifest.stages[row.name] = rec;
+  saveRunManifest(ctx.evidenceDir, manifest);
+  ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: rec.startNonce, end_nonce: nonce, count: rec.count, adopted: true });
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
@@ -649,7 +693,8 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
 
   // start nonce: exactly where the frozen counts say. Measure mode learns the start from earlier records.
   const nonce0 = await deployerNonce(ctx, deployer);
-  const wantStart = counts ? expectedStartNonce(row.name, counts) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (manifest.stages[s.name]?.count ?? 0), 0) + proofNoncesBefore(row.name);
+  const adoptedBefore = adoptedTxs(manifest);
+  const wantStart = counts ? expectedStartNonce(row.name, effectiveCounts(counts, adoptedBefore)) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (s.name in adoptedBefore ? adoptedBefore[s.name]! : (manifest.stages[s.name]?.count ?? 0)), 0) + proofNoncesBefore(row.name);
   let resuming = false;
   if (nonce0 !== wantStart) {
     const upper = wantStart + (expectedCount ?? Number.MAX_SAFE_INTEGER);
@@ -673,6 +718,11 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   // simulate: nothing is sent
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
   const sim = await ctx.run("forge", base, { env: fenv, cwd: ctx.coreDir, interactive: true });
+  // Issue 1721: forge exits 0 and prints no SIMULATION COMPLETE when it plans zero transactions. For the libs stage that means the libraries are already on chain.
+  if (row.name === LIBS_STAGE && sim.code === 0 && !sim.stdout.includes("SIMULATION COMPLETE") && !((readTxCount(broadcastFile(ctx, script, true))?.count ?? 0) > 0)) {
+    await adoptLibsStage(ctx, row, manifest, rec, deployer, outPath, expectedCount, sim.stdout);
+    return;
+  }
   if (sim.code !== 0 || !sim.stdout.includes("SIMULATION COMPLETE")) {
     throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr, outputSecrets(ctx))}`, { stage: row.name });
   }
@@ -950,8 +1000,9 @@ export async function finalNonceCheck(ctx: RunContext, manifest: RunManifest, ra
   if (!DEPLOYER_STAGES.some((s) => ran.includes(s.name))) return skip("no-deployer-stage-ran");
   const nonce = await deployerNonce(ctx, await ctx.signer.address());
   const counts: FrozenCounts = ctx.frozen ?? Object.fromEntries(DEPLOYER_STAGES.map((s) => [s.countKey!, manifest.stages[s.name]!.count ?? 0]));
-  checkNonce(nonce, counts);
-  const sum = sumCounts(counts);
+  const effective = effectiveCounts(counts, adoptedTxs(manifest)); // an adopted stage counts the transactions this deployer sent for it (issue 1721)
+  checkNonce(nonce, effective);
+  const sum = sumCounts(effective);
   ctx.log.log("info", "run.nonce_ok", { nonce, summed_frozen_counts: sum });
   return { checked: true, nonce, sum };
 }

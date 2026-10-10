@@ -62,7 +62,7 @@ stage("publish");
 // counts.json: the measured counts and the real deployer nonce, read after publish (it includes the one prove-control transaction; verify and govern run after it).
 const nonce = run([env("CAST", "cast"), "nonce", admin, "--rpc-url", rpc]).trim();
 const countsJson = join(rh, "counts.json");
-run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson], { cwd: pc });
+run([bun, "src/ci/rehearsal-counts.ts", "build", "--counts-dir", join(rh, "counts"), "--sha", sha, "--nonce", nonce, "--out", countsJson, "--run-manifest", join(rh, "evidence", "publish-run.json")], { cwd: pc });
 run([bun, "src/ci/rehearsal-counts.ts", "check", "--file", countsJson], { cwd: pc });
 exportVar("TWIN_COUNTS_JSON", countsJson);
 if (env("VERIFY_IN") === "true") {
