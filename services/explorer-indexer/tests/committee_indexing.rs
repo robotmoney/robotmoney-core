@@ -171,6 +171,7 @@ fn base_cfg(_stub: &StubRpcServer) -> IndexerConfig {
         investment_committee: Some(ic_addr()),
         consensus_receipt: None,
         max_blocks_per_tick: 100,
+        start_block: None,
         end_block: Some(10),
         feature_flags: 0,
     }

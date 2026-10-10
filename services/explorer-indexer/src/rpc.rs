@@ -51,9 +51,54 @@ fn transport_error(method: &str, ctx: &str, e: reqwest::Error) -> RpcError {
     RpcError::Transport(redact_urls(&format!("{method}: {ctx}{}", e.without_url())))
 }
 
+/// Retry policy for rate-limited or briefly unavailable public RPCs (issue 1725).
+///
+/// Only HTTP 429, 502, 503, 504 and transport failures (connect, timeout) are retried. A JSON-RPC
+/// error object or an HTTP 4xx other than 429 is a real answer and is never retried. The wait is
+/// `base_backoff_ms * 2^attempt`, capped at `max_backoff_ms`, and a `Retry-After` header (seconds)
+/// raises it, also capped. `RetryPolicy::NONE` keeps the original one-attempt behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    pub base_backoff_ms: u64,
+    pub max_backoff_ms: u64,
+}
+
+impl RetryPolicy {
+    pub const NONE: RetryPolicy = RetryPolicy {
+        max_retries: 0,
+        base_backoff_ms: 0,
+        max_backoff_ms: 0,
+    };
+
+    pub fn new(max_retries: u32, base_backoff_ms: u64) -> Self {
+        Self {
+            max_retries,
+            base_backoff_ms,
+            max_backoff_ms: base_backoff_ms.saturating_mul(32).max(base_backoff_ms),
+        }
+    }
+
+    /// The wait before retry number `attempt` (0 for the first retry).
+    pub fn backoff(&self, attempt: u32) -> Duration {
+        let factor = 1u64.checked_shl(attempt.min(32)).unwrap_or(u64::MAX);
+        let ms = self.base_backoff_ms.saturating_mul(factor);
+        Duration::from_millis(ms.min(self.max_backoff_ms))
+    }
+}
+
+/// Is this HTTP status a throttle or a transient gateway failure worth another attempt?
+pub fn is_retryable_status(code: u16) -> bool {
+    matches!(code, 429 | 502 | 503 | 504)
+}
+
 #[derive(Clone)]
 pub struct JsonRpc {
     url: String,
+    /// Optional separate endpoint for `eth_getLogs` only (issue 1725). Some providers throttle or
+    /// restrict logs differently from the rest of the API.
+    logs_url: Option<String>,
+    retry: RetryPolicy,
     http: reqwest::Client,
 }
 
@@ -90,10 +135,34 @@ impl JsonRpc {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
+            logs_url: None,
+            retry: RetryPolicy::NONE,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("reqwest client builds"),
+        }
+    }
+
+    /// Send `eth_getLogs` to this endpoint instead of the main one. An empty string is ignored.
+    pub fn with_logs_url(mut self, logs_url: Option<String>) -> Self {
+        self.logs_url = logs_url
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty());
+        self
+    }
+
+    /// Retry throttled and transient failures with exponential backoff.
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// The endpoint a method is sent to: the logs endpoint for `eth_getLogs` when one is set.
+    pub fn endpoint_for(&self, method: &str) -> &str {
+        match (&self.logs_url, method) {
+            (Some(u), "eth_getLogs") => u,
+            _ => &self.url,
         }
     }
 
@@ -115,17 +184,51 @@ impl JsonRpc {
             method,
             params,
         };
-        let resp: serde_json::Value = self
-            .http
-            .post(&self.url)
-            .json(&body)
-            .send()
-            .await
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| transport_error(method, "", e))?
-            .json()
-            .await
-            .map_err(|e| transport_error(method, "read body: ", e))?;
+        let url = self.endpoint_for(method);
+        let mut attempt: u32 = 0;
+        let resp: serde_json::Value = loop {
+            let sent = self.http.post(url).json(&body).send().await;
+            let (retryable, wait_hint, error) = match sent {
+                Err(e) => (true, None, transport_error(method, "", e)),
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        match r.json().await {
+                            Ok(v) => break v,
+                            Err(e) => (true, None, transport_error(method, "read body: ", e)),
+                        }
+                    } else {
+                        let hint = r
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.trim().parse::<u64>().ok())
+                            .map(Duration::from_secs);
+                        (
+                            is_retryable_status(status.as_u16()),
+                            hint,
+                            RpcError::Transport(format!("{method}: HTTP status {status}")),
+                        )
+                    }
+                }
+            };
+            if !retryable || attempt >= self.retry.max_retries {
+                return Err(error);
+            }
+            let wait = self.retry.backoff(attempt).max(
+                wait_hint
+                    .unwrap_or_default()
+                    .min(Duration::from_millis(self.retry.max_backoff_ms)),
+            );
+            tracing::warn!(
+                method,
+                attempt = attempt + 1,
+                wait_ms = wait.as_millis() as u64,
+                "rpc throttled or unavailable; retrying"
+            );
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+        };
         if let Some(err) = resp.get("error") {
             return Err(RpcError::Server {
                 method: method.to_string(),
@@ -483,5 +586,34 @@ mod tests {
         assert!(!text.contains("SECRETQUERYKEY"), "{text}");
         assert!(!text.contains("apikey"), "{text}");
         assert!(text.contains("eth_blockNumber"), "{text}");
+    }
+
+    #[test]
+    fn backoff_doubles_and_is_capped() {
+        let p = RetryPolicy::new(5, 100);
+        assert_eq!(p.backoff(0), Duration::from_millis(100));
+        assert_eq!(p.backoff(1), Duration::from_millis(200));
+        assert_eq!(p.backoff(2), Duration::from_millis(400));
+        assert_eq!(p.backoff(30), Duration::from_millis(3200));
+        assert_eq!(RetryPolicy::NONE.backoff(3), Duration::ZERO);
+    }
+
+    #[test]
+    fn only_throttles_and_gateway_failures_retry() {
+        for c in [429u16, 502, 503, 504] {
+            assert!(is_retryable_status(c), "{c}");
+        }
+        for c in [400u16, 401, 403, 404, 500] {
+            assert!(!is_retryable_status(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn logs_url_routes_only_eth_get_logs() {
+        let rpc = JsonRpc::new("http://main").with_logs_url(Some("http://logs".into()));
+        assert_eq!(rpc.endpoint_for("eth_getLogs"), "http://logs");
+        assert_eq!(rpc.endpoint_for("eth_blockNumber"), "http://main");
+        let plain = JsonRpc::new("http://main").with_logs_url(Some("  ".into()));
+        assert_eq!(plain.endpoint_for("eth_getLogs"), "http://main");
     }
 }

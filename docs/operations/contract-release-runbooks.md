@@ -266,6 +266,14 @@ delay and the Safe signers are proven on 8453 through the real Safe.
 9. **rmAGENT order.** rmUSDC, rmPROTO and rmRWA need no extra step. For rmAGENT, call `record()` and check that `isFresh()` reads true immediately before the deposit, otherwise the deposit reverts `StaleRecorder(uint32 lastRecordedAt, uint32 nowTs)` (selector `0x4512c7f1`) once more than 1800 s have passed since the last `record()`. Redeem within 30 minutes of the last `record()`, or poke again first. If the rmAGENT USDC redeem still reverts `StaleRecorder`, use `redeemInKind`: it reads no oracle and still pays.
 10. **Expected round-trip loss (measured on the post-govern Twin at the tag, not a guarantee for mainnet):** rmUSDC about 0, rmPROTO about 19 bps, rmRWA about 10 bps, rmAGENT about 592 bps (the 2.91% pool fee on each leg).
 
+**Run-day: look at the deployed contracts in the dapp, read-only (issue 1725).** After the deploy, copy the manifests directory to a scratch folder and run on the operator machine only, with no key, passphrase or keystore variable in the environment:
+
+```
+bun scripts/stage/core-stack.ts dapp up --chain 8453 --rpc <base rpc> --manifests <copy of manifests> --start-block <first block of the run>
+```
+
+The first block of the mainnet test run is 52401633. Open `http://127.0.0.1:15173` (dapp) and `http://127.0.0.1:18547/health` (explorer API). The stack sends no transaction and has no faucet. Stop it with `dapp down --chain 8453`. Public exposure through the existing cloudflared tunnel on the stage host is approved by the owner (decision 2026-10-10): this tool never touches tunnel, DNS or proxy configuration, and the ports stay on 127.0.0.1. Once the vaults open on 2026-10-12 anyone reaching the public dapp can deposit REAL USDC. The dapp shows the red "Base mainnet — real funds" banner and the wrong-chain screen (issue 1729): run the public dapp checks below before the tunnel points at it. See `docs/development/stage-deployment.md`.
+
 **Basket sheet values (issue 1666).** Each basket (`PROTO`, `AGENT`, `RWA`, never `USDC`) carries two more
 names in the frozen sheet, read by its stage as `NAV_DEVIATION_BPS` and `MIN_POOL_LIQUIDITY`:
 

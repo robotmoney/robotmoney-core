@@ -25,7 +25,7 @@ use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
     db::Db, feature_flags, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc,
-    DEFAULT_TICK_SECONDS,
+    rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -118,9 +118,32 @@ struct Cli {
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
 
-    /// Hard cap on per-tick block range.
-    #[arg(long, env = "INDEXER_MAX_BLOCKS_PER_TICK", default_value_t = 1000)]
+    /// Hard cap on per-tick block range (the `eth_getLogs` range). At least 1. Many public
+    /// providers cap logs at 1000 blocks or fewer.
+    #[arg(
+        long,
+        env = "INDEXER_MAX_BLOCKS_PER_TICK",
+        default_value_t = 1000,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     max_blocks_per_tick: u64,
+
+    /// First block to read. Skips the eth_getCode deploy-block search, which fails on non-archive
+    /// public RPCs (issue 1725). Unset keeps the derivation.
+    #[arg(long, env = "INDEXER_START_BLOCK")]
+    start_block: Option<u64>,
+
+    /// Optional separate JSON-RPC URL used only for eth_getLogs.
+    #[arg(long, env = "INDEXER_LOGS_RPC_URL")]
+    logs_rpc_url: Option<String>,
+
+    /// Retries on HTTP 429, 502, 503, 504 and transport errors. 0 (default) keeps one attempt.
+    #[arg(long, env = "INDEXER_RPC_MAX_RETRIES", default_value_t = 0)]
+    rpc_max_retries: u32,
+
+    /// First retry wait in milliseconds. It doubles per retry up to 32 times this value.
+    #[arg(long, env = "INDEXER_RPC_BACKOFF_MS", default_value_t = 500)]
+    rpc_backoff_ms: u64,
 
     /// Optional explicit upper-bound block. When set, the indexer
     /// stops after reaching this block — useful for bounded test runs.
@@ -205,7 +228,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .vault
         .ok_or("--vault (INDEXER_VAULT) is required unless --migrate-only")?;
 
-    let rpc = JsonRpc::new(&rpc_url);
+    let rpc = JsonRpc::new(&rpc_url)
+        .with_logs_url(cli.logs_rpc_url.clone())
+        .with_retry(RetryPolicy::new(cli.rpc_max_retries, cli.rpc_backoff_ms));
 
     let registry = cli
         .registry
@@ -259,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         investment_committee,
         consensus_receipt,
         max_blocks_per_tick: cli.max_blocks_per_tick,
+        start_block: cli.start_block,
         end_block: cli.end_block,
         // Load feature flags from FEATURE_FLAGS env var at startup.
         // config/feature-flags.json is the canonical registry.
@@ -298,5 +324,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         interval.tick().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(extra: &[&str]) -> Result<Cli, clap::Error> {
+        let mut args = vec!["indexer", "--database-url", "postgres://x"];
+        args.extend_from_slice(extra);
+        Cli::try_parse_from(args)
+    }
+
+    #[test]
+    fn start_block_and_logs_rpc_and_retry_flags_parse() {
+        let cli = parse(&[
+            "--migrate-only",
+            "--start-block",
+            "52401633",
+            "--logs-rpc-url",
+            "https://logs.example",
+            "--rpc-max-retries",
+            "5",
+            "--rpc-backoff-ms",
+            "250",
+            "--max-blocks-per-tick",
+            "1000",
+        ])
+        .expect("parses");
+        assert_eq!(cli.start_block, Some(52_401_633));
+        assert_eq!(cli.logs_rpc_url.as_deref(), Some("https://logs.example"));
+        assert_eq!((cli.rpc_max_retries, cli.rpc_backoff_ms), (5, 250));
+    }
+
+    #[test]
+    fn defaults_keep_the_old_behavior() {
+        let cli = parse(&["--migrate-only"]).expect("parses");
+        assert_eq!(cli.start_block, None);
+        assert_eq!(cli.logs_rpc_url, None);
+        assert_eq!(cli.rpc_max_retries, 0);
+        assert_eq!(cli.max_blocks_per_tick, 1000);
+    }
+
+    #[test]
+    fn a_zero_block_range_is_refused() {
+        assert!(parse(&["--migrate-only", "--max-blocks-per-tick", "0"]).is_err());
     }
 }

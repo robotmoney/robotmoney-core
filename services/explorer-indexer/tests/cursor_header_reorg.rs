@@ -104,6 +104,7 @@ async fn cursor_header_persisted_for_no_event_target() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(105),
         feature_flags: 0,
     };
@@ -191,6 +192,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(105),
         feature_flags: 0,
     };
@@ -277,6 +279,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(105),
         feature_flags: 0,
     };
@@ -351,6 +354,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 50,
+        start_block: None,
         end_block: Some(10),
         feature_flags: 0,
     };
@@ -432,6 +436,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         investment_committee: None,
         consensus_receipt: None,
         max_blocks_per_tick: 50,
+        start_block: None,
         end_block: Some(10),
         feature_flags: 0,
     };
