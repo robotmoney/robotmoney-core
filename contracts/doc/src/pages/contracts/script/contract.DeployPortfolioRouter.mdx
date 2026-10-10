@@ -1,6 +1,6 @@
 ---
 title: "DeployPortfolioRouter"
-description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets initial weights (10 000 bps to RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
+description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of the core deploy (libs, vault, registry, router, gateway). Deploys PortfolioRouter, sets the initial DEFAULT weights (10 000 bps to RobotMoneyVault — the sole active vault; no voted vector), calls `registry.setRouter(router)`, and writes the router address to a deployment JSON alongside the registry address. The router comes BEFORE the gateway: the gateway stores the router as an immutable (core 1493)."
 ---
 
 # DeployPortfolioRouter
@@ -13,8 +13,8 @@ description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of
 
 Foundry deploy script for the PortfolioRouter contract.
 Stage 4 of the core deploy (libs, vault, registry, router, gateway).
-Deploys PortfolioRouter, sets initial weights (10 000 bps to
-RobotMoneyVault — the sole active vault), calls `registry.setRouter(router)`,
+Deploys PortfolioRouter, sets the initial DEFAULT weights (10 000 bps to
+RobotMoneyVault — the sole active vault; no voted vector), calls `registry.setRouter(router)`,
 and writes the router address to a deployment JSON alongside the registry
 address. The router comes BEFORE the gateway: the gateway stores the router as
 an immutable (core 1493).
