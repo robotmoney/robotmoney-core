@@ -19,6 +19,38 @@ pub enum RpcError {
     Decode { method: String, message: String },
 }
 
+/// Replace every `scheme://...` token in `text` with `scheme://<redacted>`.
+///
+/// Keyed RPC providers put the API key in the URL path or query
+/// (`https://host/v2/<key>`, `?apikey=<key>`). The `RpcError::Transport` text is
+/// written to logs and to `indexer_runs.error`, so no URL may survive into it.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find("://") {
+        // The scheme is the run of alphanumerics and `+.-` immediately before `://`.
+        let scheme_start = rest[..pos]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')))
+            .map_or(0, |i| i + 1);
+        out.push_str(&rest[..scheme_start]);
+        out.push_str(&rest[scheme_start..pos]);
+        out.push_str("://<redacted>");
+        let after = &rest[pos + 3..];
+        // The URL ends at whitespace or a delimiter that cannot be part of it in an error message.
+        let end = after
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '>' | ','))
+            .unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn transport_error(method: &str, ctx: &str, e: reqwest::Error) -> RpcError {
+    // `without_url` drops the request URL reqwest embeds; `redact_urls` covers any other source text.
+    RpcError::Transport(redact_urls(&format!("{method}: {ctx}{}", e.without_url())))
+}
+
 /// Retry policy for rate-limited or briefly unavailable public RPCs (issue 1725).
 ///
 /// Only HTTP 429, 502, 503, 504 and transport failures (connect, timeout) are retried. A JSON-RPC
@@ -157,17 +189,13 @@ impl JsonRpc {
         let resp: serde_json::Value = loop {
             let sent = self.http.post(url).json(&body).send().await;
             let (retryable, wait_hint, error) = match sent {
-                Err(e) => (true, None, RpcError::Transport(format!("{method}: {e}"))),
+                Err(e) => (true, None, transport_error(method, "", e)),
                 Ok(r) => {
                     let status = r.status();
                     if status.is_success() {
                         match r.json().await {
                             Ok(v) => break v,
-                            Err(e) => (
-                                true,
-                                None,
-                                RpcError::Transport(format!("{method}: read body: {e}")),
-                            ),
+                            Err(e) => (true, None, transport_error(method, "read body: ", e)),
                         }
                     } else {
                         let hint = r
@@ -525,6 +553,40 @@ fn decode_hex_bytes(method: &str, s: &str) -> Result<Bytes, RpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const KEYED: &str = "http://127.0.0.1:1/v2/SECRETPATHKEY?apikey=SECRETQUERYKEY&x=1";
+
+    #[test]
+    fn redact_urls_strips_path_and_query_keys() {
+        let text = format!("eth_blockNumber: error sending request for url ({KEYED}): refused");
+        let out = redact_urls(&text);
+        assert!(!out.contains("SECRETPATHKEY"), "{out}");
+        assert!(!out.contains("SECRETQUERYKEY"), "{out}");
+        assert!(!out.contains("127.0.0.1"), "{out}");
+        assert!(out.contains("http://<redacted>"), "{out}");
+        assert!(out.contains("eth_blockNumber"), "{out}");
+        assert!(out.ends_with("): refused"), "{out}");
+    }
+
+    #[test]
+    fn redact_urls_handles_several_urls_and_no_url() {
+        assert_eq!(redact_urls("no url here"), "no url here");
+        let out = redact_urls("a https://h/KEY1 b wss://h2/KEY2?k=3 c");
+        assert_eq!(out, "a https://<redacted> b wss://<redacted> c");
+    }
+
+    #[tokio::test]
+    async fn transport_error_from_a_keyed_url_never_carries_the_key() {
+        // Port 1 refuses the connection, so reqwest returns a connect error for the keyed URL.
+        let rpc = JsonRpc::new(KEYED);
+        let err = rpc.block_number().await.expect_err("port 1 refuses");
+        let text = err.to_string();
+        assert!(matches!(err, RpcError::Transport(_)), "{text}");
+        assert!(!text.contains("SECRETPATHKEY"), "{text}");
+        assert!(!text.contains("SECRETQUERYKEY"), "{text}");
+        assert!(!text.contains("apikey"), "{text}");
+        assert!(text.contains("eth_blockNumber"), "{text}");
+    }
 
     #[test]
     fn backoff_doubles_and_is_capped() {

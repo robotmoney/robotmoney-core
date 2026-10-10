@@ -10,7 +10,10 @@
  * `vite build`.
  */
 import { describe, expect, it } from "vitest";
-import { validateFaucetKeyForBuild } from "../../src/lib/buildEnvValidation";
+import {
+  validateEnvClassForChain,
+  validateFaucetKeyForBuild,
+} from "../../src/lib/buildEnvValidation";
 
 const KEY = "0x" + "11".repeat(32);
 
@@ -170,5 +173,32 @@ describe("validateFaucetKeyForBuild", () => {
       const result = validateFaucetKeyForBuild({ env, command: "build", mode: "production" });
       expect(result.ok).toBe(true);
     });
+  });
+});
+
+describe("validateEnvClassForChain (issue 1729)", () => {
+  const ok = (env: Record<string, string>, command: "build" | "serve" = "build") =>
+    validateEnvClassForChain({ env, command }).ok;
+
+  it("refuses a real-money chain with any class but mainnet", () => {
+    for (const cls of ["fork", "devnet", "testnet"]) {
+      expect(ok({ VITE_CHAIN_ID: "8453", VITE_ENV_CLASS: cls })).toBe(false);
+      expect(ok({ VITE_CHAIN_ID: "1", VITE_ENV_CLASS: cls })).toBe(false);
+    }
+    expect(ok({ VITE_CHAIN_ID: "8453" })).toBe(false);
+    expect(ok({ VITE_CHAIN_ID: "8453", VITE_ENV_CLASS: "mainnet" })).toBe(true);
+  });
+
+  it("refuses the mainnet class with another chain or a devnet RPC", () => {
+    expect(ok({ VITE_CHAIN_ID: "918453", VITE_ENV_CLASS: "mainnet" })).toBe(false);
+    expect(ok({ VITE_ENV_CLASS: "mainnet", VITE_DEVNET_RPC_URL: "https://x" })).toBe(false);
+    expect(ok({ VITE_ENV_CLASS: "mainnet" })).toBe(true);
+  });
+
+  it("rejects a malformed VITE_CHAIN_ID and leaves non-mainnet builds and serve alone", () => {
+    expect(ok({ VITE_CHAIN_ID: "0x2105", VITE_ENV_CLASS: "mainnet" })).toBe(false);
+    expect(ok({ VITE_CHAIN_ID: "918453", VITE_ENV_CLASS: "devnet" })).toBe(true);
+    expect(ok({ VITE_ENV_CLASS: "fork" })).toBe(true);
+    expect(ok({ VITE_CHAIN_ID: "8453", VITE_ENV_CLASS: "fork" }, "serve")).toBe(true);
   });
 });

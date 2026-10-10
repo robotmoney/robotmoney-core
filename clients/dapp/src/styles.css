@@ -1003,3 +1003,32 @@ td.num {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Mainnet banner (issue 1729): persistent, never dismissible, louder than the testnet banner. */
+.mainnet-banner {
+  position: sticky;
+  top: 0;
+  z-index: 31;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  padding: 0.5rem 1rem;
+  background: color-mix(in oklab, red 28%, var(--color-void));
+  border-bottom: 2px solid red;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+.mainnet-banner-tag {
+  font-weight: 700;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+.wrong-chain-gate {
+  max-width: 40rem;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  border: 2px solid red;
+  border-radius: var(--radius-sm);
+}

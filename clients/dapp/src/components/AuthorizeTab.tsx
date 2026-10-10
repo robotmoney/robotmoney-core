@@ -1,7 +1,8 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { useAccount, useBlockNumber, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useAccount, useBlockNumber, useWaitForTransactionReceipt } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import {
@@ -28,7 +29,7 @@ type Props = Readonly<{
 
 export function AuthorizeTab(props: Props) {
   const { address, isConnected } = useAccount();
-  const { writeContract, isPending } = useWriteContract();
+  const { writeContract, isPending } = useGuardedWriteContract();
 
   const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
   const [salt, setSalt] = useState<Hex | null>(null);

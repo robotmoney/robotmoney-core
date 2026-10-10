@@ -80,7 +80,6 @@ describe("loadRuntimeConfig — served and valid", () => {
         Promise.resolve({
           VITE_GATEWAY_ADDRESS: "0x2222222222222222222222222222222222222222",
           VITE_VAULT_ADDRESS: "0x3333333333333333333333333333333333333333",
-          VITE_ENV_CLASS: "devnet",
           VITE_DEVNET_RPC_URL: "https://devnet.example/rpc",
           VITE_EXPLORER_API_URL: "https://explorer.example",
         }),
@@ -92,7 +91,7 @@ describe("loadRuntimeConfig — served and valid", () => {
     expect(source).toBe("fetched");
     // Fetched values win over the build-time ones …
     expect(config.VITE_GATEWAY_ADDRESS).toBe("0x2222222222222222222222222222222222222222");
-    expect(config.VITE_ENV_CLASS).toBe("devnet");
+    expect(config.VITE_ENV_CLASS).toBe("fork"); // the class is build-time only (issue 1729)
     expect(config.VITE_VAULT_ADDRESS).toBe("0x3333333333333333333333333333333333333333");
     expect(config.VITE_DEVNET_RPC_URL).toBe("https://devnet.example/rpc");
     // … and build-time-only values are still there underneath.
@@ -164,13 +163,13 @@ describe("loadRuntimeConfig — document absent", () => {
   it("accepts a charset-qualified JSON content type as a real config document", async () => {
     const { fetchImpl } = stubFetch({
       contentType: "application/json; charset=utf-8",
-      json: () => Promise.resolve({ VITE_ENV_CLASS: "devnet" }),
+      json: () => Promise.resolve({ VITE_EXPLORER_API_URL: "https://explorer.example" }),
     });
 
     const { config, source } = await loadRuntimeConfig({ fetchImpl, buildEnv: BUILD_ENV });
 
     expect(source).toBe("fetched");
-    expect(config.VITE_ENV_CLASS).toBe("devnet");
+    expect(config.VITE_EXPLORER_API_URL).toBe("https://explorer.example");
   });
 
   it("falls back to the build-time env on 404", async () => {
@@ -223,7 +222,7 @@ describe("loadRuntimeConfig — served but unusable", () => {
 
 describe("parseRuntimeConfig", () => {
   it("rejects a non-string value for an allowlisted key", () => {
-    expect(() => parseRuntimeConfig({ VITE_ENV_CLASS: 3 })).toThrowError(/must be a string/);
+    expect(() => parseRuntimeConfig({ VITE_GATEWAY_ADDRESS: 3 })).toThrowError(/must be a string/);
   });
 
   it("rejects null and array payloads", () => {
@@ -246,10 +245,10 @@ describe("parseRuntimeConfig", () => {
 
     const parsed = parseRuntimeConfig({
       VITE_FAUCET_HARNESS_PRIVATE_KEY: `0x${"b".repeat(64)}`,
-      VITE_ENV_CLASS: "devnet",
+      VITE_VAULT_ADDRESS: "0x1111111111111111111111111111111111111111",
     });
 
-    expect(parsed).toEqual({ VITE_ENV_CLASS: "devnet" });
+    expect(parsed).toEqual({ VITE_VAULT_ADDRESS: "0x1111111111111111111111111111111111111111" });
     expect(parsed.VITE_FAUCET_HARNESS_PRIVATE_KEY).toBeUndefined();
     expect(RUNTIME_CONFIG_KEYS).not.toContain("VITE_FAUCET_HARNESS_PRIVATE_KEY");
     expect(warn).toHaveBeenCalled();
@@ -304,10 +303,10 @@ describe("gateway expected-code-hash pin is build-time-only (#1375)", () => {
 
     const parsed = parseRuntimeConfig({
       VITE_GATEWAY_EXPECTED_CODE_HASH: HOSTILE_PIN,
-      VITE_ENV_CLASS: "devnet",
+      VITE_EXPLORER_API_URL: "https://explorer.example",
     });
 
-    expect(parsed).toEqual({ VITE_ENV_CLASS: "devnet" });
+    expect(parsed).toEqual({ VITE_EXPLORER_API_URL: "https://explorer.example" });
     expect(parsed.VITE_GATEWAY_EXPECTED_CODE_HASH).toBeUndefined();
     expect(warn).toHaveBeenCalled();
   });
@@ -387,5 +386,75 @@ describe("gateway expected-code-hash pin is build-time-only (#1375)", () => {
       status: "refused",
       reason: "unknown_revert",
     });
+  });
+});
+
+// ── issue 1729: the env class and the contract addresses are build-time on mainnet ──
+describe("loadRuntimeConfig — mainnet build (issue 1729)", () => {
+  const MAINNET_BUILD: Record<string, string> = {
+    ...BUILD_ENV,
+    VITE_ENV_CLASS: "mainnet",
+    VITE_VAULT_ADDRESS: "0x1111111111111111111111111111111111111111",
+    VITE_ROUTER_ADDRESS: "0x4444444444444444444444444444444444444444",
+  };
+
+  it("the env class is not a runtime key", () => {
+    expect(RUNTIME_CONFIG_KEYS as ReadonlyArray<string>).not.toContain("VITE_ENV_CLASS");
+  });
+
+  it.each(["fork", "devnet", "testnet", "", "anything"])(
+    "refuses to start when /config.json sets the class to %j on a mainnet build",
+    async (claimed) => {
+      const { fetchImpl } = stubFetch({
+        json: () => Promise.resolve({ VITE_ENV_CLASS: claimed }),
+      });
+      await expect(loadRuntimeConfig({ fetchImpl, buildEnv: MAINNET_BUILD })).rejects.toThrowError(
+        /fixed at build time/,
+      );
+    },
+  );
+
+  it("keeps the mainnet class when /config.json repeats it", async () => {
+    const { fetchImpl } = stubFetch({ json: () => Promise.resolve({ VITE_ENV_CLASS: "mainnet" }) });
+    const { config } = await loadRuntimeConfig({ fetchImpl, buildEnv: MAINNET_BUILD });
+    expect(config.VITE_ENV_CLASS).toBe("mainnet");
+  });
+
+  it("ignores runtime contract addresses and the devnet RPC on a mainnet build", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const evil = "0x9999999999999999999999999999999999999999";
+    const { fetchImpl } = stubFetch({
+      json: () =>
+        Promise.resolve({
+          VITE_VAULT_ADDRESS: evil,
+          VITE_ROUTER_ADDRESS: evil,
+          VITE_GATEWAY_ADDRESS: evil,
+          VITE_VAULT_ADDRESSES: `rmUSDC:${evil}`,
+          VITE_DEVNET_RPC_URL: "https://evil.example/rpc",
+          VITE_EXPLORER_API_URL: "https://explorer.example",
+        }),
+    });
+    const { config } = await loadRuntimeConfig({ fetchImpl, buildEnv: MAINNET_BUILD });
+    expect(config.VITE_VAULT_ADDRESS).toBe(MAINNET_BUILD.VITE_VAULT_ADDRESS);
+    expect(config.VITE_ROUTER_ADDRESS).toBe(MAINNET_BUILD.VITE_ROUTER_ADDRESS);
+    expect(config.VITE_GATEWAY_ADDRESS).toBe(MAINNET_BUILD.VITE_GATEWAY_ADDRESS);
+    expect(config.VITE_VAULT_ADDRESSES).toBe(MAINNET_BUILD.VITE_VAULT_ADDRESSES);
+    expect(config.VITE_DEVNET_RPC_URL).toBe(MAINNET_BUILD.VITE_DEVNET_RPC_URL);
+    expect(config.VITE_EXPLORER_API_URL).toBe("https://explorer.example");
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("a non-mainnet build still takes addresses from the document but never the class", async () => {
+    const { fetchImpl } = stubFetch({
+      json: () =>
+        Promise.resolve({
+          VITE_ENV_CLASS: "mainnet",
+          VITE_VAULT_ADDRESS: "0x3333333333333333333333333333333333333333",
+        }),
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { config } = await loadRuntimeConfig({ fetchImpl, buildEnv: BUILD_ENV });
+    expect(config.VITE_ENV_CLASS).toBe("fork");
+    expect(config.VITE_VAULT_ADDRESS).toBe("0x3333333333333333333333333333333333333333");
   });
 });
