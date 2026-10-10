@@ -6,6 +6,7 @@ import { PublishError } from "./errors.ts";
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { diffSheets, type Sheet, type SheetDiffRow } from "./sheet.ts";
+import { scrubGitEnv } from "./git-env.ts";
 import { castOut, childEnv, manifestDir, type ProcessRunner, type RunContext } from "./runner.ts";
 import { loadManifests } from "./verify/manifests.ts";
 import { coreContracts } from "./verify/constants.ts";
@@ -45,7 +46,7 @@ export function readGitHead(dir: string): string | undefined {
  * an untracked file anywhere else.
  */
 export async function dirtyTreeLines(run: ProcessRunner, dir: string, chainId: number, env: Record<string, string> = {}): Promise<string[]> {
-  const r = await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all"], { env });
+  const r = await run("git", ["-C", dir, "status", "--porcelain", "--untracked-files=all"], { env: scrubGitEnv(env) });
   if (r.code !== 0) throw new PublishError("USAGE", `git status failed in ${dir}: ${(r.stderr || "").trim().split("\n").slice(-1)[0] ?? "unknown error"}`);
   return r.stdout.split("\n").filter((l) => l.trim() !== "" && !l.startsWith(`?? deployments/${chainId}/`));
 }

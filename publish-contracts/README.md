@@ -30,6 +30,7 @@ bun src/cli.ts --chain 918453 --rpc $RPC --sheet evidence/<run>/frozen-sheet.env
 | `--owner-signer` | prove-control and govern: a Safe owner signer spec, repeated. prove-control needs one for EVERY Safe owner (a missing owner is refused before anything is sent). Govern needs the threshold. |
 | `--emergency-signer` | pause-all, and the automatic pause after a failed verify: the EMERGENCY key signer spec. Needed once the stage 11 handover has begun. On the Twin chain with none given: the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet. |
 | `--core-dir`, `--evidence`, `--counts-dir`, `--compare-sheet`, `--max-wait` | Paths, the sheet to diff in the isomorphism report, and the longest govern wait. |
+| `--counts-require-origin-dev` | 8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local `origin/dev` (fetch it first). Off by default in code, required by the release runbook. |
 
 Caller environment only: `YES=1` (refused on 8453) and `CONFIRM=typed|environment` (`environment` only in GitHub Actions behind an Environment with reviewers). They are never sheet lines.
 
