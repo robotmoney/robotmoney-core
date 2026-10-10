@@ -424,7 +424,8 @@ contract DeployTimelock is ExpectedChainGuard {
 
     /// @dev DEPLOYMENT_KIND (issue 1727): absent or "production" is production, "rehearsal" is the explicit rehearsal mode, anything else reverts.
     function _readRehearsal(string memory prefix) internal view returns (bool) {
-        string memory kind = vm.envOr(string.concat(prefix, "DEPLOYMENT_KIND"), string("production"));
+        string memory kind =
+            vm.envOr(string.concat(prefix, "DEPLOYMENT_KIND"), string("production"));
         if (keccak256(bytes(kind)) == keccak256("production")) return false;
         if (keccak256(bytes(kind)) == keccak256("rehearsal")) return true;
         revert("DEPLOYMENT_KIND must be production or rehearsal");
