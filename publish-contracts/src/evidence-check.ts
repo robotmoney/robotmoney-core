@@ -14,7 +14,7 @@
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
-import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, toBytes, type Hex } from "viem";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -193,6 +193,40 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
  * least the floor apart. `recorded_receipts`: one entry per receipt the submitter anchored through the gateway (receipt_id, payload_digest, payload_uri, submitter ADDRESS, tx_hash; never a key).
  * Both are refused in a production evidence. In a rehearsal every receipt_applications entry must trace to a recorded receipt with the same digest, by a registered submitter.
  */
+/**
+ * Issue 1750 (owner decision 2026-10-10): the consensus receipt submitter is a multisig. An entry's `submitter_safe` names the Safe's threshold (2 or more), owners and proxy code
+ * hash; a recorded receipt's also the Safe transaction hash, the nonce and the owners that signed (at least the threshold, all owners). An entry WITHOUT it is a single key:
+ * refused on 8453, and refused anywhere when that key is a role key (the deployer/admin, a governing Safe owner) or when the submitter is the governing Safe or the timelock.
+ */
+function submitterSafeProblems(ev: any, r: any, w: string, recorded: boolean, bad: (m: string) => void): void {
+  const sub = String(r?.submitter ?? "");
+  const roleKeys = new Map<string, string>([
+    [lc(ev?.safe?.address ?? ""), "the governing Safe"], [lc(ev?.timelock?.address ?? ""), "the timelock"], [lc(ev?.deployer ?? ""), "the deployer (admin)"],
+    ...((Array.isArray(ev?.safe?.owners) ? ev.safe.owners : []) as string[]).map((o, i) => [lc(o), `governing Safe owner ${i + 1}`] as [string, string]),
+  ]);
+  roleKeys.delete("");
+  const why = roleKeys.get(lc(sub));
+  const sf = r?.submitter_safe;
+  if (why) bad(`${w}: the submitter ${sub} is ${why}: the submitter is a separate multisig Safe that holds AGENT_ROLE and COMMITTEE_AGENT_ROLE and nothing else`);
+  if (sf === undefined) {
+    if (ev?.chain_id === MAINNET_CHAIN_ID) bad(`${w}: no submitter_safe: on 8453 the consensus receipt submitter is a multisig Safe, never a single key`);
+    return;
+  }
+  const owners: string[] = Array.isArray(sf?.owners) ? sf.owners : [];
+  if (!Number.isInteger(sf?.threshold) || sf.threshold < 2) bad(`${w}: submitter_safe.threshold is ${sf?.threshold}, want 2 or more`);
+  if (owners.length === 0 || !owners.every((o) => ADDR.test(o ?? ""))) bad(`${w}: submitter_safe.owners is not a list of addresses`);
+  else if (Number.isInteger(sf?.threshold) && owners.length < sf.threshold) bad(`${w}: submitter_safe has ${owners.length} owners, under its threshold ${sf.threshold}`);
+  if (!TX.test(sf?.code_hash ?? "")) bad(`${w}: submitter_safe.code_hash is not a bytes32`);
+  if (sf?.address !== undefined && ADDR.test(sub) && lc(sf.address) !== lc(sub)) bad(`${w}: submitter_safe.address ${sf.address} is not the submitter ${sub}`);
+  if (!recorded || r?.already_recorded === true) return;
+  if (!TX.test(sf?.safe_tx_hash ?? "")) bad(`${w}: submitter_safe.safe_tx_hash is not a bytes32`);
+  if (!Number.isInteger(sf?.nonce) || sf.nonce < 0) bad(`${w}: submitter_safe.nonce is not a non-negative integer`);
+  const signers: string[] = Array.isArray(sf?.signers) ? sf.signers : [];
+  if (new Set(signers.map(lc)).size !== signers.length) bad(`${w}: submitter_safe.signers repeats an owner`);
+  if (Number.isInteger(sf?.threshold) && signers.length < sf.threshold) bad(`${w}: submitter_safe.signers has ${signers.length} owners, under the threshold ${sf.threshold}`);
+  const strangers = signers.filter((x) => !owners.some((o) => lc(o) === lc(x)));
+  if (strangers.length) bad(`${w}: submitter_safe.signers ${strangers.join(", ")} are not owners of the submitter Safe`);
+}
 const regLabel = (r: any) => `${REGISTER_ROW} ${r?.submitter}`;
 const recLabel = (r: any) => `recorded receipt ${r?.receipt_id}`;
 function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[], bad: (m: string) => void): any[] {
@@ -212,6 +246,7 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     if (r?.step !== undefined && r.step !== REGISTER_ROW) bad(`${w}: step '${r.step}' is not ${REGISTER_ROW}`);
     for (const k of ["gateway", "ic_policy", "timelock"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    submitterSafeProblems(ev, r, w, false, bad);
     if (typeof r?.agent_label !== "string" || r.agent_label === "") bad(`${w}: agent_label is missing`);
     if (!/^[0-9]+$/.test(String(r?.valid_until ?? ""))) bad(`${w}: valid_until is not a decimal timestamp`);
   }
@@ -225,6 +260,7 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     if (typeof r?.payload_uri !== "string" || !/^https?:\/\//.test(r.payload_uri)) bad(`${w}: payload_uri is not an http(s) route`);
     if (!ADDR.test(r?.submitter ?? "")) bad(`${w}: submitter is not an address`);
     else if (!seenSub.has(lc(r.submitter))) bad(`${w}: submitter ${r.submitter} has no committee_registrations entry: a receipt is recorded only by a registered submitter`);
+    submitterSafeProblems(ev, r, w, true, bad);
     if (r?.already_recorded !== true && !TX.test(r?.tx_hash ?? "")) bad(`${w}: tx_hash is missing`);
     if (r?.status !== 1) bad(`${w}: status is ${r?.status}`);
   }
@@ -698,7 +734,18 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
     if (!((await ts(ex)) - schedTs >= floor)) bad(`${w}: on-chain schedule-to-execute gap is under ${floor} s`);
   }
   for (const r of Array.isArray(ev?.recorded_receipts) ? ev.recorded_receipts : []) {
-    if (TX.test(r?.tx_hash ?? "")) await rcOf(`${recLabel(r)} tx`, r.tx_hash);
+    if (!TX.test(r?.tx_hash ?? "")) continue;
+    const rc = await rcOf(`${recLabel(r)} tx`, r.tx_hash);
+    // Issue 1750: a Safe submitter. The Safe itself emitted ExecutionSuccess for the recorded Safe transaction hash, and its threshold on chain is the recorded one.
+    const sf = r?.submitter_safe;
+    if (!rc || !sf || !ADDR.test(r?.submitter ?? "") || !TX.test(sf?.safe_tx_hash ?? "")) continue;
+    const topic0 = keccak256(toBytes("ExecutionSuccess(bytes32,uint256)"));
+    const ok = rc.logs.some((l) => lc(l.address) === lc(r.submitter) && l.topics[0] === topic0 && lc(l.topics[1] ?? "") === lc(sf.safe_tx_hash));
+    if (!ok) bad(`${recLabel(r)}: the submitter Safe ${r.submitter} emitted no ExecutionSuccess for Safe transaction ${sf.safe_tx_hash} in ${r.tx_hash}`);
+    try {
+      const thr = Number(await chain.readContract({ address: r.submitter, abi: parseAbi(["function getThreshold() view returns (uint256)"]), functionName: "getThreshold" }));
+      if (thr !== sf.threshold) bad(`${recLabel(r)}: the submitter Safe's threshold on chain is ${thr}, the evidence says ${sf.threshold}`);
+    } catch (e) { bad(`${recLabel(r)}: the submitter Safe's threshold cannot be read (${(e as Error).message})`); }
   }
   return p;
 }

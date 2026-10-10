@@ -3,8 +3,9 @@
 // Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, PIN_BLOCK_IN (optional), REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
-// runs the receipt path with a REAL recorded receipt, not a fixture: register the SUBMITTER through the Safe and the timelock (govern --row register-committee), the submitter records the
-// receipt through the gateway (the record-receipt verb), the Safe applies it (govern --row apply-receipt: releaseReceipt plus the router weights), then verify a third time and check the run manifest's receipt path (evidence-check).
+// runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
+// creates it with the Safe tool (the same three owners, threshold 2, a different salt), registers it through the governing Safe and the timelock (govern --row register-committee --submitter),
+// two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: releaseReceipt plus the router weights), then verify a third time and check the run manifest's receipt path (evidence-check).
 // The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc (the RM/USDC pool is never funded: the Twin forks the live pool, owner decision 2026-10-09); the govern time warp is inside the CLI.
@@ -12,7 +13,6 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { join } from "node:path";
 import { keccak256, toBytes } from "viem";
 import { TWIN_CHAIN_ID } from "../chains.ts";
-import { keygen } from "../keystore/keygen.ts";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
@@ -36,6 +36,7 @@ const cli = env("TWIN_CLI", "src/cli.ts");
 const rehearsal = env("TWIN_REHEARSAL_CLI", "src/rehearsal/cli.ts");
 const mergeSheet = env("TWIN_MERGE_SHEET", "src/ci/merge-sheet.ts");
 const predeploy = env("TWIN_PREDEPLOY", "src/ci/predeploy-libs.ts");
+const safeCli = env("TWIN_SAFE_CLI", "src/safe/cli.ts");
 
 // Under /tmp: foundry.toml fs_permissions lets the deploy scripts write their manifests there only.
 const rh = mkdtempSync("/tmp/twin-publish.");
@@ -50,7 +51,8 @@ run([bun, rehearsal, "keys", "--dir", join(rh, "keys"), "--password-file", pass,
 if (env("SHARE_RECEIVER_IN")) appendFileSync(fragment, `SHARE_RECEIVER_ADDRESS=${env("SHARE_RECEIVER_IN")}\n`);
 // The rehearsal kind (issue 1727): explicit lines, later lines win. The committed Twin sheet stays production-kind (60 s); this job is the rehearsal.
 const rehearsalMode = env("REHEARSAL_IN") === "true";
-if (rehearsalMode) appendFileSync(fragment, ["DEPLOYMENT_KIND=rehearsal", "TIMELOCK_MIN_DELAY=900", "GOVERN_NEW_DELAY=1800", `SAFE_SALT_NONCE=${Math.floor(Date.now() / 1000)}`].join("\n") + "\n");
+const safeSalt = Math.floor(Date.now() / 1000);
+if (rehearsalMode) appendFileSync(fragment, ["DEPLOYMENT_KIND=rehearsal", "TIMELOCK_MIN_DELAY=900", "GOVERN_NEW_DELAY=1800", `SAFE_SALT_NONCE=${safeSalt}`].join("\n") + "\n");
 const sheet = join(rh, "sheet.env");
 run([bun, mergeSheet, "--template", join(core, "deployments/twin-918453/stage-sheet.env"), "--fragment", fragment, "--out", sheet], { cwd: pc });
 // PREDEPLOY_LIBS_IN=true (issue 1721): put all four CREATE2 libraries on the fork first, so the whole run finds them already deployed (the state of Base after the real deploy).
@@ -60,8 +62,6 @@ run([bun, rehearsal, "fund-gas", "--rpc", rpc, "--sheet", sheet], { cwd: pc });
 run([bun, rehearsal, "fund-usdc", "--rpc", rpc, "--sheet", sheet, "--usdc-units", "2000000000"], { cwd: pc });
 
 const admin = /^ADMIN_ADDRESS=(.*)$/m.exec(readFileSync(fragment, "utf8"))?.[1]?.trim() ?? fail("the key fragment has no ADMIN_ADDRESS");
-// The committee SUBMITTER key (rehearsal only): a throwaway keystore beside the others, under the same random passphrase file. A key never leaves its keystore.
-const submitter = rehearsalMode ? (keygen(join(rh, "keys"), pass, ["SUBMITTER"]).SUBMITTER ?? fail("no SUBMITTER address")) : "";
 exportVar("TWIN_MANIFEST_DIR", join(rh, "manifests"));
 exportVar("TWIN_DEPLOYER_ADDRESS", admin);
 exportVar("TWIN_RUN_DIR", rh);
@@ -103,8 +103,12 @@ if (env("GOVERN_IN") === "true") {
 if (rehearsalMode && env("GOVERN_IN") === "true") {
   const manifestDir = join(rh, "manifests");
   const field = (file: string, name: string): string => (JSON.parse(readFileSync(join(manifestDir, `${file}.json`), "utf8")) as Record<string, string>)[name] ?? fail(`manifest ${file}.json has no ${name}`);
-  // The submitter pays its own gas: the deployer sends it a little, as the operator does on 8453.
-  run([castBin, "send", submitter, "--value", "10000000000000000", "--keystore", join(rh, "keys/DEPLOYER"), "--password-file", pass, "--rpc-url", rpc]);
+  // The SUBMITTER is a second Safe: the same owners as the governing Safe and threshold 2, a different salt (so a different address and its own nonce). The deployer pays its creation.
+  const owners = /^SAFE_OWNERS=(.*)$/m.exec(readFileSync(fragment, "utf8"))?.[1]?.trim() ?? fail("the key fragment has no SAFE_OWNERS");
+  const submitterSafeJson = join(rh, "submitter-safe.json");
+  run([bun, safeCli, "create", "--rpc", rpc, "--chain-id", String(TWIN_CHAIN_ID), "--owners", owners, "--threshold", "2", "--signer", `keystore:${join(rh, "keys/DEPLOYER")}:${pass}`,
+    "--salt-nonce", String(safeSalt + 1), "--yes", "--out", submitterSafeJson], { cwd: pc, stdoutTo: join(rh, "submitter-safe-create.txt"), childEnv: { ADMIN_ADDRESS: admin } });
+  const submitter = (JSON.parse(readFileSync(submitterSafeJson, "utf8")) as { safe?: string }).safe ?? fail("the submitter Safe manifest has no safe address");
   // A real receipt payload: the allocation vector the Safe will apply, in the registry order of the four router-eligible vaults.
   const payload = join(rh, "receipt-payload.json");
   const body = JSON.stringify({ session_id: `twin-${sha.slice(0, 8)}`, subject_id: "router-weights", weights: [
@@ -114,10 +118,12 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
   const receiptId = keccak256(toBytes(`robotmoney:consensus-receipt-id:v1\ntwin-${sha.slice(0, 8)}\nrouter-weights`));
   const uri = `https://twin.invalid/receipts/${receiptId}.json`;
   stage("govern", join(rh, "register-committee-rows.txt"), ["--row", "register-committee", "--submitter", submitter, "--agent-label", "twin-submitter"]);
-  stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload-uri", uri], "SUBMITTER");
+  // --signer is the DEPLOYER (it pays the gas); two of the submitter Safe's owners sign (their keystores sit beside the DEPLOYER keystore).
+  stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload-uri", uri, "--submitter", submitter]);
   stage("govern", join(rh, "apply-receipt-rows.txt"), ["--row", "apply-receipt", "--receipt-id", receiptId, "--payload", payload]);
   exportVar("TWIN_RECEIPT_ID", receiptId);
   exportVar("TWIN_RECEIPT_SUBMITTER", submitter);
+  exportVar("TWIN_SUBMITTER_SAFE_JSON", submitterSafeJson);
   if (env("VERIFY_IN") === "true") {
     stage("verify", join(rh, "verify-labels-post-apply.txt"));
     exportVar("TWIN_VERIFY_LABELS_POST_APPLY", join(rh, "verify-labels-post-apply.txt"));

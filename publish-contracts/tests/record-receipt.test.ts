@@ -88,7 +88,11 @@ describe("record-receipt", () => {
     await expect(recordReceipt(prod.ctx, signer(), prod.inputs, prod.api)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("rmpc receipt submit") });
     expect(prod.st.sent).toEqual([]);
     const reh = mk(REHEARSAL, 8453);
-    await expect(recordReceipt(reh.ctx, signer(), reh.inputs, reh.api)).resolves.toMatchObject({ status: 1 });
+    // Issue 1750: on 8453 a single-key submitter is refused (the submitter is a multisig); the Safe mode is in submitter-safe.test.ts
+    await expect(recordReceipt(reh.ctx, signer(), reh.inputs, reh.api)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("multisig") });
+    expect(reh.st.sent).toEqual([]);
+    const twin = mk(REHEARSAL, 918453);
+    await expect(recordReceipt(twin.ctx, signer(), twin.inputs, twin.api)).resolves.toMatchObject({ status: 1 });
   });
   test("the roles are the contract's AGENT_ROLE and COMMITTEE_AGENT_ROLE", () => {
     expect(AGENT_ROLE).toBe(VERIFIER_AGENT_ROLE); // keccak256("AGENT_ROLE"), the same constant the verifier uses
@@ -130,6 +134,22 @@ describe("record-receipt inputs and the CLI", () => {
     }
   });
   const base = ["--chain", "918453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/dev/shm/k/SUBMITTER"];
+  test("issue 1750: --submitter parses on record-receipt (a Safe address), a bad one is a usage error, and on another verb it is still refused", () => {
+    const safe = "0x00000000000000000000000000000000005afe01";
+    const p = parseCli(["record-receipt", ...base, "--receipt-id", RID, "--payload-digest", DIGEST, "--payload-uri", URI, "--submitter", safe, "--owner-signer", "keystore:/a", "--owner-signer", "keystore:/b"]);
+    expect(p).toMatchObject({ verb: "record-receipt", submitter: safe, ownerSigners: ["keystore:/a", "keystore:/b"] });
+    expect(() => parseCli(["record-receipt", ...base, "--receipt-id", RID, "--payload-digest", DIGEST, "--payload-uri", URI, "--submitter", "0x0"])).toThrow("--submitter");
+    expect(() => parseCli(["publish", ...base, "--submitter", safe])).toThrow("register-committee");
+  });
+  test("issue 1750: the CLI refuses a rehearsal record-receipt on 8453 without --submitter before it builds the signer", async () => {
+    const { world } = await import("./harness.ts");
+    const w = world({ chainId: 8453, sheet: { DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "7" } } as never);
+    let signerBuilt = false;
+    const code = await w.run(["record-receipt", "--receipt-id", RID, "--payload-digest", DIGEST, "--payload-uri", URI], { makeSigner: () => { signerBuilt = true; throw new Error("the signer must not be built"); } });
+    expect(code).toBe(2);
+    expect(signerBuilt).toBe(false);
+    expect(w.logs().filter((l) => l.event === "run.failed").pop()!.message).toContain("never a single key");
+  });
   test("the verb parses with its flags and refuses them on any other verb", () => {
     expect(VERBS).toContain("record-receipt");
     const p = parseCli(["record-receipt", ...base, "--receipt-id", RID, "--payload-digest", DIGEST, "--payload-uri", URI]);

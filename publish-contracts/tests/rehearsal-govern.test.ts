@@ -150,6 +150,39 @@ describe("register-committee: the consensus receipt submitter, through the Safe 
     await expect(go(zero.d, zero.tl, zero.manifest, { row: REGISTER_ROW })).rejects.toMatchObject({ kind: "USAGE" });
   });
 
+  test("issue 1750: the submitter is a Safe: the evidence entry carries its threshold and owners; a key (no code) is refused on 8453 and nothing is scheduled (mutation: a Safe passes)", async () => {
+    const ok = mk(REHEARSAL);
+    await go(ok.d, ok.tl, ok.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    const entry = (ok.manifest as unknown as { committee_registrations: { submitter_safe?: { threshold: number; owners: string[]; code_hash: string } }[] }).committee_registrations[0]!;
+    expect(entry.submitter_safe).toMatchObject({ threshold: 2 });
+    expect(entry.submitter_safe!.owners).toHaveLength(3);
+    const key = mk(REHEARSAL);
+    key.tl.s.submitterKind = null;
+    await expect(go(key.d, key.tl, key.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("single key") });
+    expect(key.tl.s.events).toEqual([]);
+  });
+
+  test("issue 1750: a non-canonical Safe, and the governing Safe or timelock as submitter, are refused before anything is scheduled", async () => {
+    const bad = mk(REHEARSAL);
+    bad.tl.s.submitterKind = () => { throw Object.assign(new Error("not a canonical SafeL2 1.4.1 multisig: threshold is 1"), { kind: "USAGE" }); };
+    await expect(go(bad.d, bad.tl, bad.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("threshold is 1") });
+    expect(bad.tl.s.events).toEqual([]);
+    for (const who of [A.safe, A.timelock]) {
+      const m = mk(REHEARSAL);
+      await expect(go(m.d, m.tl, m.manifest, { row: REGISTER_ROW, submitter: who })).rejects.toMatchObject({ kind: "USAGE" });
+      expect(m.tl.s.events).toEqual([]);
+    }
+  });
+
+  test("issue 1750: on the Twin chain a key submitter is still accepted (the old path), the evidence entry then has no submitter_safe", async () => {
+    const d = setup(REHEARSAL, 918453);
+    const tl = fakeTimelock(d.sheet, 900n);
+    tl.s.submitterKind = null;
+    const manifest = newManifest(d.ctx, addr(0xa001));
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect((manifest as unknown as { committee_registrations: Record<string, unknown>[] }).committee_registrations[0]!.submitter_safe).toBeUndefined();
+  });
+
   test("--submitter without the register row is a usage error", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
     await expect(go(d, tl, manifest, { submitter: SUBMITTER })).rejects.toMatchObject({ kind: "USAGE" });

@@ -49,7 +49,7 @@ export const USAGE = `publish contracts
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
-                       record-receipt = the registered committee SUBMITTER (--signer) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
+                       record-receipt = the registered committee SUBMITTER (a Safe: --submitter, executed by --signer = the deployer, signed by its --owner-signer owners) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
                                  from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
@@ -84,7 +84,8 @@ export const USAGE = `publish contracts
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 keccak256 of the receipt's canonical bytes (payload_digest of 'rmpc receipt verify').
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
-  --submitter ADDR   govern --row register-committee only: the submitter's address (the operator supplies the key at record time; the key is never written anywhere).
+  --submitter ADDR   govern --row register-committee and the record-receipt verb: the consensus receipt SUBMITTER, a SafeL2 1.4.1 multisig (issue 1750; threshold 2 or more, no module, no guard, separate from the governing Safe).
+                     record-receipt: required on 8453; --signer is then the deployer that pays gas and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --agent-label NAME govern --row register-committee only: the label on the IC policy (default committee-submitter).
   --payload FILE     govern with --row apply-receipt only: the receipt payload file (its keccak256 is the anchored payloadDigest).
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
@@ -203,6 +204,7 @@ export function parseCli(argv: string[]): Parsed {
   const submitter = v.submitter as string | undefined;
   const agentLabel = v["agent-label"] as string | undefined;
   if (row === REGISTER_ROW) { assertSubmitter(submitter); assertAgentLabel(agentLabel); }
+  else if (verb === "record-receipt" && agentLabel === undefined) { if (submitter !== undefined) assertSubmitter(submitter); } // issue 1750: the submitter Safe
   else if (submitter !== undefined || agentLabel !== undefined) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only\n${USAGE}`);
   const payloadDigest = v["payload-digest"] as string | undefined;
   const payloadUri = v["payload-uri"] as string | undefined;
@@ -368,13 +370,22 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
     }
-    // record-receipt (issue 1727): --signer is the SUBMITTER. No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
+    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
+    const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
+      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
+      const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
+      return Promise.all(specs.map((s) => mk(s)));
+    };
+    // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
     if (a.verb === "record-receipt") {
       // Refused in production on 8453 BEFORE the signer exists: no passphrase prompt, no key load (review advisory 3).
       if (rpcChainId === MAINNET_CHAIN_ID && sheet.kind !== "rehearsal") throw new PublishError("USAGE", "record-receipt is refused on this chain in production: production records receipts with 'rmpc receipt submit' and an HSM or KMS signer. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.");
+      // Owner decision 2026-10-10: on 8453 the submitter is a multisig. Refused before the signer exists too.
+      if (rpcChainId === MAINNET_CHAIN_ID && a.submitter === undefined) throw new PublishError("USAGE", "record-receipt on 8453 needs --submitter <the submitter Safe> (a SafeL2 1.4.1 multisig) and the --owner-signer of its owners: the consensus receipt submitter is never a single key. --signer is the deployer that pays the gas.");
       const ctx = buildCtx(undefined, false);
       const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri });
-      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi);
+      const safeMode = a.submitter === undefined ? undefined : { safe: assertSubmitter(a.submitter), ownerSigners: await ownerSigners(ctx) };
+      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi, safeMode);
       console.log(JSON.stringify({ event: "record_receipt", ...rec }));
       log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
       return 0;
@@ -428,12 +439,6 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       }
     }
     const ctx = buildCtx(frozen, counts.measure);
-    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
-    const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
-      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
-      const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-      return Promise.all(specs.map((s) => mk(s)));
-    };
     // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;

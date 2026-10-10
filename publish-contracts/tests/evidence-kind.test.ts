@@ -1,7 +1,7 @@
 // Issue 1727: evidence by deployment kind. A rehearsal evidence is never production evidence and the reverse. The 900 s floor, the start nonce, the rehearsal-only rows and the
 // receipt path (registration, REAL recorded receipt, application) are accepted in a rehearsal and refused in production. Each refusal has a mutation (the fixed input passes).
 import { describe, expect, test } from "bun:test";
-import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem";
+import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbi, toBytes, type Hex } from "viem";
 import { checkEvidence, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
 import { buildRegisterCalls } from "../src/committee-register.ts";
 import { finalDeployerNonce } from "../src/counts.ts";
@@ -38,9 +38,11 @@ const rows = (e: any) => {
   ];
   return e;
 };
+/** Issue 1750: the submitter is a 2-of-3 Safe. The evidence entries carry its facts. */
+const SAFE_FACTS = { threshold: 2, owners: [a(2), a(3), a(4)], code_hash: h(0xc0de) };
 const path = (e: any) => {
-  e.committee_registrations = [{ step: "register-committee", submitter: SUB, agent_label: "s", gateway: a(30), ic_policy: a(31), timelock: a(9), valid_until: "9999999", operation_id: h(810), schedule_tx: h(210), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(211), execute_status: 1, execute_block_timestamp: T0 + 900 }];
-  e.recorded_receipts = [{ receipt_id: RID, payload_digest: DIGEST, payload_uri: "https://twin.invalid/r.json", submitter: SUB, tx_hash: h(220), status: 1 }];
+  e.committee_registrations = [{ step: "register-committee", submitter: SUB, agent_label: "s", gateway: a(30), ic_policy: a(31), timelock: a(9), valid_until: "9999999", operation_id: h(810), schedule_tx: h(210), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(211), execute_status: 1, submitter_safe: { ...SAFE_FACTS }, execute_block_timestamp: T0 + 900 }];
+  e.recorded_receipts = [{ receipt_id: RID, payload_digest: DIGEST, payload_uri: "https://twin.invalid/r.json", submitter: SUB, tx_hash: h(220), status: 1, submitter_safe: { address: SUB, ...SAFE_FACTS, safe_tx_hash: h(0x5a), nonce: 3, signers: [a(2), a(3)], sent_by: a(20) } }];
   e.consensus_receipt = { address: a(32) }; e.governance = { address: a(33) };
   e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: a(32), governance: a(33), vaults: [a(5), a(6)], bps: [9000, 1000], voted_weights_active: false, effective_vaults: [a(5), a(6)], effective_bps: [9000, 1000], payload_digest: DIGEST, operation_id: h(812), schedule_tx: h(212), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(213), execute_status: 1, execute_block_timestamp: T0 + 910 }];
   return e;
@@ -161,6 +163,31 @@ describe("the receipt path of a rehearsal", () => {
     e.recorded_receipts[0].submitter = SUB;
     expect(checkEvidence(e, undefined, undefined, R)).toEqual([]);
   });
+  test("issue 1750: a single-key submitter is refused on 8453, a role key is refused anywhere, and the Safe facts are checked (mutation: the Safe passes)", () => {
+    const m = (f: (e: any) => void) => { const e = path(reh()); f(e); return problems(e, R); };
+    expect(m((e) => { delete e.recorded_receipts[0].submitter_safe; })).toContain("on 8453 the consensus receipt submitter is a multisig Safe");
+    expect(m((e) => { delete e.committee_registrations[0].submitter_safe; })).toContain("on 8453 the consensus receipt submitter is a multisig Safe");
+    for (const [who, text] of [[a(9), "the timelock"], [a(1), "the governing Safe"], [a(20), "the deployer"], [a(2), "governing Safe owner 1"]] as const) {
+      expect(m((e) => { e.committee_registrations[0].submitter = who; e.recorded_receipts[0].submitter = who; e.recorded_receipts[0].submitter_safe.address = who; })).toContain(text);
+    }
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.threshold = 1; })).toContain("threshold is 1");
+    expect(m((e) => { e.committee_registrations[0].submitter_safe.owners = [a(2)]; e.committee_registrations[0].submitter_safe.threshold = 2; })).toContain("under its threshold");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.code_hash = "0x1"; })).toContain("code_hash");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.address = a(0x77); })).toContain("is not the submitter");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.safe_tx_hash = ""; })).toContain("safe_tx_hash");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.nonce = -1; })).toContain("nonce");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.signers = [a(2)]; })).toContain("under the threshold");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.signers = [a(2), a(2)]; })).toContain("repeats an owner");
+    expect(m((e) => { e.recorded_receipts[0].submitter_safe.signers = [a(2), a(0x66)]; })).toContain("are not owners of the submitter Safe");
+    expect(m(() => {})).toBe("");
+  });
+  test("issue 1750: on the Twin chain a key submitter without submitter_safe stays accepted, but a role key never is", () => {
+    const e = path(reh()); e.chain_id = 918453;
+    delete e.recorded_receipts[0].submitter_safe; delete e.committee_registrations[0].submitter_safe;
+    expect(problems(e, R)).not.toContain("multisig Safe"); // the Twin run manifest is read by --receipt-applications; only chain 8453 evidence needs the Safe
+    e.committee_registrations[0].submitter = a(2); e.recorded_receipts[0].submitter = a(2);
+    expect(problems(e, R)).toContain("governing Safe owner 1");
+  });
   test("the shape of each entry is checked: addresses, label, validity, digest, uri, status, transaction", () => {
     const m = (f: (e: any) => void) => { const e = path(reh()); f(e); return problems(e, R); };
     expect(m((e) => { e.committee_registrations[0].submitter = "x"; })).toContain("submitter is not an address");
@@ -204,14 +231,16 @@ describe("the registration batch and the rehearsal rows on chain", () => {
   const validUntil = 9999999n;
   const calls = () => buildRegisterCalls(a(30) as never, TL as never, SUB as never, "s", validUntil);
   const regEvidence = () => { const e = path(reh()); e.committee_registrations[0].valid_until = validUntil.toString(); return e; };
-  const chain = (delay = 900, gap = 900, tweak: (c: ReturnType<typeof calls>) => void = () => {}) => {
+  // Issue 1750: the submitter Safe emits ExecutionSuccess(safeTxHash, 0) in the recorded receipt transaction and reads threshold 2.
+  const execOk = (safe: string, safeTxHash: string) => ({ address: safe, topics: [keccak256(toBytes("ExecutionSuccess(bytes32,uint256)")), safeTxHash as Hex], data: `0x${"0".repeat(64)}` as Hex });
+  const chain = (delay = 900, gap = 900, tweak: (c: ReturnType<typeof calls>) => void = () => {}, receiptLogs: any[] = [execOk(SUB, h(0x5a))], threshold = 2n): ChainReader => {
     const c = calls(); tweak(c);
     const id = h(810) as Hex;
-    return stub({
+    return { ...stub({
       [h(210)]: { block: 1n, logs: c.map((x, i) => sched(id, i, x.target, x.data, delay)) },
       [h(211)]: { block: 2n, logs: calls().map((x, i) => exec(id, i, x.target, x.data)) },
-      [h(220)]: { block: 3n, logs: [] },
-    }, { "1": T0, "2": T0 + gap, "3": T0 + gap });
+      [h(220)]: { block: 3n, logs: receiptLogs },
+    }, { "1": T0, "2": T0 + gap, "3": T0 + gap }), readContract: async () => threshold };
   };
   const run = (c: ChainReader, f: (e: any) => void = () => {}) => { const e = regEvidence(); f(e); return checkReceiptPathOnChain(e, c, 900).then((p) => p.join("\n")); };
   test("a registration whose calls are exactly authorizeAgent and committeeRegister for the recorded submitter, label and validity passes", async () => expect(await run(chain())).toBe(""));
@@ -226,6 +255,13 @@ describe("the registration batch and the rehearsal rows on chain", () => {
   });
   test("a registration that schedules a third call, or another target, is refused", async () => {
     expect(await run(chain(900, 900, (c) => { c[1] = { ...c[1]!, target: a(99) as never }; }))).toContain("is not the gateway");
+  });
+  test("issue 1750: the submitter Safe must have emitted ExecutionSuccess for the recorded Safe transaction hash, and its threshold must match (mutation: both right passes)", async () => {
+    expect(await run(chain())).toBe("");
+    expect(await run(chain(900, 900, () => {}, []))).toContain("emitted no ExecutionSuccess");
+    expect(await run(chain(900, 900, () => {}, [execOk(SUB, h(0x5b))]))).toContain("emitted no ExecutionSuccess"); // another Safe transaction
+    expect(await run(chain(900, 900, () => {}, [execOk(a(0x77), h(0x5a))]))).toContain("emitted no ExecutionSuccess"); // another Safe emitted it
+    expect(await run(chain(900, 900, () => {}, undefined, 3n))).toContain("threshold on chain is 3");
   });
   test("a reverted recorded-receipt transaction is refused", async () => {
     const c = chain(); const inner = c.getTransactionReceipt;
