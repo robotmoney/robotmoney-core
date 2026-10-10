@@ -360,6 +360,7 @@ pub enum CountTable {
     /// Added in migration 0015 — on-chain consensus recommendation receipt
     /// commitments (issue #1247, docs/architecture.md §4.9).
     ConsensusReceipts,
+    AdminEvents,
 }
 
 impl CountTable {
@@ -389,6 +390,7 @@ impl CountTable {
             CountTable::CommitteeVotes => "committee_votes",
             CountTable::RegimeSnapshots => "regime_snapshots",
             CountTable::ConsensusReceipts => "consensus_receipts",
+            CountTable::AdminEvents => "admin_events",
         }
     }
 }
@@ -431,6 +433,7 @@ impl TryFrom<&str> for CountTable {
             "committee_votes" => Ok(CountTable::CommitteeVotes),
             "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
             "consensus_receipts" => Ok(CountTable::ConsensusReceipts),
+            "admin_events" => Ok(CountTable::AdminEvents),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -1604,6 +1607,46 @@ impl Db {
         Ok(row.0)
     }
 
+    /// Insert a Timelock or Safe event into `admin_events` (migration 0017). Idempotent on the log position.
+    pub async fn insert_admin_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        contract: [u8; 20],
+        ev: &crate::indexer::AdminEvent,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO admin_events \
+                 (chain_id, block_number, log_index, tx_hash, contract, contract_kind, event_name, op_id, detail) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&contract[..])
+        .bind(ev.contract_kind)
+        .bind(ev.event_name)
+        .bind(ev.op_id.as_ref().map(|h| &h[..]))
+        .bind(ev.detail.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Record the chain head a run saw (`indexer_runs.chain_head_block`, migration 0017).
+    pub async fn set_run_chain_head(&self, run_id: i64, head: i64) -> Result<(), DbError> {
+        sqlx::query("UPDATE indexer_runs SET chain_head_block = $2 WHERE run_id = $1")
+            .bind(run_id)
+            .bind(head)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Close a run. `error` is `Some(...)` on failure, `None` on success.
     pub async fn finish_run(
         &self,
@@ -2359,6 +2402,8 @@ mod count_guard_tests {
             "regime_snapshots",
             // Migration 0015 — issue #1247.
             "consensus_receipts",
+            // Migration 0017 — issue #1731.
+            "admin_events",
         ];
         for name in known {
             let variant = CountTable::try_from(name)

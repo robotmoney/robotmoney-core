@@ -442,6 +442,32 @@ sol! {
         /// IConsensusRecommendationReceipt.sol:63
         event ReceiptReleased(bytes32 indexed receiptId, address indexed releasedBy, uint64 releasedAt);
     }
+
+    /// Event surface of OpenZeppelin `TimelockController`, the contract the Safe schedules every
+    /// governed change through. Signatures are OpenZeppelin's, so there is no Robot Money source file to
+    /// check them against.
+    #[sol(abi)]
+    #[allow(missing_docs)]
+    interface ITimelockEvents {
+        event CallScheduled(
+            bytes32 indexed id,
+            uint256 indexed index,
+            address target,
+            uint256 value,
+            bytes data,
+            bytes32 predecessor,
+            uint256 delay
+        );
+        event CallExecuted(
+            bytes32 indexed id,
+            uint256 indexed index,
+            address target,
+            uint256 value,
+            bytes data
+        );
+        event Cancelled(bytes32 indexed id);
+        event MinDelayChange(uint256 oldDuration, uint256 newDuration);
+    }
 }
 
 /// Topic-0 hashes the indexer matches on `eth_getLogs`. Computed once
@@ -500,6 +526,18 @@ pub struct Topics {
     pub consensus_receipt_recorded: B256,
     /// Emitted when ADMIN_ROLE (the timelock) releases a recorded receipt.
     pub consensus_receipt_released: B256,
+    // TimelockController events (OpenZeppelin) — the governed-change path, issue #1731.
+    pub timelock_call_scheduled: B256,
+    pub timelock_call_executed: B256,
+    pub timelock_cancelled: B256,
+    pub timelock_min_delay_change: B256,
+    // Safe events. `ExecutionSuccess(bytes32,uint256)` has the same topic-0 on Safe 1.3 and 1.4 even
+    // though 1.4 indexes the first argument, so the indexer reads the hash from topic 1 or from the data.
+    pub safe_execution_success: B256,
+    pub safe_execution_failure: B256,
+    pub safe_added_owner: B256,
+    pub safe_removed_owner: B256,
+    pub safe_changed_threshold: B256,
 }
 
 impl Topics {
@@ -557,6 +595,17 @@ impl Topics {
                 b"ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)",
             ),
             consensus_receipt_released: keccak256(b"ReceiptReleased(bytes32,address,uint64)"),
+            timelock_call_scheduled: keccak256(
+                b"CallScheduled(bytes32,uint256,address,uint256,bytes,bytes32,uint256)",
+            ),
+            timelock_call_executed: keccak256(b"CallExecuted(bytes32,uint256,address,uint256,bytes)"),
+            timelock_cancelled: keccak256(b"Cancelled(bytes32)"),
+            timelock_min_delay_change: keccak256(b"MinDelayChange(uint256,uint256)"),
+            safe_execution_success: keccak256(b"ExecutionSuccess(bytes32,uint256)"),
+            safe_execution_failure: keccak256(b"ExecutionFailure(bytes32,uint256)"),
+            safe_added_owner: keccak256(b"AddedOwner(address)"),
+            safe_removed_owner: keccak256(b"RemovedOwner(address)"),
+            safe_changed_threshold: keccak256(b"ChangedThreshold(uint256)"),
         }
     }
 
@@ -595,6 +644,15 @@ impl Topics {
             // list is silently never fetched by `eth_getLogs`.
             self.consensus_receipt_recorded,
             self.consensus_receipt_released,
+            self.timelock_call_scheduled,
+            self.timelock_call_executed,
+            self.timelock_cancelled,
+            self.timelock_min_delay_change,
+            self.safe_execution_success,
+            self.safe_execution_failure,
+            self.safe_added_owner,
+            self.safe_removed_owner,
+            self.safe_changed_threshold,
         ]
     }
 }
