@@ -1,0 +1,116 @@
+---
+title: "ZeroLegHandler"
+---
+
+# ZeroLegHandler
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32d5d0768371a3cc2e40a1221d41581d9eb9abc6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### usdc
+
+```solidity
+MockUSDC public immutable usdc;
+```
+
+### router
+
+```solidity
+PortfolioRouter public immutable router;
+```
+
+### admin
+
+```solidity
+address public immutable admin;
+```
+
+## State Variables
+
+### v
+
+```solidity
+StrictZeroRevertVault[4] public v;
+```
+
+### totalDeposited
+
+```solidity
+uint256 public totalDeposited;
+```
+
+### deposits
+
+```solidity
+uint256 public deposits;
+```
+
+### zeroLegWasCalled
+
+```solidity
+bool public zeroLegWasCalled;
+```
+
+### depositReverted
+
+```solidity
+bool public depositReverted;
+```
+
+## Functions
+
+<a id="constructor-mockusdc-portfoliorouter-address-strictzerorevertvault-4"></a>
+
+### constructor
+
+```solidity
+constructor(
+        MockUSDC usdc_,
+        PortfolioRouter router_,
+        address admin_,
+        StrictZeroRevertVault[4] memory v_
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `MockUSDC` |  |
+| router_ | `PortfolioRouter` |  |
+| admin_ | `address` |  |
+| v_ | `StrictZeroRevertVault[4]` |  |
+
+<a id="setweights-uint16-uint16-uint16"></a>
+
+### setWeights
+
+```solidity
+function setWeights(uint16 w0, uint16 w1, uint16 w2) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w0 | `uint16` |  |
+| w1 | `uint16` |  |
+| w2 | `uint16` |  |
+
+<a id="deposit-uint256"></a>
+
+### deposit
+
+```solidity
+function deposit(uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
