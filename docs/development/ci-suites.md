@@ -863,7 +863,7 @@ invariant it restores.
 
 There is one deploy driver: the publish-contracts CLI (`bun publish-contracts/src/cli.ts`). The offline job runs `bun test scripts/deploy
 scripts/ci`: the stage table (libs, vault, registry, router, gateway, governance,
-ic, three basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests
+ic, the proto, agent and rwa basket vaults, timelock, read by the CLI from the repo root) and the manifest rules. It is red when zero tests
 pass. The `publish-contracts-tests` job runs in `publish-contracts/`: `bun install --frozen-lockfile`, `bun x tsc --noEmit`, then `bun test --timeout 60000`, and it is red when the pass count is zero (the stub forge and cast, no chain). It is listed in the deploy-gate list of `check-sha-green` and is not a branch protection rule. The rehearsal job (`core-stages-twin-chain`, core 1523)
 starts its own Twin chain at the run pin (`.github/actions/twin-fork`, no external RPC URL) and runs the `twin-publish` action with verify and govern:
 throwaway keystores, the committed stage sheet (`deployments/twin-918453/stage-sheet.env`), gas and USDC for the deployer (the only Twin environment steps
