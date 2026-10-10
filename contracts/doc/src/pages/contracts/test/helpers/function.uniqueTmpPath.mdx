@@ -1,0 +1,36 @@
+---
+title: "uniqueTmpPath"
+---
+
+# uniqueTmpPath
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/helpers/TmpPaths.sol)
+
+<a id="uniquetmppath-vm-string"></a>
+
+### uniqueTmpPath
+
+<i>
+
+A path for a tag that is unique to one test contract. The wall clock keeps two forge
+processes on one machine apart.
+
+</i>
+
+```solidity
+function uniqueTmpPath(Vm cheats, string memory tag) view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cheats | `Vm` |  |
+| tag | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+

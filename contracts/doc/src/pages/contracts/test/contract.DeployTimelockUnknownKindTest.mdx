@@ -4,7 +4,7 @@ title: "DeployTimelockUnknownKindTest"
 
 # DeployTimelockUnknownKindTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
@@ -36,6 +36,6 @@ function _prefix() internal pure override returns (string memory);
 ### test_unknownKind_reverts
 
 ```solidity
-function test_unknownKind_reverts() public;
+function test_unknownKind_reverts() public removesOwnManifest;
 ```
 

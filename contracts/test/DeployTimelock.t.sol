@@ -20,6 +20,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {claimTmpPath, releaseTmpPath, uniqueTmpPath} from "./helpers/TmpPaths.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
@@ -28,14 +29,6 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-
-/// @dev A manifest path no other test, thread or forge process shares. The manifest tests used fixed
-///      /tmp names (and the run-entrypoint subclasses all shared one), so two test contracts running in
-///      parallel, or two forge runs on one machine, could delete or overwrite each other's file and fail
-///      at random. `randomUint` is drawn per call, so every test that asks gets its own file.
-function uniqueManifestPath(Vm cheats, string memory tag) view returns (string memory) {
-    return string.concat("/tmp/", tag, "-", cheats.toString(cheats.randomUint()), ".json");
-}
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -1238,15 +1231,15 @@ contract DeployTimelockManifestTest is SafeGovernance {
         );
 
         harness = new ManifestHarness();
-        outPath = uniqueManifestPath(vm, "r7-manifest-test");
-        // A file left by an earlier run must not stand in for this one.
-        if (vm.exists(outPath)) vm.removeFile(outPath);
+        // One claimed directory per test: setUp runs once per test, in parallel, so a shared name is raced.
+        outPath = claimTmpPath(vm, "r7-manifest");
 
         // `_writeJsonTo` reads `msg.sender` for the deployer role rows, so the
         // harness call must carry the same deployer identity.
         vm.prank(deployer);
         harness.exposedWriteJsonTo(d, outPath);
         manifest = vm.readFile(outPath);
+        releaseTmpPath(vm, outPath);
     }
 
     function test_manifestRecordsTheChainId() public view {
@@ -1554,11 +1547,11 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
     ///         that the deployer owns none of them.
     function test_manifestRecordsTimelockOwnedAgents() public {
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = uniqueManifestPath(vm, "1476-manifest-test");
-        if (vm.exists(outPath)) vm.removeFile(outPath);
+        string memory outPath = claimTmpPath(vm, "1476-manifest");
         vm.prank(deployer);
         harness.exposedWriteJsonTo(d, outPath);
         string memory manifest = vm.readFile(outPath);
+        releaseTmpPath(vm, outPath);
         address[] memory recorded = stdJson.readAddressArray(manifest, ".timelock_owned_agents");
         assertEq(recorded.length, 2, "manifest agent count");
         assertEq(recorded[0], deployAgent, "manifest agent 0");
@@ -1599,11 +1592,11 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         withKept.agents = agents;
 
         ManifestHarness harness = new ManifestHarness();
-        string memory outPath = uniqueManifestPath(vm, "1476-manifest-owned-test");
-        if (vm.exists(outPath)) vm.removeFile(outPath);
+        string memory outPath = claimTmpPath(vm, "1476-manifest-owned");
         vm.prank(deployer);
         harness.exposedWriteJsonTo(withKept, outPath);
         string memory manifest = vm.readFile(outPath);
+        releaseTmpPath(vm, outPath);
         assertTrue(
             stdJson.readBool(manifest, ".roles.deployer_owns_a_listed_gateway_agent"),
             "manifest misses a listed agent the deployer still owns"
@@ -1810,7 +1803,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     function _prefix() internal pure virtual returns (string memory) {
         return "RM_1476_RUN_ENTRYPOINT_";
     }
-    /// @dev Set per test in setUp from `uniqueManifestPath`: the subclasses below share this base, so a fixed name would be shared too.
+    /// @dev Set in setUp from `uniqueTmpPath` with a tag that carries `_prefix()`: the subclasses below share this base, and every test contract is deployed at one address, so only `_prefix()` tells their files apart. Each subclass has its own prefix.
     string internal OUT_PATH;
 
     ManifestHarness internal harness;
@@ -1822,6 +1815,12 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
 
     function _set(string memory name, string memory value) internal {
         vm.setEnv(string.concat(_prefix(), name), value);
+    }
+
+    /// @dev Removes this test's own manifest once the test ends. The path is unique to this contract (see `OUT_PATH`), so nothing else is touched.
+    modifier removesOwnManifest() {
+        _;
+        if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
     }
 
     function setUp() public {
@@ -1890,7 +1889,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         _set("SAFE_THRESHOLD", vm.toString(FIXTURE_THRESHOLD));
         _set("EMERGENCY_ADDRESS", vm.toString(makeAddr("run-emergency")));
         _set("TIMELOCK_MIN_DELAY", "172800");
-        OUT_PATH = uniqueManifestPath(vm, "1476-run-entrypoint-manifest");
+        OUT_PATH = uniqueTmpPath(vm, string.concat("1476-run-entrypoint", _prefix()));
         _set("DEPLOYMENT_OUT", OUT_PATH);
         // The committee contracts are required inputs on every chain. The deployer
         // holds their admin roles until the handover.
@@ -1900,7 +1899,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
         _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
         _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
-        if (vm.exists(OUT_PATH)) vm.removeFile(OUT_PATH);
     }
 }
 
@@ -1908,7 +1906,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
 contract DeployTimelockRunEntrypointTest is DeployTimelockRunEntrypointBase {
     using stdJson for string;
 
-    function test_run_handsAgentAddressesToTimelock() public {
+    function test_run_handsAgentAddressesToTimelock() public removesOwnManifest {
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
 
         address timelock = address(d.timelock);
@@ -1954,7 +1952,7 @@ contract DeployTimelockDelayFloorTest is DeployTimelockRunEntrypointBase {
 
     /// @notice R-04: on chain id 8453 a delay under 48 hours is refused on the
     ///         broadcast path. No flag lifts it.
-    function test_run_revertsBelowDelayFloorOnBase() public {
+    function test_run_revertsBelowDelayFloorOnBase() public removesOwnManifest {
         vm.chainId(8453);
         _set("EXPECTED_CHAIN_ID", "8453");
         _set("TIMELOCK_MIN_DELAY", "60");
@@ -1970,7 +1968,7 @@ contract DeployTimelockDelayBoundaryTest is DeployTimelockRunEntrypointBase {
         return "RM_S1_FLOOR_BOUNDARY_";
     }
 
-    function test_run_floorBoundaryOnBase() public {
+    function test_run_floorBoundaryOnBase() public removesOwnManifest {
         vm.chainId(8453);
         _set("EXPECTED_CHAIN_ID", "8453");
         _set("TIMELOCK_MIN_DELAY", "172799");
@@ -2000,7 +1998,7 @@ contract DeployTimelockRehearsalKindTest is DeployTimelockKindBase {
     }
 
     /// @notice 899 and 172800 are refused in the rehearsal kind, 900 passes and records the kind. A rehearsal never carries a production delay: the chain could not tell them apart.
-    function test_rehearsalKind_boundariesOnBase() public {
+    function test_rehearsalKind_boundariesOnBase() public removesOwnManifest {
         _base("rehearsal", "899");
         vm.expectRevert(bytes("rehearsal TIMELOCK_MIN_DELAY outside 900..172799"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2020,7 +2018,7 @@ contract DeployTimelockProductionKindTest is DeployTimelockKindBase {
     }
 
     /// @notice An explicit "production" keeps the 8453 floor: 900 s is refused, 172800 s passes.
-    function test_productionKind_floorUnchangedOnBase() public {
+    function test_productionKind_floorUnchangedOnBase() public removesOwnManifest {
         _base("production", "900");
         vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2036,7 +2034,7 @@ contract DeployTimelockUnknownKindTest is DeployTimelockKindBase {
         return "RM_1727_UNKNOWN_KIND_";
     }
 
-    function test_unknownKind_reverts() public {
+    function test_unknownKind_reverts() public removesOwnManifest {
         _base("Rehearsal", "900");
         vm.expectRevert(bytes("DEPLOYMENT_KIND must be production or rehearsal"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2049,7 +2047,7 @@ contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
     }
 
     /// @notice On the Twin chain (918453) the same short delay is a plain parameter.
-    function test_run_shortDelayAllowedOnTwinChain() public {
+    function test_run_shortDelayAllowedOnTwinChain() public removesOwnManifest {
         vm.chainId(918453);
         _set("TIMELOCK_MIN_DELAY", "60");
         DeployTimelock.Deployed memory d = RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2063,13 +2061,13 @@ contract DeployTimelockStrictChainGuardTest is DeployTimelockRunEntrypointBase {
     }
 
     /// @notice On 8453 an unset EXPECTED_CHAIN_ID no longer disables the guard.
-    function test_run_revertsOnBaseWhenExpectedChainUnset() public {
+    function test_run_revertsOnBaseWhenExpectedChainUnset() public removesOwnManifest {
         vm.chainId(8453);
         vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
     }
 
-    function test_run_revertsOnBaseWhenExpectedChainIsOther() public {
+    function test_run_revertsOnBaseWhenExpectedChainIsOther() public removesOwnManifest {
         vm.chainId(8453);
         _set("EXPECTED_CHAIN_ID", "918453");
         vm.expectRevert(bytes("EXPECTED_CHAIN_ID must be set to 8453 on Base mainnet"));
@@ -2085,7 +2083,7 @@ contract DeployTimelockRequiredIcPolicyTest is DeployTimelockRunEntrypointBase {
         return "RM_S1_REQUIRED_IC_";
     }
 
-    function test_run_revertsWhenIcPolicyUnset() public {
+    function test_run_revertsWhenIcPolicyUnset() public removesOwnManifest {
         _set("IC_POLICY_ADDRESS", vm.toString(address(0)));
         vm.expectRevert(bytes("IC_POLICY_ADDRESS=0"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2097,7 +2095,7 @@ contract DeployTimelockRequiredSafeOwnersTest is DeployTimelockRunEntrypointBase
         return "RM_S1_REQUIRED_OWNERS_";
     }
 
-    function test_run_revertsWhenSafeOwnersMalformed() public {
+    function test_run_revertsWhenSafeOwnersMalformed() public removesOwnManifest {
         _set("SAFE_OWNERS", "not-an-address");
         vm.expectRevert();
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2109,7 +2107,7 @@ contract DeployTimelockRequiredDelayTest is DeployTimelockRunEntrypointBase {
         return "RM_S1_REQUIRED_DELAY_";
     }
 
-    function test_run_revertsWhenDelayMalformed() public {
+    function test_run_revertsWhenDelayMalformed() public removesOwnManifest {
         _set("TIMELOCK_MIN_DELAY", "two-days");
         vm.expectRevert(
             bytes(
@@ -2126,7 +2124,7 @@ contract DeployTimelockExpectedChainTest is DeployTimelockRunEntrypointBase {
     }
 
     /// @notice R-01/B6: EXPECTED_CHAIN_ID must match the chain the RPC serves.
-    function test_run_revertsOnExpectedChainMismatch() public {
+    function test_run_revertsOnExpectedChainMismatch() public removesOwnManifest {
         _set("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
         vm.expectRevert(bytes("EXPECTED_CHAIN_ID does not match the RPC's chain id"));
         RunEntrypointRelay(deployer).runFrom(harness, _prefix());
@@ -2140,7 +2138,7 @@ contract DeployTimelockReceiptAdminTest is DeployTimelockRunEntrypointBase {
 
     /// @notice R-02: a RECEIPT_ADMIN_ADDRESS that names the wrong account must not
     ///         leave the deployer holding the receipt contract's admin roles.
-    function test_run_revertsWhenReceiptAdminAddressIsWrong() public {
+    function test_run_revertsWhenReceiptAdminAddressIsWrong() public removesOwnManifest {
         ReceiptRoleStub receipt = new ReceiptRoleStub(deployer);
         _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
         _set("RECEIPT_ADMIN_ADDRESS", vm.toString(makeAddr("not-the-receipt-admin")));
@@ -2362,8 +2360,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
     }
 
     function test_manifestHasAHandoverEntryForEachVault() public {
-        string memory out = uniqueManifestPath(vm, "s5-four-vault-manifest");
-        if (vm.exists(out)) vm.removeFile(out);
+        string memory out = claimTmpPath(vm, "s5-four-vault-manifest");
         vm.prank(deployer);
         script.exposedWriteJsonTo(d, out);
         string memory manifest = vm.readFile(out);
@@ -2381,7 +2378,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
             assertFalse(manifest.readBool(string.concat(base, ".deployer_has_admin_role")));
             assertFalse(manifest.readBool(string.concat(base, ".deployer_has_emergency_role")));
         }
-        vm.removeFile(out);
+        releaseTmpPath(vm, out);
     }
 }
 
@@ -2391,7 +2388,7 @@ contract DeployTimelockVaultListInputTest is DeployTimelockRunEntrypointBase {
         return "RM_S5_VAULT_LIST_";
     }
 
-    function test_run_revertsWhenVaultAddressesUnset() public {
+    function test_run_revertsWhenVaultAddressesUnset() public removesOwnManifest {
         // A prefix nothing else sets: only the agent list is present, so the run reaches the
         // vault list and finds it missing.
         vm.setEnv("RM_S5_NEVER_AGENT_ADDRESSES", "none");

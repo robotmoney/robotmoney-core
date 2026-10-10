@@ -4,7 +4,7 @@ title: "DeployTimelockTwinChainDelayTest"
 
 # DeployTimelockTwinChainDelayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -38,6 +38,6 @@ function _prefix() internal pure override returns (string memory);
 On the Twin chain (918453) the same short delay is a plain parameter.
 
 ```solidity
-function test_run_shortDelayAllowedOnTwinChain() public;
+function test_run_shortDelayAllowedOnTwinChain() public removesOwnManifest;
 ```
 

@@ -17,6 +17,7 @@ import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {claimTmpPath, releaseTmpPath} from "./helpers/TmpPaths.sol";
 
 contract AgentDeployHarness is DeployAgentTokenVault {
     function writeManifestTo(string memory path, Deployed memory d, string memory json) external {
@@ -287,11 +288,10 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
         BasketVaultDeployBase.Deployed memory d = _runEmpty();
         AgentDeployHarness h = new AgentDeployHarness();
         string memory json = _emptyConfig();
-        string memory path =
-            string.concat(vm.projectRoot(), "/deployments/test-agent-manifest.json");
+        string memory path = claimTmpPath(vm, "agent-vault-manifest");
         h.writeManifestTo(path, d, json);
         string memory out = vm.readFile(path);
-        vm.removeFile(path);
+        releaseTmpPath(vm, path);
         assertEq(out.readAddress(".vault"), d.vault);
         assertTrue(out.readBool(".paused"));
         assertTrue(vm.keyExistsJson(out, ".assets"), "assets key present");
@@ -519,11 +519,10 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
     function test_v4_manifestNamesTheRecorderAndTheV4Adapter() public {
         BasketVaultDeployBase.Deployed memory d = _runLaunch();
         AgentDeployHarness h = new AgentDeployHarness();
-        string memory path =
-            string.concat(vm.projectRoot(), "/deployments/test-agent-v4-manifest.json");
+        string memory path = claimTmpPath(vm, "agent-vault-v4-manifest");
         h.writeManifestTo(path, d, _launchConfig());
         string memory out = vm.readFile(path);
-        vm.removeFile(path);
+        releaseTmpPath(vm, path);
         assertEq(out.readAddress(".recorder"), address(recorder));
         assertEq(out.readAddress(".adapter_v4"), d.adapterV4);
         assertEq(out.readString(".assets[0].venue"), "UniswapV4");
