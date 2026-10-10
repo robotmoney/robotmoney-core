@@ -57,7 +57,7 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
+    dec_to_string, headroom_of, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
     AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
@@ -89,22 +89,34 @@ type DepositRow = (
 type SnapshotRow = (i64, Vec<u8>, i64, BigDecimal, BigDecimal, DateTime<Utc>);
 type TxRow = (i64, i64, Vec<u8>, Option<Vec<u8>>, i16, DateTime<Utc>);
 
-// (chain_id, vault_address, name, risk_label, status, deposit_cap, total_assets, exit_fee_bps, indexed_at)
+// (chain_id, vault_address, name, risk_label, status, tvl_cap, per_deposit_cap, snapshot_block, total_assets,
+//  exit_fee_bps, paused, indexed_at). The five snapshot columns are null together when a vault has no snapshot.
 type VaultRow = (
     i64,
     Vec<u8>,
     String,
     String,
     i16,
-    BigDecimal,
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    Option<i64>,
     Option<BigDecimal>,
     Option<i64>,
     Option<bool>,
     DateTime<Utc>,
 );
 
-// (vault_address, name, risk_label, status, deposit_cap, indexed_at) — used by get_vault
-type VaultDetailRow = (Vec<u8>, String, String, i16, BigDecimal, DateTime<Utc>);
+// (vault_address, name, risk_label, status, indexed_at) — used by get_vault
+type VaultDetailRow = (Vec<u8>, String, String, i16, DateTime<Utc>);
+
+// (tvl_cap, per_deposit_cap, total_assets, block_number, paused) of the latest snapshot — used by get_vault
+type VaultSnapshotRow = (
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    BigDecimal,
+    i64,
+    bool,
+);
 
 // (block_number, total_assets, total_supply, indexed_at)
 type TvlPointRow = (i64, BigDecimal, BigDecimal, DateTime<Utc>);
@@ -554,14 +566,16 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
     // (docs/technical/explorer-schema-decisions.md §3.1).
     let rows: Vec<VaultRow> = sqlx::query_as(
         "SELECT v.chain_id, v.vault_address, v.name, v.risk_label, v.status, \
-                v.deposit_cap, \
+                s.tvl_cap, \
+                s.per_deposit_cap, \
+                s.block_number, \
                 s.total_assets, \
                 s.exit_fee_bps, \
                 s.paused, \
                 v.indexed_at \
          FROM vaults v \
          LEFT JOIN LATERAL ( \
-             SELECT total_assets, exit_fee_bps, paused \
+             SELECT tvl_cap, per_deposit_cap, block_number, total_assets, exit_fee_bps, paused \
              FROM vault_snapshots \
              WHERE chain_id = v.chain_id AND contract = v.vault_address \
              ORDER BY block_number DESC \
@@ -583,7 +597,9 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
                 name,
                 risk_label,
                 status,
-                deposit_cap,
+                tvl_cap,
+                per_deposit_cap,
+                snapshot_block,
                 total_assets,
                 exit_fee_bps,
                 deposits_paused,
@@ -595,7 +611,10 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
                     name,
                     risk_label,
                     status,
-                    deposit_cap: dec_to_string(&deposit_cap),
+                    headroom: headroom_of(tvl_cap.as_ref(), total_assets.as_ref()),
+                    tvl_cap: tvl_cap.as_ref().map(dec_to_string),
+                    per_deposit_cap: per_deposit_cap.as_ref().map(dec_to_string),
+                    snapshot_block,
                     total_assets: total_assets.as_ref().map(dec_to_string),
                     exit_fee_bps,
                     deposits_paused,
@@ -626,7 +645,7 @@ async fn get_vault(
     let address_bytes = decode_address_param(&address)?;
 
     let row: Option<VaultDetailRow> = sqlx::query_as(
-        "SELECT vault_address, name, risk_label, status, deposit_cap, indexed_at \
+        "SELECT vault_address, name, risk_label, status, indexed_at \
          FROM vaults \
          WHERE chain_id = $1 AND vault_address = $2 \
          LIMIT 1",
@@ -636,12 +655,12 @@ async fn get_vault(
     .fetch_optional(&state.pool)
     .await?;
 
-    let (vault_address, name, risk_label, status, deposit_cap, indexed_at) =
-        row.ok_or(ApiError::NotFound)?;
+    let (vault_address, name, risk_label, status, indexed_at) = row.ok_or(ApiError::NotFound)?;
 
-    // The vault's own `depositsPaused()` as of its latest snapshot; null when it has none (issue 1731).
-    let deposits_paused: Option<bool> = sqlx::query_scalar(
-        "SELECT paused FROM vault_snapshots \
+    // The vault's own `depositsPaused()`, `tvlCap()` and `perDepositCap()` as of its latest snapshot; all null
+    // when it has none (issues 1731 and 1741). A cap the indexer could not read is null, never 0.
+    let snapshot: Option<VaultSnapshotRow> = sqlx::query_as(
+        "SELECT tvl_cap, per_deposit_cap, total_assets, block_number, paused FROM vault_snapshots \
          WHERE chain_id = $1 AND contract = $2 \
          ORDER BY block_number DESC LIMIT 1",
     )
@@ -649,6 +668,13 @@ async fn get_vault(
     .bind(&address_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
+    let deposits_paused = snapshot.as_ref().map(|s| s.4);
+    let snapshot_block = snapshot.as_ref().map(|s| s.3);
+    let tvl_cap = snapshot.as_ref().and_then(|s| s.0.clone());
+    let per_deposit_cap = snapshot.as_ref().and_then(|s| s.1.clone());
+    let headroom = snapshot
+        .as_ref()
+        .and_then(|s| headroom_of(s.0.as_ref(), Some(&s.2)));
 
     // Fetch TVL timeseries — up to 500 rows ascending by block.
     let tvl_rows: Vec<TvlPointRow> = sqlx::query_as(
@@ -767,15 +793,11 @@ async fn get_vault(
         )
         .collect();
 
-    // Freshness is taken from the most recent TVL point if available,
-    // otherwise falls back to the indexer cursor.
-    let freshness = match tvl_history.last() {
-        Some(p) => Freshness {
-            block_number: p.block_number,
-            indexed_at: p.indexed_at,
-        },
-        None => latest_freshness(&state).await?,
-    };
+    // Freshness is the index cursor, as on every other endpoint. The block of the latest vault snapshot is
+    // `vault.snapshot_block`: it trails the cursor by up to the snapshot heartbeat, and reporting it as the
+    // index block made a healthy indexer look thousands of blocks behind (issue 1741).
+    let freshness = latest_freshness(&state).await?;
+    let chain_head_block = chain_head_block(&state).await?;
 
     let vault = VaultDetail {
         chain_id: state.chain_id,
@@ -783,7 +805,10 @@ async fn get_vault(
         name,
         risk_label,
         status,
-        deposit_cap: dec_to_string(&deposit_cap),
+        tvl_cap: tvl_cap.as_ref().map(dec_to_string),
+        per_deposit_cap: per_deposit_cap.as_ref().map(dec_to_string),
+        headroom,
+        snapshot_block,
         deposits_paused,
         tvl_history,
         adapter_allocation_history,
@@ -792,7 +817,11 @@ async fn get_vault(
         indexed_at,
     };
 
-    Ok(Json(VaultDetailResponse { vault, freshness }))
+    Ok(Json(VaultDetailResponse {
+        vault,
+        freshness,
+        chain_head_block,
+    }))
 }
 
 // ─── Governance handlers (issue #307) ──────────────────────────────────────

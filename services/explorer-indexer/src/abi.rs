@@ -304,6 +304,7 @@ sol! {
         function totalSupply() external view returns (uint256);
         function exitFeeBps() external view returns (uint256);
         function tvlCap() external view returns (uint256);
+        function perDepositCap() external view returns (uint256);
         /// Deposit pause flag. Present on every vault, the v1 vault included. A
         /// `true` value stops deposits only; redemptions stay open.
         function depositsPaused() external view returns (bool);

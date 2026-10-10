@@ -1215,6 +1215,9 @@ impl Db {
 
     /// Insert one vault state snapshot.
     ///
+    /// `tvl_cap` and `per_deposit_cap` are the vault's `tvlCap()` and `perDepositCap()` readings; `None` is a
+    /// read that failed (migration 0018), stored as NULL and never as 0.
+    ///
     /// `deposits_paused` is the vault's `depositsPaused()` reading. It lands in
     /// the `vault_snapshots.paused` column, which keeps its historical name (no
     /// migration). The flag stops deposits only; withdrawals are never frozen.
@@ -1227,12 +1230,13 @@ impl Db {
         total_assets: U256,
         total_supply: U256,
         exit_fee_bps: i64,
-        tvl_cap: U256,
+        tvl_cap: Option<U256>,
+        per_deposit_cap: Option<U256>,
         deposits_paused: bool,
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
-            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, paused) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (chain_id, contract, block_number) DO NOTHING",
         )
         .bind(chain_id)
@@ -1241,7 +1245,8 @@ impl Db {
         .bind(u256_to_decimal(total_assets))
         .bind(u256_to_decimal(total_supply))
         .bind(exit_fee_bps)
-        .bind(u256_to_decimal(tvl_cap))
+        .bind(tvl_cap.map(u256_to_decimal))
+        .bind(per_deposit_cap.map(u256_to_decimal))
         .bind(deposits_paused)
         .execute(&self.pool)
         .await?;

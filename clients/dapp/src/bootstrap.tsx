@@ -255,7 +255,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                 label: "Router Governance",
                 content: (
                   <div className="tab-section-stack">
-                    <RouterView apiUrl={cfg.explorerApiUrl} />
+                    <RouterView apiUrl={cfg.explorerApiUrl} routerAddress={cfg.router} />
                     {cfg.governance ? (
                       <GovernancePanel
                         governanceAddress={cfg.governance}

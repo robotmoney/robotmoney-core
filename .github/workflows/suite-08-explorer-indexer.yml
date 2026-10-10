@@ -183,6 +183,16 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ --nocapture
 
+      # Core 1741: each vault's tvlCap() and perDepositCap() are stored per snapshot (RobotMoneyVault and
+      # BasketVault families), a failed read is NULL and never 0, and a snapshot with unknown caps is retaken
+      # on the next tick. Testcontainer Postgres and a stub RPC, wrapped in the executed-count guard.
+      - name: Vault caps snapshots (issue 1741)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test vault_caps -- --test-threads=1 --nocapture
+
       # Two targets that landed on fusion/deployment-workflow without a job
       # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
       # no workflow executes, which is how they surfaced when the branch came
@@ -354,7 +364,7 @@ jobs:
       # listed. Testcontainer Postgres, same Docker check as above.
       - name: explorer-api index cursor, chain head, deposits_paused, admin events (issue 1731)
         run: |
-          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test progress_and_admin -- --test-threads=1 --nocapture
 

@@ -352,7 +352,7 @@ async fn a_failed_depositspaused_read_skips_the_snapshot_instead_of_recording_op
     let paused_selector = alloy_primitives::hex::encode(
         explorer_indexer::abi::IVaultReads::depositsPausedCall::SELECTOR,
     );
-    stub.set_call_hook(Arc::new(move |data: &str| {
+    stub.set_call_hook(Arc::new(move |_to: &str, data: &str| {
         if data.trim_start_matches("0x").starts_with(&paused_selector) {
             Err("execution reverted".to_string())
         } else {

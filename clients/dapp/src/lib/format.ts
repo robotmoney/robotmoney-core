@@ -113,6 +113,24 @@ export function formatUsdcString(raw: string | null | undefined): string {
   return formatUsdc(rawStringToBigint(raw));
 }
 
+/** At or above this a cap (or the headroom under it) is the contract's "no cap" value, 2^256 - 1 minus a balance. */
+const UNBOUNDED_FROM = 2n ** 255n;
+
+/** What a cap or headroom the explorer could not read says. Never "0": a zero cap reads as "deposits impossible". */
+export const UNKNOWN = "unknown";
+
+/**
+ * Format a vault cap or headroom from the explorer API (issue 1741): a raw USDC integer string, or null/absent
+ * when the indexer could not read it. Unknown is the word "unknown", never 0.00 USDC. A cap of 2^256 - 1 (or the headroom under it) is the
+ * contract's "no cap" value (`RobotMoneyVault._capsUnbounded`) and reads "unlimited".
+ */
+export function formatUsdcCapString(raw: string | null | undefined): string {
+  const v = rawStringToBigint(raw);
+  if (v === undefined) return UNKNOWN;
+  if (v >= UNBOUNDED_FROM) return "unlimited";
+  return formatUsdc(v);
+}
+
 /**
  * Format a vault-share (rmUSDC) amount (raw bigint at SHARE_DECIMALS) for display.
  *

@@ -37,7 +37,7 @@ const fourVaultFixture: VaultsResponse = {
       risk_label: "STABLE_YIELD",
       status: 0,
       deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
-      deposit_cap: "10000000000000",
+      tvl_cap: "10000000000000",
       total_assets: "5000000000",
       exit_fee_bps: 10,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -49,7 +49,7 @@ const fourVaultFixture: VaultsResponse = {
       risk_label: "VOLATILE",
       status: 0,
       deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
-      deposit_cap: "10000000000000",
+      tvl_cap: "10000000000000",
       total_assets: "2000000000",
       exit_fee_bps: 25,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -61,7 +61,7 @@ const fourVaultFixture: VaultsResponse = {
       risk_label: "SPECULATIVE",
       status: 0,
       deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
-      deposit_cap: "10000000000000",
+      tvl_cap: "10000000000000",
       total_assets: "1000000000",
       exit_fee_bps: 25,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -72,7 +72,7 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money RWA / Thematic",
       risk_label: "SPECULATIVE",
       status: 1, // non-Active (DepositsPaused)
-      deposit_cap: "0",
+      tvl_cap: "0",
       total_assets: null,
       exit_fee_bps: null,
       indexed_at: "2026-01-01T12:00:00Z",

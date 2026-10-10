@@ -170,8 +170,9 @@ pub struct StubRpcServer {
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Answers one `eth_call` from its calldata (`0x...`): the result hex, or an error message.
-pub type CallHook = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+/// Answers one `eth_call` from its target (`0x...` lower-case address) and calldata (`0x...`): the result hex,
+/// or an error message.
+pub type CallHook = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
 
 impl StubRpcServer {
     pub async fn start() -> Self {
@@ -215,8 +216,9 @@ impl StubRpcServer {
                             let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
                             let hooked = if method == "eth_call" {
                                 let data = req["params"][0]["data"].as_str().unwrap_or("").to_string();
+                                let to = req["params"][0]["to"].as_str().unwrap_or("").to_lowercase();
                                 let hook = ch.lock().unwrap().clone();
-                                hook.map(|h| h(&data))
+                                hook.map(|h| h(&to, &data))
                             } else {
                                 None
                             };
@@ -283,7 +285,7 @@ impl StubRpcServer {
             .insert(method.to_string(), value);
     }
 
-    /// Answer every `eth_call` from its calldata (see [`CallHook`]).
+    /// Answer every `eth_call` from its target and calldata (see [`CallHook`]).
     pub fn set_call_hook(&self, hook: CallHook) {
         *self.call_hook.lock().unwrap() = Some(hook);
     }
