@@ -218,7 +218,7 @@ export function parseCli(argv: string[]): Parsed {
   }
   const payload = v.payload as string | undefined;
   if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
-  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} or the record-receipt verb only\n${USAGE}`);
+  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
