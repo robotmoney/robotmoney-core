@@ -4,7 +4,8 @@
 // RouterGovernance.setDefaultWeights(vaults, bps), the ADMIN call the timelock holds). Release and weights are one operation: partial state is impossible.
 // When the contract issue lands the weight-setter applyReceipt call replaces the weights call, and `buildApplyCalls` is the only function that changes.
 // This module is pure: it reads no chain and sends nothing. govern.ts reads the chain, calls `planApply` and sends the batch.
-import { encodeFunctionData, keccak256, parseAbi, type Address, type Hex } from "viem";
+import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
+import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { PublishError } from "./errors.ts";
 import type { VaultKey } from "./sheet.ts";
 
@@ -89,8 +90,8 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
 }
 
 /**
- * Pre-send validation. Throws USAGE (nothing was sent) unless: the receipt is recorded, its stored digest equals keccak256 of the payload bytes, the
- * vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not yet released.
+ * Pre-send validation. Throws USAGE (nothing was sent) unless: the receipt is recorded, its stored digest equals the receipt digest (receipt-digest.ts) of the payload bytes, the
+ * vector sums to 10000 bps and lists exactly the registry's router-eligible vaults (it is arranged in registry order), and the receipt is not yet released.
  */
 export function planApply(i: ApplyInputs): WeightVector {
   // Issue 1743: apply-receipt writes the DEFAULT vector. A voted vector on top of it makes the whole batch a no-op for routing, so refuse before anything is sent,
@@ -101,7 +102,7 @@ export function planApply(i: ApplyInputs): WeightVector {
     if (i.released) usage(`receipt ${i.receiptId} is already released: nothing to apply`, { receipt_id: i.receiptId });
   }
   if (i.storedDigest === undefined) usage(`receipt ${i.receiptId} has no stored payload digest to compare`, { receipt_id: i.receiptId });
-  const digest = keccak256(i.payload);
+  const digest = receiptPayloadDigest(i.payload); // issue 1754: the protocol digest (domain line + canonical bytes), the same function record-receipt uses
   if (lc(digest) !== lc(i.storedDigest!)) usage(`--payload digest ${digest} differs from the digest stored for receipt ${i.receiptId} (${i.storedDigest}): the file is not the anchored payload`, { receipt_id: i.receiptId, digest, stored: i.storedDigest });
   const v = payloadVector(i.payload, i.vaultOf, i.eligible);
   const want = i.eligible.map(lc);
@@ -109,8 +110,10 @@ export function planApply(i: ApplyInputs): WeightVector {
   if (got.length !== want.length || new Set(got).size !== got.length || !got.every((a) => want.includes(a))) {
     return usage(`--payload vault set [${got.join(", ")}] differs from the registry's router-eligible vaults [${want.join(", ")}]`, { got, want });
   }
-  if (got.some((a, k) => a !== want[k])) return usage(`--payload vault order [${got.join(", ")}] differs from the registry order [${want.join(", ")}]`, { got, want });
-  return v;
+  // Issue 1754: the signed payload lists the buckets in the receipt's canonical order (agent, conservative, protocol, rwa), which is not the registry order. The router wants the registry order, so the vector is arranged here.
+  const at = (a: Address) => want.indexOf(lc(a));
+  const order = v.vaults.map((_, k) => k).sort((x, y) => at(v.vaults[x]!) - at(v.vaults[y]!));
+  return { vaults: order.map((k) => v.vaults[k]!), bps: order.map((k) => v.bps[k]!) };
 }
 
 export interface ApplyCall { label: string; target: Address; data: Hex }

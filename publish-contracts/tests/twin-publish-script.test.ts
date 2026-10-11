@@ -176,11 +176,14 @@ fi
     expect(app).toContain(`--receipt-id ${rid}`); // the receipt the Safe applies is the one the submitter recorded
     expect(rec).toMatch(/--payload-digest 0x[0-9a-f]{64}/);
     expect(rec).toMatch(/--payload-uri https:\/\/twin\.invalid\//);
-    // the payload the Safe applies is the file whose keccak256 is the recorded digest
+    // issue 1754: the payload the Safe applies is the REAL production receipt, byte for byte, and the recorded digest and id are the protocol ones (domain line + bytes), not a plain keccak256
     const payload = /--payload (\S+)/.exec(app)![1]!;
     const body = readFileSync(payload);
-    const { keccak256 } = require("viem");
-    expect(rec).toContain(`--payload-digest ${keccak256(new Uint8Array(body))}`);
+    expect(new Uint8Array(body)).toEqual(new Uint8Array(readFileSync(join(import.meta.dir, "fixtures", "real-consensus-receipt.canonical.json"))));
+    expect(rec).toContain(`--payload-digest 0x2aebf2b33c117d41813ef338ccf1d44b8006cc8a54eb162b17cbb8ac18adbacb`);
+    expect(rec).not.toContain("0x19d64ec6822ff72e19a5a7f0126491b3dc17b0b458c12356b3b78a8a577f7f86");
+    expect(rid).toBe("0xdcf4108eb6186e913447fbf24353ee32b2e75cb6c7a46aabbb27f9a663c7ca81");
+    expect(/--payload (\S+)/.exec(rec)![1]).toBe(payload); // record-receipt checks the digest against the same bytes before sending
     // the SUBMITTER was funded by a plain transfer from the deployer, and the receipt path is checked as a rehearsal
     expect(r.logText).not.toContain(`cast send ${submitterAddr}`); // the Safe needs no gas of its own
     expect(r.logText).toMatch(/line evidence --receipt-applications .*publish-run\.json --deployment-kind rehearsal --consensus-receipt 0x0*c1 --governance 0x0*c2 --timelock 0x0*c3/);

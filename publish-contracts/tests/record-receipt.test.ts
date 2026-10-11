@@ -124,6 +124,19 @@ describe("record-receipt refusals before any key is touched (review advisories 3
     expect(signerBuilt).toBe(false);
     expect(w.logs().filter((l) => l.event === "run.failed").pop()!.message).toContain("rmpc receipt submit");
   });
+  test("issue 1754: the CLI checks --payload-digest against the --payload bytes before it builds the signer, and names both digests", async () => {
+    const { world } = await import("./harness.ts");
+    const real = `${import.meta.dir}/fixtures/real-consensus-receipt.canonical.json`;
+    const RREAL = "0xdcf4108eb6186e913447fbf24353ee32b2e75cb6c7a46aabbb27f9a663c7ca81", PLAIN = "0x19d64ec6822ff72e19a5a7f0126491b3dc17b0b458c12356b3b78a8a577f7f86", PROTO = "0x2aebf2b33c117d41813ef338ccf1d44b8006cc8a54eb162b17cbb8ac18adbacb";
+    const w = world({ chainId: 918453 });
+    let signerBuilt = false;
+    const code = await w.run(["record-receipt", "--receipt-id", RREAL, "--payload-digest", PLAIN, "--payload", real, "--payload-uri", URI], { makeSigner: () => { signerBuilt = true; throw new Error("the signer must not be built"); } });
+    expect(code).toBe(2);
+    expect(signerBuilt).toBe(false);
+    const msg = w.logs().filter((l) => l.event === "run.failed").pop()!.message as string;
+    expect(msg).toContain(PLAIN);
+    expect(msg).toContain(PROTO);
+  });
 });
 
 describe("record-receipt inputs and the CLI", () => {

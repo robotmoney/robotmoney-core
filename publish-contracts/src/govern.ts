@@ -19,7 +19,7 @@
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
 //   apply-receipt                the Twin rehearsal's rebalance (issue 1696): ONE timelock batch, releaseReceipt(receiptId) plus the router weight change for the
-// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals keccak256 of the payload bytes, the
+// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
 // vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
 // the batch and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
 // Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
@@ -42,6 +42,7 @@
 // command, and the same command resumes the stage.
 import { readFileSync } from "node:fs";
 import { encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import { PublishError } from "./errors.ts";
@@ -238,7 +239,7 @@ export interface GovernOpts {
   dependsOn?: Readonly<Record<string, string>>;
   /** With row `release-receipt` or `apply-receipt`: the bytes32 receipt id. */
   receiptId?: string;
-  /** With row `apply-receipt` only: the receipt payload file. Its keccak256 must equal the digest the receipt stored on chain. */
+  /** With row `apply-receipt` only: the receipt payload file. Its receipt digest (receipt-digest.ts) must equal the digest the receipt stored on chain. */
   payload?: string;
   /** Where a row line goes. Default: stdout (console.log). */
   emit?: (line: string) => void;
@@ -798,7 +799,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (applying) {
     // Issue 1696: ONE timelock batch, releaseReceipt + the router weight change. Never part of the matrix, on 8453 only when named with a receipt id and a payload.
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32>`);
-    if (o.payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE (the receipt payload, whose keccak256 is the digest the receipt stored)`);
+    if (o.payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE (the receipt payload, whose receipt digest, keccak256 of the domain line + the canonical bytes, is the digest the receipt stored)`);
     const receiptId = assertReceiptId(o.receiptId);
     let payload: Uint8Array;
     try { payload = new Uint8Array(readFileSync(o.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${o.payload} is not readable: ${(e as Error).message}`); }
@@ -842,7 +843,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
         return bad;
       };
-      state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: keccak256(payload) } };
+      state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: receiptPayloadDigest(payload) } };
       await round(name, {
         id, description: `apply receipt ${receiptId}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),

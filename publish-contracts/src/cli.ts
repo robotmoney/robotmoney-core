@@ -73,7 +73,7 @@ export const USAGE = `publish contracts
                      the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
                      --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696): ONE timelock batch,
                      releaseReceipt plus the router weight change for the payload's vector, refused with USAGE (nothing sent) unless the receipt is recorded and
-                     unreleased, the payload's keccak256 equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
+                     unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
                      --row clear-voted-weights (no other argument) clears the router's VOTED weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(), so routing
                      falls back to the default vector. Refused (nothing scheduled) when no voted vector is active. apply-receipt refuses while one is active. Production and rehearsal, never part of stage 13.
@@ -82,12 +82,12 @@ export const USAGE = `publish contracts
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
-  --payload-digest D record-receipt only: the bytes32 keccak256 of the receipt's canonical bytes (payload_digest of 'rmpc receipt verify').
+  --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
   --submitter ADDR   govern --row register-committee and the record-receipt verb: the consensus receipt SUBMITTER, a SafeL2 1.4.1 multisig (issue 1750; threshold 2 or more, no module, no guard, separate from the governing Safe).
                      record-receipt: required on 8453; --signer is then the deployer that pays gas and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --agent-label NAME govern --row register-committee only: the label on the IC policy (default committee-submitter).
-  --payload FILE     govern with --row apply-receipt only: the receipt payload file (its keccak256 is the anchored payloadDigest).
+  --payload FILE     govern with --row apply-receipt (required), or record-receipt (optional, checked before anything is sent): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
@@ -218,7 +218,7 @@ export function parseCli(argv: string[]): Parsed {
   }
   const payload = v.payload as string | undefined;
   if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
-  if (payload !== undefined && row !== APPLY_ROW) throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only\n${USAGE}`);
+  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} or the record-receipt verb only\n${USAGE}`);
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -382,8 +382,10 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       if (rpcChainId === MAINNET_CHAIN_ID && sheet.kind !== "rehearsal") throw new PublishError("USAGE", "record-receipt is refused on this chain in production: production records receipts with 'rmpc receipt submit' and an HSM or KMS signer. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.");
       // Owner decision 2026-10-10: on 8453 the submitter is a multisig. Refused before the signer exists too.
       if (rpcChainId === MAINNET_CHAIN_ID && a.submitter === undefined) throw new PublishError("USAGE", "record-receipt on 8453 needs --submitter <the submitter Safe> (a SafeL2 1.4.1 multisig) and the --owner-signer of its owners: the consensus receipt submitter is never a single key. --signer is the deployer that pays the gas.");
+      let payloadBytes: Uint8Array | undefined;
+      if (a.payload !== undefined) { try { payloadBytes = new Uint8Array(readFileSync(a.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${a.payload} is not readable: ${(e as Error).message}`); } }
+      const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri, payload: payloadBytes }); // issue 1754: digest and id are checked against the bytes BEFORE the signer exists
       const ctx = buildCtx(undefined, false);
-      const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri });
       const safeMode = a.submitter === undefined ? undefined : { safe: assertSubmitter(a.submitter), ownerSigners: await ownerSigners(ctx) };
       const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi, safeMode);
       console.log(JSON.stringify({ event: "record_receipt", ...rec }));
