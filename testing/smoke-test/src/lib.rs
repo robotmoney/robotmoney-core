@@ -1715,7 +1715,10 @@ impl Fixture {
     pub fn record_fixture_receipt(&self, file: &str) -> Result<String, HarnessError> {
         let r = load_fixture_receipt(&self.repo_root, file)?;
         let id = format!("0x{}", hex::encode(r.receipt_id));
-        let digest = format!("0x{}", hex::encode(keccak256(&r.bytes).0));
+        // Issue 1754: the anchored digest is keccak256(domain line || bytes), the scheme `govern --row apply-receipt` checks (publish-contracts/src/receipt-digest.ts).
+        let mut preimage = b"robotmoney:consensus-receipt:v1\n".to_vec();
+        preimage.extend_from_slice(&r.bytes);
+        let digest = format!("0x{}", hex::encode(keccak256(&preimage).0));
         let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
         self.cast_send(
             &agent_pk_hex,

@@ -11,7 +11,7 @@
 // Any tool that exits non-zero fails this script. The only Twin environment steps are fund-gas and fund-usdc (the RM/USDC pool is never funded: the Twin forks the live pool, owner decision 2026-10-09); the govern time warp is inside the CLI.
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { keccak256, toBytes } from "viem";
+import { receiptIdOfBytes, receiptPayloadDigest } from "../receipt-digest.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
@@ -109,17 +109,17 @@ if (rehearsalMode && env("GOVERN_IN") === "true") {
   run([bun, safeCli, "create", "--rpc", rpc, "--chain-id", String(TWIN_CHAIN_ID), "--owners", owners, "--threshold", "2", "--signer", `keystore:${join(rh, "keys/DEPLOYER")}:${pass}`,
     "--salt-nonce", String(safeSalt + 1), "--yes", "--out", submitterSafeJson], { cwd: pc, stdoutTo: join(rh, "submitter-safe-create.txt"), childEnv: { ADMIN_ADDRESS: admin } });
   const submitter = (JSON.parse(readFileSync(submitterSafeJson, "utf8")) as { safe?: string }).safe ?? fail("the submitter Safe manifest has no safe address");
-  // A real receipt payload: the allocation vector the Safe will apply, in the registry order of the four router-eligible vaults.
+  // A REAL receipt payload (issue 1754): the production swarm receipt of session 5015526d-27f6-478a-86e9-ac768e310af1, byte for byte as the canonical route serves it, with its four signed weights
+  // (agent 575, conservative 8550, protocol 525, rwa 350 bps). Digest and id come from the shared protocol functions (receipt-digest.ts), never from a plain keccak256 of the file.
   const payload = join(rh, "receipt-payload.json");
-  const body = JSON.stringify({ session_id: `twin-${sha.slice(0, 8)}`, subject_id: "router-weights", weights: [
-    { bucket: "conservative_defi_yield", weight_bps: 8000 }, { bucket: "protocol_tokens", weight_bps: 1000 }, { bucket: "agent_tokens", weight_bps: 500 }, { bucket: "real_world_assets", weight_bps: 500 }] });
+  const body = readFileSync(join(import.meta.dir, "..", "..", "tests", "fixtures", "real-consensus-receipt.canonical.json"));
   writeFileSync(payload, body);
-  const digest = keccak256(toBytes(body));
-  const receiptId = keccak256(toBytes(`robotmoney:consensus-receipt-id:v1\ntwin-${sha.slice(0, 8)}\nrouter-weights`));
+  const digest = receiptPayloadDigest(new Uint8Array(body));
+  const receiptId = receiptIdOfBytes(new Uint8Array(body)) ?? fail("the receipt fixture has no session_id and subject_id");
   const uri = `https://twin.invalid/receipts/${receiptId}.json`;
   stage("govern", join(rh, "register-committee-rows.txt"), ["--row", "register-committee", "--submitter", submitter, "--agent-label", "twin-submitter"]);
   // --signer is the DEPLOYER (it pays the gas); two of the submitter Safe's owners sign (their keystores sit beside the DEPLOYER keystore).
-  stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload-uri", uri, "--submitter", submitter]);
+  stage("record-receipt", join(rh, "record-receipt.txt"), ["--receipt-id", receiptId, "--payload-digest", digest, "--payload", payload, "--payload-uri", uri, "--submitter", submitter]);
   stage("govern", join(rh, "apply-receipt-rows.txt"), ["--row", "apply-receipt", "--receipt-id", receiptId, "--payload", payload]);
   exportVar("TWIN_RECEIPT_ID", receiptId);
   exportVar("TWIN_RECEIPT_SUBMITTER", submitter);

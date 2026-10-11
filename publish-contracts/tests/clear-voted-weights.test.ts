@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, keccak256, toBytes } from "viem";
 import { APPLY_ROW, applyReadBackProblems, applyRecordKey, planApply } from "../src/apply-receipt.ts";
 import { CLEAR_ROW, GOVERNANCE_CLEAR_ABI, buildClearCall, clearReadBackProblems } from "../src/clear-voted-weights.ts";
@@ -34,7 +35,7 @@ function world(chainId = 918453, voted = true) {
   const file = join(d.ctx.coreDir, "payload.json");
   const text = JSON.stringify({ schema_version: "1.0", weights: GOOD });
   writeFileSync(file, text);
-  tl.s.digests.set(RID, keccak256(toBytes(text)));
+  tl.s.digests.set(RID, receiptPayloadDigest(toBytes(text)));
   tl.s.weights = { vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n] };
   if (voted) tl.s.voted = { vaults: [A.vaults.USDC], bps: [10000n] };
   const manifest = newManifest(d.ctx, addr(0xa001));

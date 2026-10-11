@@ -17,6 +17,7 @@
 // The digest and id come from `rmpc receipt verify` (read-only, no signer, it checks every analyst signature off chain): pass its payload_digest and receipt_id.
 import { createPublicClient, encodeFunctionData, getAddress, http, keccak256, parseAbi, parseAbiItem, parseEventLogs, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
+import { assertDigestMatchesBytes, receiptIdOfBytes } from "./receipt-digest.ts";
 import { isMainnet } from "./chains.ts";
 import { loadRunManifest, readManifestField, saveRunManifest, confirmStage, type RunContext } from "./runner.ts";
 import { manifestRef } from "./stages.ts";
@@ -135,10 +136,16 @@ export function realRecordApi(rpc: string, chainId: number, logger?: Logger): Re
 const B32 = /^0x[0-9a-fA-F]{64}$/;
 const lc = (x: string) => x.toLowerCase();
 
-export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: string; payloadUri?: string }): RecordInputs {
+/** With `payload` (the receipt file's bytes) the digest and the id are checked against the bytes with the shared scheme (receipt-digest.ts) and a mismatch is refused naming both. */
+export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: string; payloadUri?: string; payload?: Uint8Array }): RecordInputs {
   if (!i.receiptId || !B32.test(i.receiptId)) throw new PublishError("USAGE", "--receipt-id must be a 0x-prefixed bytes32 (the receipt_id that `rmpc receipt verify` prints)");
   if (!i.payloadDigest || !B32.test(i.payloadDigest)) throw new PublishError("USAGE", "--payload-digest must be a 0x-prefixed bytes32 (the payload_digest that `rmpc receipt verify` prints)");
   if (!i.payloadUri || !/^https?:\/\/\S+$/.test(i.payloadUri)) throw new PublishError("USAGE", "--payload-uri must be the public http(s) route that serves the exact payload bytes");
+  if (i.payload !== undefined) {
+    assertDigestMatchesBytes(i.payload, i.payloadDigest, "--payload-digest");
+    const idOfBytes = receiptIdOfBytes(i.payload);
+    if (idOfBytes !== undefined && idOfBytes.toLowerCase() !== i.receiptId.toLowerCase()) throw new PublishError("USAGE", `--receipt-id ${i.receiptId} is not the receipt id ${idOfBytes} derived from the payload's session_id and subject_id`, { receipt_id: i.receiptId, derived: idOfBytes });
+  }
   return { receiptId: i.receiptId.toLowerCase() as Hex, payloadDigest: i.payloadDigest.toLowerCase() as Hex, payloadUri: i.payloadUri };
 }
 

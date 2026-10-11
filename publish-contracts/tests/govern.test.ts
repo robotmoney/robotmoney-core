@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, keccak256, toBytes, toFunctionSelector } from "viem";
 import { APPLY_ROW, GOVERNANCE_WEIGHTS_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
@@ -1111,7 +1112,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const file = join(d.ctx.coreDir, "payload.json");
     const text = payloadDoc(docWeights);
     writeFileSync(file, text);
-    tl.s.digests.set(RID, keccak256(toBytes(text)));
+    tl.s.digests.set(RID, receiptPayloadDigest(toBytes(text)));
     tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA], bps: [6000n, 2500n, 1500n] };
     const manifest = newManifest(d.ctx, addr(0xa001));
     const apply = (extra: object = {}) => runGovern(d.ctx, stageByName("govern"), manifest, opts(d.sheet, tl, { row: APPLY_ROW, receiptId: RID, payload: file, ...extra }));
@@ -1212,21 +1213,27 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // an unknown bucket, a bucket twice
     await refused(world(918453, [...GOOD, { bucket: "memecoins", weight_bps: 0 }]), "is not one of");
     await refused(world(918453, [...GOOD, { bucket: "protocol_tokens", weight_bps: 0 }]), "listed twice");
-    // the right set in another order than the registry's: rmPROTO before rmUSDC
-    await refused(world(918453, [{ bucket: "protocol_tokens", weight_bps: 3000 }, { bucket: "conservative_defi_yield", weight_bps: 5000 }, { bucket: "real_world_assets", weight_bps: 2000 }]), "vault order");
     // no weights list, a payload that is not JSON
     await refused(world(918453, [] as never), "no weights list");
     const notJson = world();
     writeFileSync(notJson.file, "not json");
-    notJson.tl.s.digests.set(RID, keccak256(toBytes("not json")));
+    notJson.tl.s.digests.set(RID, receiptPayloadDigest(toBytes("not json")));
     await refused(notJson, "not JSON");
-    // rmAGENT eligible too: the same payload (rmAGENT at 0) now lists all four in registry order only when the payload does
-    const agentEligible = world();
-    agentEligible.tl.s.ineligible.clear();
-    const res = await agentEligible.apply({ warp: warpTo(agentEligible.tl) }).catch((e: Error) => e);
-    expect(res).toBeInstanceOf(PublishError);
-    expect((res as PublishError).message).toContain("vault order");
-    expect(agentEligible.tl.s.events).toEqual([]);
+    // the digest check is the protocol digest: a stored plain keccak256 of the bytes is refused (issue 1754)
+    const plain = world();
+    plain.tl.s.digests.set(RID, keccak256(toBytes(payloadDoc(GOOD))));
+    await refused(plain, "differs from the digest stored");
+  });
+
+  test("issue 1754: the payload lists the buckets in the receipt's canonical order, the applied vector is in registry order (the order of the signed payload is irrelevant)", async () => {
+    // registry order USDC, PROTO, AGENT, RWA with all four eligible; the payload lists agent, conservative, protocol, rwa (the real receipt's order)
+    const w = world(918453, [{ bucket: "agent_tokens", weight_bps: 575 }, { bucket: "conservative_defi_yield", weight_bps: 8550 }, { bucket: "protocol_tokens", weight_bps: 525 }, { bucket: "real_world_assets", weight_bps: 350 }]);
+    w.tl.s.ineligible.clear();
+    w.tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], bps: [6000n, 2500n, 500n, 1000n] };
+    await w.apply({ warp: warpTo(w.tl) });
+    const sc = w.tl.s.scheduled.get("apply-receipt")!;
+    const d1 = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: sc.calls[1]!.data as `0x${string}` });
+    expect(d1.args).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], [8550n, 525n, 575n, 350n]]);
   });
 
   test("apply-receipt is not in stage 13: stageRows(8453) is the four unpauses and GOVERN_ROWS has no apply-receipt", () => {
