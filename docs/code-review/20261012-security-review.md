@@ -2,7 +2,7 @@
 
 Baseline: `2c81c742f97fc2faa033befc38a01a2c2af66cc3` (`origin/dev`, the repository's default branch; `origin/main` does not exist). The Solidity production sources are unchanged from `7c742860fad65b09442bf64fdf2b0098ba0b135f`, where the focused review was performed. Review worktree: `review/contracts-security-20261012`.
 
-Status: re-checked adversarially on 2026-10-12. The first pass reported three findings. The re-check kept all three mechanisms, re-rated two of them, corrected the framing of the third, and added five findings the first pass missed. Every claim below that says "reproduced" has a passing test in `contracts/test/SecurityReview*Poc.t.sol` or `contracts/test/SecurityReviewRecheck*Poc.t.sol` at this baseline.
+Status: re-checked adversarially on 2026-10-12. The first pass reported three findings. The re-check kept all three mechanisms, re-rated two of them, corrected the framing of the third, and added five findings the first pass missed. A relevance pass against the open plan issues then retired one finding, downgraded two, and marked two as already tracked (see "Planned changes that affect this report"). Every claim below that says "reproduced" has a passing test in `contracts/test/SecurityReview*Poc.t.sol` or `contracts/test/SecurityReviewRecheck*Poc.t.sol` at this baseline.
 
 The scope inventory contains 28 production Solidity implementations under `contracts/` (7 adapters, 4 gateway, 8 library, 4 under `vaults/`, plus `FeatureFlags`, `PortfolioRouter`, `RobotMoneyVault`, `RouterGovernance`, `VaultRegistry`). The first pass traced authorization, deposit/share accounting, withdrawals, adapter eligibility, swap/oracle boundaries, and committee attribution. The re-check added the router, registry, governance, timelock wiring, the gateway's full `AGENT_ROLE` surface, the emergency and keeper paths of the vault, off-chain consumers of committee votes, and the prior-audit ledger.
 
@@ -14,12 +14,12 @@ This report evaluates the checked-out source. No Base (8453) production manifest
 |---|---|---|---|---|
 | 1 | Deposits stay open while a funded adapter is excluded from NAV | Medium (was High) | ADMIN revokes a funded adapter before deposits are paused; any later recovery leg | Reproduced; mitigation reproduced |
 | 2 | Duplicate strategy adapter registration pays the first redeemer twice | Medium (was Low) | ADMIN schedules the same active adapter address twice | Reproduced value extraction |
-| 3 | Any gateway agent can attribute a committee vote to an allowlisted member | Medium | One committee member allowlisted; attacker self-registers as a gateway agent | Reproduced, including supersede |
-| 4 | One voter carries any router-weight proposal under the shipped sheet | Medium | Stage sheet values `QUORUM_THRESHOLD=2`, `VOTER_POWER=1000` | Reproduced |
-| 5 | EMERGENCY `forceRemoveAdapter` reprices every exit | Medium | EMERGENCY hot key acts alone | Reproduced |
-| 6 | Keeper `rebalance()` undoes `emergencyWithdraw` | Low (Medium once `KEEPER_ROLE` is granted) | A keeper runs during the timelock delay | Reproduced |
+| 3 | Any gateway agent can attribute a committee vote to an allowlisted member | Low (was Medium) | One committee member allowlisted; attacker self-registers as a gateway agent | Reproduced, including supersede |
+| 4 | One voter carries any router-weight proposal under the shipped sheet | Retired | Voting is deleted before the final deployment (weight-setter issue, 1698) | Reproduced on today's bytecode |
+| 5 | EMERGENCY `forceRemoveAdapter` reprices every exit | Medium, tracked | EMERGENCY hot key acts alone; owner decision pending (four-vault plan, 1705, Q2) | Reproduced |
+| 6 | Keeper `rebalance()` undoes `emergencyWithdraw` | Info, tracked | Requires a `KEEPER_ROLE` holder; the plan asserts none (1705, C5) | Reproduced |
 | 7 | Permissionless `revealAuthorization` squats any un-owned agent address | Low | Attacker front-runs a scheduled `authorizeAgent` | Reproduced |
-| 8 | Duplicate vault entries in router weight vectors | Low | ADMIN sets a vector with a repeated vault | Source read, HR-L-9 still present |
+| 8 | Duplicate vault entries in router weight vectors | Low | A Safe-applied vector repeats a vault | Source read, HR-L-9 still present |
 | 9 | Ledger and doc drift on six prior findings | Info | — | Source read |
 
 ## Findings
@@ -59,7 +59,7 @@ Recovery is not `removeAdapter`: both entries read the same non-zero balance, so
 
 **History:** SR-M15 (`20260612-code-review-internal-claude.md:178-181`) already says "aware redeemers extract real USDC, leaving the vault insolvent". It is covered only by the grouped row `SR-0612-OPEN` in `docs/audits.md:392` with disposition "accepted-with-rationale, must land before mainnet" (`:465`). L-002 (`20260728-code-review-internal-kimi.md:329`) has no ledger row. `docs/technical/smart-contract-invariants.md:168` claims "the unified `Vault.addAdapter` reuses an inactive entry on re-add — fixed by NC-8 (#970)"; that fix landed only in `BasketVault.addAsset` (`contracts/vaults/BasketVault.sol:1081-1098`), not in `RobotMoneyVault.addAdapter`, which always pushes (L943-946).
 
-### 3. Medium — any gateway agent can attribute a committee vote to an allowlisted member
+### 3. Low — any gateway agent can attribute a committee vote to an allowlisted member
 
 **Code:** `gateway/RobotMoneyGateway.sol:616-629, 632-700, 751-753, 1529-1536`, `gateway/InvestmentCommitteePolicy.sol:213-243, 271-280`.
 
@@ -69,13 +69,15 @@ The gateway forwards caller-controlled `p.agent` unchecked; the policy checks wh
 
 - Self-registration through `commitAuthorization` + `revealAuthorization` is the documented depositor trust model, not a bug (`RobotMoneyGateway.sol:616-629`, `IGateway.sol:366-370`, `docs/architecture.md:944-962`). "Grants `AGENT_ROLE` without multisig approval" was misleading. `AGENT_ROLE` is a self-serve depositor-tier role with no committee authority. Every fund path it gates (`deposit`, `depositTo`, `withdraw`, `withdrawFromRouter`) reads `agents[msg.sender]` and pulls USDC or shares from `msg.sender` or from a `shareReceiver` a non-admin must set to itself (L752). The gateway holds no pooled shares. `test_selfRegisteredAgentCannotPullAnotherHoldersShares`.
 - The impact is larger than "false provenance". Votes are append-only with no per-agent key, so the real member's vote never reverts, but the live-state rule is latest-wins (`docs/architecture.md:581-583`, `latestVoteByAgent` at L271-280). An attacker who back-runs the member's vote becomes the member's live position. `test_spoofedVoteSupersedesMembersLatestVote`.
-- The off-chain feed is fully attacker-controllable. The indexer stores `decoded.agent` straight from the event (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220`); "verified" means only that the body at `rationale_uri` hashes to `voteJsonHash`, both attacker-supplied (`:2612-2646`). The aggregate is `AVG/COUNT` over `committee_votes WHERE verified` with no per-agent dedupe and no join to `committee_agents` (`services/explorer-indexer/src/db.rs:1979-1983`, `clients/explorer-api/src/routes.rs:1720-1727`), surfaced by the dapp as "aggregated committee tilt" (`clients/dapp/src/lib/committeeApi.ts:59-74`). `docs/architecture.md:618-623` says the timelock proposer "reads the committee's tilts, aggregated off-chain" to propose router weights, so the spoof poisons the signal governance is designed to consume. `test_spoofedVotesFloodUnderMemberName`. Severity stays Medium only because a human proposal step sits between the feed and the router.
+- The off-chain feed is fully attacker-controllable. The indexer stores `decoded.agent` straight from the event (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220`); "verified" means only that the body at `rationale_uri` hashes to `voteJsonHash`, both attacker-supplied (`:2612-2646`). The aggregate is `AVG/COUNT` over `committee_votes WHERE verified` with no per-agent dedupe and no join to `committee_agents` (`services/explorer-indexer/src/db.rs:1979-1983`, `clients/explorer-api/src/routes.rs:1720-1727`), surfaced by the dapp as "aggregated committee tilt" (`clients/dapp/src/lib/committeeApi.ts:59-74`). `test_spoofedVotesFloodUnderMemberName`.
+
+**Why Low:** `docs/architecture.md:618-623` still says the timelock proposer "reads the committee's tilts, aggregated off-chain" to propose router weights. That text is being retired. Under the owner spec of 2026-10-09 (docs issue 1697, weight-setter issue 1698) router weights move only when the Safe applies a consensus receipt, and the receipt payload comes from a swarm session with embedded analyst signatures, verified against the anchored digest (`docs/technical/consensus-receipt-submitter-runbook.md:72, 342`). Receipt anchoring checks the real submitter (below). On-chain votes become a "signed tilt" that feeds only the public committee dashboard and API. The spoof therefore corrupts a public display and its provenance, not a governance input. It returns to Medium if any consumer ever derives weights or receipts from on-chain votes.
 
 Confirmed safe: `consensusRecordReceipt` passes `msg.sender` (L1587) and the receipt checks that submitter's committee role (`ConsensusRecommendationReceipt.sol:133`); `releaseReceipt` is ADMIN-gated. `test_selfRegisteredAgentCannotAnchorReceipt`. No other gateway → policy forward carries a caller-controlled identity.
 
 **Recommendation:** In `committeeVoteSubmit`, revert unless `p.agent == msg.sender`. No ERC-2771, EIP-712, or relayer exists in the gateway, `docs/architecture.md:601-608` rules out relayed votes, and `rmpc` already sets `agent` from the signer (`clients/rust-payment-client/src/commands/committee.rs:212, 286`), so nothing breaks. Separately, have the indexer join votes to the on-chain `committee_agents` set and dedupe to latest-per-agent before aggregating.
 
-### 4. Medium — one voter carries any router-weight proposal under the shipped sheet
+### 4. Retired — one voter carries any router-weight proposal under the shipped sheet
 
 **Code:** `RouterGovernance.sol:52-54, 69, 639`, `contracts/script/DeployRouterGovernance.s.sol:95-98`, `publish-contracts/src/sheet.ts:288`, `publish-contracts/src/verify/index.ts:239-244`, `deployments/twin-918453/stage-sheet.env:16, 48`, `deployments/base-8453-rehearsal/stage-sheet.example.env:26, 58`.
 
@@ -83,7 +85,7 @@ Confirmed safe: `consensusRecordReceipt` passes `msg.sender` (L1587) and the rec
 
 **Reproduction:** `SecurityReviewRecheckGovernancePoc.test_singleVoterCarriesProposalWithSheetValues` with the sheet values.
 
-**Recommendation:** Set `QUORUM_THRESHOLD` in power units above any single voter's power (for the shipped sheet, at least `1001`), and make the deploy script and sheet validator reject `quorum <= max(voterPower)`. Add an invariant test that reads the sheet values.
+**Status:** Retired. The weight-setter issue (1698) deletes `propose`, `vote`, `execute`, `setVotingPower` and quorum from RouterGovernance before the final deployment, with `test_noVotingSurface` as an acceptance gate. The mainnet test deploys today's bytecode with voter addresses nobody holds keys for (four-vault plan, 1705, Q7), so the path is inert there. No fix is needed beyond 1698. If 1698 slips past the final deployment, this finding becomes live again and the fix is a quorum above any single voter's power.
 
 ### 5. Medium — EMERGENCY `forceRemoveAdapter` reprices every exit
 
@@ -93,15 +95,17 @@ Confirmed safe: `consensusRecordReceipt` passes `msg.sender` (L1587) and the rec
 
 The function is documented as a loss write-off. The gap is that nothing ties it to an actual loss: a healthy adapter can be written off, and only ADMIN (timelock, 48 hours) can bring it back. Rated Medium as a hot-key trust finding; the same key can already `emergencyWithdraw`, but that path keeps NAV intact.
 
+**Tracking:** The four-vault plan (1705, Q2 and C6) already lists `forceRemoveAdapter` among the emergency levers that change state without the timelock, with an owner decision due before the final deployment. This finding adds the concrete exit-repricing consequence that decision should weigh.
+
 **Recommendation:** Require `forceRemoveAdapter` to first attempt `emergencyWithdrawAdapter` and succeed, or restrict it to adapters whose `totalAssets()` reverts (the case `test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts` covers). Make `maxRedeem`/`maxWithdraw` consistent with `previewRedeem` when NAV is zero.
 
-### 6. Low — keeper `rebalance()` undoes `emergencyWithdraw`
+### 6. Info — keeper `rebalance()` undoes `emergencyWithdraw`
 
 **Code:** `RobotMoneyVault.sol:1000-1035`, especially the `_routeDeposit(idle)` leg at L1032.
 
 The rebalance throttle bounds only pulls. The routing leg sends the whole idle balance back out, checks neither `depositsPaused` nor `shutdown`, and skips only adapters whose allowlist ADMIN already revoked. After EMERGENCY drains a suspect venue, one keeper call re-deploys 100% of TVL into it during the 48-hour delay before ADMIN can revoke it. `test_O2_keeperRebalanceUndoesEmergencyWithdraw`. This is SR-M10 (`20260612-code-review-internal-claude.md:153`), still open at HEAD, never individually dispositioned in `docs/audits.md`.
 
-`KEEPER_ROLE` is not granted at launch (`docs/technical/smart-contracts.md:143`), so today only the timelock can call `rebalance()`. Rated Low for that reason; it becomes Medium the day a keeper key is granted.
+`KEEPER_ROLE` is not granted at launch (`docs/technical/smart-contracts.md:143`), and the four-vault plan (1705, item 2 and C5) adds a verifier label asserting it has no holder. Only the timelock can call `rebalance()`, and a timelock call is a deliberate governance action. Rated Info for that reason. It becomes Medium if a keeper key is ever granted. Note that the open keeper issue (1779) is about the rmAGENT price recorder, not this role.
 
 **Recommendation:** Make `rebalance()` revert while `depositsPaused` or `shutdown` is set.
 
@@ -117,7 +121,7 @@ The rebalance throttle bounds only pulls. The routing leg sends the whole idle b
 
 **Code:** `PortfolioRouter.sol:456-469, 537-553`.
 
-`setWeights` and `_setDefaultWeights` check zero, Active, eligible and sum, never uniqueness. A default vector with a duplicate satisfies `length == routerEligibleCount` while silently dropping one eligible vault. Admin-gated. One layer above finding 2, same root cause: no membership check on a registry write.
+`setWeights` and `_setDefaultWeights` check zero, Active, eligible and sum, never uniqueness. A default vector with a duplicate satisfies `length == routerEligibleCount` while silently dropping one eligible vault. Admin-gated. One layer above finding 2, same root cause: no membership check on a registry write. Still relevant after the weight-setter issue (1698): its `applyReceipt` calls `PortfolioRouter.setWeights` with the receipt's vector, and the digest check proves the vector is the one committed, not that it is well-formed.
 
 **Recommendation:** Reject repeated vault addresses in both setters.
 
@@ -128,12 +132,26 @@ Rows in `docs/audits.md` or canonical docs that state the opposite of the code a
 - AZ-BSK-3 marked fixed for RobotMoneyVault; not fixed (finding 1).
 - `docs/technical/smart-contract-invariants.md:168` says NC-8 fixed duplicate re-add on the unified vault; it fixed only BasketVault (finding 2).
 - AZ-GW-3 "accepted, remains mainnet-blocking" (`audits.md:421, 468`); fixed at `RobotMoneyGateway.sol:1363-1386` (empty `allowedSourceVaults` means pinned vault only).
-- AZ-GOV-1 "accepted" (`audits.md:422`); fixed at `RouterGovernance.sol:86` (`MAX_HISTORY_BLOCKS = 100_000`).
+- AZ-GOV-1 "accepted" (`audits.md:422`); fixed at `RouterGovernance.sol:86` (`MAX_HISTORY_BLOCKS = 100_000`). Moot once 1698 deletes voting.
 - HR-L-11 `rescueUsdc` "accepted by design" (`audits.md:341`); the function is deleted (`PortfolioRouter.sol:602-618`).
 - `docs/architecture.md:404-406` says open executor is "not yet implemented"; `DeployTimelock.s.sol:83-85` implements it.
 - `RobotMoneyVault.sol:950-956` and `docs/technical/smart-contracts.md:165, 174-177` describe the allowlist as onboarding-only (finding 1).
 
 Prior rows this review neither reconfirms nor disputes, for the next pass: SR-H4 (partial), FS-VLT-10, FS-VLT-21, FS-VLT-22, FS-VLT-23, FS-VLT-27, HR-I-1, HR-I-2, HR-I-3, FORCEREMOVE-001, HR-I-7, DC-0606-DEFER GOV-003, AC-008, and the blanket `SR-0612-OPEN` row ("4 High + 19 Medium open"), which no report has reconciled per contract.
+
+## Planned changes that affect this report
+
+Open plan issues checked on 2026-10-12. They are planned, not merged, so every finding above was reproduced against today's code.
+
+| Issue | What it changes | Effect on this report |
+|---|---|---|
+| Weight-setter `applyReceipt`, delete RouterGovernance voting (1698) | No voting anywhere; the Safe applies a consensus receipt through `WEIGHT_SETTER_ROLE` in one call | Retires finding 4. Lowers finding 3. Finding 8 stays. Makes AZ-GOV-1 moot. |
+| Governance docs rewrite (1697) | Docs describe one model; `committee vote-submit` is a signed tilt, not a vote | Fixes the stale `docs/architecture.md:618-623` that finding 3 cites. Excludes `docs/audits.md`, so finding 9 needs its own fix. |
+| Four-vault deployment and governance plan (1705) | One rule table; verifier asserts rmUSDC `KEEPER_ROLE` unheld; owner decision on no-delay emergency levers | Tracks finding 5 (Q2, C6) and finding 6 (C5). Does not cover findings 1, 2 or 7. |
+| Real Safe to timelock path in CI (1447) | Real-Safe tests for every governed contract | Would exercise the recovery sequences in findings 1 and 2 through the real path. |
+| Restore the V4 asset position adapter (1677) | Brings back a V4 adapter for the baskets | Out of scope for RobotMoneyVault. The "no V4 position in RobotMoneyVault" note below stays true unless the open host-vault question changes. |
+
+Findings 1, 2 and 7 are not covered by any open issue. They need their own issues.
 
 ## Checked and found sound
 
