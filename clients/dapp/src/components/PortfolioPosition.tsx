@@ -30,6 +30,7 @@ import {
 } from "../lib/explorerApi";
 import { VaultPositionCard } from "./shared";
 import { formatSharesString, formatUsdc, formatUsdcString } from "../lib/format";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -86,6 +87,10 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
   }, [props.address, props.apiUrl, props.fetchImpl]);
 
   const usdcValues = props.usdcValues ?? {};
+  // Each vault's own share symbol (issue 1767).
+  const symbolOf = useVaultShareSymbols(
+    state.kind === "ready" ? state.positions.map((p) => p.vault_address) : [],
+  );
 
   /** Compute composite total when all vaults have a USDC value. */
   function compositeTotal(positions: readonly AccountPosition[]): bigint | null {
@@ -146,7 +151,7 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                           <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
                           <td data-testid="portfolio-position-row-risk">{pos.risk_label}</td>
                           <td data-testid="portfolio-position-row-shares">
-                            {formatSharesString(pos.shares, "rmUSDC")}
+                            {formatSharesString(pos.shares, symbolOf(pos.vault_address))}
                           </td>
                           <td data-testid="portfolio-position-row-usdc">
                             {formatUsdcString(usdc)}
@@ -179,7 +184,7 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                       key={pos.vault_address}
                       vaultAddress={pos.vault_address}
                       vaultName={pos.vault_name}
-                      shares={formatSharesString(pos.shares, "rmUSDC")}
+                      shares={formatSharesString(pos.shares, symbolOf(pos.vault_address))}
                       riskLabel={pos.risk_label}
                       usdcValue={usdc !== undefined ? formatUsdcString(usdc) : undefined}
                     />

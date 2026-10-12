@@ -153,7 +153,7 @@ describe("PortfolioPosition", () => {
     expect(vaultNames).toEqual(["Alpha Vault", "Beta Vault"]);
 
     const shares = getAllByTestId("portfolio-position-row-shares").map((n) => n.textContent);
-    expect(shares).toEqual(["0.50 rmUSDC", "0.25 rmUSDC"]);
+    expect(shares).toEqual(["0.50 shares", "0.25 shares"]);
 
     // Address is surfaced.
     expect(getByTestId("portfolio-position-address").textContent).toContain(WATCHED);
@@ -492,7 +492,7 @@ describe("AgentPoliciesPanel", () => {
       const warn = getByTestId("agent-policy-withdrawal-warning");
       expect(warn.textContent).toMatch(/WARNING/);
       expect(warn.textContent).toMatch(/withdrawals enabled/i);
-      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toBe("10.00 rmUSDC");
+      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toBe("10.00 shares");
       expect(warn.textContent).toContain("0xdeadbeef00000000000000000000000000000001");
     });
 
@@ -550,7 +550,7 @@ describe("AgentPoliciesPanel", () => {
       const block = getByTestId("agent-policy-stale-allowance");
       expect(block).toBeTruthy();
       expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toBe(
-        "12,345.00 rmUSDC",
+        "12,345.00 shares",
       );
       const btn = getByTestId("agent-policy-revoke-allowance") as HTMLButtonElement;
       expect(btn.disabled).toBe(false);
@@ -611,7 +611,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("9,999,999.00 rmUSDC");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("9,999,999.00 shares");
       // The shareReceiver label must be surfaced (AZ-GW-2 fix).
       expect(getByTestId("agent-policy-share-allowance-owner").textContent).toContain(
         SHARE_RECEIVER,
@@ -635,7 +635,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("7,654,321.00 rmUSDC");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("7,654,321.00 shares");
       // No shareReceiver label for direct-vault policies.
       expect(queryByTestId("agent-policy-share-allowance-owner")).toBeNull();
     });

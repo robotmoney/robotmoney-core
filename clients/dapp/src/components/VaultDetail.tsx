@@ -33,6 +33,7 @@ import {
   USDC_DECIMALS,
 } from "../lib/format";
 import { useExplorer } from "../lib/ExplorerContext";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
   HEADROOM_LABEL,
@@ -194,6 +195,8 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   // from the shared vault list, and the vault's own flag read from the chain (issue 1731).
   const { vaults: listedVaults, blockNumber: listBlock, chainHeadBlock } = useExplorer();
   const { byAddress: chainPaused } = useVaultsDepositsPaused([address]);
+  // The vault is its own ERC-4626 share token: print its own symbol(), never a hardcoded unit (issue 1767).
+  const shareSymbol = useVaultShareSymbols([address])(address);
 
   useEffect(() => {
     setState({ phase: "loading" });
@@ -323,7 +326,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
                   <td data-testid="vault-detail-tvl-block">{pt.block_number}</td>
                   <td data-testid="vault-detail-tvl-assets">{formatUsdcString(pt.total_assets)}</td>
                   <td data-testid="vault-detail-tvl-supply">
-                    {formatSharesString(pt.total_supply, "rmUSDC")}
+                    {formatSharesString(pt.total_supply, shareSymbol)}
                   </td>
                 </tr>
               ))}
