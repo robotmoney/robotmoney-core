@@ -960,6 +960,22 @@ pub async fn run_once(
     Ok(outcome)
 }
 
+/// The last block of the tick that starts at `from_block`: the safe head, bounded by `end_block` and
+/// by `max_blocks_per_tick` blocks from `from_block`. `None` when there is nothing to read.
+pub fn tick_target(
+    from_block: u64,
+    safe_head: u64,
+    end_block: Option<u64>,
+    max_blocks_per_tick: u64,
+) -> Option<u64> {
+    let mut target = safe_head;
+    if let Some(e) = end_block {
+        target = target.min(e);
+    }
+    target = target.min(from_block.saturating_add(max_blocks_per_tick.max(1) - 1));
+    (from_block <= target).then_some(target)
+}
+
 async fn run_inner(
     db: &Db,
     rpc: &JsonRpc,
@@ -1037,13 +1053,12 @@ async fn run_inner(
             ..Default::default()
         });
     }
-    let mut target = safe_head;
-    if let Some(e) = cfg.end_block {
-        target = target.min(e);
-    }
-    let max_advance = (from_block as u64).saturating_add(cfg.max_blocks_per_tick - 1);
-    target = target.min(max_advance);
-    if (from_block as u64) > target {
+    let Some(target) = tick_target(
+        from_block as u64,
+        safe_head,
+        cfg.end_block,
+        cfg.max_blocks_per_tick,
+    ) else {
         return Ok(IndexerOutcome {
             to_block: None,
             last_indexed_block: last_indexed,
@@ -1052,7 +1067,7 @@ async fn run_inner(
             chain_head_block,
             ..Default::default()
         });
-    }
+    };
 
     // Static watched set (gateway, pinned vault, registry, router) plus every
     // registry-discovered active vault. Without the latter, ERC-4626
@@ -3204,6 +3219,45 @@ mod tests {
             classify_floor_check(CodeProbe::Unusable),
             FloorCheck::Inconclusive
         );
+    }
+
+    #[test]
+    fn catch_up_splits_into_ticks_of_at_most_max_blocks_with_no_gap_or_overlap() {
+        for (start, head, end, max) in [
+            (100u64, 3_450u64, None, 1000u64),
+            (100, 1_099, None, 1000),
+            (100, 1_100, None, 1000),
+            (5, 5, None, 1000),
+            (100, 9_999, Some(2_500u64), 1000),
+            (100, 500, None, 1),
+        ] {
+            let stop = end.map_or(head, |e: u64| e.min(head));
+            let mut next = start;
+            let mut ranges = Vec::new();
+            while let Some(t) = tick_target(next, head, end, max) {
+                ranges.push((next, t));
+                next = t + 1;
+            }
+            assert_eq!(ranges.first().map(|r| r.0), Some(start));
+            assert_eq!(
+                ranges.last().map(|r| r.1),
+                Some(stop),
+                "{start} {head} {end:?}"
+            );
+            for (a, b) in &ranges {
+                assert!(b >= a && b - a + 1 <= max, "{a}..{b} over {max}");
+            }
+            for w in ranges.windows(2) {
+                assert_eq!(w[1].0, w[0].1 + 1, "gap or overlap");
+            }
+        }
+        assert_eq!(tick_target(101, 100, None, 1000), None, "past the head");
+        assert_eq!(
+            tick_target(100, 500, Some(99), 1000),
+            None,
+            "past end_block"
+        );
+        assert_eq!(tick_target(0, 10_000, None, 1000), Some(999));
     }
 
     // ── the set detection runs over ─────────────────────────────────────────

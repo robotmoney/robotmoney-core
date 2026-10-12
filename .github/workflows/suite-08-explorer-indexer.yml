@@ -203,6 +203,17 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=7 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test deploy_block_detection -- --nocapture
 
+      # Core 1769: request budget of one 1000-block catch-up tick (Postgres testcontainer, stub RPC), and the
+      # retry backoff, Retry-After and tick range lib tests. Executed-count guarded.
+      - name: Catch-up request budget, backoff and tick ranges (issue 1769)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test catch_up_budget -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests::backoff rpc::tests::retry_after indexer::tests::catch_up --nocapture
+
       - name: Postgres env requirement
         working-directory: services/explorer-indexer
         run: |
