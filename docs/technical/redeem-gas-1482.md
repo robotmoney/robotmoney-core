@@ -71,6 +71,27 @@ Estimates measured on the fork. Each was executed one block later at exactly tha
 
 The vault redeem was also executed 1 hour and 1 day later at its estimate, and it succeeded. Wallet limits rise, and a 3-leg gateway withdraw estimates near 6M. The fee paid is unchanged, because a transaction pays for the gas it used, not for the limit. rmpc's fixed default gas limit (issue 1512) and the basket vault guards (issue 1513) are tracked separately.
 
+## Panic(0x11) on a redeem eth_call at "pending" (core 1758)
+Reported on Deploy 2 (rmUSDC `0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435`, Base 8453): a redeem of a 1 USDC position at the "pending" tag reverted `Panic(0x11)` at gas 2,000,000 and passed at 3,000,000.
+
+**Root cause: not a gas threshold and not in the vault.** The Panic is an arithmetic underflow inside the Moonwell Flagship MetaMorpho / Morpho Blue code that `MorphoAdapter.totalAssets()` calls on every redeem. Morpho computes `block.timestamp - market.lastUpdate`. When the eth_call environment is older than the last accrual of a market, that subtraction underflows. The vault's gas arithmetic is `gasleft() < floor` comparisons only. It has no subtraction on `gasleft()`.
+
+Evidence (read-only `eth_call` against `https://mainnet.base.org`, no transaction, no key):
+- A plain view call, `convertToAssets(305529980762486259)` on the Flagship vault `0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca`, with no gas set, alternated between a normal result and `Panic(0x11)` over six consecutive calls at the "pending" tag. The same call at "latest" returned 333302 every time.
+- Redeem at "pending" with state overrides gave `ok` at 1.7M and 2.0M and `Panic` at 2.5M and 3.0M in one run, then `Panic` at every limit from 1.7M to 2.5M in the next run. The gas-versus-outcome pattern in the report is one sample of this intermittent behavior.
+- The same redeem simulated locally at the "pending" tag succeeded (1,093,389 gas) with the same overrides, so the failure is in the node's pending environment, not in the contract path.
+- Inferred, not proven: the node's pending (flashblock) state includes a Morpho accrual stamped later than the environment timestamp it hands to the EVM. The node rejects `debug_traceCall`, so the exact environment values were not observed.
+
+On chain this cannot happen, because a mined block has a timestamp at or after every accrual before it. Real redeems succeed (txs with gas used about 0.94M to 1.0M).
+
+Reproduction in CI (Twin fork): `test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold` runs the redeem one second before the last accrual. The Moonwell adapter `totalAssets()` gives `Panic(0x11)`. The redeem gives the identical payload at every limit from 1.7M to 3.0M. In a consistent environment the same redeem succeeds.
+
+Gas arithmetic checks: `test_core1758_gasSweep_neverPanics` sweeps 500k to 3M in steps of 25k, in the accrued-this-block state and one block later. Every point is success, `InsufficientGas` or an empty out-of-gas revert, and every point below the 1.6M entry floor fails. `test_core1758_estimateConverges_forOneUsdcPosition` bisects the smallest passing limit (what `eth_estimateGas` does) for a 1 USDC position. It lands between 1.6M and 1.7M in both states, the redeem passes at it, and one gas below it reverts `InsufficientGas`.
+
+**Contract change and redeploy:** none. The root cause is outside the vault, so there is no bytecode change and no new deployment is required for this issue. Estimators that hit the node's pending environment can still see the Panic intermittently. Clients should estimate against "latest".
+
+Open design option, not taken: a `try/catch` around adapter `totalAssets()` would hide the Panic but would also let a failing adapter report zero NAV, which under-pays redeemers. It was rejected for that reason.
+
 ## What was ruled out
 - **No try/catch on the happy path.** `_pullProportional` calls `adpt.withdraw` directly. The try/catch calls exist only in `emergencyWithdrawAll`, `emergencyWithdrawAdapter` and `forceRemoveAdapter`, which the issue puts out of scope.
 - **No gas-dependent adapter branches.** `AaveV3Adapter`, `MorphoAdapter` and `CompoundV3Adapter` `withdraw` have none of their own.

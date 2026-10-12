@@ -263,6 +263,94 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
             snap = vm.snapshotState();
         }
     }
+
+    // ─── core 1758: Panic(0x11) on a redeem eth_call at the "pending" tag ───────────────────
+
+    bytes internal constant PANIC_0X11 = abi.encodeWithSignature("Panic(uint256)", uint256(0x11));
+
+    /// @dev 0 = success, 1 = InsufficientGas, 2 = empty revert (out of gas in a nested call),
+    ///      3 = Panic(0x11), 4 = anything else.
+    function _classify(bool ok, bytes memory ret) internal pure returns (uint256) {
+        if (ok) return 0;
+        if (ret.length == 0) return 2;
+        if (keccak256(ret) == keccak256(PANIC_0X11)) return 3;
+        bytes4 sel;
+        assembly {
+            sel := mload(add(ret, 32))
+        }
+        return sel == RobotMoneyVault.InsufficientGas.selector ? 1 : 4;
+    }
+
+    /// @notice Root cause of core 1758. Morpho Blue computes `elapsed = block.timestamp -
+    ///         market.lastUpdate` when the Moonwell Flagship MetaMorpho vault values its position
+    ///         (`convertToAssets`, reached from `MorphoAdapter.totalAssets` on every redeem). An
+    ///         eth_call whose block environment is older than the market's last accrual underflows
+    ///         there: Panic(0x11), raised inside Morpho, not in RobotMoneyVault. The node's
+    ///         "pending" environment does this intermittently on Base. Reproduced here
+    ///         deterministically by running one second before the last accrual. The Panic does not
+    ///         depend on the gas limit: every limit above the 1.6M entry floor gives the same
+    ///         payload, which is why a "gas 2M fails, gas 3M passes" pattern is a coincidence of
+    ///         which node answered, not a gas threshold.
+    function test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold() public {
+        address moonwell = address(dep.moonwellAdapter);
+        vm.warp(block.timestamp - 1);
+        (bool vOk, bytes memory vRet) = moonwell.staticcall(abi.encodeCall(IStrat.totalAssets, ()));
+        assertEq(_classify(vOk, vRet), 3, "Moonwell adapter totalAssets did not Panic(0x11)");
+        uint256 shares = vault.balanceOf(user) / 10;
+        for (uint256 g = 1_700_000; g <= 3_000_000; g += 100_000) {
+            (bool ok, bytes memory ret,) = _try(shares, g);
+            assertEq(_classify(ok, ret), 3, "redeem must give the same Panic at every limit");
+        }
+        // Back in a consistent environment the same redeem succeeds.
+        vm.warp(block.timestamp + 1);
+        (bool ok2,,) = _try(shares, 2_000_000);
+        assertTrue(ok2, "redeem must succeed when the environment is not older than the accrual");
+    }
+
+    /// @notice The vault's own gas arithmetic never Panics. Sweep 500k to 3M in a consistent
+    ///         environment, in the accrued-this-block state and one block later: every point is
+    ///         success, `InsufficientGas` or an out-of-gas empty revert.
+    function test_core1758_gasSweep_neverPanics() public {
+        uint256 shares = vault.balanceOf(user) / 10;
+        uint256 snap = vm.snapshotState();
+        for (uint256 later = 0; later < 2; later++) {
+            if (later == 1) _laterBlock();
+            uint256 oks;
+            for (uint256 g = 500_000; g <= 3_000_000; g += 25_000) {
+                (bool ok, bytes memory ret,) = _try(shares, g);
+                uint256 c = _classify(ok, ret);
+                assertTrue(c <= 2, "redeem reverted with something other than success/gas");
+                if (c == 0) oks++;
+                // Below the entry floor the typed error is exact.
+                if (g < 1_600_000) assertTrue(c == 1 || c == 2, "must fail on gas below floor");
+                vm.revertToState(snap);
+                snap = vm.snapshotState();
+                if (later == 1) _laterBlock();
+            }
+            assertGt(oks, 0, "no limit in the sweep succeeded");
+            vm.revertToState(snap);
+            snap = vm.snapshotState();
+        }
+    }
+
+    /// @notice What eth_estimateGas does, on a 1 USDC position: the smallest passing limit
+    ///         exists, executes when used as the limit, and sits on the entry floor in both
+    ///         accrual states.
+    function test_core1758_estimateConverges_forOneUsdcPosition() public {
+        uint256 shares = vault.convertToShares(1e6);
+        deal(address(vault), user, shares + vault.balanceOf(user));
+        for (uint256 later = 0; later < 2; later++) {
+            if (later == 1) _laterBlock();
+            uint256 est = _estimate(shares);
+            assertGe(est, 1_600_000, "estimate below the entry floor");
+            assertLe(est, 1_700_000, "estimate far above the entry floor");
+            (bool ok,,) = _try(shares, est);
+            assertTrue(ok, "redeem failed at the estimated limit");
+            (bool below, bytes memory ret,) = _try(shares, est - 1);
+            assertFalse(below);
+            assertEq(_classify(below, ret), 1, "one below the estimate must be InsufficientGas");
+        }
+    }
 }
 
 interface IStrat {
