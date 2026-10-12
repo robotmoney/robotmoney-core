@@ -17,9 +17,16 @@
 //! 4. For the range `[last+1, target]`: fetch all watched logs, fetch
 //!    each block (header+txs), upsert blocks/transactions/events.
 //! 5. State snapshots — for every contract whose events touched a block
-//!    in this range, take a snapshot at that block. Apply heartbeat
-//!    snapshot if the last snapshot is more than
-//!    `SNAPSHOT_HEARTBEAT_BLOCKS` behind.
+//!    in this range, take a snapshot at that block. Sampling cadence
+//!    (issue 1768): a vault with no row gets one at the target block. After
+//!    that, each tick reads the vault and writes a new row only when `total_assets`,
+//!    `total_supply`, `exit_fee_bps`, either cap or the paused flag differs
+//!    from the newest row, or when the newest row is at least
+//!    `SNAPSHOT_HEARTBEAT_BLOCKS` (7200 blocks) behind, which writes an
+//!    identical row on purpose. So every vault has a row at least once per
+//!    heartbeat interval. A zero-TVL vault is NOT re-snapshotted every tick.
+//!    A row with unknown (NULL) caps (issue 1741) is filled by the same
+//!    per-tick read once the caps answer, without repeated identical rows.
 //! 6. Close the run with `last_indexed_block = target`.
 //!
 //! All errors short-circuit and write to the run's `error` column;
@@ -1183,7 +1190,8 @@ async fn run_inner(
     };
     for (bn, contract) in &event_blocks_per_contract {
         if *contract == cfg.vault {
-            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn).await;
+            rows_inserted +=
+                snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn, None).await;
         }
     }
     // A DepositsPaused or DepositsUnpaused log from a vault changes what `/v1/vaults` reports as
@@ -1196,13 +1204,14 @@ async fn run_inner(
             .is_some_and(|t| *t == topics.deposits_paused || *t == topics.deposits_unpaused);
         if is_pause_log && log.address != cfg.gateway && heartbeat_vaults.contains(&log.address) {
             rows_inserted +=
-                snapshot_vault_or_skip(db, rpc, cfg.chain_id, log.address, log.block_number).await;
+                snapshot_vault_or_skip(db, rpc, cfg.chain_id, log.address, log.block_number, None)
+                    .await;
         }
     }
     // Snapshot all registered vaults for every block where the router processed deposits.
     for bn in &router_event_blocks {
         for vault in &heartbeat_vaults {
-            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, *vault, *bn).await;
+            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, *vault, *bn, None).await;
         }
     }
 
@@ -1212,12 +1221,10 @@ async fn run_inner(
     // snapshots.
 
     for vault in heartbeat_vaults {
-        // Fetch both the last snapshot block and whether its total_assets was
-        // zero so we can force a re-snapshot for vaults that were registered
-        // before deposits arrived (e.g. extra demo vaults seeded via the
-        // PortfolioRouter after an indexer that didn't watch it).
-        let last_snap: Option<(i64, String, bool)> = sqlx::query_as(
-            "SELECT block_number, CAST(total_assets AS text), (tvl_cap IS NULL OR per_deposit_cap IS NULL) \
+        // The newest stored row decides whether a heartbeat read is worth a new row (issue 1768).
+        let last_snap: Option<(i64, VaultState)> = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<String>, bool)>(
+            "SELECT block_number, CAST(total_assets AS text), CAST(total_supply AS text), exit_fee_bps, \
+                    CAST(tvl_cap AS text), CAST(per_deposit_cap AS text), paused \
              FROM vault_snapshots \
              WHERE chain_id = $1 AND contract = $2 \
              ORDER BY block_number DESC LIMIT 1",
@@ -1226,21 +1233,30 @@ async fn run_inner(
         .bind(&vault.into_array()[..])
         .fetch_optional(db.pool())
         .await
-        .map_err(DbError::from)?;
-        let needs_heartbeat = match &last_snap {
-            Some((prev, total_assets, caps_unknown)) => {
-                let behind = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
-                // Re-snapshot more aggressively when TVL shows zero — the
-                // vault may have received deposits since the last snapshot.
-                let zero_tvl = total_assets == "0" || total_assets.is_empty();
-                // A snapshot whose caps are unknown (a failed read, or a row from before migration 0018) is
-                // retried on the next tick so the explorer serves the real caps within one tick (issue 1741).
-                behind || zero_tvl || *caps_unknown
+        .map_err(DbError::from)?
+        .map(|(bn, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused)| {
+            (
+                bn,
+                VaultState { total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused },
+            )
+        });
+        match &last_snap {
+            None => {
+                rows_inserted +=
+                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, None).await;
             }
-            None => true,
-        };
-        if needs_heartbeat {
-            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target).await;
+            Some((prev, state)) => {
+                let due = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
+                // Every tick reads the vault, so a change that no watched event announced (a direct
+                // deposit, a cap change, a pause) is caught within one tick. The read writes a row only
+                // when the state differs from the newest row or the heartbeat is due (issue 1768). A row
+                // whose caps are unknown (issue 1741) is filled by the same read once the caps answer, and
+                // while they stay unreadable the unchanged state writes nothing.
+                let skip_if_equal = if due { None } else { Some(state) };
+                rows_inserted +=
+                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, skip_if_equal)
+                        .await;
+            }
         }
     }
 
@@ -2670,6 +2686,18 @@ fn into_alloy_log(log: &LogEntry) -> alloy_primitives::Log {
     }
 }
 
+/// The stored state of a `vault_snapshots` row, compared with a fresh chain read to decide whether a
+/// heartbeat read is worth a new row (issue 1768). Numbers are decimal strings, `None` is unknown (NULL).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultState {
+    pub total_assets: String,
+    pub total_supply: String,
+    pub exit_fee_bps: i64,
+    pub tvl_cap: Option<String>,
+    pub per_deposit_cap: Option<String>,
+    pub paused: bool,
+}
+
 /// Read totalAssets / totalSupply / exitFeeBps / tvlCap / depositsPaused from a
 /// vault at `block` and write a `vault_snapshots` row. The `paused` column
 /// keeps its historical name but stores `depositsPaused()` (a deposit-only
@@ -2691,8 +2719,9 @@ async fn snapshot_vault_or_skip(
     chain_id: i64,
     vault: Address,
     block: u64,
+    skip_if_equal: Option<&VaultState>,
 ) -> i64 {
-    match snapshot_vault_address(db, rpc, chain_id, vault, block).await {
+    match snapshot_vault_address(db, rpc, chain_id, vault, block, skip_if_equal).await {
         Ok(n) => n as i64,
         Err(e) => {
             tracing::warn!(vault = %vault, block, error = %e, "skipping vault snapshot");
@@ -2707,6 +2736,7 @@ async fn snapshot_vault_address(
     chain_id: i64,
     vault: Address,
     block: u64,
+    skip_if_equal: Option<&VaultState>,
 ) -> Result<u64, IndexerError> {
     let total_assets = call_u256(
         rpc,
@@ -2756,13 +2786,27 @@ async fn snapshot_vault_address(
     )
     .await?;
 
+    let exit_fee_bps: i64 = exit_fee_bps.try_into().unwrap_or(0i64);
+    if let Some(prev) = skip_if_equal {
+        let now = VaultState {
+            total_assets: total_assets.to_string(),
+            total_supply: total_supply.to_string(),
+            exit_fee_bps,
+            tvl_cap: tvl_cap.map(|c| c.to_string()),
+            per_deposit_cap: per_deposit_cap.map(|c| c.to_string()),
+            paused: deposits_paused,
+        };
+        if now == *prev {
+            return Ok(0);
+        }
+    }
     db.insert_vault_snapshot(
         chain_id,
         vault.into_array(),
         block as i64,
         total_assets,
         total_supply,
-        exit_fee_bps.try_into().unwrap_or(0i64),
+        exit_fee_bps,
         tvl_cap,
         per_deposit_cap,
         deposits_paused,
