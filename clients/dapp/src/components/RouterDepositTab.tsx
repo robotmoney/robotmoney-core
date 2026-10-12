@@ -18,6 +18,7 @@
  * docs/architecture.md §5.3 — action layer: router deposit.
  * docs/technical/portfolio-router-decisions.md §3.1–3.2.
  */
+import { withGasLimit, ROUTER_DEPOSIT_GAS_LIMIT } from "../lib/depositGas";
 import { useEffect, useState } from "react";
 import {
   useAccount,
@@ -236,7 +237,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
 
   const onDeposit = () => {
     if (!depositSim) return;
-    depositWrite.writeContract(depositSim.request);
+    depositWrite.writeContract(withGasLimit(depositSim.request, ROUTER_DEPOSIT_GAS_LIMIT));
   };
 
   useEffect(() => {

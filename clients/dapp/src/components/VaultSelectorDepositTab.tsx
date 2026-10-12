@@ -22,6 +22,7 @@
  * docs/architecture.md §5.3 — action layer: vault-selector deposit.
  * docs/technical/multi-vault-dapp-decisions.md §4.3.
  */
+import { withGasLimit, VAULT_DEPOSIT_GAS_LIMIT } from "../lib/depositGas";
 import { useEffect, useState } from "react";
 import {
   useAccount,
@@ -206,7 +207,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
 
   const onDeposit = () => {
     if (!depositSim) return;
-    depositWrite.writeContract(depositSim.request);
+    depositWrite.writeContract(withGasLimit(depositSim.request, VAULT_DEPOSIT_GAS_LIMIT));
   };
 
   // Compute submit disabled reason for accessibility label
