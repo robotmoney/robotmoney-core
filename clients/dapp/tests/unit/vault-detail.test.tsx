@@ -158,3 +158,26 @@ describe("VaultDetail — composition section (issue #941)", () => {
     expect(queryByTestId("vault-detail-composition")).toBeNull();
   });
 });
+
+describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
+  const cases: Array<[string, string, number, boolean]> = [
+    ["rmUSDC", "STABLE_YIELD", 0, false],
+    ["rmPROTO", "VOLATILE", 0, false],
+    ["rmAGENT", "SPECULATIVE", 0, false],
+    ["rmRWA", "SPECULATIVE", 0, true],
+    ["rmRWA", "SPECULATIVE", 1, true],
+    ["Other Speculative Basket", "SPECULATIVE", 0, false],
+  ];
+  it.each(cases)("%s (%s, status %i) disclosure present: %s", async (name, risk, status, shown) => {
+    const { getByTestId, queryByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_ADDR}
+        fetchImpl={makeFetch(makeVaultDetailFixture({ risk_label: risk, status, name }))}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-composition")).toBeTruthy());
+    const el = queryByTestId("vault-detail-issuer-freeze-disclosure");
+    expect(el !== null).toBe(shown);
+  });
+});
