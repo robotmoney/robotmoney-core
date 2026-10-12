@@ -105,6 +105,7 @@ contracts/test/contract.CardinalityBelowFloorPool.mdx
 contracts/test/contract.CompoundV3AdapterPositionTest.mdx
 contracts/test/contract.ConfigFilesTest.mdx
 contracts/test/contract.ConfusedDeputyGuardsTest.mdx
+contracts/test/contract.ConsensusReceiptSafeSubmitterTest.mdx
 contracts/test/contract.ConsensusRecommendationReceiptTest.mdx
 contracts/test/contract.ConstPoolFee100.mdx
 contracts/test/contract.CoreStagesFork.mdx

@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRedeemGasRootCauseTest"
 
 # RobotMoneyVaultRedeemGasRootCauseTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/43c7fdd6cd2df0b047667397347ead508f651d1b/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
 
 **Inherits:** Test
 
@@ -32,6 +32,12 @@ uint24 internal constant ADAPTER_FLOOR = 400_000;
 
 ```solidity
 uint24 internal constant TAIL_FLOOR = 150_000;
+```
+
+### PANIC_0X11
+
+```solidity
+bytes internal constant PANIC_0X11 = abi.encodeWithSignature("Panic(uint256)", uint256(0x11));
 ```
 
 ## State Variables
@@ -268,5 +274,76 @@ floor. Moonwell (MetaMorpho) is the heaviest and the closest to the floor.
 
 ```solidity
 function test_rootCause_realAdapterWithdrawGas_laterBlock() public;
+```
+
+<a id="_classify-bool-bytes"></a>
+
+### _classify
+
+<i>
+
+0 = success, 1 = InsufficientGas, 2 = empty revert (out of gas in a nested call),
+3 = Panic(0x11), 4 = anything else.
+
+</i>
+
+```solidity
+function _classify(bool ok, bytes memory ret) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_core1758_panicismorphotimestampunderflow_notagasthreshold"></a>
+
+### test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold
+
+Root cause of core 1758. Morpho Blue computes `elapsed = block.timestamp -
+market.lastUpdate` when the Moonwell Flagship MetaMorpho vault values its position
+(`convertToAssets`, reached from `MorphoAdapter.totalAssets` on every redeem). An
+eth_call whose block environment is older than the market's last accrual underflows
+there: Panic(0x11), raised inside Morpho, not in RobotMoneyVault. The node's
+"pending" environment does this intermittently on Base. Reproduced here
+deterministically by running one second before the last accrual. The Panic does not
+depend on the gas limit: every limit above the 1.6M entry floor gives the same
+payload, which is why a "gas 2M fails, gas 3M passes" pattern is a coincidence of
+which node answered, not a gas threshold.
+
+```solidity
+function test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold() public;
+```
+
+<a id="test_core1758_gassweep_neverpanics"></a>
+
+### test_core1758_gasSweep_neverPanics
+
+The vault's own gas arithmetic never Panics. Sweep 500k to 3M in a consistent
+environment, in the accrued-this-block state and one block later: every point is
+success, `InsufficientGas` or an out-of-gas empty revert.
+
+```solidity
+function test_core1758_gasSweep_neverPanics() public;
+```
+
+<a id="test_core1758_estimateconverges_foroneusdcposition"></a>
+
+### test_core1758_estimateConverges_forOneUsdcPosition
+
+What eth_estimateGas does, on a 1 USDC position: the smallest passing limit
+exists, executes when used as the limit, and sits on the entry floor in both
+accrual states.
+
+```solidity
+function test_core1758_estimateConverges_forOneUsdcPosition() public;
 ```
 

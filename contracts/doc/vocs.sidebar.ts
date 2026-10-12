@@ -218,6 +218,7 @@ export const sidebar = [
             { text: "CompoundV3AdapterPositionTest", link: "/contracts/test/contract.CompoundV3AdapterPositionTest" },
             { text: "ConfigFilesTest", link: "/contracts/test/contract.ConfigFilesTest" },
             { text: "ConfusedDeputyGuardsTest", link: "/contracts/test/contract.ConfusedDeputyGuardsTest" },
+            { text: "ConsensusReceiptSafeSubmitterTest", link: "/contracts/test/contract.ConsensusReceiptSafeSubmitterTest" },
             { text: "ConsensusRecommendationReceiptTest", link: "/contracts/test/contract.ConsensusRecommendationReceiptTest" },
             { text: "ConstPoolFee100", link: "/contracts/test/contract.ConstPoolFee100" },
             { text: "CoreStagesFork", link: "/contracts/test/contract.CoreStagesFork" },
