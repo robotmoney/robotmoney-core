@@ -123,6 +123,18 @@ impl RetryPolicy {
     }
 }
 
+impl RetryPolicy {
+    /// The wait before retry number `attempt` given an optional `Retry-After` hint: the larger of the
+    /// backoff and the hint, the hint itself capped at `max_backoff_ms`.
+    pub fn wait(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
+        self.backoff(attempt).max(
+            retry_after
+                .unwrap_or_default()
+                .min(Duration::from_millis(self.max_backoff_ms)),
+        )
+    }
+}
+
 /// Is this HTTP status a throttle or a transient gateway failure worth another attempt?
 pub fn is_retryable_status(code: u16) -> bool {
     matches!(code, 429 | 502 | 503 | 504)
@@ -259,11 +271,7 @@ impl JsonRpc {
             if !retryable || attempt >= self.retry.max_retries {
                 return Err(error);
             }
-            let wait = self.retry.backoff(attempt).max(
-                wait_hint
-                    .unwrap_or_default()
-                    .min(Duration::from_millis(self.retry.max_backoff_ms)),
-            );
+            let wait = self.retry.wait(attempt, wait_hint);
             tracing::warn!(
                 method,
                 attempt = attempt + 1,
@@ -654,6 +662,35 @@ mod tests {
         assert_eq!(p.backoff(2), Duration::from_millis(400));
         assert_eq!(p.backoff(30), Duration::from_millis(3200));
         assert_eq!(RetryPolicy::NONE.backoff(3), Duration::ZERO);
+    }
+
+    #[test]
+    fn backoff_cap_is_32x_the_base_and_reached_at_attempt_5() {
+        let p = RetryPolicy::new(10, 500);
+        assert_eq!(p.max_backoff_ms, 32 * 500);
+        assert_eq!(p.backoff(4), Duration::from_millis(8_000));
+        assert_eq!(p.backoff(5), Duration::from_millis(16_000));
+        assert_eq!(p.backoff(6), Duration::from_millis(16_000));
+        assert_eq!(p.backoff(u32::MAX), Duration::from_millis(16_000));
+    }
+
+    #[test]
+    fn retry_after_raises_the_wait_but_never_past_the_cap_or_below_the_backoff() {
+        let p = RetryPolicy::new(5, 100); // cap 3200 ms
+        let secs = |s| Some(Duration::from_secs(s));
+        assert_eq!(p.wait(0, None), Duration::from_millis(100));
+        assert_eq!(p.wait(0, secs(2)), Duration::from_secs(2), "hint raises it");
+        assert_eq!(
+            p.wait(0, secs(600)),
+            Duration::from_millis(3200),
+            "hint is capped"
+        );
+        assert_eq!(
+            p.wait(3, secs(0)),
+            Duration::from_millis(800),
+            "a small hint never lowers it"
+        );
+        assert_eq!(RetryPolicy::NONE.wait(0, secs(5)), Duration::ZERO);
     }
 
     #[test]
