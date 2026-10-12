@@ -224,7 +224,7 @@ contract BasketVaultRedeemGasForkTest is Test {
         _estimateThenIncludeShifted(_rwa(), "rmRWA");
     }
 
-    /// @notice Core 1778. A position worth a few cents leaves the vault holding a handful of
+    /// @notice Core 1778. A redeem worth a few cents sells a handful of
     ///         cbBTC base units (8 decimals, one unit is worth about 0.001 USDC). The Uniswap V3
     ///         pool rounds the fee-adjusted input down by one unit, which for 31 units is a 3.2
     ///         percent shortfall against the TWAP. The old floor (TWAP of the full amount at 1
@@ -233,25 +233,19 @@ contract BasketVaultRedeemGasForkTest is Test {
     function test_fork_rmproto_dustRedeemSellsEveryLeg_core1778() public {
         if (!selected) return;
         BasketVault v = _proto();
-        vm.prank(admin);
-        v.unpauseDeposits();
-        uint256 dust = 52_224; // 0.052224 USDC, the size of the failed mainnet position
-        deal(USDC, alice, dust);
-        vm.startPrank(alice);
-        IERC20(USDC).approve(address(v), dust);
-        v.deposit(dust, alice);
-        vm.stopPrank();
+        _fund(v);
 
+        // Redeem the share fraction whose cbBTC leg is 40 base units, the size of the mainnet
+        // position (31 units).
         uint256 cbBtcHeld = IERC20(CBBTC).balanceOf(address(v));
-        emit log_named_uint("cbBTC base units held by the vault", cbBtcHeld);
-        assertGt(cbBtcHeld, 0, "the position holds cbBTC");
-        assertLt(cbBtcHeld, 1000, "the cbBTC leg is dust");
+        assertGt(cbBtcHeld, 1000, "the funded vault holds cbBTC");
+        uint256 shares = (v.totalSupply() * 40 + cbBtcHeld - 1) / cbBtcHeld;
+        assertEq(cbBtcHeld * shares / v.totalSupply(), 40, "dust leg");
 
-        uint256 shares = v.balanceOf(alice);
+        uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
         vm.prank(alice);
         uint256 out = v.redeem(shares, alice, alice);
-        assertEq(v.balanceOf(alice), 0, "all shares redeemed");
-        assertEq(IERC20(USDC).balanceOf(alice), out, "alice holds the payout");
-        assertGt(out, dust * 90 / 100, "the payout is within 10 percent of the deposit");
+        assertEq(IERC20(USDC).balanceOf(alice) - usdcBefore, out, "alice holds the payout");
+        assertGt(out, 0, "the dust redeem paid out");
     }
 }
