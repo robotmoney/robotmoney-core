@@ -873,8 +873,32 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["secret assignment", /\b(PRIVATE_KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API_KEY|TOKEN)\s*[=:]\s*\S{6,}/i],
 ];
 
-/** Scan one evidence folder for secrets. Transaction hashes are 64-hex by design: they are allowed in the fields that name a tx. */
-export function scanEvidenceFolder(dir: string): string[] {
+const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
+/** The log events whose operation id is a public timelock operation id (govern.ts, safe/timelock.ts). */
+const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
+
+/**
+ * Removes the known public 0x bytes32 shapes from one line, so the 64-hex rule sees only what is left. Never a general 64-hex allowance:
+ * 1. the row name `apply-receipt-0x<receipt id>` (also a publish-run.json key), anywhere in a line;
+ * 2. on a `govern.waiting` or `timelock.effect` JSON log line only: the `"id"`/`"ids"` operation id values and `operation 0x<id>` in the detail text.
+ * A bare 0x64-hex, an env or keystore shaped value, or the same shapes on any other line stay in the line and are flagged.
+ */
+export function stripPublicContexts(line: string): string {
+  let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-");
+  if (out.startsWith("{")) {
+    let event: unknown;
+    try { event = JSON.parse(out).event; } catch { /* not a JSON log line */ }
+    if (typeof event === "string" && OPERATION_ID_EVENTS.has(event)) {
+      out = out
+        .replace(new RegExp(`("ids?"\\s*:\\s*\\[?\\s*)"${B32}"((?:\\s*,\\s*"${B32}")*)`, "g"), (_m, pre, rest) => `${pre}"op"${String(rest).replace(new RegExp(`"${B32}"`, "g"), '"op"')}`)
+        .replace(new RegExp(`\\boperation ${B32}`, "g"), "operation op");
+    }
+  }
+  return out;
+}
+
+/** Scan one evidence folder for secrets. Transaction hashes are 64-hex by design: they are allowed in the fields that name a tx. `strip` is the public-context allowance (a test swaps it to prove widening it is caught). */
+export function scanEvidenceFolder(dir: string, strip: (line: string) => string = stripPublicContexts): string[] {
   const hits: string[] = [];
   const walk = (d: string) => {
     for (const n of readdirSync(d)) {
@@ -884,7 +908,7 @@ export function scanEvidenceFolder(dir: string): string[] {
       text.split("\n").forEach((line, i) => {
         for (const [name, re] of SECRET_PATTERNS) {
           if (name.startsWith("64-hex") && /(tx|hash|transaction|block|codehash|salt|digest|sha|0x[0-9a-fA-F]{64}",?\s*$)/i.test(line)) continue;
-          if (re.test(line)) hits.push(`${f}:${i + 1}: ${name}`);
+          if (re.test(name.startsWith("64-hex") ? strip(line) : line)) hits.push(`${f}:${i + 1}: ${name}`);
         }
       });
     }
