@@ -92,6 +92,22 @@ Gas arithmetic checks: `test_core1758_gasSweep_neverPanics` sweeps 500k to 3M in
 
 Open design option, not taken: a `try/catch` around adapter `totalAssets()` would hide the Panic but would also let a failing adapter report zero NAV, which under-pays redeemers. It was rejected for that reason.
 
+## Dust redeem reverts "Too little received" (core 1778)
+Reported on Deploy 2 (Base 8453): after a 1 USDC router deposit, rmPROTO (`0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797`) `redeem` from the deployer reverted. Tx `0x5e9810f19835379bd1bf7b33b1062fa51facc496dbd830eef7b88c81bcaf0b51` (block 52491837, limit 3,000,000, gas used 551,483, status 0). `redeemInKind` then worked.
+
+**Root cause: not gas, not the redeem gas floors.** The revert string is `Too little received`, which the Uniswap V3 SwapRouter02 raises when `amountOut < amountOutMinimum`. The vault holds 10,287,921,115,868 wei of wETH and 31 base units of cbBTC for the whole 52,224-unit USDC position (a 5.25 percent leg of 1 USDC). `_sellProportional` sells every leg through the router with a floor of `TWAP(sellAmount) * (1 - 1%)`.
+- wETH leg: sold for 26,222. Fine.
+- cbBTC leg: 31 units. TWAP value 25,981, so the floor was 25,721. The pool paid 25,133. cbBTC has 8 decimals and one unit is worth about 838 raw USDC. The pool takes the 0.05 percent fee, then rounds the input down, which is `floor(31 * 0.9995) = 30` units. One unit is 3.2 percent of 31, which is more than the 1 percent bound.
+- The router reverts, the vault bubbles the string up, and the whole redeem reverts. The earlier legs' swaps roll back with it.
+
+Evidence (read-only, no transaction sent): a Base fork at block 52491836 replayed as the deployer, `redeem(52224e18, me, me)`, reverts `Too little received` at 557,779 gas (chain: 551,483). The trace shows `exactInputSingle(cbBTC to USDC, amountIn 31, amountOutMinimum 25721)` and the pool transferring 25,133. `test_fork_rmproto_dustRedeemSellsEveryLeg_core1778` reproduces it on a fresh `DeployProtocolAssetVault` deployment with a 0.052224 USDC deposit (31 cbBTC units held), and fails with the same string before the fix.
+
+Why `redeemInKind` worked: it transfers the basket tokens and does no swap, so no floor applies. Why the other vaults passed: rmRWA and rmAGENT hold different assets and larger legs. rmUSDC has no swap. A position of a few cents is the trigger, so real-size positions are not affected: the one-unit error is below 1e-6 of a leg above a few million units.
+
+**Fix** (`contracts/vaults/BasketVault.sol`, `_sellProportional`): the floor prices `sellAmount - 1` units instead of `sellAmount`. That covers the pool's one-unit input rounding. The 1 percent slippage bound is unchanged. A one-unit leg floors at zero, because every adapter returns 0 for a zero amount. For a normal leg the change in the floor is below 1e-6. Cost: 10 bytes of runtime code, so `VaultCodeSizeGuard` headroom floors drop by 10 (AgentTokenVault 55, ProtocolAssetVault and RwaBasketVault 97).
+
+**Deployed vaults:** the Deploy 2 vaults run the old bytecode. The fix reaches them only through a redeploy. Until then the supported workaround for a dust position is `redeemInKind(shares, receiver, owner)`, which pays out the basket tokens. Positions above a few cents redeem normally.
+
 ## What was ruled out
 - **No try/catch on the happy path.** `_pullProportional` calls `adpt.withdraw` directly. The try/catch calls exist only in `emergencyWithdrawAll`, `emergencyWithdrawAdapter` and `forceRemoveAdapter`, which the issue puts out of scope.
 - **No gas-dependent adapter branches.** `AaveV3Adapter`, `MorphoAdapter` and `CompoundV3Adapter` `withdraw` have none of their own.
