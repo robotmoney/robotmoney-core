@@ -131,6 +131,7 @@ const KNOWN_WRITERS = [
   "components/OnboardingWizard.tsx",
   "components/PauseFlow.tsx",
   "components/RevokeTab.tsx",
+  "components/RefreshPriceButton.tsx",
   "components/RouterDepositTab.tsx",
   "components/SafeProposalPanel.tsx",
   "components/VaultSelectorDepositTab.tsx",

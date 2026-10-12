@@ -9,6 +9,7 @@
 import { useMemo } from "react";
 import { useExplorer } from "./ExplorerContext";
 import { useVaultsDepositsPaused } from "./useVaultsDepositsPaused";
+import { useStaleRecorders } from "./priceRecorder";
 import { resolveDepositState, type DepositState } from "./vaultDepositState";
 
 export function useDepositStates(
@@ -17,6 +18,7 @@ export function useDepositStates(
 ): ReadonlyMap<string, DepositState> {
   const { vaults, blockNumber, chainHeadBlock } = useExplorer();
   const { byAddress } = useVaultsDepositsPaused(addresses);
+  const stale = useStaleRecorders(addresses);
   const key = addresses.map((a) => a.toLowerCase()).join(",");
   return useMemo(() => {
     const out = new Map<string, DepositState>();
@@ -30,11 +32,12 @@ export function useDepositStates(
           explorerBlock: blockNumber,
           explorerHead: chainHeadBlock,
           chainPaused: byAddress.get(a),
+          staleRecorders: stale.get(a),
         }),
       );
     }
     return out;
-  }, [key, vaults, blockNumber, chainHeadBlock, byAddress, registryStatusOverride]);
+  }, [key, vaults, blockNumber, chainHeadBlock, byAddress, stale, registryStatusOverride]);
 }
 
 /** One vault. An absent address is `unknown`. */

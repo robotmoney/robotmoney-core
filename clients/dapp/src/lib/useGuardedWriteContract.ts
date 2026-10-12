@@ -19,6 +19,7 @@
  * `ChainMismatchError`. The explicit check in (1) is the guard. The pin is the
  * backstop for a wallet that moved between render and click.
  * Other env classes behave exactly like `useWriteContract`.
+ * Every redeem also gets a fixed gas limit (redeemGas.ts, core issue 1758), on every class and path.
  */
 import { useCallback, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -30,6 +31,7 @@ import {
   WrongChainError,
   type WriteGuardState,
 } from "./writeChainGuard";
+import { withRedeemGasWorkaround } from "./redeemGas";
 
 /** Current guard state: shared by the write hook and the wrong-chain screen. */
 export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean } {
@@ -85,7 +87,9 @@ export function useGuardedWriteContract() {
   }, []);
 
   const pin = (variables: unknown) =>
-    (pinned === undefined ? variables : { ...(variables as object), chainId: pinned }) as never;
+    withRedeemGasWorkaround(
+      pinned === undefined ? variables : { ...(variables as object), chainId: pinned },
+    ) as never;
 
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {
     setRefusal(null);
@@ -94,7 +98,7 @@ export function useGuardedWriteContract() {
       return;
     }
     if (pinned === undefined) {
-      base.writeContract(variables as never, options as never);
+      base.writeContract(withRedeemGasWorkaround(variables) as never, options as never);
       return;
     }
     assertTargetHasCode(

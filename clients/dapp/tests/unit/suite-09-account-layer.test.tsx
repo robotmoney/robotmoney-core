@@ -482,7 +482,7 @@ describe("AgentPoliciesPanel", () => {
           agent: AGENT_1,
           authorized: true,
           withdrawalsEnabled: true,
-          maxWithdrawPerWindow: "10000",
+          maxWithdrawPerWindow: "10000000000000000000000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
         },
       ];
@@ -492,8 +492,24 @@ describe("AgentPoliciesPanel", () => {
       const warn = getByTestId("agent-policy-withdrawal-warning");
       expect(warn.textContent).toMatch(/WARNING/);
       expect(warn.textContent).toMatch(/withdrawals enabled/i);
-      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toContain("10000");
+      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toBe("10.00 rmUSDC");
       expect(warn.textContent).toContain("0xdeadbeef00000000000000000000000000000001");
+    });
+
+    it("shows USDC policy amounts with separators and scale, never the raw integer (issue 1760)", () => {
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          maxPerPayment: "1000000",
+          maxPerWindow: "10000000000000",
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      expect(getByTestId("agent-policy-max-per-payment").textContent).toBe("1.00 USDC");
+      expect(getByTestId("agent-policy-max-per-window").textContent).toBe("10,000,000.00 USDC");
     });
 
     it("does NOT render the withdrawal warning for deposit-only policies", () => {
@@ -521,7 +537,7 @@ describe("AgentPoliciesPanel", () => {
           agent: AGENT_1,
           authorized: true,
           withdrawalsEnabled: false,
-          shareAllowance: "12345",
+          shareAllowance: "12345000000000000000000000000",
         },
       ];
       const { getByTestId } = render(
@@ -533,7 +549,9 @@ describe("AgentPoliciesPanel", () => {
       );
       const block = getByTestId("agent-policy-stale-allowance");
       expect(block).toBeTruthy();
-      expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toContain("12345");
+      expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toBe(
+        "12,345.00 rmUSDC",
+      );
       const btn = getByTestId("agent-policy-revoke-allowance") as HTMLButtonElement;
       expect(btn.disabled).toBe(false);
       btn.click();
@@ -585,7 +603,7 @@ describe("AgentPoliciesPanel", () => {
           withdrawalsEnabled: true,
           maxWithdrawPerWindow: "5000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
-          shareAllowance: "9999999",
+          shareAllowance: "9999999000000000000000000000000",
           shareAllowanceOwner: SHARE_RECEIVER,
         },
       ];
@@ -593,7 +611,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("9999999");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("9,999,999.00 rmUSDC");
       // The shareReceiver label must be surfaced (AZ-GW-2 fix).
       expect(getByTestId("agent-policy-share-allowance-owner").textContent).toContain(
         SHARE_RECEIVER,
@@ -609,7 +627,7 @@ describe("AgentPoliciesPanel", () => {
           withdrawalsEnabled: true,
           maxWithdrawPerWindow: "5000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
-          shareAllowance: "7654321",
+          shareAllowance: "7654321000000000000000000000000",
           shareAllowanceOwner: AGENT_1, // same as agent → direct-vault
         },
       ];
@@ -617,7 +635,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("7654321");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("7,654,321.00 rmUSDC");
       // No shareReceiver label for direct-vault policies.
       expect(queryByTestId("agent-policy-share-allowance-owner")).toBeNull();
     });
