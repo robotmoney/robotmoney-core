@@ -193,6 +193,15 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test vault_caps -- --test-threads=1 --nocapture
 
+      # Core 1768: a vault snapshot row is written only on changed state or a due heartbeat; a zero-TVL vault
+      # gains no row per tick. Testcontainer Postgres and a stub RPC, wrapped in the executed-count guard.
+      - name: Vault snapshot cadence (issue 1768)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test vault_snapshot_cadence -- --test-threads=1 --nocapture
+
       # Two targets that landed on fusion/deployment-workflow without a job
       # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
       # no workflow executes, which is how they surfaced when the branch came
