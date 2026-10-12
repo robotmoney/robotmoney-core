@@ -55,7 +55,7 @@ function shortAddr(addr: string): string {
  * holdings read, so the disclosure still shows when the holdings cannot be determined (issue 1765).
  */
 function holdsDeSPXA(vaultName: string): boolean {
-  return /rwa/i.test(vaultName);
+  return /\brwa\b/i.test(vaultName);
 }
 
 interface AssetRowProps {
