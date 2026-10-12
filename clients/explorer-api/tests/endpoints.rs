@@ -1152,3 +1152,146 @@ async fn account_policies_follow_the_latest_owner_after_transfer() {
         format!("0x{}", hex::encode(receiver))
     );
 }
+
+// ─── unique_depositors counting rule (issue 1766) ──────────────────────────
+
+fn addr(b: u8) -> Vec<u8> {
+    vec![b; 20]
+}
+
+/// Remove every depositor-bearing row from the shared fixture so a test controls the count.
+async fn clear_depositor_rows(pool: &sqlx::PgPool) {
+    for t in ["wallet_positions", "agent_deposits", "router_deposit_legs"] {
+        sqlx::query(&format!("DELETE FROM {t}"))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+async fn vaults(pool: &sqlx::PgPool) -> (Vec<u8>, Vec<u8>) {
+    let rows: Vec<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT address FROM contracts WHERE kind = 'vault' ORDER BY address LIMIT 2",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "fixture must seed two vault contracts");
+    (rows[0].0.clone(), rows[1].0.clone())
+}
+
+async fn position(pool: &sqlx::PgPool, vault: &[u8], owner: &[u8], block: i64, shares: &str) {
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares) \
+         VALUES ($1, $2, $3, $4, $5::NUMERIC)",
+    )
+    .bind(common::PRIMARY_CHAIN_ID)
+    .bind(vault)
+    .bind(owner)
+    .bind(block)
+    .bind(shares)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn router_leg(pool: &sqlx::PgPool, vault: &[u8], depositor: &[u8], log_index: i32) {
+    sqlx::query(
+        "INSERT INTO router_deposit_legs \
+         (chain_id, block_number, log_index, tx_hash, payment_id, depositor, vault, amount, shares, weight_bps) \
+         VALUES ($1, 600, $2, $3, $3, $4, $5, 1, 1, 5000)",
+    )
+    .bind(common::PRIMARY_CHAIN_ID)
+    .bind(log_index)
+    .bind(vec![9u8; 32])
+    .bind(depositor)
+    .bind(vault)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn agent_deposit(pool: &sqlx::PgPool, receiver: &[u8], log_index: i32) {
+    sqlx::query(
+        "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id) \
+         VALUES ($1, 600, $2, $3, $3, $3, $4, $5, 1, 1, 1)",
+    )
+    .bind(common::PRIMARY_CHAIN_ID)
+    .bind(log_index)
+    .bind(vec![8u8; 32])
+    .bind(addr(0xAA))
+    .bind(receiver)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn depositors(s: &common::TestServer) -> i64 {
+    let body: serde_json::Value = http()
+        .get(format!("http://{}/v1/stats", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["unique_depositors"].as_i64().unwrap()
+}
+
+#[tokio::test]
+async fn depositors_counts_a_seed_receiver_holding_shares_from_a_direct_deposit() {
+    let s = start_with_seed().await;
+    clear_depositor_rows(&s._pool).await;
+    let (va, _) = vaults(&s._pool).await;
+    position(&s._pool, &va, &addr(0x51), 700, "1000000").await;
+    assert_eq!(depositors(&s).await, 1);
+}
+
+#[tokio::test]
+async fn depositors_drops_an_address_that_redeemed_everything() {
+    let s = start_with_seed().await;
+    clear_depositor_rows(&s._pool).await;
+    let (va, _) = vaults(&s._pool).await;
+    position(&s._pool, &va, &addr(0xDE), 700, "5000000").await;
+    position(&s._pool, &va, &addr(0xDE), 710, "0").await;
+    position(&s._pool, &va, &addr(0x51), 700, "1000000").await;
+    // A fully redeemed address that is also in agent_deposits stays out: it has a position row.
+    agent_deposit(&s._pool, &addr(0xDE), 1).await;
+    assert_eq!(depositors(&s).await, 1);
+}
+
+#[tokio::test]
+async fn depositors_counts_router_leg_receivers_and_agent_deposits_without_positions() {
+    let s = start_with_seed().await;
+    clear_depositor_rows(&s._pool).await;
+    let (va, vb) = vaults(&s._pool).await;
+    router_leg(&s._pool, &va, &addr(0x61), 1).await;
+    router_leg(&s._pool, &vb, &addr(0x61), 2).await;
+    router_leg(&s._pool, &vb, &addr(0x62), 3).await;
+    agent_deposit(&s._pool, &addr(0x63), 4).await;
+    assert_eq!(depositors(&s).await, 3);
+}
+
+#[tokio::test]
+async fn depositors_counts_one_address_once_across_vaults_legs_and_agent_deposits() {
+    let s = start_with_seed().await;
+    clear_depositor_rows(&s._pool).await;
+    let (va, vb) = vaults(&s._pool).await;
+    position(&s._pool, &va, &addr(0x71), 700, "10").await;
+    position(&s._pool, &vb, &addr(0x71), 700, "20").await;
+    router_leg(&s._pool, &va, &addr(0x71), 1).await;
+    agent_deposit(&s._pool, &addr(0x71), 2).await;
+    assert_eq!(depositors(&s).await, 1);
+}
+
+#[tokio::test]
+async fn depositors_uses_the_latest_position_per_vault() {
+    let s = start_with_seed().await;
+    clear_depositor_rows(&s._pool).await;
+    let (va, vb) = vaults(&s._pool).await;
+    // Redeemed vault A, still holds vault B: counts once.
+    position(&s._pool, &va, &addr(0x81), 700, "10").await;
+    position(&s._pool, &va, &addr(0x81), 710, "0").await;
+    position(&s._pool, &vb, &addr(0x81), 705, "7").await;
+    assert_eq!(depositors(&s).await, 1);
+}
