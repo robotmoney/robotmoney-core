@@ -1095,10 +1095,41 @@ async fn get_proposal(
 
 // ─── Multi-vault protocol stats handlers (issue #316) ─────────────────────
 
+/// Counting rule for `unique_depositors` (issue 1766), documented in
+/// `docs/explorer-api.md`. Change this one query to change the rule.
+///
+/// A depositor is a distinct address that currently holds shares (balance > 0)
+/// in any vault. The balance is the latest `wallet_positions` row per
+/// (vault, holder), which the indexer rolls forward from every vault
+/// `Deposit` (direct, router and gateway paths all emit one) and back on every
+/// `Withdraw`. An address is counted once however many vaults it holds, and an
+/// address that redeemed everything is not counted. Addresses seen only in
+/// `agent_deposits` (share_receiver) or `router_deposit_legs` (depositor) with
+/// no position row at all are also counted, so rows indexed without a vault
+/// `Deposit` are not lost.
+const UNIQUE_DEPOSITORS_SQL: &str = "\
+    WITH latest AS ( \
+        SELECT DISTINCT ON (contract, owner) owner, shares \
+        FROM wallet_positions \
+        WHERE chain_id = $1 \
+        ORDER BY contract, owner, block_number DESC \
+    ) \
+    SELECT COUNT(*)::BIGINT FROM ( \
+        SELECT owner AS holder FROM latest GROUP BY owner HAVING SUM(shares) > 0 \
+        UNION \
+        SELECT addr FROM ( \
+            SELECT share_receiver AS addr FROM agent_deposits WHERE chain_id = $1 \
+            UNION \
+            SELECT depositor AS addr FROM router_deposit_legs WHERE chain_id = $1 \
+        ) seen \
+        WHERE addr NOT IN (SELECT owner FROM latest) \
+    ) holders";
+
 /// GET /v1/stats — aggregate TVL, unique depositor count, and global activity feed.
 ///
 /// TVL = sum of the latest total_assets snapshot per registered vault.
-/// Depositor count = distinct share_receiver values in agent_deposits.
+/// Depositor count = distinct addresses currently holding vault shares
+/// (see [`UNIQUE_DEPOSITORS_SQL`]).
 /// Activity feed = last 50 deposit events across all vaults (descending by block).
 /// Chain-scoped to state.chain_id.
 async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsResponse>> {
@@ -1122,12 +1153,10 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
         .unwrap_or_else(|| "0".to_string());
 
     // Unique depositor count.
-    let depositor_row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT share_receiver)::BIGINT FROM agent_deposits WHERE chain_id = $1",
-    )
-    .bind(state.chain_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let depositor_row: (i64,) = sqlx::query_as(UNIQUE_DEPOSITORS_SQL)
+        .bind(state.chain_id)
+        .fetch_one(&state.pool)
+        .await?;
     let unique_depositors = depositor_row.0;
 
     // Global activity feed: last 50 deposit events.
