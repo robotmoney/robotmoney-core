@@ -24,16 +24,16 @@ import { useEffect, useState } from "react";
 import { useReadContract } from "wagmi";
 import type { FetchLike, VaultDetailRow } from "../lib/explorerApi";
 import { fetchVaultDetail } from "../lib/explorerApi";
-import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist, erc20Abi } from "../lib/abi";
+import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
 import {
   formatSharesString,
   formatTokenBalance,
-  shareSymbolOrNeutral,
   formatUsdcCapString,
   formatUsdcString,
   USDC_DECIMALS,
 } from "../lib/format";
 import { useExplorer } from "../lib/ExplorerContext";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 import { useVaultsDepositsPaused } from "../lib/useVaultsDepositsPaused";
 import {
   HEADROOM_LABEL,
@@ -196,12 +196,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   const { vaults: listedVaults, blockNumber: listBlock, chainHeadBlock } = useExplorer();
   const { byAddress: chainPaused } = useVaultsDepositsPaused([address]);
   // The vault is its own ERC-4626 share token: print its own symbol(), never a hardcoded unit (issue 1767).
-  const { data: shareSymbolRaw } = useReadContract({
-    abi: erc20Abi,
-    address: address as `0x${string}`,
-    functionName: "symbol",
-  });
-  const shareSymbol = shareSymbolOrNeutral(shareSymbolRaw);
+  const shareSymbol = useVaultShareSymbols([address])(address);
 
   useEffect(() => {
     setState({ phase: "loading" });

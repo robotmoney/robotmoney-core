@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import type { Address } from "viem";
 import { fetchPositions, type VaultPosition } from "../lib/usePositions";
 import { formatSharesString } from "../lib/format";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 
 type Props = Readonly<{
   /** Connected account whose positions are fetched. */
@@ -78,6 +79,11 @@ export function PositionSelector({ account, explorerApiUrl, onSelect, selectedVa
     };
   }, [account, explorerApiUrl]);
 
+  // Each vault's own share symbol (issue 1767); the hook runs before any early return.
+  const symbolOf = useVaultShareSymbols(
+    load.status === "ok" ? load.positions.flatMap((p) => (p.vault_addr ? [p.vault_addr] : [])) : [],
+  );
+
   if (load.status === "idle" || load.status === "loading") {
     return (
       <p data-testid="position-selector-loading" className="hint">
@@ -127,11 +133,11 @@ export function PositionSelector({ account, explorerApiUrl, onSelect, selectedVa
             />
             {p.vault_name ? (
               <>
-                {p.vault_name} — {formatSharesString(p.shares, "rmUSDC")}
+                {p.vault_name} — {formatSharesString(p.shares, symbolOf(p.vault_addr))}
               </>
             ) : (
               <>
-                {p.vault_addr} — {formatSharesString(p.shares, "rmUSDC")}
+                {p.vault_addr} — {formatSharesString(p.shares, symbolOf(p.vault_addr))}
               </>
             )}
           </label>

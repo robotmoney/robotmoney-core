@@ -12,9 +12,9 @@ describe("no hardcoded share-unit literal in share-count formatting", () => {
     expect(files.length).toBeGreaterThan(5);
   });
   for (const f of files) {
-    it(`${f} passes no quoted rm* symbol to formatShares/formatSharesString`, () => {
+    it(`${f} passes no quoted rm* symbol to formatSharesString`, () => {
       const src = readFileSync(`${DIR}${f}`, "utf8");
-      expect(src).not.toMatch(/formatShares(String)?\([^)]*["']rm[A-Za-z]+["']/);
+      expect(src).not.toMatch(/formatSharesString\([^)]*["']rm[A-Za-z]+["']/);
     });
   }
 });

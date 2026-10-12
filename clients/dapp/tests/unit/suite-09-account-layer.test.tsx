@@ -153,7 +153,7 @@ describe("PortfolioPosition", () => {
     expect(vaultNames).toEqual(["Alpha Vault", "Beta Vault"]);
 
     const shares = getAllByTestId("portfolio-position-row-shares").map((n) => n.textContent);
-    expect(shares).toEqual(["0.50 rmUSDC", "0.25 rmUSDC"]);
+    expect(shares).toEqual(["0.50 shares", "0.25 shares"]);
 
     // Address is surfaced.
     expect(getByTestId("portfolio-position-address").textContent).toContain(WATCHED);

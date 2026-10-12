@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { encodeAbiParameters, toFunctionSelector } from "viem";
 import { VaultDetail } from "../../src/components/VaultDetail";
+import { PortfolioPosition } from "../../src/components/PortfolioPosition";
 import { AgentPoliciesPanel } from "../../src/components/AgentPoliciesPanel";
 import { shareSymbolOrNeutral } from "../../src/lib/format";
 import type { FetchLike, VaultDetailRow } from "../../src/lib/explorerApi";
@@ -140,4 +141,43 @@ describe("AgentPoliciesPanel share unit", () => {
     const { getByTestId } = render(<AgentPoliciesPanel ownerAddress={owner} policies={[policy]} />);
     expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toBe("5.00 shares");
   });
+});
+
+describe("PortfolioPosition share unit", () => {
+  const OWNER = "0x1111111111111111111111111111111111111111" as const;
+  for (const v of VAULTS) {
+    it(`${v.name} position prints ${v.symbol}`, async () => {
+      const fake = makeFakeChain();
+      fake.respond = (to, data) =>
+        to === v.addr && data.startsWith(SYMBOL_SELECTOR)
+          ? encodeAbiParameters([{ type: "string" }], [v.symbol])
+          : undefined;
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          positions: [
+            {
+              vault_address: v.addr,
+              vault_name: v.name,
+              risk_label: v.risk,
+              shares: "500000000000000000000000",
+            },
+          ],
+          block_number: 10,
+        }),
+      })) as unknown as FetchLike;
+      const out = await renderOnFakeChain(
+        <PortfolioPosition address={OWNER} apiUrl="http://api" fetchImpl={fetchImpl} />,
+        fake,
+      );
+      await out.findByTestId("portfolio-position-row-shares");
+      await out.findAllByText(`0.50 ${v.symbol}`);
+      await vi.waitFor(() =>
+        expect(out.getByTestId("portfolio-position-row-shares").textContent).toBe(
+          `0.50 ${v.symbol}`,
+        ),
+      );
+    });
+  }
 });
