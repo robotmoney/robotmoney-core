@@ -49,6 +49,15 @@ function shortAddr(addr: string): string {
   return `0x...${addr.slice(-6).toUpperCase()}`;
 }
 
+/**
+ * True for the vault that holds deSPXA (rmRWA), keyed on the vault identity and never on the risk
+ * label (rmAGENT is SPECULATIVE too and has no issuer freeze control). Matching the name needs no
+ * holdings read, so the disclosure still shows when the holdings cannot be determined (issue 1765).
+ */
+function holdsDeSPXA(vaultName: string): boolean {
+  return /\brwa\b/i.test(vaultName);
+}
+
 interface AssetRowProps {
   token: string;
   active?: boolean | null;
@@ -323,7 +332,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
         </div>
       )}
 
-      {vault.risk_label === "SPECULATIVE" && (
+      {holdsDeSPXA(vault.name) && (
         <div
           data-testid="vault-detail-issuer-freeze-disclosure"
           className="risk-disclosure"

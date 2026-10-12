@@ -426,7 +426,7 @@ describe("VaultDetail", () => {
     );
   });
 
-  it("renders issuer freeze-control disclosure when risk_label is SPECULATIVE", async () => {
+  it("renders issuer freeze-control disclosure for the RWA vault (deSPXA)", async () => {
     const speculativeFixture: VaultDetailResponse = {
       vault: {
         chain_id: 8453,
