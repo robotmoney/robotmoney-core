@@ -3245,7 +3245,7 @@ mod tests {
                 "{start} {head} {end:?}"
             );
             for (a, b) in &ranges {
-                assert!(b >= a && b - a + 1 <= max, "{a}..{b} over {max}");
+                assert!(b >= a && b - a < max, "{a}..{b} over {max}");
             }
             for w in ranges.windows(2) {
                 assert_eq!(w[1].0, w[0].1 + 1, "gap or overlap");
