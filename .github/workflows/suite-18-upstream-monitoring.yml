@@ -64,6 +64,27 @@ jobs:
       - name: Run assert-basescan-verified unit tests (mock mode)
         run: bash .github/scripts/tests/test_assert_basescan_verified.sh
 
+  recorder-keeper-selftest:
+    name: recorder-keeper-selftest
+    # Core 1779: runs the real keeper against a real UniswapV4PriceRecorder on a local anvil chain.
+    # The test fails loudly when anvil, forge or cast is missing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Recorder keeper self-test
+        run: bash scripts/ops/test-recorder-keeper.sh
+
   live-monitor:
     name: live-monitor
     # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
