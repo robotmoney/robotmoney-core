@@ -147,6 +147,17 @@ export function formatShares(
   return `${bigintToDecimalString(raw, decimals, 6)} ${symbol}`;
 }
 
+/** Neutral share unit shown when the vault's own symbol() is unknown (issue 1767). */
+export const NEUTRAL_SHARE_SYMBOL = "shares";
+
+/**
+ * The share unit to print for a vault: its own on-chain `symbol()` when that is a plain ticker, else the
+ * neutral "shares". Never guessed from the vault name or hardcoded to one vault (issue 1767).
+ */
+export function shareSymbolOrNeutral(raw: unknown): string {
+  return typeof raw === "string" && /^[A-Za-z0-9]{1,16}$/.test(raw) ? raw : NEUTRAL_SHARE_SYMBOL;
+}
+
 /** Format an explorer-API raw share integer string. */
 export function formatSharesString(raw: string | null | undefined, symbol = "shares"): string {
   return formatShares(rawStringToBigint(raw), symbol);
