@@ -62,13 +62,19 @@ function setup(chainId: number, envClass: string, code: string | null = "0x6001"
   });
   // Every wallet send goes to a chain RPC URL over fetch: record the JSON-RPC methods and fail them.
   const fetched: string[] = [];
+  const sent: Array<{ gas?: string; data?: string }> = [];
   vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
     let method = "unparsed";
     let id: unknown = 1;
     try {
-      const body = JSON.parse(String(init?.body)) as { method: string; id: unknown };
+      const body = JSON.parse(String(init?.body)) as {
+        method: string;
+        id: unknown;
+        params?: Array<{ gas?: string; data?: string }>;
+      };
       method = body.method;
       id = body.id;
+      if (method === "eth_sendTransaction" && body.params?.[0]) sent.push(body.params[0]);
     } catch {
       /* not JSON-RPC */
     }
@@ -112,7 +118,7 @@ function setup(chainId: number, envClass: string, code: string | null = "0x6001"
       </QueryClientProvider>
     </WagmiProvider>,
   );
-  return { requests, fetched, getWrite: () => write! };
+  return { requests, fetched, sent, getWrite: () => write! };
 }
 
 async function connected(chainId: number, envClass: string, code: string | null = "0x6001") {
@@ -230,5 +236,76 @@ describe("useGuardedWriteContract on other classes", () => {
     expect(getWrite().writeBlocked).toBe(false);
     expect(screen.getByTestId("app-body")).toBeInTheDocument();
     expect(screen.queryByTestId("wrong-chain-gate")).toBeNull();
+  });
+});
+
+// Core issue 1758: a redeem estimated against the pending block reverts Panic(0x11), so every redeem is sent
+// with a fixed gas limit through this one hook (dapp issue 1760).
+describe("useGuardedWriteContract redeem gas workaround (core issue 1758)", () => {
+  const redeemAbi = [
+    {
+      type: "function",
+      name: "redeem",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "shares", type: "uint256" },
+        { name: "receiver", type: "address" },
+        { name: "owner", type: "address" },
+      ],
+      outputs: [{ name: "", type: "uint256" }],
+    },
+  ] as const;
+  const redeem = (extra: object = {}) => ({
+    address: `0x${(nextTarget += 1).toString(16).padStart(40, "0")}` as Address,
+    abi: redeemAbi,
+    functionName: "redeem" as const,
+    args: [1n, USER, USER] as const,
+    ...extra,
+  });
+  const GAS_2_5M = "0x2625a0";
+
+  it.each(["mainnet", "devnet"])(
+    "sends a redeem on the %s class with gas 2,500,000",
+    async (env) => {
+      const chainId = env === "mainnet" ? 8453 : 918453;
+      const { sent, getWrite } = await connected(chainId, env);
+      await act(async () => {
+        await getWrite()
+          .writeContractAsync(redeem())
+          .catch(() => undefined);
+      });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.gas).toBe(GAS_2_5M);
+    },
+  );
+
+  it("the callback form sends the redeem with gas 2,500,000 too", async () => {
+    const { sent, getWrite } = await connected(8453, "mainnet");
+    await act(async () => {
+      getWrite().writeContract(redeem());
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(sent[0]?.gas).toBe(GAS_2_5M);
+  });
+
+  it("a caller-set gas wins", async () => {
+    const { sent, getWrite } = await connected(8453, "mainnet");
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(redeem({ gas: 1_234_567n }))
+        .catch(() => undefined);
+    });
+    expect(sent[0]?.gas).toBe("0x12d687");
+  });
+
+  it("a deposit gets no added gas", async () => {
+    const { sent, getWrite } = await connected(8453, "mainnet");
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(fresh())
+        .catch(() => undefined);
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.gas).toBeUndefined();
   });
 });

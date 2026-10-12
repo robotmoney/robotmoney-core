@@ -433,7 +433,13 @@ describe("VaultSelectorDepositTab submit disabled when vault deposits are paused
       </RuntimeConfigProvider>,
     );
     fireEvent.change(screen.getByTestId("vault-selector"), { target: { value: VAULT_A } });
-    const last = readsSeen[readsSeen.length - 1]!;
+    // The price-recorder reads (issue 1760) go through the same hook, so pick the depositsPaused() read.
+    const pausedReads = readsSeen.filter(
+      (r) =>
+        (r.contracts[0] as { functionName?: string } | undefined)?.functionName ===
+        "depositsPaused",
+    );
+    const last = pausedReads[pausedReads.length - 1]!;
     expect(last.query?.enabled).toBe(true);
     expect((last.contracts[0] as { chainId?: number }).chainId).toBe(8453);
     cleanup();

@@ -40,6 +40,8 @@ export type DepositState =
   | { readonly kind: "open"; readonly source: "index"; readonly block: number }
   | { readonly kind: "paused"; readonly source: "registry" | "chain" | "explorer" }
   | { readonly kind: "retired" }
+  /** Open, but a V4 price recorder of the vault is stale, so a deposit would revert (issue 1760). */
+  | { readonly kind: "stale-price"; readonly recorders: readonly string[] }
   | { readonly kind: "unknown" };
 
 /** The index is stale past this many blocks between the chain head and its last indexed block (about a minute on Base). */
@@ -56,6 +58,8 @@ export interface DepositStateInput {
   readonly explorerHead?: number | null;
   /** The vault's `depositsPaused()` read from the chain; undefined when it could not be read. */
   readonly chainPaused?: boolean;
+  /** Price recorders of the vault whose `isFresh()` is false (priceRecorder.ts). Only matters when the vault is open. */
+  readonly staleRecorders?: readonly string[];
 }
 
 /** Is the explorer's answer provably fresh? An unindexed explorer (block 0 or null) or one far behind the head is not. */
@@ -70,6 +74,14 @@ export function explorerFresh(
 }
 
 export function resolveDepositState(input: DepositStateInput): DepositState {
+  const base = resolveBaseDepositState(input);
+  if (base.kind === "open" && input.staleRecorders && input.staleRecorders.length > 0) {
+    return { kind: "stale-price", recorders: input.staleRecorders };
+  }
+  return base;
+}
+
+function resolveBaseDepositState(input: DepositStateInput): DepositState {
   if (input.registryStatus === REGISTRY_RETIRED) return { kind: "retired" };
   if (input.registryStatus === REGISTRY_DEPOSITS_PAUSED)
     return { kind: "paused", source: "registry" };
@@ -100,10 +112,16 @@ export function depositStateLabel(s: DepositState): string {
       return "Deposits paused / closed";
     case "retired":
       return "Retired";
+    case "stale-price":
+      return "Price stale, deposits unavailable";
     case "unknown":
       return "Deposit state unknown";
   }
 }
+
+/** Said under a stale-price state. The recorder's `record()` is permissionless, so anyone can refresh it. */
+export const STALE_PRICE_REASON =
+  "Price stale, deposits to this vault are unavailable until the price is refreshed. Anyone can refresh it: record() on the price recorder is permissionless. Withdraw and redeem stay open.";
 
 /** Why deposits are closed, for the line under the label. Withdrawals stay open in every state. */
 export function depositStateReason(s: DepositState): string | null {
@@ -114,6 +132,8 @@ export function depositStateReason(s: DepositState): string | null {
       return "New deposits are closed (the vault has deposits paused). Withdraw and redeem stay open.";
     case "retired":
       return "This vault is retired and takes no deposits. Withdraw and redeem stay open.";
+    case "stale-price":
+      return STALE_PRICE_REASON;
     case "unknown":
       return "Deposit state unknown: cannot confirm deposits are open. Deposits stay disabled until they can be confirmed. Withdraw and redeem stay open.";
   }
@@ -133,7 +153,8 @@ export const depositStateSource = (s: DepositState): string => (s.kind === "open
  * "unknown".
  */
 export function headroomCell(headroom: string | null | undefined, s: DepositState): string {
-  if (s.kind === "paused" || s.kind === "retired") return "n/a (deposits closed)";
+  if (s.kind === "paused" || s.kind === "retired" || s.kind === "stale-price")
+    return "n/a (deposits closed)";
   if (s.kind === "unknown") return UNKNOWN;
   return formatUsdcCapString(headroom);
 }

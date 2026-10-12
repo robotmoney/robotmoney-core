@@ -1,5 +1,6 @@
 // Canonical: docs/architecture.md §4.1 — Vault Family
 
+import { RefreshPriceButton } from "./RefreshPriceButton";
 import { depositStateLabel, depositStateReason, type DepositState } from "../lib/vaultDepositState";
 
 /**
@@ -25,6 +26,12 @@ export function DepositsClosedNotice(props: {
       {props.scope ? `${props.scope}: ` : ""}
       {props.state.kind === "unknown" ? "" : `${depositStateLabel(props.state)}. `}
       {reason}
+      {props.state.kind === "stale-price" && (
+        <>
+          {" "}
+          <RefreshPriceButton recorders={props.state.recorders} />
+        </>
+      )}
     </p>
   );
 }
