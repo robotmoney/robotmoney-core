@@ -72,9 +72,10 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         );
     }
 
-    /// An existing holder who exits during the window takes a permanent loss. Once supply is
-    /// zero the revoked adapter's balance belongs to the ERC4626 virtual shares: the next
-    /// depositor does not get it, and no admin path can move idle `asset()` out.
+    /// A holder exiting during exclusion loses its share-based recovery entitlement.
+    /// After restoration at zero supply, an ordinary new deposit does not capture the surplus.
+    /// This does not prove unconditional permanent lock: further ADMIN eligibility changes
+    /// can redistribute it, as SecurityReviewRevisionAssessment demonstrates.
     function test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
@@ -176,8 +177,8 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertLe(vault.previewRedeem(vault.balanceOf(alice)), 2, "remaining shares are worth dust");
     }
 
-    /// With two holders the FIRST full redeemer takes the second holder's backing. The
-    /// second holder's redeem returns zero USDC: a total loss, not a revert.
+    /// With two holders the FIRST full redeemer takes the second holder's backing.
+    /// The second holder's full redemption reverts on the double-counted dust remainder.
     function test_f2_firstRedeemerTakesSecondHoldersBacking() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);

@@ -1,179 +1,189 @@
 # Smart-contract security review — 2026-10-12
 
-Baseline: `2c81c742f97fc2faa033befc38a01a2c2af66cc3` (`origin/dev`, the repository's default branch; `origin/main` does not exist). The Solidity production sources are unchanged from `7c742860fad65b09442bf64fdf2b0098ba0b135f`, where the focused review was performed. Review worktree: `review/contracts-security-20261012`.
+## Scope and disposition
 
-Status: re-checked adversarially on 2026-10-12. The first pass reported three findings. The re-check kept all three mechanisms, re-rated two of them, corrected the framing of the third, and added five findings the first pass missed. A relevance pass against the open plan issues then retired one finding, downgraded two, and marked two as already tracked (see "Planned changes that affect this report"). Every claim below that says "reproduced" has a passing test in `contracts/test/SecurityReview*Poc.t.sol` or `contracts/test/SecurityReviewRecheck*Poc.t.sol` at this baseline.
+**Status:** Final draft for PR review, including adversarial re-checks and owner-confirmed imminent retirement of RouterGovernance voting. This document reports vulnerabilities and review limits; it does not certify the contracts as free of vulnerabilities.
 
-The scope inventory contains 28 production Solidity implementations under `contracts/` (7 adapters, 4 gateway, 8 library, 4 under `vaults/`, plus `FeatureFlags`, `PortfolioRouter`, `RobotMoneyVault`, `RouterGovernance`, `VaultRegistry`). The first pass traced authorization, deposit/share accounting, withdrawals, adapter eligibility, swap/oracle boundaries, and committee attribution. The re-check added the router, registry, governance, timelock wiring, the gateway's full `AGENT_ROLE` surface, the emergency and keeper paths of the vault, off-chain consumers of committee votes, and the prior-audit ledger.
+**Baseline:** `2c81c742f97fc2faa033befc38a01a2c2af66cc3` from `origin/dev`, the repository's default branch. The production Solidity sources are unchanged from `7c742860fad65b09442bf64fdf2b0098ba0b135f`, where the initial review began. Review branch: `review/contracts-security-20261012`. Source line references below refer to this baseline; Solidity paths are relative to `contracts/` unless stated otherwise.
 
-This report evaluates the checked-out source. No Base (8453) production manifest exists under `deployments/` (only Twin placeholders and a rehearsal example), so live role holders cannot be confirmed from this repository. Deployment scripts were read for role wiring but not independently audited. Third-party protocols were not audited. No completeness claim or absence-of-vulnerabilities conclusion is made.
+The inventory covers 28 production Solidity implementations: seven adapters, four gateway contracts, eight libraries, four vault implementations/base contracts, and five top-level contracts. Review areas included authorization, share accounting, withdrawals, adapter eligibility, swap/oracle boundaries, committee attribution, router weights, emergency actions and keeper actions. Deployment scripts, committee-feed consumers and prior audit records were inspected for context. Third-party protocols and deployment tooling were not independently audited.
+
+No Base (8453) production manifest was available under `deployments/`; the repository contains Twin placeholders and a rehearsal example. Live bytecode, role holders, balances and configuration were not verified. References to the Safe, the 48-hour timelock and an unheld keeper role describe intended deployment wiring. The tests use local fixtures and mocks, including direct role impersonation; they do not reproduce the complete production Safe/timelock path.
+
+Severity reflects both impact and prerequisites. Findings 1 and 2 require an administrative action before an ordinary holder or depositor can benefit. Finding 5 concerns the authority of an emergency key. Voting retirement is the accepted resolution of finding 4; it needs no separate quorum fix. Findings 3 and 6 have explicit deployment/use assumptions below.
 
 ## Review conclusions
 
-| # | Finding | Severity | Required conditions | Evidence |
+| # | Finding | Severity / disposition | Required conditions | Evidence |
 |---|---|---|---|---|
-| 1 | Deposits stay open while a funded adapter is excluded from NAV | Medium (was High) | ADMIN revokes a funded adapter before deposits are paused; any later recovery leg | Reproduced; mitigation reproduced |
-| 2 | Duplicate strategy adapter registration pays the first redeemer twice | Medium (was Low) | ADMIN schedules the same active adapter address twice | Reproduced value extraction |
-| 3 | Any gateway agent can attribute a committee vote to an allowlisted member | Low (was Medium) | One committee member allowlisted; attacker self-registers as a gateway agent | Reproduced, including supersede |
-| 4 | One voter carries any router-weight proposal under the shipped sheet | Retired | Voting is deleted before the final deployment (weight-setter issue, 1698) | Reproduced on today's bytecode |
-| 5 | EMERGENCY `forceRemoveAdapter` reprices every exit | Medium, tracked | EMERGENCY hot key acts alone; owner decision pending (four-vault plan, 1705, Q2) | Reproduced |
-| 6 | Keeper `rebalance()` undoes `emergencyWithdraw` | Info, tracked | Requires a `KEEPER_ROLE` holder; the plan asserts none (1705, C5) | Reproduced |
-| 7 | Permissionless `revealAuthorization` squats any un-owned agent address | Low | Attacker front-runs a scheduled `authorizeAgent` | Reproduced |
-| 8 | Duplicate vault entries in router weight vectors | Low | A Safe-applied vector repeats a vault | Source read, HR-L-9 still present |
-| 9 | Ledger and doc drift on six prior findings | Info | — | Source read |
+| 1 | Deposits remain open while funded adapter value is excluded from NAV | Medium | ADMIN excludes value before deposits pause; value subsequently returns to NAV | Reproduced, including three recovery paths |
+| 2 | Duplicate strategy adapter registration overpays early redeemers | Medium | ADMIN registers an already-active adapter again | Reproduced value extraction |
+| 3 | A gateway agent can attribute a committee signal to another member | Low under advisory-only use | An allowlisted committee member exists; attacker self-registers at the gateway | On-chain spoofing reproduced; aggregation inspected in source |
+| 4 | One voter meets quorum under example deployment values | Imminent retirement; no separate fix | Voting retained and used with quorum 2 and voter power 1000 | Reproduced on reviewed bytecode; removal accepted |
+| 5 | Emergency force removal reprices exits before recoverable value is settled | Medium; authority decision tracked | EMERGENCY removes a funded adapter | Reproduced |
+| 6 | Keeper rebalance can reverse an emergency withdrawal | Info if keeper role is unheld; Medium if granted | A keeper can call after the rebalance interval | Reproduced with a granted keeper role |
+| 7 | Permissionless authorization can squat another agent's policy ownership | Low | Target address is unowned and passes role-separation checks | Ownership denial reproduced; committee-blocking claim disproved |
+| 8 | Router weight vectors permit duplicate vault addresses | Low | Authorized weight setter or ADMIN submits duplicates | Source inspection; previously reported HR-L-9 |
+| 9 | Audit dispositions and documentation disagree with current source | Info | — | Source/history inspection |
+
+The V4 recorder has a reproduced sampling concern whose economic impact remains unassessed; see “Open review item: V4 sampling.”
 
 ## Findings
 
-### 1. Medium — deposits stay open while a funded adapter is excluded from NAV
+### 1. Medium — deposits remain open while funded adapter value is excluded from NAV
 
 **Code:** `RobotMoneyVault.sol:467-481, 495-506, 722-724, 957-960, 1000-1035, 1150-1153, 1361-1375, 1468-1474`.
 
-`setAdapterAllowed(adapter, false)` removes a funded adapter from `totalAssets()` immediately, but `_activeAdapterCount()` still includes it and deposits remain open. A new user mints shares against the reduced NAV. Any recovery leg then hands part of the pre-existing holders' value to the new shares. Revoking a code hash has the same effect.
+`setAdapterAllowed(adapter, false)` removes a funded adapter from `totalAssets()` immediately. `_activeAdapterCount()` still includes the entry, and deposits remain open. New shares mint against reduced NAV and gain a claim on subsequent recoveries. Revoking an adapter code hash can produce the same exclusion.
 
-**Reproduction:** Alice deposits 2,000 USDC across two 1,000-USDC adapters. Admin revokes one. Bob deposits 1,000 USDC at the 1,000-USDC NAV. Admin restores eligibility. Bob redeems for 1,499.999999 USDC. `SecurityReviewPoc.test_revokedAdapterReactivationTransfersValue`.
+**Reproduction:** Alice deposits 2,000 USDC across two adapters. ADMIN excludes one adapter holding 1,000 USDC. Bob deposits 1,000 USDC against the reduced NAV. After ADMIN restores eligibility, Bob redeems for 1,499.999999 USDC. `SecurityReviewPoc.test_revokedAdapterReactivationTransfersValue`.
 
-**What the first pass missed:**
+Recovery can occur through restored eligibility, `emergencyWithdrawAdapter`, or `rebalance()`. The emergency path pauses deposits when called, but previously minted shares already participate in the recovery. The keeper path iterates active adapters without checking eligibility before withdrawal and routes recovered funds into eligible adapters. Tests `test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor` and `test_f1_keeperRebalancePullsRevokedAdapterIntoNav` reproduce those paths.
 
-- There are three recovery legs, not one. `setAdapterAllowed(true)` (ADMIN), `emergencyWithdrawAdapter` (EMERGENCY, works on an ineligible adapter because it checks only `active` at L1150-1152, and it pauses deposits only after Bob is already in; `test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor`), and `rebalance()` (ADMIN or KEEPER). `rebalance()` iterates `active` adapters, not `_isAdapterCounted`, and calls `withdraw` on the revoked adapter with no eligibility check (L1015-1030), then routes the proceeds into eligible adapters. A keeper therefore moves "untrusted" adapter funds back into NAV, which contradicts the ADP-2 rationale at L475-478. `test_f1_keeperRebalancePullsRevokedAdapterIntoNav`.
-- Existing holders who exit during the window lose permanently. If supply reaches zero while the revoked adapter still holds funds, the surplus is owned by the ERC4626 virtual shares (`_decimalsOffset() == 18`) and can never be claimed by anyone, including the next depositor, because `sweepForeignToken` rejects `asset()`. `test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares`.
-- The open executor widens the window. `EXECUTOR_ROLE` is `address(0)` (`contracts/script/DeployTimelock.s.sol:83-85`, `docs/operations/contract-release-runbooks.md:252`), so once the Safe schedules `setAdapterAllowed(x, false)` an attacker can execute it and deposit in the same transaction, then execute the restore and redeem atomically. `docs/architecture.md:404-406` still says the open executor is "not yet implemented"; it is implemented.
-- The `setAdapterAllowed` docstring (L950-956) says revoking "does NOT affect adapters already registered and active" and "only blocks future deposit allocations". That predates ADP-2 and is wrong: the code excludes the adapter from NAV and from user pulls. `docs/technical/smart-contracts.md:165, 174-177` repeats the stale description, and the docstring's own procedure (revoke, then drain, then remove) is exactly the ordering that opens the window.
+Existing holders who redeem during exclusion surrender their shares at reduced NAV and have no automatic entitlement to later recovery. If supply reaches zero, ordinary deposits after restoration do not capture the orphaned value because of ERC4626 virtual shares. This is demonstrated by `test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares`. It does **not** prove that the assets are unconditionally locked forever: `test_assessment_orphanedBalanceNotUnconditionallyLockedForever` recovers value through another ADMIN-controlled exclusion, deposit and restoration sequence. That is a counterexample to permanent impossibility, not a recommended recovery procedure.
 
-**Why Medium, not High:** ADMIN_ROLE is a `TimelockController` with a 48-hour floor on Base (`docs/architecture.md:397-412`, `DeployTimelock.s.sol:60-110`). EMERGENCY_ROLE is an independent hot key that can `pauseDeposits()` before the revoke lands, and `unpauseDeposits` is ADMIN-only, so the safe order pause → revoke → drain → unpause exists today with no code change (`test_f1_pauseBeforeRevokeClosesWindow`). Loss is bounded by the revoked adapter's balance and TVL headroom. No one outside ADMIN can flip eligibility: `_isAdapterEligible` reads two admin-only maps, `codehash` (all production adapters are non-proxy with `immutable` `USDC`/`VAULT`; post-Cancun `selfdestruct` cannot clear code), and two staticcalls that cannot be gas-starved behind the 1.6M entry floors.
+The deployment scripts configure an open timelock executor (`script/DeployTimelock.s.sol:83-85`). An observer may execute an independently scheduled, ready revocation and then deposit in the same transaction, if the operation permits that sequence. Executing a restore also requires that restore to have been separately authorized and become ready. An open executor neither creates operations nor permits interleaving calls within an atomic timelock batch. These timing implications were inspected in source, not reproduced through a real Safe/timelock fixture.
 
-**Recommendation:** Close deposits (`maxDeposit() == 0`, revert in `deposit`/`mint`) whenever an active adapter is ineligible. This does not conflict with audit L-4 (`20260609-code-review-internal-claude.md:233`), which was about an unintended revert inside `_allocateTo`. Make `rebalance()` skip ineligible adapters. Fix the `setAdapterAllowed` docstring and `docs/technical/smart-contracts.md`. Add an adapter-quarantine runbook under `docs/operations/` that orders pause before revoke.
+**Severity:** Medium because the demonstrated window requires ADMIN action, and an emergency pause before revocation prevents new deposits during exclusion (`test_f1_pauseBeforeRevokeClosesWindow`). That mitigation does not resolve underpaid exits or entitlement to later recoveries. Available deposit capacity affects the attack size; it is not a one-for-one bound on value captured from excluded assets.
 
-**History:** The azimuth report (`20260623-code-review-testmachine-azimuth.md:588-680`, AZ-BSK-3) describes this exact mechanism and cites `RobotMoneyVault.sol`. `docs/audits.md:416` marks it fixed and names RobotMoneyVault. The two fix commits (`d147bda9` for 1098, `639faa1c` for 1664) touched only `contracts/vaults/BasketVault.sol` and `RwaVault.sol` and fixed a different sub-problem (idle USDC in the BasketVault mint denominator). The ledger is wrong; this vault was never fixed.
+**Recommendation:** Make `maxDeposit`/`maxMint` return zero and make `deposit`/`mint` revert while an active adapter is ineligible. Prevent ordinary keeper rebalancing from interacting with quarantined adapters; retain an explicit, authorized recovery path. Pause before exclusion and keep deposits closed until recovery accounting or the loss disposition is settled. Separately define how holders exiting during exclusion retain any intended recovery entitlement. Update the onboarding-only description of `setAdapterAllowed` at L950-956 and in `docs/technical/smart-contracts.md:165, 174-177`.
 
-### 2. Medium — duplicate strategy adapter registration pays the first redeemer twice
+**History:** AZ-BSK-3 (`20260623-code-review-testmachine-azimuth.md:588-680`) describes this mechanism, but `docs/audits.md:416` marks it fixed for RobotMoneyVault. The cited fixes `d147bda9` and `639faa1c` changed BasketVault/RwaVault accounting; the RobotMoneyVault reproduction still passes. Reconcile the ledger against this source path.
 
-**Code:** `RobotMoneyVault.sol:467-473, 524, 594, 845-921, 938-947, 977-980, 1044-1062, 1181-1192`.
+### 2. Medium — duplicate strategy adapter registration overpays early redeemers
 
-`addAdapter` checks eligibility and count but never checks whether the address is already active. `totalAssets()` adds the same adapter balance once per entry.
+**Code:** `RobotMoneyVault.sol:467-473, 845-921, 938-947, 977-980, 1044-1062, 1181-1192`.
 
-**What the first pass missed:** the impact is value extraction, not only a stuck vault. With one real adapter holding 1,000 USDC counted twice, a holder who redeems half her shares is paid 999.999999 USDC: pass 1 of `_pullProportional` pulls 500 for entry 0 and the "last counted takes the remainder" rule (L887-888) pulls the other 500 for entry 1, both from the same adapter. `test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault`. With two equal holders, the first full redeemer takes 1,999.999999 of the 2,000 pool and the second holder's exit reverts on dust. `test_f2_firstRedeemerTakesSecondHoldersBacking`. A depositor after the duplicate is minted at the doubled price and receives about half the shares. `test_f2_depositAfterDuplicateMintsAtInflatedPrice`. Because the timelock executor is open, whoever is watching the Safe can execute the scheduled duplicate-add and redeem in one transaction, so the "configuration error" becomes attacker-timed theft.
+`addAdapter` checks eligibility and count but does not reject an already-active address. `totalAssets()` counts that adapter's balance once per entry. An ordinary user cannot add the duplicate; this requires an administrative configuration error.
 
-Recovery is not `removeAdapter`: both entries read the same non-zero balance, so both revert `AdapterNotEmpty`. The clean ADMIN path is `adminRebalance([0,0])` → `removeAdapter(1)` → `adminRebalance([X,0])` (`test_f2_adminOnlyRecoveryRestoresAccounting`). The EMERGENCY path `forceRemoveAdapter(1)` fixes NAV in one call but pauses deposits and emits `AdapterForceRemoved` with `lossAmount` equal to the full, not lost, balance (`test_f2_forceRemoveDuplicateFixesNavButPausesAndMisreportsLoss`). Every path is at least one timelock delay or one hot-key action away.
+**Reproduction:** With two equal holders and one adapter holding 2,000 USDC counted twice, the first holder redeems for 1,999.999999 USDC, consuming nearly all backing. A partial redemption can also extract the inflated value, while a later depositor receives approximately half the expected shares. See `test_f2_firstRedeemerTakesSecondHoldersBacking`, `test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault` and `test_f2_depositAfterDuplicateMintsAtInflatedPrice`. Full redemption of all outstanding shares can revert; that does not prevent earlier value extraction.
 
-**Recommendation:** Reject an adapter address already present as an active entry. One line, no behavioural change for legitimate flows.
+When a duplicate-add operation has been scheduled and is ready on an open-executor timelock, a holder can time execution and redemption together. The authorization prerequisite remains the erroneous ADMIN operation.
 
-**History:** SR-M15 (`20260612-code-review-internal-claude.md:178-181`) already says "aware redeemers extract real USDC, leaving the vault insolvent". It is covered only by the grouped row `SR-0612-OPEN` in `docs/audits.md:392` with disposition "accepted-with-rationale, must land before mainnet" (`:465`). L-002 (`20260728-code-review-internal-kimi.md:329`) has no ledger row. `docs/technical/smart-contract-invariants.md:168` claims "the unified `Vault.addAdapter` reuses an inactive entry on re-add — fixed by NC-8 (#970)"; that fix landed only in `BasketVault.addAsset` (`contracts/vaults/BasketVault.sol:1081-1098`), not in `RobotMoneyVault.addAdapter`, which always pushes (L943-946).
+Both duplicate entries reject ordinary removal while the shared adapter balance is nonzero. The local fixture reproduces recovery by draining through `adminRebalance([0,0])`, removing the duplicate, then reallocating. Emergency force removal of the duplicate also corrects NAV but pauses deposits and emits a misleading loss amount. Production recovery should pause new deposits and keep the accounting repair atomic where possible; its operational sequence must be exercised through the actual governance path.
 
-### 3. Low — any gateway agent can attribute a committee vote to an allowlisted member
+**Recommendation:** Reject registration of an address already present as an active adapter. Preserve deliberate reactivation behavior for inactive entries.
 
-**Code:** `gateway/RobotMoneyGateway.sol:616-629, 632-700, 751-753, 1529-1536`, `gateway/InvestmentCommitteePolicy.sol:213-243, 271-280`.
+**History:** Previously reported as SR-M15 and L-002. The NC-8 duplicate-reuse fix referenced by `docs/technical/smart-contract-invariants.md:168` applies to `BasketVault.addAsset`, not `RobotMoneyVault.addAdapter`.
 
-The gateway forwards caller-controlled `p.agent` unchecked; the policy checks whether `p.agent` holds `COMMITTEE_AGENT_ROLE`, not whether that address is the submitter, and stores `p.agent`. `SecurityReviewCommitteePoc.test_permissionlessAgentCanImpersonateCommitteeMember`.
+### 3. Low — a gateway agent can attribute a committee signal to another member
 
-**Corrections to the first pass:**
+**Code:** `gateway/RobotMoneyGateway.sol:632-700, 751-753, 1529-1536`; `gateway/InvestmentCommitteePolicy.sol:213-243, 271-280`.
 
-- Self-registration through `commitAuthorization` + `revealAuthorization` is the documented depositor trust model, not a bug (`RobotMoneyGateway.sol:616-629`, `IGateway.sol:366-370`, `docs/architecture.md:944-962`). "Grants `AGENT_ROLE` without multisig approval" was misleading. `AGENT_ROLE` is a self-serve depositor-tier role with no committee authority. Every fund path it gates (`deposit`, `depositTo`, `withdraw`, `withdrawFromRouter`) reads `agents[msg.sender]` and pulls USDC or shares from `msg.sender` or from a `shareReceiver` a non-admin must set to itself (L752). The gateway holds no pooled shares. `test_selfRegisteredAgentCannotPullAnotherHoldersShares`.
-- The impact is larger than "false provenance". Votes are append-only with no per-agent key, so the real member's vote never reverts, but the live-state rule is latest-wins (`docs/architecture.md:581-583`, `latestVoteByAgent` at L271-280). An attacker who back-runs the member's vote becomes the member's live position. `test_spoofedVoteSupersedesMembersLatestVote`.
-- The off-chain feed is fully attacker-controllable. The indexer stores `decoded.agent` straight from the event (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220`); "verified" means only that the body at `rationale_uri` hashes to `voteJsonHash`, both attacker-supplied (`:2612-2646`). The aggregate is `AVG/COUNT` over `committee_votes WHERE verified` with no per-agent dedupe and no join to `committee_agents` (`services/explorer-indexer/src/db.rs:1979-1983`, `clients/explorer-api/src/routes.rs:1720-1727`), surfaced by the dapp as "aggregated committee tilt" (`clients/dapp/src/lib/committeeApi.ts:59-74`). `test_spoofedVotesFloodUnderMemberName`.
+Permissionless gateway registration is intended. It grants a depositor-tier `AGENT_ROLE`, not committee authority. However, `committeeVoteSubmit` forwards caller-controlled `p.agent`; the policy checks that supplied address's committee role without binding it to the caller.
 
-**Why Low:** `docs/architecture.md:618-623` still says the timelock proposer "reads the committee's tilts, aggregated off-chain" to propose router weights. That text is being retired. Under the owner spec of 2026-10-09 (docs issue 1697, weight-setter issue 1698) router weights move only when the Safe applies a consensus receipt, and the receipt payload comes from a swarm session with embedded analyst signatures, verified against the anchored digest (`docs/technical/consensus-receipt-submitter-runbook.md:72, 342`). Receipt anchoring checks the real submitter (below). On-chain votes become a "signed tilt" that feeds only the public committee dashboard and API. The spoof therefore corrupts a public display and its provenance, not a governance input. It returns to Medium if any consumer ever derives weights or receipts from on-chain votes.
+**Reproduction:** A self-registered gateway agent submits under an existing committee member's address. The record names that member, and a later spoof becomes that member's `latestVoteByAgent`. See `test_permissionlessAgentCanImpersonateCommitteeMember` and `test_spoofedVoteSupersedesMembersLatestVote`.
 
-Confirmed safe: `consensusRecordReceipt` passes `msg.sender` (L1587) and the receipt checks that submitter's committee role (`ConsensusRecommendationReceipt.sol:133`); `releaseReceipt` is ADMIN-gated. `test_selfRegisteredAgentCannotAnchorReceipt`. No other gateway → policy forward carries a caller-controlled identity.
+The indexer copies the event's agent address and verifies a rationale body against its supplied hash (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220, 2612-2646`). Its aggregation averages all verified votes without latest-per-agent deduplication or a committee-membership join (`services/explorer-indexer/src/db.rs:1979-1983`; `clients/explorer-api/src/routes.rs:1720-1727`). This permits repeated attacker-authored records to bias the public aggregate if their rationale bodies verify. `test_spoofedVotesFloodUnderMemberName` proves repeated on-chain submissions only; HTTP verification, database ingestion and dashboard rendering were not tested end to end. Repeated legitimate member submissions can also bias this aggregate after caller authentication is fixed.
 
-**Recommendation:** In `committeeVoteSubmit`, revert unless `p.agent == msg.sender`. No ERC-2771, EIP-712, or relayer exists in the gateway, `docs/architecture.md:601-608` rules out relayed votes, and `rmpc` already sets `agent` from the signer (`clients/rust-payment-client/src/commands/committee.rs:212, 286`), so nothing breaks. Separately, have the indexer join votes to the on-chain `committee_agents` set and dedupe to latest-per-agent before aggregating.
+**Severity and boundary:** Low under the owner's advisory-only committee-signal model and imminent governance-voting retirement. Receipt anchoring passes the real `msg.sender` and checks committee membership; receipt release is ADMIN-gated. `test_selfRegisteredAgentCannotAnchorReceipt` confirms that the spoofing path cannot anchor a receipt. This finding does not demonstrate unauthorized router-weight changes. Reassess severity if a consumer uses the affected feed as an authoritative allocation or receipt input.
 
-### 4. Retired — one voter carries any router-weight proposal under the shipped sheet
+**Recommendation:** If the signal endpoint remains, require `p.agent == msg.sender` or populate the identity from the authenticated caller. The current client already uses the signer address. Aggregate the latest signal per member **and vault**, with an explicit membership and freshness policy, and test the complete ingestion path. Governance-voting retirement alone does not repair a retained public signal endpoint or its historical data.
 
-**Code:** `RouterGovernance.sol:52-54, 69, 639`, `contracts/script/DeployRouterGovernance.s.sol:95-98`, `publish-contracts/src/sheet.ts:288`, `publish-contracts/src/verify/index.ts:239-244`, `deployments/twin-918453/stage-sheet.env:16, 48`, `deployments/base-8453-rehearsal/stage-sheet.example.env:26, 58`.
+### 4. Imminent retirement — one voter meets quorum under example deployment values
 
-`RouterGovernance` claims "a single voter can never carry a weight proposal on their own" via `MIN_QUORUM_THRESHOLD = 2`. Quorum is compared in power units, not voter count. Both stage sheets set `QUORUM_THRESHOLD=2` and `VOTER_POWER=1000` per voter. The deploy script checks only `totalVotingPower >= quorum`, the sheet validator applies the same total-only rule, and the stage 12 verifier checks equality to the sheet. `GovernanceSeparationInvariant.t.sol:191-199` asserts "a minority of two voters must not reach quorum" against fixture constants (`VOTER_POWER=100e18`, `QUORUM=250e18`), never against sheet values. Scenario: the timelock proposes, one compromised or careless voter key votes, the weights move after the execution delay. Proposal content stays Safe-authored, which bounds the impact to choosing among Safe-proposed vectors.
+**Code:** `RouterGovernance.sol:52-54, 69, 639`; `script/DeployRouterGovernance.s.sol:95-98`; `publish-contracts/src/sheet.ts:288`; `deployments/twin-918453/stage-sheet.env:16, 48`; `deployments/base-8453-rehearsal/stage-sheet.example.env:26, 58`.
 
-**Reproduction:** `SecurityReviewRecheckGovernancePoc.test_singleVoterCarriesProposalWithSheetValues` with the sheet values.
+`MIN_QUORUM_THRESHOLD = 2` is compared against voting power, not a count of voters. The example sheets use quorum 2 and power 1000 per voter. One voter therefore satisfies quorum on a Safe-authored proposal. `test_singleVoterCarriesProposalWithSheetValues` reproduces that configuration; it does not establish live production parameters.
 
-**Status:** Retired. The weight-setter issue (1698) deletes `propose`, `vote`, `execute`, `setVotingPower` and quorum from RouterGovernance before the final deployment, with `test_noVotingSurface` as an acceptance gate. The mainnet test deploys today's bytecode with voter addresses nobody holds keys for (four-vault plan, 1705, Q7), so the path is inert there. No fix is needed beyond 1698. If 1698 slips past the final deployment, this finding becomes live again and the fix is a quorum above any single voter's power.
+**Disposition:** The owner confirmed imminent voting retirement. Removal under issue 1698 is the accepted resolution; no separate quorum fix is recommended. Verify the final deployment artifact has no voting surface and that weight-setter role wiring matches the replacement design. The mainnet-test plan's inaccessible voter keys are an assumption until verified. Retain this finding as baseline evidence and reassess only if voting is retained or used before removal.
 
-### 5. Medium — EMERGENCY `forceRemoveAdapter` reprices every exit
+### 5. Medium — emergency force removal reprices exits before recovery is settled
 
-**Code:** `RobotMoneyVault.sol:1181-1192, 467-473, 1136, 1158, 789-826, 938-947`.
+**Code:** `RobotMoneyVault.sol:467-473, 789-826, 938-947, 1136, 1158, 1181-1192`.
 
-`forceRemoveAdapter` flips `active = false` without draining. The adapter drops out of `totalAssets()`, no vault function can pull from an inactive entry (`emergencyWithdraw` skips inactive, `emergencyWithdrawAdapter` reverts `AdapterNotFound`), and redeems keep working at the deflated NAV. With every funded adapter removed, `previewRedeem` is 0 while `maxRedeem` still reports the full balance, so `redeem` burns all shares for 0 USDC (`test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero`). With one of two adapters removed, exits pay 50 cents on the dollar and, after ADMIN re-registers the adapter, the stayers own what the leavers gave up (`test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid`). This is the exit-side mirror of finding 1, triggerable by the lower-trust hot key alone, and it is not closed by the deposit pause. It conflicts with `docs/technical/security-model.md:92` ("no role, flag or function can block a redeem") in substance if not in letter, since a redeem that pays zero is a blocked exit.
+`forceRemoveAdapter` deactivates an adapter without withdrawing. Its balance disappears from NAV, and the emergency withdrawal functions cannot pull from the inactive entry. ADMIN can re-register it later. Holders redeeming in the meantime lose their proportional claim on any later recovery.
 
-The function is documented as a loss write-off. The gap is that nothing ties it to an actual loss: a healthy adapter can be written off, and only ADMIN (timelock, 48 hours) can bring it back. Rated Medium as a hot-key trust finding; the same key can already `emergencyWithdraw`, but that path keeps NAV intact.
+**Reproduction:** Removing every funded adapter allows shares to be redeemed for zero USDC. Removing one of two equal positions produces approximately half-value exits, while remaining holders benefit when ADMIN restores the position. See `test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero` and `test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid`.
 
-**Tracking:** The four-vault plan (1705, Q2 and C6) already lists `forceRemoveAdapter` among the emergency levers that change state without the timelock, with an owner decision due before the final deployment. This finding adds the concrete exit-repricing consequence that decision should weigh.
+**Severity:** Medium as an emergency-key authority risk. Force removal is an intentional loss-write-off mechanism, but the key can apply it to a healthy, recoverable position without timelock approval. Deposit pausing does not protect exiting holders. A positive `maxRedeem` with zero NAV is not itself an ERC4626 inconsistency: shares can legitimately have zero value.
 
-**Recommendation:** Require `forceRemoveAdapter` to first attempt `emergencyWithdrawAdapter` and succeed, or restrict it to adapters whose `totalAssets()` reverts (the case `test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts` covers). Make `maxRedeem`/`maxWithdraw` consistent with `previewRedeem` when NAV is zero.
+**Recommendation:** Resolve the emergency-key authority decision tracked by issue 1705 (Q2/C6), including who may finalize a loss and how later recoveries are attributed. Preserve a recovery route for quarantined positions and provide caller-controlled minimum proceeds for protected exits. Withdrawal success must not be a prerequisite for a last-resort write-off; a readable balance does not establish withdrawability. Any solution must preserve the owner's requirement that withdrawals cannot be administratively frozen.
 
-### 6. Info — keeper `rebalance()` undoes `emergencyWithdraw`
+### 6. Info / conditional Medium — keeper rebalance can reverse emergency withdrawal
 
-**Code:** `RobotMoneyVault.sol:1000-1035`, especially the `_routeDeposit(idle)` leg at L1032.
+**Code:** `RobotMoneyVault.sol:1000-1035`.
 
-The rebalance throttle bounds only pulls. The routing leg sends the whole idle balance back out, checks neither `depositsPaused` nor `shutdown`, and skips only adapters whose allowlist ADMIN already revoked. After EMERGENCY drains a suspect venue, one keeper call re-deploys 100% of TVL into it during the 48-hour delay before ADMIN can revoke it. `test_O2_keeperRebalanceUndoesEmergencyWithdraw`. This is SR-M10 (`20260612-code-review-internal-claude.md:153`), still open at HEAD, never individually dispositioned in `docs/audits.md`.
+The rebalance throttle bounds withdrawals from adapters, but `_routeDeposit(idle)` reallocates the entire idle balance. It checks neither `depositsPaused` nor `shutdown`. A keeper can redeploy funds into the same still-eligible venue after an emergency drain, once the interval permits. `test_O2_keeperRebalanceUndoesEmergencyWithdraw` reproduces this with an explicitly granted keeper role.
 
-`KEEPER_ROLE` is not granted at launch (`docs/technical/smart-contracts.md:143`), and the four-vault plan (1705, item 2 and C5) adds a verifier label asserting it has no holder. Only the timelock can call `rebalance()`, and a timelock call is a deliberate governance action. Rated Info for that reason. It becomes Medium if a keeper key is ever granted. Note that the open keeper issue (1779) is about the rmAGENT price recorder, not this role.
+**Severity:** Info under the intended configuration where the keeper role has no holder and only ADMIN can rebalance. Medium if a keeper is granted while this behavior remains. The constructor does not grant the role; that alone does not prove it is unheld on a live deployment. Issue 1705 C5 tracks a verifier assertion. The price-recorder keeper in issue 1779 is unrelated to this vault role.
 
-**Recommendation:** Make `rebalance()` revert while `depositsPaused` or `shutdown` is set.
+**Recommendation:** Prevent ordinary keeper allocation during an emergency pause or shutdown, preserving explicit authorized recovery operations. Verify role holders at deployment and before any keeper grant. This is the previously reported SR-M10 mechanism.
 
-### 7. Low — permissionless `revealAuthorization` squats any un-owned agent address
+### 7. Low — permissionless authorization can squat another agent's policy ownership
 
-**Code:** `gateway/RobotMoneyGateway.sol:640-674, 686, 689, 725, 736`, `docs/architecture.md:948-949`.
+**Code:** `gateway/RobotMoneyGateway.sol:640-700, 703-736`; `docs/architecture.md:944-962`.
 
-`revealAuthorization` lets any caller authorize any address that is not already owned, with no `agent == msg.sender` check; the caller becomes `agentOwner[agent]`. The attacker grants a third party `AGENT_ROLE` with `shareReceiver` and `assetRecipient` set to the attacker. ADMIN then cannot onboard that address (`AgentAlreadyOwned`), and `revokeRole(AGENT_ROLE, x)` does not clear `agentOwner`; only the squatter's `revokeAgent` releases it. A timelocked `authorizeAgent` publishes its target address during the delay, so squatting is trivial. The prior audit accepted a squatter DoS only for the router (`docs/audits.md:209`, FS-RTR-5). This gateway variant blocks committee onboarding, since a member needs `AGENT_ROLE` to vote. `test_permissionlessRevealSquatsThirdPartyAgentAddress`.
+Any caller can commit and reveal authorization for an unowned agent address that passes role-separation checks, becoming its policy owner without the agent's consent. An attacker can claim a published target before its legitimate owner, including during a timelock delay. Subsequent `authorizeAgent` fails with `AgentAlreadyOwned`. Revoking `AGENT_ROLE` does not release ownership. `test_permissionlessRevealSquatsThirdPartyAgentAddress` reproduces the denial of legitimate policy setup.
 
-**Recommendation:** Require `agent == msg.sender` in `revealAuthorization` for non-admin callers, or let ADMIN clear `agentOwner` on `revokeRole`.
+**Boundary:** Squatting itself grants the target `AGENT_ROLE`. It does not inherently block committee registration or voting: `test_assessment_squattedAgentCanJoinCommitteeAndVote` reproduces both while the attacker still owns the policy. The defect is unauthorized assignment of policy ownership. No autonomous theft from another holder is established by this finding; fund-moving calls retain their caller/policy constraints.
 
-### 8. Low — duplicate vault entries in router weight vectors (HR-L-9, still present)
+**Recommendation:** Require consent from the target agent to the intended owner, such as a two-party acceptance flow or a signed authorization bound to owner, gateway, chain, nonce and relevant policy terms. Preserve the documented model in which a depositor owns a distinct agent key's policy. Requiring `agent == msg.sender` would break that use case, and letting ADMIN seize ownership would contradict the existing ownership trust model. Those changes would need an explicit product decision.
+
+### 8. Low — duplicate vault entries in router weight vectors
 
 **Code:** `PortfolioRouter.sol:456-469, 537-553`.
 
-`setWeights` and `_setDefaultWeights` check zero, Active, eligible and sum, never uniqueness. A default vector with a duplicate satisfies `length == routerEligibleCount` while silently dropping one eligible vault. Admin-gated. One layer above finding 2, same root cause: no membership check on a registry write. Still relevant after the weight-setter issue (1698): its `applyReceipt` calls `PortfolioRouter.setWeights` with the receipt's vector, and the digest check proves the vector is the one committed, not that it is well-formed.
+`setWeights` and `_setDefaultWeights` validate eligibility, status and weight sum without enforcing uniqueness. A duplicate default entry can satisfy `length == routerEligibleCount` while omitting another eligible vault. This is an authorized configuration defect: `setWeights` is gated by `WEIGHT_SETTER_ROLE`, and default weights by ADMIN. Unlike finding 2, no duplicated NAV or direct theft is established here.
 
-**Recommendation:** Reject repeated vault addresses in both setters.
+**Recommendation:** Reject duplicate addresses in both setters. Keep the validation when issue 1698 introduces receipt-based application: digest binding authenticates a submitted vector but does not establish uniqueness. Previously reported as HR-L-9; source-inspected in this review.
 
-### 9. Info — ledger and doc drift
+### 9. Info — audit dispositions and documentation disagree with source
 
-Rows in `docs/audits.md` or canonical docs that state the opposite of the code at this baseline:
+Reconcile the following against the reviewed baseline:
 
-- AZ-BSK-3 marked fixed for RobotMoneyVault; not fixed (finding 1).
-- `docs/technical/smart-contract-invariants.md:168` says NC-8 fixed duplicate re-add on the unified vault; it fixed only BasketVault (finding 2).
-- AZ-GW-3 "accepted, remains mainnet-blocking" (`audits.md:421, 468`); fixed at `RobotMoneyGateway.sol:1363-1386` (empty `allowedSourceVaults` means pinned vault only).
-- AZ-GOV-1 "accepted" (`audits.md:422`); fixed at `RouterGovernance.sol:86` (`MAX_HISTORY_BLOCKS = 100_000`). Moot once 1698 deletes voting.
-- HR-L-11 `rescueUsdc` "accepted by design" (`audits.md:341`); the function is deleted (`PortfolioRouter.sol:602-618`).
-- `docs/architecture.md:404-406` says open executor is "not yet implemented"; `DeployTimelock.s.sol:83-85` implements it.
-- `RobotMoneyVault.sol:950-956` and `docs/technical/smart-contracts.md:165, 174-177` describe the allowlist as onboarding-only (finding 1).
+- AZ-BSK-3 is marked fixed for RobotMoneyVault; finding 1 remains reproducible (`docs/audits.md:416`).
+- The NC-8 duplicate-reuse claim in `docs/technical/smart-contract-invariants.md:168` does not apply to RobotMoneyVault (finding 2).
+- AZ-GW-3 is listed as accepted/mainnet-blocking, but the empty source-vault list is now restricted to the pinned vault (`gateway/RobotMoneyGateway.sol:1363-1386`).
+- AZ-GOV-1 describes a 256-block history limit; `RouterGovernance.sol:86, 600-602` now uses 100,000 blocks. This addresses that specific limit, not every historical-query availability question; voting retirement makes it moot.
+- HR-L-11 discusses `rescueUsdc`, which is absent from the reviewed PortfolioRouter.
+- `docs/architecture.md:404-406` calls the open timelock executor unimplemented; `script/DeployTimelock.s.sol:83-85` configures it.
+- The adapter allowlist documentation still describes onboarding-only effects, contrary to NAV exclusion (finding 1).
 
-Prior rows this review neither reconfirms nor disputes, for the next pass: SR-H4 (partial), FS-VLT-10, FS-VLT-21, FS-VLT-22, FS-VLT-23, FS-VLT-27, HR-I-1, HR-I-2, HR-I-3, FORCEREMOVE-001, HR-I-7, DC-0606-DEFER GOV-003, AC-008, and the blanket `SR-0612-OPEN` row ("4 High + 19 Medium open"), which no report has reconciled per contract.
+This review does not reconcile every prior disposition. Outstanding rows include SR-H4 (partial), FS-VLT-10/21/22/23/27, HR-I-1/2/3/7, FORCEREMOVE-001, DC-0606-DEFER GOV-003, AC-008 and the grouped SR-0612-OPEN row. They require individual verification before being treated as closed or accepted for release.
 
-## Planned changes that affect this report
+## Open review item: V4 sampling
 
-Open plan issues checked on 2026-10-12. They are planned, not merged, so every finding above was reproduced against today's code.
+**Code:** `adapters/UniswapV4PriceRecorder.sol:151-173, 200-217, 305-345`.
 
-| Issue | What it changes | Effect on this report |
-|---|---|---|
-| Weight-setter `applyReceipt`, delete RouterGovernance voting (1698) | No voting anywhere; the Safe applies a consensus receipt through `WEIGHT_SETTER_ROLE` in one call | Retires finding 4. Lowers finding 3. Finding 8 stays. Makes AZ-GOV-1 moot. |
-| Governance docs rewrite (1697) | Docs describe one model; `committee vote-submit` is a signed tilt, not a vote | Fixes the stale `docs/architecture.md:618-623` that finding 3 cites. Excludes `docs/audits.md`, so finding 9 needs its own fix. |
-| Four-vault deployment and governance plan (1705) | One rule table; verifier asserts rmUSDC `KEEPER_ROLE` unheld; owner decision on no-delay emergency levers | Tracks finding 5 (Q2, C6) and finding 6 (C5). Does not cover findings 1, 2 or 7. |
-| Real Safe to timelock path in CI (1447) | Real-Safe tests for every governed contract | Would exercise the recovery sequences in findings 1 and 2 through the real path. |
-| Restore the V4 asset position adapter (1677) | Brings back a V4 adapter for the baskets | Out of scope for RobotMoneyVault. The "no V4 position in RobotMoneyVault" note below stays true unless the open host-vault question changes. |
+The recorder samples a clamped live tick and extrapolates it until another record. `test_assessment_transientTickPersistsForFullWindowWithoutHonestRecord` moves the mock pool tick, records after a 60-second gap, restores the live tick immediately, then waits 1,800 seconds without another record. The reported window mean remains displaced by 600 ticks while the live pool tick is back at its original value. The staleness check permits exactly 1,800 seconds.
 
-Findings 1, 2 and 7 are not covered by any open issue. They need their own issues.
+This proves persistent sample distortion in the recorder, not a profitable attack on BasketVault. The test uses a mock pool and a two-slot recorder ring; it does not satisfy or exercise all BasketVault admission guards, perform real swaps, or model fees, liquidity, arbitrage and keeper competition. Existing flash-manipulation coverage records the restored tick two seconds later, so it does not cover this missing-record case.
 
-## Checked and found sound
+**Follow-up:** Exercise transient and repeated sampling against BasketVault with production-equivalent pool configuration, ring cardinality, spot/TWAP guards and honest recorder cadence. Measure feasible NAV/slippage effects and transaction profitability before assigning an economic severity. A periodic recorder service reduces the gap but is not proof that adversarial sampling is harmless.
 
-- Adapter NAV: Aave (`A_TOKEN.balanceOf`), Compound (`COMET.balanceOf`), Morpho (`convertToAssets`) are index-based with no reversible intra-block move. RobotMoneyVault holds no V4 position; the V4 recorder prices BasketVault only, under the ADR-accepted 600-tick-per-record drag.
-- Inflation: `_decimalsOffset() == 18`; a donation to an adapter enters the same `totalAssets()` denominator as a donation to the vault.
-- `sweepForeignToken` rejects `asset()` and the share token, and adapter sweeps protect USDC plus their receipt token.
-- `_pullProportional`: last-counted remainder is capped at balance, pass 2 is bounded by `remainingNeeded`, the over-delivery clamp leaves surplus idle for all holders.
-- Exit fee: 100 bps ceiling, non-zero `feeRecipient` enforced, fee paid only from realised gross.
-- Gas floors only revert earlier; the pull path has no try/catch, so an inner out-of-gas reverts the whole call.
-- Role admin: `ADMIN_ROLE` is self-administered with a last-admin floor on vault, registry, router, governance; the gateway pins `AGENT_ROLE` admin to `ADMIN_ROLE` and enforces tier disjointness. No lower role can escalate. No proxy, initializer, `delegatecall`, `receive`, `fallback` or `selfdestruct` in production sources. No signature verification in scope, so no replay surface.
-- Timelock wiring per scripts: proposer and canceller the Safe, executor open, admin none, 48-hour floor on 8453; the deployer is revoked from every role at stage 12 and the verifier checks it. Between stage 3 and stage 11 the deployer EOA holds ADMIN and EMERGENCY on every vault, which `docs/technical/security-model.md:88` forbids; the vaults deploy paused with a 1 USDC seed, so exposure is bounded.
-- Registry authority over a vault is deposit-halt only; `unretire` re-opens deposits only when `depositsPaused` is also false.
-- CI runs `forge test` on every PR including drafts with executed-test guards; invariants, fork tests and coverage start at ready-for-review. Slither runs on PRs touching `contracts/**` with `fail_on: high`, so medium and low detectors never fail CI.
+## Planned changes and remaining actions
+
+Plan issues were inspected on 2026-10-12. Their intended outcomes inform prioritization; implementation and deployment verification remain separate evidence.
+
+| Issue | Effect on this review |
+|---|---|
+| 1698 — receipt application and voting removal | Accepted resolution for finding 4. Verify removal and replacement role wiring; retain duplicate-vector validation from finding 8. |
+| 1697 — governance documentation | Clarifies advisory committee signals and the authority boundary in finding 3. Does not itself authenticate retained signal submissions. |
+| 1705 — four-vault governance plan | Tracks the emergency-authority decision in finding 5 and keeper-role verification in finding 6. |
+| 1447 — Safe/timelock integration | Provides the real governance path on which recovery procedures for findings 1 and 2 should be exercised. |
+| 1779 — V4 price-recorder keeper | Relevant to sampling cadence; separate from RobotMoneyVault's keeper role. |
+| 1677 — restored V4 asset-position adapter | Requires separate review if introduced; it is absent from this baseline's RobotMoneyVault strategy set. |
+
+Next actions are to assign remediation owners for findings 1, 2 and 7; correct retained committee-signal authentication and aggregation; enforce unique router vectors; settle recovery accounting and emergency authority; and reconcile the audit ledger. Check for existing tracking before creating duplicate issues. The V4 economic analysis and live deployment verification remain open.
+
+## Additional source observations and limits
+
+- Lending adapter NAV reads use Aave receipt balances, Compound balances and Morpho conversion methods. This review does not establish that every upstream valuation is immutable within a transaction or independently audit those protocols.
+- RobotMoneyVault uses an ERC4626 virtual-share offset of 18. This mitigates ordinary donation/inflation behavior, but does not prevent the NAV-exclusion mechanism in finding 1.
+- RobotMoneyVault's foreign-token sweep excludes the underlying asset and its shares. Adapter sweep protections are separate from adapter eligibility and recovery accounting.
+- `_pullProportional` caps the last-entry remainder, bounds its second pass by remaining need, and retains over-delivery as idle balance. Those bounds do not prevent duplicate-entry overvaluation.
+- Vault exit fees have a 100 bps ceiling, require a nonzero recipient, and are charged from realized gross proceeds. User pull failures revert atomically; the gas floor does not prove every external valuation call has adequate gas under every configuration.
+- Role administration and last-admin protections were inspected. BasketVault deliberately uses DELEGATECALL-linked libraries, including `BasketAssetConfigGuard`; their absence cannot be claimed. Absence of a signature-based relay likewise does not establish absence of every replay or ordering risk.
+- Deployment scripts specify Safe proposer/canceller roles, an open executor, a Base timelock floor and deployer handover. Temporary deployer authority and pause/seed sequencing require operational verification; no live exposure bound is inferred from the intended seed amount.
 
 ## Verification
 
+All commands run from the review worktree. Tests assert current behavior, including vulnerabilities; passing tests do not mean the defects are fixed.
+
 - `forge test --match-path 'contracts/test/SecurityReview*Poc.t.sol' --match-test 'test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption|test_revokedAdapterReactivationTransfersValue|test_permissionlessAgentCanImpersonateCommitteeMember' -vv` — 3 passed.
-- `forge test --match-path 'contracts/test/SecurityReviewRecheck*.t.sol' --match-test 'test_f1|test_f2|test_O|test_spoofed|test_selfRegistered|test_permissionlessReveal|test_singleVoter' -vv` — 22 passed, 0 failed, across 3 test contracts (`SecurityReviewRecheckVaultPoc`, `SecurityReviewRecheckCommitteePoc`, `SecurityReviewRecheckGovernancePoc`).
-- Existing `RobotMoneyVaultTest.test_ADP2_revokedAdapterExcludedFromNavAndPulls` — passed, and it already asserts the permanent loss for a holder who exits during the window (Alice gets 1,000 of her 2,000).
+- `forge test --match-path 'contracts/test/SecurityReviewRecheck*.t.sol' --match-test 'test_f1|test_f2|test_O|test_spoofed|test_selfRegistered|test_permissionlessReveal|test_singleVoter' -vv` — 22 passed.
+- `forge test --match-path contracts/test/SecurityReviewRevisionAssessment.t.sol --match-test test_assessment -vv` — 3 passed: policy squatting does not inherently prevent committee participation; orphaned value is not unconditionally locked forever; transient V4 samples persist without another record.
+- `forge test --match-path contracts/test/RobotMoneyVault.t.sol --match-test test_ADP2_revokedAdapterExcludedFromNavAndPulls -vv` — 1 passed; the existing regression asserts the reduced payout during exclusion.
 
-## Remaining review work
-
-The V4 recorder's public sampling and extrapolation still deserve adversarial testing against BasketVault, including transient price changes reversed after a record and gaps between honest records. The indexer's vote aggregation needs a membership join and latest-per-agent dedupe regardless of the on-chain fix. Live deployment bytecode, role assignments, pool liquidity and configuration must be checked against a real Base manifest before assigning deployment-specific exposure.
-
-No production code was changed.
+No production contract implementation was changed by this review. Deployment-specific exposure, complete off-chain ingestion behavior, V4 economic exploitability and the unreviewed historical audit rows remain outside the verified conclusions.

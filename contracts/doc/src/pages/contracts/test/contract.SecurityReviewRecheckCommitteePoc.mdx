@@ -1,0 +1,100 @@
+---
+title: "SecurityReviewRecheckCommitteePoc"
+---
+
+# SecurityReviewRecheckCommitteePoc
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+
+**Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
+
+## State Variables
+
+### attacker
+
+```solidity
+address attacker = address(0xB2);
+```
+
+## Functions
+
+<a id="_selfpolicy-address"></a>
+
+### _selfPolicy
+
+```solidity
+function _selfPolicy(address self) internal view returns (IGateway.AgentPolicy memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| self | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_selfreveal-address-address-bytes32"></a>
+
+### _selfReveal
+
+Permissionless commit/reveal: `owner` authorizes `agent` (may be any
+address that is not already owned) with a policy naming `owner` as
+shareReceiver, as `_validatePolicy` demands of non-admin callers.
+
+```solidity
+function _selfReveal(address owner, address agent, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="test_spoofedvotesupersedesmemberslatestvote"></a>
+
+### test_spoofedVoteSupersedesMembersLatestVote
+
+```solidity
+function test_spoofedVoteSupersedesMembersLatestVote() public;
+```
+
+<a id="test_spoofedvotesfloodundermembername"></a>
+
+### test_spoofedVotesFloodUnderMemberName
+
+```solidity
+function test_spoofedVotesFloodUnderMemberName() public;
+```
+
+<a id="test_selfregisteredagentcannotanchorreceipt"></a>
+
+### test_selfRegisteredAgentCannotAnchorReceipt
+
+```solidity
+function test_selfRegisteredAgentCannotAnchorReceipt() public;
+```
+
+<a id="test_permissionlessrevealsquatsthirdpartyagentaddress"></a>
+
+### test_permissionlessRevealSquatsThirdPartyAgentAddress
+
+```solidity
+function test_permissionlessRevealSquatsThirdPartyAgentAddress() public;
+```
+
+<a id="test_selfregisteredagentcannotpullanotherholdersshares"></a>
+
+### test_selfRegisteredAgentCannotPullAnotherHoldersShares
+
+```solidity
+function test_selfRegisteredAgentCannotPullAnotherHoldersShares() public;
+```
+

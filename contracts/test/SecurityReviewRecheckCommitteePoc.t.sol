@@ -87,9 +87,9 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
             vm.prank(attacker);
             gateway.committeeVoteSubmit(spoof);
         }
-        // Every row names the member; the indexer AVG/COUNT over
-        // committee_votes (db.rs L1979-1983, routes.rs L1720-1727) has no
-        // per-agent dedupe, so 25 of 25 verified rows are attacker-authored.
+        // Every on-chain row names the member. This test does not serve matching
+        // rationale bodies or run the indexer: verification and aggregation are
+        // source-inspected concerns, not end-to-end assertions of this fixture.
         assertEq(ic.voteCount(), 25);
         for (uint256 i = 0; i < 25; i++) {
             assertEq(ic.getVote(i).agent, committeeAgent);
