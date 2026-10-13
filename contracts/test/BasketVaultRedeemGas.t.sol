@@ -225,10 +225,10 @@ contract BasketVaultRedeemGasForkTest is Test {
         _estimateThenIncludeShifted(_rwa(), "rmRWA");
     }
 
-    /// @dev The live Deploy 2 position (wallet 0x2B91...02b6, 31 cbBTC units) built synthetically,
-    ///      so the case never depends on that wallet still holding it. Sells `leg` cbBTC units from
-    ///      the vault on the fork only and compares the pool output with the old floor (TWAP of the
-    ///      full amount) and the fixed floor (TWAP of one unit less), both at the vault's slippage.
+    // The live Deploy 2 position (wallet 0x2B91...02b6, 31 cbBTC units) built synthetically,
+    //      so the case never depends on that wallet still holding it. Sells `leg` cbBTC units from
+    //      the vault on the fork only and compares the pool output with the old floor (TWAP of the
+    //      full amount) and the fixed floor (TWAP of one unit less), both at the vault's slippage.
     function _assertFloorsAroundPool(BasketVault v, uint256 leg) internal {
         address pool = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
         int24 tick = TwapTickMath.meanTick(pool, v.effectiveTwapWindow(CBBTC));
