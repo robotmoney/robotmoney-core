@@ -432,7 +432,8 @@ interface IGateway {
     function committeeRegister(address agent, string calldata agentId_) external;
 
     /// @notice Forward a signed committee vote to the IC policy contract.
-    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set.
+    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+    ///         if `p.agent != msg.sender` (issue #1790).
     /// @param p  All vote fields packed into a `VoteParams` struct.
     /// @return voteId  Index of the newly appended vote in the IC contract.
     function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
