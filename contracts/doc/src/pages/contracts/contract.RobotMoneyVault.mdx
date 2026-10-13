@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/565372849346ef905691dda58e5b85471470138a/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -719,7 +719,8 @@ function maxWithdraw(address owner) public view override returns (uint256);
 
 Maximum assets that can be deposited for `receiver` given current vault state.
 Returns 0 when deposits are paused, the vault is shutdown, retired,
-no adapters are active, or the TVL cap has been reached.
+no adapters are active, any active adapter is ineligible (excluded
+from NAV, core 1788), or the TVL cap has been reached.
 
 ```solidity
 function maxDeposit(address) public view override returns (uint256);
@@ -743,6 +744,29 @@ function maxDeposit(address) public view override returns (uint256);
 
 ```solidity
 function _depositsClosed() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_anyactiveadapterineligible"></a>
+
+### _anyActiveAdapterIneligible
+
+<i>
+
+core 1788: an active adapter that fails `_isAdapterEligible` is excluded from
+`totalAssets()`. Minting against that reduced NAV would hand the new depositor a
+slice of the excluded balance once eligibility is restored, so deposits stay
+closed for as long as any active adapter is ineligible. Withdrawals are unaffected.
+
+</i>
+
+```solidity
+function _anyActiveAdapterIneligible() internal view returns (bool);
 ```
 
 **Returns**
@@ -1012,11 +1036,15 @@ Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN
 
 <i>
 
-Revoking the allowlist does NOT affect adapters already registered and active in the
-registry. To fully quarantine an adapter, callers must separately call
-`emergencyWithdrawAdapter` (to drain assets) followed by `removeAdapter` or
-`forceRemoveAdapter` (to deactivate the registry entry). Setting `allowed_ = false`
-only blocks future deposit allocations and new `addAdapter` calls for this address.
+Setting `allowed_ = false` on an adapter that is already active quarantines it:
+its balance is excluded from `totalAssets()` (ADP-2), deposits and mints close
+while it stays active (core 1788), keeper `rebalance()` neither pulls from nor
+allocates to it, and new `addAdapter` calls for the address revert. Withdrawals
+stay open and are paid from eligible adapters and idle USDC only. A holder who
+exits during the exclusion is paid at the reduced NAV and forfeits any share of
+the excluded balance; holders who stay keep their full claim when eligibility is
+restored or the funds are recovered. Recovery is explicit: `emergencyWithdrawAdapter`
+(EMERGENCY) drains it, then `removeAdapter` / `forceRemoveAdapter` deactivates it.
 
 </i>
 
@@ -1029,7 +1057,7 @@ function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(AD
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | adapter_ | `address` | Adapter address whose eligibility should change. |
-| allowed_ | `bool` | True to allow onboarding/allocation, false to revoke future allocations. |
+| allowed_ | `bool` | True to allow onboarding/allocation, false to quarantine the adapter. |
 
 <a id="setadaptercodehashallowed-bytes32-bool"></a>
 
@@ -1090,6 +1118,8 @@ function setAdapterCap(uint256 index, uint16 newCapBps) external onlyRole(ADMIN_
 Keeper-triggered equal-weight rebalance. Callable by `ADMIN_ROLE` or `KEEPER_ROLE`.
 Pulls excess from over-weight adapters and re-routes into under-weight adapters.
 Subject to `minRebalanceInterval` and `maxRebalanceBpsPerCall` throttles.
+Reverts while deposits are paused or the vault is shut down, and skips quarantined
+(ineligible) adapters. `adminRebalance` stays the explicit recovery path (core 1788).
 
 ```solidity
 function rebalance() external nonReentrant;

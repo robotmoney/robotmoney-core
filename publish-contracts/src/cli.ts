@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
-import { assertFloors, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
 import { kindLabel } from "./chains.ts";
 import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
@@ -318,6 +318,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return r.stdout;
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
+    for (const spec of a.ownerSigners) assertOwnerSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
     assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
     if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
     // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).

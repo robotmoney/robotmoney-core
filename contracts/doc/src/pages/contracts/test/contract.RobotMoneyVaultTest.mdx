@@ -4,7 +4,7 @@ title: "RobotMoneyVaultTest"
 
 # RobotMoneyVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/565372849346ef905691dda58e5b85471470138a/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:** Test
 
@@ -187,27 +187,58 @@ function test_addAdapter_revertsWhenAdapterVaultMismatchesVault() public;
 function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public;
 ```
 
-<a id="test_deposit_skipsadapterafterapprovalrevoked_fundsstayidle"></a>
+<a id="test_deposit_closedwhileactiveadapterineligible"></a>
 
-### test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle
+### test_deposit_closedWhileActiveAdapterIneligible
 
-Revoking an active adapter's allowlist entry must NOT brick deposits
-(audit 2026-06-09, L-4): `_routeDeposit` skips the ineligible adapter
-and the funds stay idle in the vault (UnroutedDeposit emitted).
+core 1788: while any active adapter is ineligible (excluded from NAV),
+`maxDeposit`/`maxMint` are zero and `deposit`/`mint` revert.
 
 ```solidity
-function test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle() public;
+function test_deposit_closedWhileActiveAdapterIneligible() public;
 ```
 
-<a id="test_deposit_routestoremainingeligibleadapterafterrevocation"></a>
+<a id="test_revokedadapterreactivation_cannottransfervalue"></a>
 
-### test_deposit_routesToRemainingEligibleAdapterAfterRevocation
+### test_revokedAdapterReactivation_cannotTransferValue
 
-With two adapters, revoking one routes the full deposit into the
-remaining eligible adapter instead of reverting (audit L-4).
+core 1788 / review finding 1 (test_revokedAdapterReactivationTransfersValue):
+a depositor can no longer mint at the reduced NAV of a quarantined adapter
+and capture its balance when eligibility returns. Withdrawals stay open.
 
 ```solidity
-function test_deposit_routesToRemainingEligibleAdapterAfterRevocation() public;
+function test_revokedAdapterReactivation_cannotTransferValue() public;
+```
+
+<a id="test_rebalance_revertswhiledepositspausedafteremergencywithdraw"></a>
+
+### test_rebalance_revertsWhileDepositsPausedAfterEmergencyWithdraw
+
+core 1788 / review finding 6 (test_O2_keeperRebalanceUndoesEmergencyWithdraw):
+a keeper rebalance cannot re-deploy funds drained by `emergencyWithdraw`.
+
+```solidity
+function test_rebalance_revertsWhileDepositsPausedAfterEmergencyWithdraw() public;
+```
+
+<a id="test_rebalance_revertswhileshutdown"></a>
+
+### test_rebalance_revertsWhileShutdown
+
+core 1788: keeper rebalance refuses to run while the vault is shut down.
+
+```solidity
+function test_rebalance_revertsWhileShutdown() public;
+```
+
+<a id="test_rebalance_doesnotpullfromquarantinedadapter"></a>
+
+### test_rebalance_doesNotPullFromQuarantinedAdapter
+
+core 1788: keeper rebalance never pulls from a quarantined adapter.
+
+```solidity
+function test_rebalance_doesNotPullFromQuarantinedAdapter() public;
 ```
 
 <a id="test_withdraw_revertswithinsufficientadapterliquidity_onadaptershortfall"></a>
