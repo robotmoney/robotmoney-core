@@ -1707,27 +1707,23 @@ async fn get_committee_track_record(
     }))
 }
 
-// (vault_address, avg_weight_bps as text, vote_count)
-type TiltRow = (Vec<u8>, BigDecimal, i64);
-
 /// GET /v1/committee/tilts
 ///
-/// Returns per-vault average tilt from verified votes only.
-/// Excludes vaults where all votes are unverified.
+/// Returns the per-vault committee tilt as of the indexer cursor, from
+/// `explorer_indexer::db::committee_tilts`: each active member's latest
+/// signal per vault, counted only when verified and fresh (issue #1790). The
+/// indexer's regime snapshots use the same function. Vaults with no counted
+/// signal are omitted.
 async fn get_committee_tilts(
     State(state): State<AppState>,
 ) -> ApiResult<Json<CommitteeTiltsResponse>> {
-    let rows: Vec<TiltRow> = sqlx::query_as(
-        "SELECT vault_address, \
-                AVG(target_weight_bps::numeric) AS avg_weight_bps, \
-                COUNT(*) AS vote_count \
-         FROM committee_votes \
-         WHERE chain_id = $1 AND verified = TRUE \
-         GROUP BY vault_address \
-         ORDER BY vault_address",
+    let freshness = latest_freshness(&state).await?;
+    let rows = explorer_indexer::db::committee_tilts(
+        &state.pool,
+        state.chain_id,
+        freshness.block_number,
+        None,
     )
-    .bind(state.chain_id)
-    .fetch_all(&state.pool)
     .await?;
 
     let tilts = rows
@@ -1739,7 +1735,6 @@ async fn get_committee_tilts(
         })
         .collect();
 
-    let freshness = latest_freshness(&state).await?;
     Ok(Json(CommitteeTiltsResponse { tilts, freshness }))
 }
 

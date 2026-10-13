@@ -632,7 +632,9 @@ pub struct CommitteeTrackRecordResponse {
     pub freshness: Freshness,
 }
 
-/// Per-vault verified tilt aggregate for GET /v1/committee/tilts.
+/// Per-vault tilt aggregate for GET /v1/committee/tilts. `vote_count` is the
+/// number of members counted: one latest, verified, fresh signal per active
+/// member (issue #1790), never the raw number of votes.
 #[derive(Debug, Serialize)]
 pub struct CommitteeTilt {
     pub vault: String,

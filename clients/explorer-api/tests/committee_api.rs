@@ -5,6 +5,9 @@
 //!   1. GET /v1/committee/agents — returns registered agents
 //!   2. GET /v1/committee/agents/:address/track-record — returns vote history
 //!   3. GET /v1/committee/tilts — excludes unverified votes
+//!
+//! Issue #1790 adds the tilt policy: one latest signal per active member and
+//! vault, within the freshness window of the indexer cursor.
 
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
@@ -301,9 +304,97 @@ async fn committee_tilts_excludes_unverified_votes() {
         vault_a_tilt["vault"],
         "0x1111111111111111111111111111111111111111"
     );
-    // avg of 7000 and 5000 = 6000
-    assert_eq!(vault_a_tilt["vote_count"], 2);
+    // vote_id 3 is agent_b's, and agent_b is revoked (issue #1790): only
+    // agent_a's 7000 counts.
+    assert_eq!(vault_a_tilt["vote_count"], 1);
+    let avg: f64 = vault_a_tilt["avg_weight_bps"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(avg, 7000.0);
 
     // Freshness.
     assert_eq!(body["block_number"], 1000);
+}
+
+// ─── Issue #1790: latest signal per member, freshness window ─────────────────
+
+async fn get_tilts(s: &TestServer) -> serde_json::Value {
+    http()
+        .get(format!("http://{}/v1/committee/tilts", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn committee_tilts_count_one_latest_signal_per_member() {
+    let s = start_committee_server().await;
+    let agent_a = hex_bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let vault_a = hex_bytes("1111111111111111111111111111111111111111");
+    // agent_a floods vault_a with five more verified votes; the last is 9000.
+    for i in 0..5i64 {
+        sqlx::query(
+            "INSERT INTO committee_votes \
+             (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+              stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
+              timestamp_secs, verified) \
+             VALUES ($1, $2, 300, $3, $4, $5, $6, 0, $7, 90, 'https://example.com/f', $8, $9, TRUE)",
+        )
+        .bind(PRIMARY_CHAIN_ID)
+        .bind(100 + i)
+        .bind(i as i32)
+        .bind(vec![0x40 + i as u8; 32])
+        .bind(&agent_a)
+        .bind(&vault_a)
+        .bind(if i == 4 { 9000i16 } else { 1000i16 })
+        .bind(vec![0xabu8; 32])
+        // A caller-supplied timestamp that claims to be oldest must not make
+        // the chain-latest vote lose.
+        .bind(1i64)
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    }
+
+    let body = get_tilts(&s).await;
+    let tilts = body["tilts"].as_array().unwrap();
+    assert_eq!(tilts.len(), 1);
+    assert_eq!(tilts[0]["vote_count"], 1, "a flood counts as one vote");
+    let avg: f64 = tilts[0]["avg_weight_bps"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(avg, 9000.0, "the member's latest signal by chain order");
+}
+
+#[tokio::test]
+async fn committee_tilts_drop_signals_older_than_the_freshness_window() {
+    let s = start_committee_server().await;
+    // Move the indexer cursor so agent_a's vote at block 200 is just outside
+    // the window.
+    let cursor = 200 + explorer_indexer::db::COMMITTEE_VOTE_FRESHNESS_BLOCKS;
+    sqlx::query(
+        "INSERT INTO indexer_runs \
+         (chain_id, started_at, from_block, last_indexed_block, reorg_count, rows_inserted) \
+         VALUES ($1, now(), 1001, $2, 0, 0)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(cursor)
+    .execute(&s._pool)
+    .await
+    .unwrap();
+
+    let body = get_tilts(&s).await;
+    assert_eq!(body["block_number"], cursor);
+    assert_eq!(
+        body["tilts"].as_array().unwrap().len(),
+        0,
+        "a stale signal does not count: {body}"
+    );
 }
