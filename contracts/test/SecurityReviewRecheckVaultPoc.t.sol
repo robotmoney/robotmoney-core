@@ -34,11 +34,9 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
 
     // ─── Finding 1: adapter exclusion window ─────────────────────────────
 
-    /// KEEPER `rebalance()` is a recovery leg: it iterates `active` (not `_isAdapterCounted`),
-    /// calls `withdraw` on the revoked adapter with no eligibility check, and routes the
-    /// proceeds into eligible adapters. The window depositor's claim rises with no
-    /// `setAdapterAllowed(true)` and no emergency call.
-    function test_f1_keeperRebalancePullsRevokedAdapterIntoNav() public {
+    /// Remediated by core 1788 (PR 1814): deposits close during exclusion, and KEEPER
+    /// `rebalance()` skips the ineligible adapter instead of pulling it into NAV.
+    function test_f1_keeperRebalanceSkipsRevokedAdapter() public {
         _grantHotKeys();
         _secondAdapter();
         vm.prank(alice);
@@ -47,29 +45,17 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vm.prank(admin);
         vault.setAdapterAllowed(address(adapter), false);
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "NAV excludes revoked adapter");
-
-        vm.prank(bob);
-        vault.deposit(200 * ONE_USDC, bob); // minted at NAV 1000 -> 1/6 of supply
-        uint256 bobClaimBefore = vault.convertToAssets(vault.balanceOf(bob));
-        assertApproxEqAbs(bobClaimBefore, 200 * ONE_USDC, 2, "bob claim at depressed NAV");
+        assertEq(vault.maxDeposit(bob), 0, "no window deposit");
 
         vm.warp(block.timestamp + 13 hours);
         uint256 revokedBefore = usdc.balanceOf(address(adapter));
         vm.prank(keeper);
         vault.rebalance();
 
-        assertLt(
-            usdc.balanceOf(address(adapter)),
-            revokedBefore,
-            "keeper pulled from the revoked adapter"
+        assertEq(
+            usdc.balanceOf(address(adapter)), revokedBefore, "keeper left revoked adapter alone"
         );
-        assertGt(vault.totalAssets(), 1_200 * ONE_USDC, "recovered value entered NAV");
-        uint256 bobClaimAfter = vault.convertToAssets(vault.balanceOf(bob));
-        emit log_named_uint("bob claim before rebalance", bobClaimBefore);
-        emit log_named_uint("bob claim after rebalance", bobClaimAfter);
-        assertGt(
-            bobClaimAfter, bobClaimBefore + 40 * ONE_USDC, "bob captures keeper-recovered value"
-        );
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "excluded value stays out of NAV");
     }
 
     /// A holder exiting during exclusion loses its share-based recovery entitlement.
@@ -114,30 +100,26 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vault.sweepForeignToken(address(usdc));
     }
 
-    /// `emergencyWithdrawAdapter` works on an already-revoked adapter and pauses deposits,
-    /// but it is itself the recovery leg: the window depositor captures the recovered idle USDC.
-    function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor() public {
+    /// Remediated by core 1788 (PR 1814): with no window depositor, `emergencyWithdrawAdapter`
+    /// on a revoked adapter returns the recovered value to the holders who funded it.
+    function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
         vault.deposit(2_000 * ONE_USDC, alice);
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), false);
         vm.prank(bob);
+        vm.expectRevert();
         vault.deposit(1_000 * ONE_USDC, bob);
 
         vm.prank(admin);
         vault.emergencyWithdrawAdapter(1);
         assertTrue(vault.depositsPaused(), "emergency drain pauses deposits");
         assertEq(usdc.balanceOf(address(second)), 0, "revoked adapter drained");
-        assertEq(vault.totalAssets(), 3_000 * ONE_USDC, "idle recovery re-enters NAV");
-
-        uint256 bobShares = vault.balanceOf(bob);
-        uint256 before = usdc.balanceOf(bob);
-        vm.prank(bob);
-        vault.redeem(bobShares, bob, bob);
-        uint256 proceeds = usdc.balanceOf(bob) - before;
-        emit log_named_uint("bob proceeds after emergency drain", proceeds);
-        assertGt(proceeds, 1_400 * ONE_USDC, "bob takes ~500 of alice's recovered value");
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "idle recovery re-enters NAV");
+        assertApproxEqAbs(
+            vault.convertToAssets(vault.balanceOf(alice)), 2_000 * ONE_USDC, 2, "alice keeps it all"
+        );
     }
 
     /// Mitigation available today: the EMERGENCY hot key pauses before the revoke executes.
@@ -385,9 +367,9 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertGe(vault.maxWithdraw(bob), 1_499 * ONE_USDC, "bob now owns alice's 500");
     }
 
-    /// SR-M10, still open: KEEPER `rebalance()` re-deploys ALL emergency-rescued idle USDC into
-    /// the suspect adapter while deposits are paused.
-    function test_O2_keeperRebalanceUndoesEmergencyWithdraw() public {
+    /// SR-M10, remediated by core 1788 (PR 1814): KEEPER `rebalance()` reverts while
+    /// deposits are paused, so it cannot re-deploy emergency-rescued idle USDC.
+    function test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw() public {
         _grantHotKeys();
         vm.prank(alice);
         vault.deposit(10_000 * ONE_USDC, alice);
@@ -399,11 +381,11 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
 
         vm.warp(block.timestamp + 13 hours);
         vm.prank(keeper);
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
         vault.rebalance();
 
-        assertTrue(vault.depositsPaused(), "still paused");
-        assertEq(adapter.totalAssets(), 10_000 * ONE_USDC, "100% of TVL pushed back in one call");
-        assertEq(usdc.balanceOf(address(vault)), 0);
+        assertEq(adapter.totalAssets(), 0, "funds stay idle");
+        assertEq(usdc.balanceOf(address(vault)), 10_000 * ONE_USDC);
     }
 
     /// 1 wei donated to an adapter blocks ADMIN `removeAdapter`; only the EMERGENCY

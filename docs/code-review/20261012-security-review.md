@@ -12,16 +12,18 @@ No Base (8453) production manifest was available under `deployments/`; the repos
 
 Severity reflects both impact and prerequisites. Findings 1 and 2 require an administrative action before an ordinary holder or depositor can benefit. Finding 5 concerns the authority of an emergency key. Voting retirement is the accepted resolution of finding 4; it needs no separate quorum fix. Findings 3 and 6 have explicit deployment/use assumptions below.
 
+**Post-baseline remediation:** core issue 1788 (merged as PR 1814, `d5c6a2e1`) changed `RobotMoneyVault` after this baseline. Deposits now close while any active adapter is ineligible, keeper `rebalance()` skips ineligible adapters, and it reverts while deposits are paused or the vault is shut down. This closes the window-deposit and keeper-recovery paths of finding 1 and the mechanism of finding 6. The affected review tests now assert the remediated behavior. Findings 1 and 6 below describe the baseline.
+
 ## Review conclusions
 
 | # | Finding | Severity / disposition | Required conditions | Evidence |
 |---|---|---|---|---|
-| 1 | Deposits remain open while funded adapter value is excluded from NAV | Medium | ADMIN excludes value before deposits pause; value subsequently returns to NAV | Reproduced, including three recovery paths |
+| 1 | Deposits remain open while funded adapter value is excluded from NAV | Medium | ADMIN excludes value before deposits pause; value subsequently returns to NAV | Reproduced at baseline; window-deposit and keeper paths remediated by 1788 |
 | 2 | Duplicate strategy adapter registration overpays early redeemers | Medium | ADMIN registers an already-active adapter again | Reproduced value extraction |
 | 3 | A gateway agent can attribute a committee signal to another member | Low under advisory-only use | An allowlisted committee member exists; attacker self-registers at the gateway | On-chain spoofing reproduced; aggregation inspected in source |
 | 4 | One voter meets quorum under example deployment values | Imminent retirement; no separate fix | Voting retained and used with quorum 2 and voter power 1000 | Reproduced on reviewed bytecode; removal accepted |
 | 5 | Emergency force removal reprices exits before recoverable value is settled | Medium; authority decision tracked | EMERGENCY removes a funded adapter | Reproduced |
-| 6 | Keeper rebalance can reverse an emergency withdrawal | Info if keeper role is unheld; Medium if granted | A keeper can call after the rebalance interval | Reproduced with a granted keeper role |
+| 6 | Keeper rebalance can reverse an emergency withdrawal | Info if keeper role is unheld; Medium if granted | A keeper can call after the rebalance interval | Reproduced at baseline; remediated by 1788 |
 | 7 | Permissionless authorization can squat another agent's policy ownership | Low | Target address is unowned and passes role-separation checks | Ownership denial reproduced; committee-blocking claim disproved |
 | 8 | Router weight vectors permit duplicate vault addresses | Low | Authorized weight setter or ADMIN submits duplicates | Source inspection; previously reported HR-L-9 |
 | 9 | Audit dispositions and documentation disagree with current source | Info | — | Source/history inspection |
@@ -36,11 +38,11 @@ The V4 recorder has a reproduced sampling concern whose economic impact remains 
 
 `setAdapterAllowed(adapter, false)` removes a funded adapter from `totalAssets()` immediately. `_activeAdapterCount()` still includes the entry, and deposits remain open. New shares mint against reduced NAV and gain a claim on subsequent recoveries. Revoking an adapter code hash can produce the same exclusion.
 
-**Reproduction:** Alice deposits 2,000 USDC across two adapters. ADMIN excludes one adapter holding 1,000 USDC. Bob deposits 1,000 USDC against the reduced NAV. After ADMIN restores eligibility, Bob redeems for 1,499.999999 USDC. `SecurityReviewPoc.test_revokedAdapterReactivationTransfersValue`.
+**Reproduction:** Alice deposits 2,000 USDC across two adapters. ADMIN excludes one adapter holding 1,000 USDC. Bob deposits 1,000 USDC against the reduced NAV. After ADMIN restores eligibility, Bob redeems for 1,499.999999 USDC. Originally reproduced at baseline. After 1788, `SecurityReviewPoc.test_revokedAdapterWindowDepositBlocked` asserts the window deposit reverts and Alice keeps her full claim.
 
-Recovery can occur through restored eligibility, `emergencyWithdrawAdapter`, or `rebalance()`. The emergency path pauses deposits when called, but previously minted shares already participate in the recovery. The keeper path iterates active adapters without checking eligibility before withdrawal and routes recovered funds into eligible adapters. Tests `test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor` and `test_f1_keeperRebalancePullsRevokedAdapterIntoNav` reproduce those paths.
+Recovery can occur through restored eligibility, `emergencyWithdrawAdapter`, or `rebalance()`. The emergency path pauses deposits when called, but previously minted shares already participate in the recovery. The keeper path iterates active adapters without checking eligibility before withdrawal and routes recovered funds into eligible adapters. Both paths were reproduced at baseline. After 1788, `test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders` and `test_f1_keeperRebalanceSkipsRevokedAdapter` assert that recovery reaches existing holders and the keeper leaves the quarantined adapter alone.
 
-Existing holders who redeem during exclusion surrender their shares at reduced NAV and have no automatic entitlement to later recovery. If supply reaches zero, ordinary deposits after restoration do not capture the orphaned value because of ERC4626 virtual shares. This is demonstrated by `test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares`. It does **not** prove that the assets are unconditionally locked forever: `test_assessment_orphanedBalanceNotUnconditionallyLockedForever` recovers value through another ADMIN-controlled exclusion, deposit and restoration sequence. That is a counterexample to permanent impossibility, not a recommended recovery procedure.
+Existing holders who redeem during exclusion surrender their shares at reduced NAV and have no automatic entitlement to later recovery. If supply reaches zero, ordinary deposits after restoration do not capture the orphaned value because of ERC4626 virtual shares. This is demonstrated by `test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares`. At baseline this did **not** prove the assets were unconditionally locked forever: another ADMIN-controlled exclusion, deposit and restoration sequence recovered the value. After 1788 that sequence is blocked at the deposit leg (`test_assessment_orphanRedistributionSequenceBlocked`). Holders exiting during exclusion still forfeit later recovery; the orphaned-value disposition remains open.
 
 The deployment scripts configure an open timelock executor (`script/DeployTimelock.s.sol:83-85`). An observer may execute an independently scheduled, ready revocation and then deposit in the same transaction, if the operation permits that sequence. Executing a restore also requires that restore to have been separately authorized and become ready. An open executor neither creates operations nor permits interleaving calls within an atomic timelock batch. These timing implications were inspected in source, not reproduced through a real Safe/timelock fixture.
 
@@ -104,7 +106,7 @@ The indexer copies the event's agent address and verifies a rationale body again
 
 **Code:** `RobotMoneyVault.sol:1000-1035`.
 
-The rebalance throttle bounds withdrawals from adapters, but `_routeDeposit(idle)` reallocates the entire idle balance. It checks neither `depositsPaused` nor `shutdown`. A keeper can redeploy funds into the same still-eligible venue after an emergency drain, once the interval permits. `test_O2_keeperRebalanceUndoesEmergencyWithdraw` reproduces this with an explicitly granted keeper role.
+The rebalance throttle bounds withdrawals from adapters, but `_routeDeposit(idle)` reallocates the entire idle balance. It checks neither `depositsPaused` nor `shutdown`. A keeper can redeploy funds into the same still-eligible venue after an emergency drain, once the interval permits. This was reproduced at baseline with an explicitly granted keeper role. After 1788, `test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw` asserts the keeper call reverts while deposits are paused.
 
 **Severity:** Info under the intended configuration where the keeper role has no holder and only ADMIN can rebalance. Medium if a keeper is granted while this behavior remains. The constructor does not grant the role; that alone does not prove it is unheld on a live deployment. Issue 1705 C5 tracks a verifier assertion. The price-recorder keeper in issue 1779 is unrelated to this vault role.
 
@@ -163,9 +165,10 @@ Plan issues were inspected on 2026-10-12. Their intended outcomes inform priorit
 | 1705 — four-vault governance plan | Tracks the emergency-authority decision in finding 5 and keeper-role verification in finding 6. |
 | 1447 — Safe/timelock integration | Provides the real governance path on which recovery procedures for findings 1 and 2 should be exercised. |
 | 1779 — V4 price-recorder keeper | Relevant to sampling cadence; separate from RobotMoneyVault's keeper role. |
+| 1788 — vault quarantine fix (PR 1814) | Remediates finding 1's window-deposit and keeper paths and finding 6. |
 | 1677 — restored V4 asset-position adapter | Requires separate review if introduced; it is absent from this baseline's RobotMoneyVault strategy set. |
 
-Next actions are to assign remediation owners for findings 1, 2 and 7; correct retained committee-signal authentication and aggregation; enforce unique router vectors; settle recovery accounting and emergency authority; and reconcile the audit ledger. Check for existing tracking before creating duplicate issues. The V4 economic analysis and live deployment verification remain open.
+Next actions are to assign remediation owners for finding 1's remaining exit-entitlement question and findings 2 and 7; correct retained committee-signal authentication and aggregation; enforce unique router vectors; settle recovery accounting and emergency authority; and reconcile the audit ledger. Check for existing tracking before creating duplicate issues. The V4 economic analysis and live deployment verification remain open.
 
 ## Additional source observations and limits
 
@@ -179,11 +182,11 @@ Next actions are to assign remediation owners for findings 1, 2 and 7; correct r
 
 ## Verification
 
-All commands run from the review worktree. Tests assert current behavior, including vulnerabilities; passing tests do not mean the defects are fixed.
+All commands run from the review worktree. Tests assert current behavior, including vulnerabilities; passing tests do not mean the defects are fixed. Tests for paths remediated by 1788 assert the fixed behavior.
 
-- `forge test --match-path 'contracts/test/SecurityReview*Poc.t.sol' --match-test 'test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption|test_revokedAdapterReactivationTransfersValue|test_permissionlessAgentCanImpersonateCommitteeMember' -vv` — 3 passed.
+- `forge test --match-path 'contracts/test/SecurityReview*Poc.t.sol' --match-test 'test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption|test_revokedAdapterWindowDepositBlocked|test_permissionlessAgentCanImpersonateCommitteeMember' -vv` — 3 passed.
 - `forge test --match-path 'contracts/test/SecurityReviewRecheck*.t.sol' --match-test 'test_f1|test_f2|test_O|test_spoofed|test_selfRegistered|test_permissionlessReveal|test_singleVoter' -vv` — 22 passed.
-- `forge test --match-path contracts/test/SecurityReviewRevisionAssessment.t.sol --match-test test_assessment -vv` — 3 passed: policy squatting does not inherently prevent committee participation; orphaned value is not unconditionally locked forever; transient V4 samples persist without another record.
+- `forge test --match-path contracts/test/SecurityReviewRevisionAssessment.t.sol --match-test test_assessment -vv` — 3 passed: policy squatting does not inherently prevent committee participation; the pre-1788 orphan redistribution sequence is now blocked; transient V4 samples persist without another record.
 - `forge test --match-path contracts/test/RobotMoneyVault.t.sol --match-test test_ADP2_revokedAdapterExcludedFromNavAndPulls -vv` — 1 passed; the existing regression asserts the reduced payout during exclusion.
 
-No production contract implementation was changed by this review. Deployment-specific exposure, complete off-chain ingestion behavior, V4 economic exploitability and the unreviewed historical audit rows remain outside the verified conclusions.
+No production contract implementation was changed by this review; the 1788 fix landed separately on `dev`. Deployment-specific exposure, complete off-chain ingestion behavior, V4 economic exploitability and the unreviewed historical audit rows remain outside the verified conclusions.

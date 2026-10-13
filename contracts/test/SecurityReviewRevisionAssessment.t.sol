@@ -26,7 +26,9 @@ contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
 }
 
 contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
-    function test_assessment_orphanedBalanceNotUnconditionallyLockedForever() public {
+    /// The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by
+    /// core 1788 (PR 1814): the deposit leg reverts while any active adapter is ineligible.
+    function test_assessment_orphanRedistributionSequenceBlocked() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
         vault.deposit(2_000 * ONE_USDC, alice);
@@ -43,17 +45,10 @@ contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
         vault.setAdapterAllowed(address(adapter), false);
         vault.setAdapterAllowed(address(second), false);
         vm.stopPrank();
+        assertEq(vault.maxDeposit(bob), 0);
         vm.prank(bob);
+        vm.expectRevert();
         vault.deposit(1_000 * ONE_USDC, bob);
-        vm.startPrank(admin);
-        vault.setAdapterAllowed(address(adapter), true);
-        vault.setAdapterAllowed(address(second), true);
-        vm.stopPrank();
-        shares = vault.balanceOf(bob);
-        uint256 before = usdc.balanceOf(bob);
-        vm.prank(bob);
-        vault.redeem(shares, bob, bob);
-        assertGt(usdc.balanceOf(bob) - before, 1_999 * ONE_USDC);
     }
 }
 

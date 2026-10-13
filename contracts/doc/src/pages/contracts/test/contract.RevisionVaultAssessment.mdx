@@ -4,17 +4,20 @@ title: "RevisionVaultAssessment"
 
 # RevisionVaultAssessment
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRevisionAssessment.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewRevisionAssessment.t.sol)
 
 **Inherits:** [SecurityReviewRecheckVaultPoc](/contracts/test/contract.SecurityReviewRecheckVaultPoc)
 
 ## Functions
 
-<a id="test_assessment_orphanedbalancenotunconditionallylockedforever"></a>
+<a id="test_assessment_orphanredistributionsequenceblocked"></a>
 
-### test_assessment_orphanedBalanceNotUnconditionallyLockedForever
+### test_assessment_orphanRedistributionSequenceBlocked
+
+The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by
+core 1788 (PR 1814): the deposit leg reverts while any active adapter is ineligible.
 
 ```solidity
-function test_assessment_orphanedBalanceNotUnconditionallyLockedForever() public;
+function test_assessment_orphanRedistributionSequenceBlocked() public;
 ```
 

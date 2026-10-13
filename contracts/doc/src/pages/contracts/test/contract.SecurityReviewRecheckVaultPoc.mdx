@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckVaultPoc"
 
 # SecurityReviewRecheckVaultPoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
 
 **Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
 
@@ -62,17 +62,15 @@ function _secondAdapter() internal returns (MockAdapter second);
 function _addDuplicate() internal;
 ```
 
-<a id="test_f1_keeperrebalancepullsrevokedadapterintonav"></a>
+<a id="test_f1_keeperrebalanceskipsrevokedadapter"></a>
 
-### test_f1_keeperRebalancePullsRevokedAdapterIntoNav
+### test_f1_keeperRebalanceSkipsRevokedAdapter
 
-KEEPER `rebalance()` is a recovery leg: it iterates `active` (not `_isAdapterCounted`),
-calls `withdraw` on the revoked adapter with no eligibility check, and routes the
-proceeds into eligible adapters. The window depositor's claim rises with no
-`setAdapterAllowed(true)` and no emergency call.
+Remediated by core 1788 (PR 1814): deposits close during exclusion, and KEEPER
+`rebalance()` skips the ineligible adapter instead of pulling it into NAV.
 
 ```solidity
-function test_f1_keeperRebalancePullsRevokedAdapterIntoNav() public;
+function test_f1_keeperRebalanceSkipsRevokedAdapter() public;
 ```
 
 <a id="test_f1_holderexitduringwindowstrandssurplusbehindvirtualshares"></a>
@@ -88,15 +86,15 @@ can redistribute it, as SecurityReviewRevisionAssessment demonstrates.
 function test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares() public;
 ```
 
-<a id="test_f1_emergencywithdrawadapteronrevokedadapterrecoverstowindowdepositor"></a>
+<a id="test_f1_emergencywithdrawadapteronrevokedadapterrecoverstoexistingholders"></a>
 
-### test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor
+### test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders
 
-`emergencyWithdrawAdapter` works on an already-revoked adapter and pauses deposits,
-but it is itself the recovery leg: the window depositor captures the recovered idle USDC.
+Remediated by core 1788 (PR 1814): with no window depositor, `emergencyWithdrawAdapter`
+on a revoked adapter returns the recovered value to the holders who funded it.
 
 ```solidity
-function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToWindowDepositor() public;
+function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders() public;
 ```
 
 <a id="test_f1_pausebeforerevokecloseswindow"></a>
@@ -210,15 +208,15 @@ and NOT closed by the deposit pause.
 function test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid() public;
 ```
 
-<a id="test_o2_keeperrebalanceundoesemergencywithdraw"></a>
+<a id="test_o2_keeperrebalanceblockedafteremergencywithdraw"></a>
 
-### test_O2_keeperRebalanceUndoesEmergencyWithdraw
+### test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw
 
-SR-M10, still open: KEEPER `rebalance()` re-deploys ALL emergency-rescued idle USDC into
-the suspect adapter while deposits are paused.
+SR-M10, remediated by core 1788 (PR 1814): KEEPER `rebalance()` reverts while
+deposits are paused, so it cannot re-deploy emergency-rescued idle USDC.
 
 ```solidity
-function test_O2_keeperRebalanceUndoesEmergencyWithdraw() public;
+function test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw() public;
 ```
 
 <a id="test_o3_dustdonationblocksremoveadapter"></a>

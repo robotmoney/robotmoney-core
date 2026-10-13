@@ -24,7 +24,9 @@ contract SecurityReviewPoc is RobotMoneyVaultTest {
         vault.redeem(aliceShares, alice, alice);
     }
 
-    function test_revokedAdapterReactivationTransfersValue() public {
+    /// Remediated by core 1788 (PR 1814): deposits close while a funded adapter is excluded
+    /// from NAV, so no window depositor can mint against the reduced NAV.
+    function test_revokedAdapterWindowDepositBlocked() public {
         MockAdapter second = new MockAdapter(address(usdc), address(vault));
         _allowAdapter(vault, address(second));
         vm.prank(admin);
@@ -35,17 +37,19 @@ contract SecurityReviewPoc is RobotMoneyVaultTest {
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), false);
 
+        assertEq(vault.maxDeposit(bob), 0, "deposits closed during exclusion");
         vm.prank(bob);
+        vm.expectRevert();
         vault.deposit(1_000 * ONE_USDC, bob);
+
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
-
-        uint256 before = usdc.balanceOf(bob);
-        uint256 bobShares = vault.balanceOf(bob);
-        vm.prank(bob);
-        vault.redeem(bobShares, bob, bob);
-        uint256 proceeds = usdc.balanceOf(bob) - before;
-        emit log_named_uint("Bob proceeds (USDC units)", proceeds);
-        assertGt(proceeds, 1_400 * ONE_USDC, "bob captures Alice's restored NAV");
+        assertGt(vault.maxDeposit(bob), 0, "deposits reopen after restoration");
+        assertApproxEqAbs(
+            vault.convertToAssets(vault.balanceOf(alice)),
+            2_000 * ONE_USDC,
+            2,
+            "alice keeps full claim"
+        );
     }
 }
