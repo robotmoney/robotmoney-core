@@ -281,6 +281,39 @@
       "cancel"
     ]
   },
+  "redeploys": [
+    {
+      "vault": "PROTO",
+      "script": "contracts/script/RedeployProtocolAssetVault.s.sol:RedeployProtocolAssetVault",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "SWAP_ROUTER",
+        "REGISTRY_ADDRESS",
+        "TIMELOCK_ADDRESS",
+        "EMERGENCY_ADDRESS",
+        "TVL_CAP",
+        "PER_DEPOSIT_CAP",
+        "FEE_RECIPIENT",
+        "EXIT_FEE_BPS",
+        "NAV_DEVIATION_BPS",
+        "MIN_POOL_LIQUIDITY",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "manifestNotes": "Single-vault redeploy into a live deployment (issue 1796), run by the redeploy-vault verb only: no frozen count, no stage. The script deploys the vault closed and unregistered, links the registry and hands ADMIN_ROLE to the timelock and EMERGENCY_ROLE to the emergency key. The Safe registers it, moves router eligibility and retires the old vault through the timelock (govern row redeploy-vault).",
+      "libraries": [
+        "tick_math"
+      ],
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "TwapTickMath",
+        "BasketViews"
+      ]
+    }
+  ],
   "vaults": [
     {
       "key": "USDC",

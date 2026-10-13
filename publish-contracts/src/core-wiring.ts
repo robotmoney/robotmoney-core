@@ -48,6 +48,8 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   IC_POLICY_ADDRESS: { stage: "ic-policy", field: "policy" },
   CONSENSUS_RECEIPT_ADDRESS: { stage: "ic-policy", field: "consensus_receipt" },
   SAFE_ADDRESS: { stage: SAFE_STAGE, field: "safe" },
+  /** The single-vault redeploy (issue 1796) hands the new vault to the live timelock. */
+  TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
   /** The agent stage registers this permissionless price recorder as RM's pool (core 1676). */
   RECORDER_ADDRESS: { stage: RECORDER_STAGE, field: "recorder" },
 };

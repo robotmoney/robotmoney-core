@@ -29,6 +29,7 @@ import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
+import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, runRedeployVault } from "./redeploy-vault.ts";
 import { RECEIPT_ROW, assertReceiptId, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
@@ -40,17 +41,20 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
-export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt"] as const;
+export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt", "redeploy-vault"] as const;
 export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
-  VERB               optional first word: publish | verify | govern | pause-all. An alias for a stage set (below). Not combined with --stage.
+  VERB               optional first word: publish | verify | govern | pause-all | record-receipt | redeploy-vault. An alias for a stage set (below). Not combined with --stage.
                        publish = every deployer stage up to and including timelock (the same as --stage deploy), with the prove-control step
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
                        record-receipt = the registered committee SUBMITTER (a Safe: --submitter, executed by --signer = the deployer, signed by its --owner-signer owners) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
                                  from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
+                       redeploy-vault = REDEPLOY ONE VAULT into the live deployment (issue 1796, an experiment on a Base mainnet REHEARSAL: refused on 8453 in production): --vault PROTO. The DEPLOYER (--signer) deploys a NEW rmPROTO from the
+                                 release tag that holds the fix: closed, unregistered, linked to the registry, ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched. --evidence is the run that deployed
+                                 the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, registers it, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
@@ -81,6 +85,11 @@ export const USAGE = `publish contracts
                      gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
+                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of five calls, registry.registerVault(new), registry.migrateEligibility(new, true, five legs),
+                     registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
+                     on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new vault is the closed, linked, timelock-governed one the verb left.
+  --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
+  --prior-out DIR    verify, after a redeploy: the forge out/ directory of a checkout built at the ORIGINAL deployment sha. The vaults the redeploy did not replace (and the retired one) run the code of that build, so their code hashes are compared with it.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
@@ -140,6 +149,8 @@ export interface CliDeps {
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
+  /** Test seam (issue 1796): the whole `redeploy-vault` verb. Default: the real one (runRedeployVault). */
+  redeployVault?: typeof runRedeployVault;
   /** Test seams (issue 1733): the proof that the anchor file is committed, and the sleep between the retries of a rate-limited `cast code`. */
   anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
@@ -164,6 +175,10 @@ export interface Parsed {
   /** record-receipt only. */
   payloadDigest?: string;
   payloadUri?: string;
+  /** redeploy-vault only: the vault key. */
+  vault?: string;
+  /** verify only (issue 1796): forge out/ of a checkout at the original deployment sha. */
+  priorOut?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -176,7 +191,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -197,8 +212,15 @@ export function parseCli(argv: string[]): Parsed {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
-    if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW) resolveGovernRow(row);
+    if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW) resolveGovernRow(row);
   }
+  const vaultArg = v.vault as string | undefined;
+  if (verb === REDEPLOY_VERB) {
+    if (vaultArg === undefined) throw new PublishError("USAGE", `${REDEPLOY_VERB} needs --vault ${REDEPLOY_KEYS.join("|")}\n${USAGE}`);
+    if (!isRedeployKey(vaultArg)) throw new PublishError("USAGE", `--vault '${vaultArg}' cannot be redeployed: only ${REDEPLOY_KEYS.join(", ")}\n${USAGE}`);
+  } else if (vaultArg !== undefined) throw new PublishError("USAGE", `--vault goes with the ${REDEPLOY_VERB} verb only\n${USAGE}`);
+  const priorOut = v["prior-out"] as string | undefined;
+  if (priorOut !== undefined && !(verb === "verify" || stage === "verify" || stage === "all" || verb === undefined)) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
@@ -235,7 +257,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, vault: vaultArg, priorOut,
   };
 }
 
@@ -323,6 +345,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
     const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
+    // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
+    if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
@@ -346,7 +370,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
         prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, coreConfigCheck: deps.coreConfigCheck,
-        manifestOut, startChain: a.dryRun ? (deps.startChain ?? startAnvil) : undefined,
+        manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
       };
     };
     // The EMERGENCY key (core 1619): --emergency-signer, else on the Twin chain the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
@@ -390,6 +414,21 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi, safeMode);
       console.log(JSON.stringify({ event: "record_receipt", ...rec }));
       log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
+      return 0;
+    }
+    // redeploy-vault (issue 1796): --signer is the DEPLOYER. No frozen counts (they belong to the original deployment sha): the sha must be a release tag of the sheet's kind with green CI on 8453.
+    if (a.verb === REDEPLOY_VERB) {
+      const usdc = await run("cast", ["code", USDC_ADDRESS], { env: castEnv });
+      if (usdc.code !== 0) throw new PublishError("CHAIN", `cast code ${USDC_ADDRESS} failed: ${usdc.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
+      assertUsdcCode(usdc.stdout.trim(), deps.usdcCodeHash);
+      if (rpcChainId === MAINNET_CHAIN_ID) {
+        const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir: defaultCountsDir(cwd), env, kind: sheet.kind, requireCounts: false, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
+        log.log("info", "redeploy.release_gate", { ok: true, tag, core_sha: a.coreSha });
+      }
+      const ctx = buildCtx(undefined, false);
+      const rec = await (deps.redeployVault ?? runRedeployVault)(ctx, a.vault as (typeof REDEPLOY_KEYS)[number]);
+      if (rec) console.log(JSON.stringify({ event: "redeploy_vault", vault: rec.vault, old_vault: rec.old_vault, new_vault: rec.new_vault, deploy_tx_hashes: rec.deploy_tx_hashes, next: `govern --row ${REDEPLOY_ROW}` }));
+      log.log("info", "run.done", { ran: [REDEPLOY_VERB], skipped: [] });
       return 0;
     }
     const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => codeWithRetry(() => run("cast", ["code", x], { env: castEnv }), { address: x, rpc: a.rpc, sleep: deps.sleep }) });

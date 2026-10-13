@@ -67,14 +67,17 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     listOk = true;
     return { ok: true, detail: `${chainVaults.length} vaults on chain` };
   });
+  const redeploys = opts.redeploys ?? [];
   const manifestSet = man.vaults.map((v) => lc(v.address));
+  // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
+  const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault))];
   await c.run("vault set: manifests equal registry.listVaults", async () => {
     if (!listOk) return { ok: false, detail: "listVaults unreadable" };
-    const missingOnChain = manifestSet.filter((a) => !chainVaults.includes(a));
-    const missingInManifest = chainVaults.filter((a) => !manifestSet.includes(a));
-    const dupes = manifestSet.length !== new Set(manifestSet).size;
+    const missingOnChain = expectedSet.filter((a) => !chainVaults.includes(a));
+    const missingInManifest = chainVaults.filter((a) => !expectedSet.includes(a));
+    const dupes = expectedSet.length !== new Set(expectedSet).size;
     const ok = !missingOnChain.length && !missingInManifest.length && !dupes;
-    return { ok, detail: ok ? `${manifestSet.length} vaults` : `in manifests only: [${missingOnChain}] on chain only: [${missingInManifest}]${dupes ? " duplicate manifest address" : ""}` };
+    return { ok, detail: ok ? `${manifestSet.length} vaults${redeploys.length ? ` and ${redeploys.length} retired` : ""}` : `in manifests only: [${missingOnChain}] on chain only: [${missingInManifest}]${dupes ? " duplicate manifest address" : ""}` };
   });
   await c.run("vault set: registry vaultCount equals listVaults length", async () =>
     Number(await chain.read(registry, "function vaultCount() view returns (uint256)")) === chainVaults.length);
@@ -201,18 +204,24 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const n of libNames) await c.run(`library[${n}]: has code`, async () => (await chain.getCode(man.libraries[n])).length > 2);
 
   // ---- code hashes against the build, immutables and links masked
-  const codeTargets: { label: string; address: Address; artifact: string }[] = [
+  // Issue 1796: after a redeploy only the new vault runs the current build. The others (and the retired vault, below) run the build of the original deployment sha.
+  const redeployed = new Set(redeploys.map((r) => r.vault));
+  const priorDir = opts.priorArtifactsDir;
+  const codeTargets: { label: string; address: Address; artifact: string; dir?: string }[] = [
     ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact })),
-    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact })),
+    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, ...(redeploys.length > 0 && !redeployed.has(v.key) ? { dir: priorDir } : {}) })),
     ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]! })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: runtime code equals build artifact (masked)`, async () => {
-      const r = compareCode(await chain.getCode(t.address), loadArtifact(opts.artifactsDir, t.artifact));
-      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}` };
+      const r = compareCode(await chain.getCode(t.address), loadArtifact(t.dir ?? opts.artifactsDir, t.artifact));
+      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
     });
   }
+
+  // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
+  for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
 
   // ---- deployer nonce equals the sum of the frozen counts
   await c.run("deployer: nonce equals sum of frozen counts", async () => {
@@ -220,13 +229,14 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     // rehearsal (issue 1727): the deployer was not fresh, the run manifest recorded the nonce it started at. Production has no start: 0.
     const start = kind === "rehearsal" ? (opts.deployerStartNonce ?? Number.NaN) : 0;
     const want = start + Object.values(opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
+    const wantNow = want + (opts.redeployDeployerTxs ?? 0); // the single-vault redeploys' deploy transactions (issue 1796) are outside every frozen stage count
     const got = await chain.nonce(D);
     const frozen = Object.keys(opts.frozenCounts).length > 0;
     // After govern the deployer has paid Safe execTransaction gas, so the live nonce is above the sum. The runner's own record of the nonce
     // at the end of the deploy stages stands in for it, and the live nonce may only be at or above that record.
     const rec = opts.deployerNonceAtDeployEnd;
     if (rec !== undefined) return { ok: frozen && rec === want && got >= rec, detail: `recorded nonce at deploy end ${rec}, frozen sum plus the prove-control transaction ${want}, live nonce ${got} (govern ran)` };
-    return { ok: frozen && got === want, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}` };
+    return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
   });
 
   return c.report();
@@ -589,4 +599,43 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, s: 
   } catch (e: any) {
     c.fail(label, `scan failed: ${String(e?.message ?? e).slice(0, 300)}`);
   }
+}
+
+/**
+ * Issue 1796: one single-vault redeploy, after its govern row executed. The vault the registry still lists is RETIRED: withdraw-only, out of the router, still holding its code (the
+ * shares of its holders redeem through `redeem`, `withdraw` and `redeemInKind`). The vault that replaced it is the one the vault manifest names (every other label already checks it) and it is Active
+ * in the registry. The router's effective weights hold the new vault and not the old one.
+ */
+async function redeployChecks(
+  c: Collector, chain: ChainReader, r: NonNullable<VerifyOptions["redeploys"]>[number],
+  ctx: { registry: Address; router: Address; tl: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string },
+): Promise<void> {
+  const p = `retired[${r.vault}]`;
+  const status = async (v: Address): Promise<number> => Number(((await chain.read(ctx.registry, "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)", [v])) as [unknown, number])[1]);
+  await c.run(`${p}: has code`, async () => (await chain.getCode(r.oldVault)).length > 2);
+  await c.runEq(`${p}: registry status is Retired`, () => status(r.oldVault), 2);
+  await c.runEq(`${p}: not router-eligible`, () => chain.read(ctx.registry, "function isRouterEligible(address vault) view returns (bool)", [r.oldVault]), false);
+  await c.runEq(`${p}: deposits halted by the registry retire`, () => chain.read(r.oldVault, "function retired() view returns (bool)"), true);
+  await c.runEq(`${p}: registry link`, () => chain.read(r.oldVault, "function registry() view returns (address)"), ctx.registry);
+  await c.run(`${p}: runtime code serves redeemInKind`, async () => {
+    const sel = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
+    const code = (await chain.getCode(r.oldVault)).toLowerCase();
+    return { ok: code.includes(sel), detail: `selector ${sel}` };
+  });
+  await c.run(`${p}: runtime code equals the original build artifact (masked)`, async () => {
+    if (!ctx.artifact) return { ok: false, detail: "no artifact name for the vault" };
+    const res = compareCode(await chain.getCode(r.oldVault), loadArtifact(ctx.priorDir ?? ctx.artifactsDir, ctx.artifact));
+    return { ok: res.ok, detail: `${ctx.artifact}: ${res.detail}${!res.ok && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of the original sha>)" : ""}` };
+  });
+  const q = `redeploy[${r.vault}]`;
+  await c.run(`${q}: the vault manifest names the replacing vault`, async () => {
+    const m = ctx.vaults.find((v) => v.key === r.vault);
+    return { ok: !!m && lc(m.address) === lc(r.newVault), detail: m ? `manifest ${m.address}, run record ${r.newVault}` : "no manifest vault" };
+  });
+  await c.runEq(`${q}: replacing vault registry status is Active`, () => status(r.newVault), 0);
+  await c.run(`${q}: router effective weights hold the replacing vault and not the retired one`, async () => {
+    const [vs] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const ok = vs.some((v) => lc(v) === lc(r.newVault)) && !vs.some((v) => lc(v) === lc(r.oldVault));
+    return { ok, detail: `[${vs.join(", ")}]` };
+  });
 }
