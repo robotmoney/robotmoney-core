@@ -14,6 +14,7 @@ import { RECEIPT_ABI, SAFE_ADMIN_ABI, VAULT_ABI, type GovernApi } from "../src/g
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
+import { REGISTRY_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -69,6 +70,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
     /** Issue 1750: what the --submitter is on chain. A canonical 2-of-3 Safe by default; null is a key (no code); a function decides per address. */
     submitterKind: undefined as undefined | null | ((a: Address) => unknown),
+    /** Issue 1796: the registry status of a vault (0 Active, 1 DepositsPaused, 2 Retired), the vaults whose retire() flag is set, the registry's router, and whether the timelock holds ADMIN_ROLE on the registry. */
+    statuses: new Map<string, number>(), retiredFlag: new Set<string>(), registryRouter: A.router as Address, timelockIsRegistryAdmin: true,
+    /** The vaults a redeploy left linked to the registry (registry() reads A.registry) and the vaults the timelock governs. */
+    linked: new Set<string>(), governed: new Set<string>(),
     agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
     /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
@@ -78,6 +83,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
     client: {
+      getCode: async () => "0x6001600155",
       getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
       getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success" }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
@@ -90,6 +96,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
           case "isRouterEligible": return !s.ineligible.has(String(args?.[0]));
+          case "getVault": return [{ name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 1n }, s.statuses.get(String(args?.[0])) ?? 0];
+          case "routerEligibleCount": return BigInt(s.listed.filter((v) => !s.ineligible.has(v)).length);
+          case "router": return s.registryRouter;
+          case "retired": return s.retiredFlag.has(address);
+          case "registry": return s.linked.has(address) ? A.registry : addr(0);
           case "listVaults": return s.listed;
           case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
@@ -100,7 +111,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
-          case "hasRole": if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "hasRole": if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
           case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
           case "icPolicy": return A.icPolicy;
           case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
@@ -167,6 +178,26 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
             continue;
           }
+          if (c.target === A.registry) {
+            // the contract rules the batch must respect: a vault is made ineligible before it is retired, the default vector spans the eligible set and sums to 10000
+            const d = decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: c.data });
+            if (d.functionName === "registerVault") { if (s.listed.includes(d.args[0] as Address)) throw new Error("AlreadyRegistered"); s.listed.push(d.args[0] as Address); s.ineligible.add(d.args[0] as string); }
+            else if (d.functionName === "migrateEligibility") {
+              const [v, eligible, vs, bps] = d.args as [Address, boolean, Address[], bigint[]];
+              if (!s.listed.includes(v)) throw new Error("NotRegistered");
+              if (eligible) s.ineligible.delete(v); else s.ineligible.add(v);
+              const count = s.listed.filter((x) => !s.ineligible.has(x)).length;
+              if (vs.length !== count) throw new Error(`LengthMismatch ${vs.length} ${count}`);
+              if (bps.reduce((t, x) => t + x, 0n) !== 10000n) throw new Error("InvalidWeightSum");
+              for (const x of vs) if (s.ineligible.has(x) || (s.statuses.get(x) ?? 0) !== 0) throw new Error("VaultNotActive");
+              s.weights = { vaults: [...vs], bps: [...bps] };
+            } else if (d.functionName === "retire") {
+              const v = d.args[0] as Address;
+              if (!s.ineligible.has(v)) throw new Error("RetireWhileRouterEligible");
+              s.statuses.set(v, 2); s.retiredFlag.add(v);
+            }
+            continue;
+          }
           if (c.target === A.gateway) {
             let d: ReturnType<typeof decodeFunctionData<typeof GATEWAY_REGISTER_ABI>>;
             try { d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
@@ -184,7 +215,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             continue;
           }
           if (c.target !== A.receipt) {
-            if (Object.values(A.vaults).includes(c.target as Address) && decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName === "unpauseDeposits") s.paused.delete(c.target);
+            if ((Object.values(A.vaults).includes(c.target as Address) || s.paused.has(c.target)) && decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName === "unpauseDeposits") s.paused.delete(c.target);
             continue;
           }
           const d = decodeFunctionData({ abi: RECEIPT_ABI, data: c.data });

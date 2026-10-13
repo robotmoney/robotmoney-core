@@ -18,6 +18,7 @@ interface Cfg {
   creates?: Record<string, string[]>;     // script file -> the CREATE2 library addresses its first transactions create (issue 1721); the file marks them transactionType CREATE2
   libsAddress?: string;                    // the tick_math address the stub manifest holds (default 0x1009)
   chainId: number;
+  vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
@@ -83,7 +84,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (outPath) {
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, JSON.stringify({
-        vault: addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
+        vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
         consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: cfg.libsAddress ?? addr(0x1009), adapter: addr(0xa2),
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
       }));

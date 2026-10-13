@@ -17,6 +17,7 @@ import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRo
 import { verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
+import { REDEPLOY_ROW, redeploysOf } from "./redeploy-vault.ts";
 
 /**
  * The expected asset config of one vault: core's config files (poolFee becomes swapFee) with the adapter this run deployed, read from the
@@ -163,6 +164,14 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     }
     mode = m.mode;
   }
+  // Issue 1796: a single-vault redeploy that is deployed and not yet governed is neither the state before nor the state after: the vault manifest names a vault the registry does not list.
+  const redeployRecs = redeploysOf(manifest);
+  const openRedeploy = redeployRecs.find((r) => r.status !== "governed");
+  if (openRedeploy) {
+    const next = openRedeploy.status === "deployed" ? `bun publish-contracts/src/cli.ts govern --row ${REDEPLOY_ROW} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)` : `the redeploy-vault verb with --resume (it died part-way)`;
+    throw new PublishError("GOVERN_PENDING", `verify refused: the redeploy of ${openRedeploy.vault} is ${openRedeploy.status} (round ${openRedeploy.ordinal}), so neither the state before it nor the state after it can be checked. Nothing was paused. Finish it first: ${next}`, { next_command: next, redeploy: openRedeploy.status });
+  }
+  const governedRedeploys = redeployRecs.filter((r) => r.status === "governed" && r.new_vault);
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
@@ -173,6 +182,11 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
+    ...(governedRedeploys.length > 0 ? {
+      redeploys: governedRedeploys.map((r) => ({ vault: r.vault, oldVault: r.old_vault, newVault: r.new_vault! })),
+      redeployDeployerTxs: governedRedeploys.reduce((t, r) => t + (r.deploy_count ?? 0), 0),
+      ...(ctx.priorArtifactsDir ? { priorArtifactsDir: ctx.priorArtifactsDir } : {}),
+    } : {}),
   });
   if (mainnet) {
     // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all four vaults and fail on any disagreement with it.
