@@ -151,6 +151,7 @@ done
 [[ -f "$KEEPER_KEYSTORE" ]] || die "KEEPER_KEYSTORE is not a file"
 [[ -f "$KEEPER_PASSWORD_FILE" ]] || die "KEEPER_PASSWORD_FILE is not a file"
 command -v cast >/dev/null || die "cast (foundry) is not installed"
+command -v python3 >/dev/null || die "python3 is not installed"
 
 if [[ "${1:-}" == "--once" ]]; then
     tick && exit 0 || exit 1
