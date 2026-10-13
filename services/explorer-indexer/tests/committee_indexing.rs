@@ -450,3 +450,118 @@ async fn agent_revoked_sets_active_false() {
     assert!(!active, "active should be false after AgentRevoked");
     assert_eq!(revoked_at, Some(10), "revoked_at should be block 10");
 }
+
+// ─── Issue #1790: one signal per member, ingestion through rendering ─────────
+
+/// A member that floods the IC with votes moves the tilt by one vote, and a
+/// revoked member does not count. The events go through `run_once` (the real
+/// ingestion path), then the explorer-api router is served over the same
+/// database and both the live tilt and the stored regime snapshot are read
+/// back over HTTP, as the dapp reads them.
+#[tokio::test]
+async fn vote_flood_from_one_member_counts_once_end_to_end() {
+    let fx = pg_fixture().await;
+
+    let ic = ic_addr();
+    let vault = vault_addr();
+    let flooder = Address::from([0xA1u8; 20]);
+    let honest = Address::from([0xB2u8; 20]);
+    let revoked = Address::from([0xC3u8; 20]);
+
+    let memo_body = br#"{"agent_id":"flood","stance":"Overweight"}"#;
+    let memo_hash = alloy_primitives::keccak256(memo_body).0;
+    let memo_srv = MemoServer::start(memo_body.to_vec()).await;
+
+    let mut logs = vec![
+        encode_agent_registered_log(ic, flooder, "flooder", 9, [0x01; 32], 0),
+        encode_agent_registered_log(ic, honest, "honest", 9, [0x02; 32], 1),
+        encode_agent_registered_log(ic, revoked, "revoked", 9, [0x03; 32], 2),
+    ];
+    let vote = |vote_id: u64, agent: Address, weight: u16, log_index: u32| {
+        encode_vote_submitted_log(
+            ic,
+            vote_id,
+            agent,
+            vault,
+            0,
+            weight,
+            80,
+            &memo_srv.url,
+            memo_hash,
+            1_000_000 + vote_id,
+            10,
+            [0x10 + vote_id as u8; 32],
+            log_index,
+        )
+    };
+    // The revoked member votes 0 bps, then is revoked.
+    logs.push(vote(0, revoked, 0, 0));
+    logs.push(encode_agent_revoked_log(ic, revoked, 10, [0x04; 32], 1));
+    // The flooder's older signals (3000 bps) are superseded by its latest
+    // (10000 bps); the honest member votes 2000 bps once, last.
+    for i in 0..4u64 {
+        logs.push(vote(1 + i, flooder, 3000, 2 + i as u32));
+    }
+    logs.push(vote(5, flooder, 10_000, 6));
+    logs.push(vote(6, honest, 2000, 7));
+
+    let stub = StubRpcServer::start().await;
+    program_stub_block10(&stub);
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = base_cfg(&stub);
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        fx.db.count(CountTable::CommitteeVotes).await.unwrap(),
+        7,
+        "every vote is still recorded"
+    );
+
+    // Serve the explorer API over the indexed database.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = explorer_api::router(explorer_api::AppState::new(fx.db.pool().clone(), 8453));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let get = |path: &'static str| async move {
+        reqwest::get(format!("http://{addr}{path}"))
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
+
+    // Two members count: the flooder's latest (10000) and the honest 2000.
+    // Counting every vote would give 6 votes; counting the revoked member
+    // would give 3 members.
+    let tilts = get("/v1/committee/tilts").await;
+    let tilts = tilts["tilts"].as_array().unwrap();
+    assert_eq!(tilts.len(), 1, "one vault has a tilt: {tilts:?}");
+    assert_eq!(tilts[0]["vote_count"], 2, "one vote per active member");
+    let avg: f64 = tilts[0]["avg_weight_bps"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(avg, 6000.0, "mean of 10000 and 2000");
+
+    // The regime snapshot the indexer stored agrees with the live tilt.
+    let feed = get("/v1/regime/feed").await;
+    let snaps = feed["snapshots"].as_array().unwrap();
+    assert_eq!(snaps.len(), 1, "one vault snapshot: {snaps:?}");
+    assert_eq!(snaps[0]["vote_count"], 2);
+    let snap_avg: f64 = snaps[0]["avg_weight_bps"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(snap_avg, 6000.0);
+}
