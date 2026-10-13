@@ -54,6 +54,7 @@ The pre-pivot TypeScript CLI (`@robotmoney/cli`) and its surrounding pnpm worksp
 - [Architecture proposal](docs/architecture.md)
 - [Plan tracking issue](https://github.com/lucky-tensor/robotmoney-monorepo/issues/109)
 - [Smart-contract reference](docs/technical/smart-contracts.md)
+- [Single-vault redeploy runbook](docs/technical/single-vault-redeploy.md)
 - [Testing strategy](docs/development/testing-strategy-ethereum.md)
 - Vault on BaseScan: https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd
 
