@@ -4,7 +4,7 @@ title: "BasketAssetConfigGuard"
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/BasketAssetConfigGuard.sol)
 
 ## Constants
 
@@ -411,8 +411,9 @@ struct AssetInfo {
 
 <i>
 
-Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
-adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
+Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is the Uniswap V4 venue: its "pool"
+is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`, `liquidity`, `slot0` and `observe`
+like a V3 pool, so every check below applies to it unchanged (core 1676).
 
 </i>
 

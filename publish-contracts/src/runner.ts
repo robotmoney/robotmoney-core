@@ -8,19 +8,22 @@ import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
-import { countFor, sumCounts, checkNonce, type FrozenCounts } from "./counts.ts";
+import type { DeploymentKind } from "./chains.ts";
+import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
+import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
 import type { Logger } from "./log.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
-import { LIBS_STAGE, VAULT_KIND, resolveEnv } from "./core-wiring.ts";
+import { LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { manifestBase, manifestPathFor } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
+import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
 
@@ -65,6 +68,12 @@ export interface StageRecord {
   lastBlock?: number;
   startedAt: string;
   finishedAt?: string;
+  /** Libs stage (issue 1721): the stage planned zero transactions because the libraries already sit on chain with the build's code. Set only by libs adoption. */
+  adopted?: boolean;
+  /** With adopted: which libraries, at which addresses and code hashes, and how many transactions this deployer sent for the stage. */
+  adoption?: AdoptionRecord;
+  /** CREATE2 library addresses (lower case) this stage's own broadcast created. A later stage that finds them deployed did not adopt them: this run made them. */
+  created?: string[];
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
   safe?: string;
   [k: string]: unknown;
@@ -72,6 +81,13 @@ export interface StageRecord {
 
 export interface RunManifest {
   version: 1;
+  /** Issue 1727: the deployment kind of the run, from the sheet's DEPLOYMENT_KIND. A manifest written before the field existed is a production run. */
+  deploymentKind?: DeploymentKind;
+  /**
+   * Issue 1727, rehearsal only: the deployer nonce at the first deployer stage. A rehearsal reuses a deployer that is not at nonce 0, so every nonce check is relative
+   * to this value. It is recorded once, before the first transaction, and never rewritten. Production runs never carry it: a fresh deployer starts at 0.
+   */
+  deployerStartNonce?: number;
   chainId: number;
   coreSha: string;
   deployer: string;
@@ -80,8 +96,18 @@ export interface RunManifest {
   firstBlock?: number;
   stages: Record<string, StageRecord>;
   govern?: Record<string, unknown>;
+  /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
+  receipt_applications?: unknown[];
+  /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
+  voted_weights_clears?: unknown[];
+  /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
+  committee_registrations?: unknown[];
+  /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */
+  recorded_receipts?: unknown[];
   /** Every pause-all that ran against this run, oldest first (issue 1686). Written by pause-all only, merged on every save. */
   pauses?: PauseEntry[];
+  /** The highest manifest sequence number handed out by reserveManifestSeq (issue 1688). Merged by max on every save, so it only grows. */
+  seqHigh?: number;
 }
 
 /**
@@ -100,6 +126,13 @@ export interface PauseEntry {
 }
 
 export const manifestPath = (evidenceDir: string): string => join(evidenceDir, "publish-run.json");
+
+/** The deployer transactions each ADOPTED stage really sent, from the run manifest (issue 1721). Empty when no stage was adopted. */
+export function adoptedTxs(manifest: Pick<RunManifest, "stages">): AdoptedTxs {
+  const out: AdoptedTxs = {};
+  for (const [name, rec] of Object.entries(manifest.stages)) if (rec.status === "done" && rec.adopted === true && rec.adoption) out[name] = rec.adoption.deployerTxs;
+  return out;
+}
 
 export function loadRunManifest(evidenceDir: string): RunManifest | undefined {
   const p = manifestPath(evidenceDir);
@@ -138,25 +171,48 @@ function writeManifestFile(evidenceDir: string, m: RunManifest): void {
 const governScheduled = (m: Pick<RunManifest, "govern">): { seq?: number }[] =>
   Object.values(m.govern ?? {}).map((r) => (r as { scheduled?: { seq?: number } } | undefined)?.scheduled).filter((x): x is { seq?: number } => !!x);
 
-/** The next manifest sequence number: above every pause entry and every stamped govern schedule. */
-export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses">): number =>
-  1 + Math.max(0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+/** The next manifest sequence number: above every pause entry, every stamped govern schedule and every reserved number. */
+export const nextManifestSeq = (m: Pick<RunManifest, "govern" | "pauses" | "seqHigh">): number =>
+  1 + Math.max(0, m.seqHigh ?? 0, ...(m.pauses ?? []).map((p) => p.seq), ...governScheduled(m).map((x) => x.seq ?? 0));
+
+/** Merges what pause-all wrote on disk into `m` (the disk copy of a pause entry wins) and keeps the larger reserved number. Call under the lock. */
+function mergeDisk(m: RunManifest, disk: RunManifest | undefined): void {
+  const bySeq = new Map<number, PauseEntry>();
+  for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
+  for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
+  if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  const high = Math.max(m.seqHigh ?? 0, disk?.seqHigh ?? 0);
+  if (high > 0) m.seqHigh = high;
+}
+
+function readDisk(evidenceDir: string): RunManifest | undefined {
+  try { return loadRunManifest(evidenceDir); } catch { return undefined; /* a damaged file is overwritten, as before */ }
+}
 
 /**
  * Saves the manifest under the write lock without dropping a concurrent pause-all: the pause entries on disk are merged in first (pause-all owns them,
- * the disk copy wins), then each govern `scheduled` record that has no `seq` yet is stamped with the next sequence number. The merge and the stamp
- * mutate `m`, so the caller's in-memory copy sees them.
+ * the disk copy wins). The merge mutates `m`, so the caller's in-memory copy sees it. A govern `scheduled` record WITHOUT a `seq` (written before issue
+ * 1688, or adopted from the chain) is never given one here: a plain save has no idea when that schedule happened, so it stays older than any pause entry.
  */
 export function saveRunManifest(evidenceDir: string, m: RunManifest): void {
   withManifestLock(evidenceDir, () => {
-    let disk: RunManifest | undefined;
-    try { disk = loadRunManifest(evidenceDir); } catch { /* a damaged file is overwritten, as before */ }
-    const bySeq = new Map<number, PauseEntry>();
-    for (const e of m.pauses ?? []) bySeq.set(e.seq, e);
-    for (const e of disk?.pauses ?? []) bySeq.set(e.seq, e);
-    if (bySeq.size) m.pauses = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-    for (const sc of governScheduled(m)) if (sc.seq === undefined) sc.seq = nextManifestSeq(m);
+    mergeDisk(m, readDisk(evidenceDir));
     writeManifestFile(evidenceDir, m);
+  });
+}
+
+/**
+ * Issue 1688: reserves the next sequence number BEFORE the schedule transaction is sent, and saves `m` with the reservation. A pause-all that begins
+ * after this call gets a higher number than the schedule, one that began before gets a lower one: the order is fixed at send time, not at the first
+ * save after the send.
+ */
+export function reserveManifestSeq(evidenceDir: string, m: RunManifest): number {
+  return withManifestLock(evidenceDir, () => {
+    mergeDisk(m, readDisk(evidenceDir));
+    const seq = nextManifestSeq(m);
+    m.seqHigh = seq;
+    writeManifestFile(evidenceDir, m);
+    return seq;
   });
 }
 
@@ -170,6 +226,7 @@ export function beginPauseEntry(evidenceDir: string, e: Omit<PauseEntry, "seq" |
     if (!disk) return undefined;
     const entry: PauseEntry = { ...e, seq: nextManifestSeq(disk), status: "started", vaults: [] };
     disk.pauses = [...(disk.pauses ?? []), entry];
+    disk.seqHigh = entry.seq;
     writeManifestFile(evidenceDir, disk);
     return entry;
   });
@@ -218,6 +275,8 @@ export interface RunContext {
   startChain?: ChainStarter;
   /** Injected for tests: the read-only chain reader behind the config-check that runs before each vault stage. Defaults to viem over `rpc`. */
   chainReader?: (rpc: string) => ChainReader;
+  /** Injected for tests: the sleep, the poll and the longest wait of the recorder gate (core 1676). Defaults to a 15 s poll for up to 40 minutes. */
+  recorderWait?: RecorderWaitDeps;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */
@@ -243,12 +302,13 @@ export const manifestDir = (ctx: ManifestCtx): string => ctx.manifestOut ?? join
 /** The path a stage manifest file takes. forge gets it as DEPLOYMENT_OUT (absolute when the caller chose the directory). */
 export const manifestFilePath = (ctx: ManifestCtx, file: string): string => join(manifestDir(ctx), file);
 
-/** The environment a child process gets: no plaintext signing material, no YES or CONFIRM, plus the RPC and chain id. */
+/** The environment a child process gets: no plaintext signing material, no YES or CONFIRM, no DEPLOYMENT_KIND (the sheet sets it for the stages), plus the RPC and chain id. */
 export function childEnv(ctx: Pick<RunContext, "baseEnv" | "rpc" | "chainId">, extra: Record<string, string> = {}): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(ctx.baseEnv)) {
     if (v === undefined) continue;
     if (PLAINTEXT_ENV.includes(k) || /^CHAIN_(SIGNER|FUNDER)_/.test(k) || k === "YES" || k === "CONFIRM") continue;
+    if (k === "DEPLOYMENT_KIND") continue; // issue 1727: the kind comes from the sheet only (stageEnv), never from the caller environment
     out[k] = v;
   }
   out.ETH_RPC_URL = ctx.rpc; // cast reads this one
@@ -430,7 +490,8 @@ const stageManifestBase = (stage: string): string => manifestBase(getStageTable(
 
 /** Every env var a forge stage gets: the table's requiredEnv (a missing value stops the stage) and the optionalEnv the sheet carries. */
 export function stageEnv(ctx: RunContext, row: StageRow): Record<string, string> {
-  const e: Record<string, string> = { CHAIN_ID: String(ctx.chainId), DEPLOY_SHA: ctx.coreSha };
+  // DEPLOYMENT_KIND (issue 1727) reaches every stage script from the sheet alone: the timelock stage script applies the rehearsal floor only when it reads "rehearsal"
+  const e: Record<string, string> = { CHAIN_ID: String(ctx.chainId), DEPLOY_SHA: ctx.coreSha, DEPLOYMENT_KIND: ctx.sheet.kind };
   for (const name of row.requiredEnv) {
     const src = resolveEnv(name, row.vault ?? null);
     if (src.from === "unmapped") throw new PublishError("INPUT_MISSING", `stage ${row.name}: core reads ${name} and publish contracts has no mapping for it (core-wiring.ts)`, { stage: row.name, name });
@@ -462,14 +523,15 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-function readTxCount(path: string): { count: number; hashes: string[]; firstBlock?: number; lastBlock?: number } | undefined {
+function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
   const hashes = txs.map((t) => (t as { hash?: string }).hash).filter((h): h is string => typeof h === "string");
   const rc = Array.isArray(j.receipts) ? j.receipts : [];
   const blocks = rc.map((r: { blockNumber?: string }) => (r.blockNumber ? Number(BigInt(r.blockNumber)) : NaN)).filter((n: number) => Number.isFinite(n));
-  return { count: txs.length, hashes, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
+  const creates = txs.filter((t) => (t as { transactionType?: string }).transactionType === "CREATE2").map((t) => String((t as { contractAddress?: string }).contractAddress ?? "").toLowerCase()).filter(Boolean);
+  return { count: txs.length, hashes, creates, firstBlock: blocks.length ? Math.min(...blocks) : undefined, lastBlock: blocks.length ? Math.max(...blocks) : undefined };
 }
 
 /** forge writes broadcast/<ScriptFile>/<chainId>/(dry-run/)run-latest.json. */
@@ -507,6 +569,66 @@ export async function vaultConfigGate(ctx: RunContext, row: StageRow): Promise<v
   if (failed.length > 0) throw new PublishError("VERIFY", `config-check before stage ${row.name} failed ${failed.length} check(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { stage: row.name, failed: failed.map((c) => c.label) });
 }
 
+/**
+ * Seconds of price history the recorder must hold before a vault stage that registers a Uniswap V4 asset (core 1676): the 1800 s TWAP window
+ * (`BasketVault.DEFAULT_TWAP_WINDOW`), which `addAsset` reads with `observe([1800, 0])`, plus three Base blocks.
+ */
+export const RECORDER_WINDOW_SECONDS = 1800;
+export const RECORDER_WAIT_MARGIN_SECONDS = 6;
+/** The longest a real chain (8453) is waited for in one process: a little over the window. A younger recorder after that is refused. */
+export const RECORDER_MAX_WAIT_MS = (RECORDER_WINDOW_SECONDS + 600) * 1000;
+export interface RecorderWaitDeps { sleep?: (ms: number) => Promise<void>; pollMs?: number; maxWaitMs?: number }
+
+/**
+ * The recorder wait (core 1676). The price recorder keeps no history before it exists, and `BasketVault.addAsset` reverts
+ * `InsufficientObservationHistory` while it holds less than the 1800 s window. So a vault stage whose config lists a UniswapV4 asset
+ * does not start until the recorder's oldest snapshot is older than the window.
+ *   - the local simulation chain of a dry run and a Twin fork move time with the anvil warp (one jump, then a re-read);
+ *   - a real chain (8453) is waited for, polling, up to RECORDER_MAX_WAIT_MS, then refused with RECORDER_HISTORY.
+ * The recorder stage runs right after libs, so on a real run the other stages normally take longer than the window.
+ */
+export async function recorderWindowGate(ctx: RunContext, row: StageRow, deps: RecorderWaitDeps = {}): Promise<void> {
+  if (!row.vault || row.kind !== "forge") return;
+  if (!loadVaultConfiguredAssets(ctx.coreDir, row.vault).some((a) => a.venue === VENUE_V4)) return;
+  const recorder = readManifestField(ctx, manifestRef(RECORDER_STAGE, "recorder")) as Address;
+  const reader = (ctx.chainReader ?? viemReader)(ctx.rpc);
+  if (!reader.blockTimestamp) throw new PublishError("TOOL", "this chain reader cannot read the head block timestamp: the recorder wait needs it");
+  const need = RECORDER_WINDOW_SECONDS + RECORDER_WAIT_MARGIN_SECONDS;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const maxWaitMs = deps.maxWaitMs ?? RECORDER_MAX_WAIT_MS;
+  const t0 = Date.now();
+  for (let warps = 0; ; ) {
+    const oldest = BigInt((await reader.read(recorder, "function oldestObservation() view returns (uint32)")) as bigint | number);
+    const age = Number((await reader.blockTimestamp()) - oldest);
+    if (age >= need) { ctx.log.log("info", "stage.recorder_ready", { stage: row.name, recorder, history_s: age, need_s: need }); return; }
+    const remaining = need - age;
+    const warped = warps === 0 ? await warpForRecorder(ctx, remaining) : false;
+    if (warped) { warps++; ctx.log.log("info", "stage.recorder_warped", { stage: row.name, recorder, seconds: remaining }); continue; }
+    if (warps > 0 || Date.now() - t0 >= maxWaitMs) {
+      throw new PublishError("RECORDER_HISTORY", `stage ${row.name}: the price recorder ${recorder} holds ${age} s of history, the vault needs ${need} s (the ${RECORDER_WINDOW_SECONDS} s window). addAsset would revert InsufficientObservationHistory. Nothing was sent. Wait ${remaining} s and rerun with --resume.`, { stage: row.name, recorder, history_s: age, need_s: need });
+    }
+    ctx.log.log("info", "stage.recorder_waiting", { stage: row.name, recorder, history_s: age, remaining_s: remaining });
+    await sleep(deps.pollMs ?? 15_000);
+  }
+}
+
+/** Moves time on a chain that may be warped (the dry-run simulation anvil, a Twin fork). False on any other chain, 8453 included. */
+async function warpForRecorder(ctx: RunContext, seconds: number): Promise<boolean> {
+  if (ctx.simRpc) {
+    if (!isLoopback(ctx.simRpc)) throw new PublishError("USAGE", `refusing to warp ${ctx.simRpc}: only the local simulation chain of a dry run is warped`);
+    for (const args of [["rpc", "evm_increaseTime", String(seconds), "--rpc-url", ctx.simRpc], ["rpc", "evm_mine", "--rpc-url", ctx.simRpc]]) {
+      const r = await ctx.run("cast", args, { env: childEnv({ ...ctx, rpc: ctx.simRpc }) });
+      if (r.code !== 0) throw new PublishError("TOOL", `cannot warp the local preflight chain: ${r.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
+    }
+    return true;
+  }
+  if (isMainnet(ctx.chainId)) return false;
+  const rpc = httpRpc(ctx.rpc);
+  if (!(await isTwinFork(rpc))) return false;
+  await warpBy(rpc, BigInt(seconds));
+  return true;
+}
+
 const isLoopback = (url: string): boolean => { try { const h = new URL(url).hostname; return h === "127.0.0.1" || h === "localhost" || h === "[::1]"; } catch { return false; } };
 
 /** Dry run only: broadcasts the stage to the local simulation anvil (an impersonated sender, no key). Refuses any non-loopback RPC. */
@@ -541,6 +663,64 @@ export async function controlProofGate(ctx: RunContext, row: StageRow, manifest:
   ctx.log.log("info", "stage.control_proof_ok", { stage: row.name, safe, tx_hash: rec.txHash, signers: rec.signers.length });
 }
 
+/**
+ * The libs stage planned zero transactions (issue 1721). It is ADOPTED only when every library of the stage sits at the address the build predicts
+ * (CREATE2 factory, salt 0, creation code) AND holds exactly the build's runtime code (keccak256 compared). Anything else is LIBS_ADOPTION and nothing is sent.
+ * The deployer nonce must still sit where the stage started (0 transactions sent by this deployer: a Twin fork) or have moved by the whole frozen count
+ * (the deployer's own transaction already landed: a resume). Any other movement is a stray transaction (NONCE). The record keeps the transactions this
+ * deployer really sent as `adopted.deployerTxs`: the nonce expectations of every later check count that number, not the frozen count.
+ * No dry-run file, no transaction count and no broadcast: none of the three exist for a stage that sent nothing.
+ */
+async function adoptLibsStage(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, deployer: string, outPath: string, expectedCount: number | undefined, simStdout: string): Promise<void> {
+  if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("LIBS_ADOPTION", `libs adoption: the simulation of ${row.name} planned zero transactions and wrote no manifest ${outPath}, so no library address is known. Nothing was sent. forge: ${forgeFailureTail(simStdout, "", outputSecrets(ctx))}`, { stage: row.name });
+  let libs: Record<string, unknown>;
+  try { libs = JSON.parse(readFileSync(outPath, "utf8")); } catch (e) { throw new PublishError("LIBS_ADOPTION", `libs adoption: ${outPath} is not valid JSON (${(e as Error).message}). Nothing was sent.`, { stage: row.name }); }
+  const libraries = await verifyAdoptedLibraries({ libraries: getStageTable().libraries, manifest: libs, outDir: join(ctx.coreDir, "out"), getCode: async (a) => castOut(ctx, ["code", a]) });
+  const nonce = await deployerNonce(ctx, deployer);
+  const sent = nonce - rec.startNonce!;
+  const allowed = expectedCount === undefined ? [0] : [0, expectedCount];
+  if (!allowed.includes(sent)) throw new PublishError("NONCE", `libs adoption: the deployer nonce moved by ${sent} since the stage started (${rec.startNonce} to ${nonce}), a libs stage that sent nothing allows ${allowed.join(" or ")}. A stray or partial transaction? Nothing was sent.`, { stage: row.name, sent, start: rec.startNonce, nonce });
+  rec.adopted = true;
+  rec.adoption = { libraries, factory: CREATE2_FACTORY, deployerTxs: sent };
+  rec.dryRunCount = 0;
+  rec.endNonce = nonce;
+  rec.count = expectedCount ?? sent;
+  rec.status = "done";
+  rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
+  if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = 0;
+  ctx.log.log("info", "stage.libs_adopted", { stage: row.name, libraries: libraries.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })), deployer_txs: sent, expected_count: expectedCount ?? null, note: "zero transactions planned: the libraries already hold the build's runtime code" });
+  if (ctx.dryRun) return; // a dry run never persists the run manifest; the libs manifest the simulation wrote stays for the later stages
+  manifest.stages[row.name] = rec;
+  saveRunManifest(ctx.evidenceDir, manifest);
+  ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: rec.startNonce, end_nonce: nonce, count: rec.count, adopted: true });
+}
+
+/** CREATE2 libraries created, or already adopted, by stages of THIS run before the current one (persisted `created` and `adoption`, plus the simulations of a dry run, which never persist). */
+const createdInDryRun = new WeakMap<object, Set<string>>();
+const createdEarlier = (manifest: RunManifest): Set<string> => new Set([...Object.values(manifest.stages).flatMap((r) => [...(r.created ?? []), ...(r.adoption?.libraries ?? []).map((l) => l.address.toLowerCase())]), ...(createdInDryRun.get(manifest) ?? [])]);
+
+/**
+ * Libraries forge deploys by itself inside this stage (issue 1721: BasketAssetConfigGuard, TwapTickMath, BasketViews inside the first basket stage). When one already
+ * sits on chain forge leaves its creation out of the stage's transactions. This finds those, and only those that this run did not create itself, and proves each is the
+ * build's library (address = CREATE2 of the resolved build, runtime code hash equal). Returns the adopted libraries (none: the stage is the normal path).
+ * Frozen counts: evaluated only when the simulation plans fewer transactions than the frozen count (the normal path reads nothing), and the shortfall must be EXACTLY the
+ * number of adopted libraries, else the usual COUNT_MISMATCH. Measuring: evaluated always, the measured count is then the reduced one and the counts file is marked.
+ */
+async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: RunManifest, dry: { count: number; creates: string[] }, expectedCount: number | undefined): Promise<AdoptedLibrary[]> {
+  if (row.create2Libraries.length === 0) return [];
+  if (expectedCount !== undefined && dry.count >= expectedCount) return [];
+  const all = getStageTable().create2Libraries ?? [];
+  const outDir = join(ctx.coreDir, "out");
+  if (!create2ArtifactsPresent(all, outDir)) { ctx.log.log("warn", "stage.create2_not_evaluated", { stage: row.name, reason: `no build artifacts under ${outDir}` }); return []; }
+  const built = buildCreate2Libraries(all, outDir);
+  const planned = new Set(dry.creates), earlier = createdEarlier(manifest);
+  const absent = row.create2Libraries.map((l) => built.get(l.artifact)!).filter((b) => !planned.has(b.address.toLowerCase()) && !earlier.has(b.address.toLowerCase()));
+  if (absent.length === 0) return [];
+  const libs = await verifyAdoptedCreate2({ adopted: absent, getCode: async (a) => castOut(ctx, ["code", a]) });
+  if (expectedCount !== undefined && dry.count !== expectedCount - libs.length) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount} and ${libs.length} adopted librar${libs.length === 1 ? "y" : "ies"} (${libs.map((l) => l.name).join(", ")}) explain only ${libs.length} of the ${expectedCount - dry.count} missing. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount, adopted: libs.length });
+  return libs;
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
@@ -548,6 +728,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   const env = stageEnv(ctx, row);
   const real = ctx;
   if (ctx.simRpc) ctx = { ...ctx, rpc: ctx.simRpc }; // a dry run simulates on the local chain: nonces, balances and forge all read it
+  await recorderWindowGate(ctx, row, ctx.recorderWait); // core 1676: the V4 price recorder must hold a full TWAP window before addAsset
   const deployer = await ctx.signer.address();
   if (deployer.toLowerCase() !== ctx.sheet.admin.toLowerCase()) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}`);
   const counts = ctx.frozen;
@@ -557,7 +738,9 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
 
   // start nonce: exactly where the frozen counts say. Measure mode learns the start from earlier records.
   const nonce0 = await deployerNonce(ctx, deployer);
-  const wantStart = counts ? expectedStartNonce(row.name, counts) : DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (manifest.stages[s.name]?.count ?? 0), 0);
+  const adoptedBefore = adoptedTxs(manifest);
+  const startBase = runStartNonce(ctx, manifest, row, nonce0);
+  const wantStart = counts ? expectedStartNonce(row.name, effectiveCounts(counts, adoptedBefore), startBase) : startBase + DEPLOYER_STAGES.slice(0, DEPLOYER_STAGES.findIndex((s) => s.name === row.name)).reduce((a, s) => a + (s.name in adoptedBefore ? adoptedBefore[s.name]! : (manifest.stages[s.name]?.count ?? 0)), 0) + proofNoncesBefore(row.name);
   let resuming = false;
   if (nonce0 !== wantStart) {
     const upper = wantStart + (expectedCount ?? Number.MAX_SAFE_INTEGER);
@@ -581,6 +764,11 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   // simulate: nothing is sent
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
   const sim = await ctx.run("forge", base, { env: fenv, cwd: ctx.coreDir, interactive: true });
+  // Issue 1721: forge exits 0 and prints no SIMULATION COMPLETE when it plans zero transactions. For the libs stage that means the libraries are already on chain.
+  if (row.name === LIBS_STAGE && sim.code === 0 && !sim.stdout.includes("SIMULATION COMPLETE") && !((readTxCount(broadcastFile(ctx, script, true))?.count ?? 0) > 0)) {
+    await adoptLibsStage(ctx, row, manifest, rec, deployer, outPath, expectedCount, sim.stdout);
+    return;
+  }
   if (sim.code !== 0 || !sim.stdout.includes("SIMULATION COMPLETE")) {
     throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr, outputSecrets(ctx))}`, { stage: row.name });
   }
@@ -588,12 +776,15 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
   rec.dryRunCount = dry.count;
   if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
-  ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null });
-  if (expectedCount !== undefined && dry.count !== expectedCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
+  const adoptedLibs = await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount);
+  const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
+  ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
+  if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
   if (ctx.dryRun) {
     // The simulation wrote the manifest. It stays for the later stages of this dry run (their inputs); runStages restores the checkout at the end.
     // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
     // reads VAULT_ADDRESS code). That sends to the local anvil only (the sender is impersonated there), never to the target RPC.
+    createdInDryRun.set(manifest, new Set([...(createdInDryRun.get(manifest) ?? []), ...dry.creates, ...adoptedLibs.map((l) => l.address.toLowerCase())]));
     if (real.simRpc) await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
     ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: real.simRpc ? "local-anvil" : "target-rpc" });
     return;
@@ -632,10 +823,17 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.endNonce = nonce1;
   const delta = nonce1 - startNonce;
   // the count checks that make the broadcast trustworthy: broadcast file, nonce delta and the frozen count all agree
-  if (expectedCount !== undefined && (sent.count !== expectedCount || delta !== expectedCount)) {
+  rec.created = sent.creates;
+  if (adoptedLibs.length > 0) {
+    // adopted creations: this deployer sent exactly what the simulation planned. A resume adds what an earlier attempt of this stage had landed: then between (frozen - adopted) and the frozen count. Forge's file always agrees with the nonce.
+    const lo = resuming ? (expectedCount ?? sent.count) - adoptedLibs.length : dry.count, hi = resuming ? (expectedCount ?? sent.count) : dry.count;
+    if (delta < lo || delta > hi || sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, adopted stage allows ${lo} to ${hi} deployer transactions (frozen count ${expectedCount ?? "none"} less up to ${adoptedLibs.length} adopted). The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, lo, hi });
+    rec.adopted = true;
+    rec.adoption = { libraries: adoptedLibs, factory: CREATE2_FACTORY, deployerTxs: delta };
+  } else if (expectedCount !== undefined && (sent.count !== expectedCount || delta !== expectedCount)) {
     throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, frozen count ${expectedCount}. The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, frozen: expectedCount });
   }
-  if (expectedCount === undefined && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
+  if (expectedCount === undefined && adoptedLibs.length === 0 && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
   rec.count = expectedCount ?? sent.count;
   if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
   if (sent.firstBlock !== undefined && (manifest.firstBlock === undefined || sent.firstBlock < manifest.firstBlock)) manifest.firstBlock = sent.firstBlock;
@@ -644,6 +842,56 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   manifest.stages[row.name] = rec;
   saveRunManifest(ctx.evidenceDir, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: startNonce, end_nonce: nonce1, count: rec.count });
+}
+
+/**
+ * Issue 1727, rehearsal only. The deployer start nonce the nonce checks are relative to. Production returns 0 without reading anything: a fresh deployer, absolute counts.
+ * A rehearsal records the live nonce in the run manifest at the FIRST deployer stage, before any transaction, and reads it back from the manifest ever after. The recorded
+ * value is never rewritten: a resume cross-checks it against the first stage's own record and, before any stage has started, against the chain.
+ */
+export function runStartNonce(ctx: Pick<RunContext, "sheet" | "dryRun" | "evidenceDir" | "log">, manifest: RunManifest, row: Pick<StageRow, "name">, nonce0: number): number {
+  if (ctx.sheet.kind !== "rehearsal") return 0;
+  const first = DEPLOYER_STAGES[0]!.name;
+  const recorded = manifest.deployerStartNonce;
+  if (recorded === undefined) {
+    if (row.name !== first || Object.keys(manifest.stages).some((n) => manifest.stages[n]?.startNonce !== undefined)) {
+      throw new PublishError("NONCE", `the rehearsal run manifest has no deployerStartNonce and stage ${row.name} is not the first deployer stage (${first}) of a fresh run: the start nonce is recorded once, at the first stage, before any transaction. Use the run's own evidence directory with --resume, or start a new run from stage ${first}.`, { stage: row.name });
+    }
+    manifest.deployerStartNonce = nonce0;
+    manifest.deploymentKind = "rehearsal";
+    if (!ctx.dryRun) saveRunManifest(ctx.evidenceDir, manifest);
+    ctx.log.log("info", "run.start_nonce_recorded", { deployer_start_nonce: nonce0, deployment_kind: "rehearsal" });
+    return nonce0;
+  }
+  if (!Number.isInteger(recorded) || recorded < 0) throw new PublishError("MANIFEST", `the run manifest deployerStartNonce '${String(recorded)}' is not a non-negative integer`);
+  const firstRec = manifest.stages[first];
+  if (firstRec?.startNonce !== undefined && firstRec.startNonce !== recorded) {
+    throw new PublishError("NONCE", `the recorded start nonce ${recorded} differs from the start nonce ${firstRec.startNonce} of stage ${first} in the same run manifest: the recorded start is never rewritten`, { recorded, stage: first, stageStart: firstRec.startNonce });
+  }
+  if (firstRec === undefined && nonce0 !== recorded) {
+    throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, the run manifest recorded start nonce ${recorded} and no stage has started: a transaction left the deployer since the start was recorded`, { nonce: nonce0, recorded });
+  }
+  return recorded;
+}
+
+/** The start nonce a finished rehearsal run is measured from: the manifest's record. A rehearsal manifest without one is refused. Production: 0. */
+export function recordedStartNonce(kind: DeploymentKind, manifest: Pick<RunManifest, "deployerStartNonce">): number {
+  if (kind !== "rehearsal") return 0;
+  if (!Number.isInteger(manifest.deployerStartNonce)) throw new PublishError("MANIFEST", "the rehearsal run manifest has no deployerStartNonce: the deployer nonce cannot be checked relative to the start");
+  return manifest.deployerStartNonce!;
+}
+
+/**
+ * Issue 1727, rehearsal only. The Safe predicted from the sheet's owners, threshold and SAFE_SALT_NONCE must not already hold code: the rehearsal reuses the first
+ * rehearsal's owners, and an unchanged salt predicts the Safe that is already there. The only exception is the resume of THIS run, whose manifest recorded the same address.
+ */
+export async function assertFreshSafeAddress(ctx: RunContext, prior: StageRecord | undefined, predicted: string): Promise<void> {
+  if (ctx.sheet.kind !== "rehearsal") return;
+  if (ctx.resume && prior?.safe && prior.safe.toLowerCase() === predicted.toLowerCase()) return;
+  const code = (await castOut(ctx, ["code", predicted])).trim();
+  if (code !== "" && code !== "0x") {
+    throw new PublishError("SAFE", `SAFE_SALT_NONCE_REUSED: the Safe predicted at ${predicted} from the sheet's SAFE_OWNERS, SAFE_THRESHOLD and SAFE_SALT_NONCE already holds code on chain ${ctx.chainId}. A rehearsal must create a NEW Safe: change SAFE_SALT_NONCE in the sheet to a value no earlier run used. (Only a --resume of the same run, whose manifest recorded this address, adopts an existing Safe.)`, { predicted });
+  }
 }
 
 // ---- the Safe stage ------------------------------------------------------------------------------------------------------
@@ -672,7 +920,6 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   if (deployer.toLowerCase() !== ctx.sheet.admin.toLowerCase()) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}`);
   const counts = ctx.frozen;
   const expectedCount = counts ? countFor(counts, "safe") : undefined;
-  const wantStart = counts ? expectedStartNonce("safe", counts) : 0;
   const nonce0 = await deployerNonce(ctx, deployer);
   const prior = manifest.stages.safe;
   const chain = { rpcUrl: ctx.rpc, chainId: ctx.chainId };
@@ -691,6 +938,8 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     saveRunManifest(ctx.evidenceDir, manifest);
     return;
   }
+  const startBase = runStartNonce(ctx, manifest, row, nonce0);
+  const wantStart = counts ? expectedStartNonce("safe", counts, startBase) : startBase;
   if (nonce0 !== wantStart) throw new PublishError("NONCE", `the deployer nonce is ${nonce0}, expected ${wantStart} before stage safe`, { nonce: nonce0, want: wantStart });
   if (existsSync(outPath) && !ctx.dryRun) throw new PublishError("MANIFEST", `${outPath} already exists: the safe stage already ran`);
 
@@ -702,6 +951,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
     confirm: async (plan: CreateSafePlan) => {
+      await assertFreshSafeAddress(ctx, prior, plan.predictedAddress);
       // record the predicted address BEFORE anything is sent: a resume adopts it
       rec.safe = plan.predictedAddress;
       manifest.stages.safe = rec;
@@ -712,6 +962,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   });
   if (ctx.dryRun || !res.created || !res.manifest) {
     if (ctx.dryRun) {
+      await assertFreshSafeAddress(ctx, prior, res.plan.predictedAddress);
       // the predicted Safe is the input of the stages after it (the vault fee recipient, the timelock): kept until runStages restores the checkout
       const sim = { safe: res.plan.predictedAddress, version: "1.4.1", threshold: ctx.sheet.safeThreshold, owners: ctx.sheet.safeOwners, created_by: deployer, chain_id: ctx.chainId, simulated: true };
       ctx.dryFiles?.write(outPath, JSON.stringify(sim, null, 2) + "\n");
@@ -741,7 +992,7 @@ export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifes
 export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
-  return { version: 1, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
+  return { version: 1, deploymentKind: ctx.sheet.kind, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
 }
 
 export interface RunResult { manifest: RunManifest; ran: string[]; skipped: string[] }
@@ -786,6 +1037,8 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
   if (manifest) {
     if (!ctx.resume && Object.keys(manifest.stages).length > 0 && !ctx.dryRun) throw new PublishError("RESUME", `${manifestPath(ctx.evidenceDir)} exists with earlier stages: pass --resume to continue, or use a fresh evidence directory`);
     if (manifest.chainId !== ctx.chainId || manifest.coreSha !== ctx.coreSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) throw new PublishError("RESUME", "the run manifest belongs to a different chain, core SHA or deployer");
+    if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
+    if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
   } else manifest = newManifest(ctx, deployer);
   const ran: string[] = [], skipped: string[] = [];
   let stop = async () => {};
@@ -842,7 +1095,7 @@ export type NonceCheckOutcome =
   | { checked: false; reason: "dry-run" | "govern-started" | "deployer-stages-incomplete" | "no-deployer-stage-ran" };
 
 /**
- * The end-of-deploy nonce check: the deployer nonce must equal the summed frozen counts. It is a stage-12 check, so it runs only when
+ * The end-of-deploy nonce check: the deployer nonce must equal the summed frozen counts plus the one prove-control transaction (core 1712). It is a stage-12 check, so it runs only when
  * EVERY deployer stage is done in the run manifest and this run executed at least one of them (a partial run, a run of other stages and a
  * dry run do not run it). After govern started the deployer nonce includes the Safe execTransaction gas, so it is skipped there and the
  * verifier compares its recorded end-of-deploy nonce instead. The outcome names the reason whenever it did not run.
@@ -858,9 +1111,11 @@ export async function finalNonceCheck(ctx: RunContext, manifest: RunManifest, ra
   if (!DEPLOYER_STAGES.some((s) => ran.includes(s.name))) return skip("no-deployer-stage-ran");
   const nonce = await deployerNonce(ctx, await ctx.signer.address());
   const counts: FrozenCounts = ctx.frozen ?? Object.fromEntries(DEPLOYER_STAGES.map((s) => [s.countKey!, manifest.stages[s.name]!.count ?? 0]));
-  checkNonce(nonce, counts);
-  const sum = sumCounts(counts);
-  ctx.log.log("info", "run.nonce_ok", { nonce, summed_frozen_counts: sum });
+  const effective = effectiveCounts(counts, adoptedTxs(manifest)); // an adopted stage counts the transactions this deployer sent for it (issue 1721)
+  const startNonce = recordedStartNonce(ctx.sheet?.kind ?? "production", manifest);
+  checkNonce(nonce, effective, undefined, startNonce);
+  const sum = sumCounts(effective);
+  ctx.log.log("info", "run.nonce_ok", { nonce, summed_frozen_counts: sum, deployer_start_nonce: startNonce, deployment_kind: ctx.sheet?.kind ?? "production" });
   return { checked: true, nonce, sum };
 }
 

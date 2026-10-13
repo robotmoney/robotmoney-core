@@ -31,7 +31,6 @@ const FETCHED = {
   VITE_GATEWAY_ADDRESS: "0x2222222222222222222222222222222222222222",
   VITE_VAULT_ADDRESS: "0x3333333333333333333333333333333333333333",
   VITE_REGISTRY_ADDRESS: "0x4444444444444444444444444444444444444444",
-  VITE_ENV_CLASS: "devnet",
   VITE_EXPLORER_API_URL: "https://explorer.example",
   VITE_DEVNET_RPC_URL: "https://devnet.example/rpc",
 } as const;
@@ -123,7 +122,7 @@ describe("bootstrapDapp — loading then render", () => {
     expect(probe).not.toBeNull();
     expect(probe?.getAttribute("data-gateway")).toBe(FETCHED.VITE_GATEWAY_ADDRESS);
     expect(probe?.getAttribute("data-vault")).toBe(FETCHED.VITE_VAULT_ADDRESS);
-    expect(probe?.getAttribute("data-env-class")).toBe("devnet");
+    expect(probe?.getAttribute("data-env-class")).toBe("fork"); // build-time only (issue 1729)
     expect(probe?.getAttribute("data-explorer")).toBe(FETCHED.VITE_EXPLORER_API_URL);
   });
 
@@ -144,7 +143,7 @@ describe("bootstrapDapp — loading then render", () => {
     expect(lastProps?.gateway).toBe(FETCHED.VITE_GATEWAY_ADDRESS);
     expect(lastProps?.gateway).not.toBe(BUILD_ENV.VITE_GATEWAY_ADDRESS);
     expect(lastProps?.registry).toBe(FETCHED.VITE_REGISTRY_ADDRESS);
-    expect(lastProps?.envClass).toBe("devnet");
+    expect(lastProps?.envClass).toBe("fork");
     // Build-time-only values still reach the tree through the base layer.
     expect(lastProps?.env.VITE_FAUCET_HARNESS_PRIVATE_KEY).toBe(
       BUILD_ENV.VITE_FAUCET_HARNESS_PRIVATE_KEY,
@@ -233,5 +232,55 @@ describe("bootstrapDapp — visible failure", () => {
     expect(
       container.querySelector('[data-testid="runtime-config-error-detail"]')?.textContent,
     ).toContain("NetworkError");
+  });
+});
+
+describe("bootstrapDapp — a mainnet build keeps its class (issue 1729)", () => {
+  const MAINNET_ENV: RuntimeConfig = {
+    ...BUILD_ENV,
+    VITE_ENV_CLASS: "mainnet",
+    VITE_FAUCET_HARNESS_PRIVATE_KEY: "",
+  };
+  const mainnetDeps = (claimed: string): BootstrapDeps => ({
+    buildEnv: MAINNET_ENV,
+    fetchImpl: () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: jsonHeaders,
+        json: () => Promise.resolve({ VITE_ENV_CLASS: claimed }),
+      }),
+    renderApp: (config) => <ConfigProbe config={config} />,
+  });
+
+  it.each(["fork", "devnet", "testnet"])(
+    "a /config.json with class %s does not mount the app: the error panel shows instead",
+    async (claimed) => {
+      const { container, root } = mount();
+      await act(async () => {
+        await bootstrapDapp(root, mainnetDeps(claimed));
+      });
+      expect(container.querySelector('[data-testid="config-probe"]')).toBeNull();
+      expect(container.querySelector('[data-testid="runtime-config-error"]')).not.toBeNull();
+    },
+  );
+
+  it("a /config.json that omits the class mounts the app with class mainnet", async () => {
+    const { container, root } = mount();
+    await act(async () => {
+      await bootstrapDapp(root, {
+        ...mainnetDeps("mainnet"),
+        fetchImpl: () =>
+          Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: jsonHeaders,
+            json: () => Promise.resolve({}),
+          }),
+      });
+    });
+    expect(
+      container.querySelector('[data-testid="config-probe"]')?.getAttribute("data-env-class"),
+    ).toBe("mainnet");
   });
 });

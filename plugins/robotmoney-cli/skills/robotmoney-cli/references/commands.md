@@ -176,47 +176,12 @@ rmpc status --config <CONFIG> --payment-id <HEX> [--pretty]
 
 ## Governance write commands
 
-### `rmpc propose`
-
-Submit a new weight-reallocation proposal to `RouterGovernance.propose()`.
-Requires `governance_address` in config and a configured signer.
-
-```
-rmpc propose --config <CONFIG> --vaults <ADDR,...> --weights-bps <BPS,...>
-  [--gas-limit <N>] [--fee-cap <WEI>] [--receipt-timeout-secs <N>]
-  [--pretty]
-```
-
-### `rmpc vote`
-
-Cast a vote on an active `RouterGovernance` proposal.
-Requires `governance_address` in config and a configured signer.
-
-```
-rmpc vote --config <CONFIG> --proposal-id <ID> --choice yes|no|abstain
-  [--gas-limit <N>] [--fee-cap <WEI>] [--receipt-timeout-secs <N>]
-  [--pretty]
-```
-
-`--choice yes` submits `vote(proposalId)` on-chain. `no` and `abstain` are
-client-side no-ops (the contract only records FOR votes). Re-calling with the
-same choice after a `yes` vote exits 0 (idempotent). A different choice after
-an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
+rmpc is not a governance signer. It has no `propose` and no `committee
+register` command. Both are governance calls that belong to the Safe and
+timelock after handover. Use `rmpc governance draft-proposal` for unsigned
+calldata and sign through the Safe with a wallet.
 
 ## Investment Committee write commands
-
-### `rmpc committee register`
-
-Register a committee agent in `InvestmentCommitteePolicy`.
-Requires `ADMIN_ROLE`. Routes through `RobotMoneyGateway`.
-
-```
-rmpc committee --config <CONFIG> register ...
-```
-
-Pass `rmpc committee register --help` for the full flag list.
-Required args: agent address, agent-id string.
-Common options: `--gas-limit`, `--fee-cap`, `--receipt-timeout-secs`, `--pretty`.
 
 ### `rmpc committee vote-submit`
 
@@ -349,7 +314,7 @@ eligible vaults (`fallback_applied: true`), refusing with
 `status: "blocked_active_proposal"` with the blocking proposal id instead of
 a submittable draft when `RouterGovernance` already has an `Active` or
 `Queued` proposal. A ready draft carries `propose_calldata` — hex calldata for
-a human to submit via `rmpc propose`, a Safe, or the runbook's timelock path.
+a human to submit via a Safe, or the runbook's timelock path.
 Never submitted by this command.
 
 ## Investment Swarm signing identity commands
@@ -359,7 +324,7 @@ Investment Swarm member signs with. The flow is plain REST end to end
 (`POST /api/swarm/apply` -> approval -> token claim ->
 `POST /api/swarm/signing-payload` -> `POST /api/swarm/submit`); there is no
 MCP transport. It is a distinct identity type from the on-chain EVM signer
-used by `rmpc committee register` / `vote-submit` above — no on-chain write,
+used by `rmpc committee vote-submit` above — no on-chain write,
 no RPC, no operator config TOML. The private key never leaves the local
 keystore file.
 

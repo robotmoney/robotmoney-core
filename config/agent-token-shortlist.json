@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "rmAGENT (AgentTokenVault) launch shortlist: RM only, the live ROBOTMONEY token pinned by code hash like USDC, on the owner-funded Uniswap V3 RM/USDC pool (fee 10000, no liquidity until the owner funds it). Other agent tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault trades through.",
+  "description": "rmAGENT (AgentTokenVault) launch shortlist: RM only, the live ROBOTMONEY token pinned by code hash like USDC, on the Uniswap V4 RM/USDC 2.91% pool (owner decision 2026-10-08; the V3 RM pool has no in-range liquidity). V4 has no pool address and a hookless V4 pool records no observations, so rmAGENT prices RM through the permissionless UniswapV4PriceRecorder, which the agent stage reads from RECORDER_ADDRESS. Other agent tokens are added later through the timelock. One list for every chain. swapRouter02 is the Uniswap V3 SwapRouter02 the vault constructor takes; the V4 adapter trades through the PoolManager, not the router. maxSlippageBps raises the vault swap bound to the 500 bps ceiling because the pool fee alone is 291 bps.",
   "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
   "swapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
@@ -10,9 +10,19 @@
       "token": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
       "tokenDecimals": 18,
       "tokenCodeHash": "0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6",
-      "pool": "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882",
-      "poolFee": 10000,
-      "venue": "UniswapV3"
+      "venue": "UniswapV4",
+      "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      "stateView": "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+      "poolId": "0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391",
+      "poolKey": {
+        "currency0": "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3",
+        "currency1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "fee": 29100,
+        "tickSpacing": 582,
+        "hooks": "0x0000000000000000000000000000000000000000"
+      },
+      "poolFee": 29100
     }
-  ]
+  ],
+  "maxSlippageBps": 500
 }

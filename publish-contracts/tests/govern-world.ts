@@ -9,12 +9,15 @@ import { parseSheet } from "../src/sheet.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import { stageManifestName } from "../src/verify/constants.ts";
-import type { Signer } from "../src/safe/index.ts";
+import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, SAFE_ADMIN_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
+import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
+import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
+import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
-export const A = { timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
+export const A = { icPolicy: addr(0x1007), timelock: addr(0x2001), safe: addr(0x2002), router: addr(0x1003), registry: addr(0x1002), gateway: addr(0x1004), governance: addr(0x1005), receipt: addr(0x1006), vaults: { USDC: addr(0x3001), PROTO: addr(0x3002), AGENT: addr(0x3003), RWA: addr(0x3004) } };
 
 /** Writes the manifests govern reads (timelock, safe, router, registry, gateway, governance, ic-policy's receipt, one per vault) into `dir`. */
 export function writeGovernManifests(dir: string): void {
@@ -23,7 +26,8 @@ export function writeGovernManifests(dir: string): void {
   const t = getStageTable();
   const n = (stage: string) => stageManifestName(t, stage);
   w(n("timelock"), { timelock: A.timelock }); w("safe", { safe: A.safe }); w(n("router"), { router: A.router }); w(n("registry"), { registry: A.registry });
-  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt });
+  w(n("recorder"), { recorder: "0x00000000000000000000000000000000000c0c0c" });
+  w(n("gateway"), { gateway: A.gateway }); w(n("governance"), { governance: A.governance }); w(n("ic-policy"), { consensus_receipt: A.receipt, policy: A.icPolicy });
   for (const v of t.vaults) w(manifestBase(v.manifest), { vault: A.vaults[v.key] });
 }
 
@@ -52,17 +56,30 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     reads: {} as Record<string, unknown>,
     /** Receipt ids recordReceipt has anchored (the test seeds it) and releaseReceipt has released (an executed timelock call adds to it). */
     recorded: new Set<string>(), released: new Set<string>(),
-    /** The vaults that read depositsPaused true. The three baskets ship paused and rmUSDC open; an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
-    paused: new Set<string>([A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
+    /** The vaults that read depositsPaused true. All four vaults deploy paused (issue 1710); an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
+    paused: new Set<string>([A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
     /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
+    /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
+    listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
+    digests: new Map<string, Hex>(),
+    weights: { vaults: [] as Address[], bps: [] as bigint[] },
+    /** Issue 1743: a VOTED vector on the router. While set, votedWeightsActive reads true and getEffectiveWeights reads it instead of the default; an executed clearVotedWeights removes it. */
+    voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
+    /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
+    txClock: new Map<string, bigint>(),
+    /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
+    /** Issue 1750: what the --submitter is on chain. A canonical 2-of-3 Safe by default; null is a key (no code); a function decides per address. */
+    submitterKind: undefined as undefined | null | ((a: Address) => unknown),
+    agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
     client: {
-      getBlock: async () => ({ timestamp: s.clock }),
+      getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
+      getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success" }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
         if (functionName in s.reads) return s.reads[functionName];
@@ -72,16 +89,24 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "tvlCap": return sheet.vaults[key!].tvlCap;
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
-          case "isRouterEligible": return true;
+          case "isRouterEligible": return !s.ineligible.has(String(args?.[0]));
+          case "listVaults": return s.listed;
+          case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
+          case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
+          case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
+          case "votedWeightsActive": return s.voted !== undefined;
           case "depositsPaused": return s.paused.has(address);
           case "votingPeriod": return sheet.votingPeriod;
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
+          case "hasRole": if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
+          case "icPolicy": return A.icPolicy;
+          case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
           case "isRecorded": return s.recorded.has(String(args?.[0]).toLowerCase());
           case "getOwners": return s.owners;
           case "getThreshold": return s.threshold;
-          case "hasRole": return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`);
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
         }
         throw new Error(`fake: ${functionName}`);
@@ -91,6 +116,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   };
   const bundle = (action: string, id: Hex) => ({ safe_tx_hash: keccak256(toBytes(`${action}${id}${s.nonce}`)), nonce: s.nonce, action, signatures: [] as unknown[], timelock_operation_id: id });
   const api: GovernApi = {
+    inspectSubmitter: (async (_h: unknown, who: Address) => {
+      if (s.submitterKind === null) return null;
+      if (typeof s.submitterKind === "function") return s.submitterKind(who);
+      return { address: who, owners: sheet.safeOwners, threshold: 2, code_hash: SAFE_141.proxyCodehash };
+    }) as never,
     connectSafe: (async () => handle) as never,
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
@@ -139,6 +169,20 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             } catch { /* updateDelay and the other timelock self-calls change no role */ }
             continue;
           }
+          if (c.target === A.governance) {
+            if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
+            const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
+            s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
+            continue;
+          }
+          if (c.target === A.gateway) {
+            let d: ReturnType<typeof decodeFunctionData<typeof GATEWAY_REGISTER_ABI>>;
+            try { d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
+            const who = String(d.args[0]).toLowerCase();
+            if (d.functionName === "authorizeAgent") { s.agentRole.add(who); s.agentOwner.set(who, A.timelock); }
+            if (d.functionName === "committeeRegister") s.committee.set(who, String(d.args[1]));
+            continue;
+          }
           if (c.target !== A.receipt) {
             if (Object.values(A.vaults).includes(c.target as Address) && decodeFunctionData({ abi: VAULT_ABI, data: c.data }).functionName === "unpauseDeposits") s.paused.delete(c.target);
             continue;
@@ -151,6 +195,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "updateDelay.execute") { s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n }); s.minDelay = b.newDelay; }
       s.nonce++;
       const hash = `0x${s.nonce.toString(16).padStart(64, "0")}`;
+      s.txClock.set(hash, s.clock);
       s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,

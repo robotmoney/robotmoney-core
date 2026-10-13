@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
@@ -8,7 +9,7 @@ import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -24,7 +25,7 @@ describe("healthy deployment", () => {
     const r = await verifyDeployment(buildWorld().opts);
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
-    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
+    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "").replace("maxSlippageBps equals 500", "")).not.toMatch(/\d{3,}/); }
   });
 });
 
@@ -58,6 +59,66 @@ describe("agents the depositors authorize after the handover are theirs (core 15
   });
 });
 
+describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
+  const LABEL = "receipt: applied receipt is released and its weights are on the router";
+  const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
+  const vaults = () => Object.values(VAULTS).map((v) => v.address);
+  const BPS = [4000, 3000, 2000, 1000];
+  /** The router holds the applied vector and the receipt reads released. */
+  const applied = (over: { released?: boolean; routerBps?: number[] } = {}) => {
+    const w = buildWorld();
+    w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
+    w.chain.set(REC, "isReleased", () => over.released ?? true);
+    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    return w;
+  };
+  test("no application: the label is present and passes, and the sheet vector is still required", async () => {
+    const ok = await verifyDeployment(buildWorld().opts);
+    expect(ok.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
+    const w = buildWorld();
+    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), BPS.map((x) => BigInt(x))]);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), BPS.map((x) => BigInt(x))]);
+    expect(failed(await verifyDeployment(w.opts)).sort()).toEqual(["router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
+  });
+  test("applied, released and on the router: every check passes, the sheet vector having been superseded", async () => {
+    const r = await verifyDeployment(applied().opts);
+    expect(failed(r)).toEqual([]);
+    expect(r.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain(RID);
+  });
+  test("applied but the receipt reads not released fails the label", async () => {
+    expect(failed(await verifyDeployment(applied({ released: false }).opts))).toEqual([LABEL]);
+  });
+  test("applied but the router holds another vector fails the label and the weights label", async () => {
+    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
+  });
+});
+
+describe("the voted vector must not override the launch vector (issue 1743)", () => {
+  const ACTIVE = "router: votedWeightsActive is false after deploy";
+  const EFFECTIVE = "router: effective weights equal the sheet's launch vector";
+  const vaults = () => Object.values(VAULTS).map((v) => v.address);
+  test("the healthy world passes both labels", async () => {
+    const r = await verifyDeployment(buildWorld().opts);
+    expect(r.checks.find((c) => c.label === ACTIVE)).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.label === EFFECTIVE)).toMatchObject({ ok: true });
+  });
+  test("the 8453 failure: a voted vector (100% rmUSDC) on top of the right default fails both labels and not the default label", async () => {
+    const w = buildWorld(8453);
+    w.chain.set(ROUTER, "votedWeightsActive", true);
+    w.chain.set(ROUTER, "getEffectiveWeights", [[vaults()[0]], [10000n]]);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([ACTIVE, EFFECTIVE].sort());
+    expect(r.checks.find((c) => c.label === EFFECTIVE)!.detail).toContain("want");
+  });
+  test("an unreadable getEffectiveWeights fails the effective label", async () => {
+    const w = buildWorld();
+    w.chain.set(ROUTER, "getEffectiveWeights", () => { throw new Error("execution reverted"); });
+    expect(failed(await verifyDeployment(w.opts))).toEqual([EFFECTIVE]);
+  });
+});
+
 describe("label drift", () => {
   test("Twin chain label set equals mainnet label set equals the committed fixture", async () => {
     const main = (await verifyDeployment(buildWorld(8453).opts)).checks.map((c) => c.label);
@@ -81,7 +142,7 @@ describe("label drift", () => {
     const main = buildWorld(8453);
     main.chain.set(TIMELOCK, "getMinDelay", 60n);
     main.sheet.timelockDelay = 60;
-    expect(failed(await verifyDeployment(main.opts))).toEqual(["timelock: min delay at least chain floor"]);
+    expect(failed(await verifyDeployment(main.opts))).toEqual(["timelock: min delay at least chain floor", "deployment kind: the timelock delay agrees with the kind"]);
   });
 });
 
@@ -165,6 +226,37 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
   });
 
+  test("rmAGENT maxSlippageBps read back on chain: 500 passes, any other value fails (core 1695)", async () => {
+    const L = "vault[rmAGENT]: maxSlippageBps equals 500";
+    const ok = await verifyDeployment(buildWorld().opts);
+    expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+    for (const bad of [499n, 501n, 291n, 0n]) {
+      const w = buildWorld();
+      w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([L]);
+    }
+    // the other vaults are not asked for it
+    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
+  });
+
+  test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
+    const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
+    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
+    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
+    const want: Record<string, string[]> = {
+      rmUSDC: [...common, ...usdc],
+      rmPROTO: [...common, ...basket],
+      rmAGENT: [...common, ...basket, "maxSlippageBps equals 500"],
+      rmRWA: [...common, ...basket],
+    };
+    for (const key of Object.keys(want)) {
+      const w = buildWorld();
+      delete (w.opts.sheet.vaults as any)[key];
+      const got = failed(await verifyDeployment(w.opts)).filter((l) => l.startsWith(`vault[${key}]: `)).map((l) => l.slice(`vault[${key}]: `.length));
+      expect(got.sort()).toEqual([...want[key]!].sort());
+    }
+  });
+
   test("rmAGENT must be paused", async () => {
     const w = buildWorld();
     w.chain.set(VAULTS.rmAGENT.address, "depositsPaused", false);
@@ -182,6 +274,12 @@ describe("mutations fail with the expected label", () => {
     w.chain.set(VAULTS.rmPROTO.address, "feeRecipient", DEPLOYER);
     const f = failed(await verifyDeployment(w.opts));
     expect(f).toContain("vault[rmPROTO]: feeRecipient is not deployer");
+  });
+
+  test("the bare frozen sum is not enough: the deployer also sent the prove-control transaction (core 1712)", async () => {
+    const w = buildWorld();
+    w.chain.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0));
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["deployer: nonce equals sum of frozen counts"]);
   });
 
   test("deployer nonce differs from the frozen sum", async () => {
@@ -299,14 +397,14 @@ describe("rmUSDC seed shares: the deployer ends with none and the receiver holds
 describe("deployer nonce after govern", () => {
   test("with the recorded end-of-deploy nonce, govern gas above the frozen sum passes", async () => {
     const w = buildWorld();
-    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0);
+    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum + 7);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["deployer: nonce equals sum of frozen counts"]);
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum }))).toEqual([]);
   });
   test("a recorded nonce that is not the frozen sum fails, and a live nonce below the record fails", async () => {
     const w = buildWorld();
-    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0);
+    const sum = Object.values(w.opts.frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES;
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum + 1 }))).toEqual(["deployer: nonce equals sum of frozen counts"]);
     w.chain.noncesMap.set(DEPLOYER.toLowerCase(), sum - 1);
     expect(failed(await verifyDeployment({ ...w.opts, deployerNonceAtDeployEnd: sum }))).toEqual(["deployer: nonce equals sum of frozen counts"]);

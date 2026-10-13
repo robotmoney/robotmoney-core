@@ -7,10 +7,11 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { FROZEN_DIR, frozenPath } from "./counts.ts";
 
-export function driftErrors(measured: Record<string, number>, frozen: Record<string, number>): string[] {
+/** `adopted` (issue 1721): stages the rehearsal adopted instead of running. Nothing was measured for them, so they are not compared. */
+export function driftErrors(measured: Record<string, number>, frozen: Record<string, number>, adopted: string[] = []): string[] {
   const errs: string[] = [];
   for (const k of [...new Set([...Object.keys(measured), ...Object.keys(frozen)])].sort())
-    if (measured[k] !== frozen[k]) errs.push(`stage ${k}: measured ${measured[k] ?? "none"}, frozen ${frozen[k] ?? "none"}`);
+    if (!adopted.includes(k) && measured[k] !== frozen[k]) errs.push(`stage ${k}: measured ${measured[k] ?? "none"}, frozen ${frozen[k] ?? "none"}`);
   return errs;
 }
 
@@ -21,7 +22,9 @@ if (import.meta.main) {
   const dir = v["frozen-dir"] ?? resolve(import.meta.dir, "../..", FROZEN_DIR);
   const p = frozenPath(dir, j.deploySha);
   if (!existsSync(p)) { console.log(`counts-drift: no frozen counts for ${j.deploySha}, nothing to compare`); process.exit(0); }
-  const errs = driftErrors(j.counts, JSON.parse(readFileSync(p, "utf8")).counts);
+  const committed = JSON.parse(readFileSync(p, "utf8"));
+  if (Array.isArray(committed.measured?.adopted) && committed.measured.adopted.length > 0) { console.error(`counts-drift: ${p} is marked as measured with adopted stage(s) ${committed.measured.adopted.join(", ")}: it is not a frozen file`); process.exit(1); }
+  const errs = driftErrors(j.counts, JSON.parse(readFileSync(p, "utf8")).counts, Object.keys(j.adopted ?? {}));
   if (errs.length) { console.error(`counts-drift: ${errs.length} stage(s) differ from ${p}\n  ${errs.join("\n  ")}`); process.exit(1); }
-  console.log(`counts-drift: counts equal ${p}`);
+  console.log(`counts-drift: counts equal ${p}${Object.keys(j.adopted ?? {}).length ? ` (adopted, not compared: ${Object.keys(j.adopted).join(", ")})` : ""}`);
 }

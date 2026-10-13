@@ -71,6 +71,45 @@ Estimates measured on the fork. Each was executed one block later at exactly tha
 
 The vault redeem was also executed 1 hour and 1 day later at its estimate, and it succeeded. Wallet limits rise, and a 3-leg gateway withdraw estimates near 6M. The fee paid is unchanged, because a transaction pays for the gas it used, not for the limit. rmpc's fixed default gas limit (issue 1512) and the basket vault guards (issue 1513) are tracked separately.
 
+## Panic(0x11) on a redeem eth_call at "pending" (core 1758)
+Reported on Deploy 2 (rmUSDC `0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435`, Base 8453): a redeem of a 1 USDC position at the "pending" tag reverted `Panic(0x11)` at gas 2,000,000 and passed at 3,000,000.
+
+**Root cause: not a gas threshold and not in the vault.** The Panic is an arithmetic underflow inside the Moonwell Flagship MetaMorpho / Morpho Blue code that `MorphoAdapter.totalAssets()` calls on every redeem. Morpho computes `block.timestamp - market.lastUpdate`. When the eth_call environment is older than the last accrual of a market, that subtraction underflows. The vault's gas arithmetic is `gasleft() < floor` comparisons only. It has no subtraction on `gasleft()`.
+
+Evidence (read-only `eth_call` against `https://mainnet.base.org`, no transaction, no key):
+- A plain view call, `convertToAssets(305529980762486259)` on the Flagship vault `0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca`, with no gas set, alternated between a normal result and `Panic(0x11)` over six consecutive calls at the "pending" tag. The same call at "latest" returned 333302 every time.
+- Redeem at "pending" with state overrides gave `ok` at 1.7M and 2.0M and `Panic` at 2.5M and 3.0M in one run, then `Panic` at every limit from 1.7M to 2.5M in the next run. The gas-versus-outcome pattern in the report is one sample of this intermittent behavior.
+- The same redeem simulated locally at the "pending" tag succeeded (1,093,389 gas) with the same overrides, so the failure is in the node's pending environment, not in the contract path.
+- Inferred, not proven: the node's pending (flashblock) state includes a Morpho accrual stamped later than the environment timestamp it hands to the EVM. The node rejects `debug_traceCall`, so the exact environment values were not observed.
+
+On chain this cannot happen, because a mined block has a timestamp at or after every accrual before it. Real redeems succeed (txs with gas used about 0.94M to 1.0M).
+
+Reproduction in CI (Twin fork): `test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold` runs the redeem one second before the last accrual. The Moonwell adapter `totalAssets()` gives `Panic(0x11)`. The redeem gives the identical payload at every limit from 1.7M to 3.0M. In a consistent environment the same redeem succeeds.
+
+Gas arithmetic checks: `test_core1758_gasSweep_neverPanics` sweeps 500k to 3M in steps of 25k, in the accrued-this-block state and one block later. Every point is success, `InsufficientGas` or an empty out-of-gas revert, and every point below the 1.6M entry floor fails. `test_core1758_estimateConverges_forOneUsdcPosition` bisects the smallest passing limit (what `eth_estimateGas` does) for a 1 USDC position. It lands between 1.6M and 1.7M in both states, the redeem passes at it, and one gas below it reverts `InsufficientGas`.
+
+**Contract change and redeploy:** none. The root cause is outside the vault, so there is no bytecode change and no new deployment is required for this issue. Estimators that hit the node's pending environment can still see the Panic intermittently. Clients should estimate against "latest".
+
+Open design option, not taken: a `try/catch` around adapter `totalAssets()` would hide the Panic but would also let a failing adapter report zero NAV, which under-pays redeemers. It was rejected for that reason.
+
+## Dust redeem reverts "Too little received" (core 1778)
+Reported on Deploy 2 (Base 8453): after a 1 USDC router deposit, rmPROTO (`0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797`) `redeem` from the deployer reverted. Tx `0x5e9810f19835379bd1bf7b33b1062fa51facc496dbd830eef7b88c81bcaf0b51` (block 52491837, limit 3,000,000, gas used 551,483, status 0). `redeemInKind` then worked.
+
+**Root cause: not gas, not the redeem gas floors.** The revert string is `Too little received`, which the Uniswap V3 SwapRouter02 raises when `amountOut < amountOutMinimum`. The vault holds 10,287,921,115,868 wei of wETH and 31 base units of cbBTC for the whole 52,224-unit USDC position (a 5.25 percent leg of 1 USDC). `_sellProportional` sells every leg through the router with a floor of `TWAP(sellAmount) * (1 - 1%)`.
+- wETH leg: sold for 26,222. Fine.
+- cbBTC leg: 31 units. TWAP value 25,981, so the floor was 25,721. The pool paid 25,133. cbBTC has 8 decimals and one unit is worth about 838 raw USDC. The pool takes the 0.05 percent fee, then rounds the input down, which is `floor(31 * 0.9995) = 30` units. One unit is 3.2 percent of 31, which is more than the 1 percent bound.
+- The router reverts, the vault bubbles the string up, and the whole redeem reverts. The earlier legs' swaps roll back with it.
+
+Evidence (read-only, no transaction sent): a Base fork at block 52491836 replayed as the deployer, `redeem(52224e18, me, me)`, reverts `Too little received` at 557,779 gas (chain: 551,483). The trace shows `exactInputSingle(cbBTC to USDC, amountIn 31, amountOutMinimum 25721)` and the pool transferring 25,133. `test_fork_rmproto_dustRedeemSellsEveryLeg_core1778` reproduces it on a fresh `DeployProtocolAssetVault` deployment: it deposits 1,000 USDC, then redeems the share fraction whose cbBTC leg is 40 units. It fails with the same string before the fix and passes after. (A deposit of only 0.05 USDC can also trip `DepositBelowSlippageFloor` at some blocks, for the same rounding reason. That is a separate path, not part of this fix.)
+
+Why `redeemInKind` worked: it transfers the basket tokens and does no swap, so no floor applies. Why the other vaults passed: rmRWA and rmAGENT hold different assets and larger legs. rmUSDC has no swap. A position of a few cents is the trigger, so real-size positions are not affected: the one-unit error is below 1e-6 of a leg above a few million units.
+
+**Live position (2026-10-13).** An outside wallet (`0x2B918144e4Aa55450a542743e7d52CB7eE5a02b6`) holds the whole rmPROTO supply (52,121 shares units of 1e18). On a read-only fork at block 52,552,571, impersonating that wallet, `redeem` reverts `Too little received`. The vault holds 31 cbBTC units, so the leg is 31 units. The old floor is 25,534 raw USDC. The pool pays 24,985, which is 2.2 percent under the TWAP value. The fixed floor is 24,710, and the pool pays above it. The cause is the same one-unit rounding as the deployer's failure. `BasketVaultLivePositionForkTest.test_fork_liveRmprotoPosition_core1778` records these numbers. The user's `previewRedeem` of 0.051591 USDC is the TWAP estimate, which does not model the pool's rounding.
+
+**Fix** (`contracts/vaults/BasketVault.sol`, `_sellProportional`): the floor prices `sellAmount - 1` units instead of `sellAmount`. That covers the pool's one-unit input rounding. The 1 percent slippage bound is unchanged. A one-unit leg floors at zero, because every adapter returns 0 for a zero amount. For a normal leg the change in the floor is below 1e-6. Cost: 10 bytes of runtime code, so `VaultCodeSizeGuard` headroom floors drop by 10 (AgentTokenVault 55, ProtocolAssetVault and RwaBasketVault 97).
+
+**Deployed vaults:** the Deploy 2 vaults run the old bytecode. The fix reaches them only through a redeploy. The vaults are not behind a proxy, so a fix needs a new rmPROTO deployment, a registry entry and a router re-point through the timelock. The one live lever is `setMaxSlippageBps` (ADMIN, so the timelock). The live leg clears only at about 4 percent (cap 5 percent), which loosens every redeem on the vault. It is not recommended. Until then the supported workaround for a dust position is `redeemInKind(shares, receiver, owner)`, which pays out the basket tokens. Positions above a few cents redeem normally.
+
 ## What was ruled out
 - **No try/catch on the happy path.** `_pullProportional` calls `adpt.withdraw` directly. The try/catch calls exist only in `emergencyWithdrawAll`, `emergencyWithdrawAdapter` and `forceRemoveAdapter`, which the issue puts out of scope.
 - **No gas-dependent adapter branches.** `AaveV3Adapter`, `MorphoAdapter` and `CompoundV3Adapter` `withdraw` have none of their own.

@@ -55,7 +55,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     require_prereqs(
         "twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_works",
     );
-    let fx = Fixture::new().expect("smoke-test fixture boot failed");
+    let fx = Fixture::new_closed().expect("smoke-test fixture boot failed");
     let rpc = fx.rpc_url().to_string();
     let vaults = fx.vault_addresses().clone();
     for n in VAULT_NAMES {
@@ -63,29 +63,21 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
     }
     let published = fx.published();
 
-    // After the deploy: rmUSDC is open (it deploys open with its seed), the other three ship paused.
-    assert!(
-        !deposits_paused(&rpc, &vaults["rmUSDC"]),
-        "rmUSDC must deploy open"
-    );
-    for n in ["rmPROTO", "rmAGENT", "rmRWA"] {
+    // After the deploy: all four vaults ship paused (core 1710: rmUSDC takes its seed deposit, then pauses).
+    for n in VAULT_NAMES {
         assert!(deposits_paused(&rpc, &vaults[n]), "{n} must deploy paused");
     }
 
-    // Stage 13 through the real Safe and timelock opens the baskets the sheet names (rmPROTO and rmRWA).
+    // Stage 13 through the real Safe and timelock opens the four vaults the sheet names (rmUSDC, rmPROTO, rmAGENT and rmRWA).
     published
         .govern_matrix()
         .expect("the govern matrix must pass through the real Safe");
-    for n in ["rmUSDC", "rmPROTO", "rmRWA"] {
+    for n in ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"] {
         assert!(
             !deposits_paused(&rpc, &vaults[n]),
             "{n} must be open after stage 13"
         );
     }
-    assert!(
-        deposits_paused(&rpc, &vaults["rmAGENT"]),
-        "rmAGENT holds RM but the default sheet never unpauses it: it stays paused"
-    );
 
     // A real depositor puts USDC straight into each open vault: shares in rmUSDC, rmPROTO and rmRWA.
     let user = fx.agent();
@@ -158,7 +150,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             "{n} must be paused after the failed verify"
         );
     }
-    // ... and a deposit into the vault that deployed open is now refused.
+    // ... and a deposit into rmUSDC (opened by stage 13) is now refused.
     fx.cast_send(
         &pk,
         fx.usdc(),
@@ -234,7 +226,7 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             "{name} must still be paused"
         );
     }
-    // rmAGENT holds RM and stays paused (the default sheet never unpauses it): the test deposits nothing there, so there are no shares to redeem.
+    // rmAGENT holds RM and the test deposits nothing there (a deposit needs a V4 swap): there are no shares to redeem.
     assert_eq!(
         before
             .iter()
@@ -255,4 +247,22 @@ fn twin_forced_verify_failure_pauses_all_four_vaults_and_every_redeem_still_work
             .expect("JSON");
     assert_eq!(manual["pauseAll"]["trigger"], "manual");
     assert_eq!(manual["pauseAll"]["allPaused"], true);
+
+    // Core 1710: the on-demand reopen round works for all four vaults. Each `govern --row unpause-X` after the pause-all is a new numbered round
+    // (its own timelock operation) through the real Safe, ordered after the pause entry. Every vault reads open again.
+    for (name, row) in [
+        ("rmUSDC", "unpause-USDC"),
+        ("rmPROTO", "unpause-PROTO"),
+        ("rmAGENT", "unpause-AGENT"),
+        ("rmRWA", "unpause-RWA"),
+    ] {
+        let lines = published
+            .govern(row, &[])
+            .unwrap_or_else(|e| panic!("the reopen round {row} after pause-all must pass: {e}"));
+        assert_eq!(lines.len(), 2, "{row}: one scheduled and one executed line");
+        assert!(
+            !deposits_paused(&rpc, &vaults[name]),
+            "{name} must be open after its reopen round"
+        );
+    }
 }

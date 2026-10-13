@@ -5,7 +5,7 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6b71569d3c7e806e0e2c2cc435012d541d09a217/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/vaults/BasketVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -1147,7 +1147,7 @@ function addAsset(
 | pool_ | `address` | DEX pool pairing `token_` with USDC (either token0 or token1).<br/>For the Uniswap V3 default path, this is the V3 pool address.<br/>For Aerodrome, this is the CL pool address used for TWAP reads. |
 | swapFee_ | `uint24` | Venue parameter forwarded to execution: Uniswap fee tier<br/>for V3/V4, or signed tick spacing for Aerodrome Slipstream. |
 | adapter_ | `address` | Swap+TWAP adapter address implementing `IBasketSwapAdapter`.<br/>Pass `address(0)` to use the built-in Uniswap V3 default path<br/>(venue = V3). For V4 or Aerodrome, pass the deployed adapter<br/>address and the corresponding `venue_`. |
-| venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` (reserved; no V4 adapter ships),<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
+| venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` with a `UniswapV4SwapAdapter` and `pool_` = its `UniswapV4PriceRecorder`,<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
 
 <a id="removeasset-uint256"></a>
 
@@ -2817,11 +2817,11 @@ Recorded on AssetInfo so off-chain tooling and governance can
 inspect which DEX each asset is wired to without parsing the
 opaque adapter address.
 V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-V4       — reserved ordinal; no V4 adapter ships. Kept on purpose: `Venue` is
-ABI-visible (`addAsset(..., uint8 venue_)`, `AssetInfo.venue`, the
-fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue` and the
-`BasketVault` tests all use the ordinals), and deleting V4 would
-renumber Aerodrome from 2 to 1.
+V4       — Uniswap V4 via a `UniswapV4SwapAdapter` (core 1676). The asset's `pool` is the
+`UniswapV4PriceRecorder` (V4 has no pool address and a hookless pool records no
+observations). `Venue` is ABI-visible (`addAsset(..., uint8 venue_)`,
+`AssetInfo.venue`, the fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue`
+and the tests all use the ordinals): V3 0, V4 1, Aerodrome 2.
 Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
 
 ```solidity

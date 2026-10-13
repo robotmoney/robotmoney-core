@@ -28,14 +28,17 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi, registryAbi, VaultStatus } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
-import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { depositsBlocked } from "../lib/vaultDepositState";
+import { useDepositState } from "../lib/useDepositStates";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { parseUsdcAmount } from "../lib/format";
 import { formatUsdc, formatShares } from "../lib/format";
 
 type Props = Readonly<{
@@ -75,9 +78,13 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
 
   // `getVault` returns two outputs (metadata, status), so viem decodes it
   // as a 2-element array — index 1 is the status, not a `.status` property.
-  const vaultRefusesDeposits =
-    liveVaultRecord !== undefined &&
-    (liveVaultRecord as readonly [unknown, number])[1] !== VaultStatus.Active;
+  // Deposits are enabled ONLY in the known-open state (issue 1731): the live registry status, the vault's own
+  // `depositsPaused()` (read pinned to the target chain behind the write guard) and the fresh explorer
+  // snapshot, resolved in one place with the other deposit forms. Paused, retired and unknown disable the form.
+  const liveRegistryStatus =
+    liveVaultRecord !== undefined ? (liveVaultRecord as readonly [unknown, number])[1] : undefined;
+  const depositState = useDepositState(selectedVaultAddr || undefined, liveRegistryStatus);
+  const vaultRefusesDeposits = Boolean(selectedVaultAddr) && depositsBlocked(depositState);
 
   // -------- live previewDeposit (AC §3) --------
   const { data: previewDepositShares } = useReadContract({
@@ -157,8 +164,8 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
   });
 
   // -------- write hooks --------
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,
@@ -250,9 +257,11 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
 
       {/* Deposits-paused / retired vault safety gate (AC §4) */}
       {vaultRefusesDeposits && (
-        <p className="hint" data-testid="vault-paused-warning" style={{ color: "red" }}>
-          Deposits into this vault are paused or the vault is retired. Withdrawals stay open.
-        </p>
+        <DepositsClosedNotice
+          state={depositState}
+          scope="This vault"
+          testId="vault-paused-warning"
+        />
       )}
 
       <label>

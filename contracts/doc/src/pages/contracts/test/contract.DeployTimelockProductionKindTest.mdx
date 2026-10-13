@@ -1,0 +1,43 @@
+---
+title: "DeployTimelockProductionKindTest"
+---
+
+# DeployTimelockProductionKindTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
+
+## Functions
+
+<a id="_prefix"></a>
+
+### _prefix
+
+<i>
+
+Overridden by subclasses so tests that mutate shared env vars
+(vm.setEnv is process-wide) each get their own namespace.
+
+</i>
+
+```solidity
+function _prefix() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_productionkind_floorunchangedonbase"></a>
+
+### test_productionKind_floorUnchangedOnBase
+
+An explicit "production" keeps the 8453 floor: 900 s is refused, 172800 s passes.
+
+```solidity
+function test_productionKind_floorUnchangedOnBase() public removesOwnManifest;
+```
+

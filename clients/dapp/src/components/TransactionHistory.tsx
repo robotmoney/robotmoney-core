@@ -17,6 +17,7 @@
  */
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
+import { formatUsdcString } from "../lib/format";
 import {
   fetchAccountHistory,
   type AccountEvent,
@@ -118,7 +119,9 @@ export function TransactionHistory(props: TransactionHistoryProps) {
                       <td data-testid="transaction-history-row-block">{ev.block_number}</td>
                       <td data-testid="transaction-history-row-tx">{ev.tx_hash}</td>
                       <td data-testid="transaction-history-row-vault">{ev.vault_address ?? "—"}</td>
-                      <td data-testid="transaction-history-row-amount">{ev.amount ?? "—"}</td>
+                      <td data-testid="transaction-history-row-amount">
+                        {formatUsdcString(ev.amount)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

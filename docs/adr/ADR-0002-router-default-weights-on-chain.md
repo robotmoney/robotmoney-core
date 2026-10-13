@@ -72,9 +72,9 @@ PR 1505):
   registered Active and eligible, summing to 10 000 bps. It does not
   refuse a 0 bps entry. Whether rmAGENT and rmRWA are marked eligible at
   0 bps or left ineligible is a sheet choice (devops 70, core 1520).
-- The Twin stage sheet on this branch (`deployments/twin-918453/stage-sheet.env`)
-  still carries `ROUTER_WEIGHTS=USDC:6000,PROTO:2500,RWA:1500`; the
-  9500/500/0/0 vector is pending devops 70 and core 1520.
+- The Twin stage sheet (`deployments/twin-918453/stage-sheet.env`) carries the
+  same launch vector as 8453, `ROUTER_WEIGHTS=USDC:9500,PROTO:500,AGENT:0,RWA:0`,
+  with `ELIGIBLE_VAULTS=PROTO,AGENT,RWA` (core 1708).
 
 The on-chain source of truth, the fallback rule and the Safe → Timelock
 path for `defaultWeights` are unchanged.

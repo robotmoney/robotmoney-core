@@ -176,6 +176,15 @@ OpenZeppelin access control, a deposit pause, reentrancy protection,
 caps, an exit fee ceiling, adapter routing, rebalance controls, and
 emergency shutdown. It is a direct non-proxy deployment on Base.
 
+The target release architecture uses an independent UUPS proxy for each
+approved stateful core contract, with upgrades controlled by the Safe through
+the admin timelock. Test, demo, rehearsal, and contained mainnet test instances
+stay upgradeable. A final mainnet proxy must either freeze upgrades in its
+deployment transaction or be frozen by a delayed governance action after an
+explicit production proving period. Existing direct addresses cannot acquire
+this behavior in place. The detailed scope, cutover, and safety gates are in
+`docs/technical/contract-upgradeability-plan.md`.
+
 The source tree also contains the basket-vault family — an abstract
 `BasketVault` base with hybrid NAV model: Uniswap V3 TWAP pricing for
 protocol-level guards (NAV growth limit, ORA-4 deviation, TVL cap), while
@@ -195,14 +204,16 @@ flag's value differs across environments. See
 
 At launch rmAGENT (`AgentTokenVault`) holds RM, the existing Base token at
 `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3`. Nothing deploys RM in
-production. RM's venue is decided (owner, 2026-10-06): the existing
-Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000).
-It is the only venue the deploy script wires (`contracts/script/BasketVaultDeployBase.sol`).
-The owner funds it with in-range liquidity at market price before the
-mainnet run, sized to rmAGENT's first-period cap, and raises its
-observation cardinality. Restoring the Uniswap V4 swap adapter is a later
-option, not a launch blocker. `config/agent-token-shortlist.json` does
-not list RM yet (not yet implemented: core #1491).
+production. RM's venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool
+with fee 2.91% (id `0xf2e7b957...2391`, tickSpacing 582, hooks zero). `UniswapV4SwapAdapter` swaps through the real
+PoolManager (unlock callback, full PoolKey). Because a hookless V4 pool records no observations, rmAGENT registers
+`UniswapV4PriceRecorder` as RM's pool: a permissionless, admin-free recorder that stores the pool tick in a V3-style
+ring (one snapshot per block, lagged tick, clamp of 10 ticks per second) and answers `observe()` for the unchanged
+`BasketVault` TWAP math. This is sufficient for the Base mainnet test, not the final deployment; its security bound
+is the pool depth, so `perDepositCap` and `tvlCap` stay below it. The recorder stage (`recorder`, right after `libs`)
+deploys it, and the runner waits for a full window of history before the `agent` stage. A stale recorder (no record for
+over 1800 s) fails deposits and USDC redeems closed, and `redeemInKind` needs no oracle. `config/agent-token-shortlist.json`
+lists RM with its PoolKey (core 1676).
 
 The source tree also contains `RwaBasketVault`, the rmRWA vault. rmRWA is
 a plain basket row: it holds deSPXA (Centrifuge / Janus Henderson / Anemoy
@@ -300,7 +311,8 @@ Readers that compare against the live vector treat a missing vault as 0 bps
 `_isDepositable` requires registry status `Active` and `isRouterEligible`.
 A leg that fails it is skipped. The full amount is split pro rata across the
 remaining legs, by each leg's share of the available bps, and the rounding
-remainder goes to the last available leg. No USDC is left with the router
+remainder goes to the last available leg with non-zero bps. A leg whose
+computed amount is 0 is skipped like an unavailable leg (issue 1746). No USDC is left with the router
 and none is returned to the user (`_executeLegs` checks the router's USDC
 balance against its pre-deposit snapshot). `previewDeposit` runs the same
 pass, so preview and execute agree on which legs are skipped (RTR-5).
@@ -357,6 +369,9 @@ Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
 
 - `UniswapV3SwapAdapter` routes USDC↔asset swaps through Uniswap V3 and
   prices NAV and slippage floors via the pool TWAP.
+- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
+  PoolManager (`unlock`, then `swap` with a full PoolKey, hooks zero) and prices NAV and slippage floors from
+  `UniswapV4PriceRecorder`, a permissionless tick recorder with a V3-shaped `observe()` (core 1676).
 - `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
   Finance Router on Base (concentrated-liquidity CL pools). NAV and
   slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
@@ -369,7 +384,7 @@ Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
 The adapter seam stays split. Lending positions use `IStrategyAdapter`
 (`AaveV3Adapter`, `MorphoAdapter`, `CompoundV3Adapter`, held by
 `RobotMoneyVault`). Basket assets use `IBasketSwapAdapter`
-(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, held by the basket
+(`AerodromeSwapAdapter`, `UniswapV3SwapAdapter`, `UniswapV4SwapAdapter`, held by the basket
 vaults). There is no position-adapter interface and no asset-position adapter.
 
 ### 4.4 Synchronous Redemption
@@ -725,7 +740,7 @@ scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
 schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
 executes it. The same row runs on Base mainnet (8453) as a standalone
 post-launch action (issue 1611): its own timelock operation with its own
-48-hour delay, never part of stage 13, which stays the three basket
+48-hour delay, never part of stage 13, which stays the four vault
 unpauses. The first run schedules and exits `GOVERN_PENDING` with the resume
 command. After the delay the Safe executes it and the CLI reads `isReleased`
 back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence
@@ -872,8 +887,8 @@ they do not require a signer key. This allows agent runtimes to run
 protocol reads from a read-only deployment without any key material.
 
 **Committee commands.** `rmpc` exposes committee write subcommands that
-follow the same write-command path as `deposit`,
-`propose`, and `vote` (issue #632): load config → enforce the
+follow the same write-command path as `deposit`
+and `vote` (issue #632): load config → enforce the
 production-signer gate (software keystores rejected on Base mainnet;
 HSM/KMS required for committee operators; depositor writes `deposit`,
 `withdraw` and `withdraw-router` are exempt, see issue #1545) → build known calldata for the configured IC contract →
@@ -881,8 +896,9 @@ sign the EIP-1559 envelope through the `AgentSigner` backend → route the
 call through `RobotMoneyGateway` → broadcast → decode the event → emit a
 stable JSON envelope.
 
-- `committee register` — one-time on-chain registration of the agent
-  identity.
+- There is no `committee register` and no `propose`: both are governance
+  calls, and rmpc is not a governance signer (issue #1447, workstream K).
+  Agent registration is an `ADMIN_ROLE` Safe action.
 - `committee vote-submit` — submit a signed per-vault tilt (stance,
   `target_weight_bps`, `confidence`, `rationale_uri`, `prompt_hash`,
   `inputs_digest`).
@@ -1459,6 +1475,13 @@ are permitted: no test-only subclasses that alter readiness, no
 build-time branches, no `if (env == "test")` logic, no spoofed users
 or state.
 
+For the planned upgrade path, the same proxy and implementation artifacts are
+used in every environment. Upgrade/freeze mode is initialized state, and a
+one-way freeze is a Safe → timelock action. Final mainnet deployment must
+choose freeze-at-deploy or a reviewed proving period with a freeze deadline;
+the release sheet records and verifies the choice. This does not change the
+status of current direct deployments.
+
 Production-readiness for a vault — whether the Portfolio Router may
 weight it and route USDC into it — is expressed as **registry state**:
 `VaultRegistry.isRouterEligible(vault)`, flipped by ADMIN_ROLE via
@@ -1580,6 +1603,10 @@ this architecture:
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
+- For future proxy deployments, only the Safe-controlled admin timelock may
+  authorize an implementation upgrade or permanently freeze upgrades. A final
+  release must record and verify its freeze choice. Adapter no-proxy and
+  codehash checks continue to apply. See the contract upgradeability plan.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no

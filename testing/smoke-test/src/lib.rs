@@ -487,7 +487,21 @@ impl Fixture {
     /// Used to override deploy-time parameters. `AGENT_MAX_PER_PAYMENT` and `AGENT_MAX_PER_WINDOW` are not
     /// sheet keys (the deploy authorizes no agent): they set the caps of the policy the test depositor
     /// authorizes for the harness agent after the deploy.
+    ///
+    /// All four vaults deploy paused (core 1710). The other suites test what happens in an open vault, so this
+    /// constructor opens rmUSDC the way production does: `govern --row unpause-USDC` through the real Safe and
+    /// timelock (one time warp on the fork). [`Self::new_closed`] keeps the vaults as the deploy left them.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
+        Self::boot(extra_deploy_env, true)
+    }
+
+    /// The fixture exactly as the deploy leaves it: rmUSDC, rmPROTO, rmAGENT and rmRWA all paused, stage 13 not run
+    /// (core 1710). The rehearsal tests that prove the verifier and the govern stage start here.
+    pub fn new_closed() -> Result<Self, HarnessError> {
+        Self::boot(&[], false)
+    }
+
+    fn boot(extra_deploy_env: &[(&str, &str)], open_usdc: bool) -> Result<Self, HarnessError> {
         let cap = |name: &str, default: u128| -> Result<u128, HarnessError> {
             match extra_deploy_env.iter().find(|(k, _)| *k == name) {
                 Some((_, v)) => v
@@ -600,13 +614,6 @@ impl Fixture {
             logging::error("smoke-test", format!("funding keys failed: {err}"));
         })?;
 
-        // Issue 1554: rmAGENT launches holding RM, and `BasketVault.addAsset` needs the RM/USDC pool to have
-        // liquidity and observation history. The live pool is unfunded until the owner funds it, so the Twin
-        // chain funds the same pool with real transactions first. The addAsset floors are not relaxed.
-        fund_rm_pool(&publish_cfg, twin.rpc_url(), &repo_root).inspect_err(|err| {
-            logging::error("smoke-test", format!("funding the RM pool failed: {err}"));
-        })?;
-
         // Identity lines are addresses only. The agent and the pauser are the
         // harness's own known keys, so the e2e suites can sign as them.
         let mut identity = keys.fragment.clone();
@@ -665,6 +672,12 @@ impl Fixture {
             .inspect_err(|err| {
                 logging::error("smoke-test", format!("funding USDC failed: {err}"));
             })?;
+
+        if open_usdc {
+            fx.govern("unpause-USDC", &[]).inspect_err(|err| {
+                logging::error("smoke-test", format!("opening rmUSDC failed: {err}"));
+            })?;
+        }
 
         Ok(fx)
     }
@@ -1639,7 +1652,7 @@ impl Fixture {
     ///
     /// - `receipt-a.json`: recorded with its OWN correct digest and released. Its weights equal the live router
     ///   vector under the missing-vault = 0 bps rule (the Twin stage sheet `ROUTER_WEIGHTS` the deployer leaves on
-    ///   the router before the handover: rmUSDC 6000, rmPROTO 2500, rmRWA 1500, rmAGENT 0), so it renders
+    ///   the router before the handover: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), so it renders
     ///   "Verified", "Released" and "Applied".
     /// - `receipt-b.json`: recorded with a deliberately WRONG digest and never released. Its weights differ from
     ///   the live vector, so it renders "Unverified", "Recorded, not released" and "Not applied".
@@ -1695,6 +1708,42 @@ impl Fixture {
             format!("seeded consensus receipts: a={id_a} (released) b={id_b} (recorded only)"),
         );
         Ok(())
+    }
+
+    /// Record a fixture payload on the receipt contract with its OWN digest, as the harness agent (issue 1696). The agent must be registered
+    /// already ([`Self::seed_consensus_receipts`] does it). The receipt stays recorded, not released. Returns the receipt id as 0x hex.
+    pub fn record_fixture_receipt(&self, file: &str) -> Result<String, HarnessError> {
+        let r = load_fixture_receipt(&self.repo_root, file)?;
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        // Issue 1754: the anchored digest is keccak256(domain line || bytes), the scheme `govern --row apply-receipt` checks (publish-contracts/src/receipt-digest.ts).
+        let mut preimage = b"robotmoney:consensus-receipt:v1\n".to_vec();
+        preimage.extend_from_slice(&r.bytes);
+        let digest = format!("0x{}", hex::encode(keccak256(&preimage).0));
+        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[&id, &digest, &r.payload_uri],
+        )?;
+        Ok(id)
+    }
+
+    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696): `govern --row apply-receipt` schedules ONE batch
+    /// (releaseReceipt plus the router weight change), waits the real delay (one time warp on the fork) and executes it. Returns the govern lines
+    /// (scheduled, executed), each with a tx hash and receipt status 1.
+    pub fn apply_fixture_receipt(
+        &self,
+        file: &str,
+    ) -> Result<Vec<publish::GovernRow>, HarnessError> {
+        let r = load_fixture_receipt(&self.repo_root, file)?;
+        let id = format!("0x{}", hex::encode(r.receipt_id));
+        let payload = self.repo_root.join(RECEIPT_FIXTURES_DIR_REL).join(file);
+        let payload = payload.display().to_string();
+        self.published.govern(
+            "apply-receipt",
+            &["--receipt-id", &id, "--payload", &payload],
+        )
     }
 
     /// Grant `amount` USDC base units (6 decimals) to `recipient` on the real Base USDC token.
@@ -1762,33 +1811,6 @@ fn cast_call_raw_at(
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_lowercase())
-}
-
-/// Fund the live RM/USDC Uniswap V3 pool on the Twin chain (issue 1554) with `rehearsal fund-rm-pool`, the one
-/// implementation of the step (the twin-publish CI action runs the same verb). Real pool, real position manager,
-/// real transactions: it gives a funder RM and USDC with the fork's balance helpers, raises the pool's
-/// observation cardinality and mints one in-range position. It asserts the `BasketVault.addAsset` floors
-/// (cardinality >= 901, liquidity >= 1e6) itself, so a failure names the pool and not a later revert.
-fn fund_rm_pool(
-    cfg: &publish::PublishConfig,
-    rpc_url: &str,
-    repo_root: &Path,
-) -> Result<(), HarnessError> {
-    let out = Command::new("bun")
-        .arg(cfg.rehearsal_cli())
-        .args(["fund-rm-pool", "--rpc", rpc_url, "--core-dir"])
-        .arg(repo_root)
-        .stdin(Stdio::null())
-        .output()?;
-    if !out.status.success() {
-        return Err(HarnessError::other(format!(
-            "rehearsal fund-rm-pool failed: {}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    logging::info("smoke-test", String::from_utf8_lossy(&out.stderr).trim());
-    Ok(())
 }
 
 // -- Public helpers ---------------------------------------------------
@@ -3532,7 +3554,7 @@ mod tests {
 
     /// The seeded fixtures load, derive distinct ids from their own payload fields, and are served under the
     /// `receipt-fixtures` hostname. receipt-a matches the live router vector under the missing-vault = 0 bps rule
-    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 6000, rmPROTO 2500, rmRWA 1500, rmAGENT 0), and receipt-b differs from it.
+    /// (the Twin stage sheet `ROUTER_WEIGHTS`: rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0), and receipt-b differs from it.
     #[test]
     fn fixture_receipts_load_and_carry_the_expected_weights() {
         let root = locate_repo_root().expect("repo root");
@@ -3559,9 +3581,9 @@ mod tests {
         };
         let live = vec![
             ("agent_tokens".to_string(), 0),
-            ("conservative_defi_yield".to_string(), 6_000),
-            ("protocol_tokens".to_string(), 2_500),
-            ("real_world_assets".to_string(), 1_500),
+            ("conservative_defi_yield".to_string(), 9_500),
+            ("protocol_tokens".to_string(), 500),
+            ("real_world_assets".to_string(), 0),
         ];
         assert_eq!(weights(&a.bytes), live);
         assert_ne!(weights(&b.bytes), live);

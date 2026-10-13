@@ -17,6 +17,7 @@
 //   GET /v1/router/weights
 //   GET /v1/governance/proposals
 //   GET /v1/governance/proposals/:id
+//   GET /v1/governance/admin-events
 //   GET /v1/stats
 //   GET /v1/router/state
 //   GET /v1/accounts/:address/positions
@@ -56,17 +57,17 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
+    dec_to_string, headroom_of, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
-    AdapterAllocationEntry, AgentPolicy, AgentResponse, CommitteeAgent, CommitteeAgentsResponse,
-    CommitteeTilt, CommitteeTiltsResponse, CommitteeTrackRecordResponse, CommitteeVoteEntry,
-    ConsensusReceipt, ConsensusReceiptResponse, ConsensusReceiptsResponse, Contract,
-    ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness, Health,
-    ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse, RegimeFeedResponse,
-    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
-    TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
-    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
-    VaultsResponse, VoteEntry, WeightHistoryEntry,
+    AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
+    CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
+    CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
+    ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
+    DepositsResponse, EventKind, Freshness, Health, ProposalDetail, ProposalDetailResponse,
+    ProposalSummary, ProposalsResponse, RegimeFeedResponse, RegimeSnapshot, RouterStateResponse,
+    RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse, Vault, VaultDetail,
+    VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
+    VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -88,21 +89,34 @@ type DepositRow = (
 type SnapshotRow = (i64, Vec<u8>, i64, BigDecimal, BigDecimal, DateTime<Utc>);
 type TxRow = (i64, i64, Vec<u8>, Option<Vec<u8>>, i16, DateTime<Utc>);
 
-// (chain_id, vault_address, name, risk_label, status, deposit_cap, total_assets, exit_fee_bps, indexed_at)
+// (chain_id, vault_address, name, risk_label, status, tvl_cap, per_deposit_cap, snapshot_block, total_assets,
+//  exit_fee_bps, paused, indexed_at). The five snapshot columns are null together when a vault has no snapshot.
 type VaultRow = (
     i64,
     Vec<u8>,
     String,
     String,
     i16,
-    BigDecimal,
+    Option<BigDecimal>,
     Option<BigDecimal>,
     Option<i64>,
+    Option<BigDecimal>,
+    Option<i64>,
+    Option<bool>,
     DateTime<Utc>,
 );
 
-// (vault_address, name, risk_label, status, deposit_cap, indexed_at) — used by get_vault
-type VaultDetailRow = (Vec<u8>, String, String, i16, BigDecimal, DateTime<Utc>);
+// (vault_address, name, risk_label, status, indexed_at) — used by get_vault
+type VaultDetailRow = (Vec<u8>, String, String, i16, DateTime<Utc>);
+
+// (tvl_cap, per_deposit_cap, total_assets, block_number, paused) of the latest snapshot — used by get_vault
+type VaultSnapshotRow = (
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    BigDecimal,
+    i64,
+    bool,
+);
 
 // (block_number, total_assets, total_supply, indexed_at)
 type TvlPointRow = (i64, BigDecimal, BigDecimal, DateTime<Utc>);
@@ -243,6 +257,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/router/weights", get(get_router_weights))
         .route("/v1/governance/proposals", get(list_proposals))
         .route("/v1/governance/proposals/:id", get(get_proposal))
+        .route("/v1/governance/admin-events", get(list_admin_events))
         // Multi-vault protocol stats endpoints (issue #316).
         .route("/v1/stats", get(get_stats))
         .route("/v1/router/state", get(get_router_state))
@@ -278,17 +293,18 @@ async fn not_found() -> impl IntoResponse {
 }
 
 async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
-    let row: Option<(Option<i64>, Option<i32>)> = sqlx::query_as(
-        "SELECT last_indexed_block, reorg_count FROM indexer_runs ORDER BY run_id DESC LIMIT 1",
+    let reorg_count: Option<i32> = sqlx::query_scalar(
+        "SELECT reorg_count FROM indexer_runs WHERE chain_id = $1 ORDER BY run_id DESC LIMIT 1",
     )
+    .bind(state.chain_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (last_indexed_block, reorg_count) =
-        row.map(|(b, r)| (b, r.unwrap_or(0))).unwrap_or((None, 0));
+    let progress = indexer_progress(&state).await?;
     Ok(Json(Health {
         status: "ok",
-        last_indexed_block,
-        reorg_count,
+        last_indexed_block: progress.map(|(b, _)| b),
+        chain_head_block: chain_head_block(&state).await?,
+        reorg_count: reorg_count.unwrap_or(0),
     }))
 }
 
@@ -550,13 +566,16 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
     // (docs/technical/explorer-schema-decisions.md §3.1).
     let rows: Vec<VaultRow> = sqlx::query_as(
         "SELECT v.chain_id, v.vault_address, v.name, v.risk_label, v.status, \
-                v.deposit_cap, \
+                s.tvl_cap, \
+                s.per_deposit_cap, \
+                s.block_number, \
                 s.total_assets, \
                 s.exit_fee_bps, \
+                s.paused, \
                 v.indexed_at \
          FROM vaults v \
          LEFT JOIN LATERAL ( \
-             SELECT total_assets, exit_fee_bps \
+             SELECT tvl_cap, per_deposit_cap, block_number, total_assets, exit_fee_bps, paused \
              FROM vault_snapshots \
              WHERE chain_id = v.chain_id AND contract = v.vault_address \
              ORDER BY block_number DESC \
@@ -578,9 +597,12 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
                 name,
                 risk_label,
                 status,
-                deposit_cap,
+                tvl_cap,
+                per_deposit_cap,
+                snapshot_block,
                 total_assets,
                 exit_fee_bps,
+                deposits_paused,
                 indexed_at,
             )| {
                 Vault {
@@ -589,9 +611,13 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
                     name,
                     risk_label,
                     status,
-                    deposit_cap: dec_to_string(&deposit_cap),
+                    headroom: headroom_of(tvl_cap.as_ref(), total_assets.as_ref()),
+                    tvl_cap: tvl_cap.as_ref().map(dec_to_string),
+                    per_deposit_cap: per_deposit_cap.as_ref().map(dec_to_string),
+                    snapshot_block,
                     total_assets: total_assets.as_ref().map(dec_to_string),
                     exit_fee_bps,
+                    deposits_paused,
                     indexed_at,
                 }
             },
@@ -599,7 +625,12 @@ async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResp
         .collect();
 
     let freshness = latest_freshness(&state).await?;
-    Ok(Json(VaultsResponse { vaults, freshness }))
+    let chain_head_block = chain_head_block(&state).await?;
+    Ok(Json(VaultsResponse {
+        vaults,
+        freshness,
+        chain_head_block,
+    }))
 }
 
 /// GET /v1/vaults/:address — detail view for a single vault.
@@ -614,7 +645,7 @@ async fn get_vault(
     let address_bytes = decode_address_param(&address)?;
 
     let row: Option<VaultDetailRow> = sqlx::query_as(
-        "SELECT vault_address, name, risk_label, status, deposit_cap, indexed_at \
+        "SELECT vault_address, name, risk_label, status, indexed_at \
          FROM vaults \
          WHERE chain_id = $1 AND vault_address = $2 \
          LIMIT 1",
@@ -624,8 +655,26 @@ async fn get_vault(
     .fetch_optional(&state.pool)
     .await?;
 
-    let (vault_address, name, risk_label, status, deposit_cap, indexed_at) =
-        row.ok_or(ApiError::NotFound)?;
+    let (vault_address, name, risk_label, status, indexed_at) = row.ok_or(ApiError::NotFound)?;
+
+    // The vault's own `depositsPaused()`, `tvlCap()` and `perDepositCap()` as of its latest snapshot; all null
+    // when it has none (issues 1731 and 1741). A cap the indexer could not read is null, never 0.
+    let snapshot: Option<VaultSnapshotRow> = sqlx::query_as(
+        "SELECT tvl_cap, per_deposit_cap, total_assets, block_number, paused FROM vault_snapshots \
+         WHERE chain_id = $1 AND contract = $2 \
+         ORDER BY block_number DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_optional(&state.pool)
+    .await?;
+    let deposits_paused = snapshot.as_ref().map(|s| s.4);
+    let snapshot_block = snapshot.as_ref().map(|s| s.3);
+    let tvl_cap = snapshot.as_ref().and_then(|s| s.0.clone());
+    let per_deposit_cap = snapshot.as_ref().and_then(|s| s.1.clone());
+    let headroom = snapshot
+        .as_ref()
+        .and_then(|s| headroom_of(s.0.as_ref(), Some(&s.2)));
 
     // Fetch TVL timeseries — up to 500 rows ascending by block.
     let tvl_rows: Vec<TvlPointRow> = sqlx::query_as(
@@ -744,15 +793,11 @@ async fn get_vault(
         )
         .collect();
 
-    // Freshness is taken from the most recent TVL point if available,
-    // otherwise falls back to the indexer cursor.
-    let freshness = match tvl_history.last() {
-        Some(p) => Freshness {
-            block_number: p.block_number,
-            indexed_at: p.indexed_at,
-        },
-        None => latest_freshness(&state).await?,
-    };
+    // Freshness is the index cursor, as on every other endpoint. The block of the latest vault snapshot is
+    // `vault.snapshot_block`: it trails the cursor by up to the snapshot heartbeat, and reporting it as the
+    // index block made a healthy indexer look thousands of blocks behind (issue 1741).
+    let freshness = latest_freshness(&state).await?;
+    let chain_head_block = chain_head_block(&state).await?;
 
     let vault = VaultDetail {
         chain_id: state.chain_id,
@@ -760,7 +805,11 @@ async fn get_vault(
         name,
         risk_label,
         status,
-        deposit_cap: dec_to_string(&deposit_cap),
+        tvl_cap: tvl_cap.as_ref().map(dec_to_string),
+        per_deposit_cap: per_deposit_cap.as_ref().map(dec_to_string),
+        headroom,
+        snapshot_block,
+        deposits_paused,
         tvl_history,
         adapter_allocation_history,
         deposit_withdrawal_log,
@@ -768,7 +817,11 @@ async fn get_vault(
         indexed_at,
     };
 
-    Ok(Json(VaultDetailResponse { vault, freshness }))
+    Ok(Json(VaultDetailResponse {
+        vault,
+        freshness,
+        chain_head_block,
+    }))
 }
 
 // ─── Governance handlers (issue #307) ──────────────────────────────────────
@@ -897,6 +950,66 @@ async fn list_proposals(State(state): State<AppState>) -> ApiResult<Json<Proposa
     }))
 }
 
+// (block_number, log_index, tx_hash, contract, contract_kind, event_name, op_id, detail, indexed_at)
+type AdminEventRow = (
+    i64,
+    i32,
+    Vec<u8>,
+    Vec<u8>,
+    String,
+    String,
+    Option<Vec<u8>>,
+    String,
+    DateTime<Utc>,
+);
+
+/// GET /v1/governance/admin-events — the Timelock and Safe events of the governed-change path (newest
+/// first, at most 500). The Safe and the Timelock themselves are listed by `/v1/chains/:chain_id/contracts`.
+async fn list_admin_events(State(state): State<AppState>) -> ApiResult<Json<AdminEventsResponse>> {
+    let rows: Vec<AdminEventRow> = sqlx::query_as(
+        "SELECT block_number, log_index, tx_hash, contract, contract_kind, event_name, op_id, detail, indexed_at \
+         FROM admin_events \
+         WHERE chain_id = $1 \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let chain_id = state.chain_id;
+    let events = rows
+        .into_iter()
+        .map(
+            |(
+                block_number,
+                log_index,
+                tx_hash,
+                contract,
+                contract_kind,
+                event_name,
+                op_id,
+                detail,
+                indexed_at,
+            )| {
+                AdminEventEntry {
+                    chain_id,
+                    block_number,
+                    log_index,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    contract: addr_to_hex(&contract),
+                    contract_kind,
+                    event_name,
+                    op_id: op_id.map(|h| hash_to_hex(&h)),
+                    detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(AdminEventsResponse { events, freshness }))
+}
+
 /// GET /v1/governance/proposals/:id — single proposal with per-voter tally.
 async fn get_proposal(
     State(state): State<AppState>,
@@ -982,10 +1095,41 @@ async fn get_proposal(
 
 // ─── Multi-vault protocol stats handlers (issue #316) ─────────────────────
 
+/// Counting rule for `unique_depositors` (issue 1766), documented in
+/// `docs/explorer-api.md`. Change this one query to change the rule.
+///
+/// A depositor is a distinct address that currently holds shares (balance > 0)
+/// in any vault. The balance is the latest `wallet_positions` row per
+/// (vault, holder), which the indexer rolls forward from every vault
+/// `Deposit` (direct, router and gateway paths all emit one) and back on every
+/// `Withdraw`. An address is counted once however many vaults it holds, and an
+/// address that redeemed everything is not counted. Addresses seen only in
+/// `agent_deposits` (share_receiver) or `router_deposit_legs` (depositor) with
+/// no position row at all are also counted, so rows indexed without a vault
+/// `Deposit` are not lost.
+const UNIQUE_DEPOSITORS_SQL: &str = "\
+    WITH latest AS ( \
+        SELECT DISTINCT ON (contract, owner) owner, shares \
+        FROM wallet_positions \
+        WHERE chain_id = $1 \
+        ORDER BY contract, owner, block_number DESC \
+    ) \
+    SELECT COUNT(*)::BIGINT FROM ( \
+        SELECT owner AS holder FROM latest GROUP BY owner HAVING SUM(shares) > 0 \
+        UNION \
+        SELECT addr FROM ( \
+            SELECT share_receiver AS addr FROM agent_deposits WHERE chain_id = $1 \
+            UNION \
+            SELECT depositor AS addr FROM router_deposit_legs WHERE chain_id = $1 \
+        ) seen \
+        WHERE addr NOT IN (SELECT owner FROM latest) \
+    ) holders";
+
 /// GET /v1/stats — aggregate TVL, unique depositor count, and global activity feed.
 ///
 /// TVL = sum of the latest total_assets snapshot per registered vault.
-/// Depositor count = distinct share_receiver values in agent_deposits.
+/// Depositor count = distinct addresses currently holding vault shares
+/// (see [`UNIQUE_DEPOSITORS_SQL`]).
 /// Activity feed = last 50 deposit events across all vaults (descending by block).
 /// Chain-scoped to state.chain_id.
 async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsResponse>> {
@@ -1009,12 +1153,10 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
         .unwrap_or_else(|| "0".to_string());
 
     // Unique depositor count.
-    let depositor_row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT share_receiver)::BIGINT FROM agent_deposits WHERE chain_id = $1",
-    )
-    .bind(state.chain_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let depositor_row: (i64,) = sqlx::query_as(UNIQUE_DEPOSITORS_SQL)
+        .bind(state.chain_id)
+        .fetch_one(&state.pool)
+        .await?;
     let unique_depositors = depositor_row.0;
 
     // Global activity feed: last 50 deposit events.
@@ -1068,6 +1210,7 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
         unique_depositors,
         activity_feed,
         freshness,
+        chain_head_block: chain_head_block(&state).await?,
     }))
 }
 
@@ -1434,16 +1577,44 @@ async fn current_freshness(state: &AppState, _chain_id: i64) -> ApiResult<Freshn
     latest_freshness(state).await
 }
 
-async fn latest_freshness(state: &AppState) -> ApiResult<Freshness> {
+/// The index cursor: the highest block a run WITHOUT AN ERROR committed for this chain, and when the
+/// latest such run finished. Never the newest run row: that row is the tick in flight (nothing written
+/// yet) or a failed tick, and reading it made `/health` say `null` and every response say `block_number: 0`
+/// while the index was at the head (issue 1731). A reorg rollback caps the runs above the root, so the
+/// maximum is the durable cursor.
+async fn indexer_progress(state: &AppState) -> ApiResult<Option<(i64, DateTime<Utc>)>> {
+    // The same definition the indexer resumes from (`Db::last_indexed_block`): the highest cursor of a run
+    // with no error. A run in flight has no cursor yet (it is written when the run finishes), so it never
+    // counts. `indexed_at` is when the newest such run finished.
     let row: Option<(Option<i64>, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT last_indexed_block, finished_at FROM indexer_runs \
-         ORDER BY run_id DESC LIMIT 1",
+        "SELECT MAX(last_indexed_block), \
+                (SELECT COALESCE(r2.finished_at, r2.started_at) FROM indexer_runs r2 \
+                  WHERE r2.chain_id = $1 AND r2.error IS NULL AND r2.last_indexed_block IS NOT NULL \
+                  ORDER BY r2.run_id DESC LIMIT 1) \
+         FROM indexer_runs \
+         WHERE chain_id = $1 AND error IS NULL",
     )
+    .bind(state.chain_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (block_number, indexed_at) = row
-        .map(|(b, t)| (b.unwrap_or(0), t.unwrap_or_else(Utc::now)))
-        .unwrap_or((0, Utc::now()));
+    Ok(row.and_then(|(b, t)| Some((b?, t?))))
+}
+
+/// The chain head the indexer saw on its latest tick that read one; null until there is one.
+async fn chain_head_block(state: &AppState) -> ApiResult<Option<i64>> {
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT chain_head_block FROM indexer_runs \
+         WHERE chain_id = $1 AND chain_head_block IS NOT NULL \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(head)
+}
+
+async fn latest_freshness(state: &AppState) -> ApiResult<Freshness> {
+    let (block_number, indexed_at) = indexer_progress(state).await?.unwrap_or((0, Utc::now()));
     Ok(Freshness {
         block_number,
         indexed_at,

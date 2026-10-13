@@ -11,7 +11,9 @@
  *
  * issue #318 — protocol layer.
  */
+import { IndexFreshness } from "./IndexFreshness";
 import { useExplorer } from "../lib/ExplorerContext";
+import { formatUsdcString } from "../lib/format";
 
 export function ProtocolStats() {
   const { stats, statsLoading, statsError } = useExplorer();
@@ -37,7 +39,7 @@ export function ProtocolStats() {
         <div className="stat-card">
           <p className="stat-label">Aggregate TVL</p>
           <p data-testid="protocol-stats-tvl" className="stat-value font-mono">
-            {stats.total_tvl}
+            {formatUsdcString(stats.total_tvl)}
           </p>
         </div>
         <div className="stat-card">
@@ -66,7 +68,11 @@ export function ProtocolStats() {
         </div>
       )}
 
-      <p data-testid="protocol-stats-freshness">Block {stats.block_number}</p>
+      <IndexFreshness
+        blockNumber={stats.block_number}
+        chainHeadBlock={stats.chain_head_block}
+        testId="protocol-stats-freshness"
+      />
     </section>
   );
 }

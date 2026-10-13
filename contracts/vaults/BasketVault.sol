@@ -96,11 +96,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///         inspect which DEX each asset is wired to without parsing the
     ///         opaque adapter address.
     ///         V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-    ///         V4       — reserved ordinal; no V4 adapter ships. Kept on purpose: `Venue` is
-    ///                    ABI-visible (`addAsset(..., uint8 venue_)`, `AssetInfo.venue`, the
-    ///                    fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue` and the
-    ///                    `BasketVault` tests all use the ordinals), and deleting V4 would
-    ///                    renumber Aerodrome from 2 to 1.
+    ///         V4       — Uniswap V4 via a `UniswapV4SwapAdapter` (core 1676). The asset's `pool` is the
+    ///                    `UniswapV4PriceRecorder` (V4 has no pool address and a hookless pool records no
+    ///                    observations). `Venue` is ABI-visible (`addAsset(..., uint8 venue_)`,
+    ///                    `AssetInfo.venue`, the fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue`
+    ///                    and the tests all use the ordinals): V3 0, V4 1, Aerodrome 2.
     ///         Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
     enum Venue {
         V3,
@@ -888,7 +888,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
-            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount);
+            // Core 1778: price one input unit less. A V3 pool rounds the fee-adjusted input down
+            // by one unit, which is a few percent of a dust leg (31 cbBTC units) and failed the
+            // 1% floor with "Too little received". For a normal leg one unit is below 1e-6 of it.
+            // A one-unit leg floors at zero (adapters return 0 for a zero amount).
+            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount - 1);
 
             uint256 received = _executeSwap(
                 assets[i].adapter,
@@ -1028,7 +1032,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///                  address and the corresponding `venue_`.
     /// @param venue_    DEX venue selector. Must match the adapter type:
     ///                  `Venue.V3` with `adapter_=address(0)`,
-    ///                  `Venue.V4` (reserved; no V4 adapter ships),
+    ///                  `Venue.V4` with a `UniswapV4SwapAdapter` and `pool_` = its `UniswapV4PriceRecorder`,
     ///                  `Venue.Aerodrome` with an `AerodromeSwapAdapter`.
     ///                  Stored on `AssetInfo` so governance tooling can inspect
     ///                  the venue without decoding the adapter address.

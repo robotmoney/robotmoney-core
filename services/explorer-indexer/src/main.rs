@@ -24,8 +24,8 @@
 use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
-    db::Db, feature_flags, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc,
-    DEFAULT_TICK_SECONDS,
+    db::Db, feature_flags, indexer::refusal_backoff, indexer::run_once, indexer::IndexerConfig,
+    rpc::JsonRpc, rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -114,13 +114,46 @@ struct Cli {
     #[arg(long, env = "INDEXER_CONSENSUS_RECEIPT")]
     consensus_receipt: Option<String>,
 
+    /// Optional TimelockController address. When set, the indexer lists it as a contract and ingests
+    /// CallScheduled, CallExecuted, Cancelled and MinDelayChange (issue 1731).
+    #[arg(long, env = "INDEXER_TIMELOCK")]
+    timelock: Option<String>,
+
+    /// Optional Safe address. When set, the indexer lists it as a contract and ingests ExecutionSuccess,
+    /// ExecutionFailure, AddedOwner, RemovedOwner and ChangedThreshold (issue 1731).
+    #[arg(long, env = "INDEXER_SAFE")]
+    safe: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
 
-    /// Hard cap on per-tick block range.
-    #[arg(long, env = "INDEXER_MAX_BLOCKS_PER_TICK", default_value_t = 1000)]
+    /// Hard cap on per-tick block range (the `eth_getLogs` range). At least 1. Many public
+    /// providers cap logs at 1000 blocks or fewer.
+    #[arg(
+        long,
+        env = "INDEXER_MAX_BLOCKS_PER_TICK",
+        default_value_t = 1000,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     max_blocks_per_tick: u64,
+
+    /// First block to read. Skips the eth_getCode deploy-block search, which fails on non-archive
+    /// public RPCs (issue 1725). Unset keeps the derivation.
+    #[arg(long, env = "INDEXER_START_BLOCK")]
+    start_block: Option<u64>,
+
+    /// Optional separate JSON-RPC URL used only for eth_getLogs.
+    #[arg(long, env = "INDEXER_LOGS_RPC_URL")]
+    logs_rpc_url: Option<String>,
+
+    /// Retries on HTTP 429, 502, 503, 504 and transport errors. 0 (default) keeps one attempt.
+    #[arg(long, env = "INDEXER_RPC_MAX_RETRIES", default_value_t = 0)]
+    rpc_max_retries: u32,
+
+    /// First retry wait in milliseconds. It doubles per retry up to 32 times this value.
+    #[arg(long, env = "INDEXER_RPC_BACKOFF_MS", default_value_t = 500)]
+    rpc_backoff_ms: u64,
 
     /// Optional explicit upper-bound block. When set, the indexer
     /// stops after reaching this block — useful for bounded test runs.
@@ -131,6 +164,14 @@ struct Cli {
     /// the long-running daemon is unwanted.
     #[arg(long, default_value_t = false)]
     once: bool,
+}
+
+fn parse_optional_address(v: Option<&str>) -> Result<Option<Address>, Box<dyn std::error::Error>> {
+    v.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()
+        .map_err(Into::into)
 }
 
 #[tokio::main]
@@ -205,7 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .vault
         .ok_or("--vault (INDEXER_VAULT) is required unless --migrate-only")?;
 
-    let rpc = JsonRpc::new(&rpc_url);
+    let rpc = JsonRpc::new(&rpc_url)
+        .with_logs_url(cli.logs_rpc_url.clone())
+        .with_retry(RetryPolicy::new(cli.rpc_max_retries, cli.rpc_backoff_ms));
 
     let registry = cli
         .registry
@@ -247,6 +290,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let timelock = parse_optional_address(cli.timelock.as_deref())?;
+    let safe = parse_optional_address(cli.safe.as_deref())?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -258,7 +304,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         portfolio_router,
         investment_committee,
         consensus_receipt,
+        timelock,
+        safe,
         max_blocks_per_tick: cli.max_blocks_per_tick,
+        start_block: cli.start_block,
         end_block: cli.end_block,
         // Load feature flags from FEATURE_FLAGS env var at startup.
         // config/feature-flags.json is the canonical registry.
@@ -266,12 +315,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut interval = tokio::time::interval(Duration::from_secs(cli.tick_seconds));
+    let mut consecutive_refusals: u32 = 0;
 
     loop {
         match run_once(&db, &rpc, &cfg).await {
             Ok(o) => {
                 if let Some(ref err) = o.error {
+                    if o.refused {
+                        // An endpoint said no. Asking again every tick cannot change the answer, so say what
+                        // to do and wait longer each time (capped), instead of logging the same line forever.
+                        consecutive_refusals = consecutive_refusals.saturating_add(1);
+                        let wait = refusal_backoff(consecutive_refusals, cli.tick_seconds);
+                        error!(
+                            run_id = o.run_id,
+                            error = %err,
+                            consecutive_refusals,
+                            next_attempt_in_secs = wait.as_secs(),
+                            "indexer cannot make progress: an RPC endpoint refused the request; fix the endpoint and restart"
+                        );
+                        if cli.once {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    consecutive_refusals = 0;
                     error!(run_id = o.run_id, error = %err, "tick error (will retry)");
+                } else {
+                    consecutive_refusals = 0;
                 }
                 info!(
                     run_id = o.run_id,
@@ -298,5 +369,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         interval.tick().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(extra: &[&str]) -> Result<Cli, clap::Error> {
+        let mut args = vec!["indexer", "--database-url", "postgres://x"];
+        args.extend_from_slice(extra);
+        Cli::try_parse_from(args)
+    }
+
+    #[test]
+    fn start_block_and_logs_rpc_and_retry_flags_parse() {
+        let cli = parse(&[
+            "--migrate-only",
+            "--start-block",
+            "52401633",
+            "--logs-rpc-url",
+            "https://logs.example",
+            "--rpc-max-retries",
+            "5",
+            "--rpc-backoff-ms",
+            "250",
+            "--max-blocks-per-tick",
+            "1000",
+        ])
+        .expect("parses");
+        assert_eq!(cli.start_block, Some(52_401_633));
+        assert_eq!(cli.logs_rpc_url.as_deref(), Some("https://logs.example"));
+        assert_eq!((cli.rpc_max_retries, cli.rpc_backoff_ms), (5, 250));
+    }
+
+    #[test]
+    fn defaults_keep_the_old_behavior() {
+        let cli = parse(&["--migrate-only"]).expect("parses");
+        assert_eq!(cli.start_block, None);
+        assert_eq!(cli.logs_rpc_url, None);
+        assert_eq!(cli.rpc_max_retries, 0);
+        assert_eq!(cli.max_blocks_per_tick, 1000);
+    }
+
+    #[test]
+    fn a_zero_block_range_is_refused() {
+        assert!(parse(&["--migrate-only", "--max-blocks-per-tick", "0"]).is_err());
     }
 }

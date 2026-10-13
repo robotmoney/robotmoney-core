@@ -27,8 +27,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "./useGuardedWriteContract";
 import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { ADMIN_ROLE_HASH, gatewayAbi } from "./abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "./preview";
@@ -40,7 +40,7 @@ export type RotationAuthorizePath = "admin" | "depositor";
 
 export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, now: number) {
   const { address, isConnected } = useAccount();
-  const { writeContract, isPending } = useWriteContract();
+  const { writeContract, isPending } = useGuardedWriteContract();
 
   const [oldAgentRaw, setOldAgentRaw] = useState("");
   const [newAgentRaw, setNewAgentRaw] = useState("");

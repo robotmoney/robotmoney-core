@@ -24,8 +24,8 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import type { Address, Hash } from "viem";
 import { erc20Abi, routerAbi } from "../lib/abi";
 import {
@@ -37,7 +37,10 @@ import {
   type LegPreview,
 } from "../lib/routerPreview";
 import { TxPreview } from "./TxPreview";
-import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { useDepositStates } from "../lib/useDepositStates";
+import { depositsBlocked, type DepositState } from "../lib/vaultDepositState";
+import { parseUsdcAmount } from "../lib/format";
 import { ProportionPreview } from "./shared";
 
 type Props = Readonly<{
@@ -48,8 +51,8 @@ type Props = Readonly<{
 
 export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const { address, isConnected } = useAccount();
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,
@@ -126,11 +129,35 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     abi: routerAbi,
     functionName: "getEffectiveWeights",
     query: {
-      enabled: isConnected && legs.length > 0,
+      // Always on: the closed notice needs the leg vaults before an amount is typed (and without a wallet).
       // Refetch frequently to detect vault list changes in near-real-time.
       refetchInterval: 12_000,
     },
   });
+
+  // -------- deposits closed on a leg vault (issue 1731) --------
+  // The router deposit is all-or-revert across its legs, so it is enabled ONLY when every leg vault is in the
+  // known-open state. A leg that is paused, retired or unknown closes the whole router deposit. Withdraw and
+  // redeem are not touched.
+  // The leg vaults come from the preview once an amount is typed. Before that they come from the router's
+  // effective weights, so the closed notice shows on page load, before any amount is entered.
+  const weightVaults = Array.isArray(effectiveWeights)
+    ? ((effectiveWeights[0] as Address[] | undefined) ?? [])
+    : [];
+  const previewVaults = legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string");
+  const legVaults = previewVaults.length > 0 ? previewVaults : weightVaults;
+  const legStates = useDepositStates(legVaults);
+  const closedLegs = legVaults.filter((v) => {
+    const st = legStates.get(v.toLowerCase());
+    return !st || depositsBlocked(st);
+  });
+  const pausedLegCount = closedLegs.length;
+  // No known leg vaults (weights not read yet) cannot be confirmed open: closed.
+  const routerDepositsClosed = pausedLegCount > 0 || legVaults.length === 0;
+  const firstClosed = closedLegs[0] && legStates.get(closedLegs[0].toLowerCase());
+  const closedState: DepositState = routerDepositsClosed
+    ? (firstClosed ?? { kind: "unknown" })
+    : { kind: "open", source: "chain" };
 
   const currentActiveVaults = Array.isArray(effectiveWeights)
     ? (effectiveWeights[0] as Address[] | undefined)
@@ -166,6 +193,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     routerPreview?.ok === true &&
     !hasUnavailable &&
     allowanceOk &&
+    !routerDepositsClosed &&
     !vaultListChanged;
 
   // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
@@ -230,11 +258,22 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           onChange={(e) => setAmountInput(e.target.value)}
           placeholder="0.00"
           inputMode="decimal"
+          disabled={routerDepositsClosed}
         />
       </label>
 
+      <DepositsClosedNotice
+        state={closedState}
+        scope={
+          legVaults.length === 0
+            ? "Router deposit (leg vaults not yet known)"
+            : `Router deposit (${pausedLegCount} of ${legVaults.length} leg vaults closed)`
+        }
+        testId="router-deposits-closed"
+      />
+
       {/* Per-leg breakdown table (AC §6) */}
-      {legs.length > 0 && <ProportionPreview legs={legs} />}
+      {legs.length > 0 && <ProportionPreview legs={legs} legStates={legStates} />}
 
       {/* Vault list changed warning (AC §7) */}
       {vaultListChanged && (
@@ -260,7 +299,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           type="button"
           data-testid="router-deposit-tab-approve"
           onClick={onApprove}
-          disabled={!isConnected || !approveSim || isPending}
+          disabled={!isConnected || !approveSim || isPending || routerDepositsClosed}
         >
           Approve USDC for router
         </button>
@@ -277,6 +316,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           isPending ||
           routerPreview?.ok !== true ||
           hasUnavailable === true ||
+          routerDepositsClosed ||
           vaultListChanged === true
         }
       >

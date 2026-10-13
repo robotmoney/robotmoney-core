@@ -14,10 +14,10 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
-const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK };
+const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
 const LIB_TICK_MATH = addr(0x11b1);
 const WHO: Record<string, `0x${string}`> = { deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safe: SAFE };
 const OTHER = addr(0x0bad);
@@ -27,6 +27,7 @@ function subject(name: string): `0x${string}` {
   const v = /^vault\[(\w+)\]$/.exec(name); if (v) return VAULTS[v[1]].address;
   if (/^library\[tick_math\]$/.test(name)) return LIB_TICK_MATH;
   if (name === "safe") return SAFE;
+  if (name === "adapter[V4:rmAGENT]") return V4_ADAPTER;
   const c = CORE[name]; if (c) return c;
   throw new Error(`no subject for '${name}'`);
 }
@@ -55,6 +56,7 @@ const RULES: Rule[] = [
   [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(subject(m[1]).toLowerCase(), "0x6000"); }],
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
+  [/^deployment kind: the timelock delay agrees with the kind$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^timelock: min delay equals sheet$/, (w) => { w.sheet.timelockDelay = 999_999; }],
   [/^timelock: manifest executorPolicy is open$/, (w) => editManifest(w, timelockFile(), (o) => { o.executorPolicy = "safe"; })],
   [/^timelock: manifest cancellerPolicy is safe-only$/, (w) => editManifest(w, timelockFile(), (o) => { o.cancellerPolicy = "any-signer"; })],
@@ -94,10 +96,28 @@ const RULES: Rule[] = [
   [/^governance: votingPeriod equals sheet$/, (w) => w.chain.set(GOV, "votingPeriod", 99_999n)],
   [/^governance: executionDelay equals sheet$/, (w) => w.chain.set(GOV, "executionDelay", 99_999n)],
   [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
+  // issue 1743: a voted vector on the router overrides the default vector
+  [/^router: votedWeightsActive is false after deploy$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+  [/^router: effective weights equal the sheet's launch vector$/, (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
+  // issue 1696: a receipt the run manifest says the Safe applied reads not released
+  [/^receipt: applied receipt is released and its weights are on the router$/, (w) => { w.opts.appliedReceipt = { receiptId: `0x${"ab".repeat(32)}`, vaults: Object.values(VAULTS).map((v) => v.address), bps: [9500, 500, 0, 0] }; w.chain.set(REC, "isReleased", () => false); }],
   [/^(vault\[\w+\]): router eligibility equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].routerEligible = false; }],
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
   [/^(vault\[\w+\]): a second setRegistry reverts$/, (w) => { w.chain.setRegistryOpen = true; }],
+  // core 1676: the Uniswap V4 asset of rmAGENT. Each label has the one fault it exists to catch.
+  [/^vault\[rmAGENT\]: asset row is venue V4 with the price recorder as its pool$/, (w) => {
+    const rm = VAULTS.rmAGENT.address;
+    w.chain.set(rm, "assets", (a: any[]) => { if (Number(a[0]) !== 0) throw new Error("execution reverted"); return [w.sheet.vaults.rmAGENT.assets[0]!.token, OTHER, 29100, true, V4_ADAPTER, 1]; });
+  }],
+  [/^vault\[rmAGENT\]: V4 adapter codehash is allowed$/, (w) => w.chain.set(VAULTS.rmAGENT.address, "adapterCodeHashAllowed", false)],
+  [/^vault\[rmAGENT\]: V4 adapter is bound to the recorder, the PoolManager and the pool key$/, (w) => w.chain.set(V4_ADAPTER, "RECORDER", OTHER)],
+  [/^recorder: PoolKey and PoolManager equal config$/, (w) => w.chain.set(RECORDER, "tickSpacing", 200)],
+  [/^recorder: observation ring holds the full window floor$/, (w) => w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 900])],
+  [/^recorder: has no owner, role or setter$/, (w) => {
+    // the recorder code gains the `owner()` selector 0x8da5cb5b, as a PUSH4 would carry it
+    w.chain.codes.set(RECORDER.toLowerCase(), `${w.chain.codes.get(RECORDER.toLowerCase())!}638da5cb5b` as `0x${string}`);
+  }],
   [/^vault\[rmAGENT\]: holds RM as its one asset$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): tvlCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "tvlCap", 1n)],
   [/^(vault\[\w+\]): perDepositCap equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "perDepositCap", 1n)],
@@ -110,6 +130,8 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
+  // core 1695: the vault bound moved off the launch value (the pool fee alone is 291 bps)
+  [/^(vault\[rmAGENT\]): maxSlippageBps equals 500$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 300n)],
   [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],
@@ -166,6 +188,16 @@ describe("negative fixture for every verifier label", () => {
 
   test("the healthy world fails nothing, so every failure below is the planted fault", async () => {
     expect(failed(await verifyDeployment(buildWorld().opts))).toEqual([]);
+  });
+
+  test("rmAGENT asset row on the wrong venue (V3, not V4) fails the V4 asset-row label even with the recorder pool and fee right", async () => {
+    const label = "vault[rmAGENT]: asset row is venue V4 with the price recorder as its pool";
+    const w = buildWorld(8453);
+    w.chain.set(VAULTS.rmAGENT.address, "assets", (a: any[]) => {
+      if (Number(a[0]) !== 0) throw new Error("execution reverted");
+      return [w.sheet.vaults.rmAGENT.assets[0]!.token, RECORDER, 29100, true, V4_ADAPTER, 0];
+    });
+    expect(failed(await verifyDeployment(w.opts))).toContain(label);
   });
 
   test.each(LABELS)("%s fails when its fault is planted", async (label) => {

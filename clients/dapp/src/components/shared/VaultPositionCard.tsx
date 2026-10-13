@@ -23,8 +23,8 @@ export interface VaultPositionCardProps {
   /** Human-readable vault name from the registry / indexer. */
   readonly vaultName: string;
   /**
-   * Raw receipt-token (rmUSDC) balance as a decimal string.
-   * Uses 6-decimal fixed-point, e.g. "1000000" = 1 rmUSDC.
+   * Receipt-token (rmUSDC) balance, already formatted for display by the parent through the shared
+   * format module (formatSharesString). This component never formats a raw integer itself.
    */
   readonly shares: string;
   /**
@@ -33,7 +33,7 @@ export interface VaultPositionCardProps {
    */
   readonly riskLabel?: string;
   /**
-   * Optional estimated USDC value string (decimal, 6-decimal units).
+   * Optional estimated USDC value, already formatted for display (formatUsdcString).
    * Injected by the parent after a live `vault.convertToAssets(shares)` call.
    * When absent or undefined, displays "—".
    */

@@ -1,0 +1,129 @@
+---
+title: "IUniswapV4PriceRecorder"
+description: "What the V4 swap adapter and the deploy scripts read from the permissionless price recorder."
+---
+
+# IUniswapV4PriceRecorder
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/interfaces/IUniswapV4PriceRecorder.sol)
+
+**Title:** IUniswapV4PriceRecorder
+
+What the V4 swap adapter and the deploy scripts read from the permissionless price recorder.
+
+## Functions
+
+<a id="pool_manager"></a>
+
+### POOL_MANAGER
+
+```solidity
+function POOL_MANAGER() external view returns (IPoolManagerV4);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4` |  |
+
+<a id="pool_id"></a>
+
+### POOL_ID
+
+```solidity
+function POOL_ID() external view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="token0"></a>
+
+### token0
+
+```solidity
+function token0() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="token1"></a>
+
+### token1
+
+```solidity
+function token1() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="fee"></a>
+
+### fee
+
+```solidity
+function fee() external view returns (uint24);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
+
+<a id="tickspacing"></a>
+
+### tickSpacing
+
+```solidity
+function tickSpacing() external view returns (int24);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="hooks"></a>
+
+### hooks
+
+```solidity
+function hooks() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="record"></a>
+
+### record
+
+Record the pool tick if this block has not been recorded yet. Permissionless. Returns whether a snapshot was written.
+
+```solidity
+function record() external returns (bool recorded);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recorded | `bool` |  |
+

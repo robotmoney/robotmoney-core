@@ -19,7 +19,9 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3,
 ///         Compound V3, Moonwell Flagship USDC through the ERC-4626 `MorphoAdapter`), allows
 ///         the adapters, registers them with 3334 / 3333 / 3333 bps caps, and makes the
-///         seed deposit that anchors the share price before the vault is opened.
+///         seed deposit that anchors the share price. The vault is deployed paused (core 1710):
+///         `pauseDeposits()` runs right after the seed deposit, and the govern stage opens it
+///         through the Safe and the timelock like the three basket vaults.
 ///
 ///         The gateway, router and registry are NOT deployed here: the registry, router and
 ///         gateway stages follow. The old single script deployed the gateway with a zero
@@ -172,7 +174,9 @@ contract DeployVault is ExpectedChainGuard {
 
     /// @dev The seed step itself, shared by the broadcast run and the in-process seeded run.
     ///      Refuses an unset (zero) or deployer receiver, deposits the seed for the receiver and
-    ///      asserts the deployer holds no shares afterwards. The caller must be the deployer.
+    ///      asserts the deployer holds no shares afterwards, then pauses deposits (core 1710: all
+    ///      four vaults deploy paused, the govern stage unpauses them). The caller must be the
+    ///      deployer, who holds EMERGENCY_ROLE until the timelock stage.
     function _seedStep(Deployed memory d, address receiver, uint256 seed)
         internal
         returns (uint256 shares)
@@ -184,6 +188,8 @@ contract DeployVault is ExpectedChainGuard {
         shares = d.vault.deposit{gas: SEED_DEPOSIT_GAS}(seed, receiver);
         require(d.vault.balanceOf(d.admin) == 0, "deployer must hold no seed shares");
         _requireSeeded(d, seed);
+        d.vault.pauseDeposits();
+        require(d.vault.depositsPaused(), "rmUSDC must deploy paused");
     }
 
     /// @dev The seed share receiver: `<prefix>SEED_SHARE_RECEIVER`, required on every chain.

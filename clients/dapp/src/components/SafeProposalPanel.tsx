@@ -20,7 +20,9 @@
  * service: exported bundles move between owners out of band.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
+import { useGuardedWriteContract, useWriteChainGuard } from "../lib/useGuardedWriteContract";
+import { WrongChainError } from "../lib/writeChainGuard";
 import { getAddress, type Address, type Hex } from "viem";
 import {
   SafeProposalError,
@@ -184,7 +186,8 @@ function ActiveSafeProposal(props: ActiveProps) {
   const { testId, safeAddress, timelockAddress, request } = props;
   const { address, connector } = useAccount();
   const publicClient = usePublicClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useGuardedWriteContract();
+  const chainGuard = useWriteChainGuard();
   const reader = useMemo(() => (publicClient ? toReader(publicClient) : undefined), [publicClient]);
 
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
@@ -230,6 +233,11 @@ function ActiveSafeProposal(props: ActiveProps) {
 
   async function onCreate() {
     if (!reader || !connector || !address) return;
+    if (chainGuard.blocked) {
+      // Signing the Safe typed data on the wrong chain is as unsafe as a write (issue 1729).
+      setNotice(new WrongChainError(chainGuard.state).message);
+      return;
+    }
     setBusy(true);
     setNotice(null);
     try {

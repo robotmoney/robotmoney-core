@@ -31,6 +31,7 @@
  * Security: docs/code-review/20260518-code-review-internal-codex.md §5.
  */
 import type { Address } from "viem";
+import { formatSharesString, formatUsdcString, shareSymbolOrNeutral } from "../lib/format";
 
 export interface AgentPolicyEntry {
   /** Agent address (0x-prefixed). */
@@ -78,6 +79,11 @@ export interface AgentPolicyEntry {
    * (issue #429, AZ-GW-2, issue #1069).
    */
   readonly shareAllowance?: string;
+  /**
+   * The share token symbol of the vault these share counts are in (its on-chain `symbol()`). Absent
+   * when the vault is not known: the panel then prints the neutral "shares" (issue 1767).
+   */
+  readonly shareSymbol?: string;
 }
 
 /**
@@ -148,9 +154,14 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                     >
                       WARNING: withdrawals enabled. An agent-key compromise can redeem up to{" "}
                       <code data-testid="agent-policy-withdrawal-warning-cap">
-                        {policy.maxWithdrawPerWindow ?? "(unknown cap)"}
+                        {policy.maxWithdrawPerWindow === undefined
+                          ? "(unknown cap)"
+                          : formatSharesString(
+                              policy.maxWithdrawPerWindow,
+                              shareSymbolOrNeutral(policy.shareSymbol),
+                            )}
                       </code>{" "}
-                      shares per window to <code>{policy.assetRecipient ?? "(unset)"}</code>. Keep
+                      per window to <code>{policy.assetRecipient ?? "(unset)"}</code>. Keep
                       assetRecipient under your sole control and revoke unused gateway share
                       allowance below.
                     </p>
@@ -160,9 +171,12 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                       <p>
                         Stale gateway share allowance:{" "}
                         <code data-testid="agent-policy-stale-allowance-amount">
-                          {policy.shareAllowance}
-                        </code>{" "}
-                        shares. Withdrawals are disabled, but this allowance lets a future
+                          {formatSharesString(
+                            policy.shareAllowance,
+                            shareSymbolOrNeutral(policy.shareSymbol),
+                          )}
+                        </code>
+                        . Withdrawals are disabled, but this allowance lets a future
                         re-authorization or compromised admin path move shares without further
                         approval. Revoke when unused.
                       </p>
@@ -190,13 +204,17 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                     {policy.maxPerPayment !== undefined && (
                       <>
                         <dt>Max per payment</dt>
-                        <dd data-testid="agent-policy-max-per-payment">{policy.maxPerPayment}</dd>
+                        <dd data-testid="agent-policy-max-per-payment">
+                          {formatUsdcString(policy.maxPerPayment)}
+                        </dd>
                       </>
                     )}
                     {policy.maxPerWindow !== undefined && (
                       <>
                         <dt>Max per window</dt>
-                        <dd data-testid="agent-policy-max-per-window">{policy.maxPerWindow}</dd>
+                        <dd data-testid="agent-policy-max-per-window">
+                          {formatUsdcString(policy.maxPerWindow)}
+                        </dd>
                       </>
                     )}
                     {policy.shareReceiver !== undefined && (
@@ -216,7 +234,10 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                       <>
                         <dt>Max withdrawal per window (shares)</dt>
                         <dd data-testid="agent-policy-max-withdraw-per-window">
-                          {policy.maxWithdrawPerWindow}
+                          {formatSharesString(
+                            policy.maxWithdrawPerWindow,
+                            shareSymbolOrNeutral(policy.shareSymbol),
+                          )}
                         </dd>
                       </>
                     )}
@@ -237,7 +258,12 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                             </>
                           ) : null}
                         </dt>
-                        <dd data-testid="agent-policy-share-allowance">{policy.shareAllowance}</dd>
+                        <dd data-testid="agent-policy-share-allowance">
+                          {formatSharesString(
+                            policy.shareAllowance,
+                            shareSymbolOrNeutral(policy.shareSymbol),
+                          )}
+                        </dd>
                       </>
                     )}
                     {policy.allowedSourceVaults !== undefined &&

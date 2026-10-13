@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SHEET_SPEC, VAULT_KEYS } from "../src/sheet.ts";
-import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef } from "../src/stages.ts";
+import { DEPLOYER_STAGES, STAGES, STAGE_NAMES, VAULT_STAGES, buildStages, expectedStartNonce, getStageTable, manifestRef, proofNoncesBefore } from "../src/stages.ts";
 import { LIBS_STAGE, MANIFEST_ENV, SHEET_RENAMES, requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
 import { manifestBase, parseStageTable } from "../src/stage-table.ts";
 import { stagePlan } from "../src/plan.ts";
@@ -91,11 +91,16 @@ describe("stage list built from core's stage table", () => {
   test("start nonces are the running sum of the frozen counts", () => {
     expect(expectedStartNonce("safe", COUNTS)).toBe(0);
     expect(expectedStartNonce("libs", COUNTS)).toBe(1);
-    expect(expectedStartNonce("vault", COUNTS)).toBe(5);
+    expect(expectedStartNonce("recorder", COUNTS)).toBe(5);
+    expect(expectedStartNonce("vault", COUNTS)).toBe(5 + COUNTS.recorder!);
     const plan = stagePlan(COUNTS);
     expect(plan.map((p) => p.stage)).toEqual(STAGE_NAMES);
     const last = plan.find((p) => p.stage === "timelock")!;
-    expect(last.startNonce! + last.expectedCount!).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0));
+    // the deployer also sends the prove-control transaction before the handover (core 1712): it moves the handover start and the end by one
+    expect(last.startNonce! + last.expectedCount!).toBe(Object.values(COUNTS).reduce((a, b) => a + b, 0) + 1);
+    expect(proofNoncesBefore("timelock")).toBe(1);
+    expect(proofNoncesBefore("vault")).toBe(0);
+    expect(proofNoncesBefore("safe")).toBe(0);
     expect(plan.find((p) => p.stage === "verify")!.expectedCount).toBeNull();
   });
   test("rmRWA is a plain basket row: no oracle name anywhere in its row", () => {
@@ -143,19 +148,19 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
     expect(gov.VOTER_ADDRESSES.toLowerCase()).toBe(sheet.voters.join(",").toLowerCase());
     expect(gov.VOTER_POWER).toBe(sheet.voterPower.toString());
     expect(gov.QUORUM_THRESHOLD).toBe(sheet.quorum.toString());
-    // the example sheet makes PROTO and RWA eligible with USDC 6000, PROTO 2500, RWA 1500
-    expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("7059,2941");
-    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("none");
-    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("6000,2500,1500");
+    // the example sheet makes PROTO, AGENT and RWA eligible with the launch vector USDC 9500, PROTO 500, AGENT 0, RWA 0
+    expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("9500,500");
+    expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");
+    expect(stageEnv(ctx, stage("rwa")).ROUTER_DEFAULT_BPS).toBe("9500,500,0,0");
     expect(stageEnv(ctx, stage("rwa")).TVL_CAP).toBe(sheet.vaults.RWA.tvlCap.toString());
     expect(stageEnv(ctx, stage("vault")).ROUTER_DEFAULT_BPS).toBeUndefined();
   });
 });
 
 describe("the govern stage lists the unpause-only matrix (issue 1520)", () => {
-  test("governRowNames() is the three basket unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
-    expect([...governRowNames()]).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
-    expect(governRowNames().length).toBe(6);
+  test("governRowNames() is the four vault unpauses then the Twin-only demonstrations, and no 13-row list survives", () => {
+    expect([...governRowNames()]).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "update-delay", "batch", "cancel"]);
+    expect(governRowNames().length).toBe(7);
     const g = (table as unknown as { govern: { mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect([...g.mainnetRows, ...g.twinOnlyRows]).toEqual([...governRowNames()]);
   });

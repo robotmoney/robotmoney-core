@@ -48,7 +48,8 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money USDC",
       risk_label: "STABLE_YIELD",
       status: 0,
-      deposit_cap: "10000000000000",
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
+      tvl_cap: "10000000000000",
       total_assets: "5000000000",
       exit_fee_bps: 10,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -59,7 +60,8 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Protocol",
       risk_label: "VOLATILE",
       status: 0,
-      deposit_cap: "10000000000000",
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
+      tvl_cap: "10000000000000",
       total_assets: "2000000000",
       exit_fee_bps: 25,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -70,7 +72,8 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money Agent Tokens",
       risk_label: "SPECULATIVE",
       status: 0,
-      deposit_cap: "10000000000000",
+      deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
+      tvl_cap: "10000000000000",
       total_assets: "1000000000",
       exit_fee_bps: 25,
       indexed_at: "2026-01-01T12:00:00Z",
@@ -81,13 +84,14 @@ const fourVaultFixture: VaultsResponse = {
       name: "Robot Money RWA / Thematic",
       risk_label: "SPECULATIVE",
       status: 1, // non-Active (DepositsPaused) — the RWA/Thematic placeholder
-      deposit_cap: "0",
+      tvl_cap: "0",
       total_assets: null,
       exit_fee_bps: null,
       indexed_at: "2026-01-01T12:00:00Z",
     },
   ],
   block_number: 1000,
+  chain_head_block: 1005,
   indexed_at: "2026-01-01T12:00:00Z",
 };
 
@@ -100,7 +104,8 @@ function makeVaultFixture(total_assets: string | null): VaultsResponse {
         name: "Robot Money USDC",
         risk_label: "STABLE_YIELD",
         status: 0,
-        deposit_cap: "10000000000000",
+        deposits_paused: false, // the explorer saw depositsPaused() == false (issue 1731)
+        tvl_cap: "10000000000000",
         total_assets,
         exit_fee_bps: 10,
         indexed_at: "2026-01-01T12:00:00Z",
@@ -155,7 +160,9 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
     const cards = await findAllByTestId("landing-vault-card");
     const active = cards.filter((c) => c.getAttribute("data-vault-active") === "true");
     for (const card of active) {
-      expect(within(card).getByTestId("landing-vault-card-status").textContent).toBe("Active");
+      expect(within(card).getByTestId("landing-vault-card-status").textContent).toBe(
+        "Active (per index, block 1000)",
+      );
       expect(within(card).getByTestId("landing-vault-card-tvl")).toBeTruthy();
     }
   });
@@ -192,7 +199,7 @@ describe("VaultCards — TVL display and polling", () => {
       </ExplorerProvider>,
     );
     await waitFor(async () => {
-      expect((await findByTestId2("landing-vault-card-tvl")).textContent).toBe("0");
+      expect((await findByTestId2("landing-vault-card-tvl")).textContent).toBe("0.00 USDC");
     });
   });
 
@@ -227,13 +234,13 @@ describe("VaultCards — TVL display and polling", () => {
 
     // Initial fetch shows "0".
     await waitFor(async () => {
-      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
+      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0.00 USDC");
     });
 
     // After one poll interval the context re-fetches and VaultCards displays the non-zero TVL.
     await waitFor(
       async () => {
-        expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5000000000");
+        expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5,000.00 USDC");
       },
       { timeout: 2_000 },
     );

@@ -1,0 +1,288 @@
+---
+title: "BasketVaultV4VenueTest"
+---
+
+# BasketVaultV4VenueTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/BasketVaultV4Venue.t.sol)
+
+**Inherits:** Test
+
+## Constants
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 100e6;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+AgentTokenVault internal vault;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### rm
+
+```solidity
+TestERC20 internal rm;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_warmrecorder"></a>
+
+### _warmRecorder
+
+<i>
+
+Grow the ring to the 1800 s window floor and record for just over one window.
+
+</i>
+
+```solidity
+function _warmRecorder() internal;
+```
+
+<a id="_addrm"></a>
+
+### _addRm
+
+```solidity
+function _addRm() internal;
+```
+
+<a id="_readyvault"></a>
+
+### _readyVault
+
+```solidity
+function _readyVault() internal;
+```
+
+<a id="_deposit-uint256"></a>
+
+### _deposit
+
+```solidity
+function _deposit(uint256 amt) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="test_addasset_revertsuntiltheadaptercodehashisallowed"></a>
+
+### test_addAsset_revertsUntilTheAdapterCodehashIsAllowed
+
+```solidity
+function test_addAsset_revertsUntilTheAdapterCodehashIsAllowed() public;
+```
+
+<a id="test_addasset_revertswhiletherecorderringisbelow901slots"></a>
+
+### test_addAsset_revertsWhileTheRecorderRingIsBelow901Slots
+
+```solidity
+function test_addAsset_revertsWhileTheRecorderRingIsBelow901Slots() public;
+```
+
+<a id="test_addasset_revertswhiletherecorderholdslessthan1800sofhistory"></a>
+
+### test_addAsset_revertsWhileTheRecorderHoldsLessThan1800sOfHistory
+
+```solidity
+function test_addAsset_revertsWhileTheRecorderHoldsLessThan1800sOfHistory() public;
+```
+
+<a id="test_addasset_revertswhentheregisteredfeeisnotthepoolfee"></a>
+
+### test_addAsset_revertsWhenTheRegisteredFeeIsNotThePoolFee
+
+```solidity
+function test_addAsset_revertsWhenTheRegisteredFeeIsNotThePoolFee() public;
+```
+
+<a id="test_addasset_revertswhentherecorderpooldoesnotpairthetokenwithusdc"></a>
+
+### test_addAsset_revertsWhenTheRecorderPoolDoesNotPairTheTokenWithUsdc
+
+```solidity
+function test_addAsset_revertsWhenTheRecorderPoolDoesNotPairTheTokenWithUsdc() public;
+```
+
+<a id="test_addasset_revertswhilepoolliquidityisbelowthevaultfloor"></a>
+
+### test_addAsset_revertsWhilePoolLiquidityIsBelowTheVaultFloor
+
+```solidity
+function test_addAsset_revertsWhilePoolLiquidityIsBelowTheVaultFloor() public;
+```
+
+<a id="test_deposit_buysrmthroughthepoolmanagerandpokestherecorder"></a>
+
+### test_deposit_buysRmThroughThePoolManagerAndPokesTheRecorder
+
+```solidity
+function test_deposit_buysRmThroughThePoolManagerAndPokesTheRecorder() public;
+```
+
+<a id="test_redeem_sellsrmbackthroughthesamepoolwhilefresh"></a>
+
+### test_redeem_sellsRmBackThroughTheSamePoolWhileFresh
+
+```solidity
+function test_redeem_sellsRmBackThroughTheSamePoolWhileFresh() public;
+```
+
+<a id="test_stale_depositandusdcredeemrevertandredeeminkindstillpays"></a>
+
+### test_stale_depositAndUsdcRedeemRevertAndRedeemInKindStillPays
+
+```solidity
+function test_stale_depositAndUsdcRedeemRevertAndRedeemInKindStillPays() public;
+```
+
+<a id="test_stale_apokerestoresdepositsandredeems"></a>
+
+### test_stale_aPokeRestoresDepositsAndRedeems
+
+```solidity
+function test_stale_aPokeRestoresDepositsAndRedeems() public;
+```
+
+<a id="test_manipulation_flashswappokedepositrevertsonthedeviationguard"></a>
+
+### test_manipulation_flashSwapPokeDepositRevertsOnTheDeviationGuard
+
+A flash swap that moves spot, then a poke, then a deposit in the same block: the ORA-4 guard sees spot far from
+the TWAP (the record moved at most 20 ticks), so the deposit reverts. The vault is never minted shares at the mark.
+
+```solidity
+function test_manipulation_flashSwapPokeDepositRevertsOnTheDeviationGuard() public;
+```
+
+<a id="test_manipulation_thetwappricebarelymovesintheblockoftheattack"></a>
+
+### test_manipulation_theTwapPriceBarelyMovesInTheBlockOfTheAttack
+
+```solidity
+function test_manipulation_theTwapPriceBarelyMovesInTheBlockOfTheAttack() public;
+```
+
+<a id="test_slippage_thedefault300bpscannotcoverthepoolfeeandimpact"></a>
+
+### test_slippage_theDefault300bpsCannotCoverThePoolFeeAndImpact
+
+The pool charges 2.91 percent. The AgentTokenVault default slippage of 300 bps leaves 9 bps for price impact,
+so a deposit that moves the price 10 bps reverts. The deploy script raises the bound to the 500 bps ceiling.
+
+```solidity
+function test_slippage_theDefault300bpsCannotCoverThePoolFeeAndImpact() public;
+```
+

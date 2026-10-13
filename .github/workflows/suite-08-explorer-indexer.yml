@@ -111,6 +111,15 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
 
+      # RPC URL redaction (issue 1729). A keyed RPC URL must never reach logs or
+      # indexer_runs.error. Fails if zero tests ran.
+      - name: RPC transport error URL redaction lib tests
+        env:
+          CARGO_TEST_MIN_EXECUTED: "3"
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests --nocapture
+
       # MIGRATIONS + BOOT SCHEMA GUARD (issues #1359, #1392, #1429)
       # tests/migrations.rs covers the schema itself, the `--migrate-only` CLI,
       # and (issues #1392, #1429) the boot-time refusal to run against a schema
@@ -146,6 +155,53 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test rpc_failure -- --nocapture
 
+      # Read-only mainnet dapp (issue 1725): retry and backoff on 429, the separate logs endpoint,
+      # the explicit start block and the refusal of a zero block range. Loopback fake RPC, no network
+      # and no Postgres. Routed through cargo_test_require_executed.sh so zero collected tests is RED.
+      - name: RPC retry, logs endpoint, start block and CLI flags (issue 1725)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test rpc_retry -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests indexer::tests::configured_start_block --nocapture
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --bin indexer -- --nocapture
+
+      # Core 1731: an RPC endpoint that answers HTTP 401 or 403 is a named, actionable, non-retried
+      # refusal (rpc_refused: loopback fake server, no Postgres), and the Timelock and Safe events,
+      # the chain head on every tick, the refusal outcome and the paused-flag snapshots are indexed
+      # (admin_events_and_progress: Postgres testcontainer). The lib steps run the pure decoders and the
+      # refusal backoff. Each is wrapped in the executed-count guard so zero collected tests is RED.
+      - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issue 1731)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test rpc_refused -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ --nocapture
+
+      # Core 1741: each vault's tvlCap() and perDepositCap() are stored per snapshot (RobotMoneyVault and
+      # BasketVault families), a failed read is NULL and never 0, and a snapshot with unknown caps is retaken
+      # on the next tick. Testcontainer Postgres and a stub RPC, wrapped in the executed-count guard.
+      - name: Vault caps snapshots (issue 1741)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test vault_caps -- --test-threads=1 --nocapture
+
+      # Core 1768: a vault snapshot row is written only on changed state or a due heartbeat; a zero-TVL vault
+      # gains no row per tick. Testcontainer Postgres and a stub RPC, wrapped in the executed-count guard.
+      - name: Vault snapshot cadence (issue 1768)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test vault_snapshot_cadence -- --test-threads=1 --nocapture
+
       # Two targets that landed on fusion/deployment-workflow without a job
       # naming them. cargo-test-target-coverage refuses a tests/<name>.rs that
       # no workflow executes, which is how they surfaced when the branch came
@@ -153,8 +209,19 @@ jobs:
       - name: Deploy-block detection
         working-directory: services/explorer-indexer
         run: |
-          CARGO_TEST_MIN_EXECUTED=6 bash ../../.github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=7 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --test deploy_block_detection -- --nocapture
+
+      # Core 1769: request budget of one 1000-block catch-up tick (Postgres testcontainer, stub RPC), and the
+      # retry backoff, Retry-After and tick range lib tests. Executed-count guarded.
+      - name: Catch-up request budget, backoff and tick ranges (issue 1769)
+        env:
+          EXPLORER_INDEXER_REQUIRE_PG: "1"
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --test catch_up_budget -- --nocapture
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer --lib -- rpc::tests::backoff rpc::tests::retry_after indexer::tests::catch_up --nocapture
 
       - name: Postgres env requirement
         working-directory: services/explorer-indexer
@@ -311,6 +378,15 @@ jobs:
             --test router_introspection \
             --test cors \
             --test canonical_schema -- --test-threads=1 --nocapture
+
+      # Core 1731: the index cursor and chain head are not read from the newest (in-flight or failed) run
+      # row, vaults carry their own deposits_paused flag, and the Safe, the timelock and their events are
+      # listed. Testcontainer Postgres, same Docker check as above.
+      - name: explorer-api index cursor, chain head, deposits_paused, admin events (issue 1731)
+        run: |
+          CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
+            --test progress_and_admin -- --test-threads=1 --nocapture
 
       # Issue #1430: the compiled explorer-api binary refuses a stale schema
       # (exit non-zero, naming both versions) and serves on a matching one.

@@ -108,11 +108,14 @@ async function waitUntil<T>(predicate: () => Promise<T | null>, description: str
   throw new Error(`multi-vault-withdrawal: timed out waiting for ${description}`);
 }
 
-/** Format a bigint shares value (6dp) as a decimal string for display comparison. */
+/**
+ * Format a raw shares value as the plain decimal string the withdraw input holds: formatInputAmount at
+ * 24 decimals (vault decimals() 6 + ERC-4626 virtual offset 18), trailing zeros trimmed.
+ */
 function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = (raw % 1_000_000n).toString().padStart(6, "0");
-  return `${whole}.${frac}`;
+  const whole = raw / 10n ** 24n;
+  const frac = (raw % 10n ** 24n).toString().padStart(24, "0").replace(/0+$/, "");
+  return frac.length > 0 ? `${whole}.${frac}` : `${whole}`;
 }
 
 test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on smoke-test devnet", () => {
@@ -145,7 +148,8 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
             {
               vault_addr: endpoints.vault_addr,
               vault_name: "RobotMoney USDC Vault",
-              shares: formatShares(sharesBefore),
+              // The explorer API serialises shares as a raw integer string (NUMERIC(78,0)).
+              shares: sharesBefore.toString(),
             },
           ],
         }),

@@ -5,7 +5,7 @@ description: "Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redee
 
 # BasketVaultRedeemGasForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/176388939d6f20be0d1e7ae20320a66e5e7f2986/contracts/test/BasketVaultRedeemGas.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/BasketVaultRedeemGas.t.sol)
 
 **Inherits:** Test
 
@@ -320,5 +320,35 @@ function test_fork_rmagent_redeemEstimateThenIncludeShifted() public;
 
 ```solidity
 function test_fork_rmrwa_redeemEstimateThenIncludeShifted() public;
+```
+
+<a id="_assertfloorsaroundpool-basketvault-uint256"></a>
+
+### _assertFloorsAroundPool
+
+```solidity
+function _assertFloorsAroundPool(BasketVault v, uint256 leg) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| leg | `uint256` |  |
+
+<a id="test_fork_rmproto_dustredeemsellseveryleg_core1778"></a>
+
+### test_fork_rmproto_dustRedeemSellsEveryLeg_core1778
+
+Core 1778. A redeem worth a few cents sells a handful of
+cbBTC base units (8 decimals, one unit is worth about 0.001 USDC). The Uniswap V3
+pool rounds the fee-adjusted input down by one unit, which for 31 units is a 3.2
+percent shortfall against the TWAP. The old floor (TWAP of the full amount at 1
+percent slippage) then reverted "Too little received" on the real swap router. The
+floor now prices one unit less, so the dust redeem executes.
+
+```solidity
+function test_fork_rmproto_dustRedeemSellsEveryLeg_core1778() public;
 ```
 

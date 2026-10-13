@@ -5,7 +5,7 @@ description: "The broadcast-path happy case (issue #1476), on the shared fixture
 
 # DeployTimelockRunEntrypointTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/32c74b4101392888212aa04d9da684c28a4aa416/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
 
@@ -18,6 +18,6 @@ The broadcast-path happy case (issue #1476), on the shared fixture.
 ### test_run_handsAgentAddressesToTimelock
 
 ```solidity
-function test_run_handsAgentAddressesToTimelock() public;
+function test_run_handsAgentAddressesToTimelock() public removesOwnManifest;
 ```
 

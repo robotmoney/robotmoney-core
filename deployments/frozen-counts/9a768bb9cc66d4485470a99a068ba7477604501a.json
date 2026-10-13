@@ -1,0 +1,22 @@
+{
+  "deploySha": "9a768bb9cc66d4485470a99a068ba7477604501a",
+  "measured": {
+    "chainId": 918453,
+    "at": "2026-10-09T19:46:52.795Z"
+  },
+  "counts": {
+    "safe": 1,
+    "libs": 1,
+    "recorder": 6,
+    "vault": 16,
+    "registry": 2,
+    "router": 4,
+    "gateway": 1,
+    "governance": 6,
+    "ic-policy": 5,
+    "proto": 10,
+    "agent": 10,
+    "rwa": 8,
+    "timelock": 43
+  }
+}

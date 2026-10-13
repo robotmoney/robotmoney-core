@@ -21,8 +21,38 @@ pub struct Freshness {
 #[derive(Debug, Serialize)]
 pub struct Health {
     pub status: &'static str,
+    /// Highest block a successful indexer run committed for this chain; null until one has.
     pub last_indexed_block: Option<i64>,
+    /// Chain head the indexer last saw (`eth_blockNumber`); null until a tick has read it.
+    pub chain_head_block: Option<i64>,
     pub reorg_count: i32,
+}
+
+/// One Timelock or Safe event (`admin_events`).
+#[derive(Debug, Serialize)]
+pub struct AdminEventEntry {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: String,
+    /// The Timelock or Safe that emitted it.
+    pub contract: String,
+    /// `timelock` or `safe`.
+    pub contract_kind: String,
+    pub event_name: String,
+    /// Timelock operation id, or Safe transaction hash.
+    pub op_id: Option<String>,
+    /// The decoded event arguments.
+    pub detail: serde_json::Value,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response for GET /v1/governance/admin-events.
+#[derive(Debug, Serialize)]
+pub struct AdminEventsResponse {
+    pub events: Vec<AdminEventEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +151,21 @@ pub struct TransactionResponse {
     pub freshness: Freshness,
 }
 
+/// `max(tvl_cap - total_assets, 0)`; `None` when either side is unknown. An unknown cap is never turned into a
+/// zero headroom (issue 1741).
+pub fn headroom_of(
+    tvl_cap: Option<&BigDecimal>,
+    total_assets: Option<&BigDecimal>,
+) -> Option<String> {
+    let (cap, assets) = (tvl_cap?, total_assets?);
+    let room = cap - assets;
+    Some(if room.sign() == bigdecimal::num_bigint::Sign::Minus {
+        "0".to_string()
+    } else {
+        dec_to_string(&room)
+    })
+}
+
 /// Format a `NUMERIC(78,0)` `BigDecimal` as a decimal string suitable for
 /// JSON `uint256` fields.
 pub fn dec_to_string(v: &BigDecimal) -> String {
@@ -139,11 +184,24 @@ pub struct Vault {
     pub risk_label: String,
     /// 0 = Active, 1 = Paused, 2 = Retired (matches on-chain VaultStatus enum).
     pub status: i16,
-    pub deposit_cap: String,
+    /// `tvlCap()` of the vault as of its most recent snapshot, in asset base units; null when no snapshot
+    /// exists or the read failed. Null is "unknown" and a client must never show it as 0 (issue 1741).
+    pub tvl_cap: Option<String>,
+    /// `perDepositCap()` as of the most recent snapshot; null when unknown, like `tvl_cap`.
+    pub per_deposit_cap: Option<String>,
+    /// `max(tvl_cap - total_assets, 0)` from the same snapshot; null when either is unknown.
+    pub headroom: Option<String>,
+    /// Block of the snapshot `total_assets`, the caps and `deposits_paused` come from; null when none exists.
+    /// It trails `block_number` by up to the snapshot heartbeat, so it is NOT the index block.
+    pub snapshot_block: Option<i64>,
     /// Most recent `total_assets` from vault_snapshots; null when no snapshot exists.
     pub total_assets: Option<String>,
     /// Most recent `exit_fee_bps` from vault_snapshots; null when no snapshot exists.
     pub exit_fee_bps: Option<i64>,
+    /// `depositsPaused()` of the vault as of its most recent snapshot; null when no snapshot exists, which
+    /// a client must read as "unknown", never as "open". The registry `status` above is lifecycle state and
+    /// does not follow a `pauseDeposits()` call on the vault.
+    pub deposits_paused: Option<bool>,
     pub indexed_at: DateTime<Utc>,
 }
 
@@ -153,6 +211,8 @@ pub struct VaultsResponse {
     pub vaults: Vec<Vault>,
     #[serde(flatten)]
     pub freshness: Freshness,
+    /// Chain head the indexer last saw; null until a tick has read it.
+    pub chain_head_block: Option<i64>,
 }
 
 /// Historical TVL data point from `vault_snapshots`.
@@ -217,7 +277,16 @@ pub struct VaultDetail {
     pub risk_label: String,
     /// 0 = Active, 1 = Paused, 2 = Retired.
     pub status: i16,
-    pub deposit_cap: String,
+    /// `tvlCap()` as of the latest snapshot; null when unknown (issue 1741). See [`Vault::tvl_cap`].
+    pub tvl_cap: Option<String>,
+    /// `perDepositCap()` as of the latest snapshot; null when unknown.
+    pub per_deposit_cap: Option<String>,
+    /// `max(tvl_cap - total_assets, 0)` from the latest snapshot; null when either is unknown.
+    pub headroom: Option<String>,
+    /// Block of the latest snapshot; null when there is none. NOT the index block (see `block_number`).
+    pub snapshot_block: Option<i64>,
+    /// `depositsPaused()` as of the latest snapshot; null when there is none (read as unknown, never open).
+    pub deposits_paused: Option<bool>,
     /// TVL history from vault_snapshots (up to 500 rows, ascending by block).
     pub tvl_history: Vec<VaultTvlPoint>,
     /// Adapter allocation history from adapter_allocations (up to 500 rows, ascending by block).
@@ -233,8 +302,13 @@ pub struct VaultDetail {
 #[derive(Debug, Serialize)]
 pub struct VaultDetailResponse {
     pub vault: VaultDetail,
+    /// `block_number` is the index block: the last block the indexer committed (the same value as `/health`
+    /// `last_indexed_block`), NOT the block of the latest vault snapshot (`vault.snapshot_block`). It used to be
+    /// the snapshot block, which made a healthy indexer look thousands of blocks behind (issue 1741).
     #[serde(flatten)]
     pub freshness: Freshness,
+    /// Chain head the indexer last saw; null until a tick has read it.
+    pub chain_head_block: Option<i64>,
 }
 
 // ─── Governance types (issue #307) ─────────────────────────────────────────
@@ -369,6 +443,8 @@ pub struct StatsResponse {
     pub activity_feed: Vec<ActivityEvent>,
     #[serde(flatten)]
     pub freshness: Freshness,
+    /// Chain head the indexer last saw; null until a tick has read it.
+    pub chain_head_block: Option<i64>,
 }
 
 // ─── GET /v1/router/state ────────────────────────────────────────────────────

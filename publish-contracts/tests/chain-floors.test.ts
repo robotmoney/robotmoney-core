@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { PublishError } from "../src/errors.ts";
-import { assertFloors, parseCorrelatedOwners, delayFloor, plaintextSignerReason, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/floors.ts";
+import { assertFloors, delayFloor, plaintextSignerReason, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/floors.ts";
 import { callerInputs, parseSheet } from "../src/sheet.ts";
 import { sheetText } from "./fixtures.ts";
 
 const sheetFor = (chain: number, extra: Record<string, string | null> = {}) => parseSheet(sheetText({ CHAIN_ID: String(chain), EXPECTED_CHAIN_ID: String(chain), ...extra }));
 const base = (chain: number, extra: Record<string, string | null> = {}, o: Record<string, unknown> = {}) =>
-  ({ rpcChainId: chain, sheet: sheetFor(chain, extra), caller: callerInputs({}), signerSpec: "keystore:/dev/shm/k/DEPLOYER", env: {}, correlatedOwners: [], environment: "mainnet", githubActions: false, ...o }) as Parameters<typeof assertFloors>[0];
+  ({ rpcChainId: chain, sheet: sheetFor(chain, extra), caller: callerInputs({}), signerSpec: "keystore:/dev/shm/k/DEPLOYER", env: {}, environment: "mainnet", githubActions: false, ...o }) as Parameters<typeof assertFloors>[0];
 const kind = (f: () => void): string | undefined => { try { f(); } catch (e) { return (e as PublishError).kind + ": " + (e as Error).message; } return undefined; };
 
 describe("delay floor keyed to the chain id", () => {
@@ -67,26 +67,5 @@ describe("YES and plaintext keys are keyed to the chain id", () => {
   });
   test("plaintextSignerReason is silent for a clean spec", () => {
     expect(plaintextSignerReason("ledger", {})).toBeUndefined();
-  });
-});
-
-describe("persona owners are keyed to the chain id", () => {
-  const good = { TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
-  test("two or more SAFE_OWNERS listed as correlated are refused on 8453", () => {
-    const sheet = sheetFor(8453, good);
-    const correlatedOwners = [sheet.safeOwners[0]!, sheet.safeOwners[1]!.toUpperCase().replace("0X", "0x")];
-    expect(kind(() => assertFloors(base(8453, good, { correlatedOwners })))).toContain("correlated");
-  });
-  test("one persona owner on 8453 is accepted", () => {
-    const sheet = sheetFor(8453, good);
-    expect(kind(() => assertFloors(base(8453, good, { correlatedOwners: [sheet.safeOwners[0]!] })))).toBeUndefined();
-  });
-  test("the same owners are accepted on 918453", () => {
-    const sheet = sheetFor(918453);
-    expect(kind(() => assertFloors(base(918453, {}, { correlatedOwners: [...sheet.safeOwners] })))).toBeUndefined();
-  });
-  test("parseCorrelatedOwners reads addresses out of personas output", () => {
-    const a = "0x" + "ab".repeat(20);
-    expect(parseCorrelatedOwners(`  signerA m/44'/60'/0'/0/2 ${a}\nnoise`)).toEqual([a]);
   });
 });

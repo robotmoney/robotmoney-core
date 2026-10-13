@@ -23,6 +23,10 @@ import type { FetchLike, VaultDetailResponse } from "../../src/lib/explorerApi";
 // Wagmi mock — useReadContract for basket vaults returns isLoading:true so
 // composition tests assert on the loading state without a live RPC.
 vi.mock("wagmi", () => ({
+  // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
+  useReadContracts: () => ({ data: undefined }),
+  useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
+  useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
   createConfig: () => ({}),
   http: () => ({}),
@@ -52,7 +56,7 @@ function makeVaultDetailFixture(overrides: {
       name: overrides.name ?? "Test Vault",
       risk_label: overrides.risk_label,
       status: overrides.status ?? 0,
-      deposit_cap: "1000000000",
+      tvl_cap: "1000000000",
       tvl_history: [],
       indexed_at: "2026-01-01T12:00:00Z",
     },
@@ -152,5 +156,30 @@ describe("VaultDetail — composition section (issue #941)", () => {
     // Component stays in loading state — no crash, no composition section yet
     await waitFor(() => expect(getByTestId("vault-detail-loading")).toBeTruthy());
     expect(queryByTestId("vault-detail-composition")).toBeNull();
+  });
+});
+
+describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
+  const cases: Array<[string, string, number, boolean]> = [
+    ["Robot Money USDC", "STABLE_YIELD", 0, false],
+    ["Robot Money Protocol", "VOLATILE", 0, false],
+    ["Robot Money Agent Tokens", "SPECULATIVE", 0, false],
+    ["Robot Money RWA", "SPECULATIVE", 0, true],
+    ["Robot Money RWA", "SPECULATIVE", 1, true],
+    ["Robot Money RWA / Thematic", "SPECULATIVE", 0, true],
+    ["Forward Fund", "SPECULATIVE", 0, false],
+    ["Reward Basket", "SPECULATIVE", 0, false],
+  ];
+  it.each(cases)("%s (%s, status %i) disclosure present: %s", async (name, risk, status, shown) => {
+    const { getByTestId, queryByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_ADDR}
+        fetchImpl={makeFetch(makeVaultDetailFixture({ risk_label: risk, status, name }))}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-composition")).toBeTruthy());
+    const el = queryByTestId("vault-detail-issuer-freeze-disclosure");
+    expect(el !== null).toBe(shown);
   });
 });

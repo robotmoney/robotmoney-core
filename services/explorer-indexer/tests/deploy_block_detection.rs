@@ -266,7 +266,10 @@ fn cfg() -> IndexerConfig {
         consensus_receipt: None,
         // Small on purpose: one tick must advance a knowable amount, so the
         // asserted `from_block` of the NEXT tick is unambiguous.
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 10,
+        start_block: None,
         end_block: None,
         feature_flags: 0,
     }
@@ -521,5 +524,32 @@ async fn detection_failure_degrades_to_the_old_behaviour_and_never_to_the_head()
         "nothing may be persisted from a detection that did not conclude"
     );
 
+    chain.shutdown();
+}
+
+// ── 7: an explicit start block replaces detection (issue 1725) ──────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_explicit_start_block_is_used_and_no_getcode_probe_is_sent() {
+    let fx = pg_fixture().await;
+    // eth_getCode is unavailable, as on a public non-archive RPC: detection would degrade to block 0.
+    let chain = ForkStateChain::start(CodeMode::Unavailable).await;
+    let rpc = JsonRpc::new(&chain.url);
+    let start = LOWEST_SERVABLE + 100;
+    let mut config = cfg();
+    config.start_block = Some(start);
+
+    let first = run_once(&fx.db, &rpc, &config).await.unwrap();
+    assert!(first.error.is_none(), "first tick clean: {:?}", first.error);
+    assert_eq!(
+        first.from_block, start as i64,
+        "the run starts at the configured block, not at 0"
+    );
+    assert_eq!(first.last_indexed_block, Some(start as i64 + 9));
+    assert_eq!(
+        chain.method_counts("eth_getCode"),
+        0,
+        "an explicit start block skips the deploy-block search entirely"
+    );
     chain.shutdown();
 }

@@ -1,6 +1,7 @@
 // The prove-control step (core 1618, plan decision 21), between stage 10 and stage 11. The real Safe executes one self-call (value 0, empty
 // data) that EVERY owner signed, through the Safe tool: proposeTx, signTx per owner, the Safe's own checkNSignatures over all of them, then
-// executeTx with every signature in the calldata. The proof goes straight through the Safe, never through the timelock.
+// executeTx with every signature in the calldata, submitted by the DEPLOYER (the only funded key; owners only sign, core 1712). The proof goes
+// straight through the Safe, never through the timelock.
 // The run manifest keeps the transaction hash and the signers. Stage 11 refuses without that record (control-proof.ts).
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -71,8 +72,8 @@ export const realProveApi: ProveApi = { connectSafe, proposeTx, signTx, checkSig
 export interface ProveOpts {
   /** One signer per Safe owner (the same specs govern takes). Every owner must be covered. */
   ownerSigners: Signer[];
-  /** Pays the gas of the execTransaction. Default: the first owner signer. It is never the deployer: the deployer nonce is the frozen-count record. */
-  sender?: Signer;
+  /** Pays the gas of the execTransaction: the deployer, the only funded key (core 1712). Every owner still signs. The deployer's own signer, never an owner. */
+  sender: Signer;
   api?: ProveApi;
 }
 
@@ -121,8 +122,7 @@ export async function runProveControl(ctx: RunContext, row: StageRow, manifest: 
   try { await api.checkSignaturesOnChain(handle, bundle, bundle.signatures, handle.owners.length); }
   catch (e) { throw controlNotProven(`the Safe rejected the owner signatures before execution: ${(e as Error).message}`); }
 
-  const sender = o.sender ?? byOwner.get(lc(handle.owners[0]!))!;
-  const res = await api.executeTx(handle, bundle, sender, { allSignatures: true });
+  const res = await api.executeTx(handle, bundle, o.sender, { allSignatures: true });
   if (!res.txHash || res.block === undefined) throw new PublishError("SAFE", "the control proof was not sent");
   const rec: ControlProofRecord = {
     status: "done", safe, txHash: res.txHash, safeTxHash: bundle.safe_tx_hash, nonce, signers: handle.owners.map(lc).sort() as Address[], block: res.block, sentBy: res.sentBy,

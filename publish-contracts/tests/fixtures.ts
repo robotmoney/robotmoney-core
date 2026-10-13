@@ -10,8 +10,8 @@ export const exampleText = (): string => readFileSync(EXAMPLE_SHEET, "utf8");
 
 /** The example sheet with some names replaced, and extra lines appended. */
 export function sheetText(over: Record<string, string | null> = {}, extra: string[] = []): string {
-  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all three unless the caller says otherwise
-  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA" };
+  // chain 8453 refuses a sheet that skips a stage 13 unpause (issue 1520): default it to all four unless the caller says otherwise
+  if (over.CHAIN_ID === "8453" && !("GOVERN_UNPAUSE_VAULTS" in over)) over = { ...over, GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA" };
   // and issue 1580: chain 8453 refuses any router weights but the launch vector (eligibility must then name all three baskets)
   if (over.CHAIN_ID === "8453") over = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", ...over };
   const lines = exampleText().split("\n");
@@ -32,7 +32,7 @@ export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
 /** Frozen counts used across the tests. Deployer stages only. */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
 
 export function tmp(prefix = "pc-"): string { return mkdtempSync(join(tmpdir(), prefix)); }
 

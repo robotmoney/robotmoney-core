@@ -60,13 +60,13 @@ describe("rehearsal and production differ only in the arguments", () => {
     expect(() => parseCli(["govern", ...base, "--call-label", "x", "--call-target", `0x${"1".repeat(40)}`, "--call-data", "abcd"])).toThrow("hex");
   });
 
-  test("--row update-delay, batch and cancel are refused with USAGE on --chain 8453 and accepted on 918453; the unpauses are accepted on both", () => {
+  test("--row update-delay, batch and cancel parse on both chains (issue 1727: whether 8453 accepts them depends on the sheet DEPLOYMENT_KIND, so runGovern refuses them in production, see rehearsal-govern.test.ts); the unpauses are accepted on both", () => {
     const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
-    for (const row of ["update-delay", "batch", "cancel", "4", "5", "6"]) {
-      expect(() => parseCli(["govern", ...base("8453"), "--row", row])).toThrow("refused on chain 8453");
+    for (const row of ["update-delay", "batch", "cancel", "5", "6", "7"]) {
+      expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
       expect(parseCli(["govern", ...base("918453"), "--row", row]).row).toBe(row);
     }
-    for (const row of ["unpause-PROTO", "unpause-AGENT", "unpause-RWA", "1", "3"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
+    for (const row of ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA", "1", "4"]) expect(parseCli(["govern", ...base("8453"), "--row", row]).row).toBe(row);
   });
 
   test("--row release-receipt is accepted on --chain 8453 and on 918453 (issue 1611), and still needs its receipt id", () => {
@@ -85,6 +85,18 @@ describe("rehearsal and production differ only in the arguments", () => {
     expect(() => parseCli(["govern", ...base, "--receipt-id", id])).toThrow("--row release-receipt only");
     expect(() => parseCli(["govern", ...base, "--row", "release-receipt", "--receipt-id", "0x12"])).toThrow("bytes32");
     expect(() => parseCli(["publish", ...base, "--row", "release-receipt", "--receipt-id", id])).toThrow("govern verb");
+  });
+
+  test("--row apply-receipt takes --receipt-id and --payload on 8453 and 918453, and needs both (issue 1696)", () => {
+    const id = `0x${"AB".repeat(32)}`;
+    const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    for (const chain of ["8453", "918453"]) expect(parseCli(["govern", ...base(chain), "--row", "apply-receipt", "--receipt-id", id, "--payload", "p.json"])).toMatchObject({ row: "apply-receipt", receiptId: id.toLowerCase(), payload: "p.json" });
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "apply-receipt", "--payload", "p.json"])).toThrow("needs --receipt-id");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "apply-receipt", "--receipt-id", id])).toThrow("needs --payload");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "apply-receipt", "--receipt-id", "0x12", "--payload", "p.json"])).toThrow("bytes32");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "release-receipt", "--receipt-id", id, "--payload", "p.json"])).toThrow("--payload goes with --row apply-receipt only");
+    expect(() => parseCli(["govern", ...base("8453"), "--payload", "p.json"])).toThrow("--payload goes with --row apply-receipt only");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "unpause-PROTO", "--receipt-id", id])).toThrow("--row release-receipt only");
   });
 
   test("the argument parser takes the documented flags and the aliases", () => {

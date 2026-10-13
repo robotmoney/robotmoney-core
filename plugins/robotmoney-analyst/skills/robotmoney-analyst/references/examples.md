@@ -82,12 +82,8 @@ The agent drafts the proposal rationale citing both sources:
 > growth vault weight. Proposed change is consistent with documented allocation
 > logic.
 
-### Step 5: Submit the proposal (not yet implemented)
+### Step 5: Hand off the proposal (rmpc does not sign it)
 
-```
-This action is not yet implemented. Governance write commands (propose, vote)
-are planned for a future release.
-```
-
-The agent surfaces the rationale text to the user for review before any
-on-chain submission.
+rmpc is not a governance signer and has no `propose` command. The agent
+surfaces the rationale text to the user for review. A Safe signer then submits
+the draft calldata (from `rmpc governance draft-proposal`) through the Safe.

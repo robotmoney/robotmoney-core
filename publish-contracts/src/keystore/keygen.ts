@@ -6,7 +6,11 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { encryptKeystore } from "./keystore.ts";
 
 export function keygen(dir: string, passwordFile: string, names: string[]): Record<string, string> {
-  const password = readFileSync(passwordFile, "utf8").replace(/\r?\n$/, ""); // one trailing newline is not part of the passphrase (cast strips it too)
+  return keygenWithPassword(dir, readFileSync(passwordFile, "utf8").replace(/\r?\n$/, ""), names); // one trailing newline is not part of the passphrase (cast strips it too)
+}
+
+/** Same as keygen with the passphrase held in memory only: nothing reads or writes a passphrase file (the hidden-prompt path). */
+export function keygenWithPassword(dir: string, password: string, names: string[]): Record<string, string> {
   if (password.length < 16) throw new Error("the password file must hold at least 16 characters");
   if (!names.length) throw new Error("give at least one key name");
   mkdirSync(dir, { recursive: true, mode: 0o700 });

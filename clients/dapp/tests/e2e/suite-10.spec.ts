@@ -165,13 +165,22 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length < registeredVaults.length) return false;
           for (const row of rows) {
             const statusText = (await row.textContent())?.trim();
-            if (!["Active", "Deposits paused", "Retired"].includes(statusText ?? "")) return false;
+            if (
+              ![
+                "Active",
+                "Deposits paused",
+                "Deposits paused / closed",
+                "Deposit state unknown",
+                "Retired",
+              ].includes(statusText ?? "")
+            )
+              return false;
           }
           return true;
         },
         {
           message:
-            "each registered vault must have a status cell reading Active / Deposits paused / Retired",
+            "each registered vault must have a status cell reading Active / Deposits paused / closed / Deposit state unknown / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -201,12 +210,22 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
           if (rows.length === 0) return false;
           for (const row of rows) {
             const text = (await row.textContent())?.trim();
-            if (!["Active", "Deposits paused", "Retired"].includes(text ?? "")) return false;
+            if (
+              ![
+                "Active",
+                "Deposits paused",
+                "Deposits paused / closed",
+                "Deposit state unknown",
+                "Retired",
+              ].includes(text ?? "")
+            )
+              return false;
           }
           return true;
         },
         {
-          message: "every vault row status must read Active / Deposits paused / Retired",
+          message:
+            "every vault row status must read Active / Deposits paused / closed / Deposit state unknown / Retired",
           timeout: 120_000,
           intervals: [5_000],
         },
@@ -231,8 +250,8 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     const tvlText = await tvl.textContent();
     expect(
       tvlText?.trim(),
-      `ProtocolStats TVL must be a parseable number (got "${tvlText}")`,
-    ).toMatch(/^\d+(\.\d+)?$/);
+      `ProtocolStats TVL must be a formatted USDC amount (got "${tvlText}")`,
+    ).toMatch(/^\d{1,3}(,\d{3})*(\.\d+)? USDC$/);
 
     const depText = await depositors.textContent();
     expect(
@@ -253,12 +272,19 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
     await expect(page.getByTestId("router-view-error")).not.toBeVisible();
 
-    // Either the weights table or the empty-state must render.
+    // Issue 1741: the weights come from the router. Either the table (with an "Effective: voted|default" label),
+    // the router's empty state, or the "unknown" notice must render; the old explorer-derived label is gone.
     const weightsTable = page.getByTestId("router-view-weights-table");
     const weightsEmpty = page.getByTestId("router-view-weights-empty");
-    const hasWeights = await weightsTable.isVisible().catch(() => false);
-    const hasEmpty = await weightsEmpty.isVisible().catch(() => false);
-    expect(hasWeights || hasEmpty, "router view must render weights or empty state").toBe(true);
+    const weightsUnknown = page.getByTestId("router-view-weights-unknown");
+    await expect(weightsTable.or(weightsEmpty).or(weightsUnknown).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    if (await weightsTable.isVisible().catch(() => false)) {
+      await expect(page.getByTestId("router-view-weight-source")).toHaveText(
+        /^Effective: (voted|default)$/,
+      );
+    }
   });
 
   test("VaultDetail renders when vault row is clicked", async ({ page }) => {

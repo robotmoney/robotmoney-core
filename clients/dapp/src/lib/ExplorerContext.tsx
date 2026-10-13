@@ -22,6 +22,8 @@ export interface ExplorerContextValue {
   readonly stats: StatsResponse | null;
   /** Block number from the most recent /v1/vaults response, or null before first fetch. */
   readonly blockNumber: number | null;
+  /** Chain head the indexer last saw (`chain_head_block`), or null when the explorer has not reported one. */
+  readonly chainHeadBlock: number | null;
   readonly vaultsLoading: boolean;
   readonly statsLoading: boolean;
   readonly vaultsError: string | null;
@@ -32,6 +34,7 @@ const INITIAL: ExplorerContextValue = {
   vaults: [],
   stats: null,
   blockNumber: null,
+  chainHeadBlock: null,
   vaultsLoading: true,
   statsLoading: true,
   vaultsError: null,
@@ -83,6 +86,7 @@ export function ExplorerProvider({
             ...prev,
             vaults: res.vaults,
             blockNumber: res.block_number,
+            chainHeadBlock: res.chain_head_block ?? null,
             vaultsLoading: false,
             vaultsError: null,
           })),

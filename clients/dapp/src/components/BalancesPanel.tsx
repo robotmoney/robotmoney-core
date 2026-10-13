@@ -23,6 +23,7 @@ import { useMemo } from "react";
 import { useAccount, useBalance, useChainId, useReadContract, useReadContracts } from "wagmi";
 import type { Address } from "viem";
 import { erc20Abi, gatewayAbi } from "../lib/abi";
+import { shareDisplayDecimals, USDC_DECIMALS } from "../lib/format";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { BalancesPanelView, type BalancesPanelReceipt } from "./BalancesPanelView";
 
@@ -176,7 +177,10 @@ export function BalancesPanel(props: BalancesPanelProps) {
       const balance = balRes.result as bigint;
       // AC §2: only render rows for vaults the wallet HOLDS (non-zero).
       if (balance === 0n) continue;
-      const decimals = decRes?.status === "success" ? Number(decRes.result) : 6;
+      // Raw shares carry the vault's decimals() plus the ERC-4626 virtual offset (format.ts SHARE_DECIMALS).
+      const decimals = shareDisplayDecimals(
+        decRes?.status === "success" ? Number(decRes.result) : USDC_DECIMALS,
+      );
       const symbol = symRes?.status === "success" ? String(symRes.result) : "rmVAULT";
       out.push({
         vaultAddress: vault.vault,

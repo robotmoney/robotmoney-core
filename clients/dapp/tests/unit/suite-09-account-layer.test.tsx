@@ -109,14 +109,14 @@ const positionsFixture: AccountPositionsResponse = {
       vault_address: VAULT_A,
       vault_name: "Alpha Vault",
       risk_label: "stable-yield",
-      shares: "500000",
+      shares: "500000000000000000000000",
       block_number: 1000,
     },
     {
       vault_address: VAULT_B,
       vault_name: "Beta Vault",
       risk_label: "growth",
-      shares: "250000",
+      shares: "250000000000000000000000",
       block_number: 1000,
     },
   ],
@@ -153,7 +153,7 @@ describe("PortfolioPosition", () => {
     expect(vaultNames).toEqual(["Alpha Vault", "Beta Vault"]);
 
     const shares = getAllByTestId("portfolio-position-row-shares").map((n) => n.textContent);
-    expect(shares).toEqual(["500000", "250000"]);
+    expect(shares).toEqual(["0.50 shares", "0.25 shares"]);
 
     // Address is surfaced.
     expect(getByTestId("portfolio-position-address").textContent).toContain(WATCHED);
@@ -177,7 +177,7 @@ describe("PortfolioPosition", () => {
     });
 
     const usdcCells = getAllByTestId("portfolio-position-row-usdc").map((n) => n.textContent);
-    expect(usdcCells).toEqual(["500000", "250000"]);
+    expect(usdcCells).toEqual(["0.50 USDC", "0.25 USDC"]);
   });
 
   it("composite total equals sum of per-vault USDC values", async () => {
@@ -343,7 +343,7 @@ describe("TransactionHistory", () => {
     expect(vaults).toEqual([VAULT_A, VAULT_B]);
 
     const amounts = getAllByTestId("transaction-history-row-amount").map((n) => n.textContent);
-    expect(amounts).toEqual(["1000000", "500000"]);
+    expect(amounts).toEqual(["1.00 USDC", "0.50 USDC"]);
   });
 
   it("shows empty state when no events", async () => {
@@ -482,7 +482,7 @@ describe("AgentPoliciesPanel", () => {
           agent: AGENT_1,
           authorized: true,
           withdrawalsEnabled: true,
-          maxWithdrawPerWindow: "10000",
+          maxWithdrawPerWindow: "10000000000000000000000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
         },
       ];
@@ -492,8 +492,24 @@ describe("AgentPoliciesPanel", () => {
       const warn = getByTestId("agent-policy-withdrawal-warning");
       expect(warn.textContent).toMatch(/WARNING/);
       expect(warn.textContent).toMatch(/withdrawals enabled/i);
-      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toContain("10000");
+      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toBe("10.00 shares");
       expect(warn.textContent).toContain("0xdeadbeef00000000000000000000000000000001");
+    });
+
+    it("shows USDC policy amounts with separators and scale, never the raw integer (issue 1760)", () => {
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          maxPerPayment: "1000000",
+          maxPerWindow: "10000000000000",
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      expect(getByTestId("agent-policy-max-per-payment").textContent).toBe("1.00 USDC");
+      expect(getByTestId("agent-policy-max-per-window").textContent).toBe("10,000,000.00 USDC");
     });
 
     it("does NOT render the withdrawal warning for deposit-only policies", () => {
@@ -521,7 +537,7 @@ describe("AgentPoliciesPanel", () => {
           agent: AGENT_1,
           authorized: true,
           withdrawalsEnabled: false,
-          shareAllowance: "12345",
+          shareAllowance: "12345000000000000000000000000",
         },
       ];
       const { getByTestId } = render(
@@ -533,7 +549,9 @@ describe("AgentPoliciesPanel", () => {
       );
       const block = getByTestId("agent-policy-stale-allowance");
       expect(block).toBeTruthy();
-      expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toContain("12345");
+      expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toBe(
+        "12,345.00 shares",
+      );
       const btn = getByTestId("agent-policy-revoke-allowance") as HTMLButtonElement;
       expect(btn.disabled).toBe(false);
       btn.click();
@@ -585,7 +603,7 @@ describe("AgentPoliciesPanel", () => {
           withdrawalsEnabled: true,
           maxWithdrawPerWindow: "5000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
-          shareAllowance: "9999999",
+          shareAllowance: "9999999000000000000000000000000",
           shareAllowanceOwner: SHARE_RECEIVER,
         },
       ];
@@ -593,7 +611,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("9999999");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("9,999,999.00 shares");
       // The shareReceiver label must be surfaced (AZ-GW-2 fix).
       expect(getByTestId("agent-policy-share-allowance-owner").textContent).toContain(
         SHARE_RECEIVER,
@@ -609,7 +627,7 @@ describe("AgentPoliciesPanel", () => {
           withdrawalsEnabled: true,
           maxWithdrawPerWindow: "5000000",
           assetRecipient: "0xdeadbeef00000000000000000000000000000001",
-          shareAllowance: "7654321",
+          shareAllowance: "7654321000000000000000000000000",
           shareAllowanceOwner: AGENT_1, // same as agent → direct-vault
         },
       ];
@@ -617,7 +635,7 @@ describe("AgentPoliciesPanel", () => {
         <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
       );
       // The allowance value must be rendered.
-      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("7654321");
+      expect(getByTestId("agent-policy-share-allowance").textContent).toBe("7,654,321.00 shares");
       // No shareReceiver label for direct-vault policies.
       expect(queryByTestId("agent-policy-share-allowance-owner")).toBeNull();
     });

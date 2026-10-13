@@ -23,7 +23,7 @@ registered genesis agents.
 
 ## 1. What the key is and what it can do
 
-The **submitter** is a single EOA that holds:
+The **submitter** is an account that holds (an EOA in the original v0.1 design, a multisig Safe from issue 1750, see §1.1):
 
 - `AGENT_ROLE` on `RobotMoneyGateway`, and
 - `COMMITTEE_AGENT_ROLE` on `InvestmentCommitteePolicy`.
@@ -49,6 +49,32 @@ signed. The chain proves the committee produced the recommendation and that one
 submitter attested to it; the analysts' ed25519 signatures are payload data
 verified off-chain (ADR-0012 §5). This is exactly why the off-chain
 verification below is load-bearing rather than cosmetic.
+
+### 1.1 The submitter is a multisig (issue 1750, owner decision 2026-10-10)
+
+Owner decision 2026-10-10: **no single key anchors a receipt.** For the Base mainnet rehearsal and every later run on the `publish-contracts` surface the submitter is not an
+EOA. It is a **second Safe**, a SafeL2 1.4.1 proxy separate from the governing Safe, that holds the two roles above and nothing else. Everything in §1 about what the
+submitter can and cannot do holds unchanged for a contract account: the contracts check only the roles, never `msg.sender`, `tx.origin`, `isContract` or a signature
+(`contracts/test/ConsensusReceiptSafeSubmitter.t.sol` proves it with a real Safe, including the 1-raw-unit deposit cap and the disabled withdrawals).
+
+- **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
+  no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
+- **Register it:** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
+- **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
+  sign, the deployer executes and pays the gas. It refuses fewer owner signers than the threshold, a Safe that differs from `--submitter`, and a Safe transaction without
+  `ExecutionSuccess`. It reads the receipt back and requires the stored submitter to be the Safe.
+- **Plainly: the same three owner keys control BOTH Safes** (the governing Safe and the submitter Safe). Proposing and approving are separated by the multisig (two of three
+  signatures) and by each Safe's own nonce, not by different keys. A compromise of two owner keys is a compromise of both Safes. This is the owner's accepted trade-off for the
+  rehearsal. The custody requirements of §2 (HSM or KMS, dedicated host, append-only signing log) describe a *single-key* submitter and are replaced, for the owners' keys, by
+  the hardware wallets of the governing Safe's own runbook.
+**Roles in the 900 s rehearsal (acceptance criterion 5).** The OLD governance Safe `0x5E68a40648DD23065b21b1C414e1178ddE6482ca` (the first rehearsal's governing Safe, 2 of 3, proxy code hash and singleton checked read-only on 8453) is the **PROPOSER**: it is the submitter Safe that records receipts (`record-receipt --submitter 0x5E68a40648DD23065b21b1C414e1178ddE6482ca`). The NEW governing Safe, created by this rehearsal with `SAFE_SALT_NONCE` 2026101002, is the **APPROVER**: it registers the proposer through the timelock and applies the receipt (`govern --row apply-receipt`). The old Safe holds no role on the new deployment until `register-committee` gives it AGENT_ROLE and COMMITTEE_AGENT_ROLE. **Caveat: the same three owner keys (A, B, C) control BOTH Safes**, so proposer and approver are separated by the multisig and by each Safe's own nonce, not by key. **Preflight:** the three owner EOAs A, B and C must differ from the 900 s sheet's ADMIN_ADDRESS, PAUSER_ADDRESS and EMERGENCY_ADDRESS (the sheet already enforces it for the new Safe; the submitter check enforces it for the old one) or registration is refused with an error naming which owner collided.
+- **Rotation (§3)** is unchanged in shape: register a new submitter Safe, record one receipt through it, revoke the old one. The old Safe stays a valid record of what it attested.
+- **The digest scheme (issue 1754).** `payloadDigest = keccak256("robotmoney:consensus-receipt:v1\n" || compact JSON || "\n")` and `receipt_id = keccak256("robotmoney:consensus-receipt-id:v1\n" || session_id || "\n" || subject_id)`. The domain line is part of the hashed bytes. The public canonical route (`/api/swarm/sessions/<session>/consensus-receipt/canonical`) serves the compact JSON plus the trailing newline WITHOUT the domain line, so a plain `keccak256` of the downloaded file is NOT the digest. Use the `payload_digest` and `receipt_id` that `rmpc receipt verify` prints. `record-receipt --payload FILE` (FILE as served by the route) recomputes both from the bytes before any signer is built and refuses a `--payload-digest` or `--receipt-id` that differs, naming both values. The real swarm receipt of session 5015526d-27f6-478a-86e9-ac768e310af1 (31941 bytes) has `payload_digest` `0x2aebf2b33c117d41813ef338ccf1d44b8006cc8a54eb162b17cbb8ac18adbacb` (a plain keccak256 would be `0x19d64ec6...7f86`) and `receipt_id` `0xdcf4108eb6186e913447fbf24353ee32b2e75cb6c7a46aabbb27f9a663c7ca81`. `govern --row apply-receipt --payload FILE` applies the same function, so the same file passes. The single TypeScript definition is `publish-contracts/src/receipt-digest.ts`.
+- **Recovery after a landed transaction.** If `record-receipt` fails after the Safe transaction landed (a stale RPC read, a timeout), re-run the same command: it finds the receipt on chain with the Safe as submitter and takes the `already_recorded` path, and it fills the missing `tx_hash` and `safe_tx_hash` in the evidence from the Safe's `ExecutionSuccess` event when it can find it. If the event cannot be found the evidence entry keeps `already_recorded` without a transaction and the operator adds the transaction hash from the chain explorer by hand.
+- **Evidence** carries `submitter_safe` (threshold, owners, proxy code hash, and for a record the Safe transaction hash, nonce and signers). `evidence-check` refuses a
+  recorded receipt on 8453 without it.
+
+Sections 2 to 5 below were written for a single-key submitter. Read "the key" as "the owner keys that sign for the submitter Safe" where a rehearsal is meant.
 
 ---
 
@@ -313,7 +339,7 @@ at all, and every cycle's draft result is persisted to `$FUSION_DRAFT_RESULT`.
 **The draft is bound to the on-chain commitment.** `draft-proposal` reads the
 anchored tuple with `getReceiptById`, fetches the bytes from the **anchored
 `payloadUri`** (a `--receipt-url` that disagrees is refused, not preferred),
-and refuses unless `keccak256(canonical_bytes) == payloadDigest` and every
+and refuses unless `keccak256(domain line + canonical_bytes) == payloadDigest` and every
 analyst signature verifies — the same checks `rmpc receipt submit` runs before
 anchoring. Without that comparison a weights-only edit of the published receipt
 produced an identical `receipt_id`, signatures still `verified:true`, and a
