@@ -161,7 +161,7 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 | `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
 | `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
 | `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
-| `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved for onboarding and future allocation |
+| `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved. Setting `false` on an active adapter quarantines it: its balance leaves `totalAssets`, deposits and mints close, and keeper `rebalance` skips it (core 1788) |
 | `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
 | `shutdown` | `false` | `shutdownVault` (EMERGENCY), `restoreVault` (ADMIN) | While true, `deposit` reverts; recoverable — `restoreVault(newTvlCap)` (ADMIN) clears it and re-opens deposits |
 | `maxRebalanceBpsPerCall` | 2500 (25%) | `setMaxRebalanceBpsPerCall` (ADMIN) | Throttle per `rebalance()` call |
@@ -172,8 +172,21 @@ approves both the exact adapter address and its runtime `codehash`, then calls
 `addAdapter`. `addAdapter` also verifies the adapter reports this vault's USDC
 asset through `USDC()` and this vault address through `VAULT()`. Deposit,
 keeper rebalance, and admin rebalance allocation paths re-check eligibility
-before USDC leaves the vault; emergency withdrawal and force removal remain
-available for already-active adapters after approval is revoked.
+before USDC leaves the vault.
+
+Revoking approval for an already-active adapter quarantines it (core 1788).
+Its balance is excluded from `totalAssets`. While any active adapter is
+ineligible, `maxDeposit` and `maxMint` return zero and `deposit` and `mint`
+revert, so no one mints against the reduced NAV. Keeper `rebalance` never
+pulls from a quarantined adapter. It also reverts while deposits are paused or
+the vault is shut down, so it cannot re-deploy funds an emergency drain parked
+idle. Withdrawals stay open and pay from eligible adapters and idle USDC. A
+holder who exits during the exclusion is paid at the reduced NAV and forfeits
+any claim on the excluded balance. Holders who stay keep their full claim when
+eligibility is restored or the funds are recovered. Recovery is explicit:
+`emergencyWithdrawAdapter` (EMERGENCY) drains the adapter, `adminRebalance`
+(ADMIN) re-allocates, and `removeAdapter` or `forceRemoveAdapter` deactivates
+the entry.
 
 ### 3.5 Adapter routing — deposit
 

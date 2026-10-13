@@ -712,7 +712,8 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
     ///         Returns 0 when deposits are paused, the vault is shutdown, retired,
-    ///         no adapters are active, or the TVL cap has been reached.
+    ///         no adapters are active, any active adapter is ineligible (excluded
+    ///         from NAV, core 1788), or the TVL cap has been reached.
     function maxDeposit(address) public view override returns (uint256) {
         if (_depositsClosed()) return 0;
         if (_capsUnbounded()) return type(uint256).max;
@@ -720,7 +721,22 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     }
 
     function _depositsClosed() internal view returns (bool) {
-        return depositsPaused || shutdown || retired || _activeAdapterCount() == 0;
+        return depositsPaused || shutdown || retired || _activeAdapterCount() == 0
+            || _anyActiveAdapterIneligible();
+    }
+
+    /// @dev core 1788: an active adapter that fails `_isAdapterEligible` is excluded from
+    ///      `totalAssets()`. Minting against that reduced NAV would hand the new depositor a
+    ///      slice of the excluded balance once eligibility is restored, so deposits stay
+    ///      closed for as long as any active adapter is ineligible. Withdrawals are unaffected.
+    function _anyActiveAdapterIneligible() internal view returns (bool) {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (adapters[i].active && !_isAdapterEligible(address(adapters[i].adapter))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     function _capsUnbounded() internal view returns (bool) {
@@ -948,12 +964,16 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
 
     /// @notice Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
     /// @param adapter_ Adapter address whose eligibility should change.
-    /// @param allowed_ True to allow onboarding/allocation, false to revoke future allocations.
-    /// @dev Revoking the allowlist does NOT affect adapters already registered and active in the
-    ///      registry. To fully quarantine an adapter, callers must separately call
-    ///      `emergencyWithdrawAdapter` (to drain assets) followed by `removeAdapter` or
-    ///      `forceRemoveAdapter` (to deactivate the registry entry). Setting `allowed_ = false`
-    ///      only blocks future deposit allocations and new `addAdapter` calls for this address.
+    /// @param allowed_ True to allow onboarding/allocation, false to quarantine the adapter.
+    /// @dev Setting `allowed_ = false` on an adapter that is already active quarantines it:
+    ///      its balance is excluded from `totalAssets()` (ADP-2), deposits and mints close
+    ///      while it stays active (core 1788), keeper `rebalance()` neither pulls from nor
+    ///      allocates to it, and new `addAdapter` calls for the address revert. Withdrawals
+    ///      stay open and are paid from eligible adapters and idle USDC only. A holder who
+    ///      exits during the exclusion is paid at the reduced NAV and forfeits any share of
+    ///      the excluded balance; holders who stay keep their full claim when eligibility is
+    ///      restored or the funds are recovered. Recovery is explicit: `emergencyWithdrawAdapter`
+    ///      (EMERGENCY) drains it, then `removeAdapter` / `forceRemoveAdapter` deactivates it.
     function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE) {
         if (adapter_ == address(0)) revert ZeroAddress();
         adapterAllowed[adapter_] = allowed_;
@@ -997,11 +1017,17 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Keeper-triggered equal-weight rebalance. Callable by `ADMIN_ROLE` or `KEEPER_ROLE`.
     ///         Pulls excess from over-weight adapters and re-routes into under-weight adapters.
     ///         Subject to `minRebalanceInterval` and `maxRebalanceBpsPerCall` throttles.
+    ///         Reverts while deposits are paused or the vault is shut down, and skips quarantined
+    ///         (ineligible) adapters. `adminRebalance` stays the explicit recovery path (core 1788).
     function rebalance() external nonReentrant {
         if (!hasRole(ADMIN_ROLE, msg.sender) && !hasRole(KEEPER_ROLE, msg.sender)) {
             revert UnauthorizedRebalancer();
         }
         if (!isRebalanceAvailable()) revert RebalanceTooSoon();
+        // core 1788: an emergency drain parks funds idle. A keeper must not re-deploy them
+        // while the pause or shutdown that guarded the drain is still in force.
+        if (depositsPaused) revert DepositsArePaused();
+        if (shutdown) revert VaultShutdown();
         uint256 activeCount = _activeAdapterCount();
         if (activeCount == 0) revert NoActiveAdapters();
 
@@ -1021,6 +1047,9 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             // back on the `_routeDeposit(idle)` leg below.
             uint256 targetBalance = _equalWeightBalance(totalAssetsCached, rank, activeCount);
             rank++;
+            // core 1788: never pull from a quarantined (ineligible) adapter. Its balance is
+            // outside NAV; recovery goes through `emergencyWithdrawAdapter` only.
+            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
             uint256 currentBalance = adapters[i].adapter.totalAssets();
             if (currentBalance <= targetBalance) continue;
             uint256 excess = currentBalance - targetBalance;
