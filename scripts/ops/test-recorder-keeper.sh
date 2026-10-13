@@ -78,6 +78,8 @@ cast send "$PM" "initializePool((address,address,uint24,int24,address),int24,uin
 REC="$(create contracts/adapters/UniswapV4PriceRecorder.sol:UniswapV4PriceRecorder \
     "$PM" "$C0" "$C1" "$FEE" "$SPACING" 0x0000000000000000000000000000000000000000)"
 export RECORDER_ADDRESS="$REC"
+# Match the production ring so a full NAV window survives catch-up records.
+cast send "$REC" "grow(uint16)" 901 --rpc-url "$RPC_URL" --unlocked --from "$DEPLOYER" >/dev/null
 
 # A fresh low-privilege keeper key in an encrypted keystore. No key literal appears in this file.
 echo "keeper-test-password" >"$WORK/pw"
