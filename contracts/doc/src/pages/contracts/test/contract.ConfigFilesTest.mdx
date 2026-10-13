@@ -5,7 +5,7 @@ description: "Reads the launch config files and pins the facts S2 fixed. Offline
 
 # ConfigFilesTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/8c65e22ebffd03fe85ca6419569a5ebe2e9ccb3a/contracts/test/ConfigFiles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/ConfigFiles.t.sol)
 
 **Inherits:** Test
 
@@ -49,12 +49,24 @@ function test_Config_rwaAssetsIsDespxaOnlyOnFee500() public view;
 function test_Config_protocolAssetsIsWethAndCbbtc() public view;
 ```
 
-<a id="test_config_agentshortlistisrmonly"></a>
+<a id="test_config_agentshortlistisrmonlyonthev4pool"></a>
 
-### test_Config_agentShortlistIsRmOnly
+### test_Config_agentShortlistIsRmOnlyOnTheV4Pool
+
+Owner decision 2026-10-08 (core 1676): RM is on the Uniswap V4 RM/USDC 2.91% pool with a hookless PoolKey.
 
 ```solidity
-function test_Config_agentShortlistIsRmOnly() public view;
+function test_Config_agentShortlistIsRmOnlyOnTheV4Pool() public view;
+```
+
+<a id="test_config_agentpoolkeyhashestothepoolid"></a>
+
+### test_Config_agentPoolKeyHashesToThePoolId
+
+The shipped PoolKey hashes to the configured pool id (a spoofed key cannot share the id).
+
+```solidity
+function test_Config_agentPoolKeyHashesToThePoolId() public view;
 ```
 
 <a id="test_config_agentshortlistcarriesswaprouter02"></a>

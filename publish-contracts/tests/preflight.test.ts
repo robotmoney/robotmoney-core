@@ -24,7 +24,7 @@ describe("preflight (--dry-run)", () => {
     const forge = calls(w).filter((c) => c.tool === "forge" && c.args[0] === "script");
     const scripts = forge.map((c) => c.args[1]!.split(":")[1]);
     for (const st of ["vault", "proto", "agent", "rwa", "timelock", "gateway"]) expect(scripts).toContain(contractOf(st));
-    expect(forge.filter((c) => !c.args.includes("--broadcast")).length).toBe(11);
+    expect(forge.filter((c) => !c.args.includes("--broadcast")).length).toBe(12);
     // a stage is applied to the local chain only (so the next stage finds its contracts), never to the target RPC
     for (const c of forge.filter((c) => c.args.includes("--broadcast"))) { expect(c.rpcEnv).toBe(LOCAL_RPC); expect(c.args).toContain("--unlocked"); }
     expect(w.logs().filter((l) => l.event === "stage.broadcast").length).toBe(0);

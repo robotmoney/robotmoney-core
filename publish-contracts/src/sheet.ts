@@ -7,7 +7,7 @@
 import { USDC_ADDRESS } from "./usdc.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
-import { MAINNET_CHAIN_ID } from "./chains.ts";
+import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
 export type Address = `0x${string}`;
 export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
@@ -58,18 +58,20 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VOTING_PERIOD: { kind: "uint" },
   EXECUTION_DELAY: { kind: "uint" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
+  /** Issue 1727: `production` (the default when the line is absent) or `rehearsal` (a Base mainnet rehearsal with a 900 s timelock). Sheet only: never an environment variable, never a CLI flag. */
+  DEPLOYMENT_KIND: { kind: "string" },
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
   ELIGIBLE_VAULTS: { kind: "string" },
   ROUTER_WEIGHTS: { kind: "string" },
-  // govern stage (stage 13): the basket unpauses are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
+  // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
 
-/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
-export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS"]);
+/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production) and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
+export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND"]);
 export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n));
 
 /** Refused by name with a reason. Anything else not in the whitelist is refused as unknown. */
@@ -80,7 +82,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine, a hardware wallet or an encrypted keystore"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
-  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the basket unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Voting power, quorum, voting period, execution delay, agents, vault setters, eligibility and router weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VOTER_*, QUORUM_THRESHOLD, VAULT_<KEY>_*)"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
@@ -98,6 +100,8 @@ export interface Sheet {
   values: Record<string, string>;
   chainId: number;
   expectedChainId: number;
+  /** The deployment kind (issue 1727): `production` unless the sheet says `DEPLOYMENT_KIND=rehearsal`. */
+  kind: DeploymentKind;
   admin: Address;
   pauser: Address;
   emergency: Address;
@@ -123,7 +127,7 @@ export interface Sheet {
   /** The router default weights the deployer leaves in place: rmUSDC and each eligible basket. */
   weights: { key: VaultKey; bps: number }[];
   govern: {
-    /** The only mainnet govern rows: one timelock unpause per basket listed here. */
+    /** The only mainnet govern rows: one timelock unpause per vault listed here. */
     unpauseVaults: VaultKey[];
     /** Twin-only update-delay demonstration target. */
     newDelay: bigint;
@@ -224,6 +228,10 @@ export function parseSheet(text: string): Sheet {
   if (chainId <= 0) throw err("CHAIN_ID must be positive");
   if (expectedChainId !== chainId) throw err(`EXPECTED_CHAIN_ID ${expectedChainId} differs from CHAIN_ID ${chainId}`);
 
+  const kindRaw = v.DEPLOYMENT_KIND ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindRaw)) throw err(`DEPLOYMENT_KIND must be ${DEPLOYMENT_KINDS.join(" or ")}, got '${kindRaw}'. Production is the default when the line is absent.`, { name: "DEPLOYMENT_KIND" });
+  const kind = kindRaw as DeploymentKind;
+
   const admin = asAddress("ADMIN_ADDRESS", v.ADMIN_ADDRESS!);
   const pauser = asAddress("PAUSER_ADDRESS", v.PAUSER_ADDRESS!);
   const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
@@ -268,6 +276,13 @@ export function parseSheet(text: string): Sheet {
   if (executionDelay < 3600n) throw err("EXECUTION_DELAY is below 3600 (the contract floor on every chain)");
   const timelockMinDelay = asUint("TIMELOCK_MIN_DELAY", v.TIMELOCK_MIN_DELAY!);
   if (timelockMinDelay < 1n) throw err("TIMELOCK_MIN_DELAY must be at least 1 second on every chain");
+  if (kind === "rehearsal") {
+    // issue 1727: the delay on chain must agree with the kind, so a rehearsal can never be mistaken for production (and the reverse)
+    const why = rehearsalDelayProblem(timelockMinDelay);
+    if (why) throw err(`TIMELOCK_MIN_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "TIMELOCK_MIN_DELAY" });
+    // a rehearsal reuses the first rehearsal's keys, so the same owners and threshold would predict the Safe that already exists: a new salt is always explicit
+    if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
+  }
   const voterPower = asUint("VOTER_POWER", v.VOTER_POWER!);
   if (voterPower === 0n) throw err("VOTER_POWER must be above 0");
   if (voterPower * BigInt(voters.length) < quorum) throw err("QUORUM_THRESHOLD is above the total voting power: no proposal could ever pass");
@@ -299,10 +314,10 @@ export function parseSheet(text: string): Sheet {
   if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
-  // issue 1520 (amended 2026-10-06): no stage 13 step may be skipped on a mainnet deploy. A basket left out would stay paused and verify green.
+  // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
   if (chainId === MAINNET_CHAIN_ID) {
-    const missing = (["PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
-    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+    const missing = (["USDC", "PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list USDC, PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
@@ -314,13 +329,18 @@ export function parseSheet(text: string): Sheet {
     if (got !== LAUNCH_ROUTER_WEIGHTS_8453) throw err(`ROUTER_WEIGHTS must be the launch vector on chain 8453 (USDC:9500,PROTO:500,AGENT:0,RWA:0, every vault named), got ${v.ROUTER_WEIGHTS}`, { name: "ROUTER_WEIGHTS" });
   }
   const newDelay = asUint("GOVERN_NEW_DELAY", v.GOVERN_NEW_DELAY!);
-  if (newDelay < 3600n || newDelay > 2592000n) throw err("GOVERN_NEW_DELAY must be from 3600 to 2592000 seconds (the Safe tool's updateDelay bounds)");
+  const newDelayMin = kind === "rehearsal" ? BigInt(REHEARSAL_DELAY_FLOOR) : 3600n;
+  if (newDelay < newDelayMin || newDelay > 2592000n) throw err(`GOVERN_NEW_DELAY must be from ${newDelayMin} to 2592000 seconds (the Safe tool's updateDelay bounds${kind === "rehearsal" ? " in a rehearsal" : ""})`);
+  if (kind === "rehearsal") {
+    const why = rehearsalDelayProblem(newDelay);
+    if (why) throw err(`GOVERN_NEW_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "GOVERN_NEW_DELAY" });
+  }
 
   const values: Record<string, string> = {};
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
-    values, chainId, expectedChainId, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
+    values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };

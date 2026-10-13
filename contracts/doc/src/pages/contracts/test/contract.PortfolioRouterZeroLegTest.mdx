@@ -1,0 +1,278 @@
+---
+title: "PortfolioRouterZeroLegTest"
+description: "Issue 1746: an Active, router-eligible leg whose computed amount is 0 (a 0-bps weight, or a weight that rounds to 0) is never called."
+---
+
+# PortfolioRouterZeroLegTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/test/PortfolioRouterZeroLeg.t.sol)
+
+**Inherits:** Test
+
+Issue 1746: an Active, router-eligible leg whose computed amount is 0
+(a 0-bps weight, or a weight that rounds to 0) is never called.
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUSDC internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+### v
+
+```solidity
+StrictZeroRevertVault[4] internal v;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_setweights-uint256-uint256-uint256-uint256"></a>
+
+### _setWeights
+
+```solidity
+function _setWeights(uint256 a, uint256 b, uint256 c, uint256 d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+| c | `uint256` |  |
+| d | `uint256` |  |
+
+<a id="_fund-uint256"></a>
+
+### _fund
+
+```solidity
+function _fund(uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="_deposit-uint256"></a>
+
+### _deposit
+
+```solidity
+function _deposit(uint256 amount) internal returns (uint256[] memory shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256[]` |  |
+
+<a id="test_launchvector_zerobpseligiblelegsarenevercalled"></a>
+
+### test_launchVector_zeroBpsEligibleLegsAreNeverCalled
+
+```solidity
+function test_launchVector_zeroBpsEligibleLegsAreNeverCalled() public;
+```
+
+<a id="test_launchvector_noeventforskippedleg"></a>
+
+### test_launchVector_noEventForSkippedLeg
+
+```solidity
+function test_launchVector_noEventForSkippedLeg() public;
+```
+
+<a id="test_previewdeposit_matchesactual_andkeepszerolegavailable"></a>
+
+### test_previewDeposit_matchesActual_andKeepsZeroLegAvailable
+
+```solidity
+function test_previewDeposit_matchesActual_andKeepsZeroLegAvailable() public;
+```
+
+<a id="test_dust_landsonlastnonzerobpsleg_nottrailingzeroleg"></a>
+
+### test_dust_landsOnLastNonZeroBpsLeg_notTrailingZeroLeg
+
+Dust goes to the last leg that carries weight, never to a 0-bps leg that
+sits after it in the vector.
+
+```solidity
+function test_dust_landsOnLastNonZeroBpsLeg_notTrailingZeroLeg() public;
+```
+
+<a id="test_tinydeposits_1_2_3_baseunits"></a>
+
+### test_tinyDeposits_1_2_3_baseUnits
+
+```solidity
+function test_tinyDeposits_1_2_3_baseUnits() public;
+```
+
+<a id="test_roundedtozeroleg_previewequalsactual"></a>
+
+### test_roundedToZeroLeg_previewEqualsActual
+
+```solidity
+function test_roundedToZeroLeg_previewEqualsActual() public;
+```
+
+<a id="test_largedeposit_sumsexactly"></a>
+
+### test_largeDeposit_sumsExactly
+
+```solidity
+function test_largeDeposit_sumsExactly() public;
+```
+
+<a id="test_zeroamountdeposit_revertsnofundedleg"></a>
+
+### test_zeroAmountDeposit_revertsNoFundedLeg
+
+```solidity
+function test_zeroAmountDeposit_revertsNoFundedLeg() public;
+```
+
+<a id="test_pausedlegstillrenormalises_zerolegstillskipped"></a>
+
+### test_pausedLegStillRenormalises_zeroLegStillSkipped
+
+```solidity
+function test_pausedLegStillRenormalises_zeroLegStillSkipped() public;
+```
+
+<a id="test_onlyzerobpslegsavailable_reverts"></a>
+
+### test_onlyZeroBpsLegsAvailable_reverts
+
+```solidity
+function test_onlyZeroBpsLegsAvailable_reverts() public;
+```
+
+<a id="test_minsharesonskippedleg_isnotenforced"></a>
+
+### test_minSharesOnSkippedLeg_isNotEnforced
+
+```solidity
+function test_minSharesOnSkippedLeg_isNotEnforced() public;
+```
+
+<a id="testfuzz_zerolegs_suminvariantandnocalls-uint96-uint16-uint16-uint16"></a>
+
+### testFuzz_zeroLegs_sumInvariantAndNoCalls
+
+```solidity
+function testFuzz_zeroLegs_sumInvariantAndNoCalls(
+        uint96 amountSeed,
+        uint16 w0,
+        uint16 w1,
+        uint16 w2
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountSeed | `uint96` |  |
+| w0 | `uint16` |  |
+| w1 | `uint16` |  |
+| w2 | `uint16` |  |
+
+<a id="testfuzz_amountsnear2pow128-uint256-uint16-uint16"></a>
+
+### testFuzz_amountsNear2pow128
+
+Near 2^128 the split still sums exactly and zero legs are still never called.
+
+```solidity
+function testFuzz_amountsNear2pow128(uint256 delta, uint16 w0, uint16 w1) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| delta | `uint256` |  |
+| w0 | `uint16` |  |
+| w1 | `uint16` |  |
+
+<a id="test_amountnearuint256max_revertsoncheckedarithmetic"></a>
+
+### test_amountNearUint256Max_revertsOnCheckedArithmetic
+
+Near uint256 max the checked multiplication `amount * bps` reverts (no wrap).
+
+```solidity
+function test_amountNearUint256Max_revertsOnCheckedArithmetic() public;
+```
+
+## Events
+
+### RouterDeposit
+
+```solidity
+event RouterDeposit(
+        address indexed depositor,
+        address indexed vault,
+        uint256 amount,
+        uint256 shares,
+        uint256 weightBps
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depositor | `address` |  |
+| vault | `address` |  |
+| amount | `uint256` |  |
+| shares | `uint256` |  |
+| weightBps | `uint256` |  |
+

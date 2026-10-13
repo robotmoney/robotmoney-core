@@ -62,7 +62,7 @@ signatures are required, and the Safe contract is what enforces it.**
 ### 1.2 After the handover: the unpause-only matrix
 
 Exactly one class of operation runs after the timelock handover (issue 1520): the
-unpause of each basket vault (rmPROTO, rmAGENT, rmRWA). Unpause needs `ADMIN_ROLE`,
+unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all of which deploy paused (core 1710). Unpause needs `ADMIN_ROLE`,
 which the timelock holds, so each unpause is a Safe transaction that schedules one
 timelock operation and a second Safe transaction that executes it after the delay
 ([security-model.md](./security-model.md), the pause-key abuse and pause-trigger rows).

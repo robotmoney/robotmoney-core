@@ -173,6 +173,12 @@ services:
       # ProposalExecuted ingestion from RouterGovernance. Without it /v1/governance/proposals
       # stays empty however many proposals the Safe and timelock created on chain.
       INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
+      # Issue 1731: INDEXER_TIMELOCK and INDEXER_SAFE put the TimelockController and the Safe in the
+      # watched set. The explorer then lists both in /v1/chains/{id}/contracts and serves their
+      # CallScheduled, CallExecuted, Cancelled, MinDelayChange and Safe execution and owner events at
+      # /v1/governance/admin-events. The indexer watches only the addresses it is given.
+      INDEXER_TIMELOCK: ${INDEXER_TIMELOCK:-}
+      INDEXER_SAFE: ${INDEXER_SAFE:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even

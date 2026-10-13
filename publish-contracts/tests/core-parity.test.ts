@@ -5,7 +5,9 @@ import { describe, expect, test } from "bun:test";
 import { loadStageTable, type StageTable } from "../src/stage-table.ts";
 import { STAGES, getStageTable, useStageTable } from "../src/stages.ts";
 import { parityProblems, stageProblems, tableProblems } from "../src/ci/core-parity.ts";
-import { requiredSheetNames } from "../src/core-wiring.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { MANIFEST_ENV, VENUE_INDEX, requiredSheetNames } from "../src/core-wiring.ts";
 import { REPO_ROOT } from "./repo-root.ts";
 
 const table = loadStageTable(REPO_ROOT);
@@ -48,6 +50,24 @@ describe("issue 1666: the basket stages read the NAV deviation guard and the poo
     const row = table.stages.find((s) => s.vault === "USDC")!;
     expect(row.requiredEnv).not.toContain("NAV_DEVIATION_BPS");
     expect(row.requiredEnv).not.toContain("MIN_POOL_LIQUIDITY");
+  });
+});
+
+describe("core 1676: the V4 venue wiring", () => {
+  test("VENUE_INDEX equals the BasketVault.Venue enum order in core (V3 0, V4 1, Aerodrome 2)", () => {
+    const src = readFileSync(join(REPO_ROOT, "contracts", "vaults", "BasketVault.sol"), "utf8");
+    const body = /enum Venue \{([^}]*)\}/.exec(src)![1]!.split(",").map((x) => x.trim()).filter(Boolean);
+    expect(body).toEqual(["V3", "V4", "Aerodrome"]);
+    expect(VENUE_INDEX).toEqual({ UniswapV3: body.indexOf("V3"), UniswapV4: body.indexOf("V4") });
+  });
+  test("the agent stage reads RECORDER_ADDRESS from the recorder stage manifest field the script writes", () => {
+    expect(MANIFEST_ENV.RECORDER_ADDRESS).toEqual({ stage: "recorder", field: "recorder" });
+    expect(STAGES.find((s) => s.name === "agent")!.requiredEnv).toContain("RECORDER_ADDRESS");
+    expect(STAGES.map((s) => s.name).indexOf("recorder")).toBe(STAGES.map((s) => s.name).indexOf("libs") + 1);
+  });
+  test("the recorder and the V4 adapter are artifacts of core's table", () => {
+    expect(table.artifacts.recorder).toBe("UniswapV4PriceRecorder");
+    expect(table.artifacts.v4Adapter).toBe("UniswapV4SwapAdapter");
   });
 });
 

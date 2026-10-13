@@ -41,18 +41,29 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { redeemFailureHint } from "../lib/redeemFailureHint";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
+import { DepositsClosedNotice } from "./DepositsClosedNotice";
+import { useDepositState } from "../lib/useDepositStates";
+import { depositsBlocked } from "../lib/vaultDepositState";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
 import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
-import { formatUsdc, formatShares } from "../lib/format";
+import {
+  formatUsdc,
+  formatShares,
+  formatInputAmount,
+  parseSharesAmount,
+  parseUsdcAmount,
+  SHARE_DECIMALS,
+} from "../lib/format";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -69,26 +80,6 @@ type Props = Readonly<{
    */
   explorerApiUrl?: string;
 }>;
-
-/**
- * Parse a human-typed amount (e.g. "1.5") into a 6-decimal bigint, the
- * unit RobotMoneyVault and USDC use. Returns `null` on any input the
- * user could not have intended as a positive USDC amount (empty,
- * non-numeric, negative, more than 6 fractional digits).
- *
- * Kept pure and exported so the vitest can exercise the amount logic
- * without rendering the component (see test plan).
- */
-export function parseUsdcAmount(input: string): bigint | null {
-  const trimmed = input.trim();
-  if (trimmed === "") return null;
-  if (!/^\d+(\.\d{1,6})?$/.test(trimmed)) return null;
-  const [whole, frac = ""] = trimmed.split(".");
-  const padded = (frac + "000000").slice(0, 6);
-  const value = BigInt(whole) * 1_000_000n + BigInt(padded || "0");
-  if (value === 0n) return null;
-  return value;
-}
 
 // formatUsdcPreview is an alias for the centralized formatUsdc.
 const formatUsdcPreview = formatUsdc;
@@ -120,9 +111,9 @@ export function DepositWithdrawTab(props: Props) {
   // `writeContract` callback fires when the hash is returned, not when
   // the tx is mined, so allowance/share-balance reads race past the
   // pending state and the deposit/withdraw submit never enables.
-  const approveWrite = useWriteContract();
-  const depositWrite = useWriteContract();
-  const withdrawWrite = useWriteContract();
+  const approveWrite = useGuardedWriteContract();
+  const depositWrite = useGuardedWriteContract();
+  const withdrawWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,
@@ -156,7 +147,13 @@ export function DepositWithdrawTab(props: Props) {
   const [selectedVault, setSelectedVault] = useState<Address | undefined>(props.vaultAddress);
 
   const depositAssets = parseUsdcAmount(depositInput);
-  const withdrawShares = parseUsdcAmount(withdrawInput);
+
+  // Deposits are enabled ONLY in the known-open state of the vault being deposited into (issue 1731): its
+  // live `depositsPaused()`, else the fresh explorer snapshot. Paused, retired and unknown all disable the form.
+  // The withdraw form below never reads this, because `pauseDeposits()` leaves exits open.
+  const depositClosedState = useDepositState(depositVault);
+  const depositsClosed = depositsBlocked(depositClosedState);
+  const withdrawShares = parseSharesAmount(withdrawInput);
 
   // -------- allowance read --------
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
@@ -214,7 +211,8 @@ export function DepositWithdrawTab(props: Props) {
     functionName: "deposit",
     args: depositAction ? [depositAction.assets, depositAction.receiver] : undefined,
     query: {
-      enabled: isConnected && depositPreview?.ok === true && allowanceOk === true,
+      enabled:
+        isConnected && depositPreview?.ok === true && allowanceOk === true && !depositsClosed,
       retry: 5,
     },
   });
@@ -346,6 +344,11 @@ export function DepositWithdrawTab(props: Props) {
         <section data-testid="deposit-form">
           <h2>Deposit USDC</h2>
           <p>Approve USDC, then deposit into the vault to receive rmUSDC shares.</p>
+          <DepositsClosedNotice
+            state={depositClosedState}
+            scope="This vault"
+            testId="deposit-closed-notice"
+          />
           <label>
             Amount (USDC)
             <input
@@ -354,6 +357,7 @@ export function DepositWithdrawTab(props: Props) {
               onChange={(e) => setDepositInput(e.target.value)}
               placeholder="0.00"
               inputMode="decimal"
+              disabled={depositsClosed}
             />
           </label>
           {depositPreview && <TxPreview preview={depositPreview} />}
@@ -362,7 +366,7 @@ export function DepositWithdrawTab(props: Props) {
               type="button"
               data-testid="deposit-approve"
               onClick={onApprove}
-              disabled={!isConnected || !approveSim || isPending}
+              disabled={!isConnected || !approveSim || isPending || depositsClosed}
             >
               Approve USDC for vault
             </button>
@@ -376,6 +380,7 @@ export function DepositWithdrawTab(props: Props) {
               !depositSim ||
               !allowanceOk ||
               isPending ||
+              depositsClosed ||
               depositPreview?.ok !== true
             }
           >
@@ -409,8 +414,12 @@ export function DepositWithdrawTab(props: Props) {
             onSelect={(vault, sharesStr) => {
               setSelectedVault(vault);
               // Pre-fill the input with the full position balance so the
-              // user can adjust if desired. The input accepts decimal strings.
-              setWithdrawInput(sharesStr);
+              // user can adjust if desired. The explorer sends raw shares; the input takes decimal shares.
+              setWithdrawInput(
+                /^\d+$/.test(sharesStr)
+                  ? formatInputAmount(BigInt(sharesStr), SHARE_DECIMALS)
+                  : sharesStr,
+              );
             }}
           />
         )}
@@ -466,6 +475,11 @@ export function DepositWithdrawTab(props: Props) {
         {redeemSimError && (
           <p className="hint" data-testid="redeem-sim-error">
             redeem simulate failed: {redeemSimError.message}
+          </p>
+        )}
+        {redeemSimError && redeemFailureHint(redeemSimError.message) && (
+          <p className="hint" data-testid="redeem-in-kind-hint">
+            {redeemFailureHint(redeemSimError.message)}
           </p>
         )}
       </section>

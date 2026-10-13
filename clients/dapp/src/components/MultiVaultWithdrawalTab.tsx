@@ -31,15 +31,21 @@ import {
   useReadContract,
   useSimulateContract,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
+import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { redeemFailureHint } from "../lib/redeemFailureHint";
 import type { Address, Hash } from "viem";
 import { vaultAbi } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
-import { parseUsdcAmount } from "./DepositWithdrawTab";
-import { formatUsdc, formatShares, formatBps, formatPercentFromNumber } from "../lib/format";
+import {
+  formatUsdc,
+  formatShares,
+  formatBps,
+  formatPercentFromNumber,
+  parseSharesAmount,
+} from "../lib/format";
 
 type Props = Readonly<{
   ctx: VaultPreviewContext;
@@ -57,7 +63,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
   const [selectedVault, setSelectedVault] = useState<Address | "">("");
   const [sharesInput, setSharesInput] = useState("");
 
-  const withdrawShares = parseUsdcAmount(sharesInput);
+  const withdrawShares = parseSharesAmount(sharesInput);
 
   // -------- batched balanceOf reads across all registered vaults (AC §8) --------
   // One eth_call batch rather than N independent reads.
@@ -154,7 +160,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
   });
 
   // -------- write hooks --------
-  const withdrawWrite = useWriteContract();
+  const withdrawWrite = useGuardedWriteContract();
   const withdrawReceipt = useWaitForTransactionReceipt({
     hash: withdrawWrite.data as Hash | undefined,
     query: { enabled: Boolean(withdrawWrite.data) },
@@ -297,6 +303,11 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
       {redeemSimError && (
         <p className="hint" data-testid="multi-vault-redeem-sim-error">
           redeem simulate failed: {redeemSimError.message}
+        </p>
+      )}
+      {redeemSimError && redeemFailureHint(redeemSimError.message) && (
+        <p className="hint" data-testid="redeem-in-kind-hint">
+          {redeemFailureHint(redeemSimError.message)}
         </p>
       )}
     </section>

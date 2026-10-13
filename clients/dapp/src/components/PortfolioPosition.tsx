@@ -29,7 +29,8 @@ import {
   type FetchLike,
 } from "../lib/explorerApi";
 import { VaultPositionCard } from "./shared";
-import { formatUsdc } from "../lib/format";
+import { formatSharesString, formatUsdc, formatUsdcString } from "../lib/format";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -86,6 +87,10 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
   }, [props.address, props.apiUrl, props.fetchImpl]);
 
   const usdcValues = props.usdcValues ?? {};
+  // Each vault's own share symbol (issue 1767).
+  const symbolOf = useVaultShareSymbols(
+    state.kind === "ready" ? state.positions.map((p) => p.vault_address) : [],
+  );
 
   /** Compute composite total when all vaults have a USDC value. */
   function compositeTotal(positions: readonly AccountPosition[]): bigint | null {
@@ -145,9 +150,11 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                         <tr key={pos.vault_address} data-testid="portfolio-position-row">
                           <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
                           <td data-testid="portfolio-position-row-risk">{pos.risk_label}</td>
-                          <td data-testid="portfolio-position-row-shares">{pos.shares}</td>
+                          <td data-testid="portfolio-position-row-shares">
+                            {formatSharesString(pos.shares, symbolOf(pos.vault_address))}
+                          </td>
                           <td data-testid="portfolio-position-row-usdc">
-                            {usdc !== undefined ? usdc : "—"}
+                            {formatUsdcString(usdc)}
                           </td>
                         </tr>
                       );
@@ -177,9 +184,9 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                       key={pos.vault_address}
                       vaultAddress={pos.vault_address}
                       vaultName={pos.vault_name}
-                      shares={pos.shares}
+                      shares={formatSharesString(pos.shares, symbolOf(pos.vault_address))}
                       riskLabel={pos.risk_label}
-                      usdcValue={usdc}
+                      usdcValue={usdc !== undefined ? formatUsdcString(usdc) : undefined}
                     />
                   );
                 })}

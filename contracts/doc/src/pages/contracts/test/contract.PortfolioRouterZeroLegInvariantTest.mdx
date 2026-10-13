@@ -1,0 +1,98 @@
+---
+title: "PortfolioRouterZeroLegInvariantTest"
+---
+
+# PortfolioRouterZeroLegInvariantTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/test/PortfolioRouterZeroLegInvariant.t.sol)
+
+**Inherits:** StdInvariant, Test
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUSDC internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### handler
+
+```solidity
+ZeroLegHandler internal handler;
+```
+
+### v
+
+```solidity
+StrictZeroRevertVault[4] internal v;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="invariant_routerholdsnousdc"></a>
+
+### invariant_routerHoldsNoUsdc
+
+The router never keeps USDC: leg amounts plus the rounding remainder equal the deposit.
+
+```solidity
+function invariant_routerHoldsNoUsdc() public view;
+```
+
+<a id="invariant_depositsequalvaultholdings"></a>
+
+### invariant_depositsEqualVaultHoldings
+
+Every deposited base unit is held by exactly one vault.
+
+```solidity
+function invariant_depositsEqualVaultHoldings() public view;
+```
+
+<a id="invariant_depositneverreverts"></a>
+
+### invariant_depositNeverReverts
+
+Every deposit matches the model: valid ones succeed, all-unavailable reverts NoWeightsSet, only-0-bps-available reverts NoFundedLeg.
+
+```solidity
+function invariant_depositNeverReverts() public view;
+```
+
+<a id="invariant_zeroweightlegnevercalled"></a>
+
+### invariant_zeroWeightLegNeverCalled
+
+A leg whose weight is 0 is never called.
+
+```solidity
+function invariant_zeroWeightLegNeverCalled() public view;
+```
+

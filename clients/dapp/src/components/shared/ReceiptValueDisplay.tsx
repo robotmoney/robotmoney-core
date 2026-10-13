@@ -20,12 +20,12 @@
 
 export interface ReceiptValueDisplayProps {
   /**
-   * Raw receipt-token (rmUSDC) amount as a decimal string (6-decimal fixed).
-   * E.g. "1000000" = 1 rmUSDC.
+   * Receipt-token (rmUSDC) amount, already formatted for display by the parent through the shared
+   * format module. This component never formats a raw integer itself.
    */
   readonly shares: string;
   /**
-   * Optional estimated USDC value string (decimal, 6-decimal units) produced
+   * Optional estimated USDC value string (already formatted) produced
    * by `vault.convertToAssets(shares)`. When absent, "—" is displayed.
    */
   readonly usdcValue?: string;

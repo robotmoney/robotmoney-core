@@ -18,7 +18,7 @@ function scriptSource(path: string): string {
   return own + extra + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -95,6 +95,18 @@ describe("stage-table.json", () => {
     }
   });
 
+  test("create2Libraries name real library sources, and a stage lists them only if it deploys a vault that links them (issue 1721)", () => {
+    const c2 = (table as any).create2Libraries as { name: string; artifact: string; path: string }[];
+    expect(c2.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"]);
+    for (const l of c2) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
+    for (const s of table.stages as any[]) for (const n of s.create2Libraries ?? []) {
+      expect(c2.map((l) => l.name)).toContain(n);
+      expect(s.vault && s.vault !== "USDC").toBe(true);
+      expect(read("contracts/vaults/BasketVault.sol")).toMatch(new RegExp(`import \\{[^}]*\\b${n}\\b`));
+    }
+    expect((table.stages as any[]).filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["proto", "agent", "rwa"]);
+  });
+
   test("artifacts name contracts that exist under contracts/", () => {
     const all = (dir: string): string[] =>
       readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
@@ -105,15 +117,15 @@ describe("stage-table.json", () => {
       if (name === "TimelockController") continue; // OpenZeppelin, deployed by DeployTimelock
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
-    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "registry", "router", "timelock"]);
+    expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
   });
 
-  test("stage 13 is the basket unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
+  test("stage 13 is the four vault unpauses only, with the deploy-time configuration set in stages 4 to 10 (issue 1520)", () => {
     const g = (table as unknown as { govern: { stage: number; description: string; mainnetRows: string[]; twinOnlyRows: string[] } }).govern;
     expect(g.stage).toBe(13);
-    expect(g.mainnetRows).toEqual(["unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
+    expect(g.mainnetRows).toEqual(["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"]);
     expect(g.twinOnlyRows).toEqual(["update-delay", "batch", "cancel"]);
-    expect(g.description).toContain("only mainnet operation is the unpause of each basket vault");
+    expect(g.description).toContain("only mainnet operation is the unpause of each of the four vaults");
     expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
     expect(g.description).toContain("Twin-only");
     // no 13-row list survives: none of the old matrix rows is named

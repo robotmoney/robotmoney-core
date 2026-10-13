@@ -533,7 +533,8 @@ async fn migration_0003_preserves_vault_snapshots_with_vault_address_backfilled(
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             50,
-            U256::ZERO,
+            Some(U256::ZERO),
+            None,
             false,
         )
         .await

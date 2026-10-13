@@ -51,7 +51,7 @@ governance-decision interpretation guidance for each source.
 
 #### https://www.robotmoney.net/regime
 
-- **Required before every `propose` transaction.** Fetch the regime page to
+- **Required before every proposal draft.** Fetch the regime page to
   obtain the current regime bucket (`risk_on`, `neutral`, `risk_off`),
   composite score, and sub-regime labels. Cite these fields verbatim in the
   proposal rationale.
@@ -62,7 +62,7 @@ governance-decision interpretation guidance for each source.
 
 #### https://analytics.robotmoney.net/projects
 
-- **Required before every `propose` transaction.** Check for active research
+- **Required before every proposal draft.** Check for active research
   threads relevant to the vaults or signals targeted by the proposal. Cite any
   relevant threads in the proposal rationale. If none apply, state "No active
   research threads identified for the targeted vaults."
@@ -183,70 +183,9 @@ asks for the full router state rather than a weights-only summary.
 
 ## Governance write commands
 
-### propose
+### proposing a weight change (no signing in rmpc)
 
-Submit a new weight-reallocation proposal to `RouterGovernance.propose()`.
-Requires `governance_address` in the operator config and a configured signer.
-
-**Preflight**: verify `governance_address` is set in config and `RMPC_KEYSTORE_PASSPHRASE`
-is available before calling.
-
-```bash
-rmpc propose --config <CONFIG> \
-  --vaults <ADDR1>,<ADDR2> \
-  --weights-bps <BPS1>,<BPS2> \
-  --pretty
-```
-
-Parameters:
-- `--vaults` — comma-separated vault addresses (must be router-eligible)
-- `--weights-bps` — comma-separated bps values summing to 10 000
-
-Output envelope on success:
-```json
-{
-  "ok": true,
-  "result": {
-    "proposal_id": "1",
-    "tx_hash": "0x...",
-    "block_number": 12345
-  }
-}
-```
-
-Exit codes: 0 success, 2 refusal (fee-cap, lock, broadcast), 3 startup failure
-(missing `governance_address`, uninitialized signer).
-
-### vote
-
-Cast a vote on an active governance proposal.
-
-```bash
-rmpc vote --config <CONFIG> \
-  --proposal-id <ID> \
-  --choice yes \
-  --pretty
-```
-
-Parameters:
-- `--proposal-id` — decimal proposal id from `get-governance` output
-- `--choice` — `yes`, `no`, or `abstain` (`yes` submits on-chain; `no`/`abstain` are client-side no-ops)
-
-Idempotency: re-calling with the same choice exits 0 (no-op). A different
-direction after an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
-
-Example trace (get-governance → propose → vote):
-
-```bash
-# Read current state
-rmpc get-governance --config rmpc.toml --pretty
-
-# Submit proposal
-rmpc propose --config rmpc.toml --vaults 0xA...,0xB... --weights-bps 6000,4000
-
-# Vote in favour
-rmpc vote --config rmpc.toml --proposal-id 1 --choice yes
-
-# Confirm vote recorded
-rmpc get-governance --config rmpc.toml --pretty
-```
+rmpc does not submit `RouterGovernance.propose()`. That call needs a governance
+signer, and rmpc is not one. Prepare the change as unsigned calldata with
+`rmpc governance draft-proposal`, then a Safe signer submits it through the
+Safe from a wallet (see `robotmoney-cli` references).

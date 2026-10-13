@@ -1,0 +1,199 @@
+---
+title: "ConsensusReceiptSafeSubmitterTest"
+description: "The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on the IC policy and nothing else. The contracts make no msg.sender, tx.origin, isContract or ecrecover check on the role holder, so a contract account is accepted unchanged. The policy is the smallest legal one the publish tooling registers (1 raw unit per payment and per window, no withdrawals, shares to the timelock)."
+---
+
+# ConsensusReceiptSafeSubmitterTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/99ba10cc73ffee81efdaf7c4dcf0239fe53e681e/contracts/test/ConsensusReceiptSafeSubmitter.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+**Title:** ConsensusReceiptSafeSubmitterTest
+
+The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds
+AGENT_ROLE on the gateway and COMMITTEE_AGENT_ROLE on the IC policy and nothing else. The contracts make no msg.sender,
+tx.origin, isContract or ecrecover check on the role holder, so a contract account is accepted unchanged. The policy is the
+smallest legal one the publish tooling registers (1 raw unit per payment and per window, no withdrawals, shares to the timelock).
+
+## Constants
+
+### URI
+
+```solidity
+string constant URI = "https://twin.invalid/r.json";
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address admin = address(0xA0);
+```
+
+### pauser
+
+```solidity
+address pauser = address(0xA1);
+```
+
+### governingSafe
+
+```solidity
+address governingSafe;
+```
+
+### submitterSafe
+
+```solidity
+address submitterSafe;
+```
+
+### usdc
+
+```solidity
+TestERC20 usdc;
+```
+
+### vault
+
+```solidity
+MockVault vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy ic;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt receipts;
+```
+
+### timelock
+
+```solidity
+TimelockController timelock;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_recordcall-bytes32-bytes32"></a>
+
+### _recordCall
+
+```solidity
+function _recordCall(bytes32 id, bytes32 digest) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="testsafesubmitterrecordsareceiptwithtwoownersignatures"></a>
+
+### testSafeSubmitterRecordsAReceiptWithTwoOwnerSignatures
+
+The Safe holds both roles and the receipt contract stores the Safe as the submitter.
+
+```solidity
+function testSafeSubmitterRecordsAReceiptWithTwoOwnerSignatures() public;
+```
+
+<a id="testoneownersignaturecannotrecord"></a>
+
+### testOneOwnerSignatureCannotRecord
+
+One owner signature is below the 2-of-3 threshold: the Safe refuses (GS020) and nothing is recorded.
+
+```solidity
+function testOneOwnerSignatureCannotRecord() public;
+```
+
+<a id="testgoverningsafecannotrecord"></a>
+
+### testGoverningSafeCannotRecord
+
+The governing Safe is NOT a submitter: its signatures through the governing Safe cannot record (it holds no role).
+
+```solidity
+function testGoverningSafeCannotRecord() public;
+```
+
+<a id="testsignaturesdonottransferbetweenthetwosafes"></a>
+
+### testSignaturesDoNotTransferBetweenTheTwoSafes
+
+Signatures made for the governing Safe's hash do not execute on the submitter Safe (different address, different domain).
+
+```solidity
+function testSignaturesDoNotTransferBetweenTheTwoSafes() public;
+```
+
+<a id="testpolicystillcapsthesafeatoneunitandnowithdrawals"></a>
+
+### testPolicyStillCapsTheSafeAtOneUnitAndNoWithdrawals
+
+The signalling-only policy holds for a Safe holder: withdrawals are disabled and a deposit above 1 raw unit reverts.
+
+```solidity
+function testPolicyStillCapsTheSafeAtOneUnitAndNoWithdrawals() public;
+```
+
+<a id="testunregisteredsafecannotrecord"></a>
+
+### testUnregisteredSafeCannotRecord
+
+An unregistered Safe cannot record, even with a full quorum.
+
+```solidity
+function testUnregisteredSafeCannotRecord() public;
+```
+
+<a id="_nonce-address"></a>
+
+### _nonce
+
+```solidity
+function _nonce(address safe_) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

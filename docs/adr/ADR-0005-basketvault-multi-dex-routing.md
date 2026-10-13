@@ -248,7 +248,7 @@ following facts replace the venue and oracle claims above:
   requires cardinality ≥ 2, a successful `observe()` over the 1800 s
   default window, and in-range liquidity ≥ 1e6. A token/WETH pool is
   refused on any venue. No WETH or multi-hop route exists.
-- **Production deploy wiring is Uniswap V3 only.**
+- **Production deploy wiring was Uniswap V3 only on 2026-10-05; the 2026-10-08 amendment below adds Uniswap V4.**
   `BasketVaultDeployBase._addAssets` registers every asset with
   `Venue.V3`, through a `UniswapV3SwapAdapter` (rmAGENT, rmRWA) or the
   built-in router path (rmPROTO). `AerodromeSwapAdapter.sol` exists, but
@@ -263,7 +263,7 @@ following facts replace the venue and oracle claims above:
   the launch shortlist; a V4 venue for it depends on the restore.
 
 **Open verification item for the later V4 restore (not a decided fact;
-not a launch blocker since 2026-10-06).** The
+not a launch blocker since 2026-10-06). RESOLVED by the 2026-10-08 amendment below.** The
 §3 claim that V4 pools expose `observe()` like V3 ("EIP-7680
 compatibility") is unverified. Uniswap V4 core keeps
 pool state inside the singleton `PoolManager` and records no observation
@@ -274,6 +274,59 @@ first prove, on a fork, a TWAP source for the chosen V4 RM/USDC pool. It
 must also show how `requirePoolUsable`, which reads `token0`, `slot0`,
 `observe` and `liquidity` from a pool address, applies to a V4 pool. It
 needs a deploy-script change and an audit item.
+
+## Amendment — 2026-10-08: RM on the Uniswap V4 RM/USDC 2.91% pool, the restored V4 swap adapter and the price recorder (core 1676)
+
+Owner decision 2026-10-08 (devops 72). It supersedes the 2026-10-06 RM venue decision above. rmAGENT trades RM on the Uniswap V4 RM/USDC pool
+with fee 29100, tickSpacing 582, hooks `0x0` and pool id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`
+(Base PoolManager `0x498581fF718922c3f8e6A244956aF099B2652b2b`). The owner's words: "It's sufficient for a test on mainnet, not the final
+deployment. We have yet to make a successful test." **This is a contained Base mainnet test, not the final deployment.** A stronger price
+source, such as a hooked oracle pool, is a later, separate owner decision. The V4 asset position adapter (core 1677) is deferred to the final
+deployment. The `IBasketSwapAdapter` seam, the per-asset venue and the slippage-floor formula stand.
+
+**What the restore had to change.** The deleted adapter reverted `UnsupportedFeeTier` for fee 29100, derived tickSpacing from a standard
+table (this pool uses 582), called an `exactInputSingle` shape that matches no canonical V4 contract, and read `observe()` and `slot0()` from a
+pool address that V4 does not have. `UniswapV4SwapAdapter` is a rewrite against the real PoolManager:
+
+- **Explicit PoolKey.** The adapter is built with the full `PoolKey` (currencies sorted, hooks zero, the fee and tickSpacing as given) and the recorder
+  for that key. It requires `keccak256(abi.encode(key))` to equal the recorder's `POOL_ID` and the recorder to sit on the same PoolManager. `swap`
+  accepts only the configured token pair and fee. A caller cannot supply a different key.
+- **Unlock flow.** `swap` pulls `amountIn` from the caller, pokes the recorder, calls `PoolManager.unlock`, and in `unlockCallback` runs an exact-input
+  `PoolManager.swap`, then `sync`, a transfer of the input to the PoolManager, `settle` and `take` of the output to the recipient. The PoolManager reverts
+  the unlock if any delta is left. `unlockCallback` answers only the PoolManager and only while a `swap` is open. `swap` is non-reentrant.
+- **Bounds.** The caller-chosen deadline is enforced in the adapter. `amountIn` and `minAmountOut` above `uint128` revert. The output floor
+  `minAmountOut` is checked against the delta the PoolManager returns. The price limit is the pool edge, so the floor is the slippage bound.
+- **Authority.** Any caller may call `swap` (it spends the caller's own approved tokens and holds nothing between calls). `ADMIN_ROLE` pins the
+  adapter by codehash (`setAdapterCodeHashAllowed`, ADP-2), and `addAsset` runs the unchanged guard checks.
+
+**The price recorder (`UniswapV4PriceRecorder`).** V3-shaped, so `BasketVault`, `BasketAssetConfigGuard` and `TwapTickMath` read it unchanged (the vault
+family has 65 to 107 bytes of EIP-170 headroom, so no vault logic changes). It is registered as the asset's `pool`, with `venue = V4` and
+`swapFee = 29100`. It exposes `token0`, `token1`, `fee`, `liquidity` (live, read through the PoolManager `extsload`), `slot0` and `observe`.
+
+- No owner, role or setter. `record()` and `grow()` are permissionless. The adapter pokes before every swap. A keeper may poke too. There is no keeper service.
+- At most one snapshot per block timestamp. The constructor records the first tick (cumulative 0). The ring grows to 901 slots (`window / 2 s + 1`).
+- **Lagged tick.** As in Uniswap V3 the interval since the last snapshot is weighted by the PREVIOUS recorded tick, so a tick pushed into the pool and
+  recorded in block N weighs only the time after block N.
+- **Clamp.** The recorded tick moves toward the live pool tick by at most 10 ticks per elapsed second, with elapsed capped at 60 s: one record moves it by at
+  most 600 ticks (about 6.2 percent). A flash swap followed by a poke in the same block therefore moves the record by at most 20 to 600 ticks.
+- `observe` never reads live spot. `slot0().tick` is live spot for the ORA-4 spot-versus-TWAP deposit guard only.
+- **Stale fails closed.** If the last snapshot is older than 1800 s (one window), `observe` reverts `StaleRecorder`. Deposits, USDC redeems and `totalAssets()`
+  then revert. `redeemInKind` reads no oracle and still pays the pro-rata RM, so withdrawals are never frozen (ADR-0007, core 1665). Any `record()` call
+  makes the recorder fresh again.
+
+**Security bound: pool depth.** A manipulator must move and hold the pool price. The clamp, the lagged tick, the ORA-4 guard and the slippage
+floor bound the damage of a short move. A move held across many blocks drags the TWAP at up to 10 ticks per second, and its cost is the pool's depth.
+`perDepositCap` and `tvlCap` MUST therefore be sized below the pool's depth. At the 2026-10-08 pin the pool holds in-range liquidity L of about
+9.8e17, a virtual USDC reserve of about 1,750 USDC at spot: a deposit moves the price by about `2 x deposit / reserve`. The pool charges 2.91 percent, so the
+vault default `maxSlippageBps` of 300 leaves 9 bps for impact. `config/agent-token-shortlist.json` sets `maxSlippageBps` 500 (the vault ceiling), which the
+deploy script applies before the handover, leaving 209 bps and a single swap limit of about 18 USDC at that depth. The 8453 caps are an owner action.
+
+**Liquidity floor unit (V4).** The floor for a V4 pool is the pool's in-range liquidity L (`StateView.getLiquidity(poolId)`), a raw `uint128`,
+not a USDC amount. It is the same unit as the V3 floor. `BasketVault.addAsset` reads it through `recorder.liquidity()`. The deploy script reads it
+through the PoolManager with the configured pool id, and the live config check reads it through StateView.
+
+**Out of scope here.** A tick-clamp or truncated-oracle hardening beyond the clamp above, a hooked oracle pool, an automated keeper, and any WETH or
+multi-hop route. The USDC-only pairing rule is unchanged.
 
 ## Consequences
 

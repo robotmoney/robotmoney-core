@@ -44,6 +44,13 @@ describe("whitelist parser", () => {
     expect(parseSheet(text).chainId).toBe(918453);
   });
 
+  test("the Twin stage sheet carries the 8453 launch router values: governance isomorphism section 1.1 lets only chain, keys, custody and delay differ (core 1708)", () => {
+    const s = parseSheet(readFileSync(join(REPO, "deployments", "twin-918453", "stage-sheet.env"), "utf8"));
+    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
+    expect(eligibilityBps(s, "AGENT")).toEqual([9500, 500, 0]);
+  });
+
   test("REHEARSAL=1 is refused", () => {
     expect(refused(sheetText({}, ["REHEARSAL=1"])).message).toContain("REHEARSAL");
     expect(refused(sheetText({}, ["export REHEARSAL=1"])).message).toContain("deleted");
@@ -171,8 +178,8 @@ describe("whitelist parser", () => {
   });
 });
 
-describe("govern carries the basket unpauses only; the rest is deploy-time configuration (issue 1520)", () => {
-  const why = "govern (stage 13) carries the basket unpauses only";
+describe("govern carries the four vault unpauses only; the rest is deploy-time configuration (issue 1520)", () => {
+  const why = "govern (stage 13) carries the four vault unpauses only";
   test("a sheet that routes voting power, quorum, agents, caps, fee, fee recipient, eligibility or router weights through govern is refused", () => {
     for (const name of [
       "GOVERN_VOTER_POWER", "GOVERN_VOTING_POWER", "GOVERN_QUORUM_THRESHOLD", "GOVERN_QUORUM", "GOVERN_VOTING_PERIOD", "GOVERN_EXECUTION_DELAY", "GOVERN_AGENT_ADDRESSES", "GOVERN_AGENTS",
@@ -182,19 +189,19 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
     const ok = parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO", GOVERN_NEW_DELAY: "3600" }));
     expect(ok.govern.unpauseVaults).toEqual(["PROTO"]);
   });
-  test("on 8453 a GOVERN_UNPAUSE_VAULTS that lacks PROTO, AGENT or RWA is refused with a named error; Twin allows it", () => {
+  test("on 8453 a GOVERN_UNPAUSE_VAULTS that lacks USDC, PROTO, AGENT or RWA is refused with a named error; Twin allows it", () => {
     const main = (list: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0", GOVERN_UNPAUSE_VAULTS: list });
-    for (const list of ["PROTO,RWA", "AGENT,RWA", "PROTO,AGENT", "PROTO", "none"]) {
+    for (const list of ["PROTO,AGENT,RWA", "USDC,AGENT,RWA", "USDC,PROTO,RWA", "USDC,PROTO,AGENT", "USDC", "none"]) {
       const e = refused(main(list));
       expect(e.message, list).toContain("no stage 13 step may be skipped");
       expect(e.message).toContain("GOVERN_UNPAUSE_VAULTS");
     }
-    expect(parseSheet(main("PROTO,AGENT,RWA")).govern.unpauseVaults).toEqual(["PROTO", "AGENT", "RWA"]);
-    expect(parseSheet(main("RWA,AGENT,PROTO")).govern.unpauseVaults).toEqual(["RWA", "AGENT", "PROTO"]);
+    expect(parseSheet(main("USDC,PROTO,AGENT,RWA")).govern.unpauseVaults).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+    expect(parseSheet(main("RWA,AGENT,PROTO,USDC")).govern.unpauseVaults).toEqual(["RWA", "AGENT", "PROTO", "USDC"]);
     expect(parseSheet(sheetText({ GOVERN_UNPAUSE_VAULTS: "PROTO,RWA" })).govern.unpauseVaults).toEqual(["PROTO", "RWA"]);
   });
   test("on 8453 ROUTER_WEIGHTS must be the launch vector, with a named error; Twin keeps its own weights", () => {
-    const main = (w: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: w });
+    const main = (w: string) => sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: w });
     const ok = parseSheet(main("USDC:9500,PROTO:500,AGENT:0,RWA:0"));
     expect(ok.weights.map((x) => x.bps)).toEqual([9500, 500, 0, 0]);
     expect(parseSheet(main("RWA:0,AGENT:0,PROTO:500,USDC:9500")).weights.length).toBe(4);
@@ -204,15 +211,15 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
       expect(e.message).toContain("ROUTER_WEIGHTS");
     }
     // a vault left out of the vector is refused too (the vector must name all four)
-    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
+    const short = refused(sheetText({ CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", ELIGIBLE_VAULTS: "PROTO", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500" }));
     expect(short.message).toContain("launch vector");
     expect(parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" })).weights.length).toBe(3);
   });
   test("the govern block holds the unpauses and the Twin-only delay and nothing else; eligibility and weights are deploy-time fields", () => {
     const s = parseSheet(exampleText());
     expect(Object.keys(s.govern).sort()).toEqual(["newDelay", "unpauseVaults"]);
-    expect(s.eligibleVaults).toEqual(["PROTO", "RWA"]);
-    expect(s.weights).toEqual([{ key: "USDC", bps: 6000 }, { key: "PROTO", bps: 2500 }, { key: "RWA", bps: 1500 }]);
+    expect(s.eligibleVaults).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(s.weights).toEqual([{ key: "USDC", bps: 9500 }, { key: "PROTO", bps: 500 }, { key: "AGENT", bps: 0 }, { key: "RWA", bps: 0 }]);
     expect(s.values.GOVERN_ELIGIBLE_VAULTS).toBeUndefined();
   });
   test("ELIGIBLE_VAULTS is required, lists baskets only, and has no repeat", () => {
@@ -228,10 +235,13 @@ describe("govern carries the basket unpauses only; the rest is deploy-time confi
   });
   test("eligibilityBps: the last eligible basket leaves exactly the sheet weights, earlier flips are scaled to 10000, an ineligible basket has none", () => {
     const s = parseSheet(exampleText());
-    expect(eligibleInOrder(s)).toEqual(["PROTO", "RWA"]);
-    expect(eligibilityBps(s, "PROTO")).toEqual([7059, 2941]);
-    expect(eligibilityBps(s, "RWA")).toEqual([6000, 2500, 1500]);
-    expect(eligibilityBps(s, "AGENT")).toBeUndefined();
+    expect(eligibleInOrder(s)).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect(eligibilityBps(s, "PROTO")).toEqual([9500, 500]);
+    expect(eligibilityBps(s, "RWA")).toEqual([9500, 500, 0, 0]);
+    const noAgent = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:6000,PROTO:2500,RWA:1500" }));
+    expect(eligibilityBps(noAgent, "PROTO")).toEqual([7059, 2941]);
+    expect(eligibilityBps(noAgent, "RWA")).toEqual([6000, 2500, 1500]);
+    expect(eligibilityBps(noAgent, "AGENT")).toBeUndefined();
     const launch = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" }));
     expect(eligibilityBps(launch, "PROTO")).toEqual([9500, 500]);
     expect(eligibilityBps(launch, "AGENT")).toEqual([9500, 500, 0]);

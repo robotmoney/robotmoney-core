@@ -29,7 +29,7 @@
  * loads — no test-only branches in this file.
  */
 import { unstable_connector, http, createConfig, fallback } from "wagmi";
-import { foundry, mainnet } from "wagmi/chains";
+import { base, foundry, mainnet } from "wagmi/chains";
 import { injected } from "wagmi/connectors";
 import { defineChain } from "viem";
 
@@ -98,12 +98,16 @@ export function makeConfig(env: Record<string, string | undefined>) {
     : unstable_connector(injected);
 
   return createConfig({
-    chains: [devnet, foundry, mainnet],
+    chains: [devnet, foundry, mainnet, base],
     connectors: [injected()],
     transports: {
       [devnet.id]: devnetTransport,
       [foundry.id]: unstable_connector(injected),
       [mainnet.id]: unstable_connector(injected),
+      // Base mainnet (8453), read through the user's wallet like every other chain here. The read-only
+      // mainnet stage stack (issue 1725) needs the chain to be configured; the faucet stays refused on it
+      // (chainClassifier.ts MAINNET_CHAIN_IDS).
+      [base.id]: unstable_connector(injected),
     },
   });
 }

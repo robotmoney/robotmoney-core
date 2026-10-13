@@ -23,6 +23,7 @@
  */
 
 import type { Stance } from "../lib/committeeApi";
+import { formatPercentFromNumber } from "../lib/format";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ export function VoteSubmitPreview(props: VoteSubmitPreviewProps) {
 
         <dt>Target Weight</dt>
         <dd data-testid="vote-submit-target-weight-bps">
-          {props.target_weight_bps} bps ({(props.target_weight_bps / 100).toFixed(2)}%)
+          {props.target_weight_bps} bps ({formatPercentFromNumber(props.target_weight_bps)})
         </dd>
 
         <dt>Confidence</dt>

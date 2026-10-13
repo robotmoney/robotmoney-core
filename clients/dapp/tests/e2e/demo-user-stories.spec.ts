@@ -99,7 +99,7 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
 
     // VaultCards re-fetches every 15 s and the indexer lags the chain, so poll until the
     // rmUSDC seed shows: exactly one card with a non-empty TVL, the other three empty.
-    const isEmpty = (t: string) => t === "" || t === "—" || Number(t.replace(/[$,\s]/g, "")) === 0;
+    const isEmpty = (t: string) => t === "" || t === "—" || Number(t.replace(/[^0-9.]/g, "")) === 0;
     await expect
       .poll(
         async () => {

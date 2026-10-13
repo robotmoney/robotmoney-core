@@ -15,6 +15,7 @@ import {
   resolveTargetChainId,
   resolveTargetRpcUrl,
 } from "../../src/lib/wagmi";
+import { classifyChain } from "../../src/lib/chainClassifier";
 import { syncDevnetChain } from "../../src/lib/syncDevnetChain";
 
 const RPC_A = "https://devnet-a.example/rpc";
@@ -47,6 +48,17 @@ describe("makeConfig consumes its env argument", () => {
     expect(makeConfig({ VITE_DEVNET_RPC_URL: RPC_A }).chains.map((c) => c.id)).toContain(
       DEVNET_CHAIN_ID,
     );
+  });
+});
+
+describe("Base mainnet (issue 1725)", () => {
+  it("is a configured chain with an injected-only transport and no baked-in RPC", () => {
+    const config = makeConfig({});
+    expect(config.chains.map((c) => c.id)).toContain(8453);
+  });
+
+  it("is classified as mainnet so the faucet stays refused", () => {
+    expect(classifyChain(8453)).toBe("mainnet");
   });
 });
 

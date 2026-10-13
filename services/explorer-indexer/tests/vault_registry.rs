@@ -185,7 +185,10 @@ async fn vault_registered_event_inserts_vaults_row() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -275,7 +278,10 @@ async fn vault_status_changed_updates_status() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -334,7 +340,10 @@ async fn vault_status_changed_updates_status() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(89),
         feature_flags: 4,
     };
@@ -414,7 +423,10 @@ async fn registered_vault_added_to_watched_address_set() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -497,7 +509,8 @@ async fn migration_preserves_existing_vault_snapshots() {
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             50,
-            U256::ZERO,
+            Some(U256::ZERO),
+            None,
             false,
         )
         .await
@@ -573,7 +586,10 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -604,7 +620,8 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
             U256::from(500_000u64),
             U256::from(500_000u64),
             50,
-            U256::ZERO,
+            Some(U256::ZERO),
+            None,
             false,
         )
         .await
@@ -635,7 +652,10 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };
@@ -740,7 +760,10 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: Some(65),
         feature_flags: 4,
     };

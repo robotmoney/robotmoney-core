@@ -10,7 +10,7 @@ import { assertControlProven, inspectProofTx, PROOF_STAGE } from "../src/control
 import { EXIT_CODES } from "../src/errors.ts";
 import { assertEveryOwnerSigned } from "../src/prove-control.ts";
 import { localSafeTxHash, signTx, type SafeTxBundle } from "../src/safe/index.ts";
-import { PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
+import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
 import { OWNERS, OWNER_KEYS, SAFE, buildWorld, failed, proofInput } from "./verify/world.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
 
@@ -99,10 +99,35 @@ describe("prove-control records the proof", () => {
     expect(w.safeNonce).toBe(1);
   });
 
-  test("the proof sends nothing from the deployer: its nonce is the frozen-count record", async () => {
+  test("the DEPLOYER submits the proof and pays the gas: owner A sends nothing, and every owner still signed (core 1712)", async () => {
     const w = world({ writeSafeManifest: true, startNonce: 7 });
     expect(await w.run(["--stage", PROOF_STAGE])).toBe(0);
-    expect(w.state().nonces["0x000000000000000000000000000000000000a001"]).toBe(7);
+    expect(w.proofSenders).toEqual([ADMIN]);
+    expect(w.state().nonces[ADMIN]).toBe(8); // one transaction, from the deployer
+    for (const owner of PROVE_OWNERS) expect(w.state().nonces[owner.toLowerCase()] ?? 0).toBe(0); // no owner sent or paid anything
+    expect(w.safeCalls.filter((c) => c === "signTx")).toHaveLength(PROVE_OWNERS.length); // all three owners signed
+    expect(w.safeCalls).toContain("executeTx:3:all"); // with all three signatures in the calldata
+    expect(manifest(w).stages[PROOF_STAGE].sentBy).toBe(ADMIN);
+  });
+
+  test("the sender is the deployer signer the run was given, not whichever owner signer comes first", async () => {
+    const w = world({ writeSafeManifest: true });
+    let sentBy: string | undefined;
+    const api = fakeProveApi(w);
+    const spy = { ...api, executeTx: async (...a: Parameters<typeof api.executeTx>) => { sentBy = (await a[2].address()).toLowerCase(); return api.executeTx(...a); } };
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: spy, ownerSigners: [...PROVE_SIGNERS].reverse() } })).toBe(0);
+    expect(sentBy).toBe(ADMIN);
+    expect(PROVE_OWNERS.map((o) => o.toLowerCase())).not.toContain(sentBy!);
+  });
+
+  test("a full deploy run: the final nonce check passes at the stage counts plus the deployer's one proof transaction (core 1712)", async () => {
+    const w = world({ startNonce: 0 });
+    expect(await w.run(["--stage", "deploy"])).toBe(0);
+    const ok = w.logs().find((l) => l.event === "run.nonce_ok"); // the run's own end-of-deploy check ran and passed
+    expect(ok).toBeDefined();
+    expect(w.proofSenders).toEqual([ADMIN]);
+    expect(ok.nonce).toBe(ok.summed_frozen_counts + 1);
+    expect(w.state().nonces[ADMIN]).toBe(ok.nonce);
   });
 
   test("a finished proof is not taken twice on --resume", async () => {
@@ -233,11 +258,11 @@ async function execCalldata(o: { signers?: typeof PROVE_SIGNERS; hash?: Hex; to?
 }
 
 /** A Safe at nonce 1 whose only execution is on chain. Override any part to build a hostile one. */
-async function landed(w: ReturnType<typeof world>, o: { input?: Hex; safeTxHash?: Hex; success?: boolean; value?: bigint; to?: string | null; status?: "success" | "reverted"; nonce?: number; extra?: number } = {}): Promise<void> {
+async function landed(w: ReturnType<typeof world>, o: { input?: Hex; safeTxHash?: Hex; success?: boolean; value?: bigint; to?: string | null; status?: "success" | "reverted"; nonce?: number; extra?: number; from?: Address } = {}): Promise<void> {
   w.safeNonce = o.nonce ?? 1;
   const ev = { txHash: LANDED_TX, safeTxHash: o.safeTxHash ?? localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0), success: o.success ?? true, block: 9, logIndex: 0 };
   w.landed.executions = [ev, ...Array.from({ length: o.extra ?? 0 }, (_, i) => ({ ...ev, txHash: `0x${"cd".repeat(31)}0${i}` as Hex, block: 10 + i }))];
-  w.landed.txs[LANDED_TX] = { from: PROVE_OWNERS[0]!, to: o.to === undefined ? SAFE_ADDR : o.to, input: o.input ?? (await execCalldata()), value: o.value ?? 0n, status: o.status ?? "success", block: 9 };
+  w.landed.txs[LANDED_TX] = { from: o.from ?? ADMIN, to: o.to === undefined ? SAFE_ADDR : o.to, input: o.input ?? (await execCalldata()), value: o.value ?? 0n, status: o.status ?? "success", block: 9 };
 }
 const sends = (w: ReturnType<typeof world>) => w.safeCalls.filter((c) => c === "proposeTx" || c === "signTx" || c === "checkSignaturesOnChain" || c.startsWith("executeTx"));
 const resumeProof = (w: ReturnType<typeof world>) => w.run(["--stage", PROOF_STAGE, "--resume"]);
@@ -255,6 +280,16 @@ describe("prove-control adopts a proof that landed before the run died", () => {
     expect(rec).toMatchObject({ status: "done", adopted: true, safe: SAFE_ADDR, txHash: LANDED_TX, nonce: 0, block: 9 });
     expect(rec.signers).toEqual(PROVE_OWNERS.map((a) => a.toLowerCase()).sort());
     expect(rec.safeTxHash).toBe(localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0));
+  });
+
+  test("the adoption does not look at who sent the transaction: the deployer, an owner or any other account is recorded as sentBy, never refused", async () => {
+    for (const from of [ADMIN, PROVE_OWNERS[0]!, "0x00000000000000000000000000000000000000bb"] as Address[]) {
+      const w = world({ writeSafeManifest: true });
+      await landed(w, { from });
+      expect(await resumeProof(w)).toBe(0);
+      expect(sends(w)).toEqual([]);
+      expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, sentBy: from });
+    }
   });
 
   test("a crash between the execution and the manifest write, then --resume: the proof is adopted, the stage 11 gate accepts it, the timelock stage runs, and the proof is sent once", async () => {

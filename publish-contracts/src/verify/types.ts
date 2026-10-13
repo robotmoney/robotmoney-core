@@ -21,14 +21,25 @@ export interface VerifyReport {
 
 export type VaultKind = "usdc" | "basket" | "agent";
 
+/** The Uniswap V4 facts of an expected asset (core 1676): the PoolManager, StateView, pool id and the full PoolKey, all from core's config. */
+export interface ExpectedV4 {
+  poolManager: Address;
+  stateView: Address;
+  poolId: Hex;
+  key: { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+}
+
 export interface ExpectedAsset {
   token: Address;
+  /** The pool the vault registers. For a UniswapV4 asset this is the price recorder, not a pool: V4 has no pool address. */
   pool: Address;
   swapFee: number;
   adapter: Address;
-  /** Venue enum index as stored on chain (0 = V3 for the shipped vaults). Optional per asset. */
+  /** Venue enum index as stored on chain (0 = V3, 1 = V4). Optional per asset. */
   venue?: number;
   active?: boolean;
+  /** UniswapV4 only: what the recorder and the V4 adapter must be bound to. */
+  v4?: ExpectedV4;
 }
 
 /** Everything the frozen sheet says about one vault. All fields are required: nothing is skipped silently. */
@@ -73,6 +84,8 @@ export interface VerifySheet {
   safeThreshold: number;
   /** Timelock delay in seconds the sheet asked for. */
   timelockDelay: number;
+  /** Issue 1727: the deployment kind of the run (the sheet's DEPLOYMENT_KIND). Absent means production, the strictest reading: the 172800 s floor on 8453. */
+  deploymentKind?: "production" | "rehearsal";
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
   governance: GovernanceSheet;
@@ -103,10 +116,21 @@ export interface VerifyOptions {
    */
   deployerNonceAtDeployEnd?: number;
   /**
+   * Issue 1727, rehearsal only: the deployer nonce the run manifest recorded at the first deployer stage. The expected nonce is this plus the summed frozen counts
+   * plus the prove-control transaction. Absent (production): 0, a fresh deployer.
+   */
+  deployerStartNonce?: number;
+  /**
    * The Safe control proof the run manifest recorded (core 1618): the execTransaction hash and the Safe nonce it used. The verifier reads the
    * transaction back from the chain. Absent: the proof label fails (a deploy without the prove-control step is not accepted).
    */
   controlProof?: { txHash: Hex; nonce: number };
+  /**
+   * The last consensus receipt the Safe applied through `govern --row apply-receipt` (issue 1696), from the run manifest: the receipt id and the vector the
+   * router took. Absent: no receipt was applied and the router default weights must equal the sheet. Present: the receipt must read released and the router
+   * default weights must equal this vector (the sheet vector was superseded by the application).
+   */
+  appliedReceipt?: { receiptId: Hex; vaults: Address[]; bps: number[] };
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */

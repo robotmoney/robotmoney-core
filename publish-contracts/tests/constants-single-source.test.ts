@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR } from "../src/chains.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR, REHEARSAL_DELAY_FLOOR } from "../src/chains.ts";
 
 const SRC = join(import.meta.dir, "..", "src");
 const SOL = join(import.meta.dir, "..", "..", "contracts", "script");
@@ -74,6 +74,7 @@ function tsFiles(dir: string): string[] {
 describe("one source of truth for chain ids and the delay floor (1603)", () => {
   test("the TS floor and chain ids equal the Solidity constants", () => {
     expect(MAINNET_DELAY_FLOOR).toBe(solConst("DeployTimelock.s.sol", "MIN_PRODUCTION_DELAY"));
+    expect(REHEARSAL_DELAY_FLOOR).toBe(solConst("DeployTimelock.s.sol", "MIN_REHEARSAL_DELAY")); // issue 1727
     expect(MAINNET_CHAIN_ID).toBe(solConst("ExpectedChainGuard.sol", "BASE_MAINNET_CHAIN_ID"));
     expect(TWIN_CHAIN_ID).not.toBe(MAINNET_CHAIN_ID);
   });

@@ -40,6 +40,19 @@ const { mock } = (await vi.importActual("wagmi/connectors")) as typeof import("w
 const { defineChain } = (await vi.importActual("viem")) as typeof import("viem");
 /* eslint-enable @typescript-eslint/no-unsafe-assignment */
 
+// The wagmi instance the COMPONENT SOURCE gets (a plain import). It is the same module as the one above in
+// some runs and a second instance in others (Vitest browser mode serves the source its own optimized copy),
+// and a provider from one instance is invisible to hooks of the other: `useAccount` throws
+// WagmiProviderNotFoundError. Components that read real wagmi hooks (issue 1731: the write guard and the
+// `depositsPaused()` reads) need the provider of THEIR instance, so it is nested inside the first when the two
+// differ. A test file that vi.mock("wagmi") has no such provider (access throws) and gets only the first.
+let SourceWagmiProvider: typeof WagmiProvider | undefined;
+try {
+  SourceWagmiProvider = ((await import("wagmi")) as typeof import("wagmi")).WagmiProvider;
+} catch {
+  SourceWagmiProvider = undefined;
+}
+
 const testChain = defineChain({
   id: 918453,
   name: "Test Devnet",
@@ -57,9 +70,15 @@ function TestProviders({ children }: { children: React.ReactNode }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  const inner =
+    SourceWagmiProvider && SourceWagmiProvider !== WagmiProvider ? (
+      <SourceWagmiProvider config={wagmiConfig}>{children}</SourceWagmiProvider>
+    ) : (
+      children
+    );
   return (
     <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{inner}</QueryClientProvider>
     </WagmiProvider>
   );
 }

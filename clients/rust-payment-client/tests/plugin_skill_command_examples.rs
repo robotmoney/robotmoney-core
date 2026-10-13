@@ -17,7 +17,7 @@
 //!     names, wrong flag positions, wrong value types, and missing required
 //!     arguments.
 //!   * **Elided invocations and inline prose mentions** (`rmpc committee
-//!     --config <CONFIG> register ...`, `` `rmpc status --payment-id <id>` ``)
+//!     --config <CONFIG> vote-submit ...`, `` `rmpc status --payment-id <id>` ``)
 //!     are incomplete by construction, so they cannot be parsed whole. Their
 //!     subcommand path must still resolve and every flag they do name must exist
 //!     on that path. This catches exactly the `--target-weight-bps` mistake
@@ -49,7 +49,6 @@ const SHELL_FENCE_LANGS: &[&str] = &["", "bash", "sh", "shell", "console"];
 /// everything else in the CLI takes a `String`/`PathBuf` and parses verbatim.
 const NUMERIC_PLACEHOLDER_VALUES: &[(&str, &str)] = &[
     ("--weight-bps", "6000"),
-    ("--weights-bps", "6000,4000"),
     ("--confidence", "70"),
     ("--timestamp", "1735689600"),
     ("--deadline-secs", "300"),

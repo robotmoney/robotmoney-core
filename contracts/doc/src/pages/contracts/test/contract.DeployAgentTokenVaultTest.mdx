@@ -5,7 +5,7 @@ description: "rmAGENT script: paused and registered at launch, holding RM on the
 
 # DeployAgentTokenVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f342f9b813bd6970b280f6cdd91c72688a190ed/contracts/test/DeployAgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployAgentTokenVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -21,12 +21,43 @@ from one config entry (adapter deployed, code hash allowed, `addAsset` called).
 address internal constant RM_TOKEN = 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3;
 ```
 
+### BASE_USDC
+
+```solidity
+address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### PM_ADDR
+
+```solidity
+address internal constant PM_ADDR = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
+```
+
+### RM_POOL_ID
+
+```solidity
+bytes32 internal constant RM_POOL_ID =
+        0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391;
+```
+
+### SHIPPED
+
+```solidity
+string internal constant SHIPPED = "config/agent-token-shortlist.json";
+```
+
 ## State Variables
 
 ### script
 
 ```solidity
 DeployAgentTokenVault internal script;
+```
+
+### recorder
+
+```solidity
+UniswapV4PriceRecorder internal recorder;
 ```
 
 ## Functions
@@ -38,6 +69,36 @@ DeployAgentTokenVault internal script;
 ```solidity
 function setUp() public;
 ```
+
+<a id="_v4world"></a>
+
+### _v4World
+
+<i>
+
+The V4 world the shipped config names: a PoolManager double etched at the real PoolManager address with the RM/USDC pool
+initialised (liquidity 1e18, tick -100), RM and USDC code at their real addresses, and a recorder for the shipped key
+warmed to a full 1800 s window (901 slots, 32 records a minute apart) so `addAsset` accepts it.
+
+</i>
+
+```solidity
+function _v4World() internal;
+```
+
+<a id="_warm-uniswapv4pricerecorder"></a>
+
+### _warm
+
+```solidity
+function _warm(UniswapV4PriceRecorder r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `UniswapV4PriceRecorder` |  |
 
 <a id="_launchconfig"></a>
 
@@ -93,8 +154,7 @@ function _emptyConfig() internal view returns (string memory);
 
 <i>
 
-Runs the SHIPPED config (RM) through the script. A mock pool paired with this test's
-USDC is etched at the shipped RM pool address, as the live pool is on Base.
+Runs the SHIPPED config (RM on the V4 pool) through the script with the recorder from `_v4World`.
 
 </i>
 
@@ -112,11 +172,94 @@ function _runLaunch() internal returns (BasketVaultDeployBase.Deployed memory);
 
 ### test_shippedConfig_parsesThroughTheScriptParser
 
-The shipped rmAGENT config carries swapRouter02 and the RM entry, so the
-script's parser accepts it (review defect: it used to revert on a missing key).
+The shipped rmAGENT config parses: RM on UniswapV4 with the full PoolKey (fee 29100, tickSpacing 582, hooks 0x0).
 
 ```solidity
 function test_shippedConfig_parsesThroughTheScriptParser() public;
+```
+
+<a id="test_config_rmonuniswapv3isrefused"></a>
+
+### test_config_rmOnUniswapV3IsRefused
+
+Owner decision 2026-10-08: RM on the V3 pool is refused.
+
+```solidity
+function test_config_rmOnUniswapV3IsRefused() public;
+```
+
+<a id="test_config_av3entryforanothertokenstillparses"></a>
+
+### test_config_aV3EntryForAnotherTokenStillParses
+
+A V3 entry for a token other than RM still parses (adding a token later is one config entry).
+
+```solidity
+function test_config_aV3EntryForAnotherTokenStillParses() public;
+```
+
+<a id="_shippedwith-string-string"></a>
+
+### _shippedWith
+
+```solidity
+function _shippedWith(string memory from, string memory to)
+        internal
+        view
+        returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `string` |  |
+| to | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_config_apoolidthatthekeydoesnothashtoisrefused"></a>
+
+### test_config_aPoolIdThatTheKeyDoesNotHashToIsRefused
+
+```solidity
+function test_config_aPoolIdThatTheKeyDoesNotHashToIsRefused() public;
+```
+
+<a id="test_config_atickspacingfromastandardtableisrefusedbythehash"></a>
+
+### test_config_aTickSpacingFromAStandardTableIsRefusedByTheHash
+
+```solidity
+function test_config_aTickSpacingFromAStandardTableIsRefusedByTheHash() public;
+```
+
+<a id="test_config_anonzerohooksaddressisrefused"></a>
+
+### test_config_aNonZeroHooksAddressIsRefused
+
+```solidity
+function test_config_aNonZeroHooksAddressIsRefused() public;
+```
+
+<a id="test_config_afeethatdiffersfrompoolfeeisrefused"></a>
+
+### test_config_aFeeThatDiffersFromPoolFeeIsRefused
+
+```solidity
+function test_config_aFeeThatDiffersFromPoolFeeIsRefused() public;
+```
+
+<a id="test_config_anunknownvenueisrefused"></a>
+
+### test_config_anUnknownVenueIsRefused
+
+```solidity
+function test_config_anUnknownVenueIsRefused() public;
 ```
 
 <a id="test_launchconfigshortlistisrmonly"></a>
@@ -295,5 +438,97 @@ function test_reverts_whenMinPoolLiquidityUnset() public;
 
 ```solidity
 function test_reverts_whenMinPoolLiquidityZero() public;
+```
+
+<a id="test_v4_reverts_whenrecorderaddressismissing"></a>
+
+### test_v4_reverts_whenRecorderAddressIsMissing
+
+```solidity
+function test_v4_reverts_whenRecorderAddressIsMissing() public;
+```
+
+<a id="test_v4_reverts_whentherecorderisforanotherpool"></a>
+
+### test_v4_reverts_whenTheRecorderIsForAnotherPool
+
+```solidity
+function test_v4_reverts_whenTheRecorderIsForAnotherPool() public;
+```
+
+<a id="test_v4_reverts_whentherecorderisonanotherpoolmanager"></a>
+
+### test_v4_reverts_whenTheRecorderIsOnAnotherPoolManager
+
+```solidity
+function test_v4_reverts_whenTheRecorderIsOnAnotherPoolManager() public;
+```
+
+<a id="test_v4_reverts_whenpoolliquidityisbelowthesheetfloor"></a>
+
+### test_v4_reverts_whenPoolLiquidityIsBelowTheSheetFloor
+
+```solidity
+function test_v4_reverts_whenPoolLiquidityIsBelowTheSheetFloor() public;
+```
+
+<a id="test_v4_succeeds_whenpoolliquidityequalsthesheetfloor"></a>
+
+### test_v4_succeeds_whenPoolLiquidityEqualsTheSheetFloor
+
+```solidity
+function test_v4_succeeds_whenPoolLiquidityEqualsTheSheetFloor() public;
+```
+
+<a id="test_v4_reverts_whenthepoolisnotinitialised"></a>
+
+### test_v4_reverts_whenThePoolIsNotInitialised
+
+```solidity
+function test_v4_reverts_whenThePoolIsNotInitialised() public;
+```
+
+<a id="test_v4_reverts_whentherecorderringistoosmall"></a>
+
+### test_v4_reverts_whenTheRecorderRingIsTooSmall
+
+A cold recorder (fewer than 901 slots or under 1800 s of history) fails `addAsset`; the script does not mask it.
+
+```solidity
+function test_v4_reverts_whenTheRecorderRingIsTooSmall() public;
+```
+
+<a id="test_v4_reverts_whentherecorderholdslessthanonewindowofhistory"></a>
+
+### test_v4_reverts_whenTheRecorderHoldsLessThanOneWindowOfHistory
+
+```solidity
+function test_v4_reverts_whenTheRecorderHoldsLessThanOneWindowOfHistory() public;
+```
+
+<a id="test_v4_reverts_whenapoolintheconfigpairsnousdc"></a>
+
+### test_v4_reverts_whenAPoolInTheConfigPairsNoUsdc
+
+```solidity
+function test_v4_reverts_whenAPoolInTheConfigPairsNoUsdc() public;
+```
+
+<a id="test_v4_thescriptpokesastalerecorderbeforeaddasset"></a>
+
+### test_v4_theScriptPokesAStaleRecorderBeforeAddAsset
+
+The script pokes the recorder itself: a recorder nobody has recorded on for over one window (stale) still lets the stage run.
+
+```solidity
+function test_v4_theScriptPokesAStaleRecorderBeforeAddAsset() public;
+```
+
+<a id="test_v4_manifestnamestherecorderandthev4adapter"></a>
+
+### test_v4_manifestNamesTheRecorderAndTheV4Adapter
+
+```solidity
+function test_v4_manifestNamesTheRecorderAndTheV4Adapter() public;
 ```
 

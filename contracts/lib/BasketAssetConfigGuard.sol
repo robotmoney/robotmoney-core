@@ -28,8 +28,9 @@ library BasketAssetConfigGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is a reserved ordinal that no
-    ///      adapter implements; it stays so Aerodrome keeps ordinal 2 (see `BasketVault.Venue`).
+    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is the Uniswap V4 venue: its "pool"
+    ///      is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`, `liquidity`, `slot0` and `observe`
+    ///      like a V3 pool, so every check below applies to it unchanged (core 1676).
     enum Venue {
         V3,
         V4,

@@ -1,0 +1,43 @@
+---
+title: "DeployTimelockRehearsalKindTest"
+---
+
+# DeployTimelockRehearsalKindTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
+
+## Functions
+
+<a id="_prefix"></a>
+
+### _prefix
+
+<i>
+
+Overridden by subclasses so tests that mutate shared env vars
+(vm.setEnv is process-wide) each get their own namespace.
+
+</i>
+
+```solidity
+function _prefix() internal pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="test_rehearsalkind_boundariesonbase"></a>
+
+### test_rehearsalKind_boundariesOnBase
+
+899 and 172800 are refused in the rehearsal kind, 900 passes and records the kind. A rehearsal never carries a production delay: the chain could not tell them apart.
+
+```solidity
+function test_rehearsalKind_boundariesOnBase() public removesOwnManifest;
+```
+

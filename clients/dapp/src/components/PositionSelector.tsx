@@ -17,6 +17,8 @@
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
 import { fetchPositions, type VaultPosition } from "../lib/usePositions";
+import { formatSharesString } from "../lib/format";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 
 type Props = Readonly<{
   /** Connected account whose positions are fetched. */
@@ -37,13 +39,13 @@ type LoadState =
 
 /**
  * Returns only the positions whose shares balance is not zero.
- * Shares are decimal strings (6 dp) — treat anything that parses to a
+ * Shares are raw integer strings — treat anything that parses to a
  * non-zero BigInt as non-zero.
  */
 function nonZero(positions: readonly VaultPosition[]): VaultPosition[] {
   return positions.filter((p) => {
     try {
-      // Strip decimal point for comparison; "0.000000" → 0n
+      // Raw share counts are integer strings; a legacy "0.000000" decimal still reads as zero.
       const raw = p.shares.replace(".", "");
       return BigInt(raw) !== 0n;
     } catch {
@@ -76,6 +78,11 @@ export function PositionSelector({ account, explorerApiUrl, onSelect, selectedVa
       controller.abort();
     };
   }, [account, explorerApiUrl]);
+
+  // Each vault's own share symbol (issue 1767); the hook runs before any early return.
+  const symbolOf = useVaultShareSymbols(
+    load.status === "ok" ? load.positions.flatMap((p) => (p.vault_addr ? [p.vault_addr] : [])) : [],
+  );
 
   if (load.status === "idle" || load.status === "loading") {
     return (
@@ -126,11 +133,11 @@ export function PositionSelector({ account, explorerApiUrl, onSelect, selectedVa
             />
             {p.vault_name ? (
               <>
-                {p.vault_name} — {p.shares} rmUSDC
+                {p.vault_name} — {formatSharesString(p.shares, symbolOf(p.vault_addr))}
               </>
             ) : (
               <>
-                {p.vault_addr} — {p.shares} rmUSDC
+                {p.vault_addr} — {formatSharesString(p.shares, symbolOf(p.vault_addr))}
               </>
             )}
           </label>

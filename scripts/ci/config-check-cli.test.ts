@@ -21,11 +21,14 @@ const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 // The fake chain serves the code 0x6001 everywhere, so its hash is the USDC pin.
 const FAKE_HASH = keccakHex("0x6001");
 const base = loadConfigs(realDir);
-const all = [...base.protocol.assets, ...base.rwa.assets, ...base.agent.shortlist];
+const all = [...base.protocol.assets, ...base.rwa.assets, ...base.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
+const RM_ENTRY = base.agent.shortlist[0];
 const FACTORY = base.rwa.uniswapV3Factory.toLowerCase();
 
 /** The live pool fee the fake chain reports for a symbol (default: the committed fee). */
 let liveFeeOverride: Record<string, number> = {};
+/** The live in-range liquidity L the fake StateView reports for the RM V4 pool (default: funded). */
+let rmLiquidity = 10n ** 18n;
 
 function handle(method: string, params: any[]): string {
   if (method === "eth_chainId") return "0x2105";
@@ -35,7 +38,13 @@ function handle(method: string, params: any[]): string {
   const { to, data } = params[0] as { to: string; data: string };
   const sel = data.slice(0, 10);
   const t = to.toLowerCase();
-  const asset = all.find((x) => x.pool.toLowerCase() === t);
+  if (t === RM_ENTRY.stateView!.toLowerCase()) {
+    // StateView: only the configured RM pool id is a live pool
+    if (data.slice(10).toLowerCase() !== RM_ENTRY.poolId!.slice(2).toLowerCase()) return "0x" + w(0) + w(0) + w(0) + w(0);
+    if (sel === "0xc815641c") return "0x" + w(1n << 96n) + w(0) + w(0) + w(liveFeeOverride.RM ?? RM_ENTRY.poolFee);
+    if (sel === "0xfa6793d5") return "0x" + w(rmLiquidity);
+  }
+  const asset = all.find((x) => x.pool?.toLowerCase() === t);
   if (sel === "0xddca3f43") return "0x" + w(asset ? (liveFeeOverride[asset.symbol] ?? Number(asset.poolFee)) : 0);
   if (sel === "0x0dfe1681") return "0x" + a(base.rwa.usdc);
   if (sel === "0xd21220a7") return "0x" + a(asset!.token);
@@ -45,7 +54,7 @@ function handle(method: string, params: any[]): string {
   if (sel === "0x1698ee82" && t === FACTORY) {
     const tok = "0x" + data.slice(10, 74).slice(24);
     const x = all.find((y) => y.token.toLowerCase() === tok.toLowerCase());
-    return "0x" + a(x!.pool);
+    return "0x" + a(x!.pool!);
   }
   return "0x" + w(0);
 }
@@ -104,7 +113,7 @@ describe("config-check CLI against a fake live chain", () => {
     const report = JSON.parse(readFileSync(file, "utf8"));
     expect(report.blockNumber).toBe(BLOCK);
     expect(report.ok).toBe(true);
-    for (const sym of ["wETH", "cbBTC", "deSPXA"]) {
+    for (const sym of ["wETH", "cbBTC", "deSPXA", "RM"]) {
       expect(report.findings.some((f: any) => f.scope.endsWith(`:${sym}`) && f.ok)).toBe(true);
     }
   });
@@ -139,6 +148,30 @@ describe("config-check CLI against a fake live chain", () => {
     const r = await run(dir);
     expect(r.code).not.toBe(0);
     expect(r.out).toMatch(/FAIL[^\n]*wETH/);
+  });
+
+  test("exits non-zero while the RM V4 pool is below the liquidity floor, and says the owner must fund it", async () => {
+    liveFeeOverride = {};
+    rmLiquidity = 999_999n;
+    const r = await run(configDir());
+    rmLiquidity = 10n ** 18n;
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*RM[^\n]*liquidity>=1000000[^\n]*the owner must add in-range liquidity/);
+  });
+
+  test("exits non-zero when the RM V4 pool reports a fee other than 29100", async () => {
+    liveFeeOverride = { RM: 10000 };
+    const r = await run(configDir());
+    liveFeeOverride = {};
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*RM[^\n]*pool-fee-equals-config/);
+  });
+
+  test("exits non-zero when the RM PoolKey in config is altered (the hash resolves to no live pool)", async () => {
+    liveFeeOverride = {};
+    const r = await run(configDir((f) => { f["agent-token-shortlist.json"].shortlist[0].poolKey.tickSpacing = 200; }));
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/FAIL[^\n]*rm-v4-pool-id|FAIL[^\n]*poolkey-hashes-to-pool-id/);
   });
 
   test("exits non-zero when the chain id is not Base", async () => {

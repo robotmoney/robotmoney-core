@@ -1,0 +1,648 @@
+---
+title: "UniswapV4PriceRecorder"
+description: "Permissionless tick recorder and V3-shaped oracle facade for one hookless Uniswap V4 pool."
+---
+
+# UniswapV4PriceRecorder
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/adapters/UniswapV4PriceRecorder.sol)
+
+**Title:** UniswapV4PriceRecorder
+
+Permissionless tick recorder and V3-shaped oracle facade for one hookless Uniswap V4 pool.
+
+<i>
+
+DESIGN (every point is tested in `UniswapV4PriceRecorder.t.sol`)
+
+</i>
+
+1. No role, owner or setter. Anyone calls `record()` (a keeper, or the swap adapter before every
+swap) and `grow()`.
+2. At most one snapshot per block timestamp. A second call in the same block is a no-op, so a
+same-block "swap, record, swap back" cannot write two points or overwrite its own record.
+3. LAGGED TICK, as in Uniswap V3. The cumulative for the interval since the previous snapshot is
+extended with the PREVIOUS recorded tick, then the new tick replaces it. A tick that an attacker
+pushes into the pool and records in block N therefore weights only the time after block N, and
+only until the next record.
+4. CLAMP. The recorded tick moves toward the live pool tick by at most `MAX_TICK_STEP_PER_SECOND`
+ticks per elapsed second, with elapsed capped at `CLAMP_ELAPSED_CAP` seconds. So one record can
+move the recorded tick by at most 600 ticks (about 6.2 percent of price), however far a flash loan
+moved the pool, and a long gap cannot widen the step. The live tick is read through the
+PoolManager `extsload`, never a spot-in-the-same-call trade.
+5. `observe()` never reads live spot. `observe([0])` returns the last snapshot extended by the last
+recorded tick, as V3 does. Live spot is exposed only through `slot0()`, which the vault's ORA-4
+deposit guard compares against the TWAP (a guard, not a price).
+6. STALE FAILS CLOSED. If the last snapshot is older than `MAX_STALENESS` (one 1800 s window),
+`observe()` reverts `StaleRecorder`. Deposits, USDC redeems, `totalAssets()` and `addAsset` then
+revert, and `redeemInKind` still works because it reads no oracle (ADR-0007, core 1665). Any call
+to `record()` makes it fresh again.
+7. FIRST RECORD. The constructor records the live tick with cumulative 0, so there is no
+uninitialised first read. The pool must be initialised.
+8. `grow(n)` raises the ring like V3's `increaseObservationCardinalityNext`. `slot0()` reports the
+ring cardinality in the position `BasketAssetConfigGuard.requireObservationHistory` reads.
+
+NOT a defence: a manipulator who can move the pool price by more than the ORA-4 deviation guard and
+hold it across many blocks can drag the TWAP at up to 10 ticks per second. That cost is the pool's
+depth, which is why the vault caps must stay below it.
+
+## Constants
+
+### MAX_STALENESS
+
+Largest age of the last snapshot at which `observe` still answers: one default TWAP window.
+
+```solidity
+uint32 public constant MAX_STALENESS = 1_800;
+```
+
+### MAX_TICK_STEP_PER_SECOND
+
+Largest tick change per elapsed second between two recorded ticks.
+
+```solidity
+uint32 public constant MAX_TICK_STEP_PER_SECOND = 10;
+```
+
+### CLAMP_ELAPSED_CAP
+
+Elapsed seconds beyond this do not widen the clamp.
+
+```solidity
+uint32 public constant CLAMP_ELAPSED_CAP = 60;
+```
+
+### POOLS_SLOT
+
+<i>
+
+PoolManager storage slot of `mapping(PoolId => Pool.State) _pools`.
+
+</i>
+
+```solidity
+uint256 private constant POOLS_SLOT = 6;
+```
+
+### LIQUIDITY_OFFSET
+
+<i>
+
+`Pool.State.liquidity` sits three slots after `slot0`.
+
+</i>
+
+```solidity
+uint256 private constant LIQUIDITY_OFFSET = 3;
+```
+
+### POOL_MANAGER
+
+```solidity
+IPoolManagerV4 public immutable POOL_MANAGER;
+```
+
+### POOL_ID
+
+```solidity
+bytes32 public immutable POOL_ID;
+```
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+### fee
+
+```solidity
+uint24 public immutable fee;
+```
+
+### tickSpacing
+
+```solidity
+int24 public immutable tickSpacing;
+```
+
+### hooks
+
+```solidity
+address public immutable hooks;
+```
+
+### POOL_STATE_SLOT
+
+<i>
+
+Storage slot of this pool's `Pool.State` in the PoolManager.
+
+</i>
+
+```solidity
+bytes32 private immutable POOL_STATE_SLOT;
+```
+
+## State Variables
+
+### observations
+
+```solidity
+Observation[65535] public observations;
+```
+
+### _state
+
+```solidity
+State private _state;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-uint24-int24-address"></a>
+
+### constructor
+
+```solidity
+constructor(
+        address poolManager_,
+        address currency0_,
+        address currency1_,
+        uint24 fee_,
+        int24 tickSpacing_,
+        address hooks_
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolManager_ | `address` | The Uniswap V4 PoolManager (Base: 0x498581fF718922c3f8e6A244956aF099B2652b2b). |
+| currency0_ | `address` | Lower token address of the pool key. |
+| currency1_ | `address` | Higher token address of the pool key. |
+| fee_ | `uint24` | Pool fee in hundredths of a bip (RM/USDC: 29100). |
+| tickSpacing_ | `int24` | Pool tick spacing (RM/USDC: 582). |
+| hooks_ | `address` | Hook address. Must be zero: a hooked pool can change swap outcomes. |
+
+<a id="record"></a>
+
+### record
+
+Record the pool tick. A no-op when this block timestamp is already recorded.
+
+```solidity
+function record() external returns (bool recorded);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recorded | `bool` | True when a snapshot was written. |
+
+<a id="grow-uint16"></a>
+
+### grow
+
+Raise the ring to at least `next` slots. Permissionless: the caller pays the storage writes.
+The ring widens at the next `record()` that reaches the end of the current ring.
+
+```solidity
+function grow(uint16 next) external returns (uint16);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| next | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+Cumulative ticks at `secondsAgos[i]` seconds ago, from the recorded snapshots only. Never reads live spot.
+
+<i>
+
+Reverts `StaleRecorder` when the last snapshot is older than `MAX_STALENESS`, and `ObservationTooOld`
+when a requested point predates the oldest snapshot. The second return value is always zeros (V3 ABI).
+
+</i>
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secondsAgos | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tickCumulatives | `int56[]` |  |
+| secondsPerLiquidityCumulativeX128s | `uint160[]` |  |
+
+<a id="slot0"></a>
+
+### slot0
+
+V3 `slot0` prefix. `sqrtPriceX96` and `tick` are the LIVE pool values, for the ORA-4 spot-versus-TWAP
+guard only (they are never a price). `observationIndex` and `observationCardinality` describe the ring.
+
+```solidity
+function slot0()
+        external
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sqrtPriceX96 | `uint160` |  |
+| tick | `int24` |  |
+| observationIndex | `uint16` |  |
+| observationCardinality | `uint16` |  |
+
+<a id="liquidity"></a>
+
+### liquidity
+
+Live in-range liquidity L of the pool (V3 `liquidity()` shape). The unit is the raw uint128 L, not USDC.
+
+```solidity
+function liquidity() external view returns (uint128);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint128` |  |
+
+<a id="latest"></a>
+
+### latest
+
+The last recorded (clamped) tick, the snapshot timestamp and the ring state.
+
+```solidity
+function latest()
+        external
+        view
+        returns (
+            int24 lastTick,
+            uint32 lastRecordedAt,
+            uint16 index,
+            uint16 cardinality,
+            uint16 cardinalityNext
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lastTick | `int24` |  |
+| lastRecordedAt | `uint32` |  |
+| index | `uint16` |  |
+| cardinality | `uint16` |  |
+| cardinalityNext | `uint16` |  |
+
+<a id="oldestobservation"></a>
+
+### oldestObservation
+
+Timestamp of the oldest snapshot still in the ring. The history `observe` can serve is `now - oldestObservation()`.
+The deploy runner reads it to wait for a full window before the vault stage (core 1676).
+
+```solidity
+function oldestObservation() external view returns (uint32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+
+<a id="isfresh"></a>
+
+### isFresh
+
+True when `observe` answers now (the last snapshot is within `MAX_STALENESS`).
+
+```solidity
+function isFresh() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_readslot0-ipoolmanagerv4-bytes32"></a>
+
+### _readSlot0
+
+```solidity
+function _readSlot0(IPoolManagerV4 pm, bytes32 stateSlot)
+        private
+        view
+        returns (uint160 sqrtPriceX96, int24 tick);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pm | `IPoolManagerV4` |  |
+| stateSlot | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sqrtPriceX96 | `uint160` |  |
+| tick | `int24` |  |
+
+<a id="_clamp-int24-int24-uint32"></a>
+
+### _clamp
+
+<i>
+
+Move `prev` toward `live` by at most MAX_TICK_STEP_PER_SECOND * min(elapsed, CLAMP_ELAPSED_CAP).
+
+</i>
+
+```solidity
+function _clamp(int24 prev, int24 live, uint32 elapsed) private pure returns (int24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prev | `int24` |  |
+| live | `int24` |  |
+| elapsed | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="_observesingle-state-uint32-uint32"></a>
+
+### _observeSingle
+
+<i>
+
+V3 `Oracle.observeSingle`, with the recorded tick as the extrapolation tick.
+
+</i>
+
+```solidity
+function _observeSingle(State memory s, uint32 time, uint32 secondsAgo)
+        private
+        view
+        returns (int56);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `State` |  |
+| time | `uint32` |  |
+| secondsAgo | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int56` |  |
+
+<a id="_transform-observation-uint32-int24"></a>
+
+### _transform
+
+```solidity
+function _transform(Observation memory last, uint32 ts, int24 tick)
+        private
+        pure
+        returns (Observation memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| last | `Observation` |  |
+| ts | `uint32` |  |
+| tick | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Observation` |  |
+
+<a id="_surrounding-state-uint32"></a>
+
+### _surrounding
+
+```solidity
+function _surrounding(State memory s, uint32 target)
+        private
+        view
+        returns (Observation memory beforeOrAt, Observation memory atOrAfter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `State` |  |
+| target | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| beforeOrAt | `Observation` |  |
+| atOrAfter | `Observation` |  |
+
+<a id="_binarysearch-state-uint32"></a>
+
+### _binarySearch
+
+```solidity
+function _binarySearch(State memory s, uint32 target)
+        private
+        view
+        returns (Observation memory beforeOrAt, Observation memory atOrAfter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `State` |  |
+| target | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| beforeOrAt | `Observation` |  |
+| atOrAfter | `Observation` |  |
+
+## Events
+
+### Recorded
+
+```solidity
+event Recorded(uint32 blockTimestamp, int24 recordedTick, int24 liveTick, int56 tickCumulative);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| blockTimestamp | `uint32` |  |
+| recordedTick | `int24` |  |
+| liveTick | `int24` |  |
+| tickCumulative | `int56` |  |
+
+### Grown
+
+```solidity
+event Grown(uint16 cardinalityNext);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cardinalityNext | `uint16` |  |
+
+## Errors
+
+### InvalidPoolKey
+
+```solidity
+error InvalidPoolKey();
+```
+
+### PoolNotInitialized
+
+```solidity
+error PoolNotInitialized();
+```
+
+### ObservationTooOld
+
+<i>
+
+`observe` was asked for a point older than the oldest snapshot (same meaning as V3's "OLD").
+
+</i>
+
+```solidity
+error ObservationTooOld();
+```
+
+### StaleRecorder
+
+<i>
+
+The last snapshot is older than `MAX_STALENESS`.
+
+</i>
+
+```solidity
+error StaleRecorder(uint32 lastRecordedAt, uint32 nowTs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lastRecordedAt | `uint32` |  |
+| nowTs | `uint32` |  |
+
+## Structs
+
+### Observation
+
+```solidity
+struct Observation {
+        uint32 blockTimestamp;
+        int56 tickCumulative;
+        bool initialized;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| blockTimestamp | `uint32` |  |
+| tickCumulative | `int56` |  |
+| initialized | `bool` |  |
+
+### State
+
+```solidity
+struct State {
+        int24 lastTick; // the recorded (clamped) tick: weights the next interval
+        uint16 index;
+        uint16 cardinality;
+        uint16 cardinalityNext;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lastTick | `int24` |  |
+| index | `uint16` |  |
+| cardinality | `uint16` |  |
+| cardinalityNext | `uint16` |  |
+

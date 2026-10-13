@@ -1,6 +1,7 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
 import type { Dispatch, SetStateAction } from "react";
+import { formatUsdc } from "../lib/format";
 
 type Props = Readonly<{
   validUntil: string;
@@ -13,6 +14,13 @@ type Props = Readonly<{
   setShareReceiver: Dispatch<SetStateAction<string>>;
   testIdPrefix?: string;
 }>;
+
+/** "= 100.00 USDC" under a base-unit input, so a raw integer is never the only reading of the amount. */
+function baseUnitGloss(raw: string): string {
+  return /^\d+$/.test(raw.trim())
+    ? `= ${formatUsdc(BigInt(raw.trim()))}`
+    : "not a whole number of base units";
+}
 
 export function PolicyFields(props: Props) {
   const p = props.testIdPrefix ?? "";
@@ -33,6 +41,10 @@ export function PolicyFields(props: Props) {
           value={props.maxPerPayment}
           onChange={(e) => props.setMaxPerPayment(e.target.value)}
         />
+        <span className="hint" data-testid={`${p}maxPerPayment-gloss`}>
+          {" "}
+          {baseUnitGloss(props.maxPerPayment)}
+        </span>
       </label>
       <label>
         Max per window (USDC base units)
@@ -41,6 +53,10 @@ export function PolicyFields(props: Props) {
           value={props.maxPerWindow}
           onChange={(e) => props.setMaxPerWindow(e.target.value)}
         />
+        <span className="hint" data-testid={`${p}maxPerWindow-gloss`}>
+          {" "}
+          {baseUnitGloss(props.maxPerWindow)}
+        </span>
       </label>
       <label>
         Share receiver

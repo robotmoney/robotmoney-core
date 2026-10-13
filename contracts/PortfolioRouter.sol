@@ -233,6 +233,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         configured, so there is no effective allocation to route by.
     error NoWeightsSet();
 
+    /// @notice Every leg's computed amount is zero (a zero-amount deposit), so
+    ///         nothing would be routed. Zero-amount legs are skipped (issue 1746).
+    error NoFundedLeg();
+
     /// @notice A vault's registry status is not Active; deposit is blocked.
     /// @param vault  The vault address that is not Active.
     /// @param status The current non-Active status of the vault.
@@ -661,6 +665,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
                 continue;
             }
 
+            // A zero-amount leg is never called by the deposit path (issue 1746),
+            // so it quotes zero shares and stays available.
+            if (legAmounts[i] == 0) continue;
+
             // Available legs quote against the renormalised legAmount. A revert
             // in the vault's own previewDeposit downgrades the leg to unavailable
             // (the runtime deposit would likewise fail this vault) — but note the
@@ -679,7 +687,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      router-eligible (asset == USDC + eligibility flag) — exactly the
     ///      availability dimension `previewDeposit` reports. The amount is split
     ///      across ONLY the available legs in proportion to their bps, with the
-    ///      rounding remainder assigned to the last available leg so the router
+    ///      rounding remainder assigned to the last available leg WITH NON-ZERO BPS so the router
     ///      holds zero USDC after a successful deposit. Unavailable legs get
     ///      amount 0. This single predicate is shared by `previewDeposit` and
     ///      `_executeLegs` so the two can never diverge on availability (RTR-5).
@@ -712,14 +720,18 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
         // Second pass: split `amount` across the available legs by their bps share
         // of `availableBps` (NOT BPS_DENOMINATOR), and find the last available leg
-        // so the rounding remainder lands somewhere the router actually deposits.
+        // WITH NON-ZERO BPS so the rounding remainder lands on a leg the router
+        // actually deposits into.
         uint256 allocated;
         uint256 lastAvailable;
         for (uint256 i = 0; i < n; i++) {
             if (!available[i]) continue;
             legAmounts[i] = (amount * bpsList[i]) / availableBps;
             allocated += legAmounts[i];
-            lastAvailable = i;
+            // The rounding remainder must land on a leg that carries weight: a
+            // 0-bps leg is never funded (issue 1746), so it cannot be the sink.
+            // `availableBps > 0` guarantees at least one such leg exists.
+            if (bpsList[i] != 0) lastAvailable = i;
         }
         if (allocated < amount) {
             legAmounts[lastAvailable] += amount - allocated;
@@ -752,6 +764,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
+    ///                          The floor is NOT enforced on a skipped leg (an
+    ///                          unavailable leg or a leg whose computed amount is
+    ///                          0): it is never called and returns 0 shares.
     function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -772,6 +787,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
+    ///                          The floor is NOT enforced on a skipped leg (an
+    ///                          unavailable leg or a leg whose computed amount is
+    ///                          0): it is never called and returns 0 shares.
     function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -996,6 +1014,22 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         }
         if (!anyAvailable) revert NoWeightsSet();
 
+        // Zero-amount legs are skipped by `_executeLegs` (issue 1746). If every
+        // leg is zero nothing would be minted, so revert with a named error
+        // instead of a silent no-op deposit. That happens for `amount == 0`, and
+        // when `availableBps == 0` (only 0 bps legs are available, so
+        // `_availabilityAndAmounts` assigns every leg 0).
+        {
+            bool anyFunded;
+            for (uint256 i = 0; i < n; i++) {
+                if (available[i] && legAmounts[i] != 0) {
+                    anyFunded = true;
+                    break;
+                }
+            }
+            if (!anyFunded) revert NoFundedLeg();
+        }
+
         // Execute legs in a separate frame so its locals do not pile onto this
         // function's stack (Solidity stack-too-deep guard).
         _executeLegs(
@@ -1029,6 +1063,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ) internal {
         for (uint256 i = 0; i < vaultList.length; i++) {
             if (!available[i]) continue; // skip non-depositable legs (RTR-5)
+            // Skip zero-amount legs (issue 1746): an Active, eligible 0-bps leg
+            // (or a weight that rounds to 0) gets no approval, no vault call and
+            // no event. Vaults such as rmAGENT revert on deposit(0).
+            if (legAmounts[i] == 0) continue;
 
             uint256 sharesReceived = _executeLeg(receiver, vaultList[i], legAmounts[i], bpsList[i]);
             sharesPerLeg[i] = sharesReceived;

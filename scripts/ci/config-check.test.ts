@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   loadConfigs, staticFindings, liveFindings, keccak256, keccakHex, parseCli, httpRpc, redactUrl, usdcHashFindings, readUsdcHashes, UsageError,
-  USDC, USDC_IMPL_SLOT, type Rpc,
+  USDC, USDC_IMPL_SLOT, RM, poolIdOfKey, type Rpc,
 } from "./config-check";
 import { spawnSync } from "node:child_process";
 
@@ -64,13 +64,61 @@ describe("static rules", () => {
     const rm = loadConfigs(realDir).agent.shortlist[0];
     expect(rm.tokenCodeHash).toBe("0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6");
   });
-  test("an RM pool other than the owner-funded one fails", () => {
-    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x" + "22".repeat(20); });
-    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+  test("the committed RM entry is the Uniswap V4 pool: venue, fee 29100, tickSpacing 582, hooks 0x0, pool id 0xf2e7b957...", () => {
+    const rm = loadConfigs(realDir).agent.shortlist[0];
+    expect(rm.venue).toBe("UniswapV4");
+    expect(rm.poolFee).toBe(29100);
+    expect(rm.poolKey).toEqual({ currency0: RM.token, currency1: USDC, fee: 29100, tickSpacing: 582, hooks: RM.hooks });
+    expect(rm.poolId).toBe("0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391");
+    expect(rm.pool).toBeUndefined();
   });
-  test("an RM pool fee other than 10000 fails", () => {
+  test("the pool id is the keccak256 of the abi-encoded PoolKey (matches cast)", () => {
+    const rm = loadConfigs(realDir).agent.shortlist[0];
+    expect(poolIdOfKey(rm.poolKey!)).toBe(rm.poolId!);
+    const r = spawnSync("cast", ["keccak", "0x" + [RM.token, USDC].map((x) => x.slice(2).toLowerCase().padStart(64, "0")).join("") +
+      (29100).toString(16).padStart(64, "0") + (582).toString(16).padStart(64, "0") + "0".repeat(64)], { encoding: "utf8" });
+    if (r.status === 0) expect(r.stdout.trim()).toBe(rm.poolId!);
+  });
+  test("a negative tickSpacing is sign-extended like abi.encode", () => {
+    const k = { currency0: RM.token, currency1: USDC, fee: 100, tickSpacing: -1, hooks: RM.hooks };
+    const r = spawnSync("cast", ["keccak", "0x" + [RM.token, USDC].map((x) => x.slice(2).toLowerCase().padStart(64, "0")).join("") +
+      (100).toString(16).padStart(64, "0") + "f".repeat(64) + "0".repeat(64)], { encoding: "utf8" });
+    if (r.status === 0) expect(poolIdOfKey(k)).toBe(r.stdout.trim());
+  });
+  // Core 1676: a fixture whose RM PoolKey hashes to a pool id other than 0xf2e7b957... fails, field by field.
+  for (const [field, value] of [["tickSpacing", 200], ["fee", 10000], ["hooks", "0x" + "11".repeat(20)], ["currency1", "0x" + "22".repeat(20)]] as const) {
+    test(`an RM PoolKey with a different ${field} fails (the hash no longer equals the pinned pool id)`, () => {
+      const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolKey[field] = value; });
+      const rules = failures(c).map((x) => x.rule);
+      expect(rules).toContain("rm-v4-pool-id");
+      expect(rules).toContain("rm-v4-poolkey");
+    });
+  }
+  test("a configured poolId that differs from the pinned one fails even when the key matches it", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolId = "0x" + "ab".repeat(32); });
+    expect(failures(c).some((x) => x.rule === "rm-v4-pool-id")).toBe(true);
+  });
+  test("an RM entry on UniswapV3, or with a V3 pool address, fails", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].venue = "UniswapV3"; });
+    expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+    const d = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].pool = "0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882"; });
+    expect(failures(d).some((x) => x.rule === "rm-v4-poolkey")).toBe(true);
+  });
+  test("an RM pool fee other than 29100 fails", () => {
     const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolFee = 3000; });
     expect(failures(c).some((x) => x.rule === "launch-list-is-rm-only")).toBe(true);
+  });
+  test("a PoolManager or StateView other than the Base ones fails", () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolManager = "0x" + "33".repeat(20); });
+    expect(failures(c).some((x) => x.rule === "rm-v4-managers")).toBe(true);
+    const d = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].stateView = "0x" + "33".repeat(20); });
+    expect(failures(d).some((x) => x.rule === "rm-v4-managers")).toBe(true);
+  });
+  test("the vault swap bound must clear the 291 bps pool fee at the 500 bps ceiling", () => {
+    const c = fixture((f) => { delete f["agent-token-shortlist.json"].maxSlippageBps; });
+    expect(failures(c).some((x) => x.rule === "rm-v4-slippage-clears-the-pool-fee")).toBe(true);
+    const d = fixture((f) => { f["agent-token-shortlist.json"].maxSlippageBps = 300; });
+    expect(failures(d).some((x) => x.rule === "rm-v4-slippage-clears-the-pool-fee")).toBe(true);
   });
 });
 
@@ -78,8 +126,12 @@ describe("config/ grep test", () => {
   const text = (dir: string): string =>
     readdirSync(dir).map((n) => readFileSync(join(dir, n), "utf8")).join("\n");
   const all = text(realDir);
-  test("no Chronicle, V4 or Aerodrome", () => {
-    expect(all).not.toMatch(/chronicle|v4|aerodrome/i);
+  test("no Chronicle or Aerodrome, and V4 only as the RM venue", () => {
+    expect(all).not.toMatch(/chronicle|aerodrome/i);
+    // prose in "description" may name V4; keys and values may name it only as the venue UniswapV4
+    const noProse = readdirSync(realDir).map((n) => JSON.stringify(JSON.parse(readFileSync(join(realDir, n), "utf8")), (k, v) => (k === "description" ? undefined : v))).join("\n");
+    const v4 = noProse.match(/[A-Za-z]*v4[A-Za-z]*/gi) ?? [];
+    expect(new Set(v4.map((x) => x.toLowerCase()))).toEqual(new Set(["uniswapv4"]));
   });
   test("no mainnet or devnet branch key", () => {
     expect(all).not.toMatch(/"(mainnet|devnet)"\s*:/);
@@ -123,20 +175,29 @@ describe("live rules against a fake RPC", () => {
   const cfg = pin(loadConfigs(realDir));
   const w = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
   const a = (x: string) => x.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-  const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.agent.shortlist];
+  const all = [...cfg.protocol.assets, ...cfg.rwa.assets, ...cfg.agent.shortlist] as { symbol: string; token: string; pool?: string; poolFee: number }[];
+  const rmEntry = cfg.agent.shortlist[0];
+  const STATE_VIEW = rmEntry.stateView!.toLowerCase();
   const FACTORY = cfg.rwa.uniswapV3Factory.toLowerCase();
 
   /** Per-pool live facts. Defaults match the committed config, so a test overrides one thing. */
-  interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string }
+  interface Live { fee?: number; cardinality?: number; liquidity?: bigint; factoryPool?: string; sqrtPrice?: bigint }
   function rpcFor(over: Record<string, Live> = {}, noCode: string[] = []): Rpc {
-    const feeOf = (pool: string) => Number(all.find((x) => x.pool.toLowerCase() === pool)!.poolFee);
+    const feeOf = (pool: string) => Number(all.find((x) => x.pool?.toLowerCase() === pool)!.poolFee);
     return async (method, params) => {
       if (method === "eth_getStorageAt") return "0x" + w(0) .slice(0, 24) + a("0x4444444444444444444444444444444444444444").slice(24);
       if (method === "eth_getCode") return noCode.includes(String(params[0]).toLowerCase()) ? "0x" : "0x6001";
       const { to, data } = params[0] as { to: string; data: string };
       const sel = data.slice(0, 10);
       const t = to.toLowerCase();
-      const asset = all.find((x) => x.pool.toLowerCase() === t);
+      if (t === STATE_VIEW) {
+        // StateView: getSlot0(poolId) -> (sqrtPriceX96, tick, protocolFee, lpFee), getLiquidity(poolId) -> uint128. Only the RM pool id is live.
+        const rm = over.RM ?? {};
+        if (data.slice(10).toLowerCase() !== rmEntry.poolId!.slice(2).toLowerCase()) return "0x" + w(0) + w(0) + w(0) + w(0);
+        if (sel === "0xc815641c") return "0x" + w(rm.sqrtPrice ?? 1n << 96n) + w(0) + w(0) + w(rm.fee ?? 29100);
+        if (sel === "0xfa6793d5") return "0x" + w(rm.liquidity ?? 10n ** 18n);
+      }
+      const asset = all.find((x) => x.pool?.toLowerCase() === t);
       const o = (asset && over[asset.symbol]) || {};
       if (sel === "0xddca3f43") return "0x" + w(o.fee ?? feeOf(t));
       if (sel === "0x0dfe1681") return "0x" + a(cfg.rwa.usdc);
@@ -219,22 +280,40 @@ describe("live rules against a fake RPC", () => {
     const r = await liveFindings(rpcFor(), "latest", { ...pin(c), agent: c.agent });
     expect(r.findings.some((f) => f.rule === "token-code-hash-pinned" && !f.ok)).toBe(true);
   });
-  test("RM: an unfunded pool (no liquidity, cardinality 1) fails until the owner funds it", async () => {
+  test("RM: an unfunded V4 pool (no liquidity) fails until the owner funds it", async () => {
     expect(await bad({ RM: { liquidity: 0n } }, "liquidity>0", "RM")).toBe(true);
-    expect(await bad({ RM: { cardinality: 1 } }, "observation-cardinality>=901", "RM")).toBe(true);
   });
-  test("RM: an unfunded pool fails with a message that names the pool and the owner action", async () => {
-    const r = await liveFindings(rpcFor({ RM: { liquidity: 0n, cardinality: 1 } }), "latest", cfg);
+  test("RM: an unfunded pool fails with a message that names the pool id, the unit and the owner action", async () => {
+    const r = await liveFindings(rpcFor({ RM: { liquidity: 0n } }), "latest", cfg);
     const failed = r.findings.filter((f) => !f.ok && f.scope.endsWith(":RM"));
-    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000", "observation-cardinality>=901"]);
-    for (const f of failed) expect(f.detail).toMatch(/0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882 is not funded yet: the owner must add in-range liquidity/);
+    expect(failed.map((f) => f.rule).sort()).toEqual(["liquidity>0", "liquidity>=1000000"]);
+    for (const f of failed) {
+      expect(f.detail).toMatch(/0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391 holds liquidity L=0/);
+      expect(f.detail).toMatch(/the owner must add in-range liquidity/);
+      expect(f.detail).toMatch(/not USDC/);
+    }
   });
-  test("RM: liquidity under the addAsset floor of 1e6 fails even though it is above zero", async () => {
+  test("RM: liquidity under the addAsset floor of 1e6 fails even though it is above zero (the pool unit is L)", async () => {
     expect(await bad({ RM: { liquidity: 999_999n } }, "liquidity>=1000000", "RM")).toBe(true);
     expect(await bad({ RM: { liquidity: 1_000_000n } }, "liquidity>=1000000", "RM")).toBe(false);
   });
-  test("RM: a live pool fee other than 10000 fails", async () => {
+  test("RM: the PoolKey resolves through StateView, so a pool id with no initialized pool fails", async () => {
+    expect(await bad({ RM: { sqrtPrice: 0n } }, "v4-pool-initialized", "RM")).toBe(true);
+  });
+  test("RM: a live lpFee other than 29100 fails", async () => {
     expect(await bad({ RM: { fee: 3000 } }, "pool-fee-equals-config", "RM")).toBe(true);
+  });
+  test("RM: a PoolKey whose hash is not the configured pool id fails in the live check", async () => {
+    const c = fixture((f) => { f["agent-token-shortlist.json"].shortlist[0].poolKey.tickSpacing = 200; });
+    const r = await liveFindings(rpcFor(), "latest", { ...pin(c), agent: pin(c).agent });
+    expect(r.findings.some((f) => f.rule === "poolkey-hashes-to-pool-id" && !f.ok)).toBe(true);
+    // the derived id is not a live pool, so the StateView read fails too
+    expect(r.findings.some((f) => f.rule === "v4-pool-initialized" && !f.ok)).toBe(true);
+  });
+  test("RM: an entry missing the poolKey fails closed", async () => {
+    const c = fixture((f) => { delete f["agent-token-shortlist.json"].shortlist[0].poolKey; });
+    const r = await liveFindings(rpcFor(), "latest", pin(c));
+    expect(r.findings.some((f) => f.rule === "v4-config-complete" && !f.ok)).toBe(true);
   });
   test("the committed config has no failing rule with the same fake RPC", async () => {
     expect(await failedRules(cfg)).toEqual([]);

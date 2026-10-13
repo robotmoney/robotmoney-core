@@ -7458,6 +7458,11 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "NoFundedLeg",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "NoRotationPending",
     inputs: [],
   },

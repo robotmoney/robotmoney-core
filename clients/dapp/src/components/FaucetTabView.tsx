@@ -23,6 +23,7 @@ import {
 } from "../lib/chainClassifier";
 import type { DripEthArgs, DripUsdcArgs } from "../lib/faucetClient";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
+import { formatUsdc } from "../lib/format";
 
 type DripStatus =
   | { kind: "idle" }
@@ -215,7 +216,7 @@ export function FaucetTabView(props: Props) {
           {props.harnessBalanceError &&
             `Harness balance error: ${props.harnessBalanceError.message}`}
           {props.harnessBalance !== undefined &&
-            `Harness balance: ${props.harnessBalance.toString()} (base units)`}
+            `Harness balance: ${formatUsdc(props.harnessBalance)}`}
         </p>
         <button type="submit" data-testid="faucet-drip-submit" disabled={!canDrip}>
           Drip {FAUCET_DRIP_AMOUNT_LABEL}
@@ -238,7 +239,7 @@ export function FaucetTabView(props: Props) {
       )}
       {props.recipientBalance !== undefined && validRecipient && (
         <p data-testid="faucet-recipient-balance" className="hint">
-          Recipient balance now: {props.recipientBalance.toString()} (base units)
+          Recipient balance now: {formatUsdc(props.recipientBalance)}
         </p>
       )}
 

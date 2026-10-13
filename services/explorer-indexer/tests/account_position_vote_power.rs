@@ -43,7 +43,10 @@ fn cfg(vault: Address) -> IndexerConfig {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         end_block: None,
         feature_flags: 0,
     }

@@ -1,0 +1,82 @@
+{
+  "deploySha": "78c50cbd8fbd2e810d4917bd01d4ee89d712ef4f",
+  "measured": {
+    "chainId": 918453,
+    "at": "2026-10-11T04:03:20.678Z",
+    "reconstructed": {
+      "fromRun": {
+        "sha": "78c50cbd8fbd2e810d4917bd01d4ee89d712ef4f",
+        "chainId": 918453,
+        "pinBlock": 52450586
+      },
+      "adopted": [
+        {
+          "stage": "libs",
+          "library": "tick_math",
+          "artifact": "TickMath",
+          "address": "0x3353854084194AE5Cc1697a9E4337806ECcdD9F6",
+          "codeHash": "0xf17c0e1737cd8103dd2c8caa0262ab00c74e14626739286c2b52a716b99faa5d"
+        },
+        {
+          "stage": "proto",
+          "library": "BasketAssetConfigGuard",
+          "artifact": "BasketAssetConfigGuard",
+          "address": "0xB026a232f54d381A47a9E2640d04084830F0Ae58",
+          "codeHash": "0xb407f32ed91aa5a4fec2bbefc102ea9c8f542d22c8168cfb72749fa08aca29d4"
+        },
+        {
+          "stage": "proto",
+          "library": "TwapTickMath",
+          "artifact": "TwapTickMath",
+          "address": "0x7fDc1E387486C81F97A2379CE897b202d4E815E2",
+          "codeHash": "0x47ee7f7360c59f8ac33ecafc6d564e60374be47ce22e674fff2c5bed572f0218"
+        },
+        {
+          "stage": "proto",
+          "library": "BasketViews",
+          "artifact": "BasketViews",
+          "address": "0xE0a16a5B9a4EDd2E0723B74F593C1053F8cBe6BA",
+          "codeHash": "0xe912c5bff742f6845bcdd12bfd1ba2339e756cae772a02592661d0a7cdb805ce"
+        }
+      ],
+      "measuredCounts": {
+        "safe": 1,
+        "libs": 0,
+        "recorder": 6,
+        "vault": 16,
+        "registry": 2,
+        "router": 4,
+        "gateway": 1,
+        "governance": 6,
+        "ic-policy": 5,
+        "proto": 7,
+        "agent": 10,
+        "rwa": 8,
+        "timelock": 43
+      },
+      "crossCheck": {
+        "against": "f8c869e26fef6a999d7be19eed6ada1817f7d34f",
+        "accepted": []
+      }
+    },
+    "crossChecked": {
+      "sha": "f8c869e26fef6a999d7be19eed6ada1817f7d34f",
+      "fileHash": "817136f1386bd38081ca1687c9f00dc57817f340a39af48bd78b1d5615bc8a20"
+    }
+  },
+  "counts": {
+    "safe": 1,
+    "libs": 1,
+    "recorder": 6,
+    "vault": 16,
+    "registry": 2,
+    "router": 4,
+    "gateway": 1,
+    "governance": 6,
+    "ic-policy": 5,
+    "proto": 10,
+    "agent": 10,
+    "rwa": 8,
+    "timelock": 43
+  }
+}

@@ -56,7 +56,10 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
+        timelock: None,
+        safe: None,
         max_blocks_per_tick: 200,
+        start_block: None,
         // Cap the run at the safe head so the heartbeat snapshot lands at a known block.
         end_block: Some(head.saturating_sub(explorer_indexer::CONFIRMATIONS)),
         feature_flags: 0,

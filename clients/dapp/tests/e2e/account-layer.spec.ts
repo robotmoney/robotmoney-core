@@ -33,7 +33,7 @@ test("watched address — portfolio position and transaction history render from
         vault_address: endpoints.vault_addr,
         vault_name: "Smoke Test Vault",
         risk_label: "stable-yield",
-        shares: "1000000",
+        shares: "1000000000000000000000000",
         block_number: 100,
       },
     ],
@@ -94,14 +94,14 @@ test("watched address — portfolio position and transaction history render from
   const positionRows = page.getByTestId("portfolio-position-row");
   await expect(positionRows).toHaveCount(1);
   await expect(page.getByTestId("portfolio-position-row-vault")).toHaveText("Smoke Test Vault");
-  await expect(page.getByTestId("portfolio-position-row-shares")).toHaveText("1000000");
+  await expect(page.getByTestId("portfolio-position-row-shares")).toHaveText("1.00 rmUSDC");
 
   // Shared VaultPositionCard renders in the card grid below the table (issue #381).
   await expect(page.getByTestId("portfolio-position-cards")).toBeVisible();
   const vaultCards = page.getByTestId("vault-position-card");
   await expect(vaultCards).toHaveCount(1);
   await expect(page.getByTestId("vault-position-card-name")).toHaveText("Smoke Test Vault");
-  await expect(page.getByTestId("vault-position-card-shares")).toHaveText("1000000");
+  await expect(page.getByTestId("vault-position-card-shares")).toHaveText("1.00 rmUSDC");
 
   // TransactionHistory renders with the stubbed deposit event.
   await expect(page.getByTestId("transaction-history")).toBeVisible();

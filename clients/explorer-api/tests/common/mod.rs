@@ -94,6 +94,17 @@ pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
 pub const COMMITTEE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0014_committee_tables.sql");
 
+/// Migration 0017 (issue 1731): `indexer_runs.chain_head_block` and `admin_events`. `/health`, `/v1/vaults`
+/// and `/v1/stats` read the chain head, so every harness that serves them needs the column.
+pub const ADMIN_EVENTS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0017_admin_events_and_chain_head.sql"
+);
+
+/// Migration 0018 (issue 1741): `vault_snapshots.tvl_cap` is nullable and `per_deposit_cap` is added. `/v1/vaults`
+/// and `/v1/vaults/:address` read both caps.
+pub const VAULT_CAPS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql");
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).
@@ -194,6 +205,14 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply account history migration (0009)");
+    sqlx::raw_sql(ADMIN_EVENTS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply admin events and chain head migration (0017)");
+    sqlx::raw_sql(VAULT_CAPS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault snapshot caps migration (0018)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.

@@ -66,3 +66,21 @@ describe("publish environment", () => {
     expect(publishEnv(1, "/m").YES).toBeUndefined();
   });
 });
+
+describe("stage-deployment.md names the manifests the tool reads", () => {
+  const doc = readFileSync(join(import.meta.dir, "../../../docs/development/stage-deployment.md"), "utf8");
+  const line = doc.split("\n").find((l) => l.startsWith("4. The job reads the manifests")) ?? "";
+  const listed = [...line.slice(0, line.indexOf(")") + 1).matchAll(/`([^`]+\.json)`/g)].map((m) => m[1]);
+  const read = new Set([...allManifests(), ...Object.values(vaultManifests())]);
+  test("the step 4 line is found", () => expect(listed.length).toBeGreaterThan(0));
+  test("every listed name is a manifest the tool reads", () => {
+    expect(listed.filter((n) => !read.has(n))).toEqual([]);
+  });
+  test("every manifest the tool reads is listed", () => {
+    expect([...read].filter((n) => !listed.includes(n))).toEqual([]);
+  });
+  test("core.json and libraries.json are gone", () => {
+    expect(doc).not.toContain("core.json");
+    expect(doc).not.toContain("libraries.json");
+  });
+});

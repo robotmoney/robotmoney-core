@@ -10,22 +10,28 @@ import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
 import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
-import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen } from "./counts.ts";
+import { kindLabel } from "./chains.ts";
+import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
+import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
+import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
-import { stagePlan } from "./plan.ts";
-import { assertReleaseGate, type CheckShaGreen } from "./release-gate.ts";
-import { DEPLOYER_STAGES, STAGE_NAMES, useStageTable } from "./stages.ts";
+import { planNonceBasis, stagePlan } from "./plan.ts";
+import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
+import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
+import { buildLibraryArtifacts } from "./libs-build.ts";
+import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
-import { finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
+import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet } from "./sheet.ts";
-import { loadCorrelatedOwners } from "./correlated-owners.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
-import { RECEIPT_ROW, assertReceiptId, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { APPLY_ROW } from "./apply-receipt.ts";
+import { CLEAR_ROW } from "./clear-voted-weights.ts";
+import { RECEIPT_ROW, assertReceiptId, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
-import { pauseAll, pauseIncomplete, type PauseTrigger } from "./pause-all.ts";
+import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
@@ -34,7 +40,7 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
-export const VERBS = ["publish", "verify", "govern", "pause-all"] as const;
+export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt"] as const;
 export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
@@ -43,6 +49,8 @@ export const USAGE = `publish contracts
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
                        govern  = the govern stage (a follow-on verb, so it implies --resume)
+                       record-receipt = the registered committee SUBMITTER (a Safe: --submitter, executed by --signer = the deployer, signed by its --owner-signer owners) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
+                                 from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
@@ -54,25 +62,41 @@ export const USAGE = `publish contracts
   --environment NAME the GitHub Environment (or 'local' on a rehearsal)
   --core-sha SHA     the core DEPLOY_SHA (40 hex). The core checkout HEAD must equal it.
   --row R            govern only: run one govern row, by 1-based number or by name.
-                     Rows: unpause-PROTO, unpause-AGENT, unpause-RWA (the only mainnet operation after the handover), then the Twin-only
+                     Rows: unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA (all four vaults deploy paused; the only mainnet operation after the handover), then the Twin-only
                      demonstrations update-delay, batch, cancel (refused with USAGE on 8453). Without --row, every unpause the sheet asks for is
                      scheduled in one sitting, then one wait, then executed (on 8453 only the unpauses run).
-                     On demand: --row unpause-USDC reopens rmUSDC after pause-all paused it (never part of a default run). Naming an unpause row whose
+                     Naming an unpause row whose
                      vault was paused again after an executed round opens a new numbered round: a new timelock operation, a new 48 hour delay.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
                      (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
                      the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
-  --receipt-id ID    govern with --row release-receipt only: the bytes32 receipt id to release.
+                     --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696): ONE timelock batch,
+                     releaseReceipt plus the router weight change for the payload's vector, refused with USAGE (nothing sent) unless the receipt is recorded and
+                     unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
+                     registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
+                     --row clear-voted-weights (no other argument) clears the router's VOTED weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(), so routing
+                     falls back to the default vector. Refused (nothing scheduled) when no voted vector is active. apply-receipt refuses while one is active. Production and rehearsal, never part of stage 13.
+                     --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,
+                     gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
+                     Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
+                     In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
+  --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
+  --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
+  --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
+  --submitter ADDR   govern --row register-committee and the record-receipt verb: the consensus receipt SUBMITTER, a SafeL2 1.4.1 multisig (issue 1750; threshold 2 or more, no module, no guard, separate from the governing Safe).
+                     record-receipt: required on 8453; --signer is then the deployer that pays gas and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
+  --agent-label NAME govern --row register-committee only: the label on the IC policy (default committee-submitter).
+  --payload FILE     govern with --row apply-receipt (required), or record-receipt (optional, checked before anything is sent): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
   --dry-run          the preflight: run every check and simulate EVERY deployer stage in order on a blank local anvil it starts itself
                      (no fork). Nothing is broadcast, nothing is sent to --rpc, the checkout is left as found.
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
-  --correlated-owners-file F   chain 8453: REQUIRED (or env CORRELATED_OWNERS_FILE). A file of addresses that share one root of trust. Two or more of them in SAFE_OWNERS is refused.
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's)
+  --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
@@ -92,8 +116,6 @@ export interface CliDeps {
   prompt?: (q: string) => Promise<string>;
   cwd?: string;
   makeSigner?: (spec: string) => PublishSigner;
-  /** Test seam: replaces the read of the correlated-owners file (used on chain 8453 only). */
-  correlatedOwners?: () => string[] | Promise<string[]>;
   ownerSigner?: (spec: string) => Promise<Signer>;
   safeApi?: RunContext["safeApi"];
   govern?: Partial<GovernOpts>;
@@ -105,23 +127,43 @@ export interface CliDeps {
   pauseAll?: typeof pauseAll;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
   chainReader?: RunContext["chainReader"];
+  /** Injected for tests: the poll and the longest wait of the recorder gate before the agent stage (core 1676). */
+  recorderWait?: RunContext["recorderWait"];
   /** Test seam: core's own config-check (bun scripts/ci/config-check.ts, read-only against live Base). Default: the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production uses the pin in usdc.ts. */
   usdcCodeHash?: string;
   /** Test seams: the contracts-freeze gate of the 8453 plan job (core 1524): the release tag read and check-sha-green. Defaults: the real ones. */
   releaseTag?: (coreDir: string, sha: string) => Promise<string | null>;
+  releaseTags?: (coreDir: string, sha: string) => Promise<string[]>;
   checkShaGreen?: CheckShaGreen;
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
+  /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
+  verifyReconstructed?: (file: FrozenFile) => Promise<void>;
+  /** Test seams (issue 1733): the proof that the anchor file is committed, and the sleep between the retries of a rate-limited `cast code`. */
+  anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
+  frozenDirCommitted?: (countsDir: string) => Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+  /** Test seams for the record-receipt verb: the whole step, or only its chain reads and send. */
+  recordReceipt?: typeof recordReceipt;
+  recordApi?: RecordApi;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
 }
 
 export interface Parsed {
   chain: number; rpc: string; sheet: string; signer?: string; environment: string; coreSha: string; stage?: string; resume: boolean; dryRun: boolean;
-  verb?: Verb; row?: string; coreDir?: string; correlatedOwnersFile?: string; evidence?: string; countsDir?: string; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
-  /** With --row release-receipt only: the receipt to release. */
+  verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
+  /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
+  /** With --row apply-receipt only: the receipt payload file. */
+  payload?: string;
+  /** With --row register-committee only: the submitter and its label. */
+  submitter?: string;
+  agentLabel?: string;
+  /** record-receipt only. */
+  payloadDigest?: string;
+  payloadUri?: string;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -133,8 +175,8 @@ export function parseCli(argv: string[]): Parsed {
       options: {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
-        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, "correlated-owners-file": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, help: { type: "boolean" },
+        resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -154,18 +196,29 @@ export function parseCli(argv: string[]): Parsed {
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
-    if (row !== RECEIPT_ROW) {
-      const resolved = resolveGovernRow(row); // an unknown row fails here, before any work
-      if (isTwinOnlyRow(resolved) && Number(chainRaw) === MAINNET_CHAIN_ID) throw new PublishError("USAGE", `--row ${resolved} is a Twin-fork demonstration of the Safe tool: it is refused on chain ${MAINNET_CHAIN_ID}\n${USAGE}`);
-    }
+    // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
+    if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW) resolveGovernRow(row);
   }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
+  const submitter = v.submitter as string | undefined;
+  const agentLabel = v["agent-label"] as string | undefined;
+  if (row === REGISTER_ROW) { assertSubmitter(submitter); assertAgentLabel(agentLabel); }
+  else if (verb === "record-receipt" && agentLabel === undefined) { if (submitter !== undefined) assertSubmitter(submitter); } // issue 1750: the submitter Safe
+  else if (submitter !== undefined || agentLabel !== undefined) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only\n${USAGE}`);
+  const payloadDigest = v["payload-digest"] as string | undefined;
+  const payloadUri = v["payload-uri"] as string | undefined;
+  if (verb === "record-receipt") assertRecordInputs({ receiptId: receiptIdRaw, payloadDigest, payloadUri });
+  else if (payloadDigest !== undefined || payloadUri !== undefined) throw new PublishError("USAGE", `--payload-digest and --payload-uri go with the record-receipt verb only\n${USAGE}`);
   if (row === RECEIPT_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>\n${USAGE}`);
-  if (receiptIdRaw !== undefined) {
-    if (row !== RECEIPT_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only\n${USAGE}`);
+  if (row === APPLY_ROW && receiptIdRaw === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32> and --payload FILE\n${USAGE}`);
+  if (receiptIdRaw !== undefined && verb !== "record-receipt") {
+    if (row !== RECEIPT_ROW && row !== APPLY_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only (or --row ${APPLY_ROW})\n${USAGE}`);
     receiptId = assertReceiptId(receiptIdRaw);
   }
+  const payload = v.payload as string | undefined;
+  if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
+  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -176,13 +229,13 @@ export function parseCli(argv: string[]): Parsed {
     if (!/^0x([0-9a-fA-F]{2})+$/.test(data)) throw new PublishError("USAGE", "--call-data must be 0x-prefixed hex calldata");
     call = { label, target, data };
   }
-  if (stage !== "plan") need("signer", v.signer);
+  if (stage !== "plan") need("signer", v.signer); // for record-receipt it is the submitter
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
-    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, correlatedOwnersFile: v["correlated-owners-file"] as string | undefined, evidence: v.evidence as string | undefined,
-    countsDir: v["counts-dir"] as string | undefined, measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId,
+    coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
+    countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri,
   };
 }
 
@@ -238,6 +291,7 @@ async function pauseOnFailure(ctx: RunContext, trigger: PauseTrigger, cause: unk
     const manifest = loadRunManifest(ctx.evidenceDir);
     if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}`);
     const report = await pause(ctx, manifest, { trigger, reason, emergencySigner: emergency() });
+    if (report.allPaused && report.manifestRecorded === false) return pauseUnrecorded(report, `${reason}. `);
     return report.allPaused ? cause : pauseIncomplete(report, `${reason}. `);
   } catch (e) {
     if (isPublishError(e, "PAUSE")) return e;
@@ -264,11 +318,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return r.stdout;
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
-    // The correlated-owners floor is on by default on 8453 and its file is required: the caller (devops) supplies it.
-    const correlatedOwners = rpcChainId === MAINNET_CHAIN_ID ? await (deps.correlatedOwners ?? (() => loadCorrelatedOwners({ file: a.correlatedOwnersFile, env, cwd })))() : undefined;
     for (const spec of a.ownerSigners) assertOwnerSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
-    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure, correlatedOwners });
-    log.log("info", "run.checks_ok", { chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
+    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
+    if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
+    // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
+    const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
+    if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
+    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
     const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
@@ -290,7 +346,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun ? (deps.startChain ?? startAnvil) : undefined,
       };
     };
@@ -311,17 +367,47 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: pause-all reads it to know whether the handover has begun. Pass the same --evidence directory as the run.`);
       const report = await (deps.pauseAll ?? pauseAll)(ctx, manifest, { trigger: "manual", reason: "pause-all was run by hand", emergencySigner: emergencySigner() });
       if (!report.allPaused) throw pauseIncomplete(report);
+      if (report.manifestRecorded === false) throw pauseUnrecorded(report);
       log.log("info", "run.done", { ran: ["pause-all"], skipped: [] });
       return 0;
     }
+    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
+    const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
+      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
+      const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
+      return Promise.all(specs.map((s) => mk(s)));
+    };
+    // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
+    if (a.verb === "record-receipt") {
+      // Refused in production on 8453 BEFORE the signer exists: no passphrase prompt, no key load (review advisory 3).
+      if (rpcChainId === MAINNET_CHAIN_ID && sheet.kind !== "rehearsal") throw new PublishError("USAGE", "record-receipt is refused on this chain in production: production records receipts with 'rmpc receipt submit' and an HSM or KMS signer. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.");
+      // Owner decision 2026-10-10: on 8453 the submitter is a multisig. Refused before the signer exists too.
+      if (rpcChainId === MAINNET_CHAIN_ID && a.submitter === undefined) throw new PublishError("USAGE", "record-receipt on 8453 needs --submitter <the submitter Safe> (a SafeL2 1.4.1 multisig) and the --owner-signer of its owners: the consensus receipt submitter is never a single key. --signer is the deployer that pays the gas.");
+      let payloadBytes: Uint8Array | undefined;
+      if (a.payload !== undefined) { try { payloadBytes = new Uint8Array(readFileSync(a.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${a.payload} is not readable: ${(e as Error).message}`); } }
+      const inputs = assertRecordInputs({ receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri, payload: payloadBytes }); // issue 1754: digest and id are checked against the bytes BEFORE the signer exists
+      const ctx = buildCtx(undefined, false);
+      const safeMode = a.submitter === undefined ? undefined : { safe: assertSubmitter(a.submitter), ownerSigners: await ownerSigners(ctx) };
+      const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, await ctx.signer.safeSigner(), inputs, deps.recordApi, safeMode);
+      console.log(JSON.stringify({ event: "record_receipt", ...rec }));
+      log.log("info", "run.done", { ran: ["record-receipt"], skipped: [] });
+      return 0;
+    }
+    const realVerifyReconstructed = async (f: FrozenFile): Promise<void> => verifyReconstructionOnChain(f.measured.reconstructed!, { table: getStageTable(), out: buildLibraryArtifacts(coreDir, getStageTable()), getCode: async (x) => codeWithRetry(() => run("cast", ["code", x], { env: castEnv }), { address: x, rpc: a.rpc, sleep: deps.sleep }) });
+    const realFrozenDirCommitted = async (d: string): Promise<void> => {
+      try { await gitFrozenDirCommitted(coreDir, d, { requireOriginDev: a.countsRequireOriginDev }); } catch (e) {
+        if (a.countsDir || !isPublishError(e)) throw e;
+        // the default counts dir is the one of the core checkout at the release sha: it can never track the baseline named by that sha (issue 1740)
+        throw new PublishError(e.kind, `${e.message} No --counts-dir was given and the default counts dir ${d} is under the core checkout: pass --counts-dir <a clean checkout of dev at Y >= the release sha that tracks the baseline file>/deployments/frozen-counts`);
+      }
+    };
+    const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
-    // the contracts-freeze gate (core 1524, 1668): on 8453 the plan and every run that broadcasts (publish, prove-control, govern, any stage but verify)
-    // run only at a release-tagged SHA with committed, clean counts and green CI. No signer exists yet. pause-all returned above and is never gated.
-    const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
-    const broadcasts = names.some((n) => n !== "verify");
-    if (rpcChainId === MAINNET_CHAIN_ID && !a.measure && (a.stage === "plan" || (broadcasts && !a.dryRun))) {
-      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, run, runEnv: castEnv, releaseTag: deps.releaseTag, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default" });
+    // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
+    if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
+      const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
+        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
     const counts = a.stage === "plan"
@@ -341,22 +427,27 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const lines = await runCoreConfigCheck({ coreDir, outDir: join(evidenceDir, "core-config-check"), chainId: rpcChainId, rpc: a.rpc, baseEnv: env }, deps.coreConfigCheck, "the plan");
       log.log("info", "plan.core_config_check", { ok: true, lines: lines.length });
       const plan = frozen ? stagePlan(frozen) : [];
-      console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, plan }));
+      // Issue 1727: a rehearsal plan prints nonces RELATIVE to the deployer start nonce (recorded in the run manifest at the first stage), never absolute ones.
+      console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, deploymentKind: sheet.kind, startNonceBasis: planNonceBasis(sheet.kind), plan }));
       return 0;
     }
+    const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
+    // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
+    // before any signer exists, so the order plan then publish is not something an operator can get wrong.
+    if (rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
+      const f = loadFrozen(countsDir, a.coreSha);
+      if (f.measured.reconstructed) {
+        await (deps.verifyReconstructed ?? realVerifyReconstructed)(f);
+        await assertBaselineCommitted({ countsDir, sha: a.coreSha, frozen: f, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted });
+      }
+    }
     const ctx = buildCtx(frozen, counts.measure);
-    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
-    const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
-      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
-      const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-      return Promise.all(specs.map((s) => mk(s)));
-    };
     // A failed verify (stage 12) or postflight pauses deposits on all four vaults (core 1619) and then fails the run as before.
     let postflight: PauseTrigger | undefined;
     let result: Awaited<ReturnType<typeof runStages>>;
     try {
       result = await runStages(ctx, names, {
-        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), ...(deps.prove ?? {}) }); },
+        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), ...(deps.prove ?? {}) }); },
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.
@@ -365,7 +456,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
@@ -376,7 +467,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (a.dryRun && counts.mode === "dry-run-measure") log.log("warn", "dry_run.counts_measured", { counts: ctx.dryCounts, note: "measured by the dry run, not frozen: nothing was written" });
     if ((a.measure || counts.mode === "twin-measure") && DEPLOYER_STAGES.every((s) => result.manifest.stages[s.name]?.status === "done")) {
       const forge = (await run("forge", ["--version"], { env: castEnv })).stdout.trim().split("\n")[0];
-      const p = writeFrozen(countsDir, a.coreSha, measuredCounts(result.manifest), { chainId: rpcChainId, at: new Date().toISOString(), forge });
+      const p = writeFrozen(countsDir, a.coreSha, measuredCounts(result.manifest), { chainId: rpcChainId, at: new Date().toISOString(), forge, ...(Object.keys(adoptedTxs(result.manifest)).length ? { adopted: Object.keys(adoptedTxs(result.manifest)) } : {}) });
       log.log("info", "run.counts_measured", { file: p });
     }
     if (!a.dryRun && existsSync(ctx.evidenceDir)) {

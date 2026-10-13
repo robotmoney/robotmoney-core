@@ -123,7 +123,7 @@ pub fn encode_signed(tx: TxEip1559, signature: Signature) -> Bytes {
 ///
 /// **A MINED TRANSACTION IS NOT A SUCCESSFUL ONE.** Every role-gated call in
 /// this client — `consensusRecordReceipt`, `consensusVoteSubmit`, the committee
-/// register call, `RouterGovernance.propose`, the governance vote — is accepted
+/// vote-submit call — is accepted
 /// by the node, mined into a block, and reverted by the EVM when the caller
 /// lacks the role. The receipt exists; `status` is 0; no event log is emitted;
 /// nothing changed on chain. A command that reports `{"ok":true, tx_hash,

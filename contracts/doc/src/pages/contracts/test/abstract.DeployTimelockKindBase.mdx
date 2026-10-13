@@ -1,0 +1,35 @@
+---
+title: "DeployTimelockKindBase"
+---
+
+# DeployTimelockKindBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+
+**Inherits:** [DeployTimelockRunEntrypointBase](/contracts/test/abstract.DeployTimelockRunEntrypointBase)
+
+<i>
+
+Issue 1727: the rehearsal kind (env DEPLOYMENT_KIND=rehearsal, the sheet line of the same name). On chain id 8453 it lowers the delay floor to 900 s and keeps
+the delay below the production floor; the default and an explicit "production" keep 172800 s unchanged. Anything else reverts.
+One scenario per contract: vm.setEnv is process-wide and forge runs the tests of a contract in parallel.
+
+</i>
+
+## Functions
+
+<a id="_base-string-string"></a>
+
+### _base
+
+```solidity
+function _base(string memory kind, string memory delay) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `string` |  |
+| delay | `string` |  |
+

@@ -153,7 +153,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -201,6 +201,19 @@ jobs:
           bun scripts/ci/check-set-registry-owner.ts
           bun test scripts/ci/check-set-registry-owner.test.ts
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployTimelock.t.sol"
+
+      - name: "forge test (rmAGENT on the Uniswap V4 RM/USDC pool: recorder, swap adapter, V4 venue, deploy wiring and config — core 1676)"
+        # Owner decision 2026-10-08. Each file must execute at least one test (a path filter that matches nothing is red):
+        #   - UniswapV4PriceRecorder.t.sol: one snapshot per block, the V3 reference cumulative, observe never reads spot, the clamp, stale fails closed, no admin.
+        #   - UniswapV4SwapAdapter.t.sol: the PoolKey, hooks, deadline, uint128, recorder-only twapPrice, reentrancy, slippage floor.
+        #   - BasketVaultV4Venue.t.sol: addAsset gating (codehash allowlist, 901 slots, 1800 s of history), deposit, USDC redeem, stale recorder and redeemInKind.
+        #   - DeployUniswapV4PriceRecorder.t.sol, DeployAgentTokenVault.t.sol, DeployBasketVaultPoolGuards.t.sol, ConfigFiles.t.sol: the stage script and the config.
+        run: |
+          for f in UniswapV4PriceRecorder UniswapV4SwapAdapter BasketVaultV4Venue DeployUniswapV4PriceRecorder DeployAgentTokenVault DeployBasketVaultPoolGuards ConfigFiles; do
+            echo "::group::contracts/test/${f}.t.sol:"
+            bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
+            echo "::endgroup::"
+          done
 
       - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)
         # A path filter that matches nothing must be red, not green. Each named file has to run
@@ -262,6 +275,13 @@ jobs:
 
       - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
         run: bash .github/scripts/tests/test_forge_test_require_executed.sh
+
+      - name: forge test scratch-file guard (no two tests share a /tmp file, core 1735)
+        # Forge runs test contracts and the tests inside one contract in parallel. A shared scratch name
+        # made DeployTimelockRunEntrypointTest flake with "failed to open file /tmp/1476-run-entrypoint-manifest-...".
+        run: |
+          python3 .github/scripts/check_test_tmp_paths.py
+          bash .github/scripts/tests/test_check_test_tmp_paths.sh
 
   # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
   # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no
@@ -350,6 +370,8 @@ jobs:
 
       - name: forge test (rmRWA fork regression — core 1492)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
+      - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
       - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
 
@@ -486,7 +508,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

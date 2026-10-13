@@ -68,18 +68,18 @@ describe("BalancesPanelView", () => {
       rmBalance: 25_000_000_000_000_000_000n,
     });
     expect(screen.getByTestId("balances-panel-row-usdc-symbol").textContent).toBe("USDC");
-    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1 USDC");
+    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1.00 USDC");
 
     expect(screen.getByTestId("balances-panel-row-eth-symbol").textContent).toBe("ETH");
-    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("1.5 ETH");
+    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("1.50 ETH");
 
     expect(screen.getByTestId("balances-panel-row-rm-symbol").textContent).toBe("RM");
-    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("25 RM");
+    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("25.00 RM");
   });
 
   it("renders one row per registered vault the wallet holds receipt-token shares in", () => {
     const receipts: BalancesPanelReceipt[] = [
-      { vaultAddress: VAULT_A, symbol: "rmUSDC", decimals: 6, balance: 5_000_000n },
+      { vaultAddress: VAULT_A, symbol: "rmUSDC", decimals: 24, balance: 5n * 10n ** 24n },
       {
         vaultAddress: VAULT_B,
         symbol: "rmPROTO",
@@ -92,16 +92,16 @@ describe("BalancesPanelView", () => {
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-symbol`).textContent).toBe(
       "rmUSDC",
     );
-    // Centralized formatter: 5_000_000 (6 decimals) + symbol → "5 rmUSDC"
+    // Centralized formatter: 5_000_000 (6 decimals) + symbol → "5.00 rmUSDC"
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-amount`).textContent).toBe(
-      "5 rmUSDC",
+      "5.00 rmUSDC",
     );
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_B}-symbol`).textContent).toBe(
       "rmPROTO",
     );
-    // Centralized formatter: 3e18 (18 decimals) + symbol → "3 rmPROTO"
+    // Centralized formatter: 3e18 (18 decimals) + symbol → "3.00 rmPROTO"
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_B}-amount`).textContent).toBe(
-      "3 rmPROTO",
+      "3.00 rmPROTO",
     );
   });
 
@@ -121,9 +121,9 @@ describe("BalancesPanelView", () => {
   it("renders zero balances as the literal '0' with symbol (not omitted)", () => {
     // Centralized formatter renders zeros with symbol suffix: "0 USDC", "0 ETH", "0 RM".
     renderView({ usdcBalance: 0n, ethBalance: 0n, rmBalance: 0n });
-    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("0 USDC");
-    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("0 ETH");
-    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("0 RM");
+    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("0.00 USDC");
+    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("0.00 ETH");
+    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("0.00 RM");
   });
 
   it("renders a connect prompt instead of balance rows when no wallet is connected", () => {

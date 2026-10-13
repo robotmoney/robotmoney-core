@@ -105,7 +105,7 @@
 |---|---|---|---|
 | BasketVault (base) | Abstract ERC-4626 USDC → basket asset mix. Subclassed by ProtocolAssetVault, AgentTokenVault, RwaBasketVault. | `contracts/vaults/BasketVault.sol` | N/A (abstract) |
 | ProtocolAssetVault | USDC → wETH, cbBTC (volatile protocol assets; assets with no usable pool are added later through the timelock) | `contracts/vaults/ProtocolAssetVault.sol` | set at the mainnet deploy |
-| AgentTokenVault | USDC → RM, the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (nothing deploys an RM mock). RM's venue is decided (owner, 2026-10-06): the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000), funded by the owner with in-range liquidity sized to rmAGENT's first-period cap and with raised observation cardinality before the mainnet run. A restored V4 swap adapter is a later option, not a launch blocker. RM is the only entry in `config/agent-token-shortlist.json` (core 1554), pinned by token code hash | `contracts/vaults/AgentTokenVault.sol` | set at the mainnet deploy |
+| AgentTokenVault | USDC → RM, the live ROBOTMONEY token `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (nothing deploys an RM mock). RM's venue is decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91% (id `0xf2e7b95797a96a19347d8fb93b4dd9fdcd24623a483f5107887131edbf252391`), traded through `UniswapV4SwapAdapter` and priced by the permissionless `UniswapV4PriceRecorder` (sufficient for the Base mainnet test, not the final deployment; `perDepositCap` and `tvlCap` stay below the pool depth). RM is the only entry in `config/agent-token-shortlist.json` (core 1554), pinned by token code hash | `contracts/vaults/AgentTokenVault.sol` | set at the mainnet deploy |
 | RwaBasketVault | USDC → deSPXA, a plain basket row priced from its fee 500 pool TWAP | `contracts/vaults/RwaBasketVault.sol` | set at the mainnet deploy |
 
 ### 2.4 Admin and fee recipient
@@ -328,7 +328,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | None — all four contracts are direct, non-proxy deployments. No upgrade path exists |
+| Upgradeability | Current deployed contracts are direct and have no in-place upgrade path. Target policy calls for per-instance UUPS proxies on approved stateful core contracts, upgradeable during test/demo/rehearsal and optionally during a bounded mainnet proving period, then permanently frozen; final mainnet may be frozen at deployment. This is a plan, not deployed behavior. See `docs/technical/contract-upgradeability-plan.md` |
 | Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
 | Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
@@ -341,7 +341,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | No proxy — direct deployment confirmed |
+| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. Future proxy deployment is planned, not live |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |
@@ -430,11 +430,12 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
    ```
 4. Call `vault.deposit(1_000_000, seedShareReceiver)` from the deployer account, so the shares are minted to `SEED_SHARE_RECEIVER`.
 5. Verify `vault.totalAssets() >= 1_000_000 * 9_999 / 10_000`, `vault.totalSupply() > 0`, and `vault.balanceOf(deployer) == 0`.
-6. Only after steps 1–5 are confirmed: open the vault to the public (e.g. increase `tvlCap`, publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
+6. Call `vault.pauseDeposits()` right after the seed (core 1710): rmUSDC deploys paused like the three basket vaults. The stage 13 `unpause-USDC` row, a Safe operation through the timelock, opens it.
+7. Only after steps 1–6 are confirmed and stage 13 has run: the vault is open to the public (publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
-**CI enforcement:** `contracts/script/DeployVault.s.sol` (the vault stage) encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets()` keeps at least 99.99% of the seed, `vault.totalSupply() > 0`, that the receiver holds the seed shares and the deployer holds none, before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the fork gate: the job runs on the Twin chain, a pinned lazy fork of real Base state; ADR-0011 is superseded by the Twin chain, core 1498.)
+**CI enforcement:** `contracts/script/DeployVault.s.sol` (the vault stage) encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets()` keeps at least 99.99% of the seed, `vault.totalSupply() > 0`, that the receiver holds the seed shares and the deployer holds none, before any public deposit, and that the vault reads paused after the seed (core 1710). It is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the fork gate: the job runs on the Twin chain, a pinned lazy fork of real Base state; ADR-0011 is superseded by the Twin chain, core 1498.)
 
 ---
 
@@ -478,11 +479,11 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 **Deposit mechanics**: A user calls `deposit(uint256 amount, uint256[] minSharesPerLeg[])`. The router:
 1. Reads the active weight vector (voted weights if active; otherwise default weights).
 2. Marks each leg available or skipped (`_availabilityAndAmounts` / `_isDepositable`): a leg is available only when its registry status is `Active` and it is router-eligible.
-3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg. Skipped legs get 0.
-4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg (`_executeLeg`).
+3. Splits the full amount across the available legs only, pro rata by bps: `legAmount[i] = amount × weight[i] / availableBps`, where `availableBps` is the sum of the available legs' bps. The rounding remainder goes to the last available leg WITH NON-ZERO BPS, so it never lands on a 0 bps leg. Skipped legs get 0.
+4. Calls `vault.deposit(legAmount[i], depositor)` for each available leg whose `legAmount` is non-zero (`_executeLeg`). A leg whose computed amount is 0 (a 0 bps weight, or a small weight that rounds to 0 on a tiny deposit) is skipped like an unavailable leg: no approval, no vault call, no event (issue 1746). Without this, one Active, eligible 0 bps leg such as rmAGENT (whose `deposit(0)` reverts) would revert the whole router deposit over the 9500/500/0/0 launch vector. `previewDeposit` reports such a leg as available with `legAmount` 0 and `estShares` 0.
 5. Emits `RouterDeposit` per deposited leg and returns the shares minted per leg (0 for a skipped leg).
 
-The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
+The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. If every computed leg amount is 0 (only a zero-amount deposit, or only 0 bps legs left available), the deposit reverts `NoFundedLeg` and calls no vault. The sum of the leg amounts always equals `amount`, so nothing is stranded. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
 
 ### 9.1.2 Weight vectors and governance integration
 
@@ -491,7 +492,7 @@ The router maintains two weight vectors:
 - **Voted weights**: Set by `RouterGovernance` on proposal execution via `setWeights(vaults, bps)`. Only one governance proposal active at a time. If the voted vector is active, it is the source of truth.
 - **Default weights**: Admin-set fallback via `setDefaultWeights(vaults, bps)`. Used when no voted proposal is active (`votedWeightsActive = false`). Survives proposal execution unchanged, providing a below-quorum safety fallback (ADR-0002). Its length must equal `VaultRegistry.routerEligibleCount()`.
 
-At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the launch vector with `setWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. Because it is written with `setWeights`, `votedWeightsActive` is true from deploy. rmPROTO, rmAGENT and rmRWA are not in that vector, so each routes 0.
+At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. A voted vector written at deploy would override every later default, so a receipt-driven `setDefaultWeights` would not change routing; a router that already carries one is cleared with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
 
 The timelock may set default weights only. Active weights come only from RouterGovernance votes: `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6).
 
@@ -500,7 +501,7 @@ The timelock may set default weights only. Active weights come only from RouterG
 A vault is **eligible for routing** only when its `VaultRegistry` status is `Active`, its registry router-eligible flag is set (`VaultRegistry.isRouterEligible`), and its `asset()` is the router's USDC (`PortfolioRouter.isRouterEligibleAndActive`).
 
 - `setWeights`, `setDefaultWeights` and `applyMigrationDefaultWeights` call `_requireActiveAndEligible` for every listed vault, at any bps, 0 included. An ineligible or non-Active vault cannot be listed even at 0 bps, so it receives 0.
-- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves.
+- At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves. An eligible leg whose computed amount is 0 is not called (issue 1746).
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
 - **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
@@ -511,7 +512,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 |---|---|---|
 | Global cap | `setRouterCap(uint256)` | Hard ceiling on total USDC per deposit. 0 = uncapped. |
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
-| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any leg returns fewer shares than specified. |
+| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. The floor is NOT enforced on a skipped leg (unavailable, or computed amount 0): it is never called and returns 0 shares. Before issue 1746 a 0 bps eligible leg was called with `deposit(0)` and a non-zero floor on it tripped. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
@@ -613,7 +614,7 @@ BasketVault maintains an ordered list of active basket assets. Each asset has:
 - **venue**: Human-readable enum (V3, V4 reserved and unused, Aerodrome) so governance and monitoring can inspect the DEX choice without decoding the adapter address.
 - **active**: Flag toggled by ADMIN_ROLE.
 
-**Swap adapters** (per docs/technical/real-four-vault-demo-seams.md §3, issue #553): Subclasses or ADMIN_ROLE can register custom swap adapters to route swaps through alternative DEXes. All adapters implement `IBasketSwapAdapter`, exposing `swap(inputAmount, minOutputAmount)` and `twapPrice(secondsAgo)` for pricing and swap execution. Two ship: `UniswapV3SwapAdapter` and `AerodromeSwapAdapter`. The deploy scripts (`BasketVaultDeployBase`) wire only venue `UniswapV3`; no deploy script registers `AerodromeSwapAdapter`. The Uniswap V4 adapters were deleted on core PR 1505. Restoring a V4 swap adapter is a decided option for RM's venue (not yet implemented; core issue to be filed).
+**Swap adapters** (per docs/technical/real-four-vault-demo-seams.md §3, issue #553): Subclasses or ADMIN_ROLE can register custom swap adapters to route swaps through alternative DEXes. All adapters implement `IBasketSwapAdapter`, exposing `swap(inputAmount, minOutputAmount)` and `twapPrice(secondsAgo)` for pricing and swap execution. Three ship: `UniswapV3SwapAdapter`, `UniswapV4SwapAdapter` (core 1676) and `AerodromeSwapAdapter`. The deploy scripts (`BasketVaultDeployBase`) wire venues `UniswapV3` and `UniswapV4`; no deploy script registers `AerodromeSwapAdapter`. `UniswapV4SwapAdapter` swaps through the real V4 PoolManager (`unlock` callback, full PoolKey, hooks zero) and its `twapPrice` accepts only the pool's `UniswapV4PriceRecorder`: a permissionless, admin-free contract with a V3-shaped `observe()` that records the pool tick (one snapshot per block, lagged tick, a clamp of 10 ticks per second, stale after 1800 s). The original V4 adapters were deleted on core PR 1505 and rewritten for 1676; the V4 asset position adapter stays deleted (core 1677).
 
 ### 9.3.3 TWAP oracle configuration
 
@@ -659,6 +660,7 @@ All three subclasses inherit BasketVault behavior and are configured with:
 
 ### 9.3.7 Key invariants and constraints
 
+- **Small basket positions (core 1778)**: a position worth a few cents can leave a basket leg of a handful of token base units (rmPROTO on Deploy 2: 31 cbBTC units). The pool's one-unit rounding then misses the 1 percent floor and the USDC `redeem` reverts `Too little received`. The supported exit is `redeemInKind(shares, receiver, owner)`, which pays the basket tokens and swaps nothing. The dapp shows this hint when a redeem simulation fails with that reason. The cause and the fix are in [redeem-gas-1482.md](redeem-gas-1482.md).
 - **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
 - **Slippage protection**: Deposits and swaps enforce admin-set `maxSlippageBps` (max 500 BPS = 5%). ADMIN_ROLE may tighten but not exceed this hard ceiling.
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.

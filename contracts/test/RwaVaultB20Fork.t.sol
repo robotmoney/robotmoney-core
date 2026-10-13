@@ -77,7 +77,8 @@ contract RwaVaultB20ForkTest is Test {
                     exitFeeBps: 0,
                     feeRecipient: makeAddr("feeRecipient"),
                     navDeviationGuardBps: 2000,
-                    minPoolLiquidity: 1e6
+                    minPoolLiquidity: 1e6,
+                    recorder: address(0)
                 }),
                 v3Cfg
             );
