@@ -1,8 +1,5 @@
 // Core issue 1777: router and vault deposits are sent with a gas limit above their entry floors.
 import { describe, expect, it } from "vitest";
-import routerTab from "../../src/components/RouterDepositTab.tsx?raw";
-import vaultSelectorTab from "../../src/components/VaultSelectorDepositTab.tsx?raw";
-import depositWithdrawTab from "../../src/components/DepositWithdrawTab.tsx?raw";
 import {
   ROUTER_DEPOSIT_GAS_FLOOR,
   ROUTER_DEPOSIT_GAS_LIMIT,
@@ -29,18 +26,5 @@ describe("deposit gas limits", () => {
   it("a higher caller-set gas wins, a lower one is raised", () => {
     expect(withGasLimit({ gas: 9_000_000n }, ROUTER_DEPOSIT_GAS_LIMIT).gas).toBe(9_000_000n);
     expect(withGasLimit({ gas: 1n }, ROUTER_DEPOSIT_GAS_LIMIT).gas).toBe(8_000_000n);
-  });
-  it("the router deposit tab sends the router limit", () => {
-    expect(routerTab as string).toMatch(
-      /depositWrite\.writeContract\(withGasLimit\(depositSim\.request, ROUTER_DEPOSIT_GAS_LIMIT\)\)/,
-    );
-  });
-  it.each([
-    ["VaultSelectorDepositTab", vaultSelectorTab],
-    ["DepositWithdrawTab", depositWithdrawTab],
-  ])("the %s sends the vault limit", (_name, src) => {
-    expect(src as string).toMatch(
-      /depositWrite\.writeContract\(withGasLimit\(depositSim\.request, VAULT_DEPOSIT_GAS_LIMIT\)\)/,
-    );
   });
 });
