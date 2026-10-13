@@ -295,6 +295,23 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     /// @dev Validates inputs, deploys, adds assets, pauses and registers. The caller owns the
     ///      broadcast (or prank) context: every call below is made as `p.admin`.
     function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed memory d) {
+        d = _deployConfigured(p, cfg);
+
+        _registerIfAbsent(VaultRegistry(p.registry), d.vault, p.usdc);
+        d.registered = true;
+
+        // Finding L3-D1: the vault DELEGATECALLs a deploy-time-linked TickMath library on the NAV
+        // path. Fail the deploy on a mislinked, zero or non-canonical library.
+        _assertTickMathLinkIntegrity(d.vault, p.tvlCap);
+    }
+
+    /// @dev The part of `_deployAll` before registration: validates inputs, deploys the vault, adds the assets, sets the guards
+    ///      and pauses deposits. The vault is not registered. A redeploy into a live deployment (issue 1796) stops here: the registry
+    ///      is governed by the timelock after the handover, so the registration is a govern row, not a deployer call.
+    function _deployConfigured(Params memory p, Cfg memory cfg)
+        internal
+        returns (Deployed memory d)
+    {
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
         require(p.swapRouter != address(0), "SWAP_ROUTER=0");
         require(p.usdc != address(0), "usdc=0");
@@ -342,13 +359,6 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         // Deployed paused. The govern stage unpauses after the checks pass.
         vault.pauseDeposits();
         d.paused = true;
-
-        _registerIfAbsent(VaultRegistry(p.registry), address(vault), p.usdc);
-        d.registered = true;
-
-        // Finding L3-D1: the vault DELEGATECALLs a deploy-time-linked TickMath library on the NAV
-        // path. Fail the deploy on a mislinked, zero or non-canonical library.
-        _assertTickMathLinkIntegrity(address(vault), p.tvlCap);
     }
 
     /// @dev TickMath link integrity for one vault (finding L3-D1). The reference is the library

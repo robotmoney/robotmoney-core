@@ -40,7 +40,7 @@ contract DeployProtocolAssetVault is BasketVaultDeployBase {
     string public constant CONFIG_FILE = "config/protocol-assets.json";
 
     /// @notice Forge broadcast entrypoint.
-    function run() external returns (Deployed memory d) {
+    function run() external virtual returns (Deployed memory d) {
         d = _runFrom("", CONFIG_FILE, "assets");
         console2Log(d.vault);
     }
