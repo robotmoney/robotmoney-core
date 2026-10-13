@@ -888,7 +888,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
-            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount);
+            // Core 1778: price one input unit less. A V3 pool rounds the fee-adjusted input down
+            // by one unit, which is a few percent of a dust leg (31 cbBTC units) and failed the
+            // 1% floor with "Too little received". For a normal leg one unit is below 1e-6 of it.
+            // A one-unit leg floors at zero (adapters return 0 for a zero amount).
+            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount - 1);
 
             uint256 received = _executeSwap(
                 assets[i].adapter,
