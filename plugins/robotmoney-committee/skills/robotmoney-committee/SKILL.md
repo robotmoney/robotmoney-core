@@ -47,3 +47,5 @@ plugin and skill directory names moved.
 **Removal:** this stub is deleted once no consumer requests the old path. Until
 then it is covered by `plugins/robotmoney-swarm/tests/run-tests.sh`, which fails
 if either stub goes missing or stops naming its replacement.
+
+`committee vote-submit` submits a signed tilt. It grants no authority over router weights.

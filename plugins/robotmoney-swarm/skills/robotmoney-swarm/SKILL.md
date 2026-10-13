@@ -180,3 +180,5 @@ All abort paths exit non-zero and print a named error code to stderr.
 - Explorer or dapp surfaces
 - Committee agent registration (a one-time Safe and timelock action: rmpc does not register committee agents)
 - Router-weight changes (`WEIGHT_SETTER_ROLE` submits the consensus receipt through a Safe-scheduled timelock operation; rmpc has no governance write command)
+
+`committee vote-submit` submits a signed tilt. It grants no authority over router weights.

@@ -210,3 +210,5 @@ go-gate item 5 dropped. Silent contradiction is not an option.
   to match it exactly.
 - Actually building the anchoring feature; only its verification model
   is fixed here.
+
+`committee vote-submit` submits a signed tilt. It grants no authority over router weights.

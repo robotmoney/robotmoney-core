@@ -521,8 +521,8 @@ behaviors the shape leaves open.
   non-receipt-capable rather than falling back to a zero or cross-chain address.
 - **Unit conversion.** Frontend weights are `[0,1]` floats; this repo is bps
   (`tests/fixtures/committee-vote.schema.json:22-33`), and
-  `RouterGovernance.propose` hard-rejects a vector that does not sum to
-  `BPS_DENOMINATOR` (`RouterGovernance.sol:377`). The converter needs a stated
+  the `apply-receipt` govern row rejects a vector that does not sum to
+  10000 bps. The converter needs a stated
   apportionment rule that closes on the denominator for *every* share vector —
   §7.1 settles it as largest remainder in binary64, with the exact-tie break
   pinned to canonical bucket order — plus a property test at the boundary.
@@ -802,8 +802,8 @@ other.
 
 `robotmoney-frontend` expresses an allocation as `[0,1]` floats over four named
 buckets. This repo expresses it as `target_weight_bps` over four vault
-addresses, and `RouterGovernance.propose` **hard-rejects** any vector that does
-not sum to `BPS_DENOMINATOR` exactly (`RouterGovernance.sol:377`). Nothing
+addresses, and the `apply-receipt` govern row rejects any vector that does
+not sum to 10000 bps exactly. Nothing
 converted between them before this issue.
 
 **The rule is data, not code.** `bps_conversion` in
@@ -898,7 +898,7 @@ the CI guard asserts schema 1.0 actually refuses a receipt carrying the field, s
 the written decision cannot quietly become false.
 
 - **No consumer can act on it.** `weights` exists to become a
-  `RouterGovernance.propose` vector over the four vault addresses in
+  receipt vector applied through the Safe over the four vault addresses in
   `consensus-receipt.bucket-vault-map.json`. Nothing on-chain consumes a bucket's
   internal composition — the vault's own adapter set decides that. Anchoring a
   number no contract enforces commits the committee, in a signed artifact, to a
