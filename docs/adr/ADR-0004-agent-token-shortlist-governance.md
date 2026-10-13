@@ -203,7 +203,7 @@ depositor protection during that window. The first checklist item (min
 delay ≥ 48 hours) is now enforced by the `DeployTimelock` floor on
 chain 8453.
 
-2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+There is no voting by token holders or anyone else. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration; the alternatives that name a token vote are rejected.
 
 2026-10-06: the owner decided that every shortlist change, add or remove, waits the single 48-hour timelock delay. The 24-hour removal split above is not built.
 
