@@ -159,7 +159,7 @@ Unchanged by this amendment: the hand-picked-not-quant-filtered method,
 the equal-weight allocation, the admin-curation path (now as amended in
 ADR-0004), and the absence of any RM-specific guard in code.
 
-2026-10-06: no token-based governance is foreseen; considered alternatives that mention token voting are historical only.
+There is no voting by token holders or anyone else. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration; the alternatives above that name a token vote are rejected.
 
 2026-10-06: the owner decided RM's venue: the existing Uniswap V3 RM/USDC pool `0x8Cd8c7015b6A8F8310c15CcC8aA3D200D9c74882` (fee 10000). The V4 adapter restore is a later option, not a launch blocker.
 

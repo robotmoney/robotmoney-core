@@ -1,9 +1,9 @@
 # Worked Examples
 
-## Example 1 — Regime fetch → signal extraction → governance proposal
+## Example 1 — Regime fetch → signal extraction → weight recommendation
 
 This trace shows the full reasoning path an agent follows when a user asks it
-to prepare a weight-reallocation proposal.
+to prepare a weight-reallocation recommendation.
 
 ### Step 1: Fetch the regime snapshot
 
@@ -51,7 +51,7 @@ borderline caveat is required.
 ### Step 3: Check research context
 
 The agent fetches https://analytics.robotmoney.net/projects and scans for
-active research threads relevant to the vaults targeted by the proposal (here,
+active research threads relevant to the vaults targeted by the recommendation (here,
 a growth vault weight increase from 20 % to 30 %).
 
 Findings:
@@ -61,11 +61,11 @@ Findings:
   overweighting growth vaults with a 90-day Sharpe improvement of +0.18.
 - No conflicting completed research threads identified.
 
-### Step 4: Construct the governance-proposal rationale
+### Step 4: Construct the recommendation rationale
 
-The agent drafts the proposal rationale citing both sources:
+The agent drafts the recommendation rationale citing both sources:
 
-> **Proposed weight change:** Growth Vault 20 % → 30 %; Stable Vault 30 % → 20 %
+> **Recommended weight change:** Growth Vault 20 % → 30 %; Stable Vault 30 % → 20 %
 >
 > **Regime signal (robotmoney.net/regime, asof 2026-06-05T00:00:00Z):**
 > Current regime is `risk_on` with a composite score of 74.2
@@ -79,11 +79,13 @@ The agent drafts the proposal rationale citing both sources:
 > of +0.18 over 90 days.
 >
 > **Conclusion:** Both the regime signal and active research support increasing
-> growth vault weight. Proposed change is consistent with documented allocation
+> growth vault weight. The recommended change is consistent with documented allocation
 > logic.
 
-### Step 5: Hand off the proposal (rmpc does not sign it)
+### Step 5: Hand the recommendation to the committee
 
-rmpc is not a governance signer and has no `propose` command. The agent
-surfaces the rationale text to the user for review. A Safe signer then submits
-the draft calldata (from `rmpc governance draft-proposal`) through the Safe.
+The agent surfaces the rationale text to the user. There is no governance
+write command: the recommendation reaches the chain only as a committee tilt
+(`rmpc committee vote-submit`, a signed tilt that is not a vote on anything)
+and then as the committee's consensus receipt, which `WEIGHT_SETTER_ROLE`
+applies through the Safe and the timelock.
