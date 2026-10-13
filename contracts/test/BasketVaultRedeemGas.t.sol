@@ -225,6 +225,45 @@ contract BasketVaultRedeemGasForkTest is Test {
         _estimateThenIncludeShifted(_rwa(), "rmRWA");
     }
 
+    /// @dev The live Deploy 2 position (wallet 0x2B91...02b6, 31 cbBTC units) built synthetically,
+    ///      so the case never depends on that wallet still holding it. Sells `leg` cbBTC units from
+    ///      the vault on the fork only and compares the pool output with the old floor (TWAP of the
+    ///      full amount) and the fixed floor (TWAP of one unit less), both at the vault's slippage.
+    function _assertFloorsAroundPool(BasketVault v, uint256 leg) internal {
+        address pool = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+        int24 tick = TwapTickMath.meanTick(pool, v.effectiveTwapWindow(CBBTC));
+        uint256 keep = 10_000 - v.maxSlippageBps();
+        uint256 oldFloor = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg) * keep / 10_000;
+        uint256 newFloor = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg - 1) * keep / 10_000;
+
+        uint256 snap = vm.snapshotState();
+        vm.startPrank(address(v));
+        IERC20(CBBTC).approve(SWAP_ROUTER, leg);
+        (bool ok, bytes memory ret) = SWAP_ROUTER.call(
+            abi.encodeWithSignature(
+                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+                CBBTC,
+                USDC,
+                uint24(500),
+                address(v),
+                leg,
+                uint256(0),
+                uint160(0)
+            )
+        );
+        vm.stopPrank();
+        assertTrue(ok, "the leg swaps with no floor");
+        uint256 poolOut = abi.decode(ret, (uint256));
+        vm.revertToState(snap);
+
+        emit log_named_uint("cbBTC leg (base units)", leg);
+        emit log_named_uint("old floor (USDC raw)", oldFloor);
+        emit log_named_uint("new floor (USDC raw)", newFloor);
+        emit log_named_uint("pool output (USDC raw)", poolOut);
+        assertLt(poolOut, oldFloor, "the old floor is missed by the pool output");
+        assertGe(poolOut, newFloor, "the fixed floor is met by the pool output");
+    }
+
     /// @notice Core 1778. A redeem worth a few cents sells a handful of
     ///         cbBTC base units (8 decimals, one unit is worth about 0.001 USDC). The Uniswap V3
     ///         pool rounds the fee-adjusted input down by one unit, which for 31 units is a 3.2
@@ -243,78 +282,12 @@ contract BasketVaultRedeemGasForkTest is Test {
         uint256 shares = (v.totalSupply() * 31 + cbBtcHeld - 1) / cbBtcHeld;
         assertEq(cbBtcHeld * shares / v.totalSupply(), 31, "dust leg");
 
+        _assertFloorsAroundPool(v, 31);
+
         uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
         vm.prank(alice);
         uint256 out = v.redeem(shares, alice, alice);
         assertEq(IERC20(USDC).balanceOf(alice) - usdcBefore, out, "alice holds the payout");
         assertGt(out, 0, "the dust redeem paid out");
-    }
-}
-
-/// @notice Core 1778, live position. An outside wallet holds the Deploy 2 rmPROTO position (about
-///         0.0525 USDC, 31 cbBTC units). Impersonated read-only on the fork: the redeem on the
-///         deployed (old) bytecode reverts "Too little received". The test prints the cbBTC leg,
-///         the old TWAP floor and the pool output, and shows the pool output is within the 1
-///         percent bound once one input unit is priced out (the fix). The fixed bytecode itself is
-///         exercised by `test_fork_rmproto_dustRedeemSellsEveryLeg_core1778`, because the deployed
-///         vault cannot be patched in place.
-contract BasketVaultLivePositionForkTest is Test {
-    address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    address internal constant SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
-    address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
-    address internal constant CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
-    address internal constant RMPROTO = 0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797;
-    address internal constant WALLET = 0x2B918144e4Aa55450a542743e7d52CB7eE5a02b6;
-
-    function test_fork_liveRmprotoPosition_core1778() public {
-        if (!ForkSelect.selectOrSkip(vm.envOr("FORK_RPC_URL", string("")))) return;
-        BasketVault v = BasketVault(RMPROTO);
-        uint256 shares = v.balanceOf(WALLET);
-        if (shares == 0 || RMPROTO.code.length == 0) {
-            vm.skip(true, "core 1778: the live rmPROTO position was exited or the vault is absent");
-            return;
-        }
-        uint256 leg = IERC20(CBBTC).balanceOf(RMPROTO) * shares / v.totalSupply();
-        int24 tick = TwapTickMath.meanTick(CBBTC_POOL, v.effectiveTwapWindow(CBBTC));
-        uint256 twapFull = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg);
-        uint256 twapLess = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg - 1);
-        uint256 oldFloor = twapFull * (10_000 - v.maxSlippageBps()) / 10_000;
-        uint256 newFloor = twapLess * (10_000 - v.maxSlippageBps()) / 10_000;
-
-        // Pool output for the leg, sold by the vault itself on this fork only.
-        uint256 snap = vm.snapshotState();
-        vm.startPrank(RMPROTO);
-        IERC20(CBBTC).approve(SWAP_ROUTER, leg);
-        (bool ok, bytes memory ret) = SWAP_ROUTER.call(
-            abi.encodeWithSignature(
-                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-                CBBTC,
-                USDC,
-                uint24(500),
-                RMPROTO,
-                leg,
-                uint256(0),
-                uint160(0)
-            )
-        );
-        vm.stopPrank();
-        assertTrue(ok, "the leg swaps with no floor");
-        uint256 poolOut = abi.decode(ret, (uint256));
-        vm.revertToState(snap);
-
-        emit log_named_uint("cbBTC leg (base units)", leg);
-        emit log_named_uint("old floor (USDC raw)", oldFloor);
-        emit log_named_uint("new floor (USDC raw)", newFloor);
-        emit log_named_uint("pool output (USDC raw)", poolOut);
-        assertLt(leg, 1000, "the live cbBTC leg is dust");
-        assertLt(poolOut, oldFloor, "the old floor is missed by the pool output");
-        assertGe(poolOut, newFloor, "the fixed floor is met by the pool output");
-
-        vm.prank(WALLET);
-        try v.redeem(shares, WALLET, WALLET) returns (uint256) {
-            emit log("live vault already runs fixed bytecode: the redeem succeeded");
-        } catch Error(string memory reason) {
-            assertEq(reason, "Too little received", "the deployed bytecode reverts on the leg");
-        }
     }
 }
