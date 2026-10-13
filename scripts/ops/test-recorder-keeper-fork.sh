@@ -58,4 +58,5 @@ grep '"alert":"recorder_stale"' "$WORK/keeper.log"
 if grep -E 'record_failed|recorder_unreadable|deviation_not_converged' "$WORK/keeper.log"; then exit 1; fi
 [[ "$(cast call "$RECORDER_ADDRESS" 'isFresh()(bool)' --rpc-url "$RPC_URL")" == true ]]
 cd "$ROOT"
-KEEPER_FORK_RPC_URL="$RPC_URL" FOUNDRY_TEST=scripts/ops/integration forge test --match-contract RecorderKeeperDepositTest -vv
+KEEPER_FORK_RPC_URL="$RPC_URL" FOUNDRY_TEST=scripts/ops/integration forge test --match-contract RecorderKeeperDepositTest -vv | tee "$WORK/assertions.log"
+grep -q '1 tests passed, 0 failed, 0 skipped (1 total tests)' "$WORK/assertions.log" || { echo 'FAIL: real guard/deposit assertion did not execute'; exit 1; }
