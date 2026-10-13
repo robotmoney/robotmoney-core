@@ -21,6 +21,7 @@ NIGHTLY = "suite-21-nightly.yml"
 # Workflows that must NOT be dispatched by the nightly, with the reason.
 EXCLUDED = {
     NIGHTLY: "the orchestrator itself",
+    "suite-18-live-monitoring.yml": "external live monitors have their own nightly schedule (issue 1779); do not dispatch twice",
     "release-dapp.yml": "release workflow",
     "release-rmpc.yml": "release workflow",
     "release-tag-suite-dispatch.yml": "release workflow",
