@@ -452,6 +452,9 @@ async function roleHolderEnumeration(
         if (!(await hasRole(chain, g.address, role, who))) continue;
         // The router's weight setter is rotatable (core 1616): its single holder is checked by "WEIGHT_SETTER_ROLE has exactly one holder", so a rotated holder is not unexpected here.
         if (lc(g.address) === lc(expect.router) && role === WEIGHT_SETTER_ROLE) continue;
+        // A depositor authorizes its own agent on the gateway after handover (architecture 5.2): AGENT_ROLE holders are users, not
+        // governance accounts. "agents: no address holds AGENT_ROLE after handover" already pins zero holders up to the handover block.
+        if (lc(g.address) === lc(expect.gateway) && role === AGENT_ROLE) continue;
         const expected = ok.has(lc(who))
           || (lc(g.address) === lc(expect.timelock) && role === EXECUTOR_ROLE && lc(who) === lc(ZERO))
           || (lc(g.address) === lc(expect.icPolicy) && role === ADMIN_ROLE && lc(who) === lc(expect.gateway));
