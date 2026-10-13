@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
@@ -381,45 +382,118 @@ contract RobotMoneyVaultTest is Test {
         assertEq(typedVault.activeAdapterCount(), 4, "all approved adapter types should be active");
     }
 
-    /// @notice Revoking an active adapter's allowlist entry must NOT brick deposits
-    ///         (audit 2026-06-09, L-4): `_routeDeposit` skips the ineligible adapter
-    ///         and the funds stay idle in the vault (UnroutedDeposit emitted).
-    function test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle() public {
-        uint256 amount = 1_000 * ONE_USDC;
+    /// @notice core 1788: while any active adapter is ineligible (excluded from NAV),
+    ///         `maxDeposit`/`maxMint` are zero and `deposit`/`mint` revert.
+    function test_deposit_closedWhileActiveAdapterIneligible() public {
         vm.prank(admin);
         vault.setAdapterAllowed(address(adapter), false);
 
-        uint256 beforeAdapter = usdc.balanceOf(address(adapter));
-        vm.expectEmit(false, false, false, true, address(vault));
-        emit RobotMoneyVault.UnroutedDeposit(amount);
-        vm.prank(alice);
-        uint256 shares = vault.deposit(amount, alice);
+        assertEq(vault.maxDeposit(alice), 0, "maxDeposit must be zero");
+        assertEq(vault.maxMint(alice), 0, "maxMint must be zero");
 
-        assertGt(shares, 0, "depositor must receive shares");
-        assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
-        assertEq(usdc.balanceOf(address(vault)), amount, "deposit must stay idle in the vault");
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626.ERC4626ExceededMaxDeposit.selector, alice, 1_000 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(1_000 * ONE_USDC, alice);
+
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxMint.selector, alice, 1e18, 0)
+        );
+        vault.mint(1e18, alice);
+
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), true);
+        assertGt(vault.maxDeposit(alice), 0, "deposits reopen once eligibility is restored");
     }
 
-    /// @notice With two adapters, revoking one routes the full deposit into the
-    ///         remaining eligible adapter instead of reverting (audit L-4).
-    function test_deposit_routesToRemainingEligibleAdapterAfterRevocation() public {
+    /// @notice core 1788 / review finding 1 (test_revokedAdapterReactivationTransfersValue):
+    ///         a depositor can no longer mint at the reduced NAV of a quarantined adapter
+    ///         and capture its balance when eligibility returns. Withdrawals stay open.
+    function test_revokedAdapterReactivation_cannotTransferValue() public {
         MockAdapter second = new MockAdapter(address(usdc), address(vault));
         _allowAdapter(vault, address(second));
         vm.prank(admin);
         vault.addAdapter(address(second), 10_000);
 
+        vm.prank(alice);
+        vault.deposit(2_000 * ONE_USDC, alice);
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(second), false);
+
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626.ERC4626ExceededMaxDeposit.selector, bob, 1_000 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(1_000 * ONE_USDC, bob);
+
+        // Withdrawals still succeed during exclusion, from the eligible adapter only.
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        vault.withdraw(500 * ONE_USDC, alice, alice);
+        assertEq(usdc.balanceOf(alice) - before, 500 * ONE_USDC, "withdraw during exclusion");
+        assertEq(usdc.balanceOf(address(second)), 1_000 * ONE_USDC, "quarantined untouched");
+    }
+
+    /// @notice core 1788 / review finding 6 (test_O2_keeperRebalanceUndoesEmergencyWithdraw):
+    ///         a keeper rebalance cannot re-deploy funds drained by `emergencyWithdraw`.
+    function test_rebalance_revertsWhileDepositsPausedAfterEmergencyWithdraw() public {
+        address emergency = makeAddr("emergency");
+        address keeper = makeAddr("keeper");
+        vm.startPrank(admin);
+        vault.grantRole(vault.EMERGENCY_ROLE(), emergency);
+        vault.grantRole(vault.KEEPER_ROLE(), keeper);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        vault.deposit(10_000 * ONE_USDC, alice);
+        vm.prank(emergency);
+        vault.emergencyWithdraw();
+        assertEq(adapter.totalAssets(), 0, "drained");
+
+        vm.warp(block.timestamp + 13 hours);
+        vm.prank(keeper);
+        vm.expectRevert(RobotMoneyVault.DepositsArePaused.selector);
+        vault.rebalance();
+        assertEq(adapter.totalAssets(), 0, "funds stay idle");
+    }
+
+    /// @notice core 1788: keeper rebalance refuses to run while the vault is shut down.
+    function test_rebalance_revertsWhileShutdown() public {
+        address emergency = makeAddr("emergency");
+        vm.startPrank(admin);
+        vault.grantRole(vault.EMERGENCY_ROLE(), emergency);
+        vm.stopPrank();
+        vm.prank(emergency);
+        vault.shutdownVault();
+
+        vm.warp(block.timestamp + vault.minRebalanceInterval());
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.VaultShutdown.selector);
+        vault.rebalance();
+    }
+
+    /// @notice core 1788: keeper rebalance never pulls from a quarantined adapter.
+    function test_rebalance_doesNotPullFromQuarantinedAdapter() public {
+        MockAdapter second = new MockAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(second));
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
         vm.prank(admin);
         vault.setAdapterAllowed(address(adapter), false);
 
-        uint256 amount = 1_000 * ONE_USDC;
-        vm.prank(alice);
-        vault.deposit(amount, alice);
-
-        assertEq(usdc.balanceOf(address(adapter)), 0, "revoked adapter must not receive USDC");
-        assertEq(
-            usdc.balanceOf(address(second)), amount, "eligible adapter must absorb the deposit"
-        );
-        assertEq(usdc.balanceOf(address(vault)), 0, "nothing should stay idle");
+        vm.warp(block.timestamp + vault.minRebalanceInterval());
+        vm.prank(admin);
+        vault.rebalance();
+        assertEq(usdc.balanceOf(address(adapter)), 1_000 * ONE_USDC, "quarantined untouched");
+        assertEq(usdc.balanceOf(address(second)), 0, "nothing moved");
     }
 
     /// @notice `_pullProportional` reverts with the dedicated
