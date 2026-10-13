@@ -2,7 +2,7 @@
 // the Safe owners as encrypted keystores SAFE_OWNER_A, SAFE_OWNER_B and SAFE_OWNER_C beside the DEPLOYER keystore, all under one passphrase file.
 // When the deployer signer is `keystore:DIR/DEPLOYER:PASSFILE`, the owner signers are the sibling keystores with the same passphrase file.
 // This reads no new secret and adds no store: it names the same files the rehearsal already made. Mainnet never uses it: there the owners
-// come from `--owner-signer` (hardware wallets).
+// come from `--owner-signer` (encrypted keystores with a typed passphrase).
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 

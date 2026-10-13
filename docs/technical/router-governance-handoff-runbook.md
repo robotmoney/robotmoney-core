@@ -1,107 +1,76 @@
-# Router-weight governance handoff — from a released receipt to applied weights
+# Router-weight governance handoff — from a consensus receipt to applied weights
 
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §3.4, §6.2
 Canonical: `docs/technical/governance-decisions.md`
 Canonical: `docs/technical/security-model.md` §4
-Implements: issue #1248 tasks 5.5, 5.8, 5.9 and acceptance criteria 5, 6
+Implements: issue #1248 tasks 5.5, 5.8, 5.9 and acceptance criteria 5, 6; core 1696 (`apply-receipt`)
 
 ---
 
 ## 0. Purpose and the separation that makes it a control, not a label
 
-The committee **recommends**; a **different** body **approves**. `docs/architecture.md`
-and `docs/prd.md` fix `RouterGovernance` as the only permitted caller of
-`PortfolioRouter.setWeights` (INV-4, `docs/prd.md` §12), and the proposal
-lifecycle is the only path that applies a weight change:
+The committee **recommends**; a **different** body **applies**. The Safe
+multisig, through the `TimelockController`, is the only body that changes any
+Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE`
+is the only authority over router weights (INV-4, `docs/prd.md` §12). It
+submits the Investment Committee's consensus receipt, and that submission is the
+rebalance:
 
 ```
-COMMITTEE (releases receipt, signalling-only, D5 admin discretion)
-   │  worker never submits unattended (§6.2)
+COMMITTEE (records a receipt: id, payload digest, payload URI)
+   │  recordReceipt through the gateway, COMMITTEE_AGENT_ROLE only
    ▼
-off-chain worker drafts RouterGovernance.propose(vaults, bps)      ← `rmpc governance draft-proposal`
-   │  human reviews
+SAFE schedules ONE timelock batch                                  ← govern row `apply-receipt`
+   │  releaseReceipt(receiptId) + the router weight change
    ▼
-RouterGovernance.propose(vaults, bps)                              ← ADMIN_ROLE, human submission
+timelock delay (172800 s on 8453)
    ▼
-vote() by the RouterGovernance voter set                           ← separate body, non-zero power
+SAFE executes the batch → receipt released, router weights applied
    ▼
-Queued (quorum reached) → execution delay elapses
-   ▼
-execute(proposalId) → PortfolioRouter.setWeights(vaults, bps)
+verifier reads isReleased(receiptId) and the router weights back
 ```
 
-Every rebalance runs through a **human** step. There is no code path that
-submits a governance proposal unattended. This runbook is the operator's
-playbook for that path, end to end.
+There is no voting by token holders or anyone else: no voter set, no voting
+power, no quorum, no voting period, no execution delay, no propose, vote or
+execute. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed
+test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
+deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. Nothing
+submits a weight change unattended: every rebalance is a Safe-signed timelock
+operation. This runbook is the operator's playbook for that path, end to end.
 
 ---
 
-## 1. The intended RouterGovernance voter set (task 5.9)
+## 1. The weight setter and its replacement
 
-`RouterGovernance` voting power is assigned by `ADMIN_ROLE` via
-`setVotingPower` (`RouterGovernance.sol:310`) and read (checkpointed) at each
-proposal's snapshot block. It is **not** token-holder governance.
+`PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, which is its own
+role admin (core 1522). `RouterGovernance` holds it, together with router
+`ADMIN_ROLE`, and the `TimelockController` holds `ADMIN_ROLE` on
+`RouterGovernance`. On today's bytecode the weight call inside the
+`apply-receipt` batch is `RouterGovernance.setDefaultWeights(vaults, bps)`,
+which the timelock reaches through that `ADMIN_ROLE`. The final deployment
+replaces it with a weight-setter `applyReceipt` call, and the role ends with the
+timelock.
 
-**Who the voters are.** The approving body is intentionally a *different* set of
-addresses than the committee that authors receipts. Genre staff followed from
-`docs/product/20260623-product-proposal-investment-committee-v0.md` §3.4: the
-voter set is the addresses the protocol admin designates to approve portfolio
-weight changes — distinct from the `COMMITTEE_AGENT_ROLE` holders, from the
-`Safe → TimelockController → ADMIN_ROLE` administrators, and from the Guardian.
-
-**How `setVotingPower` assignment is authorised.** `ADMIN_ROLE` on
-`RouterGovernance` is held by the `TimelockController` (behind the Safe), the
-same admin channel that handles all protocol-role changes
-(`docs/technical/security-model.md` §4). Changing the voter set therefore
-requires a Safe quorum → timelock `schedule` → delay → `execute`
-operation, exactly like any other privileged role change.
-
-**How that authority is itself constrained.** Assigning or revoking voting power
-is a privileged-configuration operation and must be routed through the admin
-timelock (`docs/technical/governance-decisions.md` §3.3, `docs/technical/security-model.md` §4).
-And critically: **no committee agent may hold voting power.** The
-`COMMITTEE_AGENT_ROLE` holder set and the non-zero-voting-power set are disjoint
-(`GovernanceSeparationInvariant.t.sol`). Granting a committee agent voting power
-is a security-model change requiring a new ADR against INV-4 — it is **not** an
-ordinary ops action and must never be performed by this runbook's steps.
-
-### 1.1 Choosing the quorum (task 5.8)
-
-`DeployRouterGovernance.s.sol` deploys `quorumThreshold = 2` by default, and
-`MIN_QUORUM_THRESHOLD = 2` (`RouterGovernance.sol`) is the floor the contract
-itself enforces — at both doors, the constructor and `setQuorumThreshold`.
-
-**A quorum of 1 is not reachable, by deploy script or by setter.** Three refusals
-now agree, and an operator will meet whichever comes first:
-
-| Where | What refuses | How it reads |
-|---|---|---|
-| `DeployRouterGovernance.s.sol`, before any env read | `QUORUM_THRESHOLD <= 1` | `QUORUM_THRESHOLD must be greater than 1` |
-| `RouterGovernance` constructor | `_quorumThreshold < 2` | `QuorumBelowMinimum()` |
-| `RouterGovernance.setQuorumThreshold` | `threshold < 2` | `QuorumBelowMinimum()` |
-
-The Step 5 postcondition below is therefore `quorumThreshold() > 1`, not
-`> 0`: the weaker reading was the one that let the hollow default through.
-
-**The floor is a lower bound, not a target.** Before receipts drive real weight
-changes, set a quorum that reflects the intended voter set — two voters out of
-twenty is still a minority carrying a change. The quorum is set at deploy time
-via the `QUORUM_THRESHOLD` env var (or after deploy via `setQuorumThreshold`,
-routed through the admin timelock).
+**No committee agent holds weight-setting or timelock authority.** The
+`COMMITTEE_AGENT_ROLE` holder set is disjoint from the Safe signers, the
+timelock and every `WEIGHT_SETTER_ROLE` holder
+(`GovernanceSeparationInvariant.t.sol`). Granting a committee agent any of
+those is a security-model change requiring a new ADR against INV-4; it is not
+an ordinary ops action and must never be performed by this runbook's steps.
 
 **Replacing RouterGovernance is a rotation, not a redeploy (core 1571).**
-`MIN_QUORUM_THRESHOLD` is a `constant`, so a `RouterGovernance` deployed before
-the floor change keeps the old floor of 1 and cannot be upgraded in place. The
-same holds for a buggy instance. Replace it through the router's bounded
-rotation of `WEIGHT_SETTER_ROLE` (ADR-0002, amendment 2026-10-07). Granting a
+`RouterGovernance` has no upgrade path, so a buggy instance cannot be fixed in
+place. Replace it through the router's bounded
+rotation of `WEIGHT_SETTER_ROLE` (ADR-0002). Granting a
 new `RouterGovernance` `ADMIN_ROLE` does not move `setWeights` authority,
 because `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which no role admin can
 grant. Only the rotation moves it.
 
 1. Deploy the new `RouterGovernance` against the existing router
-   (`RouterGovernance.router` is an immutable). Its deployer sets quorum,
-   voting power and delays, then hands its `ADMIN_ROLE` to the timelock. Voted
-   weights and proposals start empty on the new instance.
+   (`RouterGovernance.router` is an immutable). Its deployer hands its
+   `ADMIN_ROLE` to the timelock. The constructor's cadence arguments are
+   unused configuration on today's bytecode, and the new instance starts
+   empty.
 2. The Safe calls `router.proposeWeightSetterRotation(newGovernance)` directly.
    It needs the Safe's 2-of-3 signatures. The target must be a contract. Only
    one proposal can be pending. The `WeightSetterRotationProposed` log and
@@ -133,8 +102,7 @@ grant. Only the rotation moves it.
    redeploy step 7 that name the governance address (`VITE_GOVERNANCE_ADDRESS`,
    `governance_address`, `INDEXER_ROUTER_GOVERNANCE`).
 
-The old instance cannot set weights after step 4. Its proposals, votes and
-voting power do not carry over.
+The old instance cannot set weights after step 4. Nothing on it carries over.
 
 **Replacing the gateway or the router themselves.** The rotation does not cover
 these. The gateway holds the router as an immutable, so a new router needs a
@@ -157,8 +125,8 @@ redeploy that cascades:
    The deployer's `WEIGHT_SETTER_ROLE` on the new router must be dropped too.
    Step 2 covers it.
 2. Deploy a new `RouterGovernance` against it. `RouterGovernance.router` is an
-   immutable. Voted weights, voting power and proposals start empty on the new
-   instance. Run the stage 6 and 11 handoff again for the new pair.
+   immutable. The new instance starts empty. Run the stage 6 and 11 handoff
+   again for the new pair.
 3. Deploy a new gateway. `RobotMoneyGateway.routerContract` is an immutable.
    Depositors must authorize agents on the new gateway again. Hand the new
    gateway to the timelock as well (gateway `ADMIN_ROLE` handover), not only
@@ -207,82 +175,67 @@ redeploy that cascades:
 Old receipts stay readable on the old receipt contract but do not move to the
 new one. Allocation state on the old router does not carry over either.
 
-Selection rule: pick a quorum that **no minority subset of the voter set can
-reach**, so a change requires broad consent of the approving body. Concretely,
-with voters holding powers `p_1 … p_n` and total `T = Σ p_i`, choose
-`quorumThreshold` in `(T/2, T]` — then at least a strict majority (by power) of
-the voter body must vote FOR. Document the chosen value and the voter roster
-(next to it) wherever the deployment parameters are recorded.
 
 ---
 
 ## 2. The handoff path, step by step
 
-### Step 1 — a receipt is released
+### Step 1 — the committee records a receipt
 
-A receipt is recorded and then **released** by an admin through the timelock
-(`ConsensusRecommendationReceipt.releaseReceipt`, `onlyRole(ADMIN_ROLE)` — INV-3; the
-receipt contract's `ADMIN_ROLE` is held by the timelock). The operator runs the
-publish-contracts govern row `release-receipt` (`bun publish-contracts/src/cli.ts
-govern --row release-receipt --receipt-id 0x<64hex>` plus the usual chain, RPC,
-sheet and signer arguments; on the Twin chain `bun scripts/stage/core-stack.ts
-governance release --receipt-id 0x<64hex>` wraps it). The row runs on the Twin chain
-and on 8453. On 8453 it is a standalone post-launch action, never part of stage 13 (the
-four vault unpauses). The real Safe schedules `releaseReceipt` as its own timelock operation and the
-CLI exits `GOVERN_PENDING` (exit 15) with the exact resume command. After the 48-hour delay (172800 s) the
-same command makes the Safe execute it, and the CLI reads `isReleased` back. Record the release
-in the evidence file under `receipt_releases` (see `publish-contracts/evidence.example.json`).
-`update-delay`, `batch` and `cancel` stay Twin-only. No EOA can release. Release is signalling-
-only (D5, `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1): it publishes the receipt and emits
-`ReceiptReleased`, moving no funds and calling no `setWeights`. Most receipts
-are published, not applied — that is the intended design.
+A committee agent records the consensus through the gateway
+(`ConsensusRecommendationReceipt.recordReceipt`, submitter gated by
+`COMMITTEE_AGENT_ROLE`; `consensus-receipt-submitter-runbook.md`). The receipt
+stores the id, the `keccak256` digest of the payload and the payload URI. It
+moves no funds and calls no `setWeights`. Most receipts are recorded and never
+applied: the Safe applies a receipt by scheduling the batch in Step 2 and
+declines one by doing nothing (D5 admin discretion,
+`docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1).
 
-### Step 2 — the worker drafts, for human review only
+### Step 2 — the Safe schedules `apply-receipt`
 
 ```
-rmpc governance --config operator.toml draft-proposal \
-  --receipt-id 0x<64hex> --receipt-url <URL> [--pretty]
+bun publish-contracts/src/cli.ts govern --row apply-receipt \
+  --receipt-id 0x<64hex> --payload FILE \
+  <the usual chain, RPC, sheet and signer arguments>
 ```
 
-The worker (`clients/rust-payment-client/src/commands/governance_draft.rs`):
-- refuses an un-released receipt (`ErrReceiptNotReleased`),
-- skips (not an error) a receipt with no `weights` vector,
-- maps buckets to vaults through the config `[vault_addresses]` table,
-- **re-checks `isRouterEligibleAndActive` at draft time** for every mapped
-  vault — a vault Active when the receipt was recorded may be Paused by now, and
-  `propose()` would revert `VaultNotEligible` on exactly that vault. An
-  ineligible vault is dropped and its bps redistributed; every ineligible →
-  `ErrNoEligibleVaults`,
-- reports `blocked_active_proposal` instead of a submittable draft when
-  `RouterGovernance` already has an Active/Queued proposal,
-- emits the `propose` calldata for a **human** to submit. The worker never
-  signs, takes no nonce lock, and never broadcasts.
+Before anything is sent the row checks, and exits `USAGE` on any failure:
 
-**The human step is mandatory and permanent.** The worker is convenience
-tooling, not core machinery. No automation submits a proposal unattended.
+- the receipt is recorded on chain,
+- its stored digest equals `keccak256` of the payload bytes,
+- the receipt is not yet released,
+- the payload's weight vector sums to 10 000 bps,
+- the vault set and order equal the registry's router-eligible list.
 
-### Step 3 — a human submits the proposal
+It then schedules ONE timelock batch through the real Safe (`scheduleBatch`):
+`releaseReceipt(receiptId)` and the router weight change for that vector. The
+Safe's signers sign one transaction. The CLI exits `GOVERN_PENDING` (exit 15)
+with the ready time and the exact resume command. On 8453 the row runs only
+when named with `--row apply-receipt` and a receipt id, as a post-launch action
+with its own 172800 s delay; it is never part of stage 13 (the four vault
+unpauses). The Twin rehearsal runs the same row after the unpause rows and
+warps the delay. A Twin run proves the row executes on the real contracts; it
+is not evidence that mainnet governance works.
 
-Submit the draft's `propose_calldata` through the approved channel:
-- the Safe → `TimelockController` → `ADMIN_ROLE` path, or
-- any wallet the admin body controls.
+### Step 3 — the delay passes
 
-rmpc has no `propose` command: it is not a governance signer.
+The timelock enforces its real delay (172800 s on 8453). To abort, the Safe
+cancels the scheduled operation on the timelock before the delay passes.
+Nothing else can stop or speed up the operation.
 
-`propose()` validates the bps sum to 10 000 and that every vault is
-`isRouterEligibleAndActive`, and enforces the one-active-proposal rule.
+### Step 4 — the Safe executes the batch
 
-### Step 4 — the voter body votes
+The same command resumes: the Safe executes the batch, the receipt flips to
+released and the router's weight vector becomes the receipt's allocation in the
+same transaction. Partial state is impossible: release and weights are one
+operation, so a reverting weight call releases nothing.
 
-Each voter with non-zero power calls `vote(proposalId)` within the voting
-period. Their power is read at the proposal's snapshot block. When `votesFor`
-reaches `snapshotQuorum`, the proposal becomes `Queued`.
+### Step 5 — read back and record
 
-### Step 5 — execution delay, then execute
-
-After `execute()`'s execution delay elapses, anyone may call
-`execute(proposalId)`, which calls `PortfolioRouter.setWeights(vaults, bps)` and
-emits `WeightsApplied`. The router's weight vector is now the voted allocation.
+The tool reads `isReleased(receiptId)` and the router's weights back and fails
+if either differs from the payload. Record the application in the evidence file
+under `receipt_applications` (`publish-contracts/evidence.example.json`,
+core 1696), and rerun the stage 12 verifier, which labels the applied receipt and weights.
 
 ---
 
@@ -290,21 +243,24 @@ emits `WeightsApplied`. The router's weight vector is now the voted allocation.
 
 | Compromised role | Blast radius | Response |
 |---|---|---|
-| **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `AGENT_ROLE`/`COMMITTEE_AGENT_ROLE` via timelock. |
-| **Worker host** | Can *draft* anything but cannot sign or broadcast; recommends, never approves. | Rebuild from clean state; treat any draft as advisory until a human re-runs and reviews it. |
-| **A voter's key** | Can cast that voter's (single) vote. | Await proposal resolution; revoke/rotate the affected `setVotingPower` via timelock before the next proposal. |
-| **`ADMIN_ROLE` on `RouterGovernance`** | Can assign voting power, set quorum, propose, cancel. | Safe quorum revocation of the affected key; verify the committee↔voter disjointness still holds (`GovernanceSeparationInvariant.t.sol`). |
+| **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `AGENT_ROLE`/`COMMITTEE_AGENT_ROLE` via timelock. Never schedule `apply-receipt` for a receipt under correction. |
+| **One Safe signer's key** | Can sign, alone, nothing: the Safe threshold needs more than one signer. | Rotate the signer on the Safe; cancel any operation that signer helped schedule and is still pending. |
+| **Payload file on the operator host** | Cannot pass the digest check unless it is the recorded payload; cannot change what the receipt says. | Rebuild from clean state; re-fetch the payload from the receipt's URI and re-run the row. |
+| **`ADMIN_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the committee and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |
 
 ---
 
 ## 4. Post-deployment verification
 
-Every deploy that touches the voter set or quorum must re-run:
+Every deploy that touches the weight setter, the receipt contract or the timelock
+must re-run:
 
 ```bash
-forge test --match-contract GovernanceSeparationInvariant   # committee ⊥ voter set
+forge test --match-contract GovernanceSeparationInvariant   # committee ⊥ weight setter
 forge test --match-test testSignallingOnlyBoundary          # INV-4 static boundary
 ```
 
-These fail loudly if the committee and approving bodies ever overlap or if the
-receipt contract gains a `setWeights`/`execute` path.
+These fail loudly if the committee and the weight-setting bodies ever overlap or
+if the receipt contract gains a `setWeights` path of its own. After an
+`apply-receipt` round, the stage 12 verifier's read-back of `isReleased` and the
+router weights is the acceptance evidence.

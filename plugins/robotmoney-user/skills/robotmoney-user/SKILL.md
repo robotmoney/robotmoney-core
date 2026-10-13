@@ -68,7 +68,7 @@ rmpc self-check     Print the signer-backend self-check report (v0 §9.2 JSON)
 rmpc get-vault      Read vault state directly from chain
 rmpc get-vaults     List all vaults registered in the VaultRegistry
 rmpc get-router     Read PortfolioRouter state: vault addresses, weight bps, and router cap
-rmpc get-governance Read RouterGovernance state: active proposal, cadence params, and last applied weights
+rmpc get-governance Read RouterGovernance state: constructor params and last applied weights
 rmpc get-gateway    Read gateway state directly from chain
 rmpc get-agent      Read an agent's authorization + window usage
 rmpc get-roles      Read role membership on the gateway for a target address
