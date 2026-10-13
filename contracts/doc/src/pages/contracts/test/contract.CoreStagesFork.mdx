@@ -5,7 +5,7 @@ description: "Fork regression: the stack the split stages build takes a router d
 
 # CoreStagesFork
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/CoreStagesFork.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/319f08030f7888cee1b764a9de942a8d4df3b212/contracts/test/CoreStagesFork.t.sol)
 
 **Inherits:** Test
 
@@ -78,4 +78,77 @@ function setUp() public;
 ```solidity
 function test_fork_routerDepositAndWithdraw_throughSplitStageGateway() public;
 ```
+
+<a id="_fourlegrouter"></a>
+
+### _fourLegRouter
+
+<i>
+
+Four-leg router like the live one: the real vault plus three mock vaults. The router
+floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 1,700,000 = 6,800,000.
+
+</i>
+
+```solidity
+function _fourLegRouter() internal;
+```
+
+<a id="test_fork_routerdeposit_below6p8m_revertsinsufficientgaswiththefloor"></a>
+
+### test_fork_routerDeposit_below6p8M_revertsInsufficientGasWithTheFloor
+
+```solidity
+function test_fork_routerDeposit_below6p8M_revertsInsufficientGasWithTheFloor() public;
+```
+
+<a id="test_fork_routerdeposit_at8m_succeeds"></a>
+
+### test_fork_routerDeposit_at8M_succeeds
+
+```solidity
+function test_fork_routerDeposit_at8M_succeeds() public;
+```
+
+<a id="test_fork_vaultdeposit_below1p6m_revertsinsufficientgaswiththefloor"></a>
+
+### test_fork_vaultDeposit_below1p6M_revertsInsufficientGasWithTheFloor
+
+```solidity
+function test_fork_vaultDeposit_below1p6M_revertsInsufficientGasWithTheFloor() public;
+```
+
+<a id="test_fork_vaultdeposit_at2p5m_succeeds"></a>
+
+### test_fork_vaultDeposit_at2p5M_succeeds
+
+```solidity
+function test_fork_vaultDeposit_at2p5M_succeeds() public;
+```
+
+<a id="_tail-bytes"></a>
+
+### _tail
+
+<i>
+
+The revert data without its 4-byte selector.
+
+</i>
+
+```solidity
+function _tail(bytes memory ret) internal pure returns (bytes memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ret | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `bytes` |  |
 

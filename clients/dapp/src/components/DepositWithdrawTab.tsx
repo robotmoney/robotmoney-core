@@ -35,6 +35,7 @@
  * matches the production rmpc deposit flow (the gateway pulls USDC
  * from the agent's caller and forwards into the same vault).
  */
+import { withGasLimit, VAULT_DEPOSIT_GAS_LIMIT } from "../lib/depositGas";
 import { useEffect, useState } from "react";
 import {
   useAccount,
@@ -290,7 +291,7 @@ export function DepositWithdrawTab(props: Props) {
 
   const onDeposit = () => {
     if (!depositSim) return;
-    depositWrite.writeContract(depositSim.request);
+    depositWrite.writeContract(withGasLimit(depositSim.request, VAULT_DEPOSIT_GAS_LIMIT));
   };
 
   const onWithdraw = () => {
