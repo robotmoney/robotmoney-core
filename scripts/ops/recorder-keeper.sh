@@ -14,7 +14,7 @@
 # Every INTERVAL_SECS (default 240, under the 300 s promise) it:
 #   1. reads isFresh() and alerts `recorder_stale` when it reads false,
 #   2. calls record() and alerts `record_failed` when the call fails,
-#   3. while the live tick is more than MAX_DEVIATION_TICKS from the recorded tick, waits
+#   3. while the live tick is more than MAX_DEVIATION_TICKS from the NAV TWAP mean tick, waits
 #      CATCHUP_INTERVAL_SECS (default 60) and calls record() again, up to MAX_CATCHUP_CALLS times,
 #      then alerts `deviation_not_converged` when it gives up,
 #   4. alerts `recorder_stale` again when isFresh() still reads false after the call.
@@ -30,6 +30,7 @@
 #   CATCHUP_INTERVAL_SECS   optional, default 60.
 #   MAX_CATCHUP_CALLS       optional, default 30.
 #   MAX_DEVIATION_TICKS     optional, default 90.
+#   TWAP_WINDOW_SECS        optional, default 1800; match the vault effectiveTwapWindow.
 #   SLEEP_CMD               optional, default `sleep`. The self-test replaces it to move chain time.
 #
 # USAGE
@@ -49,6 +50,7 @@ INTERVAL_SECS="${INTERVAL_SECS:-240}"
 CATCHUP_INTERVAL_SECS="${CATCHUP_INTERVAL_SECS:-60}"
 MAX_CATCHUP_CALLS="${MAX_CATCHUP_CALLS:-30}"
 MAX_DEVIATION_TICKS="${MAX_DEVIATION_TICKS:-90}"
+TWAP_WINDOW_SECS="${TWAP_WINDOW_SECS:-1800}"
 SLEEP_CMD="${SLEEP_CMD:-sleep}"
 
 ALERTS=0
@@ -84,10 +86,10 @@ is_fresh() {
     return 1
 }
 
-# Prints |live tick - recorded tick|. Returns 1 when either read fails.
+# Prints |live tick - NAV TWAP mean tick| (same negative rounding as TwapTickMath). Returns 1 when either read fails.
 deviation_ticks() {
     local last live
-    last=$(cast call "$RECORDER_ADDRESS" "latest()(int24,uint32,uint16,uint16,uint16)" --rpc-url "$RPC_URL" 2>/dev/null | sed -n 1p | awk '{print $1}')
+    last=$(cast call "$RECORDER_ADDRESS" "observe(uint32[])(int56[],uint160[])" "[$TWAP_WINDOW_SECS,0]" --json --rpc-url "$RPC_URL" 2>/dev/null | python3 -c 'import json,sys; a=json.load(sys.stdin)[0]; print((int(a[1])-int(a[0]))//int(sys.argv[1]))' "$TWAP_WINDOW_SECS")
     live=$(cast call "$RECORDER_ADDRESS" "slot0()(uint160,int24,uint16,uint16)" --rpc-url "$RPC_URL" 2>/dev/null | sed -n 2p | awk '{print $1}')
     [[ "$last" =~ ^-?[0-9]+$ && "$live" =~ ^-?[0-9]+$ ]] || return 1
     local d=$((live - last))

@@ -10,20 +10,19 @@
 # structured JSON and exits non-zero on alert. This suite is the only automated
 # signal that those monitors still fire correctly and runs them against live RPC.
 #
-# TWO MODES
-#   - mock-tests: runs on every push/PR/dispatch. No RPC required; uses MOCK_*
-#     env vars to drive each alert path and asserts the alert JSON + exit code.
-#   - live-monitor: runs nightly (and on dispatch) against Base mainnet. Requires
-#     the BASE_RPC_URL secret. If the secret is absent the live steps are skipped
-#     so forks and the mock path are never blocked on it.
+# Component alerts and Base-fork keeper integration run here. External nightly
+# monitoring lives in suite-18-live-monitoring.yml (heavy class).
 
 name: upstream-contract-monitoring
 
 on:
   # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [dev, "dev-phase-*"]
+    branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
   workflow_dispatch:
   schedule:
     # Nightly at 03:00 UTC.
@@ -37,6 +36,9 @@ concurrency:
 # needs more declares it at job level with the reason.
 permissions:
   contents: read
+
+env:
+  CI_CLASS: feature-correctness
 
 jobs:
   mock-tests:
@@ -66,12 +68,13 @@ jobs:
 
   recorder-keeper-selftest:
     name: recorder-keeper-selftest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # Core 1779: runs the real keeper against a real UniswapV4PriceRecorder on a local anvil chain.
     # The test fails loudly when anvil, forge or cast is missing.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CI_CLASS: feature-correctness
+      CI_CLASS: system-correctness
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,47 +88,7 @@ jobs:
       - name: Recorder keeper self-test
         run: bash scripts/ops/test-recorder-keeper.sh
 
-  live-monitor:
-    name: live-monitor
-    # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
-    # push/PR so contributor CI never depends on the BASE_RPC_URL secret.
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Venue liveness (Compound v3 / Aave v3)
+      - name: Base fork keeper NAV guard and deposit
         env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live venue-liveness check"
-            exit 0
-          fi
-          bash scripts/monitor-venue-liveness.sh
-
-      - name: Governance proposals (Compound / Aave)
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live governance check"
-            exit 0
-          fi
-          bash scripts/monitor-governance-proposals.sh
-
-      - name: USDC upgrade (Circle)
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live USDC upgrade check"
-            exit 0
-          fi
-          bash scripts/monitor-usdc-upgrade.sh
+          BASE_FORK_RPC_URL: ${{ secrets.BASE_UPSTREAM_RPC || 'https://mainnet.base.org' }}
+        run: bash scripts/ops/test-recorder-keeper-fork.sh
