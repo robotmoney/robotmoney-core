@@ -341,7 +341,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | None — all four contracts are direct, non-proxy deployments. No upgrade path exists |
+| Upgradeability | Current deployed contracts are direct and have no in-place upgrade path. Target policy calls for per-instance UUPS proxies on approved stateful core contracts, upgradeable during test/demo/rehearsal and optionally during a bounded mainnet proving period, then permanently frozen; final mainnet may be frozen at deployment. This is a plan, not deployed behavior. See `docs/technical/contract-upgradeability-plan.md` |
 | Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
 | Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
@@ -354,7 +354,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | No proxy — direct deployment confirmed |
+| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. Future proxy deployment is planned, not live |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |
