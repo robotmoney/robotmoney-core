@@ -176,6 +176,15 @@ OpenZeppelin access control, a deposit pause, reentrancy protection,
 caps, an exit fee ceiling, adapter routing, rebalance controls, and
 emergency shutdown. It is a direct non-proxy deployment on Base.
 
+The target release architecture uses an independent UUPS proxy for each
+approved stateful core contract, with upgrades controlled by the Safe through
+the admin timelock. Test, demo, rehearsal, and contained mainnet test instances
+stay upgradeable. A final mainnet proxy must either freeze upgrades in its
+deployment transaction or be frozen by a delayed governance action after an
+explicit production proving period. Existing direct addresses cannot acquire
+this behavior in place. The detailed scope, cutover, and safety gates are in
+`docs/technical/contract-upgradeability-plan.md`.
+
 The source tree also contains the basket-vault family — an abstract
 `BasketVault` base with hybrid NAV model: Uniswap V3 TWAP pricing for
 protocol-level guards (NAV growth limit, ORA-4 deviation, TVL cap), while
@@ -1466,6 +1475,13 @@ are permitted: no test-only subclasses that alter readiness, no
 build-time branches, no `if (env == "test")` logic, no spoofed users
 or state.
 
+For the planned upgrade path, the same proxy and implementation artifacts are
+used in every environment. Upgrade/freeze mode is initialized state, and a
+one-way freeze is a Safe → timelock action. Final mainnet deployment must
+choose freeze-at-deploy or a reviewed proving period with a freeze deadline;
+the release sheet records and verifies the choice. This does not change the
+status of current direct deployments.
+
 Production-readiness for a vault — whether the Portfolio Router may
 weight it and route USDC into it — is expressed as **registry state**:
 `VaultRegistry.isRouterEligible(vault)`, flipped by ADMIN_ROLE via
@@ -1587,6 +1603,10 @@ this architecture:
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
+- For future proxy deployments, only the Safe-controlled admin timelock may
+  authorize an implementation upgrade or permanently freeze upgrades. A final
+  release must record and verify its freeze choice. Adapter no-proxy and
+  codehash checks continue to apply. See the contract upgradeability plan.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no

@@ -33,6 +33,7 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { redeemFailureHint } from "../lib/redeemFailureHint";
 import type { Address, Hash } from "viem";
 import { vaultAbi } from "../lib/abi";
 import { useVaultRegistry } from "../lib/VaultRegistryContext";
@@ -302,6 +303,11 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
       {redeemSimError && (
         <p className="hint" data-testid="multi-vault-redeem-sim-error">
           redeem simulate failed: {redeemSimError.message}
+        </p>
+      )}
+      {redeemSimError && redeemFailureHint(redeemSimError.message) && (
+        <p className="hint" data-testid="redeem-in-kind-hint">
+          {redeemFailureHint(redeemSimError.message)}
         </p>
       )}
     </section>

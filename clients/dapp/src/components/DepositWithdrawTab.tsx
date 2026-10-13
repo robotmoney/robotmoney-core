@@ -43,6 +43,7 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
+import { redeemFailureHint } from "../lib/redeemFailureHint";
 import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
@@ -474,6 +475,11 @@ export function DepositWithdrawTab(props: Props) {
         {redeemSimError && (
           <p className="hint" data-testid="redeem-sim-error">
             redeem simulate failed: {redeemSimError.message}
+          </p>
+        )}
+        {redeemSimError && redeemFailureHint(redeemSimError.message) && (
+          <p className="hint" data-testid="redeem-in-kind-hint">
+            {redeemFailureHint(redeemSimError.message)}
           </p>
         )}
       </section>

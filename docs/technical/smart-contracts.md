@@ -328,7 +328,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | None — all four contracts are direct, non-proxy deployments. No upgrade path exists |
+| Upgradeability | Current deployed contracts are direct and have no in-place upgrade path. Target policy calls for per-instance UUPS proxies on approved stateful core contracts, upgradeable during test/demo/rehearsal and optionally during a bounded mainnet proving period, then permanently frozen; final mainnet may be frozen at deployment. This is a plan, not deployed behavior. See `docs/technical/contract-upgradeability-plan.md` |
 | Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
 | Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
@@ -341,7 +341,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | No proxy — direct deployment confirmed |
+| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. Future proxy deployment is planned, not live |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |
@@ -660,6 +660,7 @@ All three subclasses inherit BasketVault behavior and are configured with:
 
 ### 9.3.7 Key invariants and constraints
 
+- **Small basket positions (core 1778)**: a position worth a few cents can leave a basket leg of a handful of token base units (rmPROTO on Deploy 2: 31 cbBTC units). The pool's one-unit rounding then misses the 1 percent floor and the USDC `redeem` reverts `Too little received`. The supported exit is `redeemInKind(shares, receiver, owner)`, which pays the basket tokens and swaps nothing. The dapp shows this hint when a redeem simulation fails with that reason. The cause and the fix are in [redeem-gas-1482.md](redeem-gas-1482.md).
 - **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
 - **Slippage protection**: Deposits and swaps enforce admin-set `maxSlippageBps` (max 500 BPS = 5%). ADMIN_ROLE may tighten but not exceed this hard ceiling.
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.

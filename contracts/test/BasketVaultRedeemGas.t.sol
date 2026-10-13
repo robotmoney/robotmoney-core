@@ -13,6 +13,7 @@ import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {TwapTickMath} from "../lib/TwapTickMath.sol";
 
 /// @notice Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redeem estimated in one
 ///         block must execute at exactly that limit in a later block. Estimation is the smallest
@@ -222,5 +223,71 @@ contract BasketVaultRedeemGasForkTest is Test {
     function test_fork_rmrwa_redeemEstimateThenIncludeShifted() public {
         if (!selected) return;
         _estimateThenIncludeShifted(_rwa(), "rmRWA");
+    }
+
+    // The live Deploy 2 position (wallet 0x2B91...02b6, 31 cbBTC units) built synthetically,
+    //      so the case never depends on that wallet still holding it. Sells `leg` cbBTC units from
+    //      the vault on the fork only and compares the pool output with the old floor (TWAP of the
+    //      full amount) and the fixed floor (TWAP of one unit less), both at the vault's slippage.
+    function _assertFloorsAroundPool(BasketVault v, uint256 leg) internal {
+        address pool = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+        int24 tick = TwapTickMath.meanTick(pool, v.effectiveTwapWindow(CBBTC));
+        uint256 keep = 10_000 - v.maxSlippageBps();
+        uint256 oldFloor = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg) * keep / 10_000;
+        uint256 newFloor = TwapTickMath.priceFromTick(tick, CBBTC, USDC, leg - 1) * keep / 10_000;
+
+        uint256 snap = vm.snapshotState();
+        vm.startPrank(address(v));
+        IERC20(CBBTC).approve(SWAP_ROUTER, leg);
+        (bool ok, bytes memory ret) = SWAP_ROUTER.call(
+            abi.encodeWithSignature(
+                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+                CBBTC,
+                USDC,
+                uint24(500),
+                address(v),
+                leg,
+                uint256(0),
+                uint160(0)
+            )
+        );
+        vm.stopPrank();
+        assertTrue(ok, "the leg swaps with no floor");
+        uint256 poolOut = abi.decode(ret, (uint256));
+        vm.revertToState(snap);
+
+        emit log_named_uint("cbBTC leg (base units)", leg);
+        emit log_named_uint("old floor (USDC raw)", oldFloor);
+        emit log_named_uint("new floor (USDC raw)", newFloor);
+        emit log_named_uint("pool output (USDC raw)", poolOut);
+        assertLt(poolOut, oldFloor, "the old floor is missed by the pool output");
+        assertGe(poolOut, newFloor, "the fixed floor is met by the pool output");
+    }
+
+    /// @notice Core 1778. A redeem worth a few cents sells a handful of
+    ///         cbBTC base units (8 decimals, one unit is worth about 0.001 USDC). The Uniswap V3
+    ///         pool rounds the fee-adjusted input down by one unit, which for 31 units is a 3.2
+    ///         percent shortfall against the TWAP. The old floor (TWAP of the full amount at 1
+    ///         percent slippage) then reverted "Too little received" on the real swap router. The
+    ///         floor now prices one unit less, so the dust redeem executes.
+    function test_fork_rmproto_dustRedeemSellsEveryLeg_core1778() public {
+        if (!selected) return;
+        BasketVault v = _proto();
+        _fund(v);
+
+        // Redeem the share fraction whose cbBTC leg is 31 base units, the size of the live
+        // position.
+        uint256 cbBtcHeld = IERC20(CBBTC).balanceOf(address(v));
+        assertGt(cbBtcHeld, 1000, "the funded vault holds cbBTC");
+        uint256 shares = (v.totalSupply() * 31 + cbBtcHeld - 1) / cbBtcHeld;
+        assertEq(cbBtcHeld * shares / v.totalSupply(), 31, "dust leg");
+
+        _assertFloorsAroundPool(v, 31);
+
+        uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
+        vm.prank(alice);
+        uint256 out = v.redeem(shares, alice, alice);
+        assertEq(IERC20(USDC).balanceOf(alice) - usdcBefore, out, "alice holds the payout");
+        assertGt(out, 0, "the dust redeem paid out");
     }
 }

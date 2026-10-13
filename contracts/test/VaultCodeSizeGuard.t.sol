@@ -101,15 +101,16 @@ contract VaultCodeSizeGuard is Test {
 
     /// @notice Core 1676 changes no vault logic: the vault family keeps its recorded headroom. The headroom floors are
     ///         the measured sizes after core 1673 and 1666 (AgentTokenVault 65 bytes, ProtocolAssetVault and
-    ///         RwaBasketVault 107 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
+    ///         RwaBasketVault 107 bytes), lowered by the 10 bytes the core 1778 dust-sell floor costs (AgentTokenVault
+    ///         55 bytes, ProtocolAssetVault and RwaBasketVault 97 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
     function test_vaultFamily_keepsItsMeasuredHeadroom() public {
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 65
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 55
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            107
+            97
         );
-        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 107);
+        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 97);
     }
 }
