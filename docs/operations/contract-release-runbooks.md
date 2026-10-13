@@ -7,9 +7,12 @@
 > (see §5). An example is [`docs/runbooks/v0.1.0-devnet-verification.md`](../runbooks/v0.1.0-devnet-verification.md).
 >
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
-> policy, adapted for immutable Solidity contract deployments rather than a
-> mutable Postgres-backed application: there is no schema migration, no
-> in-place rollback, and "the release branch" is the stage scripts under `contracts/script/` (listed in
+> policy, currently written for direct Solidity contract deployments rather than a
+> mutable Postgres-backed application: there is no in-place upgrade of the
+> existing direct contracts and no in-place rollback. The planned UUPS/freeze
+> release path requires the mode and verification gates in
+> [`docs/technical/contract-upgradeability-plan.md`](../technical/contract-upgradeability-plan.md)
+> before it can be used. "The release branch" is the stage scripts under `contracts/script/` (listed in
 > `scripts/deploy/stage-table.json`) at a specific commit, not a database.
 
 This is not the process for landing ordinary feature work — that is PR review
