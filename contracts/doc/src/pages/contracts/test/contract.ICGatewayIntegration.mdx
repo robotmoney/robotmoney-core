@@ -5,7 +5,7 @@ description: "Integration tests verifying the full on-chain path: gateway → IC
 
 # ICGatewayIntegration
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/ICGatewayIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7a511cdfa72db50d9966938a824287f2a66cea9/contracts/test/ICGatewayIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -152,6 +152,37 @@ Proves the full on-chain path gateway → IC contract → event.
 
 ```solidity
 function test_gatewayRoutedVoteSubmit_emitsVoteSubmitted() public;
+```
+
+<a id="test_permissionlessagentcannotimpersonatecommitteemember"></a>
+
+### test_permissionlessAgentCannotImpersonateCommitteeMember
+
+<i>
+
+Issue #1790: a self-registered gateway agent (AGENT_ROLE, no
+COMMITTEE_AGENT_ROLE) that sets `p.agent` to a registered member is
+refused by the gateway before the IC contract sees the vote.
+
+</i>
+
+```solidity
+function test_permissionlessAgentCannotImpersonateCommitteeMember() public;
+```
+
+<a id="test_committeemembercannotsubmitforanothermember"></a>
+
+### test_committeeMemberCannotSubmitForAnotherMember
+
+<i>
+
+Issue #1790: a registered member cannot file a signal under a
+second member's address either.
+
+</i>
+
+```solidity
+function test_committeeMemberCannotSubmitForAnotherMember() public;
 ```
 
 <a id="test_directcalltoicregister_reverts"></a>
