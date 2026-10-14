@@ -285,6 +285,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Provided adapter index is out of range or refers to an inactive entry.
     error AdapterNotFound();
     /// @notice The adapter is already an active registry entry; a second entry would count its balance twice in NAV.
+    /// @param adapter The adapter address that is already active.
     error AdapterAlreadyActive(address adapter);
     /// @notice Cannot remove an adapter while it still custodies assets — withdraw first.
     error AdapterNotEmpty();
