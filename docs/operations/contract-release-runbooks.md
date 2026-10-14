@@ -96,7 +96,7 @@ This section covers two different tags. Do not confuse them.
   CI never commits it. The mainnet plan job refuses any
   `DEPLOY_SHA` that is not an annotated-release-tagged SHA (`RELEASE_SHA_UNTAGGED`), whose tag object differs from, or is missing on, the checkout's `origin` or whose remote is unreachable (`RELEASE_TAG_REMOTE_MISMATCH`, exit 23; push the tag before planning), has no committed
   frozen counts (`COUNTS_MISSING`), whose counts file is untracked or modified in its git work tree (`COUNTS_UNTRACKED`) or is not green in `check-sha-green` (`CI_NOT_GREEN`).
-  The same gate runs before any signer exists on every other broadcasting 8453 run (publish, prove-control, govern); `pause-all` is exempt. A Safe owner signer on 8453 must be `ledger` or `trezor` (`OWNER_SIGNER_NOT_HARDWARE`).
+  The same gate runs before any signer exists on every other broadcasting 8453 run (publish, prove-control, govern); `pause-all` is exempt. Hardware signing (`ledger`, `trezor`) is optional for a Safe owner signer: a software keystore stays valid on 8453, while plaintext keys and passphrase files are refused.
   Any later commit that changes `contracts/` has a new SHA with no tag and no
   counts, so it needs a new rehearsal and tag. This flow is enforced by the plan job (core #1524).
   - **Green rehearsal only.** The artifact uploads even when the rehearsal failed. The job therefore records its

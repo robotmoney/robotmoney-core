@@ -64,31 +64,19 @@ describe("plaintext refusal through the CLI (main)", () => {
   });
 });
 
-describe("Safe owner signers must be hardware on 8453 (core 1668)", () => {
+describe("Safe owner signers: hardware is optional on every chain (core 1668)", () => {
   const owner = (spec: string, chain = 8453, rpc = "https://mainnet.base.org") => refusal(() => assertOwnerSignerSpec(spec, { rpcChainId: chain, rpc, env: {} }));
-  test("a software keystore, with or without a passphrase file, and env:signer are refused with OWNER_SIGNER_NOT_HARDWARE", () => {
-    for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer"]) {
-      expect(() => assertOwnerSignerSpec(spec, { rpcChainId: 8453, rpc: "https://mainnet.base.org", env: {} })).toThrow(expect.objectContaining({ kind: "OWNER_SIGNER_NOT_HARDWARE" }));
-    }
+  test("a software keystore without a passphrase file, env:signer, ledger and trezor are accepted on 8453", () => {
+    for (const spec of ["keystore:/k/OWNER", "env:signer", "ledger", "trezor"]) expect(owner(spec)).toBeUndefined();
   });
-  test("ledger and trezor are accepted on 8453", () => {
-    expect(owner("ledger")).toBeUndefined();
-    expect(owner("trezor")).toBeUndefined();
+  test("a keystore with a passphrase file is still refused on 8453 by the plaintext floor", () => {
+    expect(owner("keystore:/k/OWNER:/k/pw")).toContain("passphrase");
   });
   test("a plaintext owner spec is refused on both chains", () => {
     expect(owner("plaintext:KEY", 918453, "https://twin.example")).toContain("plaintext");
-    expect(owner("plaintext:KEY")).toContain("OWNER_SIGNER_NOT_HARDWARE");
+    expect(owner("plaintext:KEY")).toContain("plaintext");
   });
   test("software owners stay allowed on the Twin chain", () => {
     for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer", "ledger"]) expect(owner(spec, 918453, "https://twin.example")).toBeUndefined();
-  });
-  test("through main(): a keystore owner on 8453 exits OWNER_SIGNER_NOT_HARDWARE before a signer is built", async () => {
-    let signerMade = false;
-    const l = console.log; console.log = () => {};
-    try {
-      const code = await world({ chainId: 8453 }).run(["govern", "--environment", "base-mainnet", "--owner-signer", "keystore:/k/OWNER"], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } });
-      expect(code).toBe(EXIT_CODES.OWNER_SIGNER_NOT_HARDWARE);
-    } finally { console.log = l; }
-    expect(signerMade).toBe(false);
   });
 });
