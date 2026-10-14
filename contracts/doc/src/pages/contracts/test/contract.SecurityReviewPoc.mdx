@@ -1,0 +1,31 @@
+---
+title: "SecurityReviewPoc"
+---
+
+# SecurityReviewPoc
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewPoc.t.sol)
+
+**Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
+
+## Functions
+
+<a id="test_duplicateadapterdoublecountsnavandblocksfullredemption"></a>
+
+### test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption
+
+```solidity
+function test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption() public;
+```
+
+<a id="test_revokedadapterwindowdepositblocked"></a>
+
+### test_revokedAdapterWindowDepositBlocked
+
+Remediated by core 1788 (PR 1814): deposits close while a funded adapter is excluded
+from NAV, so no window depositor can mint against the reduced NAV.
+
+```solidity
+function test_revokedAdapterWindowDepositBlocked() public;
+```
+
