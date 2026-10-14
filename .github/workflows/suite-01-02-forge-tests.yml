@@ -372,6 +372,8 @@ jobs:
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
       - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
+      - name: forge test (V4 recorder sampling cannot distort the deployed rmAGENT NAV profitably — core 1793)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/V4RecorderSamplingEconomicsFork.t.sol"
       - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
 
