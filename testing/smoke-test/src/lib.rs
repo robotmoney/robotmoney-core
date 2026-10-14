@@ -1575,7 +1575,7 @@ impl Fixture {
     }
 
     /// The test depositor authorizes the harness agent: `commitAuthorization(keccak(agent, depositor, salt))`,
-    /// then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
+    /// the agent's own `commitAuthorization` consent (core 1791), then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
     /// share receiver (the permissionless path requires it). Returns the reveal transaction hash.
     pub fn depositor_authorize_agent(
         &self,
@@ -1598,6 +1598,50 @@ impl Fixture {
             "commitAuthorization(bytes32)",
             &[&commit_hash],
         )?;
+        let receiver = format!("{depositor:#x}");
+        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
+        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
+        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
+        let policy = format!(
+            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
+        );
+        let reveal_sig = "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
+        let agent_hex = format!("{agent:#x}");
+        let salt_hex = format!("0x{}", hex::encode(salt.0));
+
+        // The agent consents to the depositor for this exact reveal (core 1791): it submits
+        // keccak256(abi.encode(depositor, keccak256(revealCalldata))) through commitAuthorization from its own key.
+        let out = Command::new("cast")
+            .arg("calldata")
+            .arg(reveal_sig)
+            .args([&agent_hex, &salt_hex, &policy])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast calldata {reveal_sig} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let call_data = hex::decode(
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .trim_start_matches("0x"),
+        )
+        .map_err(|e| HarnessError::other(format!("reveal calldata is not hex: {e}")))?;
+        let mut consent_preimage = Vec::with_capacity(64);
+        consent_preimage.extend_from_slice(&[0u8; 12]);
+        consent_preimage.extend_from_slice(depositor.as_slice());
+        consent_preimage.extend_from_slice(keccak256(&call_data).as_slice());
+        let consent_hash = format!("0x{}", hex::encode(keccak256(&consent_preimage).0));
+        // The agent key needs gas for its own consent transaction.
+        self.fund_eth_from_harness(agent, "1000000000000000000")?;
+        self.cast_send(
+            &format!("0x{}", hex::encode(AGENT_PRIVATE_KEY)),
+            self.gateway(),
+            "commitAuthorization(bytes32)",
+            &[&consent_hash],
+        )?;
+
         // The reveal must land in a later block than the commit (CommitmentTooRecent otherwise). A fork without a
         // block time mines only on transactions, so mine one block here (a one-second warp).
         let commit_head = self.nonce_tracker.eth_block_number()?;
@@ -1607,18 +1651,11 @@ impl Fixture {
                 "no new block after commitAuthorization and a one-second warp",
             ));
         }
-        let receiver = format!("{depositor:#x}");
-        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
-        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
-        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
-        let policy = format!(
-            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
-        );
         self.cast_send(
             SHARE_RECEIVER_PRIVATE_KEY_HEX,
             self.gateway(),
-            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-            &[&format!("{agent:#x}"), &format!("0x{}", hex::encode(salt.0)), &policy],
+            reveal_sig,
+            &[&agent_hex, &salt_hex, &policy],
         )
     }
 

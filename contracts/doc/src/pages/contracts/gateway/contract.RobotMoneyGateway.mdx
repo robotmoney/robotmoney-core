@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7a511cdfa72db50d9966938a824287f2a66cea9/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -755,6 +755,13 @@ Permissionless. Any EOA may commit. The hash binds the agent
 address, the caller identity, and a caller-chosen salt so that
 a mempool observer cannot front-run the reveal with a different
 depositor address.
+An agent address also uses this to consent to an owner (core 1791):
+from its own key it submits
+`keccak256(abi.encode(owner, keccak256(callData)))`, where `callData` is
+the full `revealAuthorization(agent, salt, policy)` calldata `owner` will
+send. That reveal then consumes it, so the consent covers one agent, one
+policy and one salt. Without the consent the reveal reverts
+`OwnerConsentMissing`, so nobody can take an address that never agreed.
 
 </i>
 
@@ -766,7 +773,7 @@ function commitAuthorization(bytes32 commitHash) external;
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| commitHash | `bytes32` | `keccak256(abi.encode(agent, msg.sender, salt))`. |
+| commitHash | `bytes32` | `keccak256(abi.encode(agent, msg.sender, salt))`, or the consent hash above. |
 
 <a id="revealauthorization-address-bytes32-agentpolicy"></a>
 
@@ -777,7 +784,9 @@ Reveal `agent` and `salt` to validate the prior commitment and
 authorize the agent with the supplied policy. Reverts if no
 prior commitment matches, if the commitment has expired, if
 `msg.sender` is not the original committer, or if the hash
-does not match.
+does not match. For an `agent` other than the caller it also
+reverts `OwnerConsentMissing` unless the agent consented to this
+caller and this exact call through `commitAuthorization`.
 
 <i>
 
@@ -1055,6 +1064,27 @@ function depositTo(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>depositTo ids are disjoint from deposit and withdraw ids. |
+
+<a id="_requiregas-uint256"></a>
+
+### _requireGas
+
+<i>
+
+Revert `InsufficientGas` when less than `floor` gas is left. One copy for all
+four entry checks keeps the gateway under the EIP-170 size limit (core 1791).
+
+</i>
+
+```solidity
+function _requireGas(uint256 floor) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
 
 <a id="_requiredepositgas-bool"></a>
 
@@ -1728,6 +1758,18 @@ owner. The existing owner must call `setPolicy` to update or
 error AgentAlreadyOwned();
 ```
 
+### OwnerConsentMissing
+
+`revealAuthorization` named an `agent` other than the caller, and the
+agent has not consented to the caller as owner for this exact call.
+The agent must first submit the consent hash from its own key through
+`commitAuthorization`: `keccak256(abi.encode(owner, keccak256(callData)))`
+where `callData` is the full `revealAuthorization` calldata. (core 1791.)
+
+```solidity
+error OwnerConsentMissing();
+```
+
 ### CommitmentNotFound
 
 `revealAuthorization` called but no prior commitment exists for
@@ -1749,8 +1791,8 @@ error CommitmentExpired();
 
 ### CommitmentOwnerMismatch
 
-`revealAuthorization` called from a different address than the
-one that submitted the commitment.
+Unused since core 1791 (the check was unreachable: the commit hash binds
+the caller). Kept so the ABI and its clients do not change.
 
 ```solidity
 error CommitmentOwnerMismatch();

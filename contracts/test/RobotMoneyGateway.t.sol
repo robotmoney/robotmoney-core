@@ -370,6 +370,15 @@ contract RobotMoneyGatewayTest is Test {
 
         // Reveal after one block
         vm.roll(block.number + 2);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    rolelessEoa,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(rolelessEoa);
         gateway.revealAuthorization(agent, salt, p);
 
@@ -421,6 +430,14 @@ contract RobotMoneyGatewayTest is Test {
         gateway.authorizeAgent(agent, p);
 
         // Victim's reveal succeeds — agent belongs to victim
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    victim, keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(victim);
         gateway.revealAuthorization(agent, salt, p);
 
@@ -636,6 +653,15 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(freshDepositor);
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 2);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    freshDepositor,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(freshDepositor);
         gateway.revealAuthorization(agent, salt, p);
 
@@ -2490,11 +2516,24 @@ contract GatewayCommitRevealTest is Test {
         // Advance 1 block.
         vm.roll(block.number + 1);
 
+        // The agent consents to the depositor for this exact call (core 1791).
+        bytes32 consent = keccak256(
+            abi.encode(
+                depositor, keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+            )
+        );
+        vm.prank(agent);
+        gateway.commitAuthorization(consent);
+
         // Reveal
         vm.prank(depositor);
         vm.expectEmit(true, true, true, false, address(gateway));
         emit IGateway.CommitRevealed(depositor, commitHash, agent);
         gateway.revealAuthorization(agent, salt, p);
+
+        // The consent is spent by the reveal.
+        (address consentCommitter,) = gateway.commitments(keccak256(abi.encode(consent, agent)));
+        assertEq(consentCommitter, address(0));
 
         // Agent must be authorized correctly.
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -2650,6 +2689,17 @@ contract GatewayCommitRevealTest is Test {
         vm.roll(block.number + 1);
 
         // Alice reveals first — succeeds.
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    alice,
+                    keccak256(
+                        abi.encodeCall(gateway.revealAuthorization, (agent, saltAlice, pAlice))
+                    )
+                )
+            )
+        );
         vm.prank(alice);
         gateway.revealAuthorization(agent, saltAlice, pAlice);
         assertEq(gateway.agentOwner(agent), alice);
@@ -2672,6 +2722,15 @@ contract GatewayCommitRevealTest is Test {
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 1);
 
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    depositor,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(depositor);
         gateway.revealAuthorization(agent, salt, p);
         assertEq(gateway.agentOwner(agent), depositor);
@@ -2753,6 +2812,17 @@ contract GatewayCommitRevealTest is Test {
 
         vm.roll(block.number + 1);
 
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    depositor,
+                    keccak256(
+                        abi.encodeCall(gateway.revealAuthorization, (agent, salt, selfPolicy))
+                    )
+                )
+            )
+        );
         vm.prank(depositor);
         gateway.revealAuthorization(agent, salt, selfPolicy);
 

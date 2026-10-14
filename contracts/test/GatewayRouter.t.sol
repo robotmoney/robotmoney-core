@@ -2356,6 +2356,17 @@ contract GatewayRouterTest is Test {
             vm.prank(leakyDepositor);
             leakyGateway.commitAuthorization(commitHash);
             vm.roll(block.number + 1);
+            vm.prank(leakyAgent);
+            leakyGateway.commitAuthorization(
+                keccak256(
+                    abi.encode(
+                        leakyDepositor,
+                        keccak256(
+                            abi.encodeCall(leakyGateway.revealAuthorization, (leakyAgent, salt, p))
+                        )
+                    )
+                )
+            );
             vm.prank(leakyDepositor);
             leakyGateway.revealAuthorization(leakyAgent, salt, p);
         }

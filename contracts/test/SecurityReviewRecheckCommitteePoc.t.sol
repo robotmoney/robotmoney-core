@@ -41,6 +41,19 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         vm.prank(owner);
         gateway.commitAuthorization(commitment);
         vm.roll(block.number + 1);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    owner,
+                    keccak256(
+                        abi.encodeCall(
+                            gateway.revealAuthorization, (agent, salt, _selfPolicy(owner))
+                        )
+                    )
+                )
+            )
+        );
         vm.prank(owner);
         gateway.revealAuthorization(agent, salt, _selfPolicy(owner));
     }
@@ -120,34 +133,55 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
     function test_permissionlessRevealSquatsThirdPartyAgentAddress() public {
         // A future committee member's published EOA, not yet gateway-authorized.
         address victim = address(0xD1);
+        bytes32 salt = keccak256("f3-squat");
 
-        // Attacker owns the victim's gateway agent entry; victim now holds
-        // AGENT_ROLE with shareReceiver/assetRecipient = attacker.
-        _selfReveal(attacker, victim, keccak256("f3-squat"));
-        assertEq(gateway.agentOwner(victim), attacker);
-        assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), victim));
-        (,,,, address sr, address ar,,) = gateway.agents(victim);
-        assertEq(sr, attacker);
-        assertEq(ar, attacker);
-
-        // Admin cannot onboard the victim: no admin override of agentOwner.
-        vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.authorizeAgent(victim, _selfPolicy(victim));
-
-        // Admin can strip the role, but ownership persists, so onboarding stays blocked.
-        bytes32 agentRole = gateway.AGENT_ROLE();
-        vm.prank(admin);
-        gateway.revokeRole(agentRole, victim);
-        assertEq(gateway.agentOwner(victim), attacker);
-        vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.authorizeAgent(victim, _selfPolicy(victim));
-
-        // Only the squatter can release it.
+        // Core 1791: the victim never consented to the attacker, so the reveal reverts.
+        bytes32 commitment = keccak256(abi.encode(victim, attacker, salt));
         vm.prank(attacker);
-        gateway.revokeAgent(victim);
+        gateway.commitAuthorization(commitment);
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
         assertEq(gateway.agentOwner(victim), address(0));
+        assertFalse(gateway.hasRole(gateway.AGENT_ROLE(), victim));
+
+        // The victim stays free to onboard through the admin path.
+        vm.prank(admin);
+        gateway.authorizeAgent(victim, _selfPolicy(victim));
+        assertEq(gateway.agentOwner(victim), admin);
+    }
+
+    /// A consent names one owner and one exact reveal: another owner cannot use it.
+    function test_consentToOneOwnerDoesNotLetAnotherOwnerReveal() public {
+        address victim = address(0xD1);
+        address friend = address(0xF1);
+        bytes32 salt = keccak256("f3-friend");
+        IGateway.AgentPolicy memory p = _selfPolicy(friend);
+
+        vm.prank(victim);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    friend,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (victim, salt, p)))
+                )
+            )
+        );
+        vm.prank(attacker);
+        gateway.commitAuthorization(keccak256(abi.encode(victim, attacker, salt)));
+        vm.prank(friend);
+        gateway.commitAuthorization(keccak256(abi.encode(victim, friend, salt)));
+        vm.roll(block.number + 1);
+
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
+
+        // The named owner with the consented policy succeeds, and the consent is spent.
+        vm.prank(friend);
+        gateway.revealAuthorization(victim, salt, p);
+        assertEq(gateway.agentOwner(victim), friend);
     }
 
     // ── Q2: self-registered agent's fund paths pull only from itself ────────
