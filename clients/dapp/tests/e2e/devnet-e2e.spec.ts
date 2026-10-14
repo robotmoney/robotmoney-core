@@ -24,7 +24,7 @@ import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { agentOwnerOf, freshDepositor } from "./helpers/depositor";
+import { agentOwnerOf, consentFromDapp, freshDepositor } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 // keccak256("AGENT_ROLE") — matches contracts/gateway/AccessRoles.sol.
@@ -145,6 +145,9 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
 
     // Step 1 of 2: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
     await page.getByTestId("authorize-submit").click();
+
+    // The agent address consents to the depositor before the reveal (core 1791).
+    await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "authorize-consent-hash");
 
     // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("authorize-reveal-submit");

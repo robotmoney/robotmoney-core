@@ -1,6 +1,7 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 // Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
 
+import { AgentConsentNotice } from "./AgentConsentNotice";
 import type { FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
@@ -126,6 +127,7 @@ export function RotationTab(props: Props) {
         >
           <h3>Step 3: reveal new agent</h3>
           <p>Enabled one block after the commit transaction mines.</p>
+          <AgentConsentNotice testId="rotation-consent-hash" hash={r.consentHash} />
           <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
             Step 3 — Sign revealAuthorization(new) with wallet
           </button>

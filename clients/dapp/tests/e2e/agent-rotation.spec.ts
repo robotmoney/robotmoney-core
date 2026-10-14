@@ -37,6 +37,7 @@ import {
   ADMIN_ROLE,
   agentPolicyOf,
   authorizeOwnAgentViaUi,
+  consentFromDapp,
   freshAccount,
   freshDepositor,
   gatewayHasRole,
@@ -149,6 +150,8 @@ test.describe("agent rotation flow — UI invariants", () => {
     const reveal = page.getByTestId("rotation-reveal-submit");
     await expect(reveal).toBeDisabled();
     await page.getByTestId("rotation-authorize-submit").click();
+    // NEW_AGENT consents to the depositor before the reveal (core 1791).
+    await consentFromDapp(page, endpoints, NEW_AGENT, "rotation-consent-hash");
     await expect(reveal).toBeEnabled({ timeout: 60_000 });
     await reveal.click();
     await expect(page.getByTestId("rotation-complete")).toBeVisible();

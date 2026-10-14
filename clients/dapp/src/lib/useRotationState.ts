@@ -33,7 +33,7 @@ import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { ADMIN_ROLE_HASH, gatewayAbi } from "./abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "./preview";
 import { composeRotationPreview } from "./rotation";
-import { computeCommitHash, generateSalt } from "./commitReveal";
+import { computeCommitHash, computeConsentHash, generateSalt } from "./commitReveal";
 
 type RotationStep = "idle" | "revoke-sent" | "commit-sent" | "done";
 export type RotationAuthorizePath = "admin" | "depositor";
@@ -243,7 +243,13 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     );
   };
 
+  const consentHash =
+    address && salt && authorizeAction
+      ? computeConsentHash(address, authorizeAction.agent, salt, authorizeAction.policy)
+      : null;
+
   return {
+    consentHash,
     oldAgent: oldAgentRaw,
     setOldAgent,
     newAgent: newAgentRaw,

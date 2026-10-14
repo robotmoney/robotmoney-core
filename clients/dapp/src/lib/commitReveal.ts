@@ -6,7 +6,8 @@
  * authorize its own agent (no ADMIN_ROLE). The hash matches the on-chain
  * computation `keccak256(abi.encode(agent, msg.sender, salt))`.
  */
-import { encodeAbiParameters, keccak256, type Address, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, keccak256, type Address, type Hex } from "viem";
+import { gatewayAbi } from "./abi";
 
 export function computeCommitHash(agent: Address, caller: Address, salt: Hex): Hex {
   return keccak256(
@@ -22,4 +23,31 @@ export function generateSalt(): Hex {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return ("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
+}
+
+type RevealPolicy = Parameters<
+  typeof encodeFunctionData<typeof gatewayAbi, "revealAuthorization">
+>[0]["args"][2];
+
+/**
+ * The hash the agent address must submit through `commitAuthorization`, from its own key,
+ * before `owner` can reveal (core 1791). It is
+ * `keccak256(abi.encode(owner, keccak256(revealAuthorization calldata)))`, so the consent
+ * covers one agent, one salt and one policy. Without it the reveal reverts
+ * `OwnerConsentMissing`.
+ */
+export function computeConsentHash(
+  owner: Address,
+  agent: Address,
+  salt: Hex,
+  policy: RevealPolicy,
+): Hex {
+  const callData = encodeFunctionData({
+    abi: gatewayAbi,
+    functionName: "revealAuthorization",
+    args: [agent, salt, policy],
+  });
+  return keccak256(
+    encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [owner, keccak256(callData)]),
+  );
 }

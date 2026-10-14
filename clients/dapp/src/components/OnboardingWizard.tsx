@@ -29,6 +29,8 @@
  * Browser-side keypair generation is intentionally NOT a supported path;
  * see docs/technical/dapp-credential-decisions.md §3.1.
  */
+import { AgentConsentNotice } from "./AgentConsentNotice";
+import { computeConsentHash } from "../lib/commitReveal";
 import { useState, type FormEvent } from "react";
 import {
   useAccount,
@@ -527,6 +529,14 @@ export function OnboardingWizard(props: Props) {
               </span>
             )}
           </p>
+          <AgentConsentNotice
+            testId="wizard-consent-hash"
+            hash={
+              address && salt && action
+                ? computeConsentHash(address, action.agent, salt, action.policy)
+                : null
+            }
+          />
           <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
             <div className="wizard-nav">
               <button

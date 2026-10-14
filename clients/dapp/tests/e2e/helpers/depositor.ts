@@ -17,7 +17,14 @@
  * test wallet.
  */
 import type { Page } from "@playwright/test";
-import { createPublicClient, http, zeroAddress, type Address, type Hex } from "viem";
+import {
+  createPublicClient,
+  encodeFunctionData,
+  http,
+  zeroAddress,
+  type Address,
+  type Hex,
+} from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { DevnetEndpoints } from "./devnet";
 import { openDapp, openTab } from "./wallet";
@@ -224,10 +231,81 @@ export async function authorizeOwnAgentViaUi(
 
   // Step 1 of 2: commit.
   await page.getByTestId("authorize-submit").click();
+  // The agent consents to this owner from its own address (core 1791).
+  await consentFromDapp(page, endpoints, agent, "authorize-consent-hash");
   // Step 2 of 2: reveal, enabled once a block has passed since the commit.
   const reveal = page.getByTestId("authorize-reveal-submit");
   await expect(reveal).toBeEnabled({ timeout: 60_000 });
   await reveal.click();
 
   await waitForAgentState(endpoints, agent, depositor.address);
+}
+
+async function rpc(
+  endpoints: DevnetEndpoints,
+  method: string,
+  params: unknown[],
+): Promise<unknown> {
+  const res = await fetch(endpoints.rpc_url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const body = (await res.json()) as { result?: unknown; error?: { message: string } };
+  if (!res.ok || body.error) {
+    throw new Error(`${method} failed: ${body.error?.message ?? `HTTP ${res.status}`}`);
+  }
+  return body.result;
+}
+
+/**
+ * The agent address consents to its owner (core 1791): it submits the consent hash the dapp
+ * shows through `commitAuthorization`. The e2e agents are vanity addresses with no key, so the
+ * Twin chain (anvil) impersonates the address, exactly as a real agent would sign from its key.
+ */
+export async function consentAsAgent(
+  endpoints: DevnetEndpoints,
+  agent: Address,
+  consentHash: Hex,
+): Promise<void> {
+  const chainId = await client(endpoints).getChainId();
+  if (chainId === BASE_MAINNET_CHAIN_ID || chainId !== endpoints.chain_id) {
+    throw new Error(`consentAsAgent: refusing to impersonate on chain ${chainId}`);
+  }
+  await rpc(endpoints, "anvil_setBalance", [agent, `0x${(10n ** 18n).toString(16)}`]);
+  await rpc(endpoints, "anvil_impersonateAccount", [agent]);
+  const hash = (await rpc(endpoints, "eth_sendTransaction", [
+    {
+      from: agent,
+      to: endpoints.gateway_addr,
+      data: encodeFunctionData({
+        abi: [
+          {
+            type: "function",
+            name: "commitAuthorization",
+            stateMutability: "nonpayable",
+            inputs: [{ name: "commitHash", type: "bytes32" }],
+            outputs: [],
+          },
+        ],
+        functionName: "commitAuthorization",
+        args: [consentHash],
+      }),
+    },
+  ])) as Hex;
+  await rpc(endpoints, "anvil_stopImpersonatingAccount", [agent]);
+  await client(endpoints).waitForTransactionReceipt({ hash });
+}
+
+/** Read the consent hash the dapp shows (`testId`) and have `agent` submit it. */
+export async function consentFromDapp(
+  page: Page,
+  endpoints: DevnetEndpoints,
+  agent: Address,
+  testId: string,
+): Promise<void> {
+  const el = page.getByTestId(testId);
+  await el.waitFor({ state: "visible", timeout: 60_000 });
+  const hash = ((await el.textContent()) ?? "").trim() as Hex;
+  await consentAsAgent(endpoints, agent, hash);
 }

@@ -28,7 +28,7 @@ import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { freshDepositor, waitForAgentState } from "./helpers/depositor";
+import { consentFromDapp, freshDepositor, waitForAgentState } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 const FAUCET_DRIP_AMOUNT_USDC = 100_000_000n;
@@ -133,6 +133,9 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     const commitSubmit = page.getByTestId("wizard-commit-submit");
     await expect(commitSubmit).toBeEnabled({ timeout: 30_000 });
     await commitSubmit.click();
+
+    // The agent address consents to the depositor before the reveal (core 1791).
+    await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "wizard-consent-hash");
 
     // Step 3b: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("wizard-reveal-submit");

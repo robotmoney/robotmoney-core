@@ -14,6 +14,8 @@ import {
 import { markRegistered } from "../lib/useVaultRegistration";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
+import { AgentConsentNotice } from "./AgentConsentNotice";
+import { computeConsentHash } from "../lib/commitReveal";
 
 type AuthPhase = "commit" | "reveal";
 
@@ -176,6 +178,14 @@ export function AuthorizeTab(props: Props) {
             </span>
           )}
         </p>
+        <AgentConsentNotice
+          testId="authorize-consent-hash"
+          hash={
+            address && salt && action
+              ? computeConsentHash(address, action.agent, salt, action.policy)
+              : null
+          }
+        />
         <button
           type="submit"
           data-testid="authorize-reveal-submit"
