@@ -61,10 +61,17 @@ async fn self_check_happy_path_emits_v92_report_and_exits_zero() {
     );
     assert_eq!(v["software_fallback_allowed"], true);
     assert_eq!(v["selected_backend_production_ready"], false);
-    assert!(v["selected_backend_operator_message"]
-        .as_str()
-        .unwrap()
-        .contains("non-production"));
+    // QA plan U7 (DR-12): the message states that depositor writes sign
+    // with the software keystore on every chain (owner decision 2026-10-06).
+    let operator_message = v["selected_backend_operator_message"].as_str().unwrap();
+    assert!(
+        operator_message.contains("on every chain"),
+        "{operator_message}"
+    );
+    assert!(
+        !operator_message.contains("non-production"),
+        "{operator_message}"
+    );
     assert_eq!(v["key_exportable"], true);
     assert_eq!(v["device_bound"], false);
     assert!(v["timestamp"].is_number());

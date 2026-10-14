@@ -108,6 +108,56 @@ async fn health_and_freshness_use_the_last_good_cursor_not_the_newest_run_row() 
     assert_eq!(stats["chain_head_block"], 1010);
 }
 
+/// DI-5: a wedged indexer must not read as `ok`. Every tick fails after reading the head, so the head moves
+/// and the cursor does not; `/health` names the error and the lag, and recovers once a tick succeeds.
+#[tokio::test]
+async fn health_exposes_the_newest_run_error_and_the_head_lag() {
+    let s = boot().await;
+    run(&s.pool, true, None, Some(1000), Some(1005)).await;
+    let healthy = get(&s, "/health").await;
+    assert_eq!(healthy["status"], "ok", "{healthy}");
+    assert_eq!(healthy["lag_blocks"], 5, "{healthy}");
+    assert!(healthy["last_run_error"].is_null(), "{healthy}");
+
+    // Wedged: two failed ticks that each read a newer head, then a tick in flight (no outcome yet).
+    run(
+        &s.pool,
+        true,
+        Some("committee_votes FK violation"),
+        None,
+        Some(1200),
+    )
+    .await;
+    run(
+        &s.pool,
+        true,
+        Some("committee_votes FK violation"),
+        None,
+        Some(1300),
+    )
+    .await;
+    run(&s.pool, false, None, None, None).await;
+    let wedged = get(&s, "/health").await;
+    assert_eq!(wedged["status"], "degraded", "{wedged}");
+    assert_eq!(
+        wedged["last_run_error"], "committee_votes FK violation",
+        "{wedged}"
+    );
+    assert_eq!(wedged["last_indexed_block"], 1000, "{wedged}");
+    assert_eq!(wedged["chain_head_block"], 1300, "{wedged}");
+    assert_eq!(
+        wedged["lag_blocks"], 300,
+        "the lag grows with the head: {wedged}"
+    );
+
+    // Recovered: the newest finished run succeeded, so the old error is history.
+    run(&s.pool, true, None, Some(1395), Some(1400)).await;
+    let recovered = get(&s, "/health").await;
+    assert_eq!(recovered["status"], "ok", "{recovered}");
+    assert!(recovered["last_run_error"].is_null(), "{recovered}");
+    assert_eq!(recovered["lag_blocks"], 5, "{recovered}");
+}
+
 #[tokio::test]
 async fn before_anything_is_indexed_the_cursor_and_head_are_null_not_invented() {
     let s = boot().await;
@@ -115,6 +165,7 @@ async fn before_anything_is_indexed_the_cursor_and_head_are_null_not_invented() 
     let h = get(&s, "/health").await;
     assert!(h["last_indexed_block"].is_null(), "{h}");
     assert!(h["chain_head_block"].is_null(), "{h}");
+    assert!(h["lag_blocks"].is_null(), "no lag is invented either: {h}");
 }
 
 #[tokio::test]

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parse } from "smol-toml";
-import { exportRmpcConfig } from "../../src/lib/configExport";
+import { exportRmpcConfig, SOFTWARE_KEYSTORE_COMMENT } from "../../src/lib/configExport";
 
 const baseInputs = {
   chain_id: 31337,
@@ -32,8 +32,17 @@ describe("exportRmpcConfig", () => {
 
     // Must parse as valid TOML
     const parsed = parse(toml) as Record<string, unknown>;
-    expect(toml).toContain("UNSAFE FOR PRODUCTION");
-    expect(toml).toContain("HSM/KMS/device-bound signer");
+    // QA plan U7 (DR-12): the comment states the 2026-10-06 and 2026-10-14
+    // signer decisions. It must not claim mainnet needs an HSM/KMS signer.
+    for (const line of SOFTWARE_KEYSTORE_COMMENT) {
+      expect(line.startsWith("# ")).toBe(true);
+      expect(toml).toContain(`${line}\n`);
+    }
+    expect(toml).toContain("Base mainnet included");
+    expect(toml).toContain("optional, never required");
+    expect(toml).not.toContain("UNSAFE FOR PRODUCTION");
+    expect(toml).not.toContain("devnet/test use only");
+    expect(toml).not.toMatch(/require[s]? an HSM/);
 
     // All required top-level fields must be present and correct
     expect(parsed.chain_id).toBe(31337);

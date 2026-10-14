@@ -19,9 +19,9 @@
 //! - [`open_session`] — the prologue. Signer policy, keystore decrypt,
 //!   state dir, single-flight lock, replay-cache open and lookup, tokio
 //!   runtime, RPC client, and the audit-record skeleton.
-//! - [`WriteSession::submit`] — the epilogue. Fee bid, nonce, envelope
-//!   build + sign, broadcast, optimistic replay insert, receipt wait, and
-//!   the confirmed-revert refusal.
+//! - [`WriteSession::submit`] — the epilogue. Pre-sign simulation (QA plan
+//!   U6), fee bid, nonce, envelope build + sign, broadcast, optimistic
+//!   replay insert, receipt wait, and the confirmed-revert refusal.
 //!
 //! Between the two sits the only genuinely per-command work: which
 //! preflight to run, which calldata to encode, and which event log to
@@ -66,6 +66,7 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::revert::{simulate, Simulation};
 use crate::policy::ChecksOutput;
 use crate::replay_cache::ReplayCache;
 use crate::rpc::FailoverRpcClient;
@@ -114,6 +115,11 @@ pub struct WriteFailure {
     pub tx_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks: Option<ChecksOutput>,
+    /// What `--confirm` would sign, on a preview refusal
+    /// (`ErrConfirmNotProvided`). Command-specific shape; only
+    /// `withdraw-router` sets it today (QA plan U6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
 }
 
 impl WriteFailure {
@@ -128,6 +134,7 @@ impl WriteFailure {
             order_id: None,
             tx_hash: None,
             checks: None,
+            preview: None,
         }
     }
 
@@ -153,6 +160,11 @@ impl WriteFailure {
 
     pub fn checks(mut self, checks: ChecksOutput) -> Self {
         self.checks = Some(checks);
+        self
+    }
+
+    pub fn preview(mut self, preview: serde_json::Value) -> Self {
+        self.preview = Some(preview);
         self
     }
 
@@ -567,9 +579,9 @@ impl WriteSession {
         record_audit(&self.audit.build(decision, error));
     }
 
-    /// The epilogue every write command shares: fee bid, nonce, envelope
-    /// build + sign, broadcast, optimistic replay insert, receipt wait,
-    /// and the confirmed-revert refusal.
+    /// The epilogue every write command shares: pre-sign simulation, fee
+    /// bid, nonce, envelope build + sign, broadcast, optimistic replay
+    /// insert, receipt wait, and the confirmed-revert refusal.
     ///
     /// `checks` is the preflight snapshot attached to the refusals raised
     /// before the transaction reaches the chain (fee cap, broadcast
@@ -592,6 +604,34 @@ impl WriteSession {
             replay_deadline,
             checks,
         } = submission;
+
+        // -- Pre-sign simulation (QA plan U6) ----------------------------
+        // `eth_call` the exact calldata from the agent. A revert with a
+        // product reason (vault disabled, leg unavailable, slippage floor,
+        // expired policy, cap) is refused by name here, before any fee read,
+        // nonce read or signature. Anything else is logged and the write
+        // goes ahead as it did before: the preflight stays the authority.
+        match self.rt.block_on(simulate(
+            &self.rpc,
+            self.agent_address,
+            self.request.gateway,
+            &calldata,
+        )) {
+            Simulation::Passed => {}
+            Simulation::Refused { revert, err } => {
+                self.record(AuditDecision::Refused, Some(err.name().to_string()));
+                return Err(WriteAbort::refused(
+                    self.refusal(err.name())
+                        .message(format!(
+                            "{err} (the gateway call reverts {revert} when simulated; nothing was signed)"
+                        ))
+                        .checks(checks()),
+                ));
+            }
+            Simulation::Inconclusive(why) => {
+                log::warn!("rmpc {cmd}: pre-sign simulation inconclusive, continuing: {why}");
+            }
+        }
 
         let raw = match self.rt.block_on(signed_envelope(
             &self.rpc,

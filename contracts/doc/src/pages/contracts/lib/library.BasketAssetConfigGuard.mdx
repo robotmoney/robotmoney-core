@@ -4,7 +4,7 @@ title: "BasketAssetConfigGuard"
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketAssetConfigGuard.sol)
 
 ## Constants
 
@@ -128,6 +128,46 @@ function reuseOrRejectDuplicate(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | reusedIndex | `uint256` | The registry index of the inactive entry that was<br/>reactivated in place (the caller must NOT push); or<br/>`type(uint256).max` when the token is new and the caller must push. |
+
+<a id="deactivateasset-assetinfo-uint256"></a>
+
+### deactivateAsset
+
+The body of `BasketVault.removeAsset` (QA plan D6, SR-L12), delegatecall-linked so it runs as the vault
+and stays out of the EIP-170-tight vault bytecode. Deactivates the ACTIVE entry at `index` when the vault
+holds none of its token, or only dust: a balance whose TWAP sale floor
+(`value * (10_000 - maxSlippageBps) / 10_000`, the vault's `_applySlippage`) rounds to zero USDC units.
+That is the same test on which `BasketVault.emergencyUnwind` and `redeem` skip a leg, so an unwind always
+leaves a removable balance.
+
+<i>
+
+Why dust and not zero: anyone can send the vault one wei after the unwind. The Uniswap V4 adapter refuses a
+sale that pays zero (`UniswapV4SwapAdapter.unlockCallback`), so that wei could never be sold, and a zero
+balance check reverted `AssetStillHeld` forever. The dust check reads the TWAP through the vault, so it fails
+closed while the oracle is down. A zero balance needs no price. The dust left on the removed entry drops out
+of NAV (at most about one USDC unit), and `reabsorbRemovedAsset` sells it back once it grows past dust.
+
+</i>
+
+```solidity
+function deactivateAsset(AssetInfo[] storage assets, uint256 index)
+        public
+        returns (address token);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetInfo[]` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` | The deactivated token, for the vault's `AssetRemoved` event. |
 
 <a id="requireallowedadapter-address-bool"></a>
 
@@ -370,6 +410,30 @@ error TokenHasNoCode(address token);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | token | `address` |  |
+
+### AssetNotFound
+
+<i>
+
+Mirror of `BasketVault.AssetNotFound` (same selector): no ACTIVE entry at the index.
+
+</i>
+
+```solidity
+error AssetNotFound();
+```
+
+### AssetStillHeld
+
+<i>
+
+Mirror of `BasketVault.AssetStillHeld` (same selector): the vault holds more than dust of the token.
+
+</i>
+
+```solidity
+error AssetStillHeld();
+```
 
 ## Structs
 

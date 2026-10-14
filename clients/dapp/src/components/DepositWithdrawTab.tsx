@@ -6,7 +6,8 @@
  * Two symmetric sub-flows:
  *
  *   Deposit:  USDC.approve(vault, assets) → vault.deposit(assets, receiver)
- *   Withdraw: select position via PositionSelector → vault.redeem(shares, receiver, owner)
+ *   Withdraw: select position via PositionSelector → share.approve(router, shares)
+ *             → router.redeemFor(owner, owner, [vault], [shares], [floor], deadline)
  *
  * The Withdraw sub-flow lists the user's non-zero receipt balances via the
  * explorer-API PositionSelector (issue #321). Selecting a position prefills
@@ -22,6 +23,30 @@
  *   - Selecting a specific vault uses the original single-vault flow.
  *   - Withdraw always targets the primary vault (unchanged from #257).
  *
+ * Redeem targets (QA plan U4, finding DR-5): the PositionSelector rows come
+ * from the explorer API, which may never choose a signing target. A selected
+ * vault is redeemed only when it is `props.vaultAddress` (runtime config) or a
+ * vault `useVaultRegistry()` lists; any other row is refused with a visible
+ * reason, and no read, simulation, preview or write is made against it.
+ *
+ * Write handlers (QA plan U5, issue 1737 part 4, finding DR-9): each handler
+ * re-checks the state its button is gated on (deposits open, preview ok, the
+ * simulation's target is the current one) before it calls the write, so a
+ * stale simulation cannot send. Every write renders its refusal, wallet error
+ * and receipt status through `WriteStatus`. Share counts print the vault's own
+ * symbol (issue 1773), and the position card shows the holder's exclusion
+ * claim when the vault owes one (core 1820).
+ *
+ * Redeem floor (QA plan D9, finding E8, SR-M16): a direct `vault.redeem` has
+ * no minimum-out, so a registered vault is redeemed through the Portfolio
+ * Router as a one-leg `redeemFor` whose `minAssetsPerLeg` is the live
+ * `previewRedeem(shares)` less 0.50% (`routerRedeem.ts`). The router spends
+ * the holder's shares, so the holder first approves it for exactly `shares`;
+ * an allowance the redeem will not spend is shown with a revoke button. The
+ * tab falls back to `vault.redeem`, saying why and that it has no floor, only
+ * where the router cannot take the exit (no router, an unregistered vault, a
+ * mainnet build with no router pin), so an exit never depends on the router.
+ *
  * Both flows follow the same "simulate before write" gate used by
  * AuthorizeTab and RotationTab — `useSimulateContract` must return a
  * valid request before the submit button enables, and the TxPreview
@@ -36,7 +61,7 @@
  * from the agent's caller and forwards into the same vault).
  */
 import { withGasLimit, VAULT_DEPOSIT_GAS_LIMIT } from "../lib/depositGas";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
   useReadContract,
@@ -46,7 +71,7 @@ import {
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { redeemFailureHint } from "../lib/redeemFailureHint";
 import type { Address, Hash } from "viem";
-import { erc20Abi, vaultAbi } from "../lib/abi";
+import { erc20Abi, routerAbi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { DepositsClosedNotice } from "./DepositsClosedNotice";
@@ -54,12 +79,32 @@ import { useDepositState } from "../lib/useDepositStates";
 import { depositsBlocked } from "../lib/vaultDepositState";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
 import { RouterDepositTab } from "./RouterDepositTab";
-import type { RouterPreviewContext } from "../lib/routerPreview";
+import { ROUTER_SLIPPAGE_TOLERANCE_BPS, type RouterPreviewContext } from "../lib/routerPreview";
+import { useVaultRegistry } from "../lib/VaultRegistryContext";
+import { acceptedRedeemTarget, redeemTargetAllowlist } from "../lib/redeemTarget";
+import {
+  buildRouterRedeemPreview,
+  chooseRedeemRoute,
+  deriveMinAssets,
+  directRedeemReasonText,
+  leftoverRouterAllowance,
+  needsShareApproval,
+  routerRedeemCall,
+  routerRedeemDeadline,
+  type RouterRedeemInputs,
+} from "../lib/routerRedeem";
+import { parseCodePins } from "../lib/codePins";
+import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
+import { isMainnetClass } from "../lib/writeChainGuard";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
+import { WriteStatus } from "./WriteStatus";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
+import { useExclusionClaims } from "../lib/useExclusionClaims";
 import {
   formatUsdc,
   formatShares,
+  formatPercent,
   formatInputAmount,
   parseSharesAmount,
   parseUsdcAmount,
@@ -85,6 +130,10 @@ type Props = Readonly<{
 // formatUsdcPreview is an alias for the centralized formatUsdc.
 const formatUsdcPreview = formatUsdc;
 
+/** Same address, any case. A simulation built for another target must not be sent. */
+const sameAddress = (a: unknown, b: string | undefined): boolean =>
+  typeof a === "string" && b !== undefined && a.toLowerCase() === b.toLowerCase();
+
 export function DepositWithdrawTab(props: Props) {
   const { address, isConnected } = useAccount();
 
@@ -106,7 +155,7 @@ export function DepositWithdrawTab(props: Props) {
   // legacy single-vault flow is unchanged.
   const depositVault: Address =
     destination !== ROUTER_DESTINATION ? destination : props.vaultAddress;
-  // Three independent write hooks so each action exposes its own
+  // Independent write hooks so each action exposes its own
   // `data` (tx hash) and `isPending`. We then wait for each receipt
   // before refetching downstream reads — without this gate the
   // `writeContract` callback fires when the hash is returned, not when
@@ -115,6 +164,8 @@ export function DepositWithdrawTab(props: Props) {
   const approveWrite = useGuardedWriteContract();
   const depositWrite = useGuardedWriteContract();
   const withdrawWrite = useGuardedWriteContract();
+  // The router redeem's share approval and its revoke (QA plan D9).
+  const shareApproveWrite = useGuardedWriteContract();
 
   const approveReceipt = useWaitForTransactionReceipt({
     hash: approveWrite.data as Hash | undefined,
@@ -128,14 +179,20 @@ export function DepositWithdrawTab(props: Props) {
     hash: withdrawWrite.data as Hash | undefined,
     query: { enabled: Boolean(withdrawWrite.data) },
   });
+  const shareApproveReceipt = useWaitForTransactionReceipt({
+    hash: shareApproveWrite.data as Hash | undefined,
+    query: { enabled: Boolean(shareApproveWrite.data) },
+  });
 
   const isPending =
     approveWrite.isPending ||
     depositWrite.isPending ||
     withdrawWrite.isPending ||
+    shareApproveWrite.isPending ||
     approveReceipt.isFetching ||
     depositReceipt.isFetching ||
-    withdrawReceipt.isFetching;
+    withdrawReceipt.isFetching ||
+    shareApproveReceipt.isFetching;
 
   const [depositInput, setDepositInput] = useState("");
   const [withdrawInput, setWithdrawInput] = useState("");
@@ -146,6 +203,42 @@ export function DepositWithdrawTab(props: Props) {
   // so its radios are never pre-checked — a pre-checked radio never fires onChange,
   // which would leave the withdrawInput empty when clicked.
   const [selectedVault, setSelectedVault] = useState<Address | undefined>(props.vaultAddress);
+
+  // The selection is untrusted (it may come from an explorer row). Only an
+  // accepted target drives the reads, the simulation, the preview and the write.
+  const { vaults: registeredVaults, isLoading: registryLoading } = useVaultRegistry();
+  const redeemAllowlist = useMemo(
+    () => redeemTargetAllowlist(registeredVaults, props.vaultAddress),
+    [registeredVaults, props.vaultAddress],
+  );
+  const redeemVault = acceptedRedeemTarget(selectedVault, redeemAllowlist);
+  const redeemTargetRefused = selectedVault !== undefined && redeemVault === undefined;
+
+  // Each vault's own share symbol (issue 1773): never a hardcoded unit.
+  const symbolOf = useVaultShareSymbols([depositVault, redeemVault ?? props.vaultAddress]);
+  const depositSymbol = symbolOf(depositVault);
+  const redeemSymbol = symbolOf(redeemVault ?? props.vaultAddress);
+  // The holder's exclusion claim on the accepted redeem target (core 1820).
+  const exclusionClaims = useExclusionClaims(redeemVault ? [redeemVault] : [], address);
+  const exclusionClaim = redeemVault ? exclusionClaims.get(redeemVault.toLowerCase()) : undefined;
+
+  // Which contract the redeem is signed against (QA plan D9): the router when it can take the exit,
+  // else the vault directly. On the mainnet class the write guard refuses an approval to a router
+  // the build has no code-hash pin for, so such a build redeems directly rather than offer an
+  // approval that can never be sent.
+  const runtimeEnv = useRuntimeConfig();
+  const codePins = useMemo(() => parseCodePins(runtimeEnv), [runtimeEnv]);
+  const route = chooseRedeemRoute({
+    router: props.routerAddress,
+    vault: redeemVault,
+    registered: registeredVaults,
+    registryLoading,
+    routerUnpinned:
+      isMainnetClass(runtimeEnv) &&
+      props.routerAddress !== undefined &&
+      !codePins.has(props.routerAddress.toLowerCase()),
+  });
+  const redeemRouter = route.kind === "router" ? route.router : undefined;
 
   const depositAssets = parseUsdcAmount(depositInput);
 
@@ -167,22 +260,22 @@ export function DepositWithdrawTab(props: Props) {
 
   // -------- share balance read-back (per selected vault) --------
   const { data: shareBalance, refetch: refetchShareBalance } = useReadContract({
-    address: selectedVault,
+    address: redeemVault,
     abi: vaultAbi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    query: { enabled: isConnected && Boolean(address) && selectedVault !== undefined },
+    query: { enabled: isConnected && Boolean(address) && redeemVault !== undefined },
   });
 
   // -------- previewRedeem — live chain call for net USDC and exit fee --------
   // Gives the user an estimated output before signing. Runs whenever
   // withdrawShares is a valid amount and the vault is selected.
   const { data: previewRedeemAssets } = useReadContract({
-    address: selectedVault,
+    address: redeemVault,
     abi: vaultAbi,
     functionName: "previewRedeem",
     args: withdrawShares !== null ? [withdrawShares] : undefined,
-    query: { enabled: isConnected && withdrawShares !== null && selectedVault !== undefined },
+    query: { enabled: isConnected && withdrawShares !== null && redeemVault !== undefined },
   });
 
   // -------- insufficient balance check --------
@@ -190,6 +283,46 @@ export function DepositWithdrawTab(props: Props) {
   // hard refusal — the signing prompt is never shown when balance < shares.
   const hasInsufficientBalance =
     withdrawShares !== null && typeof shareBalance === "bigint" && shareBalance < withdrawShares;
+
+  // -------- router share allowance (QA plan D9) --------
+  // The router spends the holder's shares in `redeemFor`, so it needs an
+  // allowance on the vault's share token covering exactly the shares.
+  const { data: routerShareAllowance, refetch: refetchRouterShareAllowance } = useReadContract({
+    address: redeemVault,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: address && redeemRouter ? [address, redeemRouter] : undefined,
+    query: {
+      enabled:
+        isConnected && Boolean(address) && redeemVault !== undefined && redeemRouter !== undefined,
+    },
+  });
+  const shareApprovalNeeded =
+    redeemRouter !== undefined &&
+    withdrawShares !== null &&
+    needsShareApproval(routerShareAllowance, withdrawShares);
+  const routerAllowanceLeftover =
+    redeemRouter !== undefined && leftoverRouterAllowance(routerShareAllowance, withdrawShares);
+
+  // The floor is the live previewRedeem less the router tolerance. The deadline moves in 5-minute
+  // steps, so the simulation's arguments stay stable between renders.
+  const minAssets =
+    typeof previewRedeemAssets === "bigint" ? deriveMinAssets(previewRedeemAssets) : null;
+  const routerRedeemInputs: RouterRedeemInputs | null =
+    redeemRouter !== undefined &&
+    redeemVault !== undefined &&
+    withdrawShares !== null &&
+    address &&
+    !hasInsufficientBalance &&
+    minAssets !== null
+      ? {
+          vault: redeemVault,
+          shares: withdrawShares,
+          minAssets,
+          holder: address,
+          deadline: routerRedeemDeadline(Date.now()),
+        }
+      : null;
 
   // -------- deposit preview + simulation --------
   const depositAction =
@@ -199,7 +332,11 @@ export function DepositWithdrawTab(props: Props) {
   // Build the deposit preview against the selected deposit target so the
   // decoded TxPreview reports the vault the user actually deposits into
   // (DAPP-4) rather than the default props.vaultAddress.
-  const depositCtx: VaultPreviewContext = { ...props.ctx, vault: depositVault };
+  const depositCtx: VaultPreviewContext = {
+    ...props.ctx,
+    vault: depositVault,
+    shareSymbol: depositSymbol,
+  };
   const depositPreview = depositAction ? buildVaultPreview(depositAction, depositCtx) : null;
 
   const allowanceOk =
@@ -232,15 +369,21 @@ export function DepositWithdrawTab(props: Props) {
   });
 
   // -------- redeem preview + simulation --------
-  // Use the selectedVault (which may differ from props.vaultAddress when
-  // PositionSelector is active) to build the preview context and simulation.
-  // Fall back to props.vaultAddress when no position has been selected yet.
+  // Use the accepted redeem target (which may differ from props.vaultAddress
+  // when PositionSelector is active) to build the preview context and
+  // simulation. A refused selection builds neither.
   const redeemCtx: VaultPreviewContext = {
     ...props.ctx,
-    vault: selectedVault ?? props.vaultAddress,
+    vault: redeemVault ?? props.vaultAddress,
+    shareSymbol: redeemSymbol,
   };
+  // The direct `vault.redeem` is built only on the direct route (QA plan D9).
   const redeemAction =
-    withdrawShares !== null && address && !hasInsufficientBalance && selectedVault !== undefined
+    route.kind === "direct" &&
+    withdrawShares !== null &&
+    address &&
+    !hasInsufficientBalance &&
+    redeemVault !== undefined
       ? ({
           kind: "vaultRedeem",
           shares: withdrawShares,
@@ -248,17 +391,63 @@ export function DepositWithdrawTab(props: Props) {
           owner: address,
         } as const)
       : null;
-  const redeemPreview = redeemAction ? buildVaultPreview(redeemAction, redeemCtx) : null;
+  const routerRedeemPreview =
+    routerRedeemInputs && redeemRouter
+      ? buildRouterRedeemPreview(routerRedeemInputs, {
+          ...props.ctx,
+          router: redeemRouter,
+          shareSymbol: redeemSymbol,
+        })
+      : null;
+  const directRedeemPreview = redeemAction ? buildVaultPreview(redeemAction, redeemCtx) : null;
+  const redeemPreview = directRedeemPreview ?? routerRedeemPreview;
 
-  const { data: redeemSim, error: redeemSimError } = useSimulateContract({
+  const { data: directRedeemSim, error: directRedeemSimError } = useSimulateContract({
     account: address,
-    address: selectedVault,
+    address: redeemVault,
     abi: vaultAbi,
     functionName: "redeem",
     args: redeemAction
       ? [redeemAction.shares, redeemAction.receiver, redeemAction.owner]
       : undefined,
-    query: { enabled: isConnected && redeemPreview?.ok === true, retry: 5 },
+    query: { enabled: isConnected && directRedeemPreview?.ok === true, retry: 5 },
+  });
+
+  // The router redeem simulates once the router may spend the shares: before
+  // the approval it would revert on the vault's allowance check.
+  const routerCall = routerRedeemInputs ? routerRedeemCall(routerRedeemInputs) : null;
+  const { data: routerRedeemSim, error: routerRedeemSimError } = useSimulateContract({
+    account: address,
+    address: redeemRouter,
+    abi: routerAbi,
+    functionName: "redeemFor",
+    args: routerCall?.args,
+    query: {
+      enabled: isConnected && routerRedeemPreview?.ok === true && !shareApprovalNeeded,
+      retry: 5,
+    },
+  });
+  const redeemSimError = directRedeemSimError ?? routerRedeemSimError;
+  // The approval is offered only for a redeem that is otherwise ready to sign.
+  const showShareApproval = shareApprovalNeeded && routerRedeemPreview?.ok === true;
+
+  // Exactly the entered shares, to the router, on the redeemed vault's share token.
+  const { data: shareApproveSim, error: shareApproveSimError } = useSimulateContract({
+    account: address,
+    address: redeemVault,
+    abi: erc20Abi,
+    functionName: "approve",
+    args: redeemRouter && withdrawShares !== null ? [redeemRouter, withdrawShares] : undefined,
+    query: { enabled: isConnected && showShareApproval, retry: 5 },
+  });
+  // Clears an allowance the next redeem would leave standing.
+  const { data: shareRevokeSim } = useSimulateContract({
+    account: address,
+    address: redeemVault,
+    abi: erc20Abi,
+    functionName: "approve",
+    args: redeemRouter ? [redeemRouter, 0n] : undefined,
+    query: { enabled: isConnected && routerAllowanceLeftover, retry: 5 },
   });
 
   // Surface simulate failures to the console so the e2e test (which
@@ -283,21 +472,69 @@ export function DepositWithdrawTab(props: Props) {
       console.error("[DepositWithdrawTab] redeem simulate error:", redeemSimError);
     }
   }, [redeemSimError]);
+  useEffect(() => {
+    if (shareApproveSimError) {
+      // eslint-disable-next-line no-console
+      console.error("[DepositWithdrawTab] share approve simulate error:", shareApproveSimError);
+    }
+  }, [shareApproveSimError]);
 
+  // Defence in depth (issue 1737 part 4): the buttons are disabled in these states, but a handler
+  // reached another way with a stale simulation must still refuse.
   const onApprove = () => {
-    if (!approveSim) return;
+    if (!approveSim || depositsClosed) return;
+    if (!sameAddress(approveSim.request.args?.[0], depositVault)) return;
     approveWrite.writeContract(approveSim.request);
   };
 
   const onDeposit = () => {
-    if (!depositSim) return;
+    if (!depositSim || depositsClosed || depositPreview?.ok !== true || !allowanceOk) return;
+    if (!sameAddress(depositSim.request.address, depositVault)) return;
     depositWrite.writeContract(withGasLimit(depositSim.request, VAULT_DEPOSIT_GAS_LIMIT));
   };
 
-  const onWithdraw = () => {
-    if (!redeemSim) return;
-    withdrawWrite.writeContract(redeemSim.request);
+  // Only an approval of exactly the entered shares, to the router, on the redeemed vault's token.
+  const onApproveShares = () => {
+    if (!shareApproveSim || !shareApprovalNeeded || redeemVault === undefined) return;
+    if (!sameAddress(shareApproveSim.request.address, redeemVault)) return;
+    if (!sameAddress(shareApproveSim.request.args?.[0], redeemRouter)) return;
+    if (shareApproveSim.request.args?.[1] !== withdrawShares) return;
+    shareApproveWrite.writeContract(shareApproveSim.request);
   };
+
+  const onRevokeShares = () => {
+    if (!shareRevokeSim || !routerAllowanceLeftover || redeemVault === undefined) return;
+    if (!sameAddress(shareRevokeSim.request.address, redeemVault)) return;
+    if (!sameAddress(shareRevokeSim.request.args?.[0], redeemRouter)) return;
+    if (shareRevokeSim.request.args?.[1] !== 0n) return;
+    shareApproveWrite.writeContract(shareRevokeSim.request);
+  };
+
+  const onWithdraw = () => {
+    if (redeemVault === undefined || redeemPreview?.ok !== true) return;
+    if (hasInsufficientBalance) return;
+    if (route.kind === "router") {
+      if (!routerRedeemSim || shareApprovalNeeded) return;
+      // Defence in depth: the simulated call goes to the router and redeems
+      // exactly one leg, the accepted vault.
+      if (!sameAddress(routerRedeemSim.request.address, route.router)) return;
+      const legs = routerRedeemSim.request.args?.[2];
+      if (!legs || legs.length !== 1 || !sameAddress(legs[0], redeemVault)) return;
+      withdrawWrite.writeContract(routerRedeemSim.request);
+      return;
+    }
+    if (route.kind !== "direct" || !directRedeemSim) return;
+    // Defence in depth: a simulation left over from an earlier selection must
+    // not send a redeem to a target other than the accepted one.
+    if (acceptedRedeemTarget(directRedeemSim.request.address, redeemAllowlist) !== redeemVault) {
+      return;
+    }
+    withdrawWrite.writeContract(directRedeemSim.request);
+  };
+  const withdrawReady =
+    route.kind === "router"
+      ? Boolean(routerRedeemSim) && !shareApprovalNeeded
+      : route.kind === "direct" && Boolean(directRedeemSim);
 
   // Refetch on-chain state once each tx is mined. `isSuccess` flips
   // exactly once per receipt so the effect runs at most once per write.
@@ -315,8 +552,14 @@ export function DepositWithdrawTab(props: Props) {
   useEffect(() => {
     if (withdrawReceipt.isSuccess) {
       void refetchShareBalance();
+      if (redeemRouter) void refetchRouterShareAllowance();
     }
-  }, [withdrawReceipt.isSuccess, refetchShareBalance]);
+  }, [withdrawReceipt.isSuccess, refetchShareBalance, redeemRouter, refetchRouterShareAllowance]);
+  useEffect(() => {
+    if (shareApproveReceipt.isSuccess && redeemRouter) {
+      void refetchRouterShareAllowance();
+    }
+  }, [shareApproveReceipt.isSuccess, redeemRouter, refetchRouterShareAllowance]);
 
   const routerCtx: RouterPreviewContext | null =
     hasSelector && props.routerAddress ? { ...props.ctx, router: props.routerAddress } : null;
@@ -344,7 +587,7 @@ export function DepositWithdrawTab(props: Props) {
         /* Single-vault deposit path (unchanged from issue #257) */
         <section data-testid="deposit-form">
           <h2>Deposit USDC</h2>
-          <p>Approve USDC, then deposit into the vault to receive rmUSDC shares.</p>
+          <p>Approve USDC, then deposit into the vault to receive {depositSymbol}.</p>
           <DepositsClosedNotice
             state={depositClosedState}
             scope="This vault"
@@ -388,8 +631,22 @@ export function DepositWithdrawTab(props: Props) {
             Sign deposit with wallet
           </button>
           <ReceiptValueDisplay
-            shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
-            label="rmUSDC balance"
+            shares={
+              typeof shareBalance === "bigint" ? formatShares(shareBalance, redeemSymbol) : "0"
+            }
+            label={`${redeemSymbol} balance`}
+          />
+          <WriteStatus
+            testId="deposit-approve"
+            label="USDC approval"
+            write={approveWrite}
+            receipt={approveReceipt}
+          />
+          <WriteStatus
+            testId="deposit"
+            label="Deposit"
+            write={depositWrite}
+            receipt={depositReceipt}
           />
           {approveSimError && (
             <p className="hint" data-testid="approve-sim-error">
@@ -406,7 +663,7 @@ export function DepositWithdrawTab(props: Props) {
 
       <section data-testid="withdraw-form">
         <h2>Withdraw</h2>
-        <p>Select a vault position, then burn rmUSDC shares to redeem USDC (net of exitFeeBps).</p>
+        <p>Select a vault position, then burn {redeemSymbol} to redeem USDC (net of exitFeeBps).</p>
         {props.explorerApiUrl && isConnected && address && (
           <PositionSelector
             account={address}
@@ -425,7 +682,7 @@ export function DepositWithdrawTab(props: Props) {
           />
         )}
         <label>
-          Shares (rmUSDC)
+          Shares ({redeemSymbol})
           <input
             data-testid="withdraw-amount"
             value={withdrawInput}
@@ -434,23 +691,32 @@ export function DepositWithdrawTab(props: Props) {
             inputMode="decimal"
           />
         </label>
-        {selectedVault !== undefined && (
+        {redeemTargetRefused && selectedVault !== undefined && (
+          <p className="error" data-testid="withdraw-target-unregistered">
+            Refusing to redeem from {selectedVault}: the on-chain VaultRegistry does not list this
+            vault. The position list comes from the explorer, which cannot choose a signing target.
+          </p>
+        )}
+        {redeemVault !== undefined && (
           <VaultPositionCard
-            vaultAddress={selectedVault}
-            vaultName={selectedVault}
-            shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
+            vaultAddress={redeemVault}
+            vaultName={redeemVault}
+            shares={
+              typeof shareBalance === "bigint" ? formatShares(shareBalance, redeemSymbol) : "0"
+            }
+            exclusionClaim={exclusionClaim !== undefined ? formatUsdc(exclusionClaim) : undefined}
           />
         )}
         <ReceiptValueDisplay
-          shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
-          label="rmUSDC balance"
+          shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, redeemSymbol) : "0"}
+          label={`${redeemSymbol} balance`}
         />
         {hasInsufficientBalance && (
           <p className="hint" data-testid="withdraw-insufficient-balance">
             Insufficient balance: you hold{" "}
-            {typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"} but
-            entered {withdrawShares !== null ? formatShares(withdrawShares, "rmUSDC") : "0"}. Reduce
-            the amount before signing.
+            {typeof shareBalance === "bigint" ? formatShares(shareBalance, redeemSymbol) : "0"} but
+            entered {withdrawShares !== null ? formatShares(withdrawShares, redeemSymbol) : "0"}.
+            Reduce the amount before signing.
           </p>
         )}
         {typeof previewRedeemAssets === "bigint" && withdrawShares !== null && (
@@ -458,21 +724,80 @@ export function DepositWithdrawTab(props: Props) {
             Estimated USDC out: {formatUsdcPreview(previewRedeemAssets)} (net of exit fee)
           </p>
         )}
+        {/* Which contract the redeem goes to, and its floor or why it has none (QA plan D9). */}
+        {redeemVault !== undefined && (
+          <p className="hint" data-testid="withdraw-route" data-route={route.kind}>
+            {route.kind === "router"
+              ? minAssets !== null
+                ? `Routed through the Portfolio Router: the redeem reverts unless the vault pays at least ${formatUsdc(minAssets)} (previewRedeem less ${formatPercent(ROUTER_SLIPPAGE_TOLERANCE_BPS)}).`
+                : `Routed through the Portfolio Router: the redeem carries a minimum-out floor of previewRedeem less ${formatPercent(ROUTER_SLIPPAGE_TOLERANCE_BPS)}.`
+              : route.kind === "direct"
+                ? `This redeem calls the vault directly and has no minimum-out floor: ${directRedeemReasonText(route.reason)}.`
+                : "Reading the vault registry to choose the redeem route…"}
+          </p>
+        )}
         {redeemPreview && <TxPreview preview={redeemPreview} />}
+        {showShareApproval && (
+          <>
+            <p className="hint" data-testid="withdraw-approve-hint">
+              The router redeems your shares for you, so approve it for exactly the{" "}
+              {withdrawShares !== null ? formatShares(withdrawShares, redeemSymbol) : redeemSymbol}{" "}
+              to redeem. The redeem spends the whole allowance.
+            </p>
+            <button
+              type="button"
+              data-testid="withdraw-approve"
+              onClick={onApproveShares}
+              disabled={!isConnected || !shareApproveSim || isPending}
+            >
+              Approve {redeemSymbol} for the router
+            </button>
+          </>
+        )}
         <button
           type="button"
           data-testid="withdraw-submit"
           onClick={onWithdraw}
           disabled={
             !isConnected ||
-            !redeemSim ||
+            !withdrawReady ||
             isPending ||
             redeemPreview?.ok !== true ||
-            hasInsufficientBalance === true
+            hasInsufficientBalance === true ||
+            redeemVault === undefined
           }
         >
           Sign withdraw with wallet
         </button>
+        {routerAllowanceLeftover && typeof routerShareAllowance === "bigint" && (
+          <>
+            <p className="hint" data-testid="withdraw-router-allowance-leftover">
+              The router holds an allowance of {formatShares(routerShareAllowance, redeemSymbol)} on
+              your shares that the redeem entered here will not spend. Revoke it unless you redeem
+              that much now.
+            </p>
+            <button
+              type="button"
+              data-testid="withdraw-revoke"
+              onClick={onRevokeShares}
+              disabled={!isConnected || !shareRevokeSim || isPending}
+            >
+              Revoke router allowance
+            </button>
+          </>
+        )}
+        <WriteStatus
+          testId="withdraw-approve"
+          label="Share approval"
+          write={shareApproveWrite}
+          receipt={shareApproveReceipt}
+        />
+        <WriteStatus
+          testId="withdraw"
+          label="Withdraw"
+          write={withdrawWrite}
+          receipt={withdrawReceipt}
+        />
         {redeemSimError && (
           <p className="hint" data-testid="redeem-sim-error">
             redeem simulate failed: {redeemSimError.message}

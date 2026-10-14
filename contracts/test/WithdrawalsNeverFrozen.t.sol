@@ -518,7 +518,8 @@ contract WithdrawalsNeverFrozenTest is Test {
         gateway.commitAuthorization(keccak256(abi.encode(agent, agent, salt)));
         vm.roll(block.number + 1);
         vm.prank(agent);
-        gateway.revealAuthorization(agent, salt, p);
+        // Revealing for itself is the agent's consent; no signature (issue #1791).
+        gateway.revealAuthorization(agent, salt, p, "");
     }
 
     function _setStatus(address v, VaultRegistry.VaultStatus status) internal {

@@ -18,12 +18,34 @@
  *   allow_software_fallback = true
  *   keystore_path
  *
- * Encrypted-keystore exports are explicitly non-production. `rmpc` refuses
- * software signing for Base mainnet write commands; production operators
- * should use an HSM/KMS/device-bound backend when those fields are available.
+ * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
+ * and `withdraw-router` sign with the software keystore on Base mainnet too,
+ * after a production warning (owner decision 2026-10-06, issue #1545). A
+ * hardware wallet, HSM or KMS is optional, never required (owner decision
+ * 2026-10-14). The exported comment block says so: see
+ * `SOFTWARE_KEYSTORE_COMMENT`.
  */
 
 export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
+
+/**
+ * Comment lines emitted above `allow_software_fallback = true` in an
+ * encrypted-keystore export. They state the signer decisions of 2026-10-06
+ * and 2026-10-14 (QA plan U7, finding DR-12); the old lines said a software
+ * keystore was "devnet/test use only" and that Base mainnet required an
+ * HSM/KMS/device-bound signer, which rmpc has not enforced for depositor
+ * writes since 2026-10-06.
+ *
+ * `clients/rust-payment-client/tests/dapp_toml_roundtrip.rs` reads this array
+ * from this file and checks that its fixture carries every line verbatim and
+ * still loads through rmpc's `Config::from_str`. Keep one string per line.
+ */
+export const SOFTWARE_KEYSTORE_COMMENT: readonly string[] = [
+  "# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every",
+  "# chain, Base mainnet included, after a production warning (owner decision 2026-10-06).",
+  "# A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).",
+  "# rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.",
+];
 
 interface SignerSpec {
   kind: SignerKind;
@@ -75,11 +97,7 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
 
 function buildSignerLines(signer: SignerSpec): string[] {
   if (signer.kind === "encrypted_keystore") {
-    const lines = [
-      `# UNSAFE FOR PRODUCTION: software keystore is for devnet/test use only.`,
-      `# Base mainnet write commands require an HSM/KMS/device-bound signer.`,
-      `allow_software_fallback = true`,
-    ];
+    const lines = [...SOFTWARE_KEYSTORE_COMMENT, `allow_software_fallback = true`];
     if (signer.keystore_path !== undefined) {
       lines.push(`keystore_path = ${tomlStr(signer.keystore_path)}`);
     }

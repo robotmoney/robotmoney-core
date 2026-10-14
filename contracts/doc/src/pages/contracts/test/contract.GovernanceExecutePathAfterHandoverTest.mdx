@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -111,6 +111,12 @@ bytes32 internal constant RECEIPT_ID = keccak256("receipt-after-handover");
 
 ```solidity
 bytes32 internal constant DIGEST = keccak256("payload-after-handover");
+```
+
+### HOLDER_DEPOSIT
+
+```solidity
+uint256 internal constant HOLDER_DEPOSIT = 2_000e6;
 ```
 
 ## State Variables
@@ -249,6 +255,30 @@ address internal submitter = makeAddr("committee-submitter");
 
 ```solidity
 address internal agentWoon = makeAddr("committee-woon");
+```
+
+### adapterA
+
+```solidity
+NoYieldTestAdapter internal adapterA;
+```
+
+### adapterB
+
+```solidity
+NoYieldTestAdapter internal adapterB;
+```
+
+### holder
+
+```solidity
+address internal holder = makeAddr("recovery-holder");
+```
+
+### latecomer
+
+```solidity
+address internal latecomer = makeAddr("recovery-latecomer");
 ```
 
 ## Functions
@@ -405,6 +435,134 @@ single key drives governance (governance-isomorphism.md R10).
 ```solidity
 function test_oneOwnerCannotDriveTheTimelock() public;
 ```
+
+<a id="test_recovery1788_quarantinedrainremovereopenthroughsafeandtimelock"></a>
+
+### test_recovery1788_quarantineDrainRemoveReopenThroughSafeAndTimelock
+
+core 1788, the documented recovery (`setAdapterAllowed` NatSpec). The Safe
+quarantines a funded adapter through the timelock: its balance leaves NAV and
+deposits close at once. The emergency key drains it into the exclusion record
+(core 1820), which also pauses deposits. The Safe removes the empty entry and
+reopens deposits in ONE timelock batch. The holder who stayed keeps the full
+claim and nobody minted in between.
+
+```solidity
+function test_recovery1788_quarantineDrainRemoveReopenThroughSafeAndTimelock() public;
+```
+
+<a id="test_recovery1788_adminrebalancedrainsandremovesinonetimelockbatch"></a>
+
+### test_recovery1788_adminRebalanceDrainsAndRemovesInOneTimelockBatch
+
+core 1788, the ADMIN-only recovery: `adminRebalance` stays the explicit recovery
+path for a quarantined adapter. ONE timelock batch through the Safe drains it into
+the exclusion record (core 1820) and removes its entry, so the accounting repair
+is atomic and needs no emergency key. The eligible adapter is untouched.
+
+```solidity
+function test_recovery1788_adminRebalanceDrainsAndRemovesInOneTimelockBatch() public;
+```
+
+<a id="test_recovery1788_restoredeligibilityreturnsthevaluethroughsafeandtimelock"></a>
+
+### test_recovery1788_restoredEligibilityReturnsTheValueThroughSafeAndTimelock
+
+core 1788, recovery by restored eligibility: the Safe allows the adapter again
+through the timelock and the excluded value returns to the holder who stayed.
+Since core 1820 the restore realises the adapter's balance into the exclusion
+record first, so the value reaches the holder as a record claim.
+
+```solidity
+function test_recovery1788_restoredEligibilityReturnsTheValueThroughSafeAndTimelock() public;
+```
+
+<a id="test_recovery1789_duplicateaddisrefusedatexecutethroughsafeandtimelock"></a>
+
+### test_recovery1789_duplicateAddIsRefusedAtExecuteThroughSafeAndTimelock
+
+core 1789 through the production route: the Safe schedules a second `addAdapter`
+for an address an active entry holds; after the delay the execute reverts
+`AdapterAlreadyActive` (GS013 through the Safe). No duplicate entry exists to
+repair, and NAV counts the balance once.
+
+```solidity
+function test_recovery1789_duplicateAddIsRefusedAtExecuteThroughSafeAndTimelock() public;
+```
+
+<a id="test_recovery1789_drainremovereaddisoneatomictimelockbatch"></a>
+
+### test_recovery1789_drainRemoveReAddIsOneAtomicTimelockBatch
+
+core 1789, the legal re-registration (review finding 2: drain, remove, re-add,
+exercised through the actual governance path). The emergency key pauses deposits,
+then ONE atomic timelock batch through the Safe drains the adapter to idle, removes
+its entry, adds it again as a NEW entry, refills it and reopens deposits. The
+balance is counted once throughout and the holder is paid at par. The new active
+entry still refuses a duplicate.
+
+```solidity
+function test_recovery1789_drainRemoveReAddIsOneAtomicTimelockBatch() public;
+```
+
+<a id="_onboardtwofundedadapters"></a>
+
+### _onboardTwoFundedAdapters
+
+<i>
+
+Two funded adapters onboarded through the Safe and the timelock in ONE batch (allow
+both instances and their code hashes, add both at a 100 % cap), then a holder whose
+deposit the vault routes across them.
+
+</i>
+
+```solidity
+function _onboardTwoFundedAdapters() internal;
+```
+
+<a id="_govvault-bytes-bytes32"></a>
+
+### _govVault
+
+<i>
+
+One vault ADMIN_ROLE call: Safe -> timelock.schedule, the delay, Safe -> execute.
+
+</i>
+
+```solidity
+function _govVault(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="_govvaultbatch-bytes-bytes32"></a>
+
+### _govVaultBatch
+
+<i>
+
+Several vault ADMIN_ROLE calls as ONE atomic timelock operation: Safe ->
+scheduleBatch, the delay, Safe -> executeBatch.
+
+</i>
+
+```solidity
+function _govVaultBatch(bytes[] memory payloads, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| payloads | `bytes[]` |  |
+| salt | `bytes32` |  |
 
 <a id="_sixtyforty"></a>
 

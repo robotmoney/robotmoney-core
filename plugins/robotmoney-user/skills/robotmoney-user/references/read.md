@@ -141,9 +141,15 @@ rmpc get-agent --config ./config.toml --agent <0x...> [--pretty]
 ```
 
 Reads `agents[address]` policy: `active`, `validUntil`, `maxPerPayment`,
-`maxPerWindow`, `shareReceiver`, plus the current
-`agentWindowGross[address][windowId]` for the live window. Use it before any
-deposit to confirm the agent is authorized and has remaining cap.
+`maxPerWindow`, `shareReceiver`, `assetRecipient`, the withdraw caps, the
+gateway's share allowance, and the rolling-window deposit gross
+(`effectiveDepositWindowGross`). Use it before any deposit to confirm the
+agent is authorized and has remaining cap.
+
+A sub-read that fails renders its fields as `null`, with `partial: true` and
+the failed read named in `errors`. A `null` `active` or `withdrawals_enabled`
+means unknown. Never treat it as `false`, and never treat a `null` cap as
+zero.
 
 ---
 

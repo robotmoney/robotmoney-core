@@ -102,15 +102,21 @@ contract VaultCodeSizeGuard is Test {
     /// @notice Core 1676 changes no vault logic: the vault family keeps its recorded headroom. The headroom floors are
     ///         the measured sizes after core 1673 and 1666 (AgentTokenVault 65 bytes, ProtocolAssetVault and
     ///         RwaBasketVault 107 bytes), lowered by the 10 bytes the core 1778 dust-sell floor costs (AgentTokenVault
-    ///         55 bytes, ProtocolAssetVault and RwaBasketVault 97 bytes). A change that eats them fails here before it fails an EIP-170 deploy.
+    ///         55 bytes, ProtocolAssetVault and RwaBasketVault 97 bytes). Core 1793 (QA plan D5) put the deposit's ORA-4 check
+    ///         and the new redeem sell anchor behind one shared `BasketViews.checkMarket` call site, which freed 45 bytes
+    ///         (AgentTokenVault 100 bytes, ProtocolAssetVault and RwaBasketVault 142 bytes, `forge build --sizes`). QA plan D6
+    ///         moved the `removeAsset` body, with its new dust check, into the linked `BasketAssetConfigGuard.deactivateAsset`,
+    ///         which freed 168 bytes net of the dust skips in the sell, unwind and re-absorb paths (AgentTokenVault 268 bytes,
+    ///         ProtocolAssetVault and RwaBasketVault 310 bytes). A change that eats them fails here before it fails an EIP-170
+    ///         deploy.
     function test_vaultFamily_keepsItsMeasuredHeadroom() public {
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 55
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 268
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            97
+            310
         );
-        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 97);
+        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 310);
     }
 }

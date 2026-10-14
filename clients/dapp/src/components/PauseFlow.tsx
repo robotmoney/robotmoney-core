@@ -31,6 +31,7 @@ import { DEPOSIT_PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { SafeProposalPanel } from "./SafeProposalPanel";
 import { TxPreview } from "./TxPreview";
+import { WriteStatus } from "./WriteStatus";
 
 interface PauseFlowProps {
   gatewayAddress: Address;
@@ -62,7 +63,8 @@ export function PauseFlow(props: PauseFlowProps) {
   });
   const hasPauserRole = Boolean(hasPauserData);
 
-  const { writeContract, isPending } = useGuardedWriteContract();
+  const pauseWrite = useGuardedWriteContract();
+  const { writeContract, isPending } = pauseWrite;
 
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,
@@ -116,6 +118,12 @@ export function PauseFlow(props: PauseFlowProps) {
         >
           Sign deposit pause with wallet
         </button>
+        {/* A refused or rejected pause says why (QA plan U5, finding DR-9). */}
+        <WriteStatus
+          testId="pause"
+          label="Deposit pause"
+          write={{ error: pauseWrite.error, isPending }}
+        />
       </section>
 
       <section data-testid="unpause-form">

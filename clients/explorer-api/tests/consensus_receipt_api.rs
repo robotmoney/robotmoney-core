@@ -59,6 +59,10 @@ const MIGRATIONS: &[&str] = &[
     ),
     // Issue 1741: vault_snapshots.tvl_cap nullable, per_deposit_cap.
     include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
+    // DI-10 (QA plan v1 X4): committee_votes keyed by the emitting policy.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0019_committee_votes_contract_scope.sql"
+    ),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from

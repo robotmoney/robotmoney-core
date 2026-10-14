@@ -133,18 +133,20 @@ into the adapter — but pricing is **not wholly delegated** to the adapter (see
   then mint on the realized NAV delta with a slippage-floor revert guard —
   `BasketVault`'s AZ-BSK-1 model, which degenerates to exact behavior for
   lending adapters (realized delta == deposit). The mint denominator MUST be
-  the **idle-inclusive** OZ denominator (`taBefore − revokedIdle + 1`, where
-  `taBefore` already includes idle USDC and `revokedIdle` — normally `0` — is
-  only USDC recovered from a revoked/excluded adapter, so the common-case
-  denominator is the exact OZ value `taBefore + 1`; `taBefore` is read before
-  pulling the caller's USDC). Existing
+  the **idle-inclusive** OZ denominator `taBefore + 1`, where `taBefore`
+  already includes idle USDC and is read before pulling the caller's USDC.
+  This ADR first carved a `revokedIdle` term out of it for USDC recovered
+  from a revoked/excluded adapter. The shipped `RobotMoneyVault` needs no
+  carve-out (core 1820): every USDC recovered from an excluded adapter goes
+  to the vault's `ExclusionLedger`, never to idle, and is paid pro rata to
+  the holders at the moment of exclusion, exiters included. Existing
   shares are backed by `totalAssets()`, which **includes** idle USDC; pricing
   new shares on adapter-NAV only over-mints when pre-existing idle USDC is
   present (a normal steady state after `emergencyWithdraw` or a cap-full
   `UnroutedDeposit`), breaking the SUP-3 no-round-trip-profit invariant and
-  underflowing the first deposit into a cap-full adapter set. The idle
-  **exclusion** (AZ-BSK-3) applies **only** to recovered USDC from a
-  revoked/excluded adapter — never to the whole vault balance.
+  underflowing the first deposit into a cap-full adapter set. No idle USDC is
+  ever excluded (AZ-BSK-3): recovered value from an excluded adapter is not
+  idle at all.
 
 - **Withdrawal — two pinned redemption modes (H-A2):** the redemption path
   **branches on `allExact()`**; the two modes are distinct algorithms, not one

@@ -17,11 +17,21 @@
  * Unverified bytecode is still `unsafe`, matching the gateway path —
  * the same `PreviewContext` is reused (gatewayCodeHashVerified gates
  * both surfaces because the smoke-test devnet deploys both atomically).
+ *
+ * The target badge is the vault's own: `targetCodeHashKnown` is true only
+ * when the vault is in `ctx.verifiedTargets` (it matched a code-hash pin).
+ * The gateway hash says nothing about the vault, so without a pin the preview
+ * shows "[bytecode UNVERIFIED]" (QA plan U4, finding DR-5).
+ *
+ * Share counts print the vault's own `symbol()` (issue 1773, QA plan U5): the
+ * caller reads it with `useVaultShareSymbols` and passes it as
+ * `ctx.shareSymbol`. Without one the preview says the neutral "shares", never a
+ * unit guessed from another vault.
  */
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
 import { vaultAbi, type VaultActionName } from "./abi";
-import type { Preview, PreviewContext, RiskClass } from "./preview";
+import { targetCodeHashPinned, type Preview, type PreviewContext, type RiskClass } from "./preview";
 // ProductReasonCode is used indirectly through the Preview type's typed reason field.
 
 export type VaultAction =
@@ -31,6 +41,8 @@ export type VaultAction =
 /** Context for a vault preview — vault address plus the same env/code-hash gate. */
 export interface VaultPreviewContext extends PreviewContext {
   vault: Address;
+  /** The vault's own share symbol from `useVaultShareSymbols`. Absent: "shares". */
+  shareSymbol?: string;
 }
 
 export function classifyVaultRisk(_action: VaultAction, ctx: VaultPreviewContext): RiskClass {
@@ -45,6 +57,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
     return {
       ok: false,
       reason: "unknown_revert" as const,
+      ...(ctx.gatewayRefusalDetail ? { detail: ctx.gatewayRefusalDetail } : {}),
     };
   }
 
@@ -52,6 +65,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
   let args: { name: string; raw: string; gloss: string }[];
   let effect: string;
   let functionName: VaultActionName;
+  const unit = shareSymbolOrNeutral(ctx.shareSymbol);
 
   try {
     switch (action.kind) {
@@ -74,7 +88,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
             gloss: `shares -> ${shorten(action.receiver)}`,
           },
         ];
-        effect = `Vault pulls ${formatUsdc(action.assets)} from caller and mints rmUSDC shares to ${shorten(action.receiver)}.`;
+        effect = `Vault pulls ${formatUsdc(action.assets)} from caller and mints ${unit} to ${shorten(action.receiver)}.`;
         break;
       }
       case "vaultRedeem": {
@@ -88,7 +102,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
           {
             name: "shares",
             raw: action.shares.toString(),
-            gloss: `${formatShares(action.shares)} rmUSDC burned`,
+            gloss: `${formatShares(action.shares, unit)} burned`,
           },
           {
             name: "receiver",
@@ -101,7 +115,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
             gloss: `share owner ${shorten(action.owner)}`,
           },
         ];
-        effect = `Vault burns ${formatShares(action.shares)} rmUSDC owned by ${shorten(action.owner)} and credits USDC (net of exitFeeBps) to ${shorten(action.receiver)}.`;
+        effect = `Vault burns ${formatShares(action.shares, unit)} owned by ${shorten(action.owner)} and credits USDC (net of exitFeeBps) to ${shorten(action.receiver)}.`;
         break;
       }
     }
@@ -125,7 +139,8 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
   return {
     ok: true,
     target: ctx.vault,
-    targetCodeHashKnown: ctx.gatewayCodeHashVerified,
+    // The vault's own pin, never the gateway's (QA plan U4).
+    targetCodeHashKnown: targetCodeHashPinned(ctx, ctx.vault),
     functionName,
     selector,
     args,
@@ -139,7 +154,11 @@ function shorten(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-import { formatUsdc as _formatUsdc, formatShares as _formatShares } from "./format";
+import {
+  formatUsdc as _formatUsdc,
+  formatShares as _formatShares,
+  shareSymbolOrNeutral,
+} from "./format";
 
 function formatUsdc(raw: bigint): string {
   return _formatUsdc(raw);
@@ -148,7 +167,8 @@ function formatUsdc(raw: bigint): string {
 /**
  * Vault shares are scaled by the vault's `decimals()` (6) plus the ERC-4626
  * `_decimalsOffset` (18, see RobotMoneyVault.sol): format.ts SHARE_DECIMALS.
+ * The unit is the vault's own symbol (`ctx.shareSymbol`), never a literal.
  */
-function formatShares(raw: bigint): string {
-  return _formatShares(raw, "rmUSDC");
+function formatShares(raw: bigint, unit: string): string {
+  return _formatShares(raw, unit);
 }

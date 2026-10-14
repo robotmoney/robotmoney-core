@@ -29,15 +29,24 @@
 //!   router, authorize an agent, call `gateway.depositTo(router)`, and
 //!   assert the `AgentDepositRouted` event is emitted.
 //!
+//! - `deposit_router_default_gas_clears_gateway_floor` — QA plan U3: the
+//!   shipping `rmpc deposit --destination <router>` against a gateway wired
+//!   to a five-leg router. A `--gas-limit` under the gateway floor
+//!   (400_000 + 1_850_000 per leg) is refused before signing, and the
+//!   derived default lands the deposit on a real EVM.
+//!
 //! Each test boots its own anvil fork backend (per ADR §3.5), providing
 //! full state isolation without snapshot/revert coordination.
 
-use std::path::PathBuf;
+mod rmpc_bin;
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use alloy_primitives::{keccak256, Address, Bytes, U256};
 use alloy_sol_types::sol;
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 // ── Workspace root helper ────────────────────────────────────────────────────
 
@@ -987,4 +996,268 @@ fn agent_gateway_router_deposit() {
     );
 
     eprintln!("[agent_gateway_router_deposit] passed");
+}
+
+// ── Scenario 5: rmpc router deposit gas (QA plan U3) ─────────────────────────
+
+/// Gateway `ROUTER_DEPOSIT_BASE_GAS` and `ROUTER_DEPOSIT_GAS_PER_LEG`
+/// (contracts/gateway/RobotMoneyGateway.sol).
+const ROUTER_DEPOSIT_BASE_GAS: u64 = 400_000;
+const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 1_850_000;
+/// The passphrase of the throwaway agent keystore.
+const RMPC_PASSPHRASE: &str = "fork-e2e-router-gas";
+
+/// An operator config for `rmpc deposit` against this test's own gateway.
+fn write_rmpc_deposit_config(
+    dir: &Path,
+    fx: &ForkFixture,
+    gateway: Address,
+    gateway_vault: Address,
+    keystore: &Path,
+) -> PathBuf {
+    let code = fx.rpc().get_code(gateway).expect("eth_getCode gateway");
+    assert!(!code.is_empty(), "the gateway must have code");
+    let path = dir.join("rmpc.toml");
+    let toml = format!(
+        r#"chain_id              = {chain_id}
+rpc_url               = "{rpc_url}"
+gateway_address       = "{gateway:#x}"
+usdc_address          = "{usdc:#x}"
+vault_address         = "{gateway_vault:#x}"
+gateway_runtime_hash  = "{hash:#x}"
+max_fee_per_gas_cap   = 100000000000
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "{ks}"
+"#,
+        chain_id = fx.chain_id,
+        rpc_url = fx.rpc_url,
+        usdc = rmpc_fork_e2e::addresses::USDC,
+        hash = keccak256(&code),
+        ks = keystore.display(),
+    );
+    std::fs::write(&path, toml).expect("write rmpc.toml");
+    path
+}
+
+/// Run `rmpc deposit --destination <router>` as the keystore's agent.
+fn rmpc_router_deposit(
+    config: &Path,
+    state_dir: &Path,
+    router: Address,
+    amount: U256,
+    order_id: &str,
+    extra: &[&str],
+) -> (Option<i32>, Value, String) {
+    let out = Command::new(rmpc_bin::rmpc_path())
+        .env("RMPC_KEYSTORE_PASSPHRASE", RMPC_PASSPHRASE)
+        .env("RMPC_STATE_DIR", state_dir)
+        .args(["deposit", "--config"])
+        .arg(config)
+        .args([
+            "--amount",
+            &amount.to_string(),
+            "--order-id",
+            order_id,
+            "--destination",
+            &format!("{router:#x}"),
+            "--receipt-timeout-secs",
+            "60",
+        ])
+        .args(extra)
+        .output()
+        .expect("spawn rmpc deposit");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("rmpc stdout is not JSON ({e})\nstdout:\n{stdout}\nstderr:\n{stderr}")
+    });
+    (out.status.code(), v, stderr)
+}
+
+/// deposit_router_default_gas_clears_gateway_floor — QA plan U3 (DR-3).
+///
+/// The gateway checks `gasleft()` at the entry of a router `depositTo`
+/// against 400_000 + 1_850_000 per `getEffectiveWeights()` leg. rmpc used to
+/// send a fixed 3_000_000, which reverts `InsufficientGas` from two legs up
+/// and burns the gas and the nonce. Five legs need 9_650_000, above the
+/// dapp's old 8_000_000 router constant too.
+///
+/// Stack: the fixture's own rmUSDC as the gateway's vault (rmpc's preflight
+/// reads `depositsPaused()` there, which MockVault lacks; the router path
+/// never calls it), five registered MockVault legs at 2_000 bps each, and a
+/// gateway wired to the router. The agent is a throwaway key that rmpc signs
+/// for through a keystore.
+///
+/// Asserts:
+///   - `--gas-limit 3000000` is refused with `ErrGasLimitBelowFloor`, exit 2,
+///     and the agent's nonce does not move (nothing was signed);
+///   - with no `--gas-limit` the deposit lands: exit 0, `AgentDepositRouted`
+///     decoded with five legs, and the mined transaction's gas limit is at
+///     least the floor.
+#[test]
+fn deposit_router_default_gas_clears_gateway_floor() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    eprintln!(
+        "[deposit_router_default_gas_clears_gateway_floor] {}",
+        fx.summary_line()
+    );
+
+    const LEGS: usize = 5;
+    let floor = ROUTER_DEPOSIT_BASE_GAS + LEGS as u64 * ROUTER_DEPOSIT_GAS_PER_LEG;
+    assert_eq!(floor, 9_650_000);
+
+    let usdc = rmpc_fork_e2e::addresses::USDC;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let leg_amount = U256::from(1_000_000u64); // 1 USDC per leg
+    let deposit_amount = leg_amount * U256::from(LEGS as u64);
+
+    let owner = fx
+        .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
+        .expect("fund owner");
+    let pauser = fx.ephemeral(one_eth, U256::ZERO).expect("fund pauser");
+    let agent = fx
+        .ephemeral(one_eth * U256::from(3u64), deposit_amount)
+        .expect("fund agent");
+
+    // The gateway's vault: the fixture's own rmUSDC, deployed and opened by the real vault stage.
+    let gateway_vault = fx.vault();
+
+    let registry = deploy_registry(&owner, owner.address);
+    let router = deploy_portfolio_router(&owner, usdc, registry, owner.address);
+    let mut legs = Vec::with_capacity(LEGS);
+    for i in 0..LEGS {
+        let v = deploy_mock_vault(&owner, usdc);
+        register_vault(&owner, registry, v, usdc, &format!("Leg {i}"));
+        mark_router_eligible(&owner, registry, v);
+        legs.push(v);
+    }
+    owner
+        .send(
+            router,
+            &IPortfolioRouter::setWeightsCall {
+                vaults: legs.clone(),
+                bps: vec![U256::from(2_000u64); LEGS],
+            },
+            U256::ZERO,
+            2_000_000,
+        )
+        .expect("setWeights");
+    let gateway = deploy_gateway(
+        &owner,
+        usdc,
+        gateway_vault,
+        owner.address,
+        pauser.address,
+        router,
+    );
+    eprintln!(
+        "[deposit_router_default_gas_clears_gateway_floor] router={router:#x} gateway={gateway:#x} legs={LEGS}"
+    );
+
+    // Authorize the agent (ADMIN_ROLE caller, no consent needed) for the router only.
+    let now_secs: u64 = fx.chain_now().expect("read chain time");
+    let policy = IGateway::AgentPolicy {
+        active: true,
+        // rmpc's preflight compares validUntil with the host clock: leave a wide margin.
+        validUntil: now_secs + 30 * 24 * 3600,
+        maxPerPayment: deposit_amount,
+        maxPerWindow: deposit_amount,
+        shareReceiver: owner.address,
+        allowedDestinations: vec![router],
+        assetRecipient: Address::ZERO,
+        maxWithdrawPerPayment: U256::ZERO,
+        maxWithdrawPerWindow: U256::ZERO,
+        allowedSourceVaults: vec![],
+    };
+    owner
+        .send(
+            gateway,
+            &IGateway::authorizeAgentCall {
+                agent: agent.address,
+                p: policy,
+            },
+            U256::ZERO,
+            800_000,
+        )
+        .expect("authorizeAgent");
+    approve_usdc(&agent, usdc, gateway, deposit_amount);
+
+    // rmpc signs as the agent through a software keystore.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let keystore = tmp.path().join("keystore.json");
+    rmpc_bin::write_keystore(&keystore, &agent.private_key_hex(), RMPC_PASSPHRASE);
+    let config = write_rmpc_deposit_config(tmp.path(), &fx, gateway, gateway_vault, &keystore);
+    let state_dir = tmp.path().join("state");
+    std::fs::create_dir_all(&state_dir).expect("state dir");
+
+    // 1. The old fixed default is under the floor: refused before signing.
+    let nonce_before = fx.rpc().tx_count(agent.address).expect("nonce");
+    let (code, v, stderr) = rmpc_router_deposit(
+        &config,
+        &state_dir,
+        router,
+        deposit_amount,
+        &format!("{:#x}", alloy_primitives::B256::repeat_byte(0x51)),
+        &["--gas-limit", "3000000"],
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "a gas limit under the floor must be refused: {v}\n{stderr}"
+    );
+    assert_eq!(v["error"], "ErrGasLimitBelowFloor", "{v}");
+    assert_eq!(
+        fx.rpc().tx_count(agent.address).expect("nonce"),
+        nonce_before,
+        "a refused deposit must not sign or broadcast anything"
+    );
+
+    // 2. No --gas-limit: the default is derived from the five legs and clears the floor.
+    let (code, v, stderr) = rmpc_router_deposit(
+        &config,
+        &state_dir,
+        router,
+        deposit_amount,
+        &format!("{:#x}", alloy_primitives::B256::repeat_byte(0x52)),
+        &[],
+    );
+    assert_eq!(code, Some(0), "the router deposit must land: {v}\n{stderr}");
+    assert_eq!(v["status"], "success", "{v}");
+    assert_eq!(v["router"], format!("{router:#x}"), "{v}");
+    let per_leg = v["shares_per_leg"].as_array().expect("shares_per_leg");
+    assert_eq!(per_leg.len(), LEGS, "{v}");
+    for shares in per_leg {
+        // MockVault mints 1:1 and each leg takes 2_000 bps of 5 USDC.
+        assert_eq!(shares, &json!(leg_amount.to_string()), "{v}");
+    }
+
+    let tx_hash = v["tx_hash"].as_str().expect("tx_hash");
+    let tx: Value = fx
+        .rpc()
+        .rpc_raw("eth_getTransactionByHash", json!([tx_hash]))
+        .expect("eth_getTransactionByHash");
+    let gas_hex = tx["gas"].as_str().expect("tx.gas");
+    let gas_limit = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).expect("tx.gas hex");
+    assert!(
+        gas_limit >= floor,
+        "rmpc's default gas limit {gas_limit} is under the gateway floor {floor}"
+    );
+    assert!(
+        gas_limit > 3_000_000,
+        "the default must no longer be the fixed 3_000_000"
+    );
+    for leg in &legs {
+        assert_eq!(
+            usdc_balance_of(&owner, usdc, *leg),
+            leg_amount,
+            "every leg vault holds its 1 USDC"
+        );
+    }
+
+    eprintln!(
+        "[deposit_router_default_gas_clears_gateway_floor] passed gas_limit={gas_limit} floor={floor}"
+    );
 }

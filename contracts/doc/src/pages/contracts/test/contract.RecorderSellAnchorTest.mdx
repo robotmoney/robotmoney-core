@@ -1,0 +1,415 @@
+---
+title: "RecorderSellAnchorTest"
+description: "rmAGENT as deployed: AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager, `maxSlippageBps` 500 and the D10 guard of 400 bps. A keeper records every 300 s. The mock quotes at the live tick less the 2.91 percent fee with no price impact, so every number below is the tick arithmetic alone."
+---
+
+# RecorderSellAnchorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RecorderSellAnchor.t.sol)
+
+**Inherits:** Test
+
+rmAGENT as deployed: AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager,
+`maxSlippageBps` 500 and the D10 guard of 400 bps. A keeper records every 300 s. The mock quotes at the live tick
+less the 2.91 percent fee with no price impact, so every number below is the tick arithmetic alone.
+
+## Constants
+
+### FEE
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 100e6;
+```
+
+### GUARD_BPS
+
+<i>
+
+The rmAGENT sheet guard (QA plan decision D10).
+
+</i>
+
+```solidity
+uint256 internal constant GUARD_BPS = 400;
+```
+
+### KEEPER_SECS
+
+<i>
+
+The keeper cadence from core 1779.
+
+</i>
+
+```solidity
+uint256 internal constant KEEPER_SECS = 300;
+```
+
+### ONE_RECORD_TICKS
+
+<i>
+
+One record's clamp: 10 ticks per second for at most 60 s.
+
+</i>
+
+```solidity
+int24 internal constant ONE_RECORD_TICKS = 600;
+```
+
+### RING_SLOTS
+
+<i>
+
+The recorder stage ring (`DeployUniswapV4PriceRecorder.RING_SLOTS`): the 14_400 s anchor / 2 s + 1.
+
+</i>
+
+```solidity
+uint16 internal constant RING_SLOTS = 7_201;
+```
+
+### ANCHOR_SECS
+
+```solidity
+uint32 internal constant ANCHOR_SECS = 14_400;
+```
+
+### HIGH_LOSS_BPS
+
+<i>
+
+QA plan decision D2: a loss of 5 percent of a redeem within 30 minutes is "high".
+
+</i>
+
+```solidity
+uint256 internal constant HIGH_LOSS_BPS = 500;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+AgentTokenVault internal vault;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### rm
+
+```solidity
+TestERC20 internal rm;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_keep-uint256"></a>
+
+### _keep
+
+<i>
+
+`n` keeper records, `KEEPER_SECS` apart.
+
+</i>
+
+```solidity
+function _keep(uint256 n) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="_recordfor-uint256-uint256"></a>
+
+### _recordFor
+
+<i>
+
+Records every `every` seconds for `secs` seconds (the keeper, or an attacker who pokes faster).
+
+</i>
+
+```solidity
+function _recordFor(uint256 secs, uint256 every) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secs | `uint256` |  |
+| every | `uint256` |  |
+
+<a id="_meanvalue-uint32"></a>
+
+### _meanValue
+
+<i>
+
+USDC value of 1e6 RM units at the mean tick of the last `window` seconds.
+
+</i>
+
+```solidity
+function _meanValue(uint32 window) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_dropbps-uint256-uint256"></a>
+
+### _dropBps
+
+<i>
+
+Basis points by which `afterValue` sits below `beforeValue` (0 when not below).
+
+</i>
+
+```solidity
+function _dropBps(uint256 beforeValue, uint256 afterValue) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| beforeValue | `uint256` |  |
+| afterValue | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_honestproceeds-uint256"></a>
+
+### _honestProceeds
+
+<i>
+
+What a sale of `rmAmount` would pay at the pre-attack tick 0, after the pool fee.
+
+</i>
+
+```solidity
+function _honestProceeds(uint256 rmAmount) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rmAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_sellanchor_helddisplacementunderkeepercadencerefusesusdcredeem"></a>
+
+### test_sellAnchor_heldDisplacementUnderKeeperCadenceRefusesUsdcRedeem
+
+The E1 model on the vault. The attacker holds the pool 600 ticks (6.2 percent) down; the keeper records every
+300 s, so its first record after the push writes the full 600-tick step. After 2100 s the 1800 s NAV TWAP, and
+the sell floor built on it, sits on the held price: a 582 bps drop, above the 5 percent bar. The 4 hour
+anchor has moved 75 ticks, so the held spot is 511 bps below it and the USDC redeem refuses. The lowest
+price at which a USDC redeem could execute is the anchor less the guard: 472 bps under the pre-attack
+anchor, inside the bar. `redeemInKind` still pays the RM.
+
+```solidity
+function test_sellAnchor_heldDisplacementUnderKeeperCadenceRefusesUsdcRedeem() public;
+```
+
+<a id="test_sellanchor_withtheguardoffthedraggedfloorpaystheheldprice"></a>
+
+### test_sellAnchor_withTheGuardOffTheDraggedFloorPaysTheHeldPrice
+
+Before D5: with the guard at 0 (which also switches the anchor off) the same hold lets the USDC redeem through.
+It sells at the held price, 5.8 percent under the honest proceeds, against a floor that moved with it.
+
+```solidity
+function test_sellAnchor_withTheGuardOffTheDraggedFloorPaysTheHeldPrice() public;
+```
+
+<a id="test_sellanchor_holdinsidetheguardstillredeemsinusdc"></a>
+
+### test_sellAnchor_holdInsideTheGuardStillRedeemsInUsdc
+
+A hold inside the guard is not refused: 300 ticks (3 percent) held for 2100 s sits 262 ticks (2.6 percent)
+below the anchor, which has moved 38 ticks.
+
+```solidity
+function test_sellAnchor_holdInsideTheGuardStillRedeemsInUsdc() public;
+```
+
+<a id="test_sellanchor_priceabovetheanchorisneverrefused"></a>
+
+### test_sellAnchor_priceAboveTheAnchorIsNeverRefused
+
+Only the sell side is gated: a price held ABOVE the anchor pays the redeemer more and is never refused.
+
+```solidity
+function test_sellAnchor_priceAboveTheAnchorIsNeverRefused() public;
+```
+
+<a id="testfuzz_sellanchor_usdcredeemwithin30minutesofaholdlosesunderfivepercent-uint256-bool"></a>
+
+### testFuzz_sellAnchor_usdcRedeemWithin30MinutesOfAHoldLosesUnderFivePercent
+
+The D2 bar holds for every hold size and both record cadences. The attacker holds `x` ticks down from the
+keeper's last record and either leaves recording to the 300 s keeper or pokes every 60 s, which drags the
+recorded tick at the clamp's full 10 ticks per second. 30 minutes later a USDC redeem either refuses, or
+executes at a price less than 5 percent under the pre-attack price.
+
+```solidity
+function testFuzz_sellAnchor_usdcRedeemWithin30MinutesOfAHoldLosesUnderFivePercent(
+        uint256 xSeed,
+        bool attackerPokes
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| xSeed | `uint256` |  |
+| attackerPokes | `bool` |  |
+
+<a id="test_sellanchor_youngrecorderusesitswholehistory"></a>
+
+### test_sellAnchor_youngRecorderUsesItsWholeHistory
+
+A young recorder anchors on the history it has: the window is its age until 4 hours, never a revert.
+
+```solidity
+function test_sellAnchor_youngRecorderUsesItsWholeHistory() public;
+```
+
+<a id="test_sellanchor_offwhentheguardiszero"></a>
+
+### test_sellAnchor_offWhenTheGuardIsZero
+
+With the guard at 0 the anchor is off: the vault's own switch for fixtures and opted-out vaults.
+
+```solidity
+function test_sellAnchor_offWhenTheGuardIsZero() public;
+```
+
+<a id="test_sellanchor_dustleftafteranunwinddoesnotrefuseusdcredeem"></a>
+
+### test_sellAnchor_dustLeftAfterAnUnwindDoesNotRefuseUsdcRedeem
+
+QA plan D6 (E4): dust gates nothing. After the unwind sold the RM, anyone can send the vault one RM unit.
+The redeem never sells that unit (its sale floor rounds to zero), so the held price below the anchor must
+not refuse the USDC redeem of the idle USDC. A balance above dust still refuses (the tests above).
+
+```solidity
+function test_sellAnchor_dustLeftAfterAnUnwindDoesNotRefuseUsdcRedeem() public;
+```
+

@@ -258,6 +258,58 @@ async fn a_logs_endpoint_that_answers_403_is_reported_as_a_refusal_with_one_requ
     stub.shutdown();
 }
 
+/// DI-5: a tick that reads the head and then fails still records that head. Before the fix the failed run
+/// left `chain_head_block` NULL, so the newest recorded head stayed at the last good tick and a wedged
+/// indexer read as "5 blocks behind" on `/health` and to the watchdog for as long as it stayed wedged.
+#[tokio::test]
+async fn a_failed_tick_still_records_the_chain_head_it_saw() {
+    let fx = pg_fixture().await;
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let mut c = cfg();
+    c.end_block = None;
+
+    let good = run_once(&fx.db, &JsonRpc::new(&stub.url), &c)
+        .await
+        .unwrap();
+    assert!(good.error.is_none(), "{:?}", good.error);
+    assert_eq!(good.last_indexed_block, Some(15));
+
+    // The chain moves on; the logs endpoint now refuses, after the head was read.
+    program(&stub, 40);
+    let (logs_url, _hits) = forbidden();
+    let wedged = JsonRpc::new(&stub.url).with_logs_url(Some(logs_url));
+    let failed = run_once(&fx.db, &wedged, &c).await.unwrap();
+    assert!(failed.error.is_some(), "the tick must fail");
+    assert_eq!(
+        failed.chain_head_block,
+        Some(40),
+        "the outcome carries the head the failed tick read"
+    );
+    let row: (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT chain_head_block, error FROM indexer_runs WHERE run_id = $1")
+            .bind(failed.run_id)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(row.0, Some(40), "the failed run row records the head");
+    assert!(row.1.is_some(), "and its error");
+
+    // The lag a reader computes (newest recorded head minus the last good cursor) now grows.
+    let (head, cursor): (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT (SELECT chain_head_block FROM indexer_runs \
+                  WHERE chain_id = $1 AND chain_head_block IS NOT NULL ORDER BY run_id DESC LIMIT 1), \
+                (SELECT MAX(last_indexed_block) FROM indexer_runs WHERE chain_id = $1 AND error IS NULL)",
+    )
+    .bind(CHAIN)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!((head, cursor), (Some(40), Some(15)), "lag 25, not 5");
+    stub.shutdown();
+}
+
 #[tokio::test]
 async fn a_transient_failure_is_not_a_refusal() {
     let fx = pg_fixture().await;

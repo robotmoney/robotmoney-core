@@ -2,15 +2,17 @@
 // What is real here: the owner keys sign, the hashes are the Safe tool's own, every signature is recovered, and the verifier decodes the proof
 // calldata and recovers the signers. What is a fake: the chain (the runner tests stub forge and cast). The proof against a real Safe contract
 // on a real fork is the Twin rehearsal (suite 28, and the suite 14 twin_publish test).
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeFunctionData, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
+import { createPublicClient, encodeAbiParameters, encodeEventTopics, encodeFunctionData, http, keccak256, parseAbi, parseAbiItem, toHex, type Address, type Hex } from "viem";
 import { assertControlProven, inspectProofTx, PROOF_STAGE } from "../src/control-proof.ts";
 import { EXIT_CODES } from "../src/errors.ts";
-import { assertEveryOwnerSigned } from "../src/prove-control.ts";
-import { localSafeTxHash, ownerHardwareSigner, signTx, type SafeTxBundle } from "../src/safe/index.ts";
-import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, typedPrompt, world } from "./harness.ts";
+import { LOG_READ_TRIES, LOG_RETRY_DELAY_MS, LOG_WINDOW, MAX_LOG_WINDOWS, assertEveryOwnerSigned, realProveChain, type ProveApi } from "../src/prove-control.ts";
+import { parseCli } from "../src/cli.ts";
+import { SHA } from "./fixtures.ts";
+import { READ_RETRY_TRIES, localSafeTxHash, ownerHardwareSigner, signTx, type SafeHandle, type SafeTxBundle } from "../src/safe/index.ts";
+import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, fakeSafeApi, keySigner, typedPrompt, world } from "./harness.ts";
 import { privateKeyToAccount } from "viem/accounts";
 import { OWNERS, OWNER_KEYS, SAFE, buildWorld, failed, proofInput } from "./verify/world.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
@@ -386,6 +388,76 @@ describe("prove-control adopts a proof that landed before the run died", () => {
   });
 });
 
+// ---- QA plan v1 E6 (issue 1723): the Safe nonce read through a load-balanced RPC ---------------------------------------------------------
+// The fake Safe handle answers the nonce from a node behind the proof block for the first `stale` reads (0), then the chain's own nonce.
+function staleHandle<T extends object>(api: T, w: ReturnType<typeof world>, stale: number): { n: { reads: number }; api: T } {
+  const n = { reads: 0 };
+  const inner = (api as unknown as { connectSafe: (...a: unknown[]) => Promise<SafeHandle> }).connectSafe;
+  const connectSafe = async (...a: unknown[]) => { const h = await inner(...a); return { ...h, nonce: async () => (++n.reads <= stale ? 0 : w.safeNonce) } as unknown as SafeHandle; };
+  return { n, api: { ...api, connectSafe } as T };
+}
+
+describe("QA plan v1 E6: the prove-control entry and the stage 11 gate read the Safe nonce again while a stale node answers 0", () => {
+  test("a stale nonce 0 right after the proof landed does not re-run the proof: --resume reads again, sees 1 and adopts the landed proof, nothing proposed, signed or sent", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    const s = staleHandle(fakeProveApi(w), w, 2);
+    let slept = 0;
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api: s.api, ownerSigners: PROVE_SIGNERS }, readRetry: { sleep: async () => { slept++; } } })).toBe(0);
+    expect([s.n.reads, slept]).toEqual([3, 2]); // the nonce converged to 1 on the third read
+    expect(sends(w)).toEqual([]);
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX, nonce: 0 });
+  });
+
+  test("without --resume the same stale 0 does not re-run the proof either: refused, the message names --resume, nothing sent", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    const s = staleHandle(fakeProveApi(w), w, 2);
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: s.api, ownerSigners: PROVE_SIGNERS } })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("--resume");
+    expect(sends(w)).toEqual([]);
+  });
+
+  test("a Safe that reads 0 on every read of the bound is a new Safe: the proof is taken once, after READ_RETRY_TRIES reads", async () => {
+    const w = world({ writeSafeManifest: true });
+    const s = staleHandle(fakeProveApi(w), w, 0);
+    let slept = 0;
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: s.api, ownerSigners: PROVE_SIGNERS }, readRetry: { sleep: async () => { slept++; } } })).toBe(0);
+    expect(s.n.reads).toBe(READ_RETRY_TRIES + 1); // the bound at the entry, then proposeTx reads the nonce it signs over
+    expect(slept).toBe(READ_RETRY_TRIES - 1);
+    expect(executed(w)).toHaveLength(1);
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", nonce: 0 });
+  });
+
+  test("the stage 11 gate right after the proof: a stale 0 is read again until it moves, and the gate passes", async () => {
+    const w = world({ writeSafeManifest: true, startNonce: 0 });
+    expect(await w.run(["--stage", PROOF_STAGE])).toBe(0);
+    const s = staleHandle(fakeSafeApi(w), w, 2);
+    expect(await w.run(["--stage", "timelock", "--resume"], { safeApi: s.api })).not.toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(s.n.reads).toBe(3);
+    expect(w.logs().some((l) => l.event === "stage.control_proof_ok")).toBe(true);
+  });
+
+  test("the stage 11 gate: a Safe still at 0 after the whole bound is refused as before (no false success)", async () => {
+    const w = world({ writeSafeManifest: true, startNonce: 0 });
+    expect(await w.run(["--stage", PROOF_STAGE])).toBe(0);
+    w.safeNonce = 0;
+    const s = staleHandle(fakeSafeApi(w), w, 0);
+    expect(await w.run(["--stage", "timelock", "--resume"], { safeApi: s.api })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("nonce is 0");
+    expect(s.n.reads).toBe(READ_RETRY_TRIES);
+    expect(forgeBroadcasts(w)).toEqual([]);
+  });
+
+  test("the stage 11 gate with no proof on record does not wait: one nonce read, refused", async () => {
+    const w = world({ writeSafeManifest: true, startNonce: 0 });
+    const s = staleHandle(fakeSafeApi(w), w, 0);
+    expect(await w.run(["--stage", "timelock"], { safeApi: s.api })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("no finished Safe control proof");
+    expect(s.n.reads).toBe(1);
+  });
+});
+
 describe("hardware owner signers in prove-control (a simulated cast, no device)", () => {
   const KEYS = [toHex(0xb1, { size: 32 }), toHex(0xb2, { size: 32 }), toHex(0xb3, { size: 32 })] as const;
   const accts = KEYS.map((k) => privateKeyToAccount(k));
@@ -480,22 +552,223 @@ describe("hardware owner signers in prove-control (a simulated cast, no device)"
 });
 
 describe("the real chain reader walks the log range in windows and reads only", () => {
-  test("realProveChain.executions: windows of LOG_WINDOW, ExecutionSuccess and ExecutionFailure of the Safe address only, oldest first", async () => {
-    const { LOG_WINDOW, realProveChain } = await import("../src/prove-control.ts");
+  test("realProveChain.executions: windows of LOG_WINDOW from the safe stage block, ExecutionSuccess and ExecutionFailure of the Safe address only, and it stops at the window that holds the event (QA plan v1 E7)", async () => {
     const calls: any[] = [];
     const handle: any = { address: SAFE_ADDR, client: {
       getBlockNumber: async () => 5000n,
       getLogs: async (a: any) => { calls.push(a); return a.fromBlock === 2000n ? [{ transactionHash: LANDED_TX, blockNumber: 2100n, logIndex: 3, eventName: "ExecutionSuccess", args: { txHash: `0x${"11".repeat(32)}` } }] : []; },
     } };
     const out = await realProveChain.executions(handle, 0);
-    expect(calls.map((c) => [c.fromBlock, c.toBlock])).toEqual([[0n, 1999n], [2000n, 3999n], [4000n, 5000n]]);
+    expect(calls.map((c) => [c.fromBlock, c.toBlock])).toEqual([[0n, 1999n], [2000n, 3999n]]); // the window 4000 to 5000 is never read
     expect(LOG_WINDOW).toBe(2000n);
+    expect(MAX_LOG_WINDOWS).toBe(2000n);
     expect(calls.every((c) => c.address === SAFE_ADDR && c.events.length === 2)).toBe(true);
     expect(out).toEqual([{ txHash: LANDED_TX, safeTxHash: `0x${"11".repeat(32)}`, success: true, block: 2100, logIndex: 3 }]);
   });
   test("a log read that fails is refused, not treated as an empty range", async () => {
-    const { realProveChain } = await import("../src/prove-control.ts");
-    const handle: any = { address: SAFE_ADDR, client: { getBlockNumber: async () => 10n, getLogs: async () => { throw new Error("range too large"); } } };
-    await expect(realProveChain.executions(handle, 0)).rejects.toThrow(/range too large/);
+    const handle: any = { address: SAFE_ADDR, client: { getBlockNumber: async () => 10n, getLogs: async () => { throw new Error("upstream connect error"); } } };
+    let waits = 0;
+    await expect(realProveChain.executions(handle, 0, { retry: { sleep: async () => { waits++; } } })).rejects.toThrow(/^RPC_REFUSED: .* eth_getLogs for blocks 0 to 10 .*upstream connect error/);
+    expect(waits).toBe(LOG_READ_TRIES - 1);
+  });
+});
+
+// ---- QA plan v1 E7 (issue 1724): the adoption's chain reads against stub JSON-RPC servers (Bun.serve on loopback: no chain, no network) -------------------------
+// On the first mainnet run mainnet.base.org refused the scan (HTTP 429, range and rate limits) and a pruned node refused eth_getTransactionReceipt. Each stub answers
+// eth_chainId, eth_blockNumber, eth_getLogs (the proof's ExecutionSuccess at `eventBlock`), eth_getTransactionByHash and eth_getTransactionReceipt (the landed proof),
+// and records every call. `on` overrides a method on its n-th call (from 1): an HTTP status, a JSON-RPC error or another result. The clients have no viem retry, so every
+// read the reader makes reaches the stub exactly once.
+const stubs: { stop: (force?: boolean) => void }[] = [];
+afterAll(() => { for (const x of stubs) x.stop(true); });
+type StubReply = { status: number; body?: string } | { error: { code: number; message: string } } | { result: unknown };
+const hexOf = (n: bigint | number) => `0x${BigInt(n).toString(16)}`;
+const EXEC_SUCCESS = parseAbiItem("event ExecutionSuccess(bytes32 indexed txHash, uint256 payment)");
+const BLOCK_HASH = `0x${"bb".repeat(32)}`;
+
+function stubRpc(o: { chainId?: number; head?: bigint; eventBlock?: bigint; input?: Hex; on?: (method: string, params: any[], n: number) => StubReply | undefined } = {}) {
+  const calls: { method: string; params: any[] }[] = [];
+  const count: Record<string, number> = {};
+  const at = o.eventBlock ?? 9n;
+  const answer = (method: string, params: any[]): unknown => {
+    switch (method) {
+      case "eth_chainId": return hexOf(o.chainId ?? CHAIN);
+      case "eth_blockNumber": return hexOf(o.head ?? 100_000n);
+      case "eth_getLogs": {
+        const f = params[0];
+        if (o.eventBlock === undefined || o.eventBlock < BigInt(f.fromBlock) || o.eventBlock > BigInt(f.toBlock)) return [];
+        return [{
+          address: SAFE_ADDR, topics: encodeEventTopics({ abi: [EXEC_SUCCESS], eventName: "ExecutionSuccess", args: { txHash: localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0) } }),
+          data: encodeAbiParameters([{ type: "uint256" }], [0n]), blockNumber: hexOf(o.eventBlock), blockHash: BLOCK_HASH, transactionHash: LANDED_TX, transactionIndex: "0x0", logIndex: "0x2", removed: false,
+        }];
+      }
+      case "eth_getTransactionByHash": return {
+        hash: LANDED_TX, from: ADMIN, to: SAFE_ADDR, input: o.input ?? "0x", value: "0x0", blockNumber: hexOf(at), blockHash: BLOCK_HASH, transactionIndex: "0x0",
+        nonce: "0x7", gas: "0x30000", gasPrice: "0x1", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: hexOf(o.chainId ?? CHAIN),
+      };
+      case "eth_getTransactionReceipt": return {
+        transactionHash: LANDED_TX, blockHash: BLOCK_HASH, blockNumber: hexOf(at), transactionIndex: "0x0", from: ADMIN, to: SAFE_ADDR, cumulativeGasUsed: "0x1", gasUsed: "0x1",
+        effectiveGasPrice: "0x1", contractAddress: null, logs: [], logsBloom: `0x${"00".repeat(256)}`, status: "0x1", type: "0x0",
+      };
+    }
+    throw new Error(`stub: ${method}`);
+  };
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const b = (await req.json()) as { id: number; method: string; params?: any[] };
+      const params = b.params ?? [];
+      calls.push({ method: b.method, params });
+      count[b.method] = (count[b.method] ?? 0) + 1;
+      const r = o.on?.(b.method, params, count[b.method]!) ?? { result: answer(b.method, params) };
+      if ("status" in r) return new Response(r.body ?? "Too Many Requests", { status: r.status });
+      return Response.json({ jsonrpc: "2.0", id: b.id, ...r });
+    },
+  });
+  stubs.push(server);
+  return {
+    url: `http://127.0.0.1:${server.port}`,
+    methods: () => calls.map((c) => c.method),
+    ranges: () => calls.filter((c) => c.method === "eth_getLogs").map((c) => [BigInt(c.params[0].fromBlock), BigInt(c.params[0].toBlock)]),
+  };
+}
+/** A Safe handle whose client reads the stub at `url`, without viem's own retry. */
+const stubHandle = (url: string): SafeHandle => ({ address: SAFE_ADDR, chain: { rpcUrl: url, chainId: CHAIN }, client: createPublicClient({ transport: http(url, { retryCount: 0 }) }) }) as unknown as SafeHandle;
+/** The backoff seam: records each wait, never sleeps. */
+const noWait = () => { const waits: number[] = []; return { waits, retry: { sleep: async (ms: number) => { waits.push(ms); } } }; };
+const rejection = (p: Promise<unknown>): Promise<any> => p.then(() => { throw new Error("expected a refusal"); }, (e) => e);
+/** prove-control's api with the REAL chain reader: the fake Safe (owners, nonce) whose client reads the stub `--rpc` at `url`. */
+function realReaderApi(w: ReturnType<typeof world>, url: string): ProveApi {
+  const api = fakeProveApi(w);
+  return { ...api, chain: realProveChain, connectSafe: async (o) => ({ ...(await api.connectSafe(o)), chain: { rpcUrl: url, chainId: CHAIN }, client: createPublicClient({ transport: http(url, { retryCount: 0 }) }) }) as unknown as SafeHandle };
+}
+const proofEvent = { txHash: LANDED_TX, safeTxHash: localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0), success: true, logIndex: 2 };
+
+describe("QA plan v1 E7 (issue 1724): the adoption's log scan rides out a public RPC and refuses by name", () => {
+  test("a failing eth_getLogs is a refusal, never an empty answer", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w); // a Safe at nonce 1: --resume adopts, and the adoption reads the chain
+    const rpc = stubRpc({ eventBlock: 9n, on: (m) => (m === "eth_getLogs" ? { status: 503, body: "upstream unavailable" } : undefined) });
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api: realReaderApi(w, rpc.url), ownerSigners: PROVE_SIGNERS } })).toBe(EXIT_CODES.SAFE);
+    const err = lastError(w);
+    expect(err.message).toStartWith("RPC_REFUSED: the RPC at 127.0.0.1 refused eth_getLogs for blocks 7 to 2006 of Safe");
+    expect(err.message).toContain("HTTP 503");
+    expect(err.message).not.toContain("no execution event"); // a refused read never reads as "nothing landed"
+    expect(rpc.ranges()).toEqual(Array.from({ length: LOG_READ_TRIES }, () => [7n, 2006n])); // the same window, LOG_READ_TRIES reads, then the refusal
+    expect(w.logs().filter((l) => l.event === "prove_control.rpc_retry")).toHaveLength(LOG_READ_TRIES - 1);
+    expect(sends(w)).toEqual([]);
+    expect(forgeBroadcasts(w)).toEqual([]);
+    expect(existsSync(manifestPath(w)) ? manifest(w).stages[PROOF_STAGE] : undefined).toBeUndefined();
+  });
+
+  test("HTTP 429 on the first three eth_getLogs reads, then the logs: the event is found after three doubling waits, four reads of that window", async () => {
+    const rpc = stubRpc({ eventBlock: 900n, on: (m, _p, n) => (m === "eth_getLogs" && n <= 3 ? { status: 429 } : undefined) });
+    const t = noWait();
+    expect(await realProveChain.executions(stubHandle(rpc.url), 7, { retry: t.retry })).toEqual([{ ...proofEvent, block: 900 }]);
+    expect(rpc.ranges()).toEqual(Array.from({ length: 4 }, () => [7n, 2006n]));
+    expect(t.waits).toEqual([LOG_RETRY_DELAY_MS, 2 * LOG_RETRY_DELAY_MS, 4 * LOG_RETRY_DELAY_MS]);
+  });
+
+  test("HTTP 429 on every read: RPC_REFUSED names the RPC host, eth_getLogs and the block range, after LOG_READ_TRIES reads (bounded)", async () => {
+    const rpc = stubRpc({ eventBlock: 900n, on: (m) => (m === "eth_getLogs" ? { status: 429 } : undefined) });
+    const t = noWait();
+    const err = await rejection(realProveChain.executions(stubHandle(rpc.url), 7, { retry: t.retry }));
+    expect(err.kind).toBe("SAFE");
+    expect(EXIT_CODES[err.kind as keyof typeof EXIT_CODES]).toBe(19);
+    expect(err.details).toMatchObject({ error: "RPC_REFUSED", rpc_host: "127.0.0.1", method: "eth_getLogs", subject: `blocks 7 to 2006 of Safe ${SAFE_ADDR}`, reads: LOG_READ_TRIES, status: 429 });
+    expect(err.message).toContain("HTTP 429");
+    expect(err.message).toContain("--logs-rpc");
+    expect(rpc.ranges()).toHaveLength(LOG_READ_TRIES);
+    expect(t.waits).toEqual([1, 2, 4, 8, 16].map((x) => x * LOG_RETRY_DELAY_MS));
+  });
+
+  test("a range-limit refusal halves the window until the provider takes it, and the scan still finds the one execution event, with no wait", async () => {
+    const tooWide = (p: any[]) => BigInt(p[0].toBlock) - BigInt(p[0].fromBlock) + 1n > 500n;
+    const rpc = stubRpc({ eventBlock: 1300n, on: (m, p) => (m === "eth_getLogs" && tooWide(p) ? { error: { code: -32005, message: "query exceeds max block range 500" } } : undefined) });
+    const t = noWait();
+    expect(await realProveChain.executions(stubHandle(rpc.url), 7, { retry: t.retry })).toEqual([{ ...proofEvent, block: 1300 }]);
+    expect(rpc.ranges()).toEqual([[7n, 2006n], [7n, 1006n], [7n, 506n], [507n, 1006n], [1007n, 1506n]]);
+    expect(t.waits).toEqual([]);
+  });
+
+  test("a proof near the safe stage block costs two eth_getLogs reads, not a walk to a head 5 000 000 blocks on", async () => {
+    const rpc = stubRpc({ head: 5_000_000n, eventBlock: 2500n });
+    expect(await realProveChain.executions(stubHandle(rpc.url), 7, noWait())).toEqual([{ ...proofEvent, block: 2500 }]);
+    expect(rpc.ranges()).toEqual([[7n, 2006n], [2007n, 4006n]]);
+  });
+
+  test("no event up to the head is an empty answer only after every window up to the head was read", async () => {
+    const rpc = stubRpc({ head: 4100n });
+    expect(await realProveChain.executions(stubHandle(rpc.url), 7, noWait())).toEqual([]);
+    expect(rpc.ranges()).toEqual([[7n, 2006n], [2007n, 4006n], [4007n, 4100n]]);
+  });
+
+  test("a scan that reaches its bound with no event is refused by name (LOG_SCAN_LIMIT), never walked further", async () => {
+    const rpc = stubRpc({ head: 1_000_000n });
+    const err = await rejection(realProveChain.executions(stubHandle(rpc.url), 7, { maxWindows: 3n, ...noWait() }));
+    expect(err.kind).toBe("SAFE");
+    expect(err.message).toStartWith(`LOG_SCAN_LIMIT: no execution event of Safe ${SAFE_ADDR} in blocks 7 to 6006`);
+    expect(err.details).toMatchObject({ error: "LOG_SCAN_LIMIT", from: 7, to: 6006, windows: 3 });
+    expect(rpc.ranges()).toHaveLength(3);
+  });
+
+  test("--logs-rpc: eth_getLogs and one eth_chainId read go to the logs RPC, every other read stays on --rpc", async () => {
+    const main = stubRpc({ eventBlock: 900n }), logs = stubRpc({ eventBlock: 900n });
+    const handle = stubHandle(main.url);
+    const o = { logsRpc: logs.url, chainId: CHAIN, ...noWait() };
+    const found = await realProveChain.executions(handle, 7, o);
+    expect(found).toEqual([{ ...proofEvent, block: 900 }]);
+    expect(await realProveChain.transaction(handle, found[0]!.txHash, o)).toMatchObject({ to: SAFE_ADDR, value: 0n, status: "success", block: 900 });
+    expect(logs.methods()).toEqual(["eth_chainId", "eth_getLogs"]);
+    expect(main.methods()).toEqual(["eth_blockNumber", "eth_getTransactionByHash", "eth_getTransactionReceipt"]);
+  });
+
+  test("--logs-rpc that serves another chain is refused before any log is read (LOGS_RPC_WRONG_CHAIN)", async () => {
+    const main = stubRpc({ eventBlock: 900n }), logs = stubRpc({ chainId: 8453, eventBlock: 900n });
+    const err = await rejection(realProveChain.executions(stubHandle(main.url), 7, { logsRpc: logs.url, chainId: CHAIN, ...noWait() }));
+    expect(err.kind).toBe("CHAIN");
+    expect(err.message).toStartWith("LOGS_RPC_WRONG_CHAIN: --logs-rpc 127.0.0.1 answers chain id 8453");
+    expect([...main.methods(), ...logs.methods()]).not.toContain("eth_getLogs");
+  });
+
+  test("a refused eth_getTransactionReceipt (a pruned node) is RPC_REFUSED naming that RPC and method, never 'transaction not found'", async () => {
+    const rpc = stubRpc({ on: (m) => (m === "eth_getTransactionReceipt" ? { error: { code: -32000, message: "historical state not available: pruned" } } : undefined) });
+    const t = noWait();
+    const err = await rejection(realProveChain.transaction(stubHandle(rpc.url), LANDED_TX, { retry: t.retry }));
+    expect(err.kind).toBe("SAFE");
+    expect(err.details).toMatchObject({ error: "RPC_REFUSED", rpc_host: "127.0.0.1", method: "eth_getTransactionReceipt", subject: `transaction ${LANDED_TX}`, reads: LOG_READ_TRIES, code: -32000 });
+    expect(err.message).toContain("pruned");
+    expect(err.message).not.toMatch(/not found|does not know/);
+    expect(rpc.methods().filter((m) => m === "eth_getTransactionReceipt")).toHaveLength(LOG_READ_TRIES);
+  });
+
+  test("a transaction the RPC does not know is the adoption's 'cannot be read' (null), after one read", async () => {
+    const rpc = stubRpc({ on: (m) => (m === "eth_getTransactionByHash" ? { result: null } : undefined) });
+    expect(await realProveChain.transaction(stubHandle(rpc.url), LANDED_TX, noWait())).toBeNull();
+    expect(rpc.methods()).toEqual(["eth_getTransactionByHash"]);
+  });
+
+  test("through main() with --logs-rpc: the adoption reads the Safe's events from the logs RPC and every other read from --rpc, adopts the proof and sends nothing", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    const main = stubRpc({ eventBlock: 9n, input: await execCalldata() });
+    const logs = stubRpc({ eventBlock: 9n });
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume", "--logs-rpc", logs.url], { prove: { api: realReaderApi(w, main.url), ownerSigners: PROVE_SIGNERS } })).toBe(0);
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX, nonce: 0, block: 9 });
+    expect(logs.methods()).toEqual(["eth_chainId", "eth_getLogs"]);
+    expect(main.methods()).toEqual(["eth_blockNumber", "eth_getTransactionByHash", "eth_getTransactionReceipt"]);
+    expect(sends(w)).toEqual([]);
+    expect(w.logs().find((l) => l.event === "stage.control_proof_adopted")?.logs_rpc_host).toBe("127.0.0.1");
+  });
+
+  test("--logs-rpc goes with a run that reaches prove-control only, and is an http(s) URL", () => {
+    const base = ["--chain", "918453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/k"];
+    expect(parseCli(["publish", ...base, "--logs-rpc", "https://logs.example/key"]).logsRpc).toBe("https://logs.example/key");
+    expect(parseCli([...base, "--logs-rpc", "http://l"]).logsRpc).toBe("http://l"); // the default stage set reaches prove-control
+    expect(parseCli([...base, "--stage", `safe,${PROOF_STAGE}`, "--logs-rpc", "http://l"]).logsRpc).toBe("http://l");
+    expect(parseCli(["publish", ...base]).logsRpc).toBeUndefined();
+    for (const run of [["govern", ...base], ["verify", ...base], [...base, "--stage", "plan"], [...base, "--stage", "timelock"]]) {
+      expect(() => parseCli([...run, "--logs-rpc", "http://l"])).toThrow("--logs-rpc goes with a run that reaches");
+    }
+    expect(() => parseCli(["publish", ...base, "--logs-rpc", "ws://l"])).toThrow("--logs-rpc must be an http(s) URL");
   });
 });

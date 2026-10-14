@@ -4,7 +4,7 @@ title: "RobotMoneyVaultTest"
 
 # RobotMoneyVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/565372849346ef905691dda58e5b85471470138a/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:** Test
 
@@ -179,6 +179,32 @@ function test_addAdapter_revertsWhenAdapterAssetMismatchesVault() public;
 function test_addAdapter_revertsWhenAdapterVaultMismatchesVault() public;
 ```
 
+<a id="test_addadapter_revertswhenadapteralreadyactive"></a>
+
+### test_addAdapter_revertsWhenAdapterAlreadyActive
+
+core 1789: an address that an ACTIVE entry already holds cannot be added
+again, at any registry index. A second active entry would count the one
+balance twice in `totalAssets()` and overpay the first redeemer.
+
+```solidity
+function test_addAdapter_revertsWhenAdapterAlreadyActive() public;
+```
+
+<a id="test_addadapter_afterforceremovesucceeds"></a>
+
+### test_addAdapter_afterForceRemoveSucceeds
+
+core 1789: re-adding an adapter after `forceRemoveAdapter` stays legal. It
+appends a NEW entry (this family never reactivates the inactive one in
+place), the inactive entry is never counted, so the balance re-enters NAV
+once. A further add of the same address is then refused against the new
+active entry.
+
+```solidity
+function test_addAdapter_afterForceRemoveSucceeds() public;
+```
+
 <a id="test_approvedproductionanddevnetadaptertypescanbeadded"></a>
 
 ### test_approvedProductionAndDevnetAdapterTypesCanBeAdded
@@ -332,6 +358,123 @@ function test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked() public
 
 ```solidity
 function test_emergencyWithdrawStillWorksAfterApprovalRevoked() public;
+```
+
+<a id="_addsecondadapter"></a>
+
+### _addSecondAdapter
+
+<i>
+
+Second funded adapter at registry index 1, 100% cap.
+
+</i>
+
+```solidity
+function _addSecondAdapter() internal returns (MockAdapter second);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| second | `MockAdapter` |  |
+
+<a id="_fundandapprove-address-uint256"></a>
+
+### _fundAndApprove
+
+```solidity
+function _fundAndApprove(address who, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| amount | `uint256` |  |
+
+<a id="test_exclusionrecoverypaidproratatosnapshot"></a>
+
+### test_exclusionRecoveryPaidProRataToSnapshot
+
+core 1820: recovery from an excluded adapter belongs pro rata to the holders at
+the moment of exclusion. Alice exits during the exclusion and keeps her claim;
+Bob stays and gets the same per-share recovery; Carol, who receives shares after
+the snapshot, and Dave, who deposits after the record closes, get nothing. Two
+recovery paths credit the same record: `emergencyWithdrawAdapter` and restored
+eligibility (`setAdapterAllowed(true)` realises the residual first). The share
+price never moves on a recovery.
+
+```solidity
+function test_exclusionRecoveryPaidProRataToSnapshot() public;
+```
+
+<a id="_assertsettledrecord-exclusionledger-uint256-uint256-uint256"></a>
+
+### _assertSettledRecord
+
+<i>
+
+Record `id` is finalized with `recovered` credited against `supply`, every holder
+has claimed, only rounding dust remains, and the ledger holds exactly what it owes.
+
+</i>
+
+```solidity
+function _assertSettledRecord(
+        ExclusionLedger ledger,
+        uint256 id,
+        uint256 supply,
+        uint256 recovered
+    ) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `ExclusionLedger` |  |
+| id | `uint256` |  |
+| supply | `uint256` |  |
+| recovered | `uint256` |  |
+
+<a id="test_adminrebalancerecoverycreditsexclusionrecord"></a>
+
+### test_adminRebalanceRecoveryCreditsExclusionRecord
+
+E2: `adminRebalance` is the third recovery path. Before core 1820 its pull from
+an excluded adapter landed in idle NAV, so the holder who stayed took the exiter's
+part. Now it is credited to the exclusion record, the share price does not move,
+and `removeAdapter` on the drained entry closes the record.
+
+```solidity
+function test_adminRebalanceRecoveryCreditsExclusionRecord() public;
+```
+
+<a id="test_redeemduringexclusionrevertsonzeropayout"></a>
+
+### test_redeemDuringExclusionRevertsOnZeroPayout
+
+E2: when the excluded adapter holds the only funded balance, NAV is 0 and a
+redeem would burn shares for 0 USDC. It reverts while the exclusion is open, and
+the holder is paid through the record instead.
+
+```solidity
+function test_redeemDuringExclusionRevertsOnZeroPayout() public;
+```
+
+<a id="test_restorerevertswhenexcludedadaptercannotpayout"></a>
+
+### test_restoreRevertsWhenExcludedAdapterCannotPayOut
+
+core 1820: restoring eligibility realises the residual into the record first. An
+adapter that cannot pay out keeps its record open (the restore reverts), and
+`forceRemoveAdapter` then closes the record with the loss on snapshot holders.
+
+```solidity
+function test_restoreRevertsWhenExcludedAdapterCannotPayOut() public;
 ```
 
 <a id="test_decimalsoffset_is18"></a>

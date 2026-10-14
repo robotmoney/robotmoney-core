@@ -258,6 +258,11 @@ services:
         VITE_GATEWAY_ADDRESS: ${VITE_GATEWAY_ADDRESS:?VITE_GATEWAY_ADDRESS must be set}
         VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:?VITE_VAULT_ADDRESS must be set}
         VITE_GATEWAY_EXPECTED_CODE_HASH: ${VITE_GATEWAY_EXPECTED_CODE_HASH:?VITE_GATEWAY_EXPECTED_CODE_HASH must be set to enable admin writes}
+        # QA plan U5 (issue 1737): vault and router code-hash pins, set by the 8453
+        # stack builder (scripts/stage/mainnet-dapp.ts). Single-quoted: the vault pin
+        # is a raw JSON object. Empty elsewhere; only the mainnet class enforces them.
+        VITE_VAULT_EXPECTED_CODE_HASH: '${VITE_VAULT_EXPECTED_CODE_HASH:-}'
+        VITE_ROUTER_EXPECTED_CODE_HASH: ${VITE_ROUTER_EXPECTED_CODE_HASH:-}
         VITE_GATEWAY_CODE_HASH_VERIFIED: "false"
         VITE_ENV_CLASS: fork
         VITE_BROWSER_KEYGEN: "false"

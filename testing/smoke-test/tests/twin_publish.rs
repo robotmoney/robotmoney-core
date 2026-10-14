@@ -87,6 +87,8 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "navDeviationGuardBps equals sheet",
             "navDeviationGuardBps above zero",
             "pool liquidity meets the sheet floor",
+            // QA plan v1 D7: present before govern too (a paused basket passes it); after govern it needs the set-unwind-guard rounds below
+            "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault",
         ] {
             let label = format!("vault[{vault}]: {what}");
             assert!(
@@ -244,6 +246,34 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         assert!(
             !deposits_paused(vault),
             "{name} must read open after stage 13"
+        );
+    }
+
+    // QA plan v1 D7: the verifier requires a non-zero emergency unwind guard on every active asset of an OPEN basket. The Safe sets it through the real timelock,
+    // one `govern --row set-unwind-guard` round per basket (token=all), as the twin-publish step does, before the post-govern verify. The baskets hold nothing yet:
+    // these values prove the row and the label on the real contracts, not a sizing (on 8453 the operator sizes min-usdc-out from each vault's holding).
+    for basket in ["PROTO", "AGENT", "RWA"] {
+        let vault_arg = format!("vault={basket}");
+        let guarded = fx
+            .published()
+            .govern(
+                "set-unwind-guard",
+                &[
+                    "--admin-arg",
+                    vault_arg.as_str(),
+                    "--admin-arg",
+                    "token=all",
+                    "--admin-arg",
+                    "min-usdc-out=1000000",
+                    "--admin-arg",
+                    "max-loss-bps=500",
+                ],
+            )
+            .expect("the Safe sets the basket's emergency unwind guard through the real timelock");
+        assert_eq!(
+            guarded.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+            vec!["set-unwind-guard", "set-unwind-guard"],
+            "one scheduled and one executed line for the {basket} guard"
         );
     }
 

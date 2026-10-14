@@ -367,10 +367,10 @@ def judge_errors(receipt: dict[str, Any]) -> list[str]:
 # THE FORMAT GAP THIS CLOSES. robotmoney-frontend expresses an allocation as
 # [0,1] floats over the four named buckets; this repo expresses it as
 # `target_weight_bps` 0..BPS_DENOMINATOR over four vault addresses, and
-# RouterGovernance.propose HARD-REJECTS any vector that does not sum to
-# BPS_DENOMINATOR exactly. A conversion that is merely "close" is a proposal
-# that reverts, so the rounding rule has to be pinned rather than left to
-# whichever side rounds first.
+# RouterGovernance.applyReceipt (through PortfolioRouter.setWeights) HARD-REJECTS
+# any vector that does not sum to BPS_DENOMINATOR exactly. A conversion that is
+# merely "close" is a receipt that cannot be applied, so the rounding rule has
+# to be pinned rather than left to whichever side rounds first.
 #
 # The rule is DATA, not code: `bps_conversion` in
 # consensus-receipt.canonicalization.json states it, `canonical_bucket_order`
@@ -553,7 +553,7 @@ def mean_weights_to_bps(
     # so the leftover is < len(order) and one bp per bucket always suffices — but
     # that is a proof, and a proof is the kind of thing that stops holding when
     # someone widens SHARE_SUM_TOLERANCE. A vector that does not close on the
-    # denominator must never leave this function: RouterGovernance.propose
+    # denominator must never leave this function: RouterGovernance.applyReceipt
     # reverts on it, and by then it is signed.
     if leftover != 0:
         raise CanonicalizationError(

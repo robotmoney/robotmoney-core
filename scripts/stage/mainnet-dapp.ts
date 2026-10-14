@@ -6,6 +6,7 @@
 // passed as an argument, never a path baked in here) and holds every refusal:
 //   - a signing key, passphrase, keystore or deploy-sheet variable in the environment,
 //   - a manifest from another chain, a missing manifest, an address that is not an address,
+//   - a vault or the router with no recorded runtime code hash (the dapp's build-time pins, QA plan U5),
 //   - a compose file that publishes a port off loopback, joins the host network or defines the deploy job.
 // The explorer indexer and the dapp read through a public Base RPC. The RPC URL may carry an API key, so
 // it is only ever logged as its origin.
@@ -39,8 +40,13 @@ const ZERO = /^0x0{40}$/;
 const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
 
 // ─── refusals on the environment ─────────────────────────────────────────────
-/** Variable names that mean a signing key, a key store or a deploy step. Matched on the NAME, case-insensitive. */
-export const SECRET_ENV_NAME = /(PRIVATE_KEY|SECRET_KEY|MNEMONIC|SEED_PHRASE|PASSPHRASE|KEYSTORE|SIGNER|DEPLOYER|FAUCET|^STAGE_SHEET$|^PUBLISH_|^DEPLOY_ONLY$)/i;
+/**
+ * Variable names that mean a signing key, a key store, a seed or a deploy step. Matched on the NAME,
+ * case-insensitive. Issue 1737 item 6 (QA plan U5) widened it: `PRIVATEKEY`, a bare or `_`-delimited `PK`,
+ * `ETH_KEY`, `WALLET_KEY`, any `SECRET`, any `SEED`, and every `STAGE_SHEET*` (so `STAGE_SHEET_PATH` too).
+ */
+export const SECRET_ENV_NAME =
+  /(PRIVATE_?KEY|SECRET|MNEMONIC|SEED|PASSPHRASE|KEYSTORE|SIGNER|DEPLOYER|FAUCET|ETH_KEY|WALLET_KEY|(^|_)PK($|_)|^STAGE_SHEET|^PUBLISH_|^DEPLOY_ONLY$)/i;
 
 /**
  * Refuses when the process environment holds anything that could sign or deploy. A set-but-empty variable is fine:
@@ -151,6 +157,10 @@ export interface MainnetAddresses {
   gatewayCodeHash: string;
   registry: string;
   router: string;
+  /** keccak256 of the router's runtime code, as the timelock manifest read it from the chain (`code_hashes.router`). */
+  routerCodeHash: string;
+  /** keccak256 of each vault's runtime code, keyed like `vaults` (`vault_handover.vault_<i>.code_hash`). */
+  vaultCodeHashes: Record<(typeof VAULT_KEYS)[number], string>;
   governance: string;
   consensusReceipt: string;
   timelock: string;
@@ -174,6 +184,14 @@ function readJson(dir: string, file: string, read: (p: string) => string): Json 
 
 function addr(file: string, field: string, v: unknown): string {
   if (typeof v !== "string" || !ADDR.test(v) || ZERO.test(v)) throw new MainnetDappError("manifest-field", `${file} ${field} is not a non-zero address`);
+  return v;
+}
+
+/** A recorded runtime code hash: a non-zero bytes32, else a refusal (the dapp would build without that pin). */
+function codeHash(file: string, field: string, v: unknown): string {
+  if (typeof v !== "string" || !BYTES32.test(v) || /^0x0{64}$/.test(v)) {
+    throw new MainnetDappError("manifest-field", `${file} ${field} is not a non-zero bytes32 runtime code hash`);
+  }
   return v;
 }
 
@@ -235,10 +253,23 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
     }
     vaults[key] = a;
   });
+  // QA plan U5 (issue 1737 item 1): the dapp's build-time code-hash pins. DeployTimelock reads every vault's and
+  // the router's runtime code hash back from the chain into the timelock manifest. A vault or router with no
+  // recorded hash refuses the build: a bundle without its pin would refuse every deposit into it anyway.
+  const routerCodeHash = codeHash(files.timelock, "code_hashes.router", ((t.code_hashes ?? {}) as Json).router);
+  const handover = (t.vault_handover ?? {}) as Json;
+  const vaultCodeHashes = {} as MainnetAddresses["vaultCodeHashes"];
+  VAULT_KEYS.forEach((key, i) => {
+    const entry = (handover[`vault_${i}`] ?? {}) as Json;
+    if (!same(addr(files.timelock, `vault_handover.vault_${i}.address`, entry.address), vaults[key])) {
+      throw new MainnetDappError("manifest-mismatch", `${files.timelock} vault_handover.vault_${i}.address is not the ${key} vault`);
+    }
+    vaultCodeHashes[key] = codeHash(files.timelock, `vault_handover.vault_${i}.code_hash`, entry.code_hash);
+  });
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
   }
-  return { gateway, gatewayCodeHash: hash, registry, router, governance, consensusReceipt, timelock, safe, vaults };
+  return { gateway, gatewayCodeHash: hash, registry, router, routerCodeHash, governance, consensusReceipt, timelock, safe, vaults, vaultCodeHashes };
 }
 
 // ─── the environment ─────────────────────────────────────────────────────────
@@ -310,6 +341,9 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_ADDRESS: a.gateway,
     VITE_VAULT_ADDRESS: a.vaults.rmUSDC,
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
+    // Build-time vault and router pins (QA plan U5): vault address -> runtime code hash, and the router's hash.
+    VITE_VAULT_EXPECTED_CODE_HASH: JSON.stringify(Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultCodeHashes[k]]))),
+    VITE_ROUTER_EXPECTED_CODE_HASH: a.routerCodeHash,
     VITE_REGISTRY_ADDRESS: a.registry,
     VITE_ROUTER_ADDRESS: a.router,
     VITE_GOVERNANCE_ADDRESS: a.governance,

@@ -164,6 +164,12 @@ Exposure cap:
 - The cap is set via `setMaxExposure(uint256 cap)`, restricted to the
   owning vault by the `onlyVault` modifier — the same authority gate as
   `deploy` and `withdraw`.
+- Governance reaches it through the vault:
+  `RobotMoneyVault.setAdapterMaxExposure(uint256 index, uint256 cap)`
+  (`ADMIN_ROLE`, the timelock in production) forwards the call to the active
+  entry at `index` and emits `AdapterMaxExposureSet(index, adapter, cap)`.
+  Read the live value back with the adapter's `maxExposure()` (FS-VLT-10, QA
+  plan D8).
 - A cap of `0` means uncapped (the default), so a deployment keeps its
   prior behavior until a vault sets a non-zero cap.
 - When the cap is non-zero, `deploy(amount)` reads the adapter's live
@@ -183,6 +189,8 @@ Admin controls:
 - `addAdapter(address adapter, uint16 capBps)`.
 - `removeAdapter(uint256 index)` when the adapter holds zero assets.
 - `setAdapterCap(uint256 index, uint16 capBps)`.
+- `setAdapterMaxExposure(uint256 index, uint256 cap)` for an adapter with an
+  exposure cap (Morpho). Other adapters revert the call.
 - `adminRebalance(uint256[] targetBalances)`.
 
 Keeper/admin rebalance:

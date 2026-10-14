@@ -41,7 +41,8 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         return vm.readFile("config/agent-token-shortlist.json");
     }
 
-    function test_deploysTheRecorderForTheShippedKeyWithA901SlotRingTarget() public {
+    /// @notice The ring target is the 4 hour sell anchor floor (core 1793): 14_400 s / 2 s + 1 = 7_201 slots.
+    function test_deploysTheRecorderForTheShippedKeyWithA7201SlotRingTarget() public {
         DeployUniswapV4PriceRecorder.Deployed memory d = script.runInProcess(_shipped());
         UniswapV4PriceRecorder rec = UniswapV4PriceRecorder(d.recorder);
         assertEq(rec.POOL_ID(), RM_POOL_ID);
@@ -51,8 +52,8 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         assertEq(uint256(rec.fee()), 29100);
         assertEq(int256(rec.tickSpacing()), int256(582));
         (,,,, uint16 next) = rec.latest();
-        assertEq(next, 901, "ring target is the 1800 s window floor");
-        assertEq(d.cardinalityNext, 901);
+        assertEq(next, 7_201, "ring target is the 4 hour sell anchor floor");
+        assertEq(d.cardinalityNext, 7_201);
         assertEq(d.poolId, RM_POOL_ID);
     }
 
@@ -63,7 +64,7 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         vm.warp(block.timestamp + 2);
         rec.record();
         (,,, uint16 card,) = rec.latest();
-        assertEq(card, 901);
+        assertEq(card, 7_201);
     }
 
     /// @notice One grow transaction costs about 22,000 gas per slot: a chunk must stay far under a block gas limit.
@@ -130,7 +131,7 @@ contract DeployUniswapV4PriceRecorderTest is Test {
         assertEq(out.readAddress(".recorder"), d.recorder);
         assertEq(out.readAddress(".pool_manager"), PM_ADDR);
         assertEq(out.readBytes32(".pool_id"), RM_POOL_ID);
-        assertEq(out.readUint(".ring_slots"), 901);
+        assertEq(out.readUint(".ring_slots"), 7_201);
         assertEq(out.readUint(".chain_id"), block.chainid);
     }
 }

@@ -3,17 +3,20 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useAccount, useBlockNumber, useWaitForTransactionReceipt } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
-import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
+import { isAddress, type Address, type Hex } from "viem";
 import { gatewayAbi } from "../lib/abi";
+import { buildPreview, type AgentPolicy, type PreviewContext } from "../lib/preview";
 import {
-  buildPreview,
-  type AdminAction,
-  type AgentPolicy,
-  type PreviewContext,
-} from "../lib/preview";
+  commitAuthorizationCall,
+  generateSalt,
+  revealAuthorizationCall,
+  type CommitInputs,
+  type RevealInputs,
+} from "../lib/commitReveal";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
+import { WriteStatus } from "./WriteStatus";
 
 type AuthPhase = "commit" | "reveal";
 
@@ -29,10 +32,16 @@ type Props = Readonly<{
 
 export function AuthorizeTab(props: Props) {
   const { address, isConnected } = useAccount();
-  const { writeContract, isPending } = useGuardedWriteContract();
+  const write = useGuardedWriteContract();
+  const { writeContract, isPending } = write;
 
   const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
-  const [salt, setSalt] = useState<Hex | null>(null);
+  // The salt the next commit uses. It exists before the commit so the commit
+  // preview can show the exact commitHash the wallet will sign (QA plan U4).
+  const [salt] = useState<Hex>(generateSalt);
+  // What the commit bound, frozen when the wallet accepts it. The reveal
+  // preview and the reveal write both read this one object.
+  const [committed, setCommitted] = useState<RevealInputs | null>(null);
   // commitTxHash is set when the commit tx hash comes back from the wallet.
   // We wait for its receipt to get the actual on-chain block number, which
   // is used to gate the reveal (must be in a strictly later block).
@@ -65,16 +74,21 @@ export function AuthorizeTab(props: Props) {
         }
       : null;
 
-  const action: AdminAction | null =
-    validAgent && validReceiver && policy
-      ? {
-          kind: "authorizeAgent",
-          agent: props.agent as Address,
-          policy,
-        }
+  // Step 1 signs commitAuthorization; step 2 signs revealAuthorization. Each
+  // preview is built from the same inputs its write uses (QA plan U4, DR-4).
+  const commitInputs: CommitInputs | null =
+    address && validAgent && policy
+      ? { agent: props.agent as Address, committer: address, salt }
       : null;
+  const revealInputs: RevealInputs | null =
+    committed ?? (validAgent && policy ? { agent: props.agent as Address, salt, policy } : null);
 
-  const preview = action ? buildPreview(action, props.ctx) : null;
+  const commitPreview = commitInputs
+    ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
+    : null;
+  const revealPreview = revealInputs
+    ? buildPreview({ kind: "revealAuthorization", ...revealInputs }, props.ctx)
+    : null;
 
   // Wait for the commit tx receipt to learn the exact block it mined in.
   // This is needed to correctly gate the reveal: the contract rejects reveals
@@ -101,42 +115,21 @@ export function AuthorizeTab(props: Props) {
     currentBlock !== undefined &&
     currentBlock > commitBlockNumber;
 
-  // Compute commitHash = keccak256(abi.encode(agent, caller, salt)).
-  // Matches the on-chain computation in revealAuthorization.
-  function computeCommitHash(agentAddr: Address, caller: Address, saltHex: Hex): Hex {
-    return keccak256(
-      encodeAbiParameters(
-        [{ type: "address" }, { type: "address" }, { type: "bytes32" }],
-        [agentAddr, caller, saltHex],
-      ),
-    );
-  }
-
-  // Generate a fresh random salt for use in the commit/reveal pair.
-  function generateSalt(): Hex {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    return ("0x" +
-      Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("")) as Hex;
-  }
-
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!address || !validAgent) return;
-    const newSalt = generateSalt();
-    const actualHash = computeCommitHash(props.agent as Address, address, newSalt);
+    if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
+    // Freeze what this commit binds: a later edit of the shared agent field
+    // must not change the reveal that follows it.
+    const snapshot = revealInputs;
     writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
-        functionName: "commitAuthorization",
-        args: [actualHash],
+        ...commitAuthorizationCall(commitInputs),
       },
       {
         onSuccess: (txHash) => {
-          setSalt(newSalt);
+          setCommitted(snapshot);
           setCommitTxHash(txHash);
           setAuthPhase("reveal");
         },
@@ -146,13 +139,12 @@ export function AuthorizeTab(props: Props) {
 
   const onReveal = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!salt || !action) return;
+    if (!committed || revealPreview?.ok !== true) return;
     writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
-        functionName: "revealAuthorization",
-        args: [action.agent, salt, action.policy],
+        ...revealAuthorizationCall(committed),
       },
       {
         onSuccess: () => {
@@ -176,13 +168,27 @@ export function AuthorizeTab(props: Props) {
             </span>
           )}
         </p>
+        {/* The policy preview again, for the call this button signs (QA plan U4). */}
+        {revealPreview && (
+          <div data-testid="authorize-reveal-preview">
+            <TxPreview preview={revealPreview} />
+          </div>
+        )}
         <button
           type="submit"
           data-testid="authorize-reveal-submit"
-          disabled={!isConnected || isPending || !revealReady || !salt || !action}
+          disabled={
+            !isConnected || isPending || !revealReady || !committed || revealPreview?.ok !== true
+          }
         >
           Sign reveal transaction
         </button>
+        {/* A refused or rejected reveal says why (QA plan U5, finding DR-9). */}
+        <WriteStatus
+          testId="authorize-reveal"
+          label="Reveal"
+          write={{ error: write.error, isPending }}
+        />
       </form>
     );
   }
@@ -209,14 +215,39 @@ export function AuthorizeTab(props: Props) {
         shareReceiver={props.shareReceiver}
         setShareReceiver={props.setShareReceiver}
       />
-      {preview && <TxPreview preview={preview} />}
+      {commitPreview && (
+        <div data-testid="authorize-commit-preview">
+          <TxPreview preview={commitPreview} />
+        </div>
+      )}
+      {revealPreview && (
+        <div data-testid="authorize-next-reveal-preview">
+          <p className="hint">
+            Step 2 signs this reveal, with this policy, after the commit mines:
+          </p>
+          <TxPreview preview={revealPreview} />
+        </div>
+      )}
       <button
         type="submit"
         data-testid="authorize-submit"
-        disabled={!isConnected || !validAgent || !validReceiver || isPending}
+        disabled={
+          !isConnected ||
+          !validAgent ||
+          !validReceiver ||
+          isPending ||
+          commitPreview?.ok !== true ||
+          revealPreview?.ok !== true
+        }
       >
         Sign commit transaction
       </button>
+      {/* A refused or rejected commit says why (QA plan U5, finding DR-9). */}
+      <WriteStatus
+        testId="authorize-commit"
+        label="Commit"
+        write={{ error: write.error, isPending }}
+      />
     </form>
   );
 }

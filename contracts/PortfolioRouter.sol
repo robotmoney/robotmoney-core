@@ -641,7 +641,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param weightBps   Weight assigned to this leg.
     /// @param legAmount   USDC that would be sent to this vault.
     /// @param estShares   Estimated shares the depositor would receive (0 if unavailable).
-    /// @param unavailable True if the vault is paused/retired or the call reverted.
+    /// @param unavailable True if execute skips this leg: its registry status is not
+    ///                    Active, it is not router-eligible, the vault's own
+    ///                    `maxDeposit` is 0 or reverts, or its `previewDeposit` reverts.
     struct LegPreview {
         address vault;
         uint256 weightBps;
@@ -652,13 +654,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     /// @notice Return per-vault estimated receipts for `amount` USDC without
     ///         executing any state changes. Non-depositable legs (paused/retired,
-    ///         unregistered, router-ineligible, or over their per-vault cap) are
-    ///         marked `unavailable = true` and return `estShares = 0`; the deposit
-    ///         path skips exactly these legs and renormalises `amount` across the
-    ///         remaining available legs. `legAmount` therefore reflects the
+    ///         unregistered, router-ineligible, a vault whose own `maxDeposit` is 0,
+    ///         or a vault whose `previewDeposit` reverts, such as a basket on a
+    ///         stale price recorder) are marked `unavailable = true` and return
+    ///         `estShares = 0`; the deposit path skips exactly these legs and
+    ///         renormalises `amount` across the remaining available legs. A
+    ///         per-vault cap is not an availability signal (see
+    ///         `_availabilityAndAmounts`). `legAmount` therefore reflects the
     ///         **renormalised** amount the leg would actually receive on execute,
     ///         so `previewDeposit` and the executed deposit never disagree on which
-    ///         legs are available (RTR-5; findings F-13/NC-4).
+    ///         legs are available (RTR-5; findings F-13/NC-4; QA plan D4).
     /// @param amount  Total USDC to preview.
     /// @return legs   One entry per vault in the current weight vector.
     function previewDeposit(uint256 amount) external view returns (LegPreview[] memory legs) {
@@ -666,47 +671,49 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 n = vaultList.length;
         legs = new LegPreview[](n);
 
-        // Identical availability + renormalisation pass to the deposit path, so a
-        // leg preview reports `unavailable` for exactly the legs `_executeLegs`
-        // skips, and `legAmount` for exactly the amount it would deposit.
-        (bool[] memory available, uint256[] memory legAmounts) =
+        // Identical availability + renormalisation + quote pass to the deposit
+        // path, so a leg preview reports `unavailable` for exactly the legs
+        // `_executeLegs` skips, `legAmount` for exactly the amount it would
+        // deposit, and `estShares` from the vault's own `previewDeposit` of that
+        // amount. A zero-amount leg is never called by the deposit path (issue
+        // 1746), so it quotes zero shares and stays available.
+        (bool[] memory available, uint256[] memory legAmounts, uint256[] memory estShares) =
             _availabilityAndAmounts(vaultList, bpsList, amount);
 
         for (uint256 i = 0; i < n; i++) {
-            legs[i].vault = vaultList[i];
-            legs[i].weightBps = bpsList[i];
-            legs[i].legAmount = legAmounts[i];
-
-            if (!available[i]) {
-                legs[i].unavailable = true;
-                continue;
-            }
-
-            // A zero-amount leg is never called by the deposit path (issue 1746),
-            // so it quotes zero shares and stays available.
-            if (legAmounts[i] == 0) continue;
-
-            // Available legs quote against the renormalised legAmount. A revert
-            // in the vault's own previewDeposit downgrades the leg to unavailable
-            // (the runtime deposit would likewise fail this vault) — but note the
-            // skip-set was already fixed above, so this only zeroes estShares.
-            try IERC4626(vaultList[i]).previewDeposit(legAmounts[i]) returns (uint256 estShares) {
-                legs[i].estShares = estShares;
-            } catch {
-                legs[i].unavailable = true;
-            }
+            legs[i] = LegPreview({
+                vault: vaultList[i],
+                weightBps: bpsList[i],
+                legAmount: legAmounts[i],
+                estShares: estShares[i],
+                unavailable: !available[i]
+            });
         }
     }
 
     /// @dev Compute, for the given weight vector and total `amount`, which legs
-    ///      are depositable and the renormalised USDC each available leg receives.
-    ///      A leg is available iff its registry status is `Active` and it is
-    ///      router-eligible (asset == USDC + eligibility flag) — exactly the
-    ///      availability dimension `previewDeposit` reports. The amount is split
-    ///      across ONLY the available legs in proportion to their bps, with the
-    ///      rounding remainder assigned to the last available leg WITH NON-ZERO BPS so the router
-    ///      holds zero USDC after a successful deposit. Unavailable legs get
-    ///      amount 0. This single predicate is shared by `previewDeposit` and
+    ///      are depositable, the renormalised USDC each available leg receives,
+    ///      and the shares each funded leg quotes. A leg is available iff
+    ///      (1) its registry status is `Active`, (2) it is router-eligible
+    ///      (asset == USDC + eligibility flag), (3) the vault's own `maxDeposit`
+    ///      is non-zero (its deposit pause, shutdown, retirement, empty basket,
+    ///      full TVL cap or open exclusion), and (4) the vault's `previewDeposit`
+    ///      of the leg's renormalised amount does not revert (a stale price
+    ///      recorder, a reverting adapter read). Checks (3) and (4) close the
+    ///      RTR-5 known gap (QA plan D4, CS-4): without them a registry-Active,
+    ///      eligible leg whose own deposit could not run stayed in the set and
+    ///      reverted the whole routed deposit `UsdcLegTransferFailed`.
+    ///
+    ///      The amount is split across ONLY the available legs in proportion to
+    ///      their bps, with the rounding remainder assigned to the last available
+    ///      leg WITH NON-ZERO BPS so the router holds zero USDC after a successful
+    ///      deposit. Unavailable legs get amount 0. Dropping a leg in (4) changes
+    ///      the split, so the split and the quotes rerun over the survivors until
+    ///      no funded leg reverts. Each round drops at least one leg, so the loop
+    ///      ends within `n + 1` rounds, and it runs once when no quote reverts.
+    ///      Every funded available leg has therefore quoted at exactly the amount
+    ///      execute deposits. A zero-amount leg is never quoted or called (issue
+    ///      1746). This single predicate is shared by `previewDeposit` and
     ///      `_executeLegs` so the two can never diverge on availability (RTR-5).
     ///
     ///      Per-vault caps are intentionally NOT an availability factor: a cap is a
@@ -714,31 +721,70 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      signal, and silently redistributing a capped leg's allocation onto
     ///      other vaults would breach operator intent. A renormalised leg over its
     ///      cap therefore still reverts `VaultCapExceeded` at execute time rather
-    ///      than being skipped.
+    ///      than being skipped. The same holds for a vault's own non-zero
+    ///      `maxDeposit` below the leg amount, and for a vault whose views pass but
+    ///      whose `deposit` reverts (for example the ORA-4 spot-versus-TWAP guard,
+    ///      which `previewDeposit` does not run): execute reverts
+    ///      `UsdcLegTransferFailed` for that leg.
     function _availabilityAndAmounts(
         address[] memory vaultList,
         uint256[] memory bpsList,
         uint256 amount
-    ) internal view returns (bool[] memory available, uint256[] memory legAmounts) {
+    )
+        internal
+        view
+        returns (bool[] memory available, uint256[] memory legAmounts, uint256[] memory estShares)
+    {
         uint256 n = vaultList.length;
         available = new bool[](n);
-        legAmounts = new uint256[](n);
+        estShares = new uint256[](n);
 
-        // First pass: availability (status + eligibility) and the sum of the bps
-        // of the available legs, which becomes the renormalisation denominator.
-        uint256 availableBps;
+        // First pass: the amount-independent checks (status, eligibility,
+        // the vault's own maxDeposit).
         for (uint256 i = 0; i < n; i++) {
-            if (_isDepositable(vaultList[i])) {
-                available[i] = true;
-                availableBps += bpsList[i];
+            available[i] = _isDepositable(vaultList[i]);
+        }
+
+        // Split, then quote every funded available leg at its split amount. A
+        // reverting quote drops the leg, and the split reruns over the survivors.
+        bool dropped = true;
+        while (dropped) {
+            dropped = false;
+            legAmounts = _splitAcrossAvailable(available, bpsList, amount);
+            for (uint256 i = 0; i < n; i++) {
+                if (!available[i] || legAmounts[i] == 0) continue;
+                try IERC4626(vaultList[i]).previewDeposit(legAmounts[i]) returns (uint256 s) {
+                    estShares[i] = s;
+                } catch {
+                    available[i] = false;
+                    estShares[i] = 0;
+                    dropped = true;
+                }
             }
         }
-        if (availableBps == 0) return (available, legAmounts);
+    }
 
-        // Second pass: split `amount` across the available legs by their bps share
-        // of `availableBps` (NOT BPS_DENOMINATOR), and find the last available leg
-        // WITH NON-ZERO BPS so the rounding remainder lands on a leg the router
-        // actually deposits into.
+    /// @dev Split `amount` across the available legs by each leg's bps share of
+    ///      the available bps (NOT BPS_DENOMINATOR). The rounding remainder lands
+    ///      on the last available leg WITH NON-ZERO BPS, a leg the router actually
+    ///      deposits into. Unavailable legs get 0, and every leg gets 0 when no
+    ///      available leg carries weight.
+    function _splitAcrossAvailable(
+        bool[] memory available,
+        uint256[] memory bpsList,
+        uint256 amount
+    ) private pure returns (uint256[] memory legAmounts) {
+        uint256 n = bpsList.length;
+        legAmounts = new uint256[](n);
+
+        // The sum of the bps of the available legs is the renormalisation
+        // denominator.
+        uint256 availableBps;
+        for (uint256 i = 0; i < n; i++) {
+            if (available[i]) availableBps += bpsList[i];
+        }
+        if (availableBps == 0) return legAmounts;
+
         uint256 allocated;
         uint256 lastAvailable;
         for (uint256 i = 0; i < n; i++) {
@@ -755,10 +801,15 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         }
     }
 
-    /// @dev Non-reverting predicate: is `vault` depositable right now (registry
-    ///      status Active AND router-eligible)? Mirrors the reverting checks in
-    ///      `_executeLeg`/`_requireRouterEligible` without reverting, so it can be
-    ///      used to compute the shared availability set.
+    /// @dev Non-reverting, amount-independent half of the availability check: is
+    ///      `vault` registry-Active, router-eligible, and open for deposits by its
+    ///      own `maxDeposit`? Mirrors the reverting checks in
+    ///      `_executeLeg`/`_requireRouterEligible` and the vault's own ERC-4626
+    ///      deposit gate without reverting, so it can be used to compute the
+    ///      shared availability set. `maxDeposit` is read with this router as the
+    ///      receiver: preview has no receiver to pass, and every vault in the
+    ///      family ignores the argument. A reverting `maxDeposit` counts as 0,
+    ///      because an ERC-4626 `deposit` reads it first and would revert too.
     function _isDepositable(address vault) internal view returns (bool) {
         try registry.getVault(vault) returns (
             VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
@@ -767,7 +818,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         } catch {
             return false;
         }
-        return this.isRouterEligible(vault);
+        if (!this.isRouterEligible(vault)) return false;
+        try IERC4626(vault).maxDeposit(address(this)) returns (uint256 cap) {
+            return cap != 0;
+        } catch {
+            return false;
+        }
     }
 
     // ─── Deposit ─────────────────────────────────────────────────────────────
@@ -841,13 +897,19 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///           1494). Retired vaults are withdraw-only, never deposit targets —
     ///           see ADR-0009.
     ///
-    ///         SECURITY: users must NEVER grant a share-token approval directly to
+    ///         SECURITY: users must NEVER leave a STANDING share-token approval to
     ///         this router. The router calls `vault.redeem` with itself as the
     ///         vault-level spender, so a standing user→router approval would let
     ///         any holder-authorized caller burn the user's shares to an arbitrary
-    ///         `assetRecipient`. Only the gateway's transient self-custody flow
-    ///         (approve inside its own `nonReentrant` frame, clear afterwards) may
-    ///         approve the router.
+    ///         `assetRecipient`. Two flows approve the router: the gateway's
+    ///         transient self-custody flow (approve inside its own `nonReentrant`
+    ///         frame, clear afterwards), and a holder's own single-vault exit
+    ///         (QA plan D9, SR-M16), which approves exactly the shares of the one
+    ///         `redeemFor(holder, holder, [vault], [shares], [floor], deadline)`
+    ///         it sends next. That redeem spends the approval to zero. A holder
+    ///         whose call reverts (`SlippageExceeded`, `DeadlineExpired`) clears
+    ///         the approval it left. A direct `vault.redeem` has no minimum-out,
+    ///         so this one-leg call is how a holder puts a floor on one vault.
     ///
     ///         All legs must succeed (all-or-revert). No intermediate USDC custody
     ///         is created in the router — each vault sends USDC directly to
@@ -1014,9 +1076,11 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // renormalised USDC each available leg receives. This is the SAME shared
         // pass `previewDeposit` runs, so preview-available ⇒ execute-deposits and
         // preview-unavailable ⇒ execute-skips — preview and execute never disagree
-        // (RTR-5; findings F-13/NC-4). A single non-Active leg no longer reverts
-        // the whole router deposit; the basket deposits the remaining legs.
-        (bool[] memory available, uint256[] memory legAmounts) =
+        // (RTR-5; findings F-13/NC-4). A single non-Active leg, or a leg whose own
+        // `maxDeposit` is 0 or whose `previewDeposit` reverts (QA plan D4), no
+        // longer reverts the whole router deposit; the basket deposits the
+        // remaining legs.
+        (bool[] memory available, uint256[] memory legAmounts,) =
             _availabilityAndAmounts(vaultList, bpsList, amount);
 
         // When NO leg is depositable the basket is consistently unavailable: there
@@ -1064,10 +1128,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @dev Execute one available vault leg per entry: approve and deposit, then
     ///      check the slippage floor. Unavailable legs (per the shared
     ///      `_availabilityAndAmounts` pass) are skipped — matching
-    ///      `previewDeposit` (RTR-5). Available legs are guaranteed depositable by
-    ///      that pass; `_executeLeg` re-asserts eligibility as defence in depth.
-    ///      All available legs must succeed (all-or-revert across the surviving
-    ///      set). Writes minted shares into `sharesPerLeg`.
+    ///      `previewDeposit` (RTR-5). Available legs passed that pass's status,
+    ///      eligibility, `maxDeposit` and `previewDeposit` checks; `_executeLeg`
+    ///      re-asserts status and eligibility as defence in depth. All available
+    ///      legs must succeed (all-or-revert across the surviving set): a vault
+    ///      whose views pass but whose `deposit` reverts still reverts the whole
+    ///      deposit. Writes minted shares into `sharesPerLeg`.
     function _executeLegs(
         address receiver,
         address[] memory vaultList,

@@ -27,7 +27,7 @@ import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
-import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
+import { createSafe, impersonatedSender, connectSafe, readUntil, verifyCreatedSafe, type CreateSafePlan, type ReadRetry, type SafeManifest } from "./safe/index.ts";
 
 // ---- spawning: forge, cast and a read-only git status only -----------------------------------------------------------------------------------------
 
@@ -111,6 +111,8 @@ export interface RunManifest {
   receipt_applications?: unknown[];
   /** One entry per executed `govern --row clear-voted-weights` round (issue 1743): the active (applied receipt) vector dropped, routing back on the default. */
   voted_weights_clears?: unknown[];
+  /** QA plan v1 D7: one entry per executed `govern --row set-unwind-guard` round (a basket vault's emergency unwind guard). A record: the verifier reads the guards from the chain. */
+  unwind_guards?: unknown[];
   /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
   vault_redeploys?: RedeployRecord[];
   /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
@@ -292,13 +294,30 @@ export interface RunContext {
   chainReader?: (rpc: string) => ChainReader;
   /** Injected for tests: the sleep, the poll and the longest wait of the recorder gate (core 1676). Defaults to a 15 s poll for up to 40 minutes. */
   recorderWait?: RecorderWaitDeps;
+  /**
+   * Injected for tests: how a read that checks what a landed transaction left is read again on a load-balanced RPC (issue 1723, QA plan v1 E6: the Safe creation, the
+   * prove-control entry, the stage 11 gate, the redeploy verb). Defaults to 5 reads, 1 s apart (safe/read-after-write.ts).
+   */
+  readRetry?: ReadRetry;
+  /**
+   * QA plan v1 E7 (issue 1724): --logs-rpc, an RPC for eth_getLogs only. The prove-control adoption reads the Safe's execution events there (after one eth_chainId read
+   * proves it serves this chain); every other read stays on `rpc`. Undefined: eth_getLogs goes to `rpc` too.
+   */
+  logsRpc?: string;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */
   simRpc?: string;
   dryFiles?: DryRunFiles;
-  /** Issue 1796, verify after a redeploy: the forge out/ of a checkout at the ORIGINAL deployment sha, for the code hashes of the vaults the redeploy did not replace and of the retired one. */
+  /** Issue 1796, verify after a redeploy: the forge out/ of a checkout at the ORIGINAL deployment sha, for the code hashes of every contract the redeploy did not replace (and of the retired vault). */
   priorArtifactsDir?: string;
+  /** QA plan v1 E1: the HEAD sha of the git checkout that holds `priorArtifactsDir`. The verify stage records it (the stage record and each governed redeploy entry). */
+  priorArtifactsSha?: string;
+  /**
+   * QA plan v1 E1 (DT-2, issue 1796): set only for a run at a single-vault redeploy's sha (`govern --row redeploy-vault`, `verify --prior-out`; redeploy-vault.ts
+   * redeployShaRun). It is the sha of the ORIGINAL deployment: the run manifest names it, `coreSha` names the redeploy sha, and runStages accepts that manifest.
+   */
+  originalSha?: string;
   /** Absolute manifest directory chosen by the caller (env PUBLISH_MANIFEST_DIR). Undefined: deployments/<chainId>/ in the core checkout. */
   manifestOut?: string;
 }
@@ -682,7 +701,11 @@ export async function controlProofGate(ctx: RunContext, row: StageRow, manifest:
   const api: Pick<SafeApi, "connectSafe"> = { connectSafe, ...(ctx.safeApi ?? {}) };
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: safe as Address, logger: ctx.log });
-  const rec = assertControlProven(manifest.stages[PROOF_STAGE], { safe, owners: handle.owners, nonce: await handle.nonce() });
+  // QA plan v1 E6 (issue 1723): with a finished proof on record the Safe nonce is 1 or more, and the proof usually landed moments ago (prove-control runs right before
+  // this stage). A load-balanced RPC may still answer 0 from a node behind that block, so a 0 is read again, bounded. A Safe still at 0 after the last read is refused as before.
+  const proofDone = manifest.stages[PROOF_STAGE]?.status === "done";
+  const nonce = proofDone ? await readUntil(() => handle.nonce(), (n) => n >= 1, ctx.readRetry) : await handle.nonce();
+  const rec = assertControlProven(manifest.stages[PROOF_STAGE], { safe, owners: handle.owners, nonce });
   ctx.log.log("info", "stage.control_proof_ok", { stage: row.name, safe, tx_hash: rec.txHash, signers: rec.signers.length });
 }
 
@@ -922,12 +945,14 @@ export async function assertFreshSafeAddress(ctx: RunContext, prior: StageRecord
 async function createSafeOnSimulationChain(ctx: RunContext, api: SafeApi, deployer: Address, predicted: Address, outPath: string): Promise<void> {
   const simRpc = ctx.simRpc!;
   if (!isLoopback(simRpc)) throw new PublishError("USAGE", `refusing to create the Safe on ${simRpc}: only the local simulation chain takes it`);
+  // The local anvil forks the target and reports its chain id: 8453 for a mainnet sheet. The impersonated sender is keyed on the loopback RPC,
+  // never on the chain id (issue 1720, QA plan v1 E5), so an 8453 sheet's --dry-run creates the Safe here like a Twin sheet's.
   const chain = { rpcUrl: simRpc, chainId: ctx.chainId };
   const imp = await ctx.run("cast", ["rpc", "anvil_impersonateAccount", deployer, "--rpc-url", simRpc], { env: childEnv({ ...ctx, rpc: simRpc }) });
   if (imp.code !== 0) throw new PublishError("TOOL", `cannot impersonate the deployer on the local preflight chain: ${imp.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
   const simNonce = await deployerNonce({ ...ctx, rpc: simRpc }, deployer);
   const res = await api.createSafe({
-    ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: impersonatedSender(deployer, chain), deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
+    ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: impersonatedSender(deployer, chain, { localSimulationFork: true }), deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
     forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
     expectDeployerNonce: simNonce, logger: ctx.log, dryRun: false, confirm: async () => true,
   });
@@ -972,7 +997,7 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
   const res = await api.createSafe({
     ...chain, owners: ctx.sheet.safeOwners, threshold: ctx.sheet.safeThreshold, deployer: signer, deploySha: ctx.coreSha, saltNonce: ctx.sheet.safeSalt,
     forbiddenOwners: { ADMIN_ADDRESS: ctx.sheet.admin, PAUSER_ADDRESS: ctx.sheet.pauser, EMERGENCY_ADDRESS: ctx.sheet.emergency },
-    expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun,
+    expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun, readRetry: ctx.readRetry,
     confirm: async (plan: CreateSafePlan) => {
       await assertFreshSafeAddress(ctx, prior, plan.predictedAddress);
       // record the predicted address BEFORE anything is sent: a resume adopts it
@@ -1059,7 +1084,12 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
   let manifest = loadRunManifest(ctx.evidenceDir);
   if (manifest) {
     if (!ctx.resume && Object.keys(manifest.stages).length > 0 && !ctx.dryRun) throw new PublishError("RESUME", `${manifestPath(ctx.evidenceDir)} exists with earlier stages: pass --resume to continue, or use a fresh evidence directory`);
-    if (manifest.chainId !== ctx.chainId || manifest.coreSha !== ctx.coreSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) throw new PublishError("RESUME", "the run manifest belongs to a different chain, core SHA or deployer");
+    // QA plan v1 E1: a run at a redeploy round's sha (govern --row redeploy-vault, verify --prior-out) continues the run manifest of the ORIGINAL sha (ctx.originalSha).
+    const manifestSha = ctx.originalSha ?? ctx.coreSha;
+    if (manifest.chainId !== ctx.chainId || manifest.coreSha !== manifestSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) {
+      const why = manifest.coreSha !== manifestSha ? `: it was written at core SHA ${manifest.coreSha}, this run names ${ctx.coreSha}. Only govern --row redeploy-vault and verify (with --prior-out) may name the sha a redeploy-vault round was deployed at` : "";
+      throw new PublishError("RESUME", `the run manifest belongs to a different chain, core SHA or deployer${why}`);
+    }
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
     if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
   } else manifest = newManifest(ctx, deployer);

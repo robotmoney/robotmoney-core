@@ -236,6 +236,96 @@ impl FailingWebhookServer {
     }
 }
 
+/// One request a [`ScriptedWebhookServer`] answered.
+#[derive(Debug, Clone)]
+pub struct ScriptedCapture {
+    /// The HTTP status it was answered with.
+    pub status: u16,
+    /// Raw JSON body bytes.
+    pub body: Vec<u8>,
+}
+
+/// An HTTP server that answers the n-th request with `statuses[n]`, and every
+/// request past the script with 202, capturing each body with its status.
+///
+/// DI-7: a receiver that fails once and then comes back is what the retry path
+/// must survive; a fixed-status server cannot show both halves in one test.
+pub struct ScriptedWebhookServer {
+    /// Full URL (e.g. `http://127.0.0.1:12345`).
+    pub url: String,
+    /// (requests answered so far, captures not yet drained). The count is what
+    /// indexes the script, so draining never replays it.
+    state: Arc<Mutex<(usize, Vec<ScriptedCapture>)>>,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl ScriptedWebhookServer {
+    /// Start a server that plays `statuses` in order, then answers 202.
+    pub async fn start(statuses: Vec<u16>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let state: Arc<Mutex<(usize, Vec<ScriptedCapture>)>> = Arc::default();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let script = Arc::new(statuses);
+
+        let caps2 = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accept = listener.accept() => {
+                        let Ok((mut sock, _)) = accept else { break };
+                        let caps = caps2.clone();
+                        let script = script.clone();
+                        tokio::spawn(async move {
+                            let mut buf = vec![0u8; 32 * 1024];
+                            let n = match sock.read(&mut buf).await { Ok(n) => n, Err(_) => return };
+                            if n == 0 { return; }
+                            let body_start = buf[..n].windows(4)
+                                .position(|w| w == b"\r\n\r\n")
+                                .map(|i| i + 4)
+                                .unwrap_or(0);
+                            let body = buf[body_start..n].to_vec();
+                            // Pick the status and record the request under one
+                            // lock, so concurrent requests consume the script in
+                            // the order they are recorded.
+                            let status = {
+                                let mut st = caps.lock().unwrap();
+                                let status = script.get(st.0).copied().unwrap_or(202);
+                                st.0 += 1;
+                                st.1.push(ScriptedCapture { status, body });
+                                status
+                            };
+                            let resp = format!(
+                                "HTTP/1.1 {status} Scripted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                            let _ = sock.shutdown().await;
+                        });
+                    }
+                }
+            }
+        });
+
+        Self {
+            url,
+            state,
+            shutdown: shutdown_tx,
+        }
+    }
+
+    /// Drain every request answered since the last drain, in arrival order.
+    pub fn drain_captures(&self) -> Vec<ScriptedCapture> {
+        self.state.lock().unwrap().1.drain(..).collect()
+    }
+
+    /// Shut down the server.
+    pub fn shutdown(self) {
+        let _ = self.shutdown.send(());
+    }
+}
+
 /// A TCP server that accepts a connection and then never responds, holding the
 /// socket open until shutdown. Used to simulate a hung RPC endpoint so the
 /// watchdog's SLA timeout can be exercised: a pause RPC against this URL never

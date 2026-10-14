@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7a511cdfa72db50d9966938a824287f2a66cea9/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -152,6 +152,59 @@ uint8 internal constant OP_DEPOSIT_TO = 3;
 
 ```solidity
 uint8 internal constant OP_WITHDRAW_ROUTER = 4;
+```
+
+### AGENT_CONSENT_TYPEHASH
+
+EIP-712 type of the agent's consent to a binding (issue #1791).
+Signed by the agent; `owner` is the revealer, `nonce` is
+`agentConsentNonce(agent)`.
+
+```solidity
+bytes32 public constant AGENT_CONSENT_TYPEHASH =
+        keccak256("AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)");
+```
+
+### _EIP712_DOMAIN_TYPEHASH
+
+<i>
+
+EIP-712 domain parts. The separator is derived per call from
+`block.chainid` and `address(this)`, so a consent never verifies on
+another chain or another gateway.
+
+</i>
+
+```solidity
+bytes32 private constant _EIP712_DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+```
+
+### _EIP712_NAME_HASH
+
+```solidity
+bytes32 private constant _EIP712_NAME_HASH = keccak256("RobotMoneyGateway");
+```
+
+### _EIP712_VERSION_HASH
+
+```solidity
+bytes32 private constant _EIP712_VERSION_HASH = keccak256("1");
+```
+
+### _SECP256K1_HALF_ORDER
+
+<i>
+
+secp256k1 order / 2. A signature with `s` above it is the
+malleable twin of a low-s one and is refused (EIP-2).
+
+</i>
+
+```solidity
+uint256 private constant _SECP256K1_HALF_ORDER =
+        0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 ```
 
 ### usdcToken
@@ -319,6 +372,64 @@ preceding storage slot moves.
 ```solidity
 IConsensusRecommendationReceipt public consensusReceipt;
 ```
+
+### agentConsentNonce
+
+Nonce the agent's next `AgentConsent` signature must carry
+(issue #1791). Starts at zero and advances by one each time a
+consent signature authorizes the agent.
+
+<i>
+
+Appended after `consensusReceipt` so no preceding slot moves.
+
+</i>
+
+```solidity
+mapping(address => uint256) public agentConsentNonce;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` | The agent address to look up. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+### agentConsented
+
+True when the agent's current binding carries its consent: a
+consent signature, or the agent revealed for itself. False for
+an unbound address and for a binding an `ADMIN_ROLE` caller made
+without consent, which the agent can undo with `releaseAgent`.
+
+<i>
+
+Set on a binding made with the agent's consent; cleared with the
+binding by `revokeAgent`. Gates `releaseAgent`.
+
+</i>
+
+```solidity
+mapping(address => bool) public agentConsented;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` | The agent address to look up. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 ## Functions
 
@@ -768,7 +879,7 @@ function commitAuthorization(bytes32 commitHash) external;
 | ---- | ---- | ----------- |
 | commitHash | `bytes32` | `keccak256(abi.encode(agent, msg.sender, salt))`. |
 
-<a id="revealauthorization-address-bytes32-agentpolicy"></a>
+<a id="revealauthorization-address-bytes32-agentpolicy-bytes"></a>
 
 ### revealAuthorization
 
@@ -778,6 +889,28 @@ authorize the agent with the supplied policy. Reverts if no
 prior commitment matches, if the commitment has expired, if
 `msg.sender` is not the original committer, or if the hash
 does not match.
+
+Agent consent (issue #1791). A caller without `ADMIN_ROLE`
+
+that names an `agent` other than itself must pass the agent's
+
+65-byte EIP-712 signature (`r ‖ s ‖ v`) over
+
+`AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)`
+
+with `owner = msg.sender`, `shareReceiver = p.shareReceiver`
+
+and `nonce = agentConsentNonce(agent)`, in the domain
+
+(`RobotMoneyGateway`, `1`, `block.chainid`, this gateway).
+
+Anything else reverts `InvalidAgentConsent`. A successful use
+
+advances the nonce, so a consent authorizes once. An agent
+
+revealing for itself, and an `ADMIN_ROLE` caller, pass empty
+
+bytes; the field is not read for them.
 
 <i>
 
@@ -789,7 +922,12 @@ a caller without `ADMIN_ROLE` must name itself as
 </i>
 
 ```solidity
-function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
+function revealAuthorization(
+        address agent,
+        bytes32 salt,
+        AgentPolicy calldata p,
+        bytes calldata agentConsent
+    ) external;
 ```
 
 **Parameters**
@@ -799,6 +937,7 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 | agent | `address` | The agent address to authorize (must not already be owned). |
 | salt | `bytes32` | The caller-chosen salt used when building `commitHash`. |
 | p | `AgentPolicy` | Initial policy parameters. |
+| agentConsent | `bytes` | The agent's consent signature, or empty (see above). |
 
 <a id="authorizeagent-address-agentpolicy"></a>
 
@@ -813,6 +952,8 @@ authority after the deploy handover revokes the deployer's
 `agent` already has a recorded owner; that owner must call
 `setPolicy` to update or `revokeAgent` to release. The caller
 holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
+No agent consent is taken, so the agent may undo the binding
+with `releaseAgent` (issue #1791).
 
 ```solidity
 function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE);
@@ -825,7 +966,7 @@ function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole
 | agent | `address` | The agent address to authorize (must not already be owned). |
 | p | `AgentPolicy` | Initial policy parameters. |
 
-<a id="_authorizeagentinternal-address-agentpolicy"></a>
+<a id="_authorizeagentinternal-address-agentpolicy-bytes"></a>
 
 ### _authorizeAgentInternal
 
@@ -836,8 +977,20 @@ Shared authorization logic for both `authorizeAgent` (direct) and
 
 </i>
 
+Agent consent (issue #1791, review CS-1 and CS-2). Without it a
+caller could bind an agent address it does not control, with
+itself as share receiver, so that agent's deposits mint to the
+caller; or claim a published address first and block its real
+owner (`AgentAlreadyOwned`). A caller without ADMIN_ROLE therefore
+binds an agent other than itself only with the agent's signature
+(`_requireAgentConsent`). Revealing for itself is consent by the
+call. An ADMIN_ROLE caller takes no consent; that binding is
+recorded as unconsented, and the agent may undo it with
+`releaseAgent`.
+
 ```solidity
-function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal;
+function _authorizeAgentInternal(address agent, AgentPolicy calldata p, bytes calldata consent)
+        internal;
 ```
 
 **Parameters**
@@ -846,6 +999,7 @@ function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal
 | ---- | ---- | ----------- |
 | agent | `address` |  |
 | p | `AgentPolicy` |  |
+| consent | `bytes` |  |
 
 <a id="setpolicy-address-agentpolicy"></a>
 
@@ -903,7 +1057,7 @@ function transferAgentOwnership(address agent, address newOwner) external;
 ### revokeAgent
 
 Revoke an agent. Reverts if `msg.sender` is not the recorded
-owner. Clears policy, role, and owner record.
+owner. Clears policy, role, owner record and consent record.
 
 ```solidity
 function revokeAgent(address agent) external;
@@ -914,6 +1068,77 @@ function revokeAgent(address agent) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | agent | `address` | The agent address whose policy and role are revoked. |
+
+<a id="releaseagent"></a>
+
+### releaseAgent
+
+Release path for an address bound without its consent (issue
+#1791). The caller is the agent: when it has a recorded owner
+and never consented to that binding (an `ADMIN_ROLE` caller
+authorized it), this clears its policy, role and owner record
+exactly as `revokeAgent` does and emits `AgentRevoked` with the
+owner it had. Reverts `AgentNotReleasable` when the caller has
+no owner or consented to its binding (by signature or by
+revealing for itself); such an agent's owner revokes it.
+
+```solidity
+function releaseAgent() external;
+```
+
+<a id="_clearagent-address-address"></a>
+
+### _clearAgent
+
+<i>
+
+Clear one binding: policy, owner, consent record and AGENT_ROLE.
+Shared by `revokeAgent` and `releaseAgent`; both emit `AgentRevoked`
+so off-chain readers see the agent leave by either path.
+
+</i>
+
+```solidity
+function _clearAgent(address agent, address owner) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| owner | `address` |  |
+
+<a id="_requireagentconsent-address-address-bytes"></a>
+
+### _requireAgentConsent
+
+<i>
+
+Require `consent` to be `agent`'s EIP-712 `AgentConsent` signature
+for this revealer (`msg.sender`) and `shareReceiver` at the agent's
+current nonce, then advance the nonce so the signature authorizes
+once (issue #1791). Layout is `r ‖ s ‖ v` (65 bytes). A high-s
+signature is refused (EIP-2), so a consent has one valid encoding.
+`agent` is non-zero here, so a failed recovery (zero signer) never
+matches. A contract agent (no ECDSA key) consents by revealing for
+itself instead. Hand-rolled rather than OZ `ECDSA.tryRecover` and
+`EIP712` to stay under EIP-170 and to add no storage.
+
+</i>
+
+```solidity
+function _requireAgentConsent(address agent, address shareReceiver, bytes calldata consent)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+| shareReceiver | `address` |  |
+| consent | `bytes` |  |
 
 <a id="_validatepolicy-address-agentpolicy"></a>
 
@@ -972,9 +1197,6 @@ function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 
 ### deposit
 
-Pull `amount` USDC from caller, deposit into the vault, route
-resulting shares to the agent's configured `shareReceiver`.
-
 <i>
 
 Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, rolling
@@ -982,6 +1204,13 @@ deposit window) are written before external calls (CEI pattern).
 `nonReentrant` provides defense-in-depth.
 
 </i>
+
+The policy checks, the USDC pull and the vault leg are the same
+helpers `depositTo` uses for a vault destination
+(`_requireDepositPolicy`, `_pullDepositUsdc`,
+`_executeVaultDeposit`), in the same order as before. Sharing them
+is what keeps the runtime under EIP-170 with the agent-consent
+check of issue #1791 in it.
 
 ```solidity
 function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
@@ -1055,6 +1284,53 @@ function depositTo(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | paymentId | `bytes32` | keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,<br/>orderId, amount, idempotencyKey)) — op-kind prefix ensures<br/>depositTo ids are disjoint from deposit and withdraw ids. |
+
+<a id="_requiredepositpolicy-agentpolicy-uint256-uint64"></a>
+
+### _requireDepositPolicy
+
+<i>
+
+Deposit policy checks shared by `deposit` and `depositTo`, in this
+order: amount, deadline window, policy active and not expired.
+
+</i>
+
+```solidity
+function _requireDepositPolicy(AgentPolicy memory p, uint256 amount, uint64 deadline)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `AgentPolicy` |  |
+| amount | `uint256` |  |
+| deadline | `uint64` |  |
+
+<a id="_pulldepositusdc-depositargs"></a>
+
+### _pullDepositUsdc
+
+<i>
+
+Pull `args.amount` USDC from the agent into the gateway and refuse
+a short delivery (fee-on-transfer or rebasing token). Records the
+pre-pull balance in `args.balBefore` for the custody checks.
+
+</i>
+
+```solidity
+function _pullDepositUsdc(DepositArgs memory args) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| args | `DepositArgs` |  |
 
 <a id="_requiredepositgas-bool"></a>
 
@@ -1161,12 +1437,14 @@ function _executeRouterDeposit(DepositArgs memory args, uint256[] calldata minSh
 <i>
 
 Vault-path deposit: pre-call share custody check, approve vault, deposit,
-clear allowance, post-call custody invariants, emit event.
+clear allowance, post-call custody invariants, emit event. Shared by
+`deposit` (destination = the pinned vault) and a vault-destination
+`depositTo`.
 
 </i>
 
 ```solidity
-function _executeVaultDeposit(DepositArgs memory args) internal;
+function _executeVaultDeposit(DepositArgs memory args) internal returns (uint256 sharesMinted);
 ```
 
 **Parameters**
@@ -1174,6 +1452,12 @@ function _executeVaultDeposit(DepositArgs memory args) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | args | `DepositArgs` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesMinted | `uint256` |  |
 
 <a id="withdraw-bytes32-uint256-address-uint64-bytes32"></a>
 
@@ -1875,6 +2159,26 @@ is configured (`consensusReceipt == address(0)`).
 
 ```solidity
 error ConsensusReceiptNotSet();
+```
+
+### InvalidAgentConsent
+
+A caller without `ADMIN_ROLE` revealed for an agent other than
+itself, and `agentConsent` is missing, malformed, or not the
+agent's EIP-712 signature over this owner, share receiver and
+the agent's current `agentConsentNonce` (issue #1791).
+
+```solidity
+error InvalidAgentConsent();
+```
+
+### AgentNotReleasable
+
+`releaseAgent` called by an address that has no recorded owner,
+or whose binding carries its consent (issue #1791).
+
+```solidity
+error AgentNotReleasable();
 ```
 
 ### WindowBufferFull

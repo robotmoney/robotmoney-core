@@ -247,6 +247,6 @@ function formatVerification(state: VerificationState): string {
     case "verified":
       return `verified ${state.computedHash}`;
     case "refused":
-      return `refused: ${state.reason}`;
+      return `refused: ${state.reason} (${state.cause})`;
   }
 }

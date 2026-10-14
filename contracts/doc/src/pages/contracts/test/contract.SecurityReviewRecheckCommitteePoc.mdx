@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -42,12 +42,29 @@ function _selfPolicy(address self) internal view returns (IGateway.AgentPolicy m
 
 ### _selfReveal
 
-Permissionless commit/reveal: `owner` authorizes `agent` (may be any
-address that is not already owned) with a policy naming `owner` as
-shareReceiver, as `_validatePolicy` demands of non-admin callers.
+Permissionless commit/reveal: `owner` authorizes `agent` with a policy
+naming `owner` as shareReceiver, as `_validatePolicy` demands of
+non-admin callers. It carries no agent consent, so since issue #1791 it
+lands only when `owner == agent` (the reveal is the agent's own consent).
 
 ```solidity
 function _selfReveal(address owner, address agent, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="_commitandroll-address-address-bytes32"></a>
+
+### _commitAndRoll
+
+```solidity
+function _commitAndRoll(address owner, address agent, bytes32 salt) internal;
 ```
 
 **Parameters**
@@ -100,12 +117,24 @@ function test_selfRevealedAgentCannotVoteUnderOwnAddress() public;
 function test_selfRegisteredAgentCannotAnchorReceipt() public;
 ```
 
-<a id="test_permissionlessrevealsquatsthirdpartyagentaddress"></a>
+<a id="test_permissionlessrevealcannotsquatthirdpartyagentaddress"></a>
 
-### test_permissionlessRevealSquatsThirdPartyAgentAddress
+### test_permissionlessRevealCannotSquatThirdPartyAgentAddress
+
+<i>
+
+Finding 7. At baseline the attacker became the policy owner of a
+published third-party address, with itself as share receiver, and
+admin onboarding of that address then reverted `AgentAlreadyOwned`
+(also after the admin stripped its role). Issue #1791 requires the
+agent's EIP-712 consent for a non-admin reveal of another address,
+so the same reveal reverts `InvalidAgentConsent`, nothing is bound,
+and the admin onboards the address.
+
+</i>
 
 ```solidity
-function test_permissionlessRevealSquatsThirdPartyAgentAddress() public;
+function test_permissionlessRevealCannotSquatThirdPartyAgentAddress() public;
 ```
 
 <a id="test_selfregisteredagentcannotpullanotherholdersshares"></a>

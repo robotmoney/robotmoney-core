@@ -19,6 +19,7 @@ import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures
 const vaultAddr = (key: string): `0x${string}` => `0x00000000000000000000000000000000000000c${["USDC", "PROTO", "AGENT", "RWA"].indexOf(key) + 1}`;
 const MANIFEST_ADAPTER_V4 = "0x00000000000000000000000000000000000000a4";
 const MANIFEST_RECORDER = "0x00000000000000000000000000000000000000d5";
+const USDC_ADAPTER_FIELDS = { aave_adapter: "0x00000000000000000000000000000000000000e1", compound_adapter: "0x00000000000000000000000000000000000000e2", moonwell_flagship_adapter: "0x00000000000000000000000000000000000000e3" } as const;
 
 /** A core checkout fixture: the real-shaped config files, the vault manifests with the adapter each run deploys, and the Safe manifest. */
 function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] } | null = {}, o: { adapters?: boolean; chain?: number } = {}) {
@@ -28,7 +29,8 @@ function setup(config: { proto?: object[]; rwa?: object[]; shortlist?: object[] 
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
   if (o.adapters !== false) {
-    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER, adapter_v4: MANIFEST_ADAPTER_V4, recorder: MANIFEST_RECORDER } : {}) }));
+    // the rmUSDC manifest names the three lending adapters its stage registered (issue 1705 C4: the verify sheet reads them)
+    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: chain, vault: vaultAddr(v.key), ...(v.key !== "USDC" ? { adapter: MANIFEST_ADAPTER, adapter_v4: MANIFEST_ADAPTER_V4, recorder: MANIFEST_RECORDER } : USDC_ADAPTER_FIELDS) }));
     writeFileSync(join(m, "recorder.json"), JSON.stringify({ chain_id: chain, recorder: MANIFEST_RECORDER }));
   }
   if (config) writeCoreAssetConfig(coreDir, config);
@@ -60,6 +62,20 @@ describe("stage 12: the one verifier", () => {
     expect(v.vaults.rmUSDC!.seedShareReceiver).toBe(sheet.shareReceiver);
     expect(v.vaults.rmPROTO!.feeRecipient).toBe("0x00000000000000000000000000000000000050fe"); // @safe resolves to the created Safe
     expect(v.timelockDelay).toBe(60);
+  });
+
+  test("the verifier sheet carries rmUSDC's lending adapters at the deploy script's caps and every basket's swap bound, and a missing adapter field is an error (issue 1705 C4)", () => {
+    const { ctx } = setup();
+    const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
+    expect(v.vaults.rmUSDC!.adapters).toEqual([
+      { address: USDC_ADAPTER_FIELDS.aave_adapter, capBps: 3334 }, { address: USDC_ADAPTER_FIELDS.compound_adapter, capBps: 3333 }, { address: USDC_ADAPTER_FIELDS.moonwell_flagship_adapter, capBps: 3333 },
+    ]);
+    expect(v.vaults.rmUSDC!.maxSlippageBps).toBeUndefined();
+    // the fixture configs set no root maxSlippageBps, so each basket keeps its vault default
+    expect([v.vaults.rmPROTO!.maxSlippageBps, v.vaults.rmAGENT!.maxSlippageBps, v.vaults.rmRWA!.maxSlippageBps]).toEqual([100n, 300n, 100n]);
+    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) expect(v.vaults[k]!.adapters).toBeUndefined();
+    writeFileSync(join(ctx.coreDir, "deployments", String(ctx.chainId), "vault.json"), JSON.stringify({ chain_id: ctx.chainId, vault: vaultAddr("USDC"), aave_adapter: USDC_ADAPTER_FIELDS.aave_adapter }));
+    expect(() => buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe")).toThrow("manifest vault.json has no compound_adapter");
   });
 
   test("the verifier sheet carries the NAV deviation guard and the pool liquidity floor of every basket, and none for rmUSDC (issue 1666)", () => {
@@ -224,6 +240,26 @@ describe("stage 12 after govern: the unpause rows are linked to the paused reads
     const deps = { verifyDeployment: async () => ({ ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }, { label: "manifest: vault.json present", ok: true, detail: "" }] }), verifySources: async () => ({ ok: true, checks: [] }), emit: (l: string) => out.push(l) };
     await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);
     expect(out).toEqual(["[verify]", "chain: id equals sheet", "manifest: vault.json present"]);
+  });
+
+  // QA plan v1 C3 (CS-6): the run records the current weight setter's gating in the verify stage record and on the log (stderr), never on stdout.
+  test("the stage record and the log carry the weight setter's gating, also when the gate is wrong and verify fails", async () => {
+    const TL = "0x000000000000000000000000000000000071e10c", GOVERNANCE = "0x000000000000000000000000000000000000060b", SAFE_ADDR = "0x00000000000000000000000000000000000050fe";
+    const gated = { gating: "timelock", holders: [{ address: GOVERNANCE, routerGovernanceCode: true, admins: [TL], timelockGated: true }], timelock: TL, delaySeconds: 60 };
+    const open = { ...gated, gating: "not-timelock", holders: [{ address: GOVERNANCE, routerGovernanceCode: true, admins: [TL, SAFE_ADDR], timelockGated: false }] };
+    const label = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+    for (const [weightSetter, ok] of [[gated, true], [open, false]] as const) {
+      const { ctx, lines } = setup();
+      const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+      const out: string[] = [];
+      const deps = { verifyDeployment: async () => ({ ok, checks: [{ label, ok, detail: "" }], weightSetter }), verifySources: async () => ({ ok: true, checks: [] }), emit: (l: string) => out.push(l) };
+      const run = runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest as never, deps as never);
+      if (ok) await run; else await expect(run).rejects.toMatchObject({ kind: "VERIFY" });
+      expect(manifest.stages[stageByName("verify").name]).toMatchObject({ status: ok ? "done" : "started", weightSetterGating: weightSetter });
+      const logged = lines.map((l) => JSON.parse(l)).find((j) => j.event === "verify.weight_setter_gating");
+      expect(logged).toMatchObject({ level: ok ? "info" : "error", gating: weightSetter.gating, holders: weightSetter.holders, timelock: TL, delay_seconds: 60 });
+      expect(out).toEqual(["[verify]", label]);
+    }
   });
 });
 

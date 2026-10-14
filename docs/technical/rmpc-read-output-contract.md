@@ -67,6 +67,15 @@ The deferred existing `rmpc status` (issue #15) command predates §9 and emits a
   renders `null`; a vault with genuinely zero shares renders `"0"`. Consumers
   that parse these fields must treat `null` as "unknown" and fail loudly, never
   coerce it to zero.
+- **Also applies to `get-agent`** (QA plan U6, finding DR-8). A failed
+  `agents()` read renders every field it fills as `null`: `active`,
+  `valid_until`, `max_per_payment`, `max_per_window`, `share_receiver`,
+  `asset_recipient`, `max_withdraw_per_payment`, `max_withdraw_per_window` and
+  `withdrawals_enabled`. A failed allowance, block-timestamp or window-gross
+  read renders `share_allowance`, `window_id` or `window_gross` as `null`.
+  Before U6 a failed `agents()` read printed `false` and `"0"`, which read as an
+  inactive agent with withdrawals disabled. A `null` boolean is unknown, never
+  `false`. Pinned by `get_agent::tests::get_agent_failed_agents_read_renders_null`.
 
 ### 3.7 Snapshot-test placement is per-command, not per-envelope
 
@@ -88,18 +97,37 @@ The following are the seams downstream read-command batches MUST consume. Adding
 
 ## 5. Stable RmpcError Reason-Code Variants
 
-The four variants below are the stable, product-visible API surface of
+The variants below are the stable, product-visible API surface of
 `RmpcError` (`clients/rust-payment-client/src/errors.rs`).  Agents and
 operator tooling **must** match on these variant names (the prefix of every
 `Display` output) rather than on human-readable message text.  Renaming any
 variant is a breaking change; see `docs/architecture.md` §7.2.
 
-| Variant | Display prefix | Product reason code (arch §7.2) | EVM revert source |
+| Variant | Display prefix | Product reason code (arch §7.2) | Raised by (QA plan U6) |
 |---|---|---|---|
-| `ErrVaultDisabled` | `ErrVaultDisabled:` | `vault_disabled` | `PortfolioRouter.VaultNotRegistered` / `VaultNotActive` |
-| `ErrPolicyExpired` | `ErrPolicyExpired:` | `expired_policy` | `RobotMoneyGateway.AgentPolicyExpired` |
-| `ErrLegUnavailable` | `ErrLegUnavailable:` | `unavailable_leg` | `PortfolioRouter.VaultNotActive` / `VaultCapExceeded` |
-| `ErrSlippageBoundExceeded` | `ErrSlippageBoundExceeded:` | `slippage_bound_exceeded` | `PortfolioRouter.SlippageExceeded` |
+| `ErrVaultDisabled` | `ErrVaultDisabled:` | `vault_disabled` | simulated `PortfolioRouter.VaultNotRegistered` / `RedeemVaultNotRegistered` / `VaultNotActive` with status Retired; `RobotMoneyVault.VaultRetired` / `VaultShutdown` |
+| `ErrPolicyExpired` | `ErrPolicyExpired:` | `expired_policy` | preflight `agents(self).validUntil < now`; simulated `RobotMoneyGateway.AgentPolicyExpired` |
+| `ErrLegUnavailable` | `ErrLegUnavailable:` | `unavailable_leg` | simulated `PortfolioRouter.VaultNotActive` (DepositsPaused) / `VaultNotRouterEligible` / `VaultCapExceeded` / `NoWeightsSet` |
+| `ErrSlippageBoundExceeded` | `ErrSlippageBoundExceeded:` | `slippage_bound_exceeded` | simulated `PortfolioRouter.SlippageExceeded` (deposit `minSharesPerLeg` or redeem `minAssetsPerLeg`) |
+| `ErrDepositCapExceeded` | `ErrDepositCapExceeded:` | `cap_exceeded` | preflight `maxPerPayment` / `maxPerWindow`; simulated `AmountExceedsPerPaymentCap` / `WindowCapExceeded` |
+| `ErrWithdrawCapExceeded` | `ErrWithdrawCapExceeded:` | `cap_exceeded` | preflight `maxWithdrawPerPayment` / `maxWithdrawPerWindow`; simulated `SharesExceedWithdrawPerPaymentCap` / `WithdrawWindowCapExceeded` |
+
+Before U6 none of the first four was raised anywhere, a cap breach printed
+`ErrConfig` and an expired policy printed `ErrAgentNotAuthorized` (finding
+DR-7). Two refusals that are not reason codes were added with them:
+`ErrAgentBindingMismatch` (the preflight's `agents(self).shareReceiver` or
+`agentOwner(self)` differs from the config's `share_receiver` / `agent_owner`,
+QA plan D2) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
+floor).
+
+### 5.0 Where the simulated names come from
+
+`WriteSession::submit` runs the exact calldata as an `eth_call` from the agent
+before it reads fees or the nonce (`policy::revert::simulate`). A revert whose
+selector is in `policy::revert::refusal_from_revert` is refused by that name,
+with the contract error named in `message`, and nothing is signed. A revert
+with any other selector, or a simulation the node cannot run, is logged and
+the write proceeds as before: an on-chain revert is still `ErrTxReverted`.
 
 ### 5.1 One owner for the variant-name table (issue #1285)
 
@@ -116,21 +144,22 @@ compiler signal. Two more derived the name by splitting the `Display`
 output on whitespace, which is the same contract restated in a form that
 cannot be checked.
 
-All four variants are unit-free (no struct fields).  Their full `Display`
+The four router and policy variants are unit-free (no struct fields). The
+two cap variants carry a detail string that names the cap. Their `Display`
 strings are:
 
 ```
 ErrVaultDisabled: target vault is not registered or has been disabled
 ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)
 ErrLegUnavailable: router leg vault is unavailable (deposits paused, full, or de-listed)
-ErrSlippageBoundExceeded: estimated shares per leg fall below the caller's minimum bound
+ErrSlippageBoundExceeded: a router leg falls below the caller's per-leg minimum bound
+ErrDepositCapExceeded: <amount and the cap it exceeds>
+ErrWithdrawCapExceeded: <shares and the cap it exceeds>
 ```
 
-These are the only `RmpcError` variants that map directly from contract
-execution results rather than pre-flight checks.  Earlier variants such as
-`ErrDepositsPaused` (deposits only), `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
-are raised before the transaction is signed; these four are raised from the
-on-chain revert data decoded from a mined or simulated transaction.
+Every one of them is raised before the transaction is signed: by the
+preflight, or from the revert data of the pre-sign simulation (§5.0). A mined
+revert is not decoded; it stays `ErrTxReverted` with the `tx_hash`.
 
 ## 6. Newly discovered integration points and risks
 

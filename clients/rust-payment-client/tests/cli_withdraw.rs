@@ -14,6 +14,12 @@
 //! and revert paths, plus the happy path, the replay-cache refusal, and
 //! the vault-side share checks that are specific to a redemption.
 //!
+//! QA plan D9 (finding E8, SR-M16): on a gateway with a router the command
+//! signs a one-leg `withdrawFromRouter` carrying a `minAssetsPerLeg` floor,
+//! never `gateway.withdraw` (→ `vault.redeem`, no min-out). The default
+//! floor is `previewRedeem(shares)` less 0.50%. A gateway without a router
+//! redeems through `gateway.withdraw` only for `--min-assets 0`.
+//!
 //! CI: run by `suite-07-rmpc-integration.yml`'s `rmpc-parity` job, which
 //! names this binary explicitly with `--test cli_withdraw`. `cargo test
 //! --lib` (suite 6) does not build it.
@@ -21,12 +27,14 @@
 mod common;
 
 use crate::common::{
-    enc_bool, enc_u256, install_happy_path_mocks, install_withdraw_preflight_mocks, jrpc_result,
-    jrpc_result_raw, match_eth_call_selector, selector_hex_of, Fixture, ASSET_RECIPIENT, GATEWAY,
-    SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
+    enc_address, enc_bool, enc_u256, install_happy_path_mocks, install_withdraw_preflight_mocks,
+    jrpc_result, jrpc_result_raw, match_eth_call_selector, selector_hex_of, Fixture,
+    ASSET_RECIPIENT, GATEWAY, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
 };
-use alloy_primitives::{b256, hex as ahex, Bytes, LogData, B256, U256};
-use alloy_sol_types::SolEvent;
+use alloy_primitives::{
+    address, b256, hex as ahex, keccak256, Address, Bytes, LogData, B256, U256,
+};
+use alloy_sol_types::{SolCall, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::gateway::{Erc20, RobotMoneyGateway};
@@ -45,6 +53,15 @@ const TX_HASH: B256 = b256!("444444444444444444444444444444444444444444444444444
 
 const SHARES: u64 = 500_000;
 const ASSETS_OUT: u64 = 499_000;
+/// `vault.previewRedeem(SHARES)` in the mocks.
+const PREVIEW_REDEEM: u64 = 499_000;
+/// PREVIEW_REDEEM less 0.50%: 499_000 * 9_950 / 10_000.
+const DEFAULT_FLOOR: u64 = 496_505;
+/// `gateway.router()` in the mocks.
+const ROUTER: Address = address!("0000000000000000000000000000000000000a11");
+/// `chain_deadline`: the mocked block timestamp 0x64a9f4c0 plus the default
+/// 300 s horizon.
+const DEADLINE: u64 = 0x64a9_f4c0 + 300;
 
 /// base fees 1 gwei, rewards 1 gwei → maxFee = 2*1 + 1 = 3 gwei, well
 /// under the 100 gwei cap baked into `Fixture`'s TOML.
@@ -58,7 +75,29 @@ fn fee_history_body() -> String {
     .to_string()
 }
 
-/// A receipt carrying the `AgentWithdrawal` log the gateway emits.
+/// A receipt carrying the `AgentWithdrawalRouted` log the gateway emits for
+/// the one-leg router redemption (QA plan D9).
+fn receipt_with_routed_withdrawal_body(shares: U256, assets_out: U256) -> String {
+    let ev = RobotMoneyGateway::AgentWithdrawalRouted {
+        paymentId: PAYMENT_ID,
+        orderId: ORDER_ID,
+        agent: SIGNER_ADDRESS,
+        router: ROUTER,
+        shareHolder: SHARE_RECEIVER,
+        sharesPerLeg: vec![shares],
+        assetsPerLeg: vec![assets_out],
+        assetRecipient: ASSET_RECIPIENT,
+        windowId: 42u64,
+    };
+    let topics = ev.encode_topics();
+    receipt_with_log_body(LogData::new_unchecked(
+        topics.iter().map(|t| B256::from(t.0)).collect(),
+        Bytes::from(ev.encode_data()),
+    ))
+}
+
+/// A receipt carrying the `AgentWithdrawal` log `gateway.withdraw` emits
+/// (single-vault mode, `--min-assets 0`).
 fn receipt_with_agent_withdrawal_body(shares: U256, assets_out: U256) -> String {
     let ev = RobotMoneyGateway::AgentWithdrawal {
         paymentId: PAYMENT_ID,
@@ -71,11 +110,14 @@ fn receipt_with_agent_withdrawal_body(shares: U256, assets_out: U256) -> String 
         windowId: 42u64,
     };
     let topics = ev.encode_topics();
-    let data: Vec<u8> = ev.encode_data();
-    let log = LogData::new_unchecked(
+    receipt_with_log_body(LogData::new_unchecked(
         topics.iter().map(|t| B256::from(t.0)).collect(),
-        Bytes::from(data),
-    );
+        Bytes::from(ev.encode_data()),
+    ))
+}
+
+/// A mined, successful receipt with one gateway log.
+fn receipt_with_log_body(log: LogData) -> String {
     let topics_hex: Vec<String> = log
         .topics()
         .iter()
@@ -193,6 +235,25 @@ async fn install_withdraw_happy_path_with_caps(
     chain_id: u64,
     max_withdraw_per_payment: U256,
 ) {
+    install_withdraw_mocks(
+        server,
+        chain_id,
+        max_withdraw_per_payment,
+        ROUTER,
+        &receipt_with_routed_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
+    )
+    .await;
+}
+
+/// Every mock a withdrawal reads or writes, for a gateway whose `router()`
+/// is `router` and a receipt carrying `receipt_body`.
+async fn install_withdraw_mocks(
+    server: &mut mockito::ServerGuard,
+    chain_id: u64,
+    max_withdraw_per_payment: U256,
+    router: Address,
+    receipt_body: &str,
+) {
     install_happy_path_mocks(server, chain_id, SIGNER_ADDRESS).await;
     install_withdraw_preflight_mocks(
         server,
@@ -201,11 +262,57 @@ async fn install_withdraw_happy_path_with_caps(
         U256::ZERO,
     )
     .await;
-    install_post_preflight_mocks(
-        server,
-        &receipt_with_agent_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
+    install_route_mocks(server, router).await;
+    install_post_preflight_mocks(server, receipt_body).await;
+}
+
+/// `previewRedeem(uint256)` selector, 0x-prefixed. The rmpc `IVault` binding
+/// does not carry the function.
+fn preview_redeem_selector() -> String {
+    format!(
+        "0x{}",
+        ahex::encode(&keccak256(b"previewRedeem(uint256)")[..4])
     )
-    .await;
+}
+
+/// The two reads that choose the route and its default floor (QA plan D9):
+/// `gateway.router()` and the source vault's `previewRedeem(shares)`.
+async fn install_route_mocks(server: &mut mockito::ServerGuard, router: Address) {
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::routerCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(router)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&preview_redeem_selector()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(PREVIEW_REDEEM))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
+/// A mock that answers the pre-sign simulation of exactly `calldata` (an
+/// `eth_call` to the gateway carrying it) and must be hit once. The
+/// simulated calldata is the calldata the command signs (`write_path`).
+async fn expect_simulation_of(server: &mut mockito::ServerGuard, calldata: &[u8]) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_call"})),
+            Matcher::Regex(format!(r#""data":"0x{}""#, ahex::encode(calldata))),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect(1)
+        .create_async()
+        .await
 }
 
 fn unique_state_dir() -> std::path::PathBuf {
@@ -280,10 +387,197 @@ async fn withdraw_happy_path_emits_payment_id_and_exits_zero() {
     );
     assert_eq!(v["shares"], SHARES.to_string());
     assert_eq!(v["assets_out"], ASSETS_OUT.to_string());
+    // QA plan D9: the router route, with the default floor, from the
+    // policy's shareReceiver.
+    assert_eq!(v["route"], "router");
+    assert_eq!(v["min_assets"], DEFAULT_FLOOR.to_string());
+    assert_eq!(
+        v["share_holder"].as_str().unwrap().to_lowercase(),
+        format!("{SHARE_RECEIVER:#x}")
+    );
     assert_eq!(v["block_number"], 0x42);
     assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
     assert!(v["gas_used"].is_string());
     assert!(v["effective_gas_price"].is_string());
+}
+
+/// QA plan D9 (finding E8, SR-M16): `gateway.withdraw` → `vault.redeem` has
+/// no min-out. With a router on the gateway, `rmpc withdraw` simulates and
+/// signs the one-leg `withdrawFromRouter([vault], [shares],
+/// [previewRedeem less 0.50%])` instead, and never `gateway.withdraw`.
+#[tokio::test]
+async fn withdraw_signs_withdraw_from_router_with_the_preview_redeem_floor() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    let expected = RobotMoneyGateway::withdrawFromRouterCall {
+        orderId: ORDER_ID,
+        vaults: vec![VAULT],
+        sharesPerLeg: vec![U256::from(SHARES)],
+        minAssetsPerLeg: vec![U256::from(DEFAULT_FLOOR)],
+        deadline: DEADLINE,
+        idempotencyKey: IDEMPOTENCY_KEY,
+    }
+    .abi_encode();
+    let simulated = expect_simulation_of(&mut server, &expected).await;
+    let direct = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::withdrawCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--receipt-timeout-secs", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    simulated.assert_async().await;
+    direct.assert_async().await;
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["route"], "router");
+    assert_eq!(v["min_assets"], DEFAULT_FLOOR.to_string());
+}
+
+/// An explicit `--min-assets` is the floor the router call carries.
+#[tokio::test]
+async fn withdraw_min_assets_flag_sets_the_router_floor() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    let expected = RobotMoneyGateway::withdrawFromRouterCall {
+        orderId: ORDER_ID,
+        vaults: vec![VAULT],
+        sharesPerLeg: vec![U256::from(SHARES)],
+        minAssetsPerLeg: vec![U256::from(498_000u64)],
+        deadline: DEADLINE,
+        idempotencyKey: IDEMPOTENCY_KEY,
+    }
+    .abi_encode();
+    let simulated = expect_simulation_of(&mut server, &expected).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--min-assets", "498000", "--receipt-timeout-secs", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    simulated.assert_async().await;
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["min_assets"], "498000");
+}
+
+/// A gateway without a router (single-vault mode) can only sign
+/// `gateway.withdraw`, which has no floor. Without `--min-assets 0` the
+/// command refuses before signing.
+#[tokio::test]
+async fn withdraw_without_router_refuses_unless_the_floor_is_explicitly_zero() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_mocks(
+        &mut server,
+        chain_id,
+        U256::from(u128::MAX),
+        Address::ZERO,
+        &receipt_with_agent_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
+    )
+    .await;
+    let broadcast = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["error"], "ErrConfig");
+    assert!(v["message"].as_str().unwrap().contains("--min-assets 0"));
+    broadcast.assert_async().await;
+}
+
+/// With `--min-assets 0` a single-vault-mode gateway redeems through
+/// `gateway.withdraw`, from the agent's own shares, and says it had no floor.
+#[tokio::test]
+async fn withdraw_without_router_and_a_zero_floor_signs_gateway_withdraw() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_mocks(
+        &mut server,
+        chain_id,
+        U256::from(u128::MAX),
+        Address::ZERO,
+        &receipt_with_agent_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
+    )
+    .await;
+    let expected = RobotMoneyGateway::withdrawCall {
+        orderId: ORDER_ID,
+        shares: U256::from(SHARES),
+        sourceVault: VAULT,
+        deadline: DEADLINE,
+        idempotencyKey: IDEMPOTENCY_KEY,
+    }
+    .abi_encode();
+    let simulated = expect_simulation_of(&mut server, &expected).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .args(["--min-assets", "0", "--receipt-timeout-secs", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    simulated.assert_async().await;
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["route"], "vault");
+    assert_eq!(v["min_assets"], "0");
+    assert_eq!(
+        v["share_holder"].as_str().unwrap().to_lowercase(),
+        format!("{SIGNER_ADDRESS:#x}")
+    );
+    assert_eq!(v["assets_out"], ASSETS_OUT.to_string());
+}
+
+/// A `--gas-limit` under the router call's gateway floor (2_250_000) is
+/// refused before signing.
+#[tokio::test]
+async fn withdraw_gas_limit_below_the_router_floor_refuses() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .args(["--gas-limit", "2100000"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["error"], "ErrGasLimitBelowFloor");
 }
 
 /// Owner decision 2026-10-06: the software keystore is allowed on Base
@@ -406,7 +700,8 @@ async fn withdraw_over_policy_cap_refuses_before_signing() {
         .clone();
     assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    assert_eq!(v["error"], "ErrConfig");
+    // QA plan U6: a cap breach is `ErrWithdrawCapExceeded`, not `ErrConfig`.
+    assert_eq!(v["error"], "ErrWithdrawCapExceeded");
     assert!(v["message"]
         .as_str()
         .unwrap()
@@ -415,8 +710,9 @@ async fn withdraw_over_policy_cap_refuses_before_signing() {
 }
 
 /// Refusal path: the vault-side share allowance. A redemption burns the
-/// agent's vault shares, which the gateway pulls from the source vault, so
-/// an unapproved gateway is refused client-side rather than on chain.
+/// share holder's vault shares (the policy's `shareReceiver` on the router
+/// route), which the gateway pulls from the source vault, so an unapproved
+/// gateway is refused client-side rather than on chain.
 #[tokio::test]
 async fn withdraw_insufficient_share_allowance_refuses() {
     let mut server = mockito::Server::new_async().await;
@@ -476,9 +772,10 @@ async fn withdraw_fee_cap_exceeded_refuses() {
         .with_body(jrpc_result_raw(huge_fee_history))
         .create_async()
         .await;
+    install_route_mocks(&mut server, ROUTER).await;
     install_post_preflight_mocks(
         &mut server,
-        &receipt_with_agent_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
+        &receipt_with_routed_withdrawal_body(U256::from(SHARES), U256::from(ASSETS_OUT)),
     )
     .await;
 
@@ -585,6 +882,7 @@ async fn withdraw_reverted_tx_emits_err_tx_reverted_and_clears_the_replay_entry(
         U256::ZERO,
     )
     .await;
+    install_route_mocks(&mut server, ROUTER).await;
     install_post_preflight_mocks(&mut server, &reverted_receipt_body()).await;
 
     let fix = Fixture::build(&server.url(), chain_id);

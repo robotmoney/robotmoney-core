@@ -3,13 +3,13 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
-import { verifyDeployment } from "../../src/verify/index.ts";
+import { UNWIND_GUARD_LABEL, verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
-import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
+import { ADMIN_ROLE, EMERGENCY_ROLE, KEEPER_ROLE, SAFE_GUARD_SLOT, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
+import { buildWorld, failed, addr, BASKET_SLIPPAGE_BPS, DEPLOYER, PAUSER, SAFE, SEED_SHARES, USDC_ADAPTERS, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, UNWIND_MAX_LOSS_BPS, UNWIND_MIN_USDC_OUT, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -25,7 +25,7 @@ describe("healthy deployment", () => {
     const r = await verifyDeployment(buildWorld().opts);
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
-    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "").replace("maxSlippageBps equals 500", "")).not.toMatch(/\d{3,}/); }
+    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
   });
 });
 
@@ -71,6 +71,7 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
    */
   const applied = (over: { released?: boolean; routerBps?: number[]; active?: boolean } = {}) => {
     const w = buildWorld();
+    w.chain.receiptAppliedLog(RID, vaults(), BPS); // QA plan v1 C2: the chain's record of the application, which the run manifest's record must match
     w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
     w.chain.set(REC, "isReleased", () => over.released ?? true);
     w.chain.set(ROUTER, "votedWeightsActive", over.active ?? true);
@@ -106,6 +107,65 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     const w = applied();
     w.chain.set(ROUTER, "getDefaultWeights", [vaults(), BPS.map((x) => BigInt(x))]);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["router: default weights equal sheet"]);
+  });
+});
+
+describe("the applied vector is the chain's ReceiptApplied event, never the run manifest's record (QA plan v1 C2, issue 1701)", () => {
+  const LABEL = "receipt: applied receipt is released and its weights are on the router";
+  const ACTIVE = "router: votedWeightsActive is false after deploy, true after an applied receipt";
+  const EFFECTIVE = "router: effective weights equal the sheet's launch vector";
+  const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
+  const vaults = () => Object.values(VAULTS).map((v) => v.address);
+  const BPS = [4000, 3000, 2000, 1000];
+  const DRIFT = [5000, 3000, 2000, 0];
+  /** The chain applied BPS and the router routes by `routerBps`; the run manifest records `recorded` (undefined: no record). */
+  const world = (o: { routerBps?: number[]; recorded?: number[] | null; event?: boolean } = {}) => {
+    const w = buildWorld(8453);
+    if (o.event ?? true) w.chain.receiptAppliedLog(RID, vaults(), BPS);
+    if (o.recorded !== null) w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: o.recorded ?? BPS };
+    w.chain.set(REC, "isReleased", () => true);
+    w.chain.set(ROUTER, "votedWeightsActive", true);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), (o.routerBps ?? BPS).map((x) => BigInt(x))]);
+    return w;
+  };
+  test("a forged run manifest record that matches drifted router weights cannot hide the drift: the effective and the applied-receipt labels fail", async () => {
+    const r = await verifyDeployment(world({ routerBps: DRIFT, recorded: DRIFT }).opts);
+    expect(failed(r).sort()).toEqual([LABEL, EFFECTIVE].sort());
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain("the chain's last ReceiptApplied");
+    expect(r.checks.find((c) => c.label === EFFECTIVE)!.detail).toContain("want");
+  });
+  test("a record with no ReceiptApplied event behind it fails, and the router is held to the launch vector", async () => {
+    const r = await verifyDeployment(world({ event: false }).opts);
+    expect(failed(r).sort()).toEqual([LABEL, ACTIVE, EFFECTIVE].sort());
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain("logged no ReceiptApplied");
+  });
+  test("an application the run manifest does not record fails the applied-receipt label only", async () => {
+    const r = await verifyDeployment(world({ recorded: null }).opts);
+    expect(failed(r)).toEqual([LABEL]);
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain("records no application");
+  });
+  test("the record and the event agree: every label passes", async () => {
+    expect(failed(await verifyDeployment(world().opts))).toEqual([]);
+  });
+  test("a clear after the application: the default vector routes again and every label passes", async () => {
+    const w = world();
+    w.chain.votedWeightsClearedLog(4500n);
+    w.chain.set(ROUTER, "votedWeightsActive", false);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), [9500n, 500n, 0n, 0n]]);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain("cleared");
+    // a clear BEFORE the application does not undo it: the router must still route by the applied vector
+    const early = world();
+    early.chain.votedWeightsClearedLog(3500n);
+    early.chain.set(ROUTER, "votedWeightsActive", false);
+    expect(failed(await verifyDeployment(early.opts))).toContain(ACTIVE);
+  });
+  test("an unreadable log scan fails the three labels instead of reading as nothing applied", async () => {
+    const w = world({ recorded: null, event: false });
+    w.chain.maxLogSpan = 10n; // every log query errors
+    const f = failed(await verifyDeployment(w.opts));
+    for (const l of [LABEL, ACTIVE, EFFECTIVE]) expect(f).toContain(l);
   });
 });
 
@@ -228,10 +288,10 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: registry link"]);
   });
 
-  test("emergency key lost EMERGENCY on a vault", async () => {
+  test("emergency key lost EMERGENCY on a vault: the vault has no emergency key at all (issue 1705 C5)", async () => {
     const w = buildWorld();
     w.chain.revoke(VAULTS.rmRWA.address, EMERGENCY_ROLE, w.sheet.emergency);
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: EMERGENCY_ROLE held by emergency key"]);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: EMERGENCY_ROLE held by emergency key", "vault[rmRWA]: EMERGENCY_ROLE has exactly one holder"]);
   });
 
   test("basket asset config differs from the sheet", async () => {
@@ -240,27 +300,99 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
   });
 
-  test("rmAGENT maxSlippageBps read back on chain: 500 passes, any other value fails (core 1695)", async () => {
-    const L = "vault[rmAGENT]: maxSlippageBps equals 500";
+  test("every basket's maxSlippageBps is read back against its config: rmAGENT 500 (core 1695), rmPROTO and rmRWA the vault default; any other value fails that basket only (issue 1705 C4)", async () => {
     const ok = await verifyDeployment(buildWorld().opts);
-    expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
-    for (const bad of [499n, 501n, 291n, 0n]) {
-      const w = buildWorld();
-      w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
-      expect(failed(await verifyDeployment(w.opts))).toEqual([L]);
+    const labels = ok.checks.filter((c) => c.label.endsWith(": maxSlippageBps equals config"));
+    // rmUSDC has no swap bound, so it is not asked for one
+    expect(labels.map((c) => [c.label, c.ok])).toEqual([["vault[rmPROTO]: maxSlippageBps equals config", true], ["vault[rmAGENT]: maxSlippageBps equals config", true], ["vault[rmRWA]: maxSlippageBps equals config", true]]);
+    for (const key of ["rmPROTO", "rmAGENT", "rmRWA"]) {
+      for (const bad of [BASKET_SLIPPAGE_BPS[key]! - 1n, BASKET_SLIPPAGE_BPS[key]! + 1n, 0n]) {
+        const w = buildWorld();
+        w.chain.set(VAULTS[key]!.address, "maxSlippageBps", bad);
+        expect(failed(await verifyDeployment(w.opts))).toEqual([`vault[${key}]: maxSlippageBps equals config`]);
+      }
     }
-    // the other vaults are not asked for it
-    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
+    // a verifier sheet with no expected value fails the label instead of skipping it
+    const w = buildWorld();
+    delete w.sheet.vaults.rmRWA!.maxSlippageBps;
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: maxSlippageBps equals config"]);
+  });
+
+  describe("issue 1705 C5: one emergency key per vault and no rmUSDC keeper, from the RoleGranted history", () => {
+    const ONE = (k: string) => `vault[${k}]: EMERGENCY_ROLE has exactly one holder`;
+    const KEEPER = "vault[rmUSDC]: KEEPER_ROLE has no holder";
+    test("the healthy world passes both on every vault, and only rmUSDC is asked about KEEPER_ROLE", async () => {
+      const r = await verifyDeployment(buildWorld().opts);
+      for (const k of Object.keys(VAULTS)) expect(r.checks.find((c) => c.label === ONE(k))).toMatchObject({ ok: true });
+      expect(r.checks.filter((c) => c.label.endsWith("KEEPER_ROLE has no holder")).map((c) => [c.label, c.ok])).toEqual([[KEEPER, true]]);
+    });
+    test("a second EMERGENCY_ROLE holder that is an expected account (the pauser) fails only the one-holder label", async () => {
+      const w = buildWorld();
+      w.chain.grant(VAULTS.rmPROTO.address, EMERGENCY_ROLE, PAUSER);
+      w.chain.roleGrantedLog(VAULTS.rmPROTO.address, EMERGENCY_ROLE, PAUSER, 4100n);
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r)).toEqual([ONE("rmPROTO")]);
+      expect(r.checks.find((c) => c.label === ONE("rmPROTO"))!.detail.toLowerCase()).toContain(PAUSER.toLowerCase());
+    });
+    test("a KEEPER_ROLE grant on rmUSDC fails the keeper label, also when the keeper is the Safe; a revoked grant is no holder", async () => {
+      const w = buildWorld();
+      w.chain.grant(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE);
+      w.chain.roleGrantedLog(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE, 4100n);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([KEEPER]);
+      w.chain.revoke(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([]);
+    });
+    test("an unreadable block number fails both labels instead of reading as no holder", async () => {
+      const w = buildWorld();
+      w.chain.blockNumber = async () => { throw new Error("rpc down"); };
+      const f = failed(await verifyDeployment(w.opts));
+      expect(f).toContain(KEEPER);
+      for (const k of Object.keys(VAULTS)) expect(f).toContain(ONE(k));
+    });
+  });
+
+  describe("issue 1705 C4: rmUSDC's adapter set, caps and code-hash allowlist equal the deploy script", () => {
+    const L = "vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script";
+    const usdc = () => VAULTS.rmUSDC.address;
+    test("the healthy world passes: three adapters at 3334/3333/3333 bps, both allowlists hold exactly them", async () => {
+      const r = await verifyDeployment(buildWorld().opts);
+      expect(r.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+      expect(r.checks.filter((c) => c.label.includes("adapter set, caps and code-hash allowlist")).map((c) => c.label)).toEqual([L]);
+    });
+    const cases: [string, (w: World) => void, string][] = [
+      ["a fourth adapter registered", (w) => w.chain.set(usdc(), "adapterCount", 4n), "adapterCount 4"],
+      ["an adapter at another address than the manifest", (w) => w.chain.set(usdc(), "adapters", (a: any[]) => [Number(a[0]) === 2 ? addr(0xbad) : USDC_ADAPTERS[Number(a[0])]!.address, USDC_ADAPTERS[Number(a[0])]!.capBps, true]), "adapters(2) is"],
+      ["an adapter at another cap", (w) => w.chain.set(usdc(), "adapters", (a: any[]) => [USDC_ADAPTERS[Number(a[0])]!.address, Number(a[0]) === 0 ? 10_000 : USDC_ADAPTERS[Number(a[0])]!.capBps, true]), "adapters(0) cap 10000"],
+      ["an inactive adapter", (w) => w.chain.set(usdc(), "adapters", (a: any[]) => [USDC_ADAPTERS[Number(a[0])]!.address, USDC_ADAPTERS[Number(a[0])]!.capBps, Number(a[0]) !== 1]), "adapters(1) is not active"],
+      ["an adapter's code hash not allowed", (w) => w.chain.set(usdc(), "adapterCodeHashAllowed", false), "is not on the code-hash allowlist"],
+      ["an extra code hash allowed after the deploy", (w) => w.chain.allowlistLog(usdc(), SIG_ADAPTER_CODE_HASH_ALLOWED_SET, keccak256(toHex("other adapter")), true, 4200n), "the code-hash allowlist also holds"],
+      ["an extra adapter address allowed after the deploy", (w) => w.chain.allowlistLog(usdc(), SIG_ADAPTER_ALLOWED_SET, padTopic(addr(0xbad)), true, 4200n), "the adapter allowlist also holds"],
+      ["no adapter in the verifier sheet", (w) => { delete w.sheet.vaults.rmUSDC!.adapters; }, "names no adapter"],
+    ];
+    for (const [what, plant, detail] of cases) test(`${what} fails the label and says so`, async () => {
+      const w = buildWorld();
+      plant(w);
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r)).toEqual([L]);
+      expect(r.checks.find((c) => c.label === L)!.detail).toContain(detail);
+    });
+    test("an extra code hash allowed and then disallowed again is not on the allowlist", async () => {
+      const w = buildWorld();
+      const h = keccak256(toHex("other adapter"));
+      w.chain.allowlistLog(usdc(), SIG_ADAPTER_CODE_HASH_ALLOWED_SET, h, true, 4200n);
+      w.chain.allowlistLog(usdc(), SIG_ADAPTER_CODE_HASH_ALLOWED_SET, h, false, 4300n);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([]);
+    });
   });
 
   test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
     const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
-    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
-    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
+    const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor", "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault", "maxSlippageBps equals config"];
+    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares", "adapter set, caps and code-hash allowlist equal the deploy script"];
     const want: Record<string, string[]> = {
       rmUSDC: [...common, ...usdc],
       rmPROTO: [...common, ...basket],
-      rmAGENT: [...common, ...basket, "maxSlippageBps equals 500"],
+      rmAGENT: [...common, ...basket],
       rmRWA: [...common, ...basket],
     };
     for (const key of Object.keys(want)) {
@@ -474,5 +606,155 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
     rotate(w, { updateManifest: true });
     w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, GOV);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["router: WEIGHT_SETTER_ROLE has exactly one holder"]);
+  });
+
+  // QA plan v1 C3 (CS-6, ADR-0002): every weight change waits the timelock delay only while the weight setter is timelock-gated. A rotation installs whatever
+  // contract the Safe chose, so the run records the current holder's gating (VerifyReport.weightSetter) and fails the gating label on any other gate.
+  describe("the current holder's gating is recorded (QA plan v1 C3, CS-6)", () => {
+    const GATING = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+    const FORWARDER = addr(0xf0e3);
+    const gatingOf = (r: Awaited<ReturnType<typeof verifyDeployment>>) => r.checks.find((c) => c.label === GATING)!;
+
+    test("the healthy world records RouterGovernance gated by the timelock alone and the delay each weight change waits, on mainnet and on Twin", async () => {
+      for (const [id, delay] of [[8453, 172800], [918453, 60]] as const) {
+        const r = await verifyDeployment(buildWorld(id).opts);
+        expect(r.weightSetter).toEqual({ gating: "timelock", holders: [{ address: GOV, routerGovernanceCode: true, admins: [TIMELOCK], timelockGated: true }], timelock: TIMELOCK, delaySeconds: delay });
+        expect(gatingOf(r).ok).toBe(true);
+        expect(gatingOf(r).detail).toContain(`every weight change waits the timelock delay of ${delay} s`);
+      }
+    });
+
+    test("a completed rotation to a new RouterGovernance records the new holder, still gated by the timelock", async () => {
+      const w = buildWorld();
+      rotate(w, { updateManifest: true });
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r)).toEqual([]);
+      expect(r.weightSetter).toMatchObject({ gating: "timelock", holders: [{ address: NEW_GOV, routerGovernanceCode: true, admins: [TIMELOCK], timelockGated: true }] });
+    });
+
+    test("a rotation to a Safe forwarder records it as not timelock-gated and fails the gating label, with or without a manifest naming it", async () => {
+      for (const updateManifest of [false, true]) {
+        const w = buildWorld();
+        w.chain.codes.set(FORWARDER.toLowerCase(), "0x6080604052348015600f57600080fd5b50");
+        w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+        w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, FORWARDER);
+        if (updateManifest) {
+          const p = join(w.manifestDir, stageManifestFile(getStageTable(), "governance"));
+          writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), governance: FORWARDER }));
+        }
+        const r = await verifyDeployment(w.opts);
+        expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [{ address: FORWARDER, routerGovernanceCode: false, timelockGated: false }] });
+        expect(failed(r)).toContain(GATING);
+        expect(gatingOf(r).detail).toContain("skip the timelock delay of 172800 s");
+      }
+    });
+
+    test("the Safe as a second ADMIN_ROLE member of the weight setter is not timelock-gated: it could apply weights with no delay", async () => {
+      const w = buildWorld();
+      w.chain.grant(GOV, ADMIN_ROLE, SAFE);
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [{ address: GOV, routerGovernanceCode: true, admins: [TIMELOCK, SAFE], timelockGated: false }] });
+      expect(failed(r)).toContain(GATING);
+      expect(failed(r)).toContain("governance: ADMIN_ROLE not held by safe");
+    });
+
+    test("no holder records not-timelock: an empty role gates nothing the verifier can name", async () => {
+      const w = buildWorld();
+      w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "not-timelock", holders: [] });
+      expect(gatingOf(r)).toMatchObject({ ok: false, detail: "WEIGHT_SETTER_ROLE has no holder" });
+    });
+
+    test("an unreadable holder enumeration records unreadable and fails the gating label alone: it never reads as gated", async () => {
+      const w = buildWorld();
+      const read = w.chain.read.bind(w.chain);
+      w.chain.read = async (a, sig, args) => (sig.includes("getRoleMember(") ? Promise.reject(new Error("rpc down")) : read(a, sig, args));
+      const r = await verifyDeployment(w.opts);
+      expect(r.weightSetter).toMatchObject({ gating: "unreadable", holders: [], delaySeconds: 172800 });
+      expect(failed(r)).toEqual([GATING]);
+    });
+  });
+});
+
+// QA plan v1 D7 (review E5, issue 1705 Q2): before govern --row set-unwind-guard nothing set a basket's emergency unwind guard, so the oracle-free unwind and the override path
+// could not run. The stage 12 label requires a non-zero minUsdcOut on every active asset of a basket the sheet expects OPEN; a paused basket (pre-govern) passes and records the values.
+describe("the emergency unwind guard label (QA plan v1 D7)", () => {
+  const BASKETS = ["rmPROTO", "rmAGENT", "rmRWA"] as const;
+  const labelOf = (k: string) => `vault[${k}]: ${UNWIND_GUARD_LABEL}`;
+  const check = (r: Awaited<ReturnType<typeof verifyDeployment>>, k: string) => r.checks.find((c) => c.label === labelOf(k))!;
+  /** The post-govern state of one basket: the sheet expects it open and the chain reads it open. */
+  const open = (w: World, k: string) => { w.sheet.vaults[k]!.expectPaused = false; w.chain.set(VAULTS[k]!.address, "depositsPaused", false); };
+  const zeroGuards = (w: World, k: string) => w.chain.set(VAULTS[k]!.address, "emergencyUnwindGuard", () => [0n, false, 0n]);
+
+  test("every basket carries the label and rmUSDC does not (it has no unwind guard)", async () => {
+    const r = await verifyDeployment(buildWorld().opts);
+    for (const k of BASKETS) expect(check(r, k)?.ok).toBe(true);
+    expect(r.checks.some((c) => c.label === labelOf("rmUSDC"))).toBe(false);
+  });
+  test("pre-govern: a paused basket with no guard set passes and records the zero values", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) zeroGuards(w, k);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(check(r, "rmPROTO").detail).toContain("deposits paused, no guard required until the vault opens");
+    expect(check(r, "rmPROTO").detail).toContain("minUsdcOut 0");
+  });
+  test("post-govern: an open basket whose every active asset reads a non-zero minUsdcOut passes, and the detail records overrideAllowed and maxLossBps", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(check(r, "rmPROTO").detail).toContain(`minUsdcOut ${UNWIND_MIN_USDC_OUT} overrideAllowed true maxLossBps ${UNWIND_MAX_LOSS_BPS}`);
+  });
+  test("post-govern: an open basket with one active asset at minUsdcOut zero fails exactly its label, names the token and the govern row", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    const token = w.sheet.vaults.rmPROTO!.assets[1]!.token;
+    w.chain.set(VAULTS.rmPROTO!.address, "emergencyUnwindGuard", (a: any[]) => (String(a[0]).toLowerCase() === token.toLowerCase() ? [0n, true, 500n] : [UNWIND_MIN_USDC_OUT, true, UNWIND_MAX_LOSS_BPS]));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([labelOf("rmPROTO")]);
+    expect(check(r, "rmPROTO").detail).toContain(`minUsdcOut is zero for ${token}`);
+    expect(check(r, "rmPROTO").detail).toContain("govern --row set-unwind-guard");
+  });
+  test("post-govern: a basket the govern stage opened with no guard at all fails (the state before this row existed)", async () => {
+    const w = buildWorld();
+    for (const k of BASKETS) { open(w, k); zeroGuards(w, k); }
+    expect(failed(await verifyDeployment(w.opts))).toEqual(BASKETS.map(labelOf));
+  });
+  test("an inactive asset row is not required to carry a guard", async () => {
+    const w = buildWorld();
+    open(w, "rmRWA");
+    const row = w.sheet.vaults.rmRWA!.assets[0]!;
+    // a second, inactive row with no guard: the label reads only the active ones (asset config is checked by its own label)
+    w.chain.set(VAULTS.rmRWA!.address, "assets", (a: any[]) => {
+      const i = Number(a[0]);
+      if (i === 0) return [row.token, row.pool, row.swapFee, true, row.adapter, row.venue ?? 0];
+      if (i === 1) return [addr(0xdead), addr(0xf009), 500, false, row.adapter, 0];
+      throw new Error("execution reverted");
+    });
+    const r = await verifyDeployment(w.opts);
+    expect(check(r, "rmRWA").ok).toBe(true);
+    expect(check(r, "rmRWA").detail).not.toContain(addr(0xdead));
+  });
+  test("an open basket whose asset list reads empty fails closed: nothing proves an unwind floor", async () => {
+    const w = buildWorld();
+    open(w, "rmRWA");
+    w.chain.set(VAULTS.rmRWA!.address, "assets", () => { throw new Error("execution reverted"); });
+    const r = await verifyDeployment(w.opts);
+    expect(check(r, "rmRWA").ok).toBe(false);
+    expect(check(r, "rmRWA").detail).toContain("lists no active asset");
+  });
+  test("an unreadable guard is a failed check, not a pass", async () => {
+    const w = buildWorld();
+    open(w, "rmAGENT");
+    w.chain.handlers.delete(`${VAULTS.rmAGENT!.address.toLowerCase()}:emergencyUnwindGuard`);
+    expect(check(await verifyDeployment(w.opts), "rmAGENT").ok).toBe(false);
+  });
+  test("the label set is the same before and after govern (the check is always present)", async () => {
+    const before = (await verifyDeployment(buildWorld().opts)).checks.map((c) => c.label);
+    const w = buildWorld();
+    for (const k of BASKETS) open(w, k);
+    expect((await verifyDeployment(w.opts)).checks.map((c) => c.label)).toEqual(before);
   });
 });

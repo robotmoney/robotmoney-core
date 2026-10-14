@@ -3,7 +3,7 @@
 // the adapter is deployed per run, so callers add it from the vault manifest.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ASSET_CONFIG_FILES, VENUE_INDEX, VENUE_V4 } from "./core-wiring.ts";
+import { ASSET_CONFIG_FILES, BASKET_DEFAULT_SLIPPAGE_BPS, VENUE_INDEX, VENUE_V4 } from "./core-wiring.ts";
 import { PublishError } from "./errors.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import type { Address, ExpectedV4 } from "./verify/types.ts";
@@ -54,6 +54,24 @@ export function loadConfigAssets(coreDir: string, key: VaultKey): ConfigAsset[] 
     if (typeof a.pool !== "string" || !ADDR.test(a.pool)) throw new PublishError("INPUT_MISSING", `${at}: pool is not an address`, { key });
     return { symbol, token: a.token as Address, pool: a.pool as Address, swapFee: a.poolFee, venue };
   });
+}
+
+/**
+ * Issue 1705 C4: the swap bound a basket's deploy leaves on the vault (`maxSlippageBps`): the config file's root `maxSlippageBps` when set and above zero
+ * (BasketVaultDeployBase applies it before the handover), else the vault constructor's default (core-wiring BASKET_DEFAULT_SLIPPAGE_BPS). Read from core's
+ * config at the DEPLOY_SHA, never from the chain it is checked against. Undefined for a vault with no asset config (rmUSDC has no swap bound).
+ */
+export function expectedMaxSlippageBps(coreDir: string, key: VaultKey): bigint | undefined {
+  const spec = ASSET_CONFIG_FILES[key];
+  if (!spec) return undefined;
+  const p = join(coreDir, spec.file);
+  if (!existsSync(p)) throw new PublishError("INPUT_MISSING", `${spec.file} is missing in the core checkout: the expected maxSlippageBps of ${VAULT_NAME[key]} is read from it (nothing is skipped)`, { path: p });
+  const raw = (JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>).maxSlippageBps;
+  if (raw !== undefined && (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0)) throw new PublishError("INPUT_MISSING", `${spec.file}: maxSlippageBps is not a non-negative integer`, { key });
+  if (typeof raw === "number" && raw > 0) return BigInt(raw);
+  const fallback = BASKET_DEFAULT_SLIPPAGE_BPS[key];
+  if (fallback === undefined) throw new PublishError("INPUT_MISSING", `${VAULT_NAME[key]} has no vault default maxSlippageBps in core-wiring BASKET_DEFAULT_SLIPPAGE_BPS and ${spec.file} sets none`, { key });
+  return fallback;
 }
 
 /** BasketVault.sol and RobotMoneyVault.sol define the same constant: the highest exit fee a vault accepts. */

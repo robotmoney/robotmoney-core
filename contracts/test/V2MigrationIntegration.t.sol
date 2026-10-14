@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/adr/ADR-0010-unified-vault-architecture.md,
+// Canonical: docs/architecture.md §4.7 — Vault Deprecation/Retirement Lifecycle,
 //            docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md,
 //            docs/adr/ADR-0002-router-default-weights-on-chain.md,
 //            docs/technical/unified-vault-open-questions-resolution.md
@@ -86,6 +86,12 @@ contract MigVault is ERC20 {
 
     function previewDeposit(uint256 assets) external pure returns (uint256) {
         return assets; // 1:1
+    }
+
+    /// @dev ERC-4626 `maxDeposit`: 0 while retired, uncapped otherwise. The router skips a leg
+    ///      whose `maxDeposit` is 0 or reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external view returns (uint256) {
+        return retired ? 0 : type(uint256).max;
     }
 
     /// @dev IRetirableVault deposit-halt hooks. Registry-gated in production; the

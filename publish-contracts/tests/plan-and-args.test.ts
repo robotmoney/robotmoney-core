@@ -134,3 +134,23 @@ describe("--owner-signer grammar", () => {
     }
   });
 });
+
+// QA plan v1 D7: the set-unwind-guard row takes its own --admin-arg keys, checked at parse time (before any signer or passphrase prompt), on 8453 and 918453.
+describe("--row set-unwind-guard and its --admin-arg values (QA plan v1 D7)", () => {
+  const base = (chain: string) => ["--chain", chain, "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+  const token = `0x${"7".repeat(40)}`;
+  const args = ["--admin-arg", "vault=PROTO", "--admin-arg", `token=${token}`, "--admin-arg", "min-usdc-out=2000000", "--admin-arg", "max-loss-bps=500"];
+  test("accepted on both chains; the values reach the parsed arguments", () => {
+    for (const chain of ["8453", "918453"]) {
+      expect(parseCli(["govern", ...base(chain), "--row", "set-unwind-guard", ...args])).toMatchObject({ row: "set-unwind-guard", adminArgs: { vault: "PROTO", token, "min-usdc-out": "2000000", "max-loss-bps": "500" } });
+    }
+    expect(parseCli(["govern", ...base("8453"), "--row", "set-unwind-guard", ...args, "--admin-arg", "override-allowed=false"]).adminArgs).toMatchObject({ "override-allowed": "false" });
+  });
+  test("refused with USAGE: no arguments, a self-administration key, rmUSDC, a zero floor; and the row's keys with any other row", () => {
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "set-unwind-guard"])).toThrow("vault=");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "set-unwind-guard", ...args, "--admin-arg", "threshold=2"])).toThrow("--admin-arg takes key=value with key vault");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "set-unwind-guard", ...args, "--admin-arg", "vault=USDC"])).toThrow("rmUSDC has no emergency unwind guard");
+    expect(() => parseCli(["govern", ...base("8453"), "--row", "set-unwind-guard", ...args, "--admin-arg", "min-usdc-out=0"])).toThrow("min-usdc-out 0");
+    expect(() => parseCli(["govern", ...base("918453"), "--row", "unpause-PROTO", ...args])).toThrow("--admin-arg goes with a self-administration row");
+  });
+});

@@ -4,7 +4,7 @@ title: "MorphoAdapterTest"
 
 # MorphoAdapterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:** Test
 
@@ -235,6 +235,20 @@ also reverts with ExposureCapExceeded.
 
 ```solidity
 function test_deploy_revertsWhenCumulative_exceedsCap() public;
+```
+
+<a id="test_maxexposure_settablethroughvault"></a>
+
+### test_maxExposure_settableThroughVault
+
+QA plan D8 (CS-8): `setMaxExposure` is `onlyVault`, and no vault function called
+it, so the FS-VLT-10 cap could never be set. Governance now sets it through
+`RobotMoneyVault.setAdapterMaxExposure` (`ADMIN_ROLE`). The cap set that way is
+stored on the adapter, binds a routed vault deposit, and clears with 0. A
+non-admin caller, an unknown index and a removed entry are refused.
+
+```solidity
+function test_maxExposure_settableThroughVault() public;
 ```
 
 <a id="test_harvestrewards_ispermissionlessnoopformorpho"></a>

@@ -5,7 +5,7 @@ description: "The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a se
 
 # ConsensusReceiptSafeSubmitterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/99ba10cc73ffee81efdaf7c4dcf0239fe53e681e/contracts/test/ConsensusReceiptSafeSubmitter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/ConsensusReceiptSafeSubmitter.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -175,6 +175,230 @@ An unregistered Safe cannot record, even with a full quorum.
 
 ```solidity
 function testUnregisteredSafeCannotRecord() public;
+```
+
+<a id="_handovergatewayadmin"></a>
+
+### _handOverGatewayAdmin
+
+<i>
+
+The handover: the timelock holds the gateway's ADMIN_ROLE (in production DeployTimelock grants it), so it can own an agent, write that agent's
+policy and register a committee agent.
+
+</i>
+
+```solidity
+function _handOverGatewayAdmin() internal;
+```
+
+<a id="_submitterpolicy-address"></a>
+
+### _submitterPolicy
+
+<i>
+
+The signalling-only policy the publish tooling registers (1 raw unit, no withdrawals), paying shares to `receiver`.
+
+</i>
+
+```solidity
+function _submitterPolicy(address receiver)
+        internal
+        view
+        returns (IGateway.AgentPolicy memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IGateway.AgentPolicy` |  |
+
+<a id="_selfauthorize-address-bytes32"></a>
+
+### _selfAuthorize
+
+<i>
+
+The PRIVATE half: three transactions of the submitter Safe itself. A caller without ADMIN_ROLE must name itself as shareReceiver; an agent
+revealing for itself consents by the call, so the consent argument is empty (issue #1791).
+
+</i>
+
+```solidity
+function _selfAuthorize(address safe_, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="_gatewaybatch-address-bytes"></a>
+
+### _gatewayBatch
+
+<i>
+
+A two-call timelock batch on the gateway: `first`, then committeeRegister(safe_).
+
+</i>
+
+```solidity
+function _gatewayBatch(address safe_, bytes memory first)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory payloads);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe_ | `address` |  |
+| first | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| payloads | `bytes[]` |  |
+
+<a id="_govschedulebatch-address-uint256-bytes-bytes32"></a>
+
+### _govScheduleBatch
+
+<i>
+
+Governing Safe -> timelock.scheduleBatch, with two owner signatures.
+
+</i>
+
+```solidity
+function _govScheduleBatch(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory payloads,
+        bytes32 salt
+    ) internal returns (bytes32 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| payloads | `bytes[]` |  |
+| salt | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="test_publicregisterbatchcannotbefrontrun"></a>
+
+### test_publicRegisterBatchCannotBeFrontRun
+
+The register batch is public on the timelock for the whole delay. With the submitter Safe's private self-authorization done first, the batch is
+setPolicy + committeeRegister and carries no first-time authorization. A squatter who reads the submitter address from the scheduled batch can
+neither authorize it (AgentAlreadyOwned) nor revoke, re-point or take it (NotAgentOwner), and the batch executes after the delay. Before the
+private half a squatter cannot claim the Safe's address either: it has no key to consent with (InvalidAgentConsent, issue #1791).
+
+```solidity
+function test_publicRegisterBatchCannotBeFrontRun() public;
+```
+
+<a id="_assertsquattercannotclaim-address"></a>
+
+### _assertSquatterCannotClaim
+
+<i>
+
+Before the private half: a squatter commits and reveals for `agent` with no consent. A caller without ADMIN_ROLE binds another address only
+with that address's EIP-712 signature (issue #1791), and a Safe has no key, so the reveal is refused and `agent` stays unowned.
+
+</i>
+
+```solidity
+function _assertSquatterCannotClaim(address agent) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+<a id="_assertsquattercannottouch-address"></a>
+
+### _assertSquatterCannotTouch
+
+<i>
+
+During the delay: the squatter, who read `agent` from the scheduled batch, tries every agent write the gateway exposes. The timelock owns
+the agent, so a first-time authorization reverts AgentAlreadyOwned and every owner-gated write reverts NotAgentOwner.
+
+</i>
+
+```solidity
+function _assertSquatterCannotTouch(address agent) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+<a id="_sharereceiver-address"></a>
+
+### _shareReceiver
+
+<i>
+
+The stored policy's share receiver (the public getter returns the eight non-array fields).
+
+</i>
+
+```solidity
+function _shareReceiver(address agent) internal view returns (address receiver);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| agent | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+
+<a id="test_privatecommitcannotberevealedbyanotheraccount"></a>
+
+### test_privateCommitCannotBeRevealedByAnotherAccount
+
+The private commit is bound to the submitter Safe: the commit hash carries msg.sender, so a watcher who sees the Safe's commit, and even learns its
+salt, cannot reveal it. The Safe's own reveal still lands.
+
+```solidity
+function test_privateCommitCannotBeRevealedByAnotherAccount() public;
 ```
 
 <a id="_nonce-address"></a>

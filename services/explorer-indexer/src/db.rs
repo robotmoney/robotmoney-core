@@ -697,6 +697,164 @@ async fn derive_rollback_tables(conn: &mut sqlx::PgConnection) -> Result<Vec<Str
     Ok(fk_child_first_order(&tables, &edges))
 }
 
+/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0020).
+pub const AGENT_EVENT_REGISTERED: i16 = 0;
+/// `committee_agent_events.kind` of an `AgentRevoked`.
+pub const AGENT_EVENT_REVOKED: i16 = 1;
+/// `committee_agent_events.kind` of a DI-4 placeholder: the first vote from a
+/// member that had no row.
+pub const AGENT_EVENT_PLACEHOLDER: i16 = 2;
+
+/// Append one entry to a member's `committee_agent_events` history (X7, DI-8).
+/// Idempotent on (chain, member, block, log index).
+async fn insert_committee_agent_event(
+    conn: &mut sqlx::PgConnection,
+    chain_id: i64,
+    agent_address: [u8; 20],
+    block_number: i64,
+    log_index: i32,
+    kind: i16,
+    agent_id: &str,
+) -> Result<u64, DbError> {
+    let r = sqlx::query(
+        "INSERT INTO committee_agent_events \
+           (chain_id, agent_address, block_number, log_index, kind, agent_id) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (chain_id, agent_address, block_number, log_index) DO NOTHING",
+    )
+    .bind(chain_id)
+    .bind(&agent_address[..])
+    .bind(block_number)
+    .bind(log_index)
+    .bind(kind)
+    .bind(agent_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Write the `committee_agents` row of each member in `agents` from its
+/// `committee_agent_events` history (X7, DI-8). Returns the rows written.
+///
+/// The newest registration or placeholder entry gives `registered_at` and
+/// `agent_id`. A revoke after it makes the row inactive with that
+/// `revoked_at`. Only a registration with no revoke after it is active, so a
+/// placeholder stays inactive. Ordering is chain position (block, log index),
+/// never processing order, so replaying events out of order derives the same
+/// row.
+///
+/// A member with no registration or placeholder entry is left alone here: it
+/// has no row unless something outside the history wrote one, and
+/// [`reconcile_committee_agents`] decides what a rollback does with it.
+async fn derive_committee_agents(
+    conn: &mut sqlx::PgConnection,
+    chain_id: i64,
+    agents: &[Vec<u8>],
+) -> Result<u64, DbError> {
+    if agents.is_empty() {
+        return Ok(0);
+    }
+    let r = sqlx::query(
+        "WITH latest_reg AS ( \
+           SELECT DISTINCT ON (e.agent_address) \
+                  e.agent_address, e.block_number, e.log_index, e.kind, e.agent_id \
+           FROM committee_agent_events e \
+           WHERE e.chain_id = $1 AND e.agent_address = ANY($2) AND e.kind IN ($3, $5) \
+           ORDER BY e.agent_address, e.block_number DESC, e.log_index DESC \
+         ), latest_rev AS ( \
+           SELECT DISTINCT ON (e.agent_address) e.agent_address, e.block_number \
+           FROM committee_agent_events e \
+           JOIN latest_reg r ON r.agent_address = e.agent_address \
+           WHERE e.chain_id = $1 AND e.kind = $4 \
+             AND (e.block_number, e.log_index) > (r.block_number, r.log_index) \
+           ORDER BY e.agent_address, e.block_number DESC, e.log_index DESC \
+         ) \
+         INSERT INTO committee_agents \
+           (chain_id, agent_address, agent_id, active, registered_at, revoked_at) \
+         SELECT $1, r.agent_address, r.agent_id, (r.kind = $3 AND v.block_number IS NULL), \
+                r.block_number, v.block_number \
+         FROM latest_reg r \
+         LEFT JOIN latest_rev v ON v.agent_address = r.agent_address \
+         ORDER BY r.agent_address \
+         ON CONFLICT (chain_id, agent_address) DO UPDATE \
+           SET agent_id      = EXCLUDED.agent_id, \
+               active        = EXCLUDED.active, \
+               registered_at = EXCLUDED.registered_at, \
+               revoked_at    = EXCLUDED.revoked_at, \
+               indexed_at    = now()",
+    )
+    .bind(chain_id)
+    .bind(agents)
+    .bind(AGENT_EVENT_REGISTERED)
+    .bind(AGENT_EVENT_REVOKED)
+    .bind(AGENT_EVENT_PLACEHOLDER)
+    .execute(&mut *conn)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// After a rollback deleted the history above the root, bring the rows of the
+/// members in `agents` (those that lost a history entry) back in line with the
+/// surviving history (X7, DI-8).
+///
+/// - A member whose registration or placeholder survives is derived again: an
+///   orphaned revoke is undone, an orphaned re-registration falls back to the
+///   one before it.
+/// - A member left with neither is a row the orphaned blocks created. It is
+///   deleted, unless a surviving vote still references it through the
+///   `committee_votes` foreign key. That can only be a member whose earlier
+///   registration predates the migration-0020 backfill (which kept only the
+///   newest one), and it becomes the inactive placeholder DI-4 would have
+///   written for its earliest surviving vote.
+///
+/// Votes above the root are already gone when this runs: `committee_votes` is
+/// block-scoped and the rollback deletes it first.
+async fn reconcile_committee_agents(
+    conn: &mut sqlx::PgConnection,
+    chain_id: i64,
+    agents: &[Vec<u8>],
+) -> Result<(), DbError> {
+    if agents.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO committee_agent_events \
+           (chain_id, agent_address, block_number, log_index, kind, agent_id) \
+         SELECT DISTINCT ON (v.agent_address) \
+                v.chain_id, v.agent_address, v.block_number, v.log_index, $3, '' \
+         FROM committee_votes v \
+         WHERE v.chain_id = $1 AND v.agent_address = ANY($2) \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM committee_agent_events e \
+             WHERE e.chain_id = $1 AND e.agent_address = v.agent_address \
+               AND e.kind IN ($3, $4)) \
+         ORDER BY v.agent_address, v.block_number, v.log_index \
+         ON CONFLICT (chain_id, agent_address, block_number, log_index) DO NOTHING",
+    )
+    .bind(chain_id)
+    .bind(agents)
+    .bind(AGENT_EVENT_PLACEHOLDER)
+    .bind(AGENT_EVENT_REGISTERED)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "DELETE FROM committee_agents a \
+         WHERE a.chain_id = $1 AND a.agent_address = ANY($2) \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM committee_agent_events e \
+             WHERE e.chain_id = $1 AND e.agent_address = a.agent_address \
+               AND e.kind IN ($3, $4))",
+    )
+    .bind(chain_id)
+    .bind(agents)
+    .bind(AGENT_EVENT_REGISTERED)
+    .bind(AGENT_EVENT_PLACEHOLDER)
+    .execute(&mut *conn)
+    .await?;
+    derive_committee_agents(conn, chain_id, agents).await?;
+    Ok(())
+}
+
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, DbError> {
         let pool = PgPoolOptions::new()
@@ -965,7 +1123,7 @@ impl Db {
     /// covered by the migration that creates it.
     ///
     /// Reorg-rollback cascade: remove every block-numbered row strictly above
-    /// `root` for this chain, then reconcile the two derived states that are
+    /// `root` for this chain, then reconcile the derived states that are
     /// **not** plain block-numbered rows:
     ///
     /// - **`vaults.status` (IDX-8)** — status is mutated in place, so it cannot
@@ -981,8 +1139,34 @@ impl Db {
     ///   This makes the cursor reorg-safe even if the run that performed the
     ///   rollback subsequently fails: the next [`Db::last_indexed_block`]
     ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
+    /// - **`committee_agents` (X7, DI-8)** — the row is derived from the
+    ///   block-numbered `committee_agent_events` history (migration 0020). Every
+    ///   member that lost a history entry above `root` is derived again from
+    ///   what survives ([`reconcile_committee_agents`]): an orphaned
+    ///   `AgentRevoked` is undone, an orphaned re-registration falls back to the
+    ///   earlier one, and a row that only orphaned blocks created is deleted.
+    /// - **`vaults` (X7, DI-8)** — the row is written once, by the vault's
+    ///   first `VaultRegistered` (the registry refuses a second registration,
+    ///   and `upsert_vault` keeps the first). A row whose `registered_block` is
+    ///   above `root` was created by an orphaned block and is deleted; the
+    ///   replay of the canonical chain registers the vault again, at whatever
+    ///   block it landed in. Its `contracts` row stays: it is a watched-address
+    ///   record, other rows may reference it, and `upsert_contract` is
+    ///   idempotent.
     pub async fn delete_above_block(&self, chain_id: i64, root: i64) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
+
+        // X7 (DI-8): the members whose history loses an entry in this rollback,
+        // read before the history is deleted.
+        let reorged_agents: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT DISTINCT agent_address FROM committee_agent_events \
+             WHERE chain_id = $1 AND block_number > $2 \
+             ORDER BY agent_address",
+        )
+        .bind(chain_id)
+        .bind(root)
+        .fetch_all(&mut *tx)
+        .await?;
 
         // Issue #1283: the table set is DERIVED from the live schema inside the
         // same transaction as the deletes, never hand-copied. Any migration that
@@ -1002,6 +1186,23 @@ impl Db {
                 .await?;
             total += r.rows_affected();
         }
+
+        // X7 (DI-8): a vault whose registration block was orphaned. The registry
+        // emits one `VaultRegistered` per vault and the row keeps the first, so
+        // the row IS the registration history; it goes with its block. Its
+        // `vault_status_events` above `root` are already gone, and none can sit
+        // below a registration that is above `root`.
+        let r = sqlx::query("DELETE FROM vaults WHERE chain_id = $1 AND registered_block > $2")
+            .bind(chain_id)
+            .bind(root)
+            .execute(&mut *tx)
+            .await?;
+        total += r.rows_affected();
+
+        // X7 (DI-8): committee members whose revoke, registration or placeholder
+        // was orphaned. Runs after the loop, which deleted their history and
+        // their votes above `root`.
+        reconcile_committee_agents(&mut tx, chain_id, &reorged_agents).await?;
 
         // IDX-8: re-derive the in-place vaults.status from the surviving
         // (block_number <= root) status history.  A vault whose latest event
@@ -1281,6 +1482,9 @@ impl Db {
     /// `deposits_paused` is the vault's `depositsPaused()` reading. It lands in
     /// the `vault_snapshots.paused` column, which keeps its historical name (no
     /// migration). The flag stops deposits only; withdrawals are never frozen.
+    ///
+    /// `preview_redeem_total` is the vault's `previewRedeem(totalSupply())` reading: what redeeming every share
+    /// pays after the exit costs (migration 0022, core 1795). `None` is a read that failed, stored as NULL.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vault_snapshot(
         &self,
@@ -1293,10 +1497,11 @@ impl Db {
         tvl_cap: Option<U256>,
         per_deposit_cap: Option<U256>,
         deposits_paused: bool,
+        preview_redeem_total: Option<U256>,
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
-            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused, preview_redeem_total) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (chain_id, contract, block_number) DO NOTHING",
         )
         .bind(chain_id)
@@ -1308,6 +1513,7 @@ impl Db {
         .bind(tvl_cap.map(u256_to_decimal))
         .bind(per_deposit_cap.map(u256_to_decimal))
         .bind(deposits_paused)
+        .bind(preview_redeem_total.map(u256_to_decimal))
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -1888,71 +2094,153 @@ impl Db {
     // Three events drive three tables:
     //   AgentRegistered → upsert_committee_agent (sets active=true)
     //   AgentRevoked    → revoke_committee_agent (sets active=false)
-    //   VoteSubmitted   → insert_committee_vote + upsert_regime_snapshot
+    //   VoteSubmitted   → insert_committee_agent_placeholder + insert_committee_vote
+    // Each of the three is followed by refresh_regime_snapshots, and so is
+    // every tick (freshness expiry has no event), DI-3.
+    //
+    // QA plan X7 (DI-8): each writer first appends the event to the
+    // block-numbered `committee_agent_events` history (migration 0020), and the
+    // `committee_agents` row is derived from that history
+    // ([`derive_committee_agents`]). A reorg rollback deletes the orphaned
+    // history with its block and derives the row again, so an orphaned revoke
+    // or re-registration is undone.
 
-    /// Upsert a committee agent row on AgentRegistered.
+    /// Record an `AgentRegistered` at (`registered_at`, `log_index`) and derive
+    /// the member's row: active, with this label and `registered_at`.
     ///
-    /// Uses ON CONFLICT DO UPDATE so that re-indexing the same event is
-    /// idempotent, and so that a previously-revoked agent re-registered
-    /// with ADMIN_ROLE gets `active` flipped back to true.
+    /// Re-indexing the same event is a no-op on the history and derives the
+    /// same row. A previously revoked member that registers again is active
+    /// again, because no revoke follows the new registration.
     pub async fn upsert_committee_agent(
         &self,
         chain_id: i64,
         agent_address: [u8; 20],
         agent_id: &str,
         registered_at: i64,
+        log_index: i32,
     ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "INSERT INTO committee_agents \
-               (chain_id, agent_address, agent_id, active, registered_at) \
-             VALUES ($1, $2, $3, TRUE, $4) \
-             ON CONFLICT (chain_id, agent_address) DO UPDATE \
-               SET agent_id = EXCLUDED.agent_id, \
-                   active   = TRUE, \
-                   registered_at = EXCLUDED.registered_at, \
-                   revoked_at    = NULL, \
-                   indexed_at    = now()",
+        let mut tx = self.pool.begin().await?;
+        insert_committee_agent_event(
+            &mut tx,
+            chain_id,
+            agent_address,
+            registered_at,
+            log_index,
+            AGENT_EVENT_REGISTERED,
+            agent_id,
         )
-        .bind(chain_id)
-        .bind(&agent_address[..])
-        .bind(agent_id)
-        .bind(registered_at)
-        .execute(&self.pool)
         .await?;
-        Ok(r.rows_affected())
+        let r = derive_committee_agents(&mut tx, chain_id, &[agent_address.to_vec()]).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
-    /// Mark a committee agent as revoked on AgentRevoked.
+    /// Record an `AgentRevoked` at (`revoked_at`, `log_index`) and derive the
+    /// member's row: inactive, with this `revoked_at`.
     ///
-    /// No-ops gracefully if the agent row does not exist yet (the
-    /// AgentRegistered event may have been missed on a partial reindex).
+    /// A member with no indexed registration and no placeholder has no row, and
+    /// still has none afterwards (the AgentRegistered event may lie below the
+    /// indexed range). The revoke stays in the history, so a registration
+    /// indexed later is ordered against it.
     pub async fn revoke_committee_agent(
         &self,
         chain_id: i64,
         agent_address: [u8; 20],
         revoked_at: i64,
+        log_index: i32,
     ) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        insert_committee_agent_event(
+            &mut tx,
+            chain_id,
+            agent_address,
+            revoked_at,
+            log_index,
+            AGENT_EVENT_REVOKED,
+            "",
+        )
+        .await?;
+        let r = derive_committee_agents(&mut tx, chain_id, &[agent_address.to_vec()]).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+
+    /// Give a voting member a `committee_agents` row when it has none, so its
+    /// vote can be stored (DI-4). Returns 1 when a placeholder was written and
+    /// 0 when the member already had a row.
+    ///
+    /// `committee_votes` has a foreign key to `committee_agents`. A member
+    /// registered before the indexed range (below `INDEXER_START_BLOCK`, or
+    /// before the IC policy was configured) has no row. Its first
+    /// `VoteSubmitted` failed that foreign key, the tick errored before the
+    /// cursor advanced, and every retry read the same vote again: the indexer
+    /// was stuck for good.
+    ///
+    /// The placeholder records only what the indexer saw, that the address
+    /// voted at `first_seen_block`: `active = FALSE`, an empty `agent_id`,
+    /// `registered_at = first_seen_block`, `revoked_at = NULL`. An inactive row
+    /// never counts toward [`committee_tilts`], so the vote is stored and tilts
+    /// nothing. A later `AgentRegistered` for the member replaces the
+    /// placeholder through [`Db::upsert_committee_agent`], and votes from
+    /// before that registration still do not count.
+    ///
+    /// `ON CONFLICT DO NOTHING`: a row that exists, registered or revoked, is
+    /// never touched.
+    ///
+    /// A placeholder that is written is also recorded in the history at the
+    /// vote's (`first_seen_block`, `log_index`), so a reorg that orphans the
+    /// vote removes the placeholder with it (X7, DI-8).
+    pub async fn insert_committee_agent_placeholder(
+        &self,
+        chain_id: i64,
+        agent_address: [u8; 20],
+        first_seen_block: i64,
+        log_index: i32,
+    ) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
         let r = sqlx::query(
-            "UPDATE committee_agents \
-             SET active = FALSE, revoked_at = $3, indexed_at = now() \
-             WHERE chain_id = $1 AND agent_address = $2",
+            "INSERT INTO committee_agents \
+               (chain_id, agent_address, agent_id, active, registered_at) \
+             VALUES ($1, $2, '', FALSE, $3) \
+             ON CONFLICT (chain_id, agent_address) DO NOTHING",
         )
         .bind(chain_id)
         .bind(&agent_address[..])
-        .bind(revoked_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
+        .bind(first_seen_block)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if r > 0 {
+            insert_committee_agent_event(
+                &mut tx,
+                chain_id,
+                agent_address,
+                first_seen_block,
+                log_index,
+                AGENT_EVENT_PLACEHOLDER,
+                "",
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(r)
     }
 
     /// Insert a committee vote row on VoteSubmitted.
     ///
     /// `verified` is set by the caller after memo fetch + keccak256 check.
     /// Uses ON CONFLICT DO NOTHING for idempotent re-indexing.
+    ///
+    /// `contract_address` is the policy deployment that emitted the event, and
+    /// it is part of the key (migration 0019, DI-10). `vote_id` is an index
+    /// into one deployment's vote array, so a redeployed policy reuses every
+    /// id. Under the old `(chain_id, vote_id)` key the new policy's votes hit
+    /// the conflict clause and were dropped with no error.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_committee_vote(
         &self,
         chain_id: i64,
+        contract_address: [u8; 20],
         vote_id: i64,
         block_number: i64,
         log_index: i32,
@@ -1969,13 +2257,14 @@ impl Db {
     ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO committee_votes \
-               (chain_id, vote_id, block_number, log_index, tx_hash, \
+               (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, \
                 agent_address, vault_address, stance, target_weight_bps, \
                 confidence, rationale_uri, vote_json_hash, timestamp_secs, verified) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
-             ON CONFLICT (chain_id, vote_id) DO NOTHING",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) \
+             ON CONFLICT (chain_id, contract_address, vote_id) DO NOTHING",
         )
         .bind(chain_id)
+        .bind(&contract_address[..])
         .bind(vote_id)
         .bind(block_number)
         .bind(log_index)
@@ -1996,9 +2285,10 @@ impl Db {
 
     /// Upsert a regime snapshot for (chain_id, vault_address, block_number).
     ///
-    /// Called after every verified VoteSubmitted to keep the aggregate
-    /// (avg_weight_bps, vote_count) current. Uses ON CONFLICT DO UPDATE
-    /// so that re-indexing is idempotent.
+    /// Writes the aggregate (avg_weight_bps, vote_count) as given. The indexer
+    /// writes through [`Db::refresh_regime_snapshots`], which decides whether
+    /// a row is due. Uses ON CONFLICT DO UPDATE so that re-indexing is
+    /// idempotent.
     pub async fn upsert_regime_snapshot(
         &self,
         chain_id: i64,
@@ -2009,6 +2299,21 @@ impl Db {
     ) -> Result<u64, DbError> {
         let avg_bps = BigDecimal::from_str(&format!("{avg_weight_bps:.2}"))
             .unwrap_or_else(|_| BigDecimal::from(0));
+        self.write_regime_snapshot(chain_id, &vault_address, block_number, &avg_bps, vote_count)
+            .await
+    }
+
+    /// The one INSERT behind [`Db::upsert_regime_snapshot`] and
+    /// [`Db::refresh_regime_snapshots`]. `avg_weight_bps` is already at the
+    /// column's scale (two decimals).
+    async fn write_regime_snapshot(
+        &self,
+        chain_id: i64,
+        vault_address: &[u8],
+        block_number: i64,
+        avg_weight_bps: &BigDecimal,
+        vote_count: i32,
+    ) -> Result<u64, DbError> {
         let r = sqlx::query(
             "INSERT INTO regime_snapshots \
                (chain_id, vault_address, block_number, avg_weight_bps, vote_count) \
@@ -2019,33 +2324,81 @@ impl Db {
                    indexed_at     = now()",
         )
         .bind(chain_id)
-        .bind(&vault_address[..])
+        .bind(vault_address)
         .bind(block_number)
-        .bind(avg_bps)
+        .bind(avg_weight_bps)
         .bind(vote_count)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
     }
 
-    /// Compute the committee tilt for a vault as of `block_number` and upsert
-    /// the regime snapshot row. Returns the number of rows affected (0 or 1).
+    /// Bring `regime_snapshots` in line with the committee tilt as of
+    /// `block_number`, for `vault` or, with `None`, for every vault. Returns
+    /// the number of rows written.
     ///
     /// The aggregate is [`committee_tilts`]: one signal per active member
     /// (issue #1790), so a flood of votes from one member moves it by one vote.
-    pub async fn refresh_regime_snapshot(
+    ///
+    /// A vault gets a row at `block_number` when its tilt there differs from
+    /// its newest stored row at or below that block (DI-3). When no member
+    /// counts any more, that row says so: `vote_count = 0` and
+    /// `avg_weight_bps = 0`. A vault with no stored row and no counted member
+    /// gets none, because it never had a tilt. An unchanged tilt writes
+    /// nothing, so calling this every tick does not grow the table.
+    ///
+    /// Before DI-3 the snapshot was refreshed only on a verified vote, and an
+    /// empty tilt wrote nothing. A revoke, a newer unverified vote, or a signal
+    /// ageing out of the freshness window then left the old aggregate as the
+    /// newest row, and `/v1/regime/feed` kept a member that
+    /// `/v1/committee/tilts` had dropped. The indexer now calls this after
+    /// every committee event and once per tick at the tick's target block,
+    /// which is what catches expiry: no event announces it.
+    pub async fn refresh_regime_snapshots(
         &self,
         chain_id: i64,
-        vault_address: [u8; 20],
         block_number: i64,
+        vault: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
-        let rows = committee_tilts(&self.pool, chain_id, block_number, Some(vault_address)).await?;
-        let Some((_, avg, cnt)) = rows.into_iter().next() else {
-            return Ok(0);
-        };
-        let avg_f: f64 = avg.to_string().parse::<f64>().unwrap_or(0.0);
-        self.upsert_regime_snapshot(chain_id, vault_address, block_number, avg_f, cnt as i32)
-            .await
+        let live = committee_tilts(&self.pool, chain_id, block_number, vault).await?;
+        let stored: Vec<(Vec<u8>, BigDecimal, i32)> = sqlx::query_as(
+            "SELECT DISTINCT ON (vault_address) vault_address, avg_weight_bps, vote_count \
+             FROM regime_snapshots \
+             WHERE chain_id = $1 \
+               AND block_number <= $2 \
+               AND ($3::BYTEA IS NULL OR vault_address = $3) \
+             ORDER BY vault_address, block_number DESC",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(vault.map(|v| v.to_vec()))
+        .fetch_all(&self.pool)
+        .await?;
+
+        // The tilt as the column stores it (two decimals). `committee_tilts`
+        // lists only vaults with at least one counted member.
+        let mut due: std::collections::BTreeMap<Vec<u8>, (BigDecimal, i32)> = live
+            .into_iter()
+            .map(|(v, avg, cnt)| {
+                let avg = avg.with_scale_round(2, bigdecimal::RoundingMode::HalfEven);
+                (v, (avg, i32::try_from(cnt).unwrap_or(i32::MAX)))
+            })
+            .collect();
+        for (v, avg, cnt) in stored {
+            // A stored vault the live tilt no longer lists has nobody counted.
+            let now = due.remove(&v).unwrap_or_else(|| (BigDecimal::from(0), 0));
+            if now != (avg, cnt) {
+                due.insert(v, now);
+            }
+        }
+
+        let mut written = 0;
+        for (v, (avg, cnt)) in due {
+            written += self
+                .write_regime_snapshot(chain_id, &v, block_number, &avg, cnt)
+                .await?;
+        }
+        Ok(written)
     }
 
     // ─── End InvestmentCommitteePolicy writers ────────────────────────────────
@@ -2261,6 +2614,264 @@ impl Db {
     }
 
     // ─── End ConsensusRecommendationReceipt writers ────────────────────────────────
+
+    // ─── ExclusionLedger writers ─────────────────────────────────────────────────
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0021.
+    //
+    // Every writer appends a block-numbered row keyed on chain position or on the
+    // record id, with ON CONFLICT DO NOTHING, so re-indexing a range is a no-op and a
+    // reorg rollback removes the orphaned rows with their block. Running totals
+    // (recovered, claimed) are aggregates over these rows, never in-place updates.
+
+    /// Record an `ExclusionOpened`: `vault` excluded `adapter` and its ledger
+    /// opened record `exclusion_id` with a snapshot of `snapshot_supply` shares.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_exclusion_record(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        vault_address: [u8; 20],
+        adapter_index: i64,
+        adapter_address: [u8; 20],
+        snapshot_supply: U256,
+        adapter_value: U256,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_records \
+               (chain_id, ledger_address, exclusion_id, vault_address, adapter_index, \
+                adapter_address, snapshot_supply, adapter_value, block_number, log_index, tx_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (chain_id, ledger_address, exclusion_id) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(&vault_address[..])
+        .bind(adapter_index)
+        .bind(&adapter_address[..])
+        .bind(u256_to_decimal(snapshot_supply))
+        .bind(u256_to_decimal(adapter_value))
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Record an `ExclusionRecoveryCredited`: `amount` USDC moved into the
+    /// record, which then holds `recovered_total`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_exclusion_recovery(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        source: i16,
+        amount: U256,
+        recovered_total: U256,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_recoveries \
+               (chain_id, block_number, log_index, tx_hash, ledger_address, exclusion_id, \
+                source, amount, recovered_total) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(source)
+        .bind(u256_to_decimal(amount))
+        .bind(u256_to_decimal(recovered_total))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Record an `ExclusionFinalized`: the record takes no more recovery and
+    /// stays claimable.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_exclusion_finalization(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        reason: i16,
+        recovered_total: U256,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_finalizations \
+               (chain_id, ledger_address, exclusion_id, reason, recovered_total, \
+                block_number, log_index, tx_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (chain_id, ledger_address, exclusion_id) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(reason)
+        .bind(u256_to_decimal(recovered_total))
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Record an `ExclusionClaimed`: `amount` USDC paid to `holder` from the record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_exclusion_claim(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        holder: [u8; 20],
+        amount: U256,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_claims \
+               (chain_id, block_number, log_index, tx_hash, ledger_address, exclusion_id, \
+                holder, amount) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(&holder[..])
+        .bind(u256_to_decimal(amount))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Store `holder`'s vault shares at record `exclusion_id`'s snapshot
+    /// (`ExclusionLedger.balanceAt`). `block_number` is the block the row rolls
+    /// back with: the record's block, or the block of the claim that revealed
+    /// the holder.
+    pub async fn insert_exclusion_holder_balance(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        holder: [u8; 20],
+        balance_at: U256,
+        block_number: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_holder_balances \
+               (chain_id, ledger_address, exclusion_id, holder, balance_at, block_number) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (chain_id, ledger_address, exclusion_id, holder) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(&holder[..])
+        .bind(u256_to_decimal(balance_at))
+        .bind(block_number)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// The vault of record `exclusion_id` in `ledger_address`, or `None` when the
+    /// indexer stored no such record.
+    pub async fn exclusion_record_vault(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+    ) -> Result<Option<[u8; 20]>, DbError> {
+        let row: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT vault_address FROM exclusion_records \
+             WHERE chain_id = $1 AND ledger_address = $2 AND exclusion_id = $3",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|v| v.try_into().ok()))
+    }
+
+    /// The addresses that may hold shares of `vault` at a record opened in
+    /// `opened_block` and have no stored balance for it yet: every owner with a
+    /// `wallet_positions` row for the vault at or below that block.
+    ///
+    /// `wallet_positions` follows vault `Deposit` and `Withdraw` only, so a
+    /// holder who received shares by a plain transfer is not a candidate. That
+    /// holder is picked up when it first claims ([`Db::has_exclusion_holder_balance`]).
+    pub async fn exclusion_snapshot_candidates(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        opened_block: i64,
+    ) -> Result<Vec<[u8; 20]>, DbError> {
+        let rows: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT DISTINCT wp.owner FROM wallet_positions wp \
+             WHERE wp.chain_id = $1 AND wp.contract = $2 AND wp.block_number <= $5 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM exclusion_holder_balances b \
+                 WHERE b.chain_id = $1 AND b.ledger_address = $3 \
+                   AND b.exclusion_id = $4 AND b.holder = wp.owner) \
+             ORDER BY wp.owner",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(opened_block)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().filter_map(|v| v.try_into().ok()).collect())
+    }
+
+    /// Whether `holder`'s snapshot balance for record `exclusion_id` is stored.
+    pub async fn has_exclusion_holder_balance(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        holder: [u8; 20],
+    ) -> Result<bool, DbError> {
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM exclusion_holder_balances \
+             WHERE chain_id = $1 AND ledger_address = $2 AND exclusion_id = $3 AND holder = $4",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(&holder[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(found.is_some())
+    }
+
+    // ─── End ExclusionLedger writers ─────────────────────────────────────────────
 
     /// Row count for any of the nine §11 tables.
     ///

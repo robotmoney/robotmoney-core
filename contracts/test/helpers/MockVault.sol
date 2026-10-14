@@ -85,6 +85,19 @@ contract MockVault is ERC20, ReentrancyGuard {
         return assetToken.balanceOf(address(this));
     }
 
+    /// @notice ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0
+    ///         or reverts (QA plan D4), so the mock answers it when used as a router leg.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
+    }
+
+    /// @notice ERC-4626 `previewDeposit`: 1:1, matching `deposit`. The router skips a leg whose
+    ///         `previewDeposit` reverts (QA plan D4).
+    /// @param  assets Amount of USDC to preview.
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets;
+    }
+
     /// @notice ERC-4626-style deposit. Pulls `assets` USDC from `msg.sender`
     ///         via `transferFrom`, mints `shares == assets` to `receiver`.
     /// @param  assets Amount of USDC (6 decimals) to deposit.

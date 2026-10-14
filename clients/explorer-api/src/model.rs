@@ -18,13 +18,24 @@ pub struct Freshness {
     pub indexed_at: DateTime<Utc>,
 }
 
+/// Body of `GET /health`. The HTTP status is 200 whenever the API can read `indexer_runs`: readiness probes
+/// gate on that. Whether the indexer is keeping up is in the body (DI-5).
 #[derive(Debug, Serialize)]
 pub struct Health {
+    /// `"ok"`, or `"degraded"` when the newest finished indexer run failed (`last_run_error` is set).
     pub status: &'static str,
     /// Highest block a successful indexer run committed for this chain; null until one has.
     pub last_indexed_block: Option<i64>,
-    /// Chain head the indexer last saw (`eth_blockNumber`); null until a tick has read it.
+    /// Chain head the indexer last saw (`eth_blockNumber`); null until a tick has read it. A tick that read
+    /// the head and then failed records it too, so this keeps moving while the indexer is wedged.
     pub chain_head_block: Option<i64>,
+    /// `chain_head_block - last_indexed_block`: how many blocks the index trails the head the indexer last
+    /// saw. About 5 when healthy (the indexer waits 5 confirmations); it grows while ticks fail. Null while
+    /// either side is null.
+    pub lag_blocks: Option<i64>,
+    /// `indexer_runs.error` of the newest finished run for this chain; null when that run succeeded or no
+    /// run has finished. A wedged indexer repeats the same error here every tick.
+    pub last_run_error: Option<String>,
     pub reorg_count: i32,
 }
 
@@ -164,6 +175,33 @@ pub fn headroom_of(
     } else {
         dec_to_string(&room)
     })
+}
+
+/// The USDC a redeem of `shares` pays, priced from the vault's newest snapshot:
+/// `floor(shares * preview_redeem_total / total_supply)`, where `preview_redeem_total` is the
+/// vault's `previewRedeem(totalSupply())` at that block (migration 0022).
+///
+/// `previewRedeem` is linear in the share count up to rounding, so this is the vault's own
+/// `previewRedeem(shares)` to within one unit: net of the exit fee and, on a BasketVault, of the
+/// `maxSlippageBps` floor. The gross `shares * total_assets / total_supply` (`convertToAssets`)
+/// overstated rmAGENT positions by about 3% against what a redeem paid (core 1795, QA plan X8).
+///
+/// `None` when the snapshot has no exit value (a row older than migration 0022 or a failed read)
+/// or a zero supply: the value is unknown, and the gross value is never served in its place.
+pub fn position_exit_value(
+    shares: &BigDecimal,
+    preview_redeem_total: Option<&BigDecimal>,
+    total_supply: Option<&BigDecimal>,
+) -> Option<BigDecimal> {
+    let (preview, supply) = (preview_redeem_total?, total_supply?);
+    let (supply, _) = supply.with_scale(0).into_bigint_and_exponent();
+    if supply.sign() != bigdecimal::num_bigint::Sign::Plus {
+        return None;
+    }
+    let (shares, _) = shares.with_scale(0).into_bigint_and_exponent();
+    let (preview, _) = preview.with_scale(0).into_bigint_and_exponent();
+    // Integer division: exact floor for the non-negative NUMERIC(78,0) inputs.
+    Some(BigDecimal::from(shares * preview / supply))
 }
 
 /// Format a `NUMERIC(78,0)` `BigDecimal` as a decimal string suitable for
@@ -435,7 +473,7 @@ pub struct ActivityEvent {
 #[derive(Debug, Serialize)]
 pub struct StatsResponse {
     /// Aggregate total_assets across all active vaults (sum of latest snapshot
-    /// per vault), as a decimal string.
+    /// per vault, Retired vaults left out), as a decimal string.
     pub total_tvl: String,
     /// Count of distinct share_receiver addresses across all agent_deposits.
     pub unique_depositors: i64,
@@ -469,9 +507,11 @@ pub struct VaultPosition {
     pub vault: String,
     /// Most recent indexed share balance (receipt token units), decimal string.
     pub shares: String,
-    /// USDC value of shares at the latest snapshot share price, decimal string.
-    /// Computed as: shares * total_assets / total_supply.
-    /// Null when no vault_snapshot exists for this vault.
+    /// USDC a redeem of `shares` pays at the latest snapshot, decimal string: the vault's
+    /// `previewRedeem` semantics, net of the exit fee and (BasketVault) the slippage floor.
+    /// Computed as: shares * previewRedeem(totalSupply) / total_supply ([`position_exit_value`],
+    /// core 1795). Null when no vault_snapshot exists for this vault, or its newest snapshot has
+    /// no `previewRedeem` reading yet.
     pub usdc_value: Option<String>,
     /// Block of the most recent wallet_positions row for this vault.
     pub block_number: i64,
@@ -485,6 +525,69 @@ pub struct AccountPositionsResponse {
     pub positions: Vec<VaultPosition>,
     #[serde(flatten)]
     pub freshness: Freshness,
+}
+
+// ─── GET /v1/accounts/:address/exclusion-claims ──────────────────────────────
+
+/// One holder's claim on one exclusion record (QA plan X7, core issue 1820).
+///
+/// When a `RobotMoneyVault` excludes a funded adapter, its `ExclusionLedger`
+/// opens a record with a snapshot of the vault's shares. What is later
+/// recovered from the adapter belongs pro rata to the holders at the snapshot,
+/// including holders who have since exited. All amounts are decimal strings in
+/// base units: shares for `snapshot_supply` and `balance_at`, the vault asset
+/// (USDC, 6 decimals) for the `*_usdc` fields.
+#[derive(Debug, Serialize)]
+pub struct ExclusionClaim {
+    /// The vault that excluded the adapter.
+    pub vault: String,
+    /// The vault's `ExclusionLedger`, which holds the recovered USDC and pays
+    /// claims (`claim(exclusion_id, holder)`).
+    pub exclusion_ledger: String,
+    /// Record id inside that ledger (1-based).
+    pub exclusion_id: i64,
+    /// The excluded adapter and its registry index in the vault.
+    pub adapter: String,
+    pub adapter_index: i64,
+    /// Block of the snapshot.
+    pub opened_block: i64,
+    /// Vault share supply at the snapshot.
+    pub snapshot_supply: String,
+    /// This holder's vault shares at the snapshot.
+    pub balance_at: String,
+    /// USDC credited to the record so far.
+    pub recovered_usdc: String,
+    /// USDC this holder has been paid from the record so far.
+    pub claimed_usdc: String,
+    /// USDC this holder can claim now:
+    /// `floor(recovered_usdc * balance_at / snapshot_supply) - claimed_usdc`, never below 0.
+    pub claimable_usdc: String,
+    /// True once the record takes no more recovery. It stays claimable.
+    pub finalized: bool,
+    /// Why it closed: `restored`, `removed` or `force_removed`; null while open.
+    pub finalize_reason: Option<String>,
+}
+
+/// Response envelope for GET /v1/accounts/:address/exclusion-claims.
+#[derive(Debug, Serialize)]
+pub struct AccountExclusionClaimsResponse {
+    pub address: String,
+    /// One entry per record this address held shares at, open or closed.
+    pub claims: Vec<ExclusionClaim>,
+    /// Sum of `claimable_usdc` over `claims`.
+    pub total_claimable_usdc: String,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Wire name of `ExclusionLedger.FinalizeReason`.
+pub fn exclusion_finalize_reason_label(reason: i16) -> &'static str {
+    match reason {
+        0 => "restored",
+        1 => "removed",
+        2 => "force_removed",
+        _ => "unknown",
+    }
 }
 
 // ─── GET /v1/accounts/:address/history ───────────────────────────────────────
@@ -612,6 +715,11 @@ pub struct CommitteeAgentsResponse {
 /// A single verified vote in an agent's track record.
 #[derive(Debug, Serialize)]
 pub struct CommitteeVoteEntry {
+    /// The InvestmentCommitteePolicy deployment that emitted `VoteSubmitted`,
+    /// 0x-prefixed hex. `vote_id` is an index into one deployment's votes, so
+    /// a redeployed policy reuses every id, and only this field tells two such
+    /// votes apart (DI-10, migration 0019).
+    pub contract_address: String,
     pub vote_id: i64,
     pub vault: String,
     pub stance: i16,
@@ -800,6 +908,39 @@ mod tests {
         assert!(
             v["usdc_value"].is_null(),
             "usdc_value must serialize as JSON null when None"
+        );
+    }
+
+    /// Core 1795 (QA plan X8): a position is priced at `previewRedeem`, what a redeem pays after
+    /// exit costs, not at the gross `convertToAssets` share price. rmAGENT-like numbers: 1000 USDC of
+    /// assets over 1000e18 shares, a 5% slippage floor, so `previewRedeem(totalSupply())` is 950 USDC.
+    #[test]
+    fn position_exit_value_is_preview_redeem_not_convert_to_assets() {
+        let d = |s: &str| s.parse::<BigDecimal>().unwrap();
+        let supply = d("1000000000000000000000");
+        let preview_total = d("950000000");
+        let shares = d("100000000000000000000"); // a tenth of the supply
+        assert_eq!(
+            position_exit_value(&shares, Some(&preview_total), Some(&supply))
+                .map(|v| dec_to_string(&v)),
+            Some("95000000".to_string()),
+            "95 USDC, not the 100 USDC convertToAssets gives"
+        );
+        // Floor, like the vault's own rounding: 2 of 3 shares worth 10 in all is 6 (6.67), not 7.
+        assert_eq!(
+            position_exit_value(&d("2"), Some(&d("10")), Some(&d("3"))).map(|v| dec_to_string(&v)),
+            Some("6".to_string())
+        );
+        // No exit value on the snapshot (older than migration 0022): unknown, never the gross value.
+        assert_eq!(position_exit_value(&shares, None, Some(&supply)), None);
+        // No snapshot, or a zero supply: unknown.
+        assert_eq!(
+            position_exit_value(&shares, Some(&preview_total), None),
+            None
+        );
+        assert_eq!(
+            position_exit_value(&shares, Some(&preview_total), Some(&d("0"))),
+            None
         );
     }
 }

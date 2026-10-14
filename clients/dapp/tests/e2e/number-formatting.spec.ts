@@ -9,7 +9,15 @@
  *   2. Numeric <td> elements in the balances-panel table have computed
  *      `text-align: right`.
  *   3. ProportionPreview numeric columns have computed `text-align: right`.
- *   4. Screenshot snapshots per polished surface with a documented tolerance.
+ *
+ * QA plan v1 T5: two tests here skipped on every dapp-e2e run. The
+ * ProportionPreview test looked for the leg table without choosing the router
+ * destination or entering an amount, so the table never rendered and the test
+ * skipped. It now drives the router deposit form the way router-deposit.spec.ts
+ * does and requires the table. The balances-panel screenshot test skipped
+ * because no baseline was ever committed (and it looked for a file name
+ * Playwright does not use). The panel shows live balances, so a pixel baseline
+ * cannot be stable. It is deleted; test 1 asserts the formatting as text.
  *
  * Runs against the full-stack devnet after devnet-global-setup.ts has seeded
  * USDC balances into the test EOAs.
@@ -17,11 +25,14 @@
  * Canonical: docs/architecture.md §5.3 — Human Dapp.
  */
 import { test, expect } from "./helpers/fixtures";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
+import {
+  injectWallet,
+  connectInjectedWallet,
+  dismissOnboardingIfPresent,
+  openDapp,
+  openTab,
+} from "./helpers/wallet";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,72 +108,24 @@ test("balances-panel: balance column is right-aligned (text-align: right)", asyn
 // ---------------------------------------------------------------------------
 
 test("router-deposit: ProportionPreview numeric columns are right-aligned", async ({ page }) => {
-  await injectWallet(page, {
-    privateKey: eps.admin_private_key as `0x${string}`,
-    rpcUrl: eps.rpc_url,
-    chainId: eps.chain_id,
-  });
-  await page.goto(eps.dapp_url);
-  await connectInjectedWallet(page);
-  await dismissOnboardingIfPresent(page);
+  // The leg table renders only once the router destination is chosen and an amount is entered,
+  // the same steps router-deposit.spec.ts takes. No skip: a missing table fails (QA plan v1 T5).
+  await openDapp(page, eps, { role: "admin" });
+  await openTab(page, "deposit-withdraw");
+  await page.getByTestId("destination-router").click();
+  await page.getByTestId("router-deposit-tab-amount").fill("10");
 
-  // Navigate to the Deposit/Withdraw tab and select the Router destination.
-  const depositTab = page.getByRole("button", { name: /deposit/i }).first();
-  if (await depositTab.isVisible()) {
-    await depositTab.click();
-  }
-
-  // Wait for the proportion preview table (may require selecting Router destination
-  // and entering an amount before the table renders).
   const previewTable = page.getByTestId("proportion-preview-table");
-  // If the table is not present (no router vaults configured), skip gracefully.
-  if (!(await previewTable.isVisible({ timeout: 10_000 }).catch(() => false))) {
-    test.skip();
-    return;
+  await expect(previewTable).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("proportion-preview-row-0")).toBeVisible();
+
+  // Weight (2nd), USDC leg (3rd) and estimated shares (4th) are the numeric columns
+  // (styles.css, ProportionPreview).
+  for (const column of [2, 3, 4]) {
+    const cell = page
+      .locator(`[data-testid="proportion-preview-table"] td:nth-child(${column})`)
+      .first();
+    const align = await cell.evaluate((el) => window.getComputedStyle(el).textAlign);
+    expect(align, `ProportionPreview column ${column} should be right-aligned`).toBe("right");
   }
-
-  // Weight column (2nd) and USDC-leg column (3rd) should be right-aligned.
-  const weightCell = page
-    .locator('[data-testid="proportion-preview-table"] td:nth-child(2)')
-    .first();
-  const weightAlign = await weightCell.evaluate((el) => window.getComputedStyle(el).textAlign);
-  expect(weightAlign, "Weight column should be right-aligned").toBe("right");
-});
-
-// ---------------------------------------------------------------------------
-// Screenshot snapshots per polished surface
-// ---------------------------------------------------------------------------
-
-test("snapshot: balances panel renders consistently", async ({ page }) => {
-  // Resolve the snapshot baseline path. On the first run (no committed baseline)
-  // skip gracefully so CI stays green; a developer runs
-  // `playwright test --update-snapshots` locally, commits the generated file,
-  // and subsequent runs diff against it.
-  const thisDir = path.dirname(fileURLToPath(import.meta.url));
-  const snapshotDir = path.join(thisDir, "number-formatting.spec.ts-snapshots");
-  const baselinePath = path.join(snapshotDir, "balances-panel-linux.png");
-  if (!fs.existsSync(baselinePath)) {
-    test.info().annotations.push({
-      type: "note",
-      description:
-        "Screenshot baseline balances-panel-linux.png not yet committed. " +
-        "Run `playwright test --update-snapshots` and commit the generated file.",
-    });
-    test.skip();
-    return;
-  }
-
-  await injectWallet(page, {
-    privateKey: eps.admin_private_key as `0x${string}`,
-    rpcUrl: eps.rpc_url,
-    chainId: eps.chain_id,
-  });
-  await page.goto(eps.dapp_url);
-  await connectInjectedWallet(page);
-  await dismissOnboardingIfPresent(page);
-
-  await page.getByTestId("balances-panel").waitFor({ state: "visible" });
-  const panel = page.getByTestId("balances-panel");
-  // Screenshot with a 10% pixel-diff tolerance to handle minor rendering variance.
-  await expect(panel).toHaveScreenshot("balances-panel.png", { maxDiffPixelRatio: 0.1 });
 });

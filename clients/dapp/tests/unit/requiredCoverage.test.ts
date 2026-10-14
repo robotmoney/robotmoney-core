@@ -6,6 +6,8 @@
 import { describe, it, expect } from "vitest";
 import {
   evaluateCoverage,
+  evaluateNoSkips,
+  evaluateRun,
   shouldEnforceFromArgv,
   formatFailureReport,
   REQUIRED_SPECS,
@@ -79,6 +81,32 @@ describe("required browser coverage guard", () => {
         seen({ ...others, "role-grant-revoke.spec.ts": { executed: 8, skipped: 0 } }),
       ).ok,
     ).toBe(true);
+  });
+
+  // QA plan v1 T5: a test that skips inside a spec whose other tests ran. The
+  // spec rule passes it, so this rule has to fail it.
+  it("FAILS a full run that skipped any test, and names the test (QA plan v1 T5)", () => {
+    const label =
+      "number-formatting.spec.ts › router-deposit: ProportionPreview numeric columns are right-aligned";
+    const v = evaluateNoSkips([label]);
+    expect(v.ok).toBe(false);
+    expect(v.failures).toHaveLength(1);
+    expect(v.failures[0]).toContain(label);
+    expect(v.failures[0]).toContain("SKIPPED");
+  });
+
+  it("passes a full run that skipped no test (QA plan v1 T5)", () => {
+    expect(evaluateNoSkips([])).toEqual({ ok: true, failures: [] });
+  });
+
+  it("fails the run on a skip even when every required spec executed (QA plan v1 T5)", () => {
+    const allRan = seen(
+      Object.fromEntries(REQUIRED_SPECS.map((s) => [s, { executed: 1, skipped: 0 }])),
+    );
+    expect(evaluateRun(allRan, []).ok).toBe(true);
+    const v = evaluateRun(allRan, ["number-formatting.spec.ts › snapshot"]);
+    expect(v.ok).toBe(false);
+    expect(v.failures.join("\n")).toContain("number-formatting.spec.ts › snapshot");
   });
 
   it("does NOT require the environment-gated real-artifact spec", () => {

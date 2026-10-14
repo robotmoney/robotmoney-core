@@ -186,11 +186,14 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     /// @notice ORA-4 / F-10 — maximum permitted divergence (in bps) between the
     ///         NAV-pricing TWAP and the executable market (spot) price before
-    ///         deposits/redemptions are halted on the deposit/redeem hot path.
-    ///         A stale or manipulated mark whose spot has moved beyond this band
-    ///         reverts `NavMarketDeviationExceeded` rather than settling at a
-    ///         price the market no longer offers. `0` DISABLES the guard (used
-    ///         by fixtures and any vault that opts out); production deployments
+    ///         deposits are halted. A stale or manipulated mark whose spot has
+    ///         moved beyond this band reverts `NavMarketDeviationExceeded` rather
+    ///         than settling at a price the market no longer offers. The same
+    ///         value bounds the USDC sell anchor on `redeem` (core 1793): a
+    ///         Uniswap V4 leg whose spot sits more than this below its 4 hour
+    ///         mean refuses the USDC redeem with `BasketViews.SpotBelowSellAnchor`,
+    ///         and the holder uses `redeemInKind`. `0` DISABLES both (used by
+    ///         fixtures and any vault that opts out); production deployments
     ///         set a non-zero, timelock-governed threshold. Bounded above by
     ///         `MAX_NAV_DEVIATION_BPS`.
     uint256 public navDeviationGuardBps;
@@ -300,6 +303,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     error InvalidParam();
     error MaxAssetsReached();
     error AssetNotFound();
+    /// @dev `removeAsset`: the vault holds more than dust of the token (QA plan D6). Reverted by the linked
+    ///      `BasketAssetConfigGuard.deactivateAsset` (same selector), declared here so the vault ABI decodes it.
     error AssetStillHeld();
     error NoActiveAssets();
 
@@ -309,6 +314,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      mark. `deviationBps` is the observed divergence; `thresholdBps` is the
     ///      configured guard.
     error NavMarketDeviationExceeded(address token, uint256 deviationBps, uint256 thresholdBps);
+    /// @dev Core 1793: mirror of `BasketViews.SpotBelowSellAnchor` (same selector), declared here so the vault ABI decodes
+    ///      the USDC sell anchor's refusal. The linked library reverts it; the vault has no code for it.
+    error SpotBelowSellAnchor(address token, uint256 belowBps, uint256 thresholdBps);
     error EmergencyUnwindOverrideDisabled();
     error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
@@ -577,9 +585,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         // a mint at a stale/manipulated mark is the entry leg of the F-16 leak.
         // The per-asset divergence loop lives in the linked `BasketViews`
         // library to keep this EIP-170-tight vault under the bytecode limit.
-        BasketViews.checkNavDeviation(
-            IBasketVaultViews(address(this)), address(_USDC), navDeviationGuardBps
-        );
+        _checkMarket(false);
 
         // Snapshot pre-deposit state so shares are minted against the value the
         // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
@@ -690,6 +696,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///         per-leg slippage guard ineffective.
     ///         This override reads _lastWithdrawnAssets written by _withdraw() and
     ///         returns that instead.
+    /// @dev Core 1793 (QA plan D5): after the gas floor and before any sale, the USDC sell anchor refuses a redeem that
+    ///      would sell a Uniswap V4 leg more than `navDeviationGuardBps` below its 4 hour mean
+    ///      (`BasketViews.SpotBelowSellAnchor`). A held price displacement drags the 1800 s TWAP floor onto itself within
+    ///      one window, so the floor alone does not stop that sale. The holder exits through `redeemInKind` meanwhile.
     function redeem(uint256 shares, address receiver, address owner)
         public
         override
@@ -698,8 +708,16 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         uint256 floor = REDEEM_BASE_GAS + assets.length * REDEEM_GAS_PER_ASSET;
         uint256 g = gasleft();
         if (g < floor) revert InsufficientGas(g, floor);
+        _checkMarket(true);
         super.redeem(shares, receiver, owner);
         return _lastWithdrawnAssets;
+    }
+
+    /// @dev The one call site of the linked `BasketViews.checkMarket`: the ORA-4 deviation guard on deposit (`sell` false),
+    ///      the USDC sell anchor on redeem (`sell` true). One shared call site keeps the vault family 78 bytes smaller than
+    ///      two inline library calls (EIP-170, measured with `forge build --sizes`).
+    function _checkMarket(bool sell) internal view {
+        BasketViews.checkMarket(sell);
     }
 
     /// @notice Oracle-free exit (core 1665): burn `shares` of `owner` and pay `receiver` the pro-rata
@@ -893,6 +911,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             // 1% floor with "Too little received". For a normal leg one unit is below 1e-6 of it.
             // A one-unit leg floors at zero (adapters return 0 for a zero amount).
             uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount - 1);
+            // QA plan D6 (E4, SR-L12): a zero floor means the leg is worth about one USDC unit or
+            // less. Its sale can pay zero, which the V4 adapter refuses, so one donated wei would
+            // revert the redeem. The leg is skipped and stays with the remaining holders.
+            if (minUsdcOut == 0) continue;
 
             uint256 received = _executeSwap(
                 assets[i].adapter,
@@ -1117,12 +1139,15 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_, venue_);
     }
 
-    /// @notice Deactivate a basket asset. The vault must hold zero of that token. Restricted to ADMIN_ROLE.
+    /// @notice Deactivate a basket asset. Restricted to ADMIN_ROLE. The vault must hold none of the token, or only dust:
+    ///         a balance whose TWAP sale floor rounds to zero USDC units. That is the leg `emergencyUnwind` and `redeem`
+    ///         skip, so whatever an unwind leaves behind can always be removed (QA plan D6). A balance above dust reverts
+    ///         `AssetStillHeld`.
+    /// @dev SR-L12 / E4: before D6 anyone could send one wei of the token after the unwind and make this revert
+    ///      `AssetStillHeld` forever, because the Uniswap V4 adapter refuses a sale that pays zero. The checks and the
+    ///      write run in the delegatecall-linked `BasketAssetConfigGuard.deactivateAsset` (EIP-170).
     function removeAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
-        if (index >= assets.length || !assets[index].active) revert AssetNotFound();
-        if (IERC20(assets[index].token).balanceOf(address(this)) > 0) revert AssetStillHeld();
-        assets[index].active = false;
-        emit AssetRemoved(index, assets[index].token);
+        emit AssetRemoved(index, BasketAssetConfigGuard.deactivateAsset(_guardAssets(), index));
     }
 
     /// @notice Re-absorb a balance that has reappeared on a removed (inactive)
@@ -1143,6 +1168,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      oracle is unavailable or the price is manipulated. The additional
     ///      caller-supplied minUsdcOut is checked against the actual received
     ///      amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+    ///      A dust balance, whose TWAP floor rounds to zero USDC units, is left in
+    ///      place and the call is a no-op (QA plan D6), like a zero balance.
     /// @param index      Registry index of an inactive (removed) basket asset.
     /// @param minUsdcOut Caller-supplied slippage floor (in USDC raw units).
     ///                   Reverts with SlippageExceeded when the swap output is
@@ -1275,7 +1302,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
     ///      stale configuration being exploited by a sandwich attacker. If the
     ///      oracle is unavailable, a non-zero configured floor is required.
-    ///      Reverts when any router leg cannot satisfy its effective floor.
+    ///      Reverts when any router leg cannot satisfy its effective floor. A leg whose TWAP floor
+    ///      rounds to zero USDC units is dust and is skipped (QA plan D6, SR-L12): one donated wei
+    ///      cannot block the unwind.
     function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
         uint256 len = assets.length;
@@ -1288,6 +1317,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             uint256 effectiveFloor;
             try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
                 uint256 twapFloor = _applySlippage(twapValue);
+                // QA plan D6: dust (a floor that rounds to zero) stays put whatever the configured
+                // minimum. Its sale can pay zero, which the V4 adapter refuses. `removeAsset` accepts it.
+                if (twapFloor == 0) continue;
                 effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
             } catch {
                 if (configuredMin == 0) revert EmergencyFloorUnavailable(assetInfo.token);
@@ -1434,7 +1466,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      any non-zero value must be `<= MAX_NAV_DEVIATION_BPS`. When set,
     ///      deposits revert `NavMarketDeviationExceeded` if any active asset's
     ///      executable market (spot) price diverges from its NAV-pricing TWAP
-    ///      beyond `newBps`. Independent of `maxSlippageBps` (the swap floor),
+    ///      beyond `newBps`, and a USDC `redeem` reverts `SpotBelowSellAnchor`
+    ///      while a held Uniswap V4 leg's spot sits more than `newBps` below its
+    ///      4 hour sell anchor (core 1793). Independent of `maxSlippageBps` (the swap floor),
     ///      which stays TWAP/pool-fee-derived (ORA-7) — the two bounds never
     ///      share a source.
     /// @param newBps New deviation threshold in basis points.
@@ -1563,7 +1597,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     /// @notice USDC value of `amount` of the active asset at registry `index`,
     ///         priced via its TWAP adapter (or the built-in V3 path). Used by the
-    ///         externally-linked `BasketViews` weight-preview library.
+    ///         externally-linked `BasketViews` weight-preview library, and by the dust checks in
+    ///         `BasketAssetConfigGuard.deactivateAsset` and `BasketViews.checkSellAnchor` (QA plan D6).
     function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256) {
         AssetInfo memory a = assets[index];
         return _twapUsdcValue(a.pool, a.token, a.adapter, amount);
@@ -1614,7 +1649,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     // uses the freshly-returned `received` amount, not the stale balance.
     function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        if (bal == 0) return;
+        // QA plan D6: a zero floor marks dust. Leave it rather than send a sale that can pay zero,
+        // which the V4 adapter refuses. `emergencyUnwind` never passes zero; `reabsorbRemovedAsset`
+        // passes zero only for dust, so its dust call is a no-op like its zero-balance call (LIFE-6).
+        if (bal == 0 || minUsdcOut == 0) return;
         uint256 received = _executeSwap(
             assetInfo.adapter,
             assetInfo.token,

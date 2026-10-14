@@ -4,7 +4,7 @@ title: "GatewayAgentPolicyFixture"
 
 # GatewayAgentPolicyFixture
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
 
 **Inherits:** Test
 
@@ -13,7 +13,8 @@ title: "GatewayAgentPolicyFixture"
 Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
 constructor admin, and `adminOwner`, who owns agents in these tests)
 and a permissionless account (`user`) that authorizes through
-commit/reveal.
+commit/reveal. Agents made with `_keyed` have a known key, so a
+permissionless reveal can carry the agent's consent (issue #1791).
 
 </i>
 
@@ -105,7 +106,74 @@ address internal stranger = makeAddr("stranger");
 address internal otherReceiver = makeAddr("otherReceiver");
 ```
 
+### agentKey
+
+Private key of every agent address made with `_keyed`.
+
+```solidity
+mapping(address => uint256) internal agentKey;
+```
+
 ## Functions
+
+<a id="_keyed-string"></a>
+
+### _keyed
+
+<i>
+
+An address with a known key, recorded so `_consent` can sign for it.
+
+</i>
+
+```solidity
+function _keyed(string memory name) internal returns (address a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+
+<a id="_consent-address-address-address"></a>
+
+### _consent
+
+<i>
+
+What a reveal by `owner` for `agent` must carry: nothing when the
+owner holds ADMIN_ROLE or reveals for itself, else the agent's
+EIP-712 consent for this owner and receiver at its current nonce.
+
+</i>
+
+```solidity
+function _consent(address owner, address agent, address receiver)
+        internal
+        view
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| agent | `address` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
 
 <a id="setup"></a>
 
@@ -158,7 +226,7 @@ function _commit(address owner, address agent, bytes32 salt) internal;
 <i>
 
 Commit/reveal authorization by `owner`, waiting the one block the
-commitment requires.
+commitment requires, with the agent's consent when one is needed.
 
 </i>
 

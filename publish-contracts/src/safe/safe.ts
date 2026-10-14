@@ -5,6 +5,7 @@ import { assertChainAllowed, chainGuard, lc, publicClientFor, rpcLabel, sameAddr
 import { FACTORY_ABI, FALLBACK_HANDLER_SLOT, SAFE_141, SAFE_ABI, SAFE_VERSION, ZERO_ADDRESS } from "./constants.ts";
 import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
 import { silentLogger, type Logger } from "./log.ts";
+import { awaitRead, type ReadRetry } from "./read-after-write.ts";
 import type { Signer } from "./signers.ts";
 
 export interface SafeHandle {
@@ -101,6 +102,8 @@ export interface CreateSafeOpts extends ChainOpts {
   /** Simulate and plan only. */
   dryRun?: boolean;
   logger?: Logger;
+  /** The reads after the creation landed (awaitCreatedSafe, issue 1723): the test seam and tuning. Default 5 reads, 1 s apart. */
+  readRetry?: ReadRetry;
 }
 
 export interface CreateSafePlan {
@@ -150,7 +153,7 @@ export function defaultSaltNonce(owners: Address[], threshold: number, deploySha
 /**
  * Creates the production Safe through the canonical SafeProxyFactory (SafeL2 1.4.1 singleton, CompatibilityFallbackHandler).
  * All read-only checks run first. After the one creation transaction the Safe is verified from the chain, not from the plan:
- * owners, threshold, version, nonce 0, singleton slot, fallback slot and the pinned canonical proxy codehash.
+ * owners, threshold, version, nonce 0, singleton slot, fallback slot and the pinned canonical proxy codehash. Those reads are read-after-write safe (awaitCreatedSafe).
  */
 export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult> {
   const logger = opts.logger ?? silentLogger;
@@ -238,18 +241,54 @@ export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult
   const receipt = await client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") throw new SafeToolError("TX_REVERTED", `the creation transaction reverted: ${txHash}`);
 
-  const handle = await connectSafe({ ...opts, safeAddress: predictedAddress, logger });
-  await verifyCreatedSafe(handle, { owners, threshold: opts.threshold });
-  if (opts.expectDeployerNonce !== undefined) {
-    const after = await client.getTransactionCount({ address: deployer });
-    if (after !== opts.expectDeployerNonce + 1) throw new SafeToolError("VERIFY_FAILED", `deployer nonce is ${after} after the stage, expected ${opts.expectDeployerNonce + 1}`);
-  }
+  const handle = await awaitCreatedSafe({
+    connect: () => connectSafe({ ...opts, safeAddress: predictedAddress, logger }),
+    want: { owners, threshold: opts.threshold },
+    deployerNonce: opts.expectDeployerNonce === undefined ? undefined : { want: opts.expectDeployerNonce + 1, read: () => client.getTransactionCount({ address: deployer }) },
+    rpcUrl: opts.rpcUrl, txHash, retry: opts.readRetry,
+  });
   const manifest: SafeManifest = {
     safe: predictedAddress, version: SAFE_VERSION, threshold: opts.threshold, owners, factory: SAFE_141.proxyFactory, singleton: SAFE_141.singletonL2,
     fallback_handler: SAFE_141.fallbackHandler, salt_nonce: saltNonce, created_by: deployer, tx_hash: txHash, block: Number(receipt.blockNumber), chain_id: opts.chainId,
   };
   logger.log("info", "safe.create.verified", { safe: predictedAddress, tx_hash: txHash, block: manifest.block });
   return { plan, created: true, txHash, block: manifest.block, handle, manifest };
+}
+
+/**
+ * The reads after a landed creation (issue 1723, QA plan v1 E6): connect to the new Safe and verify it against the plan (verifyCreatedSafe: roster, version, nonce 0,
+ * singleton, fallback handler, canonical proxy code), then read the deployer nonce the creation must leave. A load-balanced RPC may answer them from a node behind the
+ * creation block, which has no code at the Safe (NOT_A_SAFE, or the code check of verifyCreatedSafe) and the deployer's nonce from before. So each is read again, bounded
+ * by `retry`, while it does not show the expected state. What still differs after the last read fails with the check's own code (NOT_A_SAFE, VERIFY_FAILED, ...), its
+ * message extended with the number of reads and the RPC host. A deployer nonce above the expected one fails at once: another transaction moved the deployer.
+ */
+export async function awaitCreatedSafe(c: {
+  connect: () => Promise<SafeHandle>;
+  want: { owners: Address[]; threshold: number };
+  /** The deployer nonce the creation must leave (the nonce before it plus 1) and its read. Unset: not checked. */
+  deployerNonce?: { want: number; read: () => Promise<number> };
+  rpcUrl: string;
+  txHash: Hex;
+  retry?: ReadRetry;
+}): Promise<SafeHandle> {
+  const host = rpcLabel(c.rpcUrl);
+  const created = await awaitRead(async () => { const h = await c.connect(); await verifyCreatedSafe(h, c.want); return h; }, () => true, c.retry);
+  if (!created.ok) {
+    const e = created.error;
+    const why = `${created.reads} read(s) from RPC ${host} after the creation ${c.txHash} landed`;
+    const details = { reads: created.reads, rpc: host, tx_hash: c.txHash };
+    if (e instanceof SafeToolError) throw new SafeToolError(e.code, `${e.message} (${why})`, { ...e.details, ...details });
+    throw new SafeToolError("VERIFY_FAILED", `the new Safe cannot be read: ${revertReasonOf(e)} (${why})`, details);
+  }
+  if (c.deployerNonce) {
+    const { want, read } = c.deployerNonce;
+    const n = await awaitRead(read, (x) => x === want, c.retry, (x) => x > want);
+    if (!n.ok) {
+      if (n.seen.length === 0) throw new SafeToolError("VERIFY_FAILED", `the deployer nonce cannot be read after the stage: ${revertReasonOf(n.error)} (${n.reads} read(s) from RPC ${host})`, { want, rpc: host, tx_hash: c.txHash });
+      throw new SafeToolError("VERIFY_FAILED", `deployer nonce is ${n.last} after the stage, expected ${want}: read ${n.seen.join(", ")} in ${n.reads} read(s) from RPC ${host} after ${c.txHash}`, { got: n.last, want, seen: n.seen, rpc: host, tx_hash: c.txHash });
+    }
+  }
+  return created.last!;
 }
 
 /** The `initializer` argument of createProxyWithNonce(singleton, initializer, saltNonce) inside the SDK's calldata. */

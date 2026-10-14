@@ -8,6 +8,8 @@
 // The applied vector is the router's ACTIVE vector: `getEffectiveWeights()` reads it and `votedWeightsActive()` reads true (the storage keeps its pre-1698 name for
 // ABI stability). The DEFAULT vector (`setDefaultWeights`) stays the fallback and is not touched by an application. A later receipt replaces the active vector;
 // the clear row (clear-voted-weights.ts) drops it so routing falls back to the default.
+// Before anything is scheduled, and again before the execute, the row also checks the stage 11 wiring the call needs (applyWiringProblems): RouterGovernance
+// releases from the register this row read and holds its ADMIN_ROLE. A miss would only show as a revert one full timelock delay later.
 // This module is pure: it reads no chain and sends nothing. govern.ts reads the chain, calls `planApply` and sends the call.
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
@@ -36,6 +38,9 @@ export const REGISTRY_ELIGIBLE_ABI = parseAbi([
 export const RECEIPT_RECORD_ABI = parseAbi([
   "function getReceiptById(bytes32 receiptId) view returns ((bytes32 receiptId, bytes32 payloadDigest, string payloadUri, address submitter, uint64 recordedAt, uint64 releasedAt, bool released))",
 ]);
+/** The stage 11 wiring the one call depends on (issue 1698): the register RouterGovernance releases from, and the register role that gates `releaseReceipt`. */
+export const GOVERNANCE_WIRING_ABI = parseAbi(["function receiptContract() view returns (address)"]);
+export const RECEIPT_ROLE_ABI = parseAbi(["function hasRole(bytes32 role, address account) view returns (bool)"]);
 
 export const BPS_TOTAL = 10_000;
 
@@ -77,7 +82,8 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
   const entries: { vault: Address; bps: number; bucket: string }[] = [];
   for (const w of weights) {
     const bucket = String(w?.bucket);
-    const key = BUCKET_VAULT[bucket];
+    // issue 1701: an own-property lookup, so a bucket named `constructor` or `__proto__` is an unknown bucket (USAGE), never a prototype member
+    const key = Object.hasOwn(BUCKET_VAULT, bucket) ? BUCKET_VAULT[bucket] : undefined;
     if (key === undefined) return usage(`--payload weights: bucket '${bucket}' is not one of ${Object.keys(BUCKET_VAULT).join(", ")}`);
     if (seen.has(bucket)) return usage(`--payload weights: bucket '${bucket}' is listed twice`);
     seen.add(bucket);
@@ -115,6 +121,22 @@ export function planApply(i: ApplyInputs): WeightVector {
   const at = (a: Address) => want.indexOf(lc(a));
   const order = v.vaults.map((_, k) => k).sort((x, y) => at(v.vaults[x]!) - at(v.vaults[y]!));
   return { vaults: order.map((k) => v.vaults[k]!), bps: order.map((k) => v.bps[k]!) };
+}
+
+/** What the chain says about the weight setter's wiring. `receiptContract` is undefined when the read failed: a pre-1698 RouterGovernance has neither it nor `applyReceipt`. */
+export interface ApplyWiring { receiptContract: Address | undefined; governanceIsReceiptAdmin: boolean }
+
+/**
+ * Pre-send wiring problems (issue 1698). The one call only works when RouterGovernance releases from the register this row read (stage 11 `setReceiptContract`) and holds
+ * that register's ADMIN_ROLE (the `releaseReceipt` gate). Without either, the call the Safe schedules reverts at the execute, one full timelock delay later
+ * (ReceiptContractNotSet, AccessControlUnauthorizedAccount), or releases from a register whose receipt state and digest this row never checked. An empty list is a pass.
+ */
+export function applyWiringProblems(receipt: Address, governance: Address, w: ApplyWiring): string[] {
+  const bad: string[] = [];
+  if (w.receiptContract === undefined) bad.push(`governance ${governance} does not answer receiptContract(): it is not a RouterGovernance with applyReceipt (issue 1698), so the call would revert`);
+  else if (lc(w.receiptContract) !== lc(receipt)) bad.push(`governance.receiptContract() is ${w.receiptContract}, not the consensus receipt ${receipt} this row read: the call would release from another register`);
+  if (!w.governanceIsReceiptAdmin) bad.push(`receipt ${receipt}: ADMIN_ROLE is not held by governance ${governance}, so its releaseReceipt inside applyReceipt would revert`);
+  return bad;
 }
 
 export interface ApplyCall { label: string; target: Address; data: Hex }

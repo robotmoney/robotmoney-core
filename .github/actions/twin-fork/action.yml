@@ -9,6 +9,8 @@ description: >-
   Every job of one workflow run must pass the same pin-block (choose it once in a setup job, see
   scripts/devnet/README-twin-fork.md). The optional paid upstream is the input upstream-secret, or
   an already-set BASE_UPSTREAM_RPC env when the input is empty. It is never printed.
+  Foundry is pinned to one exact release (issue 1682). This install runs after any earlier one in
+  the job and wins on PATH, so every later anvil, cast and forge of a Twin chain job is this release.
 inputs:
   pin-block:
     description: "Pinned Base block. Empty means upstream head minus 2 (use only in the setup job)."
@@ -50,7 +52,13 @@ outputs:
 runs:
   using: composite
   steps:
+    # An exact release, never `stable` (issue 1682): a floating `stable` moved cast to 1.8, which
+    # changed `cast wallet new --json` and kept suite 11b red from 2026-09-05 with no repo change.
+    # Bump it together with every pin in .github/workflows/suite-11b-opencode-headless.yml:
+    # .github/scripts/tests/test_parse_cast_wallet_new.py fails when the two differ or float.
     - uses: foundry-rs/foundry-toolchain@v1
+      with:
+        version: v1.8.5
     - uses: oven-sh/setup-bun@v2
     - id: pin
       shell: bash

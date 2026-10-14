@@ -5,7 +5,7 @@ description: "1:1 vault that REVERTS on `deposit(0)` (like rmAGENT: a zero swap)
 
 # StrictZeroRevertVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d10083c3fcb22c22a537433d925e50d14ee0f882/contracts/test/PortfolioRouterZeroLeg.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/PortfolioRouterZeroLeg.t.sol)
 
 **Inherits:** ERC20
 
@@ -101,6 +101,33 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxdeposit-address"></a>
+
+### maxDeposit
+
+<i>
+
+ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+reverts (QA plan D4), so a router-leg mock must answer it.
+
+</i>
+
+```solidity
+function maxDeposit(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
 
 **Returns**
 

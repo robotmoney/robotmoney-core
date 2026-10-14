@@ -24,6 +24,12 @@ interface IInKindVault {
     function feeRecipient() external view returns (address);
 }
 
+/// @dev The vault getters `deactivateAsset` reads from `address(this)` to price a leftover balance (QA plan D6).
+interface IDustPricedVault {
+    function maxSlippageBps() external view returns (uint256);
+    function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+}
+
 library BasketAssetConfigGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -67,6 +73,10 @@ library BasketAssetConfigGuard {
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
     /// @dev Token has no usable bytecode and its code hash is not the allowed B20 marker.
     error TokenHasNoCode(address token);
+    /// @dev Mirror of `BasketVault.AssetNotFound` (same selector): no ACTIVE entry at the index.
+    error AssetNotFound();
+    /// @dev Mirror of `BasketVault.AssetStillHeld` (same selector): the vault holds more than dust of the token.
+    error AssetStillHeld();
 
     /// @dev Code hash of the single byte `0xef`. Coinbase B20 tokenized stocks are protocol
     ///      precompiles: the account code on Base is exactly `0xef`, so a plain "has code"
@@ -163,6 +173,34 @@ library BasketAssetConfigGuard {
             return i;
         }
         return type(uint256).max;
+    }
+
+    /// @notice The body of `BasketVault.removeAsset` (QA plan D6, SR-L12), delegatecall-linked so it runs as the vault
+    ///         and stays out of the EIP-170-tight vault bytecode. Deactivates the ACTIVE entry at `index` when the vault
+    ///         holds none of its token, or only dust: a balance whose TWAP sale floor
+    ///         (`value * (10_000 - maxSlippageBps) / 10_000`, the vault's `_applySlippage`) rounds to zero USDC units.
+    ///         That is the same test on which `BasketVault.emergencyUnwind` and `redeem` skip a leg, so an unwind always
+    ///         leaves a removable balance.
+    /// @dev Why dust and not zero: anyone can send the vault one wei after the unwind. The Uniswap V4 adapter refuses a
+    ///      sale that pays zero (`UniswapV4SwapAdapter.unlockCallback`), so that wei could never be sold, and a zero
+    ///      balance check reverted `AssetStillHeld` forever. The dust check reads the TWAP through the vault, so it fails
+    ///      closed while the oracle is down. A zero balance needs no price. The dust left on the removed entry drops out
+    ///      of NAV (at most about one USDC unit), and `reabsorbRemovedAsset` sells it back once it grows past dust.
+    /// @return token The deactivated token, for the vault's `AssetRemoved` event.
+    function deactivateAsset(AssetInfo[] storage assets, uint256 index)
+        public
+        returns (address token)
+    {
+        if (index >= assets.length || !assets[index].active) revert AssetNotFound();
+        token = assets[index].token;
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (bal > 0) {
+            // Runs as the vault (delegatecall): price the balance through the vault's own TWAP view.
+            IDustPricedVault self = IDustPricedVault(address(this));
+            uint256 floor = self.assetUsdcValue(index, bal) * (10_000 - self.maxSlippageBps()) / 10_000;
+            if (floor > 0) revert AssetStillHeld();
+        }
+        assets[index].active = false;
     }
 
     /// @notice Vet a non-zero adapter's codehash against the allowlist (ADP-2 / NC-2).

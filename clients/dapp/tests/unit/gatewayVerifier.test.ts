@@ -11,7 +11,14 @@
  */
 import { describe, it, expect } from "vitest";
 import { keccak256 } from "viem";
-import { computeVerificationState, ZERO_ADDRESS } from "../../src/lib/gatewayVerifier";
+import {
+  computeVerificationState,
+  describeVerificationCause,
+  ZERO_ADDRESS,
+  type VerificationCause,
+} from "../../src/lib/gatewayVerifier";
+import { buildVaultPreview } from "../../src/lib/vaultPreview";
+import { buildRouterPreview } from "../../src/lib/routerPreview";
 
 const GATEWAY = "0x1111111111111111111111111111111111111111";
 // Minimal non-empty bytecode fixture.
@@ -87,5 +94,86 @@ describe("computeVerificationState", () => {
   it("returns refused (not pending) when expectedHash is missing even with undefined code", () => {
     const result = computeVerificationState(GATEWAY, undefined, undefined);
     expect(result.status).toBe("refused");
+  });
+});
+
+// QA plan U5, finding DR-9: every refusal names its own cause, and the banner prints one
+// distinct sentence per cause instead of the same "unknown_revert" for all of them.
+describe("one refusal cause per failure", () => {
+  const causeOf = (r: ReturnType<typeof computeVerificationState>) =>
+    r.status === "refused" ? r.cause : `not refused: ${r.status}`;
+
+  it("names pin-missing, address-missing, no-code and hash-mismatch", () => {
+    expect(causeOf(computeVerificationState(GATEWAY, undefined, CODE))).toBe("pin-missing");
+    expect(causeOf(computeVerificationState(GATEWAY, " ", CODE))).toBe("pin-missing");
+    expect(causeOf(computeVerificationState(ZERO_ADDRESS, CODE_HASH, CODE))).toBe(
+      "address-missing",
+    );
+    expect(causeOf(computeVerificationState("", CODE_HASH, CODE))).toBe("address-missing");
+    expect(causeOf(computeVerificationState(GATEWAY, CODE_HASH, null))).toBe("no-code");
+    expect(causeOf(computeVerificationState(GATEWAY, CODE_HASH, "0x"))).toBe("no-code");
+    expect(causeOf(computeVerificationState(GATEWAY, WRONG_HASH, CODE))).toBe("hash-mismatch");
+  });
+
+  it("keeps the stable product reason code on every refusal", () => {
+    const r = computeVerificationState(GATEWAY, WRONG_HASH, CODE);
+    expect(r).toEqual({ status: "refused", reason: "unknown_revert", cause: "hash-mismatch" });
+  });
+
+  it("describes each cause with its own sentence", () => {
+    const causes: VerificationCause[] = [
+      "pin-missing",
+      "address-missing",
+      "no-code",
+      "hash-mismatch",
+      "wrong-chain",
+      "no-wallet",
+      "rpc-failed",
+    ];
+    const sentences = causes.map(describeVerificationCause);
+    expect(new Set(sentences).size).toBe(causes.length);
+    for (const s of sentences) {
+      expect(s.length).toBeGreaterThan(20);
+      expect(s).not.toContain("unknown_revert");
+    }
+    expect(describeVerificationCause("wrong-chain")).toMatch(/different chain/);
+    expect(describeVerificationCause("hash-mismatch")).toMatch(/does not match the pinned/);
+  });
+});
+
+// QA plan U5, finding DR-9: a vault preview refused because the gateway is unverified used to say only
+// "Gateway bytecode hash does not match" whatever the real cause. It now carries the cause's sentence.
+describe("a vault or router preview refused on the gateway names the cause", () => {
+  const vault = "0x2222222222222222222222222222222222222222" as const;
+  const user = "0x3333333333333333333333333333333333333333" as const;
+  const ctx = {
+    gateway: GATEWAY as `0x${string}`,
+    gatewayCodeHashVerified: false,
+    envClass: "mainnet" as const,
+    gatewayRefusalDetail: describeVerificationCause("wrong-chain"),
+  };
+
+  it("vault redeem", () => {
+    const p = buildVaultPreview(
+      { kind: "vaultRedeem", shares: 1n, receiver: user, owner: user },
+      { ...ctx, vault },
+    );
+    expect(p.ok).toBe(false);
+    expect(!p.ok && p.detail).toBe(describeVerificationCause("wrong-chain"));
+  });
+
+  it("router deposit", () => {
+    const p = buildRouterPreview(1n, [], { ...ctx, router: vault });
+    expect(!p.ok && p.detail).toBe(describeVerificationCause("wrong-chain"));
+  });
+
+  it("no detail is invented when the caller gives none", () => {
+    const { gatewayRefusalDetail: _unused, ...bare } = ctx;
+    void _unused;
+    const p = buildVaultPreview(
+      { kind: "vaultDeposit", assets: 1n, receiver: user },
+      { ...bare, vault },
+    );
+    expect(!p.ok && p.detail).toBeUndefined();
   });
 });

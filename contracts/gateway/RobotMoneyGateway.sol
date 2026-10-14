@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
@@ -156,6 +157,14 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `consensusRecordReceipt()` called but no consensus receipt contract
     ///         is configured (`consensusReceipt == address(0)`).
     error ConsensusReceiptNotSet();
+    /// @notice A caller without `ADMIN_ROLE` revealed for an agent other than
+    ///         itself, and `agentConsent` is missing, malformed, or not the
+    ///         agent's EIP-712 signature over this owner, share receiver and
+    ///         the agent's current `agentConsentNonce` (issue #1791).
+    error InvalidAgentConsent();
+    /// @notice `releaseAgent` called by an address that has no recorded owner,
+    ///         or whose binding carries its consent (issue #1791).
+    error AgentNotReleasable();
 
     // -------------------------------------------------------------------
     // Constants
@@ -181,6 +190,24 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     uint8 internal constant OP_WITHDRAW = 2;
     uint8 internal constant OP_DEPOSIT_TO = 3;
     uint8 internal constant OP_WITHDRAW_ROUTER = 4;
+
+    /// @notice EIP-712 type of the agent's consent to a binding (issue #1791).
+    ///         Signed by the agent; `owner` is the revealer, `nonce` is
+    ///         `agentConsentNonce(agent)`.
+    bytes32 public constant AGENT_CONSENT_TYPEHASH =
+        keccak256("AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)");
+    /// @dev EIP-712 domain parts. The separator is derived per call from
+    ///      `block.chainid` and `address(this)`, so a consent never verifies on
+    ///      another chain or another gateway.
+    bytes32 private constant _EIP712_DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+    bytes32 private constant _EIP712_NAME_HASH = keccak256("RobotMoneyGateway");
+    bytes32 private constant _EIP712_VERSION_HASH = keccak256("1");
+    /// @dev secp256k1 order / 2. A signature with `s` above it is the
+    ///      malleable twin of a low-s one and is refused (EIP-2).
+    uint256 private constant _SECP256K1_HALF_ORDER =
+        0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     // -------------------------------------------------------------------
     // Immutables
@@ -353,6 +380,15 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         configured. Appended after the admin-tier counters so no
     ///         preceding storage slot moves.
     IConsensusRecommendationReceipt public consensusReceipt;
+
+    /// @inheritdoc IGateway
+    /// @dev Appended after `consensusReceipt` so no preceding slot moves.
+    mapping(address => uint256) public agentConsentNonce;
+
+    /// @inheritdoc IGateway
+    /// @dev Set on a binding made with the agent's consent; cleared with the
+    ///      binding by `revokeAgent`. Gates `releaseAgent`.
+    mapping(address => bool) public agentConsented;
 
     /// @notice Revoking/renouncing the sole holder of an admin tier is forbidden.
     error LastAdminFloor();
@@ -625,12 +661,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     //
     // Writers of `agents[...]` / `agentOwner[...]` (issue #1476):
     //   _authorizeAgentInternal  writes both; runs _validatePolicy(caller, p)
+    //                            and, for a caller without ADMIN_ROLE, the
+    //                            agent-consent check (issue #1791)
     //   setPolicy                writes agents; runs _validatePolicy(caller, p)
     //   transferAgentOwnership   writes agentOwner only; the destination
     //                            must hold ADMIN_ROLE, which the caller-
     //                            dependent shareReceiver rule does not bind,
     //                            so the stored policy is not checked again
     //   revokeAgent              deletes both; writes no policy, so no check
+    //   releaseAgent             deletes both, called by the agent itself and
+    //                            only for a binding made without its consent
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
@@ -642,7 +682,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external {
+    function revealAuthorization(
+        address agent,
+        bytes32 salt,
+        AgentPolicy calldata p,
+        bytes calldata agentConsent
+    ) external {
         bytes32 commitHash = keccak256(abi.encode(agent, msg.sender, salt));
         bytes32 storageKey = _commitmentKey(commitHash, msg.sender);
         Commitment memory c = commitments[storageKey];
@@ -675,21 +720,40 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         emit CommitRevealed(msg.sender, commitHash, agent);
 
-        // 6. Perform the authorization (same logic as authorizeAgent).
-        _authorizeAgentInternal(agent, p);
+        // 6. Perform the authorization (same logic as authorizeAgent), with
+        //    the agent's consent checked for a caller without ADMIN_ROLE.
+        _authorizeAgentInternal(agent, p, agentConsent);
     }
 
     /// @inheritdoc IGateway
     function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE) {
-        _authorizeAgentInternal(agent, p);
+        // The caller holds ADMIN_ROLE, so no consent is read (empty slice).
+        _authorizeAgentInternal(agent, p, msg.data[0:0]);
     }
 
     /// @dev Shared authorization logic for both `authorizeAgent` (direct) and
     ///      `revealAuthorization` (commit/reveal path).
-    function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal {
+    ///
+    ///      Agent consent (issue #1791, review CS-1 and CS-2). Without it a
+    ///      caller could bind an agent address it does not control, with
+    ///      itself as share receiver, so that agent's deposits mint to the
+    ///      caller; or claim a published address first and block its real
+    ///      owner (`AgentAlreadyOwned`). A caller without ADMIN_ROLE therefore
+    ///      binds an agent other than itself only with the agent's signature
+    ///      (`_requireAgentConsent`). Revealing for itself is consent by the
+    ///      call. An ADMIN_ROLE caller takes no consent; that binding is
+    ///      recorded as unconsented, and the agent may undo it with
+    ///      `releaseAgent`.
+    function _authorizeAgentInternal(address agent, AgentPolicy calldata p, bytes calldata consent)
+        internal
+    {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
         _validatePolicy(msg.sender, p);
+        if (!hasRole(ADMIN_ROLE, msg.sender)) {
+            if (agent != msg.sender) _requireAgentConsent(agent, p.shareReceiver, consent);
+            agentConsented[agent] = true;
+        }
 
         agentOwner[agent] = msg.sender;
         agents[agent] = p;
@@ -736,13 +800,68 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (agent == address(0)) revert ZeroAddress();
         address owner = agentOwner[agent];
         if (owner != msg.sender) revert NotAgentOwner();
+        _clearAgent(agent, owner);
+    }
 
+    /// @inheritdoc IGateway
+    function releaseAgent() external {
+        address owner = agentOwner[msg.sender];
+        if (owner == address(0) || agentConsented[msg.sender]) revert AgentNotReleasable();
+        _clearAgent(msg.sender, owner);
+    }
+
+    /// @dev Clear one binding: policy, owner, consent record and AGENT_ROLE.
+    ///      Shared by `revokeAgent` and `releaseAgent`; both emit `AgentRevoked`
+    ///      so off-chain readers see the agent leave by either path.
+    function _clearAgent(address agent, address owner) internal {
         delete agents[agent];
         delete agentOwner[agent];
+        delete agentConsented[agent];
         if (hasRole(AGENT_ROLE, agent)) {
             _revokeRole(AGENT_ROLE, agent);
         }
         emit AgentRevoked(agent, owner);
+    }
+
+    /// @dev Require `consent` to be `agent`'s EIP-712 `AgentConsent` signature
+    ///      for this revealer (`msg.sender`) and `shareReceiver` at the agent's
+    ///      current nonce, then advance the nonce so the signature authorizes
+    ///      once (issue #1791). Layout is `r ‖ s ‖ v` (65 bytes). A high-s
+    ///      signature is refused (EIP-2), so a consent has one valid encoding.
+    ///      `agent` is non-zero here, so a failed recovery (zero signer) never
+    ///      matches. A contract agent (no ECDSA key) consents by revealing for
+    ///      itself instead. Hand-rolled rather than OZ `ECDSA.tryRecover` and
+    ///      `EIP712` to stay under EIP-170 and to add no storage.
+    function _requireAgentConsent(address agent, address shareReceiver, bytes calldata consent)
+        internal
+    {
+        if (consent.length != 65) revert InvalidAgentConsent();
+        uint256 nonce = agentConsentNonce[agent];
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                _EIP712_DOMAIN_TYPEHASH,
+                _EIP712_NAME_HASH,
+                _EIP712_VERSION_HASH,
+                block.chainid,
+                address(this)
+            )
+        );
+        bytes32 structHash =
+            keccak256(abi.encode(AGENT_CONSENT_TYPEHASH, agent, msg.sender, shareReceiver, nonce));
+        bytes32 digest = MessageHashUtils.toTypedDataHash(domainSeparator, structHash);
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        // The length is exactly 65, so the three loads stay inside `consent`.
+        assembly ("memory-safe") {
+            r := calldataload(consent.offset)
+            s := calldataload(add(consent.offset, 0x20))
+            v := byte(0, calldataload(add(consent.offset, 0x40)))
+        }
+        if (uint256(s) > _SECP256K1_HALF_ORDER || ecrecover(digest, v, r, s) != agent) {
+            revert InvalidAgentConsent();
+        }
+        agentConsentNonce[agent] = nonce + 1;
     }
 
     /// @dev The one policy validator every writer of `agents[...]` calls, so
@@ -793,6 +912,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @dev Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, rolling
     ///      deposit window) are written before external calls (CEI pattern).
     ///      `nonReentrant` provides defense-in-depth.
+    ///
+    ///      The policy checks, the USDC pull and the vault leg are the same
+    ///      helpers `depositTo` uses for a vault destination
+    ///      (`_requireDepositPolicy`, `_pullDepositUsdc`,
+    ///      `_executeVaultDeposit`), in the same order as before. Sharing them
+    ///      is what keeps the runtime under EIP-170 with the agent-consent
+    ///      check of issue #1791 in it.
     function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
         external
         nonReentrant
@@ -807,25 +933,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         AgentPolicy memory p = agents[msg.sender];
 
-        // 1. amount > 0 && amount <= maxPerPayment
-        if (amount == 0) revert InvalidAmount();
-        if (amount > p.maxPerPayment) revert AmountExceedsPerPaymentCap();
-
-        // 2. deadline window
-        if (block.timestamp > deadline) revert DeadlineExpired();
-        if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
-
-        // 3. policy active and not expired.
-        //
-        // Note: the `!p.active` branch is defensive and unreachable through
-        // the current public API — `authorizeAgent` requires `p.active==true`
-        // and `revokeAgent` `delete`s the policy AND revokes `AGENT_ROLE`,
-        // so any caller reaching this point with the role granted has
-        // `p.active==true`. Kept for defense-in-depth against future storage
-        // corruption / upgrade paths. Excluded from branch-coverage targets.
-        // coverage:unreachable
-        if (!p.active) revert AgentNotAuthorized();
-        if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+        // 1–3. amount, deadline window, policy active and not expired.
+        _requireDepositPolicy(p, amount, deadline);
 
         // 4. windowId — used for event emission only; cap is enforced by the
         //    rolling-window accounting below (#497).
@@ -846,14 +955,20 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
-        uint256 shareBalanceBefore = IERC20(address(vaultContract)).balanceOf(address(this));
-
         // 6. EFFECTS: write state before any external call (CEI pattern).
         //    Rolling-window deposit cap (#497): eliminates the calendar-boundary
         //    burst that fixed-window accounting allowed. `agentWindowGross` is
         //    no longer written (deprecated in #497; retained for ABI compat).
         _accrueRollingDeposit(msg.sender, amount, p.maxPerWindow);
         usedPaymentIds[paymentId] = true;
+
+        DepositArgs memory args;
+        args.paymentId = paymentId;
+        args.orderId = orderId;
+        args.shareReceiver = p.shareReceiver;
+        args.amount = amount;
+        args.destination = address(vaultContract);
+        args.windowId = windowId;
 
         // slither-disable-start reentrancy-balance
         // Justification: The `balBefore` pattern below is intentional fee-on-transfer
@@ -863,35 +978,15 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // CEI pattern. `nonReentrant` provides defense-in-depth.
 
         // 8. safeTransferFrom with balance-delta verification.
-        uint256 balBefore = usdcToken.balanceOf(address(this));
-        usdcToken.safeTransferFrom(msg.sender, address(this), amount);
-        uint256 balAfter = usdcToken.balanceOf(address(this));
-        if (balAfter - balBefore != amount) revert FeeOnTransferDetected();
+        _pullDepositUsdc(args);
 
-        // 9. one-shot allowance.
-        usdcToken.forceApprove(address(vaultContract), amount);
-
-        // 10. vault deposit; receiver = pre-registered shareReceiver.
-        sharesMinted = vaultContract.deposit(amount, p.shareReceiver);
-
-        // 11. clear residual allowance.
-        usdcToken.forceApprove(address(vaultContract), 0);
-
-        // Post-call invariants:
-        // gateway must not custody any rmUSDC.
-        if (IERC20(address(vaultContract)).balanceOf(address(this)) != shareBalanceBefore) {
-            revert ShareCustodyInvariantViolated();
-        }
-        // gateway must not custody any leftover USDC from this call.
-        if (usdcToken.balanceOf(address(this)) != balBefore) {
-            revert ShareCustodyInvariantViolated();
-        }
+        // 9–12. one-shot allowance, vault deposit to the pre-registered
+        //       shareReceiver, allowance cleared, custody invariants (no rmUSDC
+        //       and no leftover USDC in the gateway), event. The share balance
+        //       the custody check compares against is read after the USDC pull;
+        //       a USDC transfer cannot move the gateway's vault-share balance.
+        sharesMinted = _executeVaultDeposit(args);
         // slither-disable-end reentrancy-balance
-
-        // 12. event.
-        emit AgentDeposit(
-            paymentId, orderId, msg.sender, p.shareReceiver, amount, sharesMinted, windowId
-        );
     }
 
     /// @inheritdoc IGateway
@@ -922,18 +1017,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         {
             AgentPolicy memory p = agents[msg.sender];
 
-            // 1. amount > 0 && amount <= maxPerPayment
-            if (amount == 0) revert InvalidAmount();
-            if (amount > p.maxPerPayment) revert AmountExceedsPerPaymentCap();
-
-            // 2. deadline window
-            if (block.timestamp > deadline) revert DeadlineExpired();
-            if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
-
-            // 3. policy active and not expired.
-            // coverage:unreachable
-            if (!p.active) revert AgentNotAuthorized();
-            if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+            // 1–3. amount, deadline window, policy active and not expired.
+            _requireDepositPolicy(p, amount, deadline);
 
             // 4. destination validation + allowedDestinations whitelist.
             args.isRouter = _validateDestination(destination, p.allowedDestinations);
@@ -994,14 +1079,48 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // slither-disable-start reentrancy-balance
         // 9. safeTransferFrom with balance-delta verification.
-        args.balBefore = usdcToken.balanceOf(address(this));
-        usdcToken.safeTransferFrom(msg.sender, address(this), amount);
-        if (usdcToken.balanceOf(address(this)) - args.balBefore != amount) {
-            revert FeeOnTransferDetected();
-        }
+        _pullDepositUsdc(args);
 
         _executeDeposit(args, minSharesPerLeg);
         // slither-disable-end reentrancy-balance
+    }
+
+    /// @dev Deposit policy checks shared by `deposit` and `depositTo`, in this
+    ///      order: amount, deadline window, policy active and not expired.
+    function _requireDepositPolicy(AgentPolicy memory p, uint256 amount, uint64 deadline)
+        internal
+        view
+    {
+        // 1. amount > 0 && amount <= maxPerPayment
+        if (amount == 0) revert InvalidAmount();
+        if (amount > p.maxPerPayment) revert AmountExceedsPerPaymentCap();
+
+        // 2. deadline window
+        if (block.timestamp > deadline) revert DeadlineExpired();
+        if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
+
+        // 3. policy active and not expired.
+        //
+        // Note: the `!p.active` branch is defensive and unreachable through
+        // the current public API — `authorizeAgent` requires `p.active==true`
+        // and `revokeAgent` `delete`s the policy AND revokes `AGENT_ROLE`,
+        // so any caller reaching this point with the role granted has
+        // `p.active==true`. Kept for defense-in-depth against future storage
+        // corruption / upgrade paths. Excluded from branch-coverage targets.
+        // coverage:unreachable
+        if (!p.active) revert AgentNotAuthorized();
+        if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+    }
+
+    /// @dev Pull `args.amount` USDC from the agent into the gateway and refuse
+    ///      a short delivery (fee-on-transfer or rebasing token). Records the
+    ///      pre-pull balance in `args.balBefore` for the custody checks.
+    function _pullDepositUsdc(DepositArgs memory args) internal {
+        args.balBefore = usdcToken.balanceOf(address(this));
+        usdcToken.safeTransferFrom(msg.sender, address(this), args.amount);
+        if (usdcToken.balanceOf(address(this)) - args.balBefore != args.amount) {
+            revert FeeOnTransferDetected();
+        }
     }
 
     /// @dev Entry gas floor for `depositTo`. The router floor scales with the effective legs.
@@ -1090,16 +1209,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @dev Vault-path deposit: pre-call share custody check, approve vault, deposit,
-    ///      clear allowance, post-call custody invariants, emit event.
+    ///      clear allowance, post-call custody invariants, emit event. Shared by
+    ///      `deposit` (destination = the pinned vault) and a vault-destination
+    ///      `depositTo`.
     // slither-disable-start reentrancy-balance
     // `deposit()` and `depositTo()` are `nonReentrant`; the pre-call balance
     // snapshot and post-call custody checks are therefore safe from observable
     // reentry and the stale-balance warning is a false positive.
-    function _executeVaultDeposit(DepositArgs memory args) internal {
+    function _executeVaultDeposit(DepositArgs memory args) internal returns (uint256 sharesMinted) {
         uint256 shareBalanceBefore = IERC20(args.destination).balanceOf(address(this));
 
         usdcToken.forceApprove(args.destination, args.amount);
-        uint256 sharesMinted = IERC4626(args.destination).deposit(args.amount, args.shareReceiver);
+        sharesMinted = IERC4626(args.destination).deposit(args.amount, args.shareReceiver);
         usdcToken.forceApprove(args.destination, 0);
 
         if (IERC20(args.destination).balanceOf(address(this)) != shareBalanceBefore) {

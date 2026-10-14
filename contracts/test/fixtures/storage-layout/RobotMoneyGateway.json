@@ -95,6 +95,18 @@
       "offset": 0,
       "slot": "14",
       "type": "t_contract(IConsensusRecommendationReceipt)"
+    },
+    {
+      "label": "agentConsentNonce",
+      "offset": 0,
+      "slot": "15",
+      "type": "t_mapping(t_address,t_uint256)"
+    },
+    {
+      "label": "agentConsented",
+      "offset": 0,
+      "slot": "16",
+      "type": "t_mapping(t_address,t_bool)"
     }
   ],
   "structs": {

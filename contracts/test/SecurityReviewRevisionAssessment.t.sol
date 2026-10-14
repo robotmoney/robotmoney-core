@@ -8,12 +8,23 @@ import {SecurityReviewRecheckCommitteePoc} from "./SecurityReviewRecheckCommitte
 import {SecurityReviewRecheckVaultPoc} from "./SecurityReviewRecheckVaultPoc.t.sol";
 import {UniswapV4PriceRecorderTest} from "./UniswapV4PriceRecorder.t.sol";
 import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
+import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {MockAdapter} from "./RobotMoneyVault.t.sol";
 
 contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
-    function test_assessment_squattedAgentCanJoinCommitteeAndVote() public {
+    /// At baseline the attacker squatted the member's address and the member still
+    /// joined the committee and voted while the attacker owned its policy. Since
+    /// issue #1791 the squat itself reverts `InvalidAgentConsent`; the member binds
+    /// its own address (the reveal is its consent), joins the committee and votes.
+    function test_assessment_squatRefusedAndMemberJoinsCommitteeAndVotes() public {
         address victim = address(0xD1);
-        _selfReveal(attacker, victim, keccak256("assessment"));
+        bytes32 salt = keccak256("assessment");
+        _commitAndRoll(attacker, victim, salt);
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.InvalidAgentConsent.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker), "");
+
+        _selfReveal(victim, victim, keccak256("assessment-own"));
         vm.prank(admin);
         gateway.committeeRegister(victim, "new-member");
         IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
@@ -21,13 +32,15 @@ contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
         vm.prank(victim);
         uint256 id = gateway.committeeVoteSubmit(p);
         assertEq(ic.getVote(id).agent, victim);
-        assertEq(gateway.agentOwner(victim), attacker);
+        assertEq(gateway.agentOwner(victim), victim);
     }
 }
 
 contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
     /// The pre-1788 counterexample (re-exclude both adapters, deposit, restore) is closed by
     /// core 1788 (PR 1814): the deposit leg reverts while any active adapter is ineligible.
+    /// Since core 1820 there is also nothing orphaned to redistribute: restoration realises the
+    /// excluded balance into the exclusion record of alice, the holder at the snapshot.
     function test_assessment_orphanRedistributionSequenceBlocked() public {
         MockAdapter second = _secondAdapter();
         vm.prank(alice);
@@ -40,7 +53,8 @@ contract RevisionVaultAssessment is SecurityReviewRecheckVaultPoc {
         assertEq(vault.totalSupply(), 0);
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
-        assertGt(vault.totalAssets(), 999 * ONE_USDC);
+        assertEq(vault.totalAssets(), 0, "nothing orphaned in NAV");
+        assertEq(vault.exclusionLedger().claimable(1, alice), 1_000 * ONE_USDC, "alice's claim");
         vm.startPrank(admin);
         vault.setAdapterAllowed(address(adapter), false);
         vault.setAdapterAllowed(address(second), false);

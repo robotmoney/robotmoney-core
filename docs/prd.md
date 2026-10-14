@@ -59,7 +59,8 @@ Success is measured by:
   approval;
 - percentage of failed operations that return a clear product reason;
 - autonomous-agent activity that remains within depositor-defined limits;
-- governance participation in allocation-weight votes;
+- consensus receipts recorded, and the share the Safe applies to router
+  weights through the timelock;
 - user visibility into allocation, performance, fees, and state changes;
 - number of registered committee agents and of third-party agents
   producing live allocation output, plus the visibility and continuity of
@@ -194,16 +195,18 @@ changes any Robot Money contract configuration, router weights included.
 `WEIGHT_SETTER_ROLE` is the only authority over router weights. It
 submits the Investment Committee's consensus receipt, and that submission
 is the rebalance: one timelock operation releases the receipt and applies
-its weights (govern row `apply-receipt`, core 1696). There is no voting by
-token holders or anyone else: no voter set, no voting power, no quorum,
-no voting period, no propose, vote or execute. `RouterGovernance.propose`,
-`vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. There is no tier system
-(Observer / Participant / Analyst / Strategist) and no activity gate.
+its weights (govern row `apply-receipt`, core 1696). The weight setter's
+`applyReceipt` call releases the receipt and writes its weights in the same
+transaction (issue 1698). There is no voting by token holders or anyone
+else: no voter set, no voting power, no quorum, no voting period, no
+propose, vote or execute, and the contracts carry no voting path. There is
+no tier system (Observer / Participant / Analyst / Strategist) and no
+activity gate.
 
 1. The Investment Committee records a consensus receipt with a weight
    vector over the router-eligible vaults.
-2. The Safe schedules `apply-receipt` through the timelock: release the
-   receipt and apply its weights, as one operation.
+2. The Safe schedules `apply-receipt` through the timelock: one
+   `applyReceipt` call that releases the receipt and applies its weights.
 3. The timelock delay elapses and the Safe executes the operation.
 4. The product publishes the released receipt, the execution state, and
    the resulting allocation weights.
@@ -212,7 +215,7 @@ no voting period, no propose, vote or execute. `RouterGovernance.propose`,
 
 Committee allocation tilts (see the Committee Vote workflow) are an
 upstream, signalling-only input to this flow: aggregated committee output
-informs proposed target weights, but applying weights remains
+informs the consensus receipt's weight vector, but applying weights remains
 admin-applied. The committee never sets weights directly.
 
 ### Committee Vote
@@ -280,9 +283,11 @@ Common edge cases:
   Any migration to a successor vault is user-initiated and user-signed at the app
   layer (redeem, then deposit) — the protocol never moves a depositor's funds
   without that depositor's own transaction.
-- **Portfolio Router allocation.** Draft weights -> active vote ->
-  approved weights -> applied weights; active vote -> rejected or
-  expired.
+- **Portfolio Router allocation.** Default weights -> applied weights (a
+  consensus receipt applied through the timelock) -> replaced by the next
+  applied receipt; applied weights -> default weights when the Safe clears
+  them through the timelock. A weight operation the Safe cancels before
+  execution changes nothing.
 - **Depositor position.** No position -> previewed deposit -> active
   position -> previewed withdrawal -> reduced or closed position.
 - **Agent policy.** Draft -> active -> updated -> paused or revoked;
@@ -309,8 +314,8 @@ Common edge cases:
 ## 7. Integration Needs
 
 - **Wallet or account authorization.** Triggered when a depositor
-  connects, approves a deposit or withdrawal, manages an agent policy, or
-  votes.
+  connects, approves a deposit or withdrawal, or manages an agent policy,
+  and when a Safe signer signs a timelock operation.
 - **Digital asset transfer and settlement.** Triggered by deposits,
   withdrawals, fee collection, allocation changes, and buyback activity.
 - **Market access and valuation.** Triggered when vaults need asset
@@ -478,11 +483,12 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
-of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
-right after its seed deposit) and are unpaused only by Safe → Timelock
-governance, one timelock operation per vault, executed after the timelock
-delay (stage 13: four unpause rows, core #1710).
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) deploy paused, and the
+Safe unpauses each one through the timelock in stage 13. rmUSDC pauses right
+after its seed deposit. Each unpause is its own timelock operation, executed
+after the timelock delay, so deposits open on day 2 of the mainnet launch
+(stage 13: four unpause rows, core #1710). The per-vault rule is the stage
+table's (`scripts/deploy/stage-table.json` `vaults[]`, issue 1705).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
 48 hours (open executor not yet implemented: core #1521). All products are
@@ -490,8 +496,8 @@ eligible for Portfolio Router allocation — four initially, extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
 launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
-come from RouterGovernance votes (not yet implemented: core #1520, core
-#1522). The
+come from consensus receipts the Safe applies through the timelock (govern
+row `apply-receipt`, issue 1698). The
 stable-yield product's single-transaction redemption is met through
 proportional withdrawal across all active strategies in one transaction.
 If any strategy cannot fulfil its proportional share, the product covers
@@ -711,5 +717,5 @@ EOA can release a receipt or set weights. The policy contract is reached only
 through the gateway entrypoint, and registration and tilt submission are
 restricted to admin-allowlisted agents. A committee agent's `vote-submit` is a
 signed allocation tilt, not a vote on anything. The receipt contract itself
-cannot call the router: release and weight application are two calls of the
-same timelock batch.
+cannot call the router: the weight setter's `applyReceipt` releases the
+receipt and applies its weights in one call (issue 1698).

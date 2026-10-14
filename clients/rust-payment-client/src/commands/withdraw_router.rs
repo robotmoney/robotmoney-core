@@ -10,11 +10,18 @@
 //!
 //! 1. Argument parsing: `vaults[i]` is identity-bound to
 //!    `sharesPerLeg[i]` (issue #967), and `minAssetsPerLeg` is the
-//!    per-leg slippage floor (GW-5 / F-11).
+//!    per-leg slippage floor (GW-5 / F-11). The floor is required: an
+//!    omitted `--min-assets-per-leg` is refused with
+//!    `ErrMinAssetsPerLegRequired`, and `--min-assets-per-leg 0` is the
+//!    explicit way to send no floor (QA plan U6, finding DR-6).
 //! 2. [`Preflight::run_withdraw_gateway`] against the summed shares, then
-//!    [`Preflight::run_withdraw_vault`] per identity-bound leg (RPC-7).
+//!    [`Preflight::run_withdraw_vault`] per identity-bound leg (RPC-7),
+//!    against the policy's `shareReceiver`: the gateway pulls each leg's
+//!    shares from it, not from the agent.
 //! 3. The explicit `--confirm` gate: without it the command prints a
-//!    preview refusal and exits 2 without signing.
+//!    preview refusal and exits 2 without signing. The preview names every
+//!    vault, its shares and floor, the share holder, the `assetRecipient`
+//!    and the gas limit against the gateway's floor ([`WithdrawRouterPreview`]).
 //! 4. `gateway.withdrawFromRouter(...)` calldata.
 //! 5. Decoding the `AgentWithdrawalRouted` event log → stable JSON.
 //!
@@ -31,13 +38,14 @@ use alloy_sol_types::{SolCall, SolEvent};
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::errors::RmpcError;
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::AuditDecision;
 use crate::output::emit;
 use crate::policy::{ChecksOutput, Preflight, PreflightInputs};
 use crate::replay_cache::OP_WITHDRAW;
 use crate::write_path::{
-    chain_deadline, open_session, Submission, WriteRequest, EXIT_OK, EXIT_REFUSAL,
+    chain_deadline, open_session, Submission, WriteFailure, WriteRequest, EXIT_OK, EXIT_REFUSAL,
     EXIT_STARTUP_FAIL, MAX_DEADLINE_SKEW_SECS,
 };
 
@@ -54,9 +62,10 @@ pub struct Args {
     /// directly instead of the router's live weight vector.
     pub vaults: Vec<String>,
     /// Per-leg minimum USDC out (slippage floor), decimal strings, parallel to
-    /// `shares_per_leg` (GW-5 / F-11). Empty ⇒ an all-zero floor of the same
-    /// length is sent (back-compat). Otherwise the length must equal
-    /// `shares_per_leg`.
+    /// `shares_per_leg` (GW-5 / F-11). Required (QA plan U6): empty is
+    /// refused with `ErrMinAssetsPerLegRequired`. A single `0` sends an
+    /// all-zero floor; otherwise the length must equal `shares_per_leg`.
+    /// See [`parse_min_assets_per_leg`].
     pub min_assets_per_leg: Vec<String>,
     /// 32-byte order id, 0x-prefixed hex.
     pub order_id: String,
@@ -90,6 +99,78 @@ pub struct WithdrawRouterOutput {
     pub tx_hash: String,
     pub gas_used: String,
     pub effective_gas_price: String,
+}
+
+/// What `--confirm` would sign, printed on the preview refusal
+/// (`ErrConfirmNotProvided`) and logged before a confirmed run signs (QA plan
+/// U6, finding DR-6). Each field comes from the arguments or from this run's
+/// live preflight reads, never from cached or explorer data.
+#[derive(Debug, Serialize)]
+pub struct WithdrawRouterPreview {
+    /// The transaction's `to`: `gateway.withdrawFromRouter(...)`.
+    pub gateway: String,
+    /// `agents(self).shareReceiver`: the gateway pulls every leg's shares
+    /// from this address.
+    pub share_holder: String,
+    /// `agents(self).assetRecipient`: every leg's USDC lands here.
+    pub asset_recipient: String,
+    /// One entry per identity-bound leg, in calldata order.
+    pub legs: Vec<PreviewLeg>,
+    /// Sum of the legs' shares, checked against the withdraw caps.
+    pub total_shares: String,
+    /// True when every floor is zero (`--min-assets-per-leg 0`): no leg is
+    /// protected against slippage.
+    pub no_slippage_floor: bool,
+    /// The gas limit the transaction will carry.
+    pub gas_limit: u64,
+    /// The gateway's entry floor for these legs: 400_000 + 1_850_000 per
+    /// non-zero leg. Below it the call reverts `InsufficientGas`.
+    pub gas_floor: u64,
+    /// Block-time deadline the call carries.
+    pub deadline: u64,
+}
+
+/// One leg of a [`WithdrawRouterPreview`].
+#[derive(Debug, Serialize)]
+pub struct PreviewLeg {
+    pub vault: String,
+    pub shares: String,
+    /// Minimum USDC this leg must return or the whole call reverts.
+    pub min_assets: String,
+}
+
+/// Why `--min-assets-per-leg` could not become a floor vector.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FloorArgError {
+    /// The flag was omitted (or given no values). Refused: the zero floor
+    /// must be asked for (QA plan U6).
+    Missing,
+    /// Neither a single `0` nor one value per leg.
+    Length { got: usize, legs: usize },
+    /// A value is not a decimal U256.
+    NotDecimal(String),
+}
+
+/// Parse `--min-assets-per-leg` for `legs` legs.
+///
+/// - omitted → [`FloorArgError::Missing`]. Before U6 this silently sent an
+///   all-zero floor, so a router withdrawal signed with no slippage
+///   protection whenever the operator forgot the flag (DR-6);
+/// - a single `0` → an all-zero floor of `legs` entries, the explicit opt-out;
+/// - otherwise exactly one decimal floor per leg, `0` allowed per leg.
+pub fn parse_min_assets_per_leg(raw: &[String], legs: usize) -> Result<Vec<U256>, FloorArgError> {
+    match raw {
+        [] => Err(FloorArgError::Missing),
+        [only] if only.trim() == "0" => Ok(vec![U256::ZERO; legs]),
+        _ if raw.len() != legs => Err(FloorArgError::Length {
+            got: raw.len(),
+            legs,
+        }),
+        _ => raw
+            .iter()
+            .map(|s| U256::from_str(s.trim()).map_err(|_| FloorArgError::NotDecimal(s.clone())))
+            .collect(),
+    }
 }
 
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
@@ -157,31 +238,37 @@ pub fn run(args: Args) -> i32 {
         return EXIT_REFUSAL;
     }
 
-    // Parse the per-leg slippage floor (GW-5 / F-11). Empty ⇒ all-zero of the
-    // same length (back-compat); otherwise the length must equal shares_per_leg.
-    let min_assets_per_leg: Vec<U256> = if args.min_assets_per_leg.is_empty() {
-        vec![U256::ZERO; shares_per_leg.len()]
-    } else {
-        if args.min_assets_per_leg.len() != shares_per_leg.len() {
+    // Parse the per-leg slippage floor (GW-5 / F-11). Required (QA plan U6):
+    // an omitted flag is a named refusal on stdout, not a silent zero floor.
+    let min_assets_per_leg: Vec<U256> = match parse_min_assets_per_leg(
+        &args.min_assets_per_leg,
+        shares_per_leg.len(),
+    ) {
+        Ok(v) => v,
+        Err(FloorArgError::Missing) => {
+            let err = RmpcError::ErrMinAssetsPerLegRequired;
+            log::error!("rmpc withdraw-router: {err}");
+            return WriteFailure::new(err.name())
+                .message(format!("{err}"))
+                .emit(args.pretty);
+        }
+        Err(FloorArgError::Length { got, legs }) => {
             log::error!(
-                "rmpc withdraw-router: --min-assets-per-leg length ({}) must equal --shares-per-leg length ({})",
-                args.min_assets_per_leg.len(),
-                shares_per_leg.len()
+                "rmpc withdraw-router: --min-assets-per-leg length ({got}) must equal --shares-per-leg length ({legs}), or be a single 0"
             );
             return EXIT_STARTUP_FAIL;
         }
-        let mut out = Vec::with_capacity(args.min_assets_per_leg.len());
-        for s in &args.min_assets_per_leg {
-            match U256::from_str(s) {
-                Ok(v) => out.push(v),
-                Err(e) => {
-                    log::error!("rmpc withdraw-router: --min-assets-per-leg entry {s:?} is not a valid decimal U256: {e}");
-                    return EXIT_STARTUP_FAIL;
-                }
-            }
+        Err(FloorArgError::NotDecimal(s)) => {
+            log::error!(
+                "rmpc withdraw-router: --min-assets-per-leg entry {s:?} is not a valid decimal U256"
+            );
+            return EXIT_STARTUP_FAIL;
         }
-        out
     };
+    let gas_floor = gas_floor_for(&shares_per_leg);
+    let gas_limit = args
+        .gas_limit
+        .unwrap_or_else(|| default_gas_limit(vaults.len()));
 
     let order_id = match B256::from_str(&args.order_id) {
         Ok(b) => b,
@@ -278,16 +365,21 @@ pub fn run(args: Args) -> i32 {
 
     // -- Per-leg vault share preflight (RPC-7) ----------------------------
     // The gateway preflight above intentionally leaves USDC allowance/balance
-    // at zero (N/A for withdrawals). The redeem itself burns the agent's
-    // *vault shares*, which the gateway pulls from each source vault, so the
-    // agent must (a) hold enough shares in each vault and (b) have approved
-    // the gateway to spend them. Run the same per-vault share
-    // allowance/balance check the single-vault `withdraw` path uses,
-    // once per identity-bound (vault, shares) leg.
+    // at zero (N/A for withdrawals). The redeem burns *vault shares*, which
+    // the gateway pulls from each source vault, so the share holder must
+    // (a) hold enough shares in each vault and (b) have approved the gateway
+    // to spend them. Run the same per-vault share allowance/balance check the
+    // single-vault `withdraw` path uses, once per identity-bound leg.
+    //
+    // The share holder is the policy's `shareReceiver`: `withdrawFromRouter`
+    // pulls each leg's shares from it (`args.shareHolder = p.shareReceiver`).
+    // Checking the agent's own shares would pass or refuse the wrong account
+    // whenever the two differ (AZ-GW-2).
+    let share_holder = report.share_receiver;
     for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
         let leg_result = session.rt.block_on(async {
             Preflight::new(&session.rpc, &cfg)
-                .run_withdraw_vault(*vault, gateway_addr, agent_address, *leg_shares)
+                .run_withdraw_vault(*vault, gateway_addr, share_holder, *leg_shares)
                 .await
         });
         if let Err(err) = leg_result {
@@ -300,20 +392,77 @@ pub fn run(args: Args) -> i32 {
         }
     }
 
+    // -- Gas floor (QA plan U6) -------------------------------------------
+    // The gateway checks `gasleft()` against 400_000 + 1_850_000 per non-zero
+    // leg at entry and reverts `InsufficientGas` below it, burning the gas.
+    if gas_limit < gas_floor {
+        let err = RmpcError::ErrGasLimitBelowFloor {
+            gas_limit,
+            floor: gas_floor,
+        };
+        session.record(AuditDecision::Refused, Some(err.name().to_string()));
+        return session
+            .refusal(err.name())
+            .message(format!("{err}"))
+            .checks(ChecksOutput::from_report(&report))
+            .emit(args.pretty);
+    }
+
+    // -- Preview (QA plan U6, finding DR-6) --------------------------------
+    let preview = WithdrawRouterPreview {
+        gateway: format!("{gateway_addr:#x}"),
+        share_holder: format!("{share_holder:#x}"),
+        asset_recipient: format!("{:#x}", report.asset_recipient),
+        legs: vaults
+            .iter()
+            .zip(shares_per_leg.iter())
+            .zip(min_assets_per_leg.iter())
+            .map(|((v, s), m)| PreviewLeg {
+                vault: format!("{v:#x}"),
+                shares: s.to_string(),
+                min_assets: m.to_string(),
+            })
+            .collect(),
+        total_shares: total_shares.to_string(),
+        no_slippage_floor: min_assets_per_leg.iter().all(|m| m.is_zero()),
+        gas_limit,
+        gas_floor,
+        deadline,
+    };
+    let preview_json = serde_json::to_value(&preview).unwrap_or(serde_json::Value::Null);
+    log::info!("withdraw-router: preview {preview_json}");
+
     // -- Explicit confirmation required -----------------------------------
     if !args.confirm {
         eprintln!(
-            "rmpc withdraw-router: preview — {} legs, total_shares={total_shares}. Re-run with --confirm to proceed.",
-            shares_per_leg.len()
+            "rmpc withdraw-router: preview — gateway {gateway_addr:#x} redeems {} legs \
+             (total_shares={total_shares}) from share holder {share_holder:#x}; \
+             USDC goes to assetRecipient {:#x}; gas_limit={gas_limit} (floor {gas_floor}).",
+            shares_per_leg.len(),
+            report.asset_recipient,
         );
+        for leg in &preview.legs {
+            eprintln!(
+                "  vault {} shares={} min_assets={}",
+                leg.vault, leg.shares, leg.min_assets
+            );
+        }
+        if preview.no_slippage_floor {
+            eprintln!("  WARNING: --min-assets-per-leg 0: no leg has a slippage floor.");
+        }
+        eprintln!("Re-run with --confirm to sign exactly this.");
         session.record(
             AuditDecision::Refused,
             Some("ErrConfirmNotProvided".to_string()),
         );
         return session
             .refusal("ErrConfirmNotProvided")
-            .message("Pass --confirm to execute. Inspect --get-router first to verify leg amounts.")
+            .message(
+                "Pass --confirm to sign exactly the preview. Run `rmpc get-router` first to \
+                 check the router's vaults and decide the per-leg shares and floors.",
+            )
             .checks(ChecksOutput::from_report(&report))
+            .preview(preview_json)
             .emit(args.pretty);
     }
 
@@ -332,9 +481,7 @@ pub fn run(args: Args) -> i32 {
         &cfg,
         Submission {
             calldata,
-            gas_limit: args
-                .gas_limit
-                .unwrap_or_else(|| default_gas_limit(vaults.len())),
+            gas_limit,
             fee_cap_wei: args.fee_cap_wei,
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
@@ -413,6 +560,12 @@ pub fn gas_floor(legs: usize) -> u64 {
     ROUTER_WITHDRAW_BASE_GAS.saturating_add(ROUTER_WITHDRAW_GAS_PER_LEG.saturating_mul(legs as u64))
 }
 
+/// The gateway's entry floor for these shares: it counts only the non-zero
+/// legs (`RobotMoneyGateway.withdrawFromRouter`, core 1482).
+pub fn gas_floor_for(shares_per_leg: &[U256]) -> u64 {
+    gas_floor(shares_per_leg.iter().filter(|s| !s.is_zero()).count())
+}
+
 /// Default tx gas limit: the entry floor for every leg plus a margin.
 pub fn default_gas_limit(legs: usize) -> u64 {
     gas_floor(legs).saturating_add(GAS_MARGIN)
@@ -461,6 +614,43 @@ mod tests {
             RobotMoneyGateway::withdrawFromRouterCall::SELECTOR
         );
         assert!(encoded.len() > 4, "encoded call must have non-trivial body");
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// QA plan U6, finding DR-6: an omitted floor is refused, a single `0`
+    /// is the explicit all-zero floor, and anything else is one per leg.
+    #[test]
+    fn min_assets_per_leg_requires_a_floor_or_an_explicit_zero() {
+        assert_eq!(
+            parse_min_assets_per_leg(&[], 2),
+            Err(FloorArgError::Missing)
+        );
+        assert_eq!(
+            parse_min_assets_per_leg(&strs(&["0"]), 3).unwrap(),
+            vec![U256::ZERO; 3]
+        );
+        assert_eq!(
+            parse_min_assets_per_leg(&strs(&["5", "0"]), 2).unwrap(),
+            vec![U256::from(5u64), U256::ZERO]
+        );
+        assert_eq!(
+            parse_min_assets_per_leg(&strs(&["5"]), 2),
+            Err(FloorArgError::Length { got: 1, legs: 2 })
+        );
+        assert_eq!(
+            parse_min_assets_per_leg(&strs(&["5", "x"]), 2),
+            Err(FloorArgError::NotDecimal("x".into()))
+        );
+    }
+
+    #[test]
+    fn gas_floor_counts_only_non_zero_legs() {
+        let shares = [U256::from(1u64), U256::ZERO, U256::from(2u64)];
+        assert_eq!(gas_floor_for(&shares), gas_floor(2));
+        assert_eq!(gas_floor_for(&[U256::ZERO]), ROUTER_WITHDRAW_BASE_GAS);
     }
 
     #[test]

@@ -188,6 +188,18 @@ jobs:
           CARGO_TEST_MIN_EXECUTED: "5"
         run: bash ../../.github/scripts/cargo_test_require_executed.sh -p smoke-test --test deploy_only_cli
 
+      # The govern stdout contract (tests/govern_output_parse.rs): the recorded
+      # `publish-contracts govern` JSON lines parse into one row per line, and a
+      # reverted row fails the harness check by name. Hermetic: no chain, no
+      # Docker. No step ran it before QA plan T2. The coverage checker credited it
+      # to the `echo "::error::cargo test -p smoke-test ..."` line in the lib
+      # floor step above, which is prose and runs nothing.
+      - name: govern stdout contract (hermetic)
+        working-directory: testing/smoke-test
+        env:
+          CARGO_TEST_MIN_EXECUTED: "5"
+        run: bash ../../.github/scripts/cargo_test_require_executed.sh -p smoke-test --test govern_output_parse
+
       # Self-test for the executed-test guard's REQUIRE_EXECUTED_MARKERS gate
       # (issue #1371): replays canned libtest transcripts through a stub cargo
       # and proves the guard goes RED when hermetic tests keep the pass count
@@ -222,6 +234,17 @@ jobs:
           bash .github/scripts/tests/test_check_no_bare_cargo_test.sh
           python3 .github/scripts/check_no_bare_cargo_test.py
           bash .github/scripts/tests/test_wrapped_step_floors.sh
+
+      # QA plan v1 T5: a floor of 1 catches a filter that matches nothing, not a test that stopped
+      # running. In suites 5, 8 and 22 every guard call names a floor equal to the number of tests it
+      # selects, counted from the source, and no forge test or cargo test runs outside its guard. A
+      # new test means a new floor in the same PR. The self-test runs the checker on a synthetic
+      # workspace (right floors, a floor one low and one high, no floor, bare runs, a missing target)
+      # and on the real suite 22 with a floor lowered by one.
+      - name: executed floors equal the test counts in suites 5, 8 and 22 (guard + self-test, hermetic)
+        run: |
+          bash .github/scripts/tests/test_check_executed_floors.sh
+          python3 .github/scripts/check_executed_floors.py
 
   # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once. Every chain job
   # below takes it as input.

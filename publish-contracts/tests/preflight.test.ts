@@ -5,7 +5,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
-import { impersonatedSender } from "../src/safe/index.ts";
+import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/chains.ts";
+import { EXIT_CODES } from "../src/errors.ts";
+import { addressOnlySigner, impersonatedSender, loopbackKeySigner } from "../src/safe/index.ts";
 import { topUpSimulationUsdc } from "../src/preflight.ts";
 import { dryRunOrder, forgeFailureTail } from "../src/runner.ts";
 import { STAGE_NAMES, stageByName } from "../src/stages.ts";
@@ -100,11 +102,68 @@ describe("preflight (--dry-run)", () => {
     const bare = forgeFailureTail("Compiling...\nTraces:\n  [2] Bar::go()\n    └─ ← custom error 0xdeadbeef\nError: EVM error", "");
     expect(bare).toContain("custom error 0xdeadbeef");
   });
-  test("the impersonated sender and the USDC top-up refuse anything that is not the local anvil", async () => {
-    expect(() => impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "https://mainnet.base.org", chainId: 8453 })).toThrow();
-    expect(() => impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId: 8453 })).toThrow();
-    expect(impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId: 918453 }).kind).toBe("address-only");
+  // Issue 1720 (QA plan v1 E5): the simulation anvil is a lazy fork of the target and reports its chain id, so an 8453 sheet's preflight
+  // runs on a loopback RPC that answers 8453. The guard is the RPC: loopback is accepted at either chain id, anything else refused at both.
+  test("the impersonated sender is keyed on a loopback RPC, never the chain id: loopback 8453 and 918453 accepted, non-loopback refused at both", () => {
+    const sim = { localSimulationFork: true } as const;
+    for (const chainId of [MAINNET_CHAIN_ID, TWIN_CHAIN_ID]) {
+      expect(impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId }, sim).kind, `loopback ${chainId}`).toBe("address-only");
+      expect(impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: LOCAL_RPC, chainId }, sim).kind, `loopback ${chainId}`).toBe("address-only");
+      for (const rpcUrl of ["https://mainnet.base.org", "http://rpc.test:8545", "http://10.0.0.5:8545"]) {
+        expect(() => impersonatedSender(ADMIN as `0x${string}`, { rpcUrl, chainId }, sim), `${rpcUrl} ${chainId}`).toThrow("loopback");
+      }
+    }
+    // the caller must say it is the local simulation fork: a call without that intent is refused even on loopback
+    expect(() => impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID }, undefined as never)).toThrow("simulation fork");
+    expect(() => impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID }, { localSimulationFork: false } as never)).toThrow("simulation fork");
+  });
+  test("the impersonated sender never sends to a non-loopback RPC, at either chain id, and cannot sign a Safe hash", async () => {
+    const s = impersonatedSender(ADMIN as `0x${string}`, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID }, { localSimulationFork: true });
+    for (const chainId of [MAINNET_CHAIN_ID, TWIN_CHAIN_ID]) {
+      await expect(s.send({ to: ADMIN as `0x${string}`, data: "0x" }, { rpcUrl: "https://mainnet.base.org", chainId })).rejects.toThrow("loopback");
+    }
+    await expect(s.signSafeHash(`0x${"11".repeat(32)}`, "raw")).rejects.toThrow("cannot sign");
+  });
+  test("issue 1720 relaxes nothing else: the plaintext key signer still refuses 8453 on loopback and any non-loopback RPC; the address-only signer still sends nothing", async () => {
+    const pk = `0x${"ab".repeat(32)}` as `0x${string}`;
+    expect(() => loopbackKeySigner(pk, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID })).toThrow("loopback");
+    expect(() => loopbackKeySigner(pk, { rpcUrl: "https://mainnet.base.org", chainId: MAINNET_CHAIN_ID })).toThrow("loopback");
+    expect(() => loopbackKeySigner(pk, { rpcUrl: "https://mainnet.base.org", chainId: TWIN_CHAIN_ID })).toThrow("loopback");
+    const addr = addressOnlySigner(ADMIN as `0x${string}`);
+    await expect(addr.send({ to: ADMIN as `0x${string}`, data: "0x" }, { rpcUrl: "http://127.0.0.1:8545", chainId: MAINNET_CHAIN_ID })).rejects.toThrow("cannot send");
+    await expect(addr.signSafeHash(`0x${"11".repeat(32)}`, "raw")).rejects.toThrow("cannot sign");
+  });
+  test("the USDC top-up refuses anything that is not the local anvil", async () => {
     await expect(topUpSimulationUsdc("http://127.0.0.1:1", ADMIN, 1n)).rejects.toThrow();
+  });
+  test("issue 1720: a --dry-run of an 8453 sheet creates the Safe on the local simulation fork and reaches stage.dry_run_done", async () => {
+    for (const signer of ["keystore:/dev/shm/stub/DEPLOYER", `address:${ADMIN}`]) {
+      const w = world({ chainId: MAINNET_CHAIN_ID, startNonce: 0 });
+      const over = signer.startsWith("address:") ? { signer, makeSigner: undefined as never } : { signer };
+      expect(await w.run(["--stage", "safe", "--dry-run"], over), signer).toBe(0);
+      expect(w.safeCalls, signer).toContain("createSafe:local");
+      expect(w.logs().some((l) => l.event === "stage.sim_applied" && l.stage === "safe"), signer).toBe(true);
+      expect(w.logs().some((l) => l.event === "stage.dry_run_done" && l.stage === "safe"), signer).toBe(true);
+      expect(w.logs().filter((l) => l.event === "stage.failed").length, signer).toBe(0);
+      // the impersonation and every send reach the local chain only, never the target RPC
+      const imp = calls(w).filter((c) => c.tool === "cast" && c.args[1] === "anvil_impersonateAccount");
+      expect(imp.length, signer).toBe(1);
+      expect(imp[0]!.args, signer).toContain(LOCAL_RPC);
+      expect(w.logs().filter((l) => l.event === "stage.broadcast").length, signer).toBe(0);
+      expect(existsSync(join(w.evidence, "publish-run.json")), signer).toBe(false);
+      expect(w.chainEvents, signer).toEqual(["start", "stop"]);
+    }
+  });
+  test("issue 1720: the Safe of an 8453 dry run is never created on a simulation chain that is not loopback", async () => {
+    const w = world({ chainId: MAINNET_CHAIN_ID, startNonce: 0 });
+    const notLocal = async () => { w.chainEvents.push("start"); return { rpc: "http://sim.example:8545", stop: async () => { w.chainEvents.push("stop"); } }; };
+    expect(await w.run(["--stage", "safe", "--dry-run"], { startChain: notLocal })).toBe(EXIT_CODES.USAGE);
+    const failed = w.logs().find((l) => l.event === "stage.failed");
+    expect(failed?.stage).toBe("safe");
+    expect(String(failed?.message)).toContain("only the local simulation chain takes it");
+    expect(w.safeCalls).not.toContain("createSafe:local");
+    expect(calls(w).some((c) => c.tool === "cast" && c.args[1] === "anvil_impersonateAccount")).toBe(false);
+    expect(w.chainEvents).toEqual(["start", "stop"]);
   });
   test("dryRunOrder names every deployer stage up to the last asked for and drops verify and govern", () => {
     expect(dryRunOrder(["rwa"]).map((s) => s.name)).toEqual(STAGE_NAMES.slice(0, STAGE_NAMES.indexOf("rwa") + 1));

@@ -87,6 +87,7 @@ async fn vault_snapshot_insert_is_idempotent() {
             Some(U256::from(10u64).pow(U256::from(18u64))),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -103,6 +104,7 @@ async fn vault_snapshot_insert_is_idempotent() {
             Some(U256::from(10u64).pow(U256::from(18u64))),
             None,
             false,
+            None,
         )
         .await
         .unwrap();

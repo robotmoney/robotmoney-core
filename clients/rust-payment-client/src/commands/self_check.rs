@@ -328,31 +328,10 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
         Err(err) => {
             // Salvage what we can: chain_id from config (since on mismatch
-            // we don't have an authoritative value). gateway_code_hash_match
-            // depends on which step tripped — we conservatively report
-            // false across the board on any failure.
-            let mut checks = ChecksOutput::unknown();
-            // ErrChainIdMismatch is the only case where we know the others
-            // weren't even attempted; for everything else the earlier
-            // checks did pass, but we have no `report` to read from. Keep
-            // it simple: emit the variant name and let operators inspect
-            // logs for the rest. Set `chain_id_match` and
-            // `gateway_code_hash_match` based on the specific error.
-            match &err {
-                RmpcError::ErrChainIdMismatch => {}
-                RmpcError::ErrCodeHashMismatch => {
-                    checks.chain_id_match = true;
-                }
-                RmpcError::ErrDepositsPaused => {
-                    checks.chain_id_match = true;
-                    checks.gateway_code_hash_match = true;
-                    checks.deposits_paused = true;
-                }
-                _ => {
-                    checks.chain_id_match = true;
-                    checks.gateway_code_hash_match = true;
-                }
-            }
+            // we don't have an authoritative value). Which checks passed
+            // depends on which step tripped; `from_err_partial` is the one
+            // owner of that per-error table, shared with the write commands.
+            let checks = ChecksOutput::from_err_partial(&err);
             (false, checks, cfg.chain_id, Some(err.name().to_string()))
         }
     };
@@ -402,10 +381,15 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
     }
 }
 
+/// The message states the signer decisions (QA plan U7, finding DR-12):
+/// depositor writes sign with the software keystore on every chain (owner
+/// decision 2026-10-06), and hardware is optional (owner decision
+/// 2026-10-14). Only `committee` and `receipt` still refuse it on Base
+/// mainnet ([`crate::signer::require_production_grade_for_write`]).
 fn backend_operator_message(backend: SignerBackendKind) -> &'static str {
     match backend {
         SignerBackendKind::Software => {
-            "software keystore is non-production; use an HSM/KMS/device-bound signer for Base mainnet writes"
+            "software keystore: deposit, withdraw and withdraw-router sign with it on every chain; committee and receipt writes on Base mainnet need an HSM/KMS signer"
         }
         SignerBackendKind::Hsm | SignerBackendKind::Kms => {
             "production-grade signer backend selected"
@@ -426,6 +410,8 @@ mod tests {
             deposits_paused: false,
             agent_active: true,
             agent_valid_until: 9_999_999_999,
+            share_receiver: alloy_primitives::Address::repeat_byte(0xee),
+            asset_recipient: alloy_primitives::Address::ZERO,
             max_per_payment: U256::from(1_000_000u64),
             max_per_window: U256::from(100_000_000u64),
             window_gross: U256::from(0u64),

@@ -5,23 +5,27 @@ import {RobotMoneyVaultTest, MockAdapter} from "./RobotMoneyVault.t.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 
 contract SecurityReviewPoc is RobotMoneyVaultTest {
-    function test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption() public {
+    /// Finding 2 of docs/code-review/20261012-security-review.md. At baseline this PoC proved
+    /// the duplicate add landed, NAV counted one balance twice and the full redemption
+    /// reverted. Issue #1789 refuses an address an ACTIVE entry already holds, so the same
+    /// path now pins `AdapterAlreadyActive` and a full redemption at par.
+    function test_duplicateAdapterRefused_fullRedemptionPaysPar() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(admin);
-        vault.addAdapter(address(adapter), 10_000);
-
-        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "single balance counted twice");
-        uint256 aliceShares = vault.balanceOf(alice);
-        vm.prank(alice);
         vm.expectRevert(
             abi.encodeWithSelector(
-                RobotMoneyVault.InsufficientAdapterLiquidity.selector,
-                2_000 * ONE_USDC - 1,
-                1_000 * ONE_USDC
+                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 0
             )
         );
+        vault.addAdapter(address(adapter), 10_000);
+
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "single balance counted once");
+        uint256 aliceShares = vault.balanceOf(alice);
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
+        assertApproxEqAbs(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, 2, "alice at par");
     }
 
     /// Remediated by core 1788 (PR 1814): deposits close while a funded adapter is excluded
@@ -42,11 +46,14 @@ contract SecurityReviewPoc is RobotMoneyVaultTest {
         vm.expectRevert();
         vault.deposit(1_000 * ONE_USDC, bob);
 
+        // core 1820: restoration realises the excluded balance into the exclusion record, so
+        // alice's full claim is her shares plus her record claim.
         vm.prank(admin);
         vault.setAdapterAllowed(address(second), true);
         assertGt(vault.maxDeposit(bob), 0, "deposits reopen after restoration");
         assertApproxEqAbs(
-            vault.convertToAssets(vault.balanceOf(alice)),
+            vault.convertToAssets(vault.balanceOf(alice))
+                + vault.exclusionLedger().claimable(1, alice),
             2_000 * ONE_USDC,
             2,
             "alice keeps full claim"

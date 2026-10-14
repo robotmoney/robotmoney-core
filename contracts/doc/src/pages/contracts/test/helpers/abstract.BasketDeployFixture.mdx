@@ -4,7 +4,7 @@ title: "BasketDeployFixture"
 
 # BasketDeployFixture
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/helpers/BasketDeployFixture.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/helpers/BasketDeployFixture.sol)
 
 **Inherits:** Test
 
@@ -33,8 +33,14 @@ uint256 internal constant PER_DEPOSIT_CAP = 5_000 * 1e6;
 
 ### NAV_DEVIATION_BPS
 
+<i>
+
+The sheet value for rmAGENT (QA plan D10): above the 291 bps RM V4 pool fee, which the deploy script requires (D4).
+
+</i>
+
 ```solidity
-uint256 internal constant NAV_DEVIATION_BPS = 100;
+uint256 internal constant NAV_DEVIATION_BPS = 400;
 ```
 
 ### MIN_POOL_LIQUIDITY

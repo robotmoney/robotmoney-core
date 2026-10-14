@@ -2,6 +2,8 @@
 // Canonical: none — Foundry tests for contracts/RobotMoneyVault.sol
 // Covers: issue #160 — ERC-4626 decimals offset and first-depositor inflation protection
 //         issue #161 — include idle vault USDC balance in totalAssets()
+//         core 1820 — exclusion records: recovery from an excluded adapter paid pro rata to
+//         the holders at exclusion (ExclusionLedger)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -9,7 +11,9 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {ExclusionLedger} from "../ExclusionLedger.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
@@ -347,6 +351,83 @@ contract RobotMoneyVaultTest is Test {
             )
         );
         vault.addAdapter(address(wrongVaultAdapter), 10_000);
+    }
+
+    // ─── Duplicate adapter entries (core 1789) ───────────────────────────────
+
+    /// @notice core 1789: an address that an ACTIVE entry already holds cannot be added
+    ///         again, at any registry index. A second active entry would count the one
+    ///         balance twice in `totalAssets()` and overpay the first redeemer.
+    function test_addAdapter_revertsWhenAdapterAlreadyActive() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+
+        // Same address as the fixture's index-0 entry, any cap.
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 0
+            )
+        );
+        vault.addAdapter(address(adapter), 5_000);
+
+        assertEq(vault.adapterCount(), 1, "no second registry entry");
+        assertEq(vault.activeAdapterCount(), 1, "one active entry");
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "balance counted once");
+
+        // The scan covers every active entry, not only index 0.
+        MockAdapter second = new MockAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(second));
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterAlreadyActive.selector, address(second), 1
+            )
+        );
+        vault.addAdapter(address(second), 10_000);
+        assertEq(vault.adapterCount(), 2, "still two registry entries");
+    }
+
+    /// @notice core 1789: re-adding an adapter after `forceRemoveAdapter` stays legal. It
+    ///         appends a NEW entry (this family never reactivates the inactive one in
+    ///         place), the inactive entry is never counted, so the balance re-enters NAV
+    ///         once. A further add of the same address is then refused against the new
+    ///         active entry.
+    function test_addAdapter_afterForceRemoveSucceeds() public {
+        vm.prank(alice);
+        uint256 aliceShares = vault.deposit(1_000 * ONE_USDC, alice);
+
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+        assertEq(vault.totalAssets(), 0, "force-removed balance written off");
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit RobotMoneyVault.AdapterAdded(1, address(adapter), 10_000);
+        vm.prank(admin);
+        vault.addAdapter(address(adapter), 10_000);
+
+        assertEq(vault.adapterCount(), 2, "re-add appends a new entry");
+        assertEq(vault.activeAdapterCount(), 1, "only the new entry is active");
+        (,, bool oldActive) = vault.adapters(0);
+        assertFalse(oldActive, "the force-removed entry stays inactive");
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "balance counted once, not twice");
+
+        // The scan skips the inactive index 0 and finds the new active index 1.
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 1
+            )
+        );
+        vault.addAdapter(address(adapter), 10_000);
+
+        // The holder exits at par (redeem is open while deposits stay paused).
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        vault.redeem(aliceShares, alice, alice);
+        assertApproxEqAbs(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, 2, "alice at par");
     }
 
     function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public {
@@ -750,7 +831,286 @@ contract RobotMoneyVaultTest is Test {
         vault.emergencyWithdrawAdapter(0);
 
         assertEq(usdc.balanceOf(address(adapter)), 0, "adapter should be drained");
-        assertEq(usdc.balanceOf(address(vault)), amount, "vault should receive adapter USDC");
+        // core 1820: USDC recovered from an excluded adapter goes to the exclusion record, not
+        // to vault idle, and belongs to the holders at the moment of exclusion.
+        ExclusionLedger ledger = vault.exclusionLedger();
+        assertEq(usdc.balanceOf(address(ledger)), amount, "the record holds the recovery");
+        assertEq(usdc.balanceOf(address(vault)), 0, "nothing lands in idle");
+        assertEq(ledger.claimable(1, alice), amount, "the sole holder owns all of it");
+    }
+
+    // ─── Exclusion records (core 1820, E2) ───────────────────────────────────
+
+    /// @dev Second funded adapter at registry index 1, 100% cap.
+    function _addSecondAdapter() internal returns (MockAdapter second) {
+        second = new MockAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(second));
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
+    }
+
+    function _fundAndApprove(address who, uint256 amount) internal {
+        usdc.mint(who, amount);
+        vm.prank(who);
+        usdc.approve(address(vault), type(uint256).max);
+    }
+
+    /// @notice core 1820: recovery from an excluded adapter belongs pro rata to the holders at
+    ///         the moment of exclusion. Alice exits during the exclusion and keeps her claim;
+    ///         Bob stays and gets the same per-share recovery; Carol, who receives shares after
+    ///         the snapshot, and Dave, who deposits after the record closes, get nothing. Two
+    ///         recovery paths credit the same record: `emergencyWithdrawAdapter` and restored
+    ///         eligibility (`setAdapterAllowed(true)` realises the residual first). The share
+    ///         price never moves on a recovery.
+    function test_exclusionRecoveryPaidProRataToSnapshot() public {
+        MockAdapter second = _addSecondAdapter();
+        ExclusionLedger ledger = vault.exclusionLedger();
+
+        // Alice 3 000 and Bob 1 000: equal weight leaves 2 000 in each adapter.
+        vm.prank(alice);
+        uint256 aliceShares = vault.deposit(3_000 * ONE_USDC, alice);
+        vm.prank(bob);
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
+        assertEq(usdc.balanceOf(address(second)), 2_000 * ONE_USDC, "second adapter funded");
+        uint256 supply = vault.totalSupply();
+
+        // Exclusion opens record 1 on index 1 with a snapshot of the supply.
+        vm.expectEmit(true, true, true, true, address(ledger));
+        emit ExclusionLedger.ExclusionOpened(1, 1, address(second), supply, 2_000 * ONE_USDC);
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(second), false);
+        assertEq(vault.openExclusionOf(1), 1, "record 1 open on index 1");
+        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "the excluded balance left NAV");
+
+        // Alice exits in full during the exclusion: paid at the reduced NAV, claim kept.
+        {
+            uint256 aliceStart = usdc.balanceOf(alice);
+            vm.prank(alice);
+            vault.redeem(aliceShares, alice, alice);
+            assertApproxEqAbs(
+                usdc.balanceOf(alice) - aliceStart, 1_500 * ONE_USDC, 2, "exit at the reduced NAV"
+            );
+            assertEq(vault.balanceOf(alice), 0, "alice holds no shares");
+            assertEq(ledger.balanceAt(alice, 1), aliceShares, "the exiter keeps her snapshot");
+        }
+
+        // Bob moves half his shares to Carol after the snapshot: the claim does not move.
+        vm.prank(bob);
+        vault.transfer(makeAddr("carol"), bobShares / 2);
+        assertEq(ledger.balanceAt(bob, 1), bobShares, "a transfer does not move the claim");
+        assertEq(ledger.balanceAt(makeAddr("carol"), 1), 0, "a transferee has no claim");
+
+        // Recovery 1: the emergency key drains the excluded adapter into the record.
+        uint256 nav = vault.totalAssets();
+        uint256 price = vault.convertToAssets(1e24);
+        vm.prank(admin);
+        vault.emergencyWithdrawAdapter(1);
+        assertEq(usdc.balanceOf(address(second)), 0, "drained");
+        assertEq(usdc.balanceOf(address(ledger)), 2_000 * ONE_USDC, "the record holds it");
+        assertEq(vault.totalAssets(), nav, "recovery never raises NAV");
+        assertEq(vault.convertToAssets(1e24), price, "share price unchanged");
+
+        uint256 aliceFirst = Math.mulDiv(2_000 * ONE_USDC, aliceShares, supply);
+        assertEq(ledger.claimable(1, alice), aliceFirst, "alice: recovered x snapshot share");
+        assertApproxEqAbs(aliceFirst, 1_500 * ONE_USDC, 2, "alice owns three quarters");
+        assertApproxEqAbs(ledger.claimable(1, bob), 500 * ONE_USDC, 2, "bob owns one quarter");
+        assertEq(ledger.claimable(1, makeAddr("carol")), 0, "carol owns nothing");
+
+        // Anyone may trigger a claim; the USDC always goes to the holder.
+        {
+            uint256 aliceBefore = usdc.balanceOf(alice);
+            vm.prank(makeAddr("carol"));
+            assertEq(ledger.claim(1, alice), aliceFirst, "claim paid");
+            assertEq(usdc.balanceOf(alice) - aliceBefore, aliceFirst, "alice received it");
+            assertEq(usdc.balanceOf(makeAddr("carol")), 0, "the caller received nothing");
+        }
+
+        // Recovery 2: the venue returns 400 more. Restoring eligibility realises it into the
+        // record before the entry counts again, then closes the record.
+        usdc.mint(address(second), 400 * ONE_USDC);
+        vm.expectEmit(true, true, false, true, address(ledger));
+        emit ExclusionLedger.ExclusionRecoveryCredited(
+            1, ExclusionLedger.RecoverySource.Restoration, 400 * ONE_USDC, 2_400 * ONE_USDC
+        );
+        vm.expectEmit(true, true, false, true, address(ledger));
+        emit ExclusionLedger.ExclusionFinalized(
+            1, ExclusionLedger.FinalizeReason.Restored, 2_400 * ONE_USDC
+        );
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(second), true);
+        assertEq(vault.openExclusionOf(1), 0, "record closed");
+        assertEq(usdc.balanceOf(address(second)), 0, "the residual was realised first");
+        assertEq(vault.totalAssets(), nav, "the restored entry re-enters NAV empty");
+        assertEq(vault.convertToAssets(1e24), price, "share price still unchanged");
+
+        // Claims follow the cumulative recovery; stayer and exiter get the same per share.
+        assertEq(
+            ledger.claimable(1, alice),
+            Math.mulDiv(2_400 * ONE_USDC, aliceShares, supply) - aliceFirst,
+            "alice: second slice only"
+        );
+        assertEq(
+            ledger.claimAll(bob),
+            Math.mulDiv(2_400 * ONE_USDC, bobShares, supply),
+            "bob: full share in one claim"
+        );
+        ledger.claimAll(alice);
+        assertEq(ledger.claimAll(makeAddr("carol")), 0, "carol: nothing");
+        assertEq(ledger.claimable(1, alice), 0, "nothing left for alice");
+        assertEq(ledger.claimable(1, bob), 0, "nothing left for bob");
+        _assertSettledRecord(ledger, 1, supply, 2_400 * ONE_USDC);
+
+        // Dave deposits after the record closed: no claim, and a fair price.
+        address dave = makeAddr("dave");
+        vm.prank(admin);
+        vault.unpauseDeposits();
+        _fundAndApprove(dave, 1_000 * ONE_USDC);
+        vm.prank(dave);
+        uint256 daveShares = vault.deposit(1_000 * ONE_USDC, dave);
+        assertEq(ledger.claimable(1, dave), 0, "a later depositor has no claim");
+        assertApproxEqAbs(vault.convertToAssets(daveShares), 1_000 * ONE_USDC, 2, "fair price");
+    }
+
+    /// @dev Record `id` is finalized with `recovered` credited against `supply`, every holder
+    ///      has claimed, only rounding dust remains, and the ledger holds exactly what it owes.
+    function _assertSettledRecord(
+        ExclusionLedger ledger,
+        uint256 id,
+        uint256 supply,
+        uint256 recovered
+    ) internal view {
+        (,,,, bool finalized, uint256 snapshotSupply,, uint256 credited, uint256 claimedUsdc) =
+            ledger.exclusions(id);
+        assertTrue(finalized, "finalized");
+        assertEq(snapshotSupply, supply, "snapshot supply");
+        assertEq(credited, recovered, "recovered total");
+        assertLe(claimedUsdc, credited, "never over-claimed");
+        assertApproxEqAbs(claimedUsdc, credited, 2, "only rounding dust remains");
+        assertEq(ledger.heldUsdc(), credited - claimedUsdc, "held = recovered - claimed");
+        assertEq(usdc.balanceOf(address(ledger)), ledger.heldUsdc(), "ledger fully backed");
+    }
+
+    /// @notice E2: `adminRebalance` is the third recovery path. Before core 1820 its pull from
+    ///         an excluded adapter landed in idle NAV, so the holder who stayed took the exiter's
+    ///         part. Now it is credited to the exclusion record, the share price does not move,
+    ///         and `removeAdapter` on the drained entry closes the record.
+    function test_adminRebalanceRecoveryCreditsExclusionRecord() public {
+        address carol = makeAddr("carol");
+        MockAdapter second = _addSecondAdapter();
+        ExclusionLedger ledger = vault.exclusionLedger();
+
+        // Alice and Bob 1 000 each: 1 000 in each adapter.
+        vm.prank(alice);
+        uint256 aliceShares = vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(bob);
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(second), false);
+
+        vm.prank(alice);
+        vault.redeem(aliceShares, alice, alice);
+        uint256 bobValue = vault.convertToAssets(bobShares);
+        assertApproxEqAbs(bobValue, 500 * ONE_USDC, 2, "bob's NAV share without the excluded");
+
+        // Drain the excluded entry; leave the eligible one where it is.
+        uint256[] memory targets = new uint256[](2);
+        targets[0] = adapter.totalAssets();
+        vm.expectEmit(true, true, false, true, address(ledger));
+        emit ExclusionLedger.ExclusionRecoveryCredited(
+            1, ExclusionLedger.RecoverySource.AdminRebalance, 1_000 * ONE_USDC, 1_000 * ONE_USDC
+        );
+        vm.prank(admin);
+        vault.adminRebalance(targets);
+
+        assertEq(usdc.balanceOf(address(second)), 0, "excluded adapter drained");
+        assertEq(usdc.balanceOf(address(vault)), 0, "nothing left in idle");
+        assertEq(usdc.balanceOf(address(ledger)), 1_000 * ONE_USDC, "the record holds it");
+        assertEq(ledger.heldUsdc(), 1_000 * ONE_USDC, "held by the record");
+        assertEq(vault.convertToAssets(bobShares), bobValue, "the drain does not lift the price");
+        assertApproxEqAbs(ledger.claimable(1, alice), 500 * ONE_USDC, 1, "the exiter keeps half");
+        assertApproxEqAbs(ledger.claimable(1, bob), 500 * ONE_USDC, 1, "the stayer gets half");
+
+        // Removing the drained entry closes the record and reopens deposits.
+        vm.expectEmit(true, true, false, true, address(ledger));
+        emit ExclusionLedger.ExclusionFinalized(
+            1, ExclusionLedger.FinalizeReason.Removed, 1_000 * ONE_USDC
+        );
+        vm.prank(admin);
+        vault.removeAdapter(1);
+        assertEq(vault.openExclusionOf(1), 0, "record closed");
+        assertGt(vault.maxDeposit(carol), 0, "deposits reopen");
+
+        _fundAndApprove(carol, 1_000 * ONE_USDC);
+        vm.prank(carol);
+        vault.deposit(1_000 * ONE_USDC, carol);
+        assertEq(ledger.claimable(1, carol), 0, "a later depositor has no claim");
+
+        uint256 aliceBefore = usdc.balanceOf(alice);
+        ledger.claim(1, alice);
+        assertApproxEqAbs(usdc.balanceOf(alice) - aliceBefore, 500 * ONE_USDC, 1, "alice paid");
+    }
+
+    /// @notice E2: when the excluded adapter holds the only funded balance, NAV is 0 and a
+    ///         redeem would burn shares for 0 USDC. It reverts while the exclusion is open, and
+    ///         the holder is paid through the record instead.
+    function test_redeemDuringExclusionRevertsOnZeroPayout() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+        assertEq(vault.totalAssets(), 0, "the only funded adapter is excluded");
+        assertEq(vault.previewRedeem(shares), 0, "the shares price at zero");
+
+        vm.prank(alice);
+        vm.expectRevert(RobotMoneyVault.ZeroPayoutDuringExclusion.selector);
+        vault.redeem(shares, alice, alice);
+        vm.prank(alice);
+        vm.expectRevert(RobotMoneyVault.ZeroPayoutDuringExclusion.selector);
+        vault.redeem(1, alice, alice);
+        assertEq(vault.balanceOf(alice), shares, "no share was burned");
+
+        // The recovery reaches the snapshot holder; the empty redeem is still refused.
+        vm.prank(admin);
+        vault.emergencyWithdrawAdapter(0);
+        ExclusionLedger ledger = vault.exclusionLedger();
+        assertEq(ledger.claimable(1, alice), 1_000 * ONE_USDC, "the sole holder owns it all");
+        vm.prank(alice);
+        vm.expectRevert(RobotMoneyVault.ZeroPayoutDuringExclusion.selector);
+        vault.redeem(shares, alice, alice);
+        uint256 before = usdc.balanceOf(alice);
+        ledger.claim(1, alice);
+        assertEq(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, "paid through the record");
+
+        // With the record closed no exclusion is open, and the guard no longer applies.
+        vm.prank(admin);
+        vault.removeAdapter(0);
+        vm.prank(alice);
+        assertEq(vault.redeem(shares, alice, alice), 0, "zero-value shares burn outside one");
+    }
+
+    /// @notice core 1820: restoring eligibility realises the residual into the record first. An
+    ///         adapter that cannot pay out keeps its record open (the restore reverts), and
+    ///         `forceRemoveAdapter` then closes the record with the loss on snapshot holders.
+    function test_restoreRevertsWhenExcludedAdapterCannotPayOut() public {
+        vm.prank(alice);
+        vault.deposit(1_000 * ONE_USDC, alice);
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+        ExclusionLedger ledger = vault.exclusionLedger();
+
+        adapter.setRevertTotalAssets(true);
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.AdapterNotEmpty.selector);
+        vault.setAdapterAllowed(address(adapter), true);
+        assertEq(vault.openExclusionOf(0), 1, "the record stays open");
+        assertEq(vault.maxDeposit(bob), 0, "deposits stay closed");
+
+        vm.expectEmit(true, true, false, true, address(ledger));
+        emit ExclusionLedger.ExclusionFinalized(1, ExclusionLedger.FinalizeReason.ForceRemoved, 0);
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+        assertEq(vault.openExclusionOf(0), 0, "record closed");
+        assertEq(ledger.claimable(1, alice), 0, "nothing was recovered");
     }
 
     // ─── Decimals offset ────────────────────────────────────────────────────

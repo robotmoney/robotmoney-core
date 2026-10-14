@@ -295,6 +295,23 @@ sol! {
             uint256 assets,
             uint256 shares
         );
+        // Snapshot triggers with no table row (issue 1781, QA plan X6). Each changes a
+        // `vault_snapshots` column without an ERC-4626 event, and a tick reads only the vaults
+        // that emitted a watched log (or are new, zero-TVL, unknown-cap or heartbeat-due).
+        /// RobotMoneyVault and BasketVault.
+        event TvlCapUpdated(uint256 oldCap, uint256 newCap);
+        /// RobotMoneyVault and BasketVault.
+        event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
+        /// RobotMoneyVault and BasketVault.
+        event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
+        /// `shutdownVault()` zeroes `tvlCap` and emits only this, in both vault families.
+        event Shutdown();
+        /// BasketVault `restoreVault`: sets a fresh `tvlCap` and emits only this.
+        event Restored(uint256 newTvlCap);
+        /// BasketVault `redeemInKind`: burns shares and pays out without an ERC-4626 `Withdraw`.
+        event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
+        /// RobotMoneyVault: an adapter written off, `totalAssets` drops by `lossAmount`.
+        event AdapterForceRemoved(uint256 indexed index, address indexed adapter, uint256 lossAmount);
     }
 
     /// Read surface for vault state snapshots.
@@ -308,6 +325,10 @@ sol! {
         /// Deposit pause flag. Present on every vault, the v1 vault included. A
         /// `true` value stops deposits only; redemptions stay open.
         function depositsPaused() external view returns (bool);
+        /// ERC-4626 `previewRedeem`: the USDC a redeem of `shares` pays, after the
+        /// exit fee and (BasketVault) the `maxSlippageBps` floor. Read with
+        /// `totalSupply()` as the argument for the position value (core 1795, QA plan X8).
+        function previewRedeem(uint256 shares) external view returns (uint256);
     }
 
     /// Event surface from `VaultRegistry`.  Signatures match `VaultRegistry.sol`
@@ -469,6 +490,52 @@ sol! {
         event Cancelled(bytes32 indexed id);
         event MinDelayChange(uint256 oldDuration, uint256 newDuration);
     }
+
+    /// Event surface of `ExclusionLedger`, the exclusion record a
+    /// `RobotMoneyVault` deploys in its constructor (core issue 1820, QA plan
+    /// D3 / X7).
+    ///
+    /// Signatures match `contracts/ExclusionLedger.sol` exactly. The two enum
+    /// parameters (`RecoverySource`, `FinalizeReason`) ABI-encode as `uint8`.
+    /// The ledger's address is not configured: the indexer derives it from the
+    /// vault (`crate::indexer::exclusion_ledger_of`).
+    #[sol(abi)]
+    #[allow(missing_docs)]
+    interface IExclusionLedgerEvents {
+        /// A record opened: `adapter` left NAV, and its future recovery belongs
+        /// to the holders of `snapshotSupply` shares at this point.
+        event ExclusionOpened(
+            uint256 indexed exclusionId,
+            uint256 indexed adapterIndex,
+            address indexed adapter,
+            uint256 snapshotSupply,
+            uint256 adapterValue
+        );
+        /// Recovered USDC was credited to a record. `recoveredUsdc` is the
+        /// record's total after this credit.
+        event ExclusionRecoveryCredited(
+            uint256 indexed exclusionId,
+            uint8 indexed source,
+            uint256 amount,
+            uint256 recoveredUsdc
+        );
+        /// A record stopped accepting recovery. It stays claimable.
+        event ExclusionFinalized(
+            uint256 indexed exclusionId,
+            uint8 indexed reason,
+            uint256 recoveredUsdc
+        );
+        /// A snapshot holder was paid from a record.
+        event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint256 amount);
+    }
+
+    /// The one `ExclusionLedger` read the indexer makes: a holder's vault
+    /// shares at a record's snapshot. The value is fixed once the record
+    /// exists, so any block at or after the record answers the same.
+    #[allow(missing_docs)]
+    interface IExclusionLedgerReads {
+        function balanceAt(address holder, uint256 id) external view returns (uint256);
+    }
 }
 
 /// Topic-0 hashes the indexer matches on `eth_getLogs`. Computed once
@@ -512,6 +579,17 @@ pub struct Topics {
     pub erc4626_deposit: B256,
     /// ERC-4626 Withdraw event emitted by any vault on every redemption.
     pub erc4626_withdraw: B256,
+    // Vault state changes that only trigger a snapshot read (issue 1781, QA plan X6).
+    pub vault_tvl_cap_updated: B256,
+    pub vault_per_deposit_cap_updated: B256,
+    pub vault_exit_fee_updated: B256,
+    pub vault_shutdown: B256,
+    /// BasketVault only.
+    pub vault_restored: B256,
+    /// BasketVault only.
+    pub vault_redeemed_in_kind: B256,
+    /// RobotMoneyVault only.
+    pub vault_adapter_force_removed: B256,
     // InvestmentCommitteePolicy events — docs/architecture.md §5.4, issue #1053.
     /// Emitted when ADMIN_ROLE registers a committee agent.
     /// InvestmentCommitteePolicy.sol:104
@@ -539,6 +617,12 @@ pub struct Topics {
     pub safe_added_owner: B256,
     pub safe_removed_owner: B256,
     pub safe_changed_threshold: B256,
+    // ExclusionLedger events — core issue 1820, QA plan X7. Emitted by the ledger each
+    // `RobotMoneyVault` deploys, never by the vault itself.
+    pub exclusion_opened: B256,
+    pub exclusion_recovery_credited: B256,
+    pub exclusion_finalized: B256,
+    pub exclusion_claimed: B256,
 }
 
 impl Topics {
@@ -585,6 +669,14 @@ impl Topics {
             default_weights_set: keccak256(b"DefaultWeightsSet(address[],uint256[])"),
             erc4626_deposit: keccak256(b"Deposit(address,address,uint256,uint256)"),
             erc4626_withdraw: keccak256(b"Withdraw(address,address,address,uint256,uint256)"),
+            // Snapshot-trigger vault events — issue 1781.
+            vault_tvl_cap_updated: keccak256(b"TvlCapUpdated(uint256,uint256)"),
+            vault_per_deposit_cap_updated: keccak256(b"PerDepositCapUpdated(uint256,uint256)"),
+            vault_exit_fee_updated: keccak256(b"ExitFeeUpdated(uint256,uint256)"),
+            vault_shutdown: keccak256(b"Shutdown()"),
+            vault_restored: keccak256(b"Restored(uint256)"),
+            vault_redeemed_in_kind: keccak256(b"RedeemedInKind(address,address,uint256)"),
+            vault_adapter_force_removed: keccak256(b"AdapterForceRemoved(uint256,address,uint256)"),
             // InvestmentCommitteePolicy — issue #1053.
             ic_agent_registered: keccak256(b"AgentRegistered(address,string)"),
             ic_agent_revoked: keccak256(b"AgentRevoked(address)"),
@@ -607,6 +699,15 @@ impl Topics {
             safe_added_owner: keccak256(b"AddedOwner(address)"),
             safe_removed_owner: keccak256(b"RemovedOwner(address)"),
             safe_changed_threshold: keccak256(b"ChangedThreshold(uint256)"),
+            // ExclusionLedger — core issue 1820. Enum parameters encode as uint8.
+            exclusion_opened: keccak256(
+                b"ExclusionOpened(uint256,uint256,address,uint256,uint256)",
+            ),
+            exclusion_recovery_credited: keccak256(
+                b"ExclusionRecoveryCredited(uint256,uint8,uint256,uint256)",
+            ),
+            exclusion_finalized: keccak256(b"ExclusionFinalized(uint256,uint8,uint256)"),
+            exclusion_claimed: keccak256(b"ExclusionClaimed(uint256,address,uint256)"),
         }
     }
 
@@ -637,6 +738,15 @@ impl Topics {
             self.default_weights_set,
             self.erc4626_deposit,
             self.erc4626_withdraw,
+            // Vault snapshot triggers — issue 1781. Without them a quiet vault's cap, fee or
+            // in-kind exit would wait for the heartbeat, since a tick no longer reads every vault.
+            self.vault_tvl_cap_updated,
+            self.vault_per_deposit_cap_updated,
+            self.vault_exit_fee_updated,
+            self.vault_shutdown,
+            self.vault_restored,
+            self.vault_redeemed_in_kind,
+            self.vault_adapter_force_removed,
             // InvestmentCommitteePolicy — issue #1053.
             self.ic_agent_registered,
             self.ic_agent_revoked,
@@ -654,6 +764,11 @@ impl Topics {
             self.safe_added_owner,
             self.safe_removed_owner,
             self.safe_changed_threshold,
+            // ExclusionLedger — core issue 1820, QA plan X7.
+            self.exclusion_opened,
+            self.exclusion_recovery_credited,
+            self.exclusion_finalized,
+            self.exclusion_claimed,
         ]
     }
 }
@@ -802,6 +917,7 @@ mod tests {
             IPortfolioRouterEvents,
             IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
+            IExclusionLedgerEvents,
         );
         out
     }
@@ -1008,6 +1124,73 @@ mod tests {
                 "Withdraw",
                 t.erc4626_withdraw,
             ),
+            // Snapshot-trigger events (issue 1781), from both vault families.
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "TvlCapUpdated",
+                t.vault_tvl_cap_updated,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "PerDepositCapUpdated",
+                t.vault_per_deposit_cap_updated,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "ExitFeeUpdated",
+                t.vault_exit_fee_updated,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "Shutdown",
+                t.vault_shutdown,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "AdapterForceRemoved",
+                t.vault_adapter_force_removed,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "TvlCapUpdated",
+                t.vault_tvl_cap_updated,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "PerDepositCapUpdated",
+                t.vault_per_deposit_cap_updated,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "ExitFeeUpdated",
+                t.vault_exit_fee_updated,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "Shutdown",
+                t.vault_shutdown,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "Restored",
+                t.vault_restored,
+            ),
+            (
+                "BasketVault.sol",
+                "BasketVault",
+                "RedeemedInKind",
+                t.vault_redeemed_in_kind,
+            ),
             // VaultRegistry.
             (
                 "VaultRegistry.sol",
@@ -1096,6 +1279,31 @@ mod tests {
                 "ConsensusRecommendationReceipt",
                 "ReceiptReleased",
                 t.consensus_receipt_released,
+            ),
+            // ExclusionLedger — core issue 1820, QA plan X7.
+            (
+                "ExclusionLedger.sol",
+                "ExclusionLedger",
+                "ExclusionOpened",
+                t.exclusion_opened,
+            ),
+            (
+                "ExclusionLedger.sol",
+                "ExclusionLedger",
+                "ExclusionRecoveryCredited",
+                t.exclusion_recovery_credited,
+            ),
+            (
+                "ExclusionLedger.sol",
+                "ExclusionLedger",
+                "ExclusionFinalized",
+                t.exclusion_finalized,
+            ),
+            (
+                "ExclusionLedger.sol",
+                "ExclusionLedger",
+                "ExclusionClaimed",
+                t.exclusion_claimed,
             ),
         ];
 
@@ -1282,6 +1490,29 @@ mod tests {
         // ERC-4626 standard events.
         assert_eq!(t.erc4626_deposit, IVaultEvents::Deposit::SIGNATURE_HASH);
         assert_eq!(t.erc4626_withdraw, IVaultEvents::Withdraw::SIGNATURE_HASH);
+        // Snapshot-trigger vault events — issue 1781.
+        assert_eq!(
+            t.vault_tvl_cap_updated,
+            IVaultEvents::TvlCapUpdated::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.vault_per_deposit_cap_updated,
+            IVaultEvents::PerDepositCapUpdated::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.vault_exit_fee_updated,
+            IVaultEvents::ExitFeeUpdated::SIGNATURE_HASH
+        );
+        assert_eq!(t.vault_shutdown, IVaultEvents::Shutdown::SIGNATURE_HASH);
+        assert_eq!(t.vault_restored, IVaultEvents::Restored::SIGNATURE_HASH);
+        assert_eq!(
+            t.vault_redeemed_in_kind,
+            IVaultEvents::RedeemedInKind::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.vault_adapter_force_removed,
+            IVaultEvents::AdapterForceRemoved::SIGNATURE_HASH
+        );
         // InvestmentCommitteePolicy — issue #1053.
         assert_eq!(
             t.ic_agent_registered,
@@ -1466,6 +1697,39 @@ mod tests {
                 b"Withdraw(address,address,address,uint256,uint256)",
                 IVaultEvents::Withdraw::SIGNATURE_HASH,
             ),
+            // Snapshot-trigger vault events — issue 1781.
+            // Declared in RobotMoneyVault.sol and contracts/vaults/BasketVault.sol.
+            (
+                "TvlCapUpdated",
+                b"TvlCapUpdated(uint256,uint256)",
+                IVaultEvents::TvlCapUpdated::SIGNATURE_HASH,
+            ),
+            (
+                "PerDepositCapUpdated",
+                b"PerDepositCapUpdated(uint256,uint256)",
+                IVaultEvents::PerDepositCapUpdated::SIGNATURE_HASH,
+            ),
+            (
+                "ExitFeeUpdated",
+                b"ExitFeeUpdated(uint256,uint256)",
+                IVaultEvents::ExitFeeUpdated::SIGNATURE_HASH,
+            ),
+            ("Shutdown", b"Shutdown()", IVaultEvents::Shutdown::SIGNATURE_HASH),
+            (
+                "Restored",
+                b"Restored(uint256)",
+                IVaultEvents::Restored::SIGNATURE_HASH,
+            ),
+            (
+                "RedeemedInKind",
+                b"RedeemedInKind(address,address,uint256)",
+                IVaultEvents::RedeemedInKind::SIGNATURE_HASH,
+            ),
+            (
+                "AdapterForceRemoved",
+                b"AdapterForceRemoved(uint256,address,uint256)",
+                IVaultEvents::AdapterForceRemoved::SIGNATURE_HASH,
+            ),
             // InvestmentCommitteePolicy.sol:104,107,110 — issue #1053.
             // Stance ABI-encodes as uint8.
             (
@@ -1494,6 +1758,27 @@ mod tests {
                 "ReceiptReleased",
                 b"ReceiptReleased(bytes32,address,uint64)",
                 IConsensusRecommendationReceiptEvents::ReceiptReleased::SIGNATURE_HASH,
+            ),
+            // ExclusionLedger — core issue 1820, QA plan X7. Enum parameters encode as uint8.
+            (
+                "ExclusionOpened",
+                b"ExclusionOpened(uint256,uint256,address,uint256,uint256)",
+                IExclusionLedgerEvents::ExclusionOpened::SIGNATURE_HASH,
+            ),
+            (
+                "ExclusionRecoveryCredited",
+                b"ExclusionRecoveryCredited(uint256,uint8,uint256,uint256)",
+                IExclusionLedgerEvents::ExclusionRecoveryCredited::SIGNATURE_HASH,
+            ),
+            (
+                "ExclusionFinalized",
+                b"ExclusionFinalized(uint256,uint8,uint256)",
+                IExclusionLedgerEvents::ExclusionFinalized::SIGNATURE_HASH,
+            ),
+            (
+                "ExclusionClaimed",
+                b"ExclusionClaimed(uint256,address,uint256)",
+                IExclusionLedgerEvents::ExclusionClaimed::SIGNATURE_HASH,
             ),
         ];
 

@@ -8,6 +8,7 @@ import type { PreviewContext } from "../lib/preview";
 import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
+import { WriteStatus } from "./WriteStatus";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -29,8 +30,8 @@ export function RotationTab(props: Props) {
     <section data-testid="rotation-form">
       <h2>Agent rotation (revoke old → authorize new)</h2>
       <p>
-        Both previews must be confirmed before wallet signing begins. Do not close this dialog
-        between transactions.
+        Every step&apos;s preview must be confirmed before wallet signing begins. Do not close this
+        dialog between transactions.
       </p>
 
       {r.combinedRiskAnnotation && (
@@ -126,6 +127,8 @@ export function RotationTab(props: Props) {
         >
           <h3>Step 3: reveal new agent</h3>
           <p>Enabled one block after the commit transaction mines.</p>
+          {/* The policy preview for the call step 3 signs (QA plan U4). */}
+          {r.revealPreview && <TxPreview preview={r.revealPreview} />}
           <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
             Step 3 — Sign revealAuthorization(new) with wallet
           </button>
@@ -135,6 +138,12 @@ export function RotationTab(props: Props) {
       {r.step === "done" && (
         <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>
       )}
+      {/* A refused or rejected step says why (QA plan U5, finding DR-9). */}
+      <WriteStatus
+        testId="rotation"
+        label="Rotation step"
+        write={{ error: r.writeError, isPending: r.isPending }}
+      />
     </section>
   );
 }

@@ -6,6 +6,8 @@
 //   - A required name is missing when no check-run carries it, pending when any run of it is not completed.
 //   - Every run of a required name must conclude success. A failure next to a success is a failure.
 //   - Optional entries are listed when they are not green and never change the exit code.
+//   - Exempt entries run on every push but test nothing about the sha (twin-pin): never read here.
+//     scripts/ci/deploy-gate-jobs.ts holds the three lists equal to the jobs the workflow tree runs on every push.
 // Canonical: docs/development/ci-suites.md (check-sha-green), core 1502.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -23,12 +25,16 @@ export interface CheckSpec {
   /** "required-on-deploy-paths": runs on every push, on a pull request only when a path in `paths` changed. */
   class?: string;
   paths?: string[];
+  /** Why an optional or exempt job does not gate a deploy sha. */
+  reason?: string;
 }
 
 export interface RequiredChecks {
   version: number;
   required: CheckSpec[];
   optional: CheckSpec[];
+  /** Jobs that run on every push and are no check of the sha (a pin chooser, a change detector). */
+  exempt?: CheckSpec[];
 }
 
 export interface Verdict {
@@ -40,7 +46,7 @@ export interface Verdict {
   passing: string[];
 }
 
-const label = (s: CheckSpec): string => (s.name !== undefined ? s.name : `${s.prefix}*`);
+export const label = (s: CheckSpec): string => (s.name !== undefined ? s.name : `${s.prefix}*`);
 
 function matches(spec: CheckSpec, run: CheckRun): boolean {
   if (spec.name !== undefined) return run.name === spec.name;
@@ -54,7 +60,8 @@ export function parseConfig(raw: unknown): RequiredChecks {
   if (!c || c.version !== 1 || !Array.isArray(c.required) || !Array.isArray(c.optional)) {
     throw new Error("required-checks.json must be { version: 1, required: [...], optional: [...] }");
   }
-  for (const s of [...c.required, ...c.optional]) {
+  if (c.exempt !== undefined && !Array.isArray(c.exempt)) throw new Error("exempt must be a list when present");
+  for (const s of [...c.required, ...c.optional, ...(c.exempt ?? [])]) {
     if ((s.name === undefined) === (s.prefix === undefined)) {
       throw new Error(`each entry needs exactly one of name or prefix: ${JSON.stringify(s)}`);
     }

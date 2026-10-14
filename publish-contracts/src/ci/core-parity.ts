@@ -4,7 +4,8 @@
 // and runnable alone: bun src/ci/core-parity.ts
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { MANIFEST_ENV, MANIFEST_FIELDS_READ, SAFE_STAGE, VAULT_ADDRESS_FIELD, resolveEnv } from "../core-wiring.ts";
+import { BASKET_DEFAULT_SLIPPAGE_BPS, LENDING_ADAPTERS, MANIFEST_ENV, MANIFEST_FIELDS_READ, SAFE_STAGE, VAULT_ADDRESS_FIELD, resolveEnv } from "../core-wiring.ts";
+import type { VaultKey } from "../sheet.ts";
 import { loadStageTable, manifestFile, type StageTable, type TableStage } from "../stage-table.ts";
 import { SHEET_SPEC } from "../sheet.ts";
 
@@ -119,6 +120,40 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
     const f = manifestFile(s.manifest);
     if (seen.has(f)) out.push(`two stages write ${f}`);
     seen.add(f);
+  }
+  out.push(...vaultWiringProblems(table, coreDir));
+  return out;
+}
+
+/** A `uint` constant of a Solidity source (`NAME = 3_334;`), or undefined. */
+const solUint = (src: string, name: string): bigint | undefined => {
+  const m = new RegExp(`\\b${name}\\s*=\\s*([0-9_]+)\\s*;`).exec(src);
+  return m ? BigInt(m[1]!.replace(/_/g, "")) : undefined;
+};
+
+/**
+ * Issue 1705 C4: the per-vault values the verifier compares the chain with and that core keeps in Solidity: each lending adapter's cap and its registration order
+ * (`addAdapter` calls, in the vault stage script), and each basket's default swap bound (`_DEFAULT_SLIPPAGE_BPS` in the vault source).
+ */
+export function vaultWiringProblems(table: StageTable, coreDir: string): string[] {
+  const out: string[] = [];
+  for (const [key, w] of Object.entries(LENDING_ADAPTERS)) {
+    const v = table.vaults.find((x) => x.key === key);
+    const st = table.stages.find((x) => x.name === w!.stage);
+    if (!v || v.stage !== w!.stage || !st) { out.push(`lending adapters of ${key}: core-wiring names stage ${w!.stage}, the table's vault stage is ${v?.stage ?? "missing"}`); continue; }
+    const src = scriptSource(coreDir, scriptFile(st));
+    const order = [...src.matchAll(/\.addAdapter\(\s*address\([^)]*\)\s*,\s*([A-Z_]+)\s*\)/g)].map((m) => m[1]!);
+    if (order.join(",") !== w!.adapters.map((a) => a.capConstant).join(",")) out.push(`lending adapters of ${key}: ${scriptFile(st)} registers caps ${order.join(", ") || "none"} in that order, core-wiring LENDING_ADAPTERS names ${w!.adapters.map((a) => a.capConstant).join(", ")}`);
+    for (const a of w!.adapters) {
+      const got = solUint(src, a.capConstant);
+      if (got !== BigInt(a.capBps)) out.push(`lending adapters of ${key}: ${a.capConstant} is ${got ?? "not defined"} in ${scriptFile(st)}, core-wiring LENDING_ADAPTERS says ${a.capBps}`);
+    }
+  }
+  for (const [key, bps] of Object.entries(BASKET_DEFAULT_SLIPPAGE_BPS)) {
+    const v = table.vaults.find((x) => x.key === (key as VaultKey));
+    const file = v && walkSol(join(coreDir, "contracts")).find((f) => new RegExp(`^\\s*contract\\s+${v.artifact}\\b`, "m").test(readFileSync(f, "utf8")));
+    const got = file ? solUint(readFileSync(file, "utf8"), "_DEFAULT_SLIPPAGE_BPS") : undefined;
+    if (got !== bps) out.push(`default swap bound of ${key}: _DEFAULT_SLIPPAGE_BPS is ${got ?? "not found"} in ${v?.artifact ?? "the vault source"}, core-wiring BASKET_DEFAULT_SLIPPAGE_BPS says ${bps}`);
   }
   return out;
 }

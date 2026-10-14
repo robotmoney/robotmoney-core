@@ -3,9 +3,10 @@
  *
  * Acceptance criterion source: issue #150 AC §2.
  *
- * A rotation previews BOTH revokeAgent(old) AND authorizeAgent(new, policy)
- * effects before wallet signing is enabled for either step. The operator
- * must confirm both previews before any wallet interaction occurs.
+ * A rotation previews revokeAgent(old) AND the authorization of the new agent
+ * (commitAuthorization, then revealAuthorization(new, salt, policy) on the
+ * depositor path) before wallet signing is enabled for any step. The operator
+ * must confirm every preview before any wallet interaction occurs.
  *
  * The rotation runs as a DEPOSITOR. After the timelock handover no EOA holds
  * ADMIN_ROLE on any chain, so a browser wallet authorizes and rotates only
@@ -20,8 +21,9 @@
  *   1. Rotation section renders two independent step sub-sections.
  *   2. Both signing buttons are disabled until all rotation inputs are
  *      valid and both previews are structurally OK.
- *   3. The revokeAgent step preview renders the old address and the
- *      authorizeAgent step preview renders the new address.
+ *   3. The revokeAgent step preview renders the old address; on the
+ *      depositor path step 2 previews commitAuthorization and step 3
+ *      previews revealAuthorization with the policy (QA plan U4).
  *   4. Entering identical addresses for old and new prevents the
  *      previews from rendering (rotation requires distinct addresses).
  *   5. Step-2 (authorize new) button is disabled until step-1
@@ -179,18 +181,22 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(step1.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");
   });
 
-  test("authorizeAgent preview for new address renders structured fields", async ({ page }) => {
+  test("commit and reveal previews for new address render structured fields", async ({ page }) => {
     await fillRotationForm(page, {
       oldAgent: OLD_AGENT,
       newAgent: NEW_AGENT,
       shareReceiver: SHARE_RECEIVER,
     });
 
+    // The depositor signs commitAuthorization in step 2 and revealAuthorization in
+    // step 3, so those are the previews (QA plan U4), never authorizeAgent.
     const step2 = page.getByTestId("rotation-step2");
-    // The structured preview for authorizeAgent must render.
     await expect(step2.locator('[data-testid="tx-preview"][data-ok="true"]')).toBeVisible();
-    await expect(step2.getByTestId("tx-preview-fn")).toContainText("authorizeAgent");
-    await expect(step2.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
+    await expect(step2.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
+    const step3 = page.getByTestId("rotation-step3");
+    await expect(step3.locator('[data-testid="tx-preview"][data-ok="true"]')).toBeVisible();
+    await expect(step3.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
+    await expect(step3.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
   });
 
   test("combined risk annotation renders warning about TWO transactions", async ({ page }) => {

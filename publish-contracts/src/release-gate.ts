@@ -1,8 +1,10 @@
-// The contracts-freeze gate of the mainnet plan job (core 1524). On chain 8453 the plan refuses unless, in this order:
+// The contracts-freeze gate of the mainnet plan job (core 1524), and since QA plan v1 E4 (issue 1816) of every run on 8453 that can broadcast (cli.ts releaseGated:
+// publish, every deployer stage, safe, prove-control, govern, redeploy-vault). On chain 8453 such a run refuses unless, in this order:
 //   1. an annotated release/<version> tag points at DEPLOY_SHA, and the remote holds the same tag object (RELEASE_SHA_UNTAGGED, RELEASE_TAG_REMOTE_MISMATCH)
 //      The TAG KIND must match the deployment kind of the sheet (issue 1727): a production plan needs release/<version>, a rehearsal plan needs release/<version>-rehearsal.
 //      A rehearsal tag never satisfies a production plan and the reverse (RELEASE_TAG_KIND).
-//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING). A reconstructed baseline is also proven committed in the COUNTS checkout (issue 1740, gitFrozenDirCommitted)
+//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING), and the COUNTS checkout proves it committed and clean (gitFrozenDirCommitted, issue 1740).
+//      Every baseline is held to that proof: a reconstructed one since issue 1740, a plain measured one since QA plan v1 E4 (a hand-edited or uncommitted file is refused).
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
 //   (the single-vault redeploy, issue 1796, skips step 2: it has no frozen counts of its own)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
@@ -53,8 +55,9 @@ export interface ReleaseGateInput {
    */
   anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
   /**
-   * Issue 1733 and 1740: the counts dir of a reconstructed baseline must be a clean dir of a checkout at the release sha or a descendant of it, tracking every frozen file in it with the
-   * same bytes (gitFrozenDirCommitted). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
+   * Issue 1733 and 1740: the counts dir of a baseline must be a clean dir of a checkout at the release sha or a descendant of it, tracking every frozen file in it with the
+   * same bytes (gitFrozenDirCommitted). Required for EVERY frozen file the gate loads, plain or reconstructed (QA plan v1 E4, issue 1816): without it the gate refuses
+   * (COUNTS_MISSING). Default seam in the CLI: gitFrozenDirCommitted.
    */
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
   /**
@@ -161,6 +164,11 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
     if (!i.verifyReconstructed) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json is a reconstructed baseline (issue 1733) and the gate has no way to re-verify it on chain: it is refused`, { sha: i.sha });
     await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
     await assertBaselineCommitted({ countsDir: i.countsDir, sha: i.sha, frozen, frozenDirCommitted: i.frozenDirCommitted, anchorCommitted: i.anchorCommitted });
+  } else if (frozen) {
+    // QA plan v1 E4 (issue 1816, review T7): a PLAIN measured baseline gets the same committed-and-clean proof of its counts dir. Before, only a reconstructed file did,
+    // so a plain <sha>.json that was hand-edited, never committed or left beside untracked files passed on its shape alone. It has no anchor and no chain records to prove.
+    if (!i.frozenDirCommitted) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json needs a proof that the counts dir is the committed, clean one and the gate was given none: refused`, { sha: i.sha });
+    await i.frozenDirCommitted(i.countsDir); // throws COUNTS_MISSING: not a git work tree, not a descendant of the release sha, a file untracked or edited, the dir not clean
   }
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
   if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453.`, { sha: i.sha });

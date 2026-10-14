@@ -21,6 +21,15 @@
 # paid upstream, never printed) and the base-testnet secrets of suite 5. The workflow itself
 # references none of them.
 #
+# PERMISSIONS
+# A called workflow can keep or lower the caller's GITHUB_TOKEN permissions, never raise them. When
+# a called job asks for a scope the caller job does not grant, GitHub refuses the whole run as
+# `startup_failure` before any job starts. That kept this nightly from ever running (7/7
+# startup_failure 2026-10-07..13, QA plan v1 T1): the suite-07 `parity` job asks for
+# `pull-requests: read`. So the workflow default stays `contents: read` and each caller job that
+# needs more grants it at job level with the reason. scripts/ci/check_reusable_workflow_permissions.py
+# (suite 13) fails when a caller grants less than any job it calls asks for.
+#
 # Suite 26 is NOT in this list: it targets the shared stage devnet (a Twin fork kept alive as a
 # service on the stage host) and needs secrets.FUSION_RMPC_CONFIG, so it does not start a fork per
 # run. See docs/development/ci-suites.md §26.
@@ -103,6 +112,11 @@ jobs:
     name: suite-07 rmpc integration
     needs: pin
     uses: ./.github/workflows/suite-07-rmpc-integration.yml
+    # The called `parity` job reads the pulls/compare APIs for its changed-path list and asks for
+    # pull-requests: read. Without this grant GitHub refuses the whole nightly as startup_failure.
+    permissions:
+      contents: read
+      pull-requests: read
     secrets: inherit
     with:
       pin_block: ${{ needs.pin.outputs.block }}

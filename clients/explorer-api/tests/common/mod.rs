@@ -105,6 +105,17 @@ pub const ADMIN_EVENTS_MIGRATION: &str = include_str!(
 pub const VAULT_CAPS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql");
 
+/// Migration 0021 (QA plan X7, core issue 1820): the exclusion-record tables that
+/// `/v1/accounts/:address/exclusion-claims` reads. It references only `chains`.
+pub const EXCLUSION_RECORDS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0021_exclusion_records.sql");
+
+/// Migration 0022 (QA plan X8, core issue 1795): `vault_snapshots.preview_redeem_total`, the
+/// `previewRedeem(totalSupply())` reading that `/v1/accounts/:address/positions` prices a position with.
+pub const PREVIEW_REDEEM_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0022_vault_snapshot_preview_redeem.sql"
+);
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).
@@ -213,6 +224,14 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply vault snapshot caps migration (0018)");
+    sqlx::raw_sql(EXCLUSION_RECORDS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply exclusion records migration (0021)");
+    sqlx::raw_sql(PREVIEW_REDEEM_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault snapshot preview redeem migration (0022)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -444,10 +463,12 @@ async fn seed_fixture(pool: &PgPool) {
     // Use block 500 so this snapshot does not interfere with the existing
     // test `list_vault_snapshots_filters_by_block_range` which expects
     // exactly 1 snapshot in the 999-1001 range (the gateway snapshot at 1000).
+    // `preview_redeem_total` is `previewRedeem(totalSupply())` with the 25 bps exit fee
+    // (migration 0022): 99999999 - floor(99999999 * 25 / 10000) = 99750000.
     sqlx::query(
         "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
-                                       exit_fee_bps, tvl_cap, paused, indexed_at) \
-         VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9)",
+                                       exit_fee_bps, tvl_cap, paused, indexed_at, preview_redeem_total) \
+         VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9, $10::NUMERIC)",
     )
     .bind(PRIMARY_CHAIN_ID)
     .bind(&vault_a_addr[..])
@@ -458,14 +479,15 @@ async fn seed_fixture(pool: &PgPool) {
     .bind("1000000000")
     .bind(false)
     .bind(indexed_at)
+    .bind("99750000")
     .execute(pool)
     .await
     .unwrap();
 
     // --- wallet_positions (issue #316 suite-08 fixture) ---
     // Seed a share balance for `agent` on vault_a so account positions tests pass.
-    // shares = 50000000, same block as the vault_a snapshot (500) for clean math:
-    //   usdc_value = 50000000 * 99999999 / 99999999 = 50000000.
+    // shares = 50000000, same block as the vault_a snapshot (500), priced at previewRedeem (core 1795):
+    //   usdc_value = floor(50000000 * 99750000 / 99999999) = 49875000.
     sqlx::query(
         "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares, indexed_at) \
          VALUES ($1, $2, $3, $4, $5::NUMERIC, $6)",

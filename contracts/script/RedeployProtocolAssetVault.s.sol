@@ -11,7 +11,9 @@
 //      `DeployTimelock` links the registry from a script (core S5, `scripts/ci/check-set-registry-owner.ts`).
 //   2. It hands the new vault over itself, the way `DeployTimelock` does for the four launch vaults: it moves EMERGENCY_ROLE to the
 //      independent emergency key, grants ADMIN_ROLE to the timelock and drops both roles from the deployer.
-//   3. The vault is left paused. The govern row opens it in the same timelock batch that moves the router weights.
+//   3. The vault is paused right after it is created, before its first asset is added (QA plan v1 E3), so no direct deposit can land
+//      while it is configured, and it is left paused. The govern row opens it in the same timelock batch that moves the router weights
+//      and copies the old vault's router cap to it.
 // Same vault class, same config file, same sheet inputs as the launch deploy: the new vault is configured exactly like the one it replaces.
 pragma solidity ^0.8.24;
 
@@ -81,7 +83,7 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         require(emergency != p.admin, "EMERGENCY_ADDRESS == deployer");
         require(timelock != p.admin, "TIMELOCK_ADDRESS == deployer");
 
-        d = _deployConfigured(p, cfg);
+        d = _deployConfigured({p: p, cfg: cfg, pauseBeforeAssets: true});
         _assertTickMathLinkIntegrity(d.vault, p.tvlCap);
         _handOver(d.vault, p.admin, timelock, emergency);
         // Left unregistered on purpose: only the Safe, through the timelock, registers it (govern row `redeploy-vault`).

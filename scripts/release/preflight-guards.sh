@@ -10,11 +10,11 @@
 #      <= 49152 bytes, measured from the exact `forge build` artifacts in out/.
 #      Contracts whose runtime sits within SIZE_WARN_MARGIN of the EIP-170 cap
 #      are reported loudly (the #1298 growth risk) but do not fail the gate.
-#   2. Env-default guard — EXECUTION_DELAY and TIMELOCK_MIN_DELAY must not be
-#      left at the unsafe `0` default (the #864 revert class), and
-#      QUORUM_THRESHOLD must be set and greater than 1
-#      (router-governance-handoff-runbook §1.1: quorum 0/1 is hollow
-#      separate-body control, so 1 is refused exactly like 0).
+#   2. Env-default guard — TIMELOCK_MIN_DELAY must not be left at the unsafe
+#      `0` default (the #864 revert class). Issue 1698 deleted RouterGovernance
+#      voting: its constructor is (router, admin), so QUORUM_THRESHOLD,
+#      VOTING_PERIOD and EXECUTION_DELAY are no longer constructor arguments
+#      and are not checked here (a sheet may still carry them; nothing reads them).
 #
 # Usage:
 #   preflight-guards.sh [--contract NAME ...] [--dependency-manifest CHAIN_ID:RELEASE]
@@ -81,19 +81,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── 1. Hard env-default guard (#864 class) ──────────────────────────────────
-for var in EXECUTION_DELAY TIMELOCK_MIN_DELAY QUORUM_THRESHOLD; do
+for var in TIMELOCK_MIN_DELAY; do
   if [[ -n "${!var:-}" ]] && [[ "${!var}" == "0" ]]; then
     fail "${var}=0 is the unsafe env-default hazard (#864) — set a non-zero value before the ceremony"
   fi
 done
-
-[[ "${QUORUM_THRESHOLD:-}" =~ ^[0-9]+$ && "${QUORUM_THRESHOLD:-0}" -gt 1 ]] \
-  || fail "QUORUM_THRESHOLD must be an integer greater than 1 (got: ${QUORUM_THRESHOLD:-unset})"
-if [[ -n "${EXECUTION_DELAY:-}" ]] && [[ "$EXECUTION_DELAY" =~ ^[0-9]+$ ]] \
-  && [[ "$EXECUTION_DELAY" -lt 3600 ]]; then
-  warn "EXECUTION_DELAY=${EXECUTION_DELAY} < RouterGovernance.MIN_EXECUTION_DELAY (3600); the constructor will revert ExecutionDelayBelowMinimum"
-fi
-echo "OK: [preflight] env-default guard: EXECUTION_DELAY=${EXECUTION_DELAY:-unset} QUORUM_THRESHOLD=${QUORUM_THRESHOLD:-unset} TIMELOCK_MIN_DELAY=${TIMELOCK_MIN_DELAY:-unset}"
+# Issue 1698: no quorum, voting period or execution delay guard. RouterGovernance has no voting surface (constructor (router, admin)).
+echo "OK: [preflight] env-default guard: TIMELOCK_MIN_DELAY=${TIMELOCK_MIN_DELAY:-unset}"
 
 # ─── 2. EIP-170 / EIP-3860 size gate against the exact artifacts ─────────────
 command -v python3 >/dev/null 2>&1 || fail "python3 not on PATH"

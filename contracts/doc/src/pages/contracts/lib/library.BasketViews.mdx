@@ -5,7 +5,7 @@ description: "Off-chain weight-preview views for `BasketVault`, extracted into a
 
 # BasketViews
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/BasketViews.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketViews.sol)
 
 **Title:** BasketViews
 
@@ -20,6 +20,49 @@ family. Arithmetic is identical to the prior inline implementations.
 
 ```solidity
 uint256 internal constant MAX_BPS = 10_000;
+```
+
+### SELL_ANCHOR_WINDOW
+
+Window of the USDC sell anchor (core 1793, QA plan D5): 4 hours, eight times the 1800 s NAV window.
+
+<i>
+
+A displacement held for the 1800 s NAV window drags the NAV TWAP, and the sell floor with it, all the way to the
+held price. The same hold moves this anchor by a quarter of the displacement at most, so a USDC redeem refuses
+while the held spot sits more than the guard below it. The recorder ring must hold the window under one record
+per 2 s block (14_400 / 2 + 1 = 7_201 slots, `DeployUniswapV4PriceRecorder.RING_SLOTS`), or a spammer could
+evict the history and shorten the anchor to the NAV window.
+
+</i>
+
+```solidity
+uint32 internal constant SELL_ANCHOR_WINDOW = 14_400;
+```
+
+### VENUE_V4
+
+<i>
+
+`BasketVault.Venue.V4`: the only venue whose TWAP is the in-protocol recorder (core 1676).
+
+</i>
+
+```solidity
+uint8 internal constant VENUE_V4 = 1;
+```
+
+### SELL_ANCHOR_PROBE_USDC
+
+<i>
+
+USDC amount priced both ways by the sell anchor: 1,000,000 USDC, so the token amount carries enough digits for a
+basis-point compare even for a high-priced 8-decimal token. Decimals cancel in the ratio.
+
+</i>
+
+```solidity
+uint256 internal constant SELL_ANCHOR_PROBE_USDC = 1e12;
 ```
 
 ## Functions
@@ -84,6 +127,148 @@ function checkNavDeviation(IBasketVaultViews vault, address usdc, uint256 thresh
 | vault | `IBasketVaultViews` | The basket vault (read surface). |
 | usdc | `address` | The quote token (USDC). |
 | thresholdBps | `uint256` | Max permitted spot-vs-TWAP divergence in bps. |
+
+<a id="checkmarket-bool"></a>
+
+### checkMarket
+
+The vault's one market-check entry point: the ORA-4 deviation guard on deposit (`sell` false) or the USDC
+sell anchor on redeem (`sell` true), with the vault's own `navDeviationGuardBps` and USDC. Runs as the vault
+(delegatecall) and reads both through self-calls, so each vault call site passes one bool (EIP-170).
+
+```solidity
+function checkMarket(bool sell) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `bool` |  |
+
+<a id="checksellanchor-ibasketvaultviews-address-uint256"></a>
+
+### checkSellAnchor
+
+USDC sell anchor (core 1793, QA plan D5). Revert `SpotBelowSellAnchor` when a USDC `redeem` would sell a held
+Uniswap V4 basket asset at a live price more than `thresholdBps` below that asset's `SELL_ANCHOR_WINDOW` mean.
+No-op when `thresholdBps` is 0. Externally linked so the loop is not inlined into the EIP-170-tight vault.
+
+<i>
+
+Why: the recorder is permissionless and moves 600 ticks per record, so a manipulator who holds the pool price
+down drags the 1800 s NAV TWAP, and with it the TWAP sell floor, onto the held price within one window. Every
+USDC redeem in that window then sells at the depressed price and passes the floor. The anchor needs the hold
+to last `SELL_ANCHOR_WINDOW` instead. Only the sell side is gated: a live price ABOVE the anchor pays the
+redeemer more, and deposits keep the ORA-4 guard (`checkNavDeviation`). Only V4 legs are gated: V3 and
+Aerodrome pools write their own per-block observations and are deeper. A leg the vault holds none of is
+skipped, because the redeem sells none of it. So is a leg the vault holds only dust of (QA plan D6): a balance
+whose TWAP sale floor rounds to zero USDC units, which `BasketVault._sellProportional` never sells. Without
+that, one donated wei after an unwind would refuse every USDC redeem while the price sits below the anchor.
+The dust test prices the balance only on the refusal path, so a normal redeem pays no extra TWAP read.
+`redeemInKind` never calls this, so the holder's oracle-free exit stays open (ADR-0007, core 1665).
+
+</i>
+
+```solidity
+function checkSellAnchor(IBasketVaultViews vault, address usdc, uint256 thresholdBps)
+        public
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `IBasketVaultViews` | The basket vault (read surface). |
+| usdc | `address` | The quote token (USDC). |
+| thresholdBps | `uint256` | The vault's `navDeviationGuardBps`. |
+
+<a id="_isdust-ibasketvaultviews-uint256-uint256"></a>
+
+### _isDust
+
+<i>
+
+QA plan D6: true when `bal` of asset `index` is dust, a balance whose TWAP sale floor
+(`value * (MAX_BPS - maxSlippageBps) / MAX_BPS`, the vault's `_applySlippage`) rounds to zero USDC units.
+The same test as `BasketAssetConfigGuard.deactivateAsset` and the vault's sell and unwind loops.
+
+</i>
+
+```solidity
+function _isDust(IBasketVaultViews vault, uint256 index, uint256 bal)
+        private
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `IBasketVaultViews` |  |
+| index | `uint256` |  |
+| bal | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="spotbelowsellanchorbps-address-address-address"></a>
+
+### spotBelowSellAnchorBps
+
+How far `token`'s live price on the recorder `pool` sits below its sell anchor, in basis points of the anchor
+price. 0 when the live price is at or above the anchor. Monitors and tests read the same number the gate uses.
+
+```solidity
+function spotBelowSellAnchorBps(address pool, address token, address usdc)
+        public
+        view
+        returns (uint256 bps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256` |  |
+
+<a id="sellanchorwindow-address"></a>
+
+### sellAnchorWindow
+
+The window the sell anchor reads on recorder `pool`: `SELL_ANCHOR_WINDOW`, or the recorder's whole history
+when that is shorter (a young recorder). A shorter history weakens the anchor toward the NAV window; it never
+blocks a redeem by itself. With the 7_201-slot ring the history reaches the full window 4 hours after the
+recorder stage and no spammer can shorten it again.
+
+```solidity
+function sellAnchorWindow(address pool) public view returns (uint32 window);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| window | `uint32` |  |
 
 <a id="previewdepositweights-ibasketvaultviews-uint256"></a>
 
@@ -208,4 +393,23 @@ function _fillRealizedValues(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | totalValue | `uint256` |  |
+
+## Errors
+
+### SpotBelowSellAnchor
+
+A USDC redeem would sell `token` at a live price more than `thresholdBps` below its sell anchor (core 1793).
+The holder exits through `redeemInKind`, which reads no price, or waits for the price to settle.
+
+```solidity
+error SpotBelowSellAnchor(address token, uint256 belowBps, uint256 thresholdBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` | The basket asset whose sale was refused. |
+| belowBps | `uint256` | How far the live price sits below the anchor, in basis points of the anchor price. |
+| thresholdBps | `uint256` | The vault's `navDeviationGuardBps`. |
 

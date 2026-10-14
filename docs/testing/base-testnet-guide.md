@@ -146,8 +146,19 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 ## CI integration
 
 The Base testnet adapter e2e runs as the `base-testnet-adapters` job in
-`.github/workflows/suite-05-fork-integration.yml` (shipped in PR #849). The job
-gracefully skips when `BASE_TESTNET_RPC_URL` is unset (the secret has no value).
+`.github/workflows/suite-05-fork-integration.yml` (shipped in PR #849).
+
+QA plan v1 T5 changed how it skips. `parameterized_e2e!` makes one test per
+network, `adapters_against_live_services::robot_money_devnet` and
+`adapters_against_live_services::base_testnet`. A leg whose RPC or funder key is
+unset skips on a laptop and panics under `CI` ("Refusing to skip"). Before T5
+the two legs were one test: the devnet leg met the step's floor of 1, and the
+Base testnet leg skipped on every CI run. Now the devnet leg runs on the Twin
+fork with `--skip base_testnet`. The Base testnet leg runs in its own step only
+when `BASE_TESTNET_RPC_URL` and `BASE_TESTNET_FUNDER_KEY` are set, and a warning
+says so when they are not. A further step runs the testnet leg with `CI=true`
+and no testnet env, and requires the refusal. The sketch below is the original
+shape; the workflow is the source of truth.
 
 ```yaml
 # .github/workflows/suite-05-fork-integration.yml (base-testnet-adapters job)
@@ -172,9 +183,12 @@ jobs:
 
 ## Troubleshooting
 
-### "BASE_TESTNET_RPC_URL not set; skipping"
+### "BASE_TESTNET_RPC_URL not configured" or "Refusing to skip"
 
-Normal behavior. Set the env var to run against real testnet.
+Locally the testnet leg skips when the env var is unset: set it to run against
+the real testnet. Under `CI` the same leg panics with "Refusing to skip" instead
+(QA plan v1 T5). In CI, run the leg only where the secrets are set, and leave it
+out elsewhere with `--skip base_testnet`.
 
 ### RPC timeout errors
 

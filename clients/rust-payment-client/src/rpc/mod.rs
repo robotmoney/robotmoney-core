@@ -62,6 +62,40 @@ struct JsonRpcResponse {
 struct JsonRpcErrorObj {
     code: i64,
     message: String,
+    /// Revert payload of an `eth_call` that reverted. Geth and anvil put the
+    /// `0x…` string here; some nodes nest it as `{ "data": "0x…" }`. Only
+    /// [`RpcClient::eth_call_outcome`] reads it.
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+impl JsonRpcErrorObj {
+    /// The revert payload, when the node returned one.
+    fn revert_data(&self) -> Option<Bytes> {
+        let hex = match self.data.as_ref()? {
+            Value::String(s) => s.as_str(),
+            Value::Object(m) => m.get("data")?.as_str()?,
+            _ => return None,
+        };
+        hex.parse::<Bytes>().ok()
+    }
+
+    /// True when the error object reports an EVM revert rather than a node
+    /// or request failure. Code 3 is the standard "execution reverted" code.
+    fn is_revert(&self) -> bool {
+        self.code == 3 || self.message.contains("revert")
+    }
+}
+
+/// What an `eth_call` returned when the caller needs a revert as an answer
+/// rather than as an error: the pre-sign simulation of a write (QA plan U6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallOutcome {
+    /// The call returned without reverting.
+    Returned(Bytes),
+    /// The node reported a revert. `data` is the revert payload, empty when
+    /// the node gave none. `message` is the node's error text.
+    Reverted { data: Bytes, message: String },
 }
 
 /// Returns `true` iff `err` is Geth's transient "transaction indexing is in
@@ -119,6 +153,20 @@ impl RpcClient {
     /// callers can reach methods we haven't wrapped yet (e.g. anvil pokes
     /// in the e2e harness).
     pub async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T> {
+        let parsed = self.send(method, params).await?;
+        if let Some(err) = parsed.error {
+            return Err(RmpcError::ErrRpcServer {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        decode_result(parsed.result)
+    }
+
+    /// POST one JSON-RPC request and parse the response envelope. Transport
+    /// failures and non-JSON bodies are errors here; a JSON-RPC error object
+    /// is left in the envelope for the caller to interpret.
+    async fn send(&self, method: &str, params: Value) -> Result<JsonRpcResponse> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = JsonRpcRequest {
             jsonrpc: "2.0",
@@ -147,22 +195,8 @@ impl RpcClient {
             )));
         }
 
-        let parsed: JsonRpcResponse = serde_json::from_slice(&body)
-            .map_err(|e| RmpcError::ErrRpcDecode(format!("response not JSON: {e}")))?;
-
-        if let Some(err) = parsed.error {
-            return Err(RmpcError::ErrRpcServer {
-                code: err.code,
-                message: err.message,
-            });
-        }
-        // `result: null` is a *valid* response (e.g. pending receipt). Hand
-        // through the literal `Value::Null` so callers that decode into
-        // `Option<T>` see `None`. Only treat a missing `result` field as
-        // a protocol violation.
-        let result = parsed.result.unwrap_or(Value::Null);
-        serde_json::from_value(result)
-            .map_err(|e| RmpcError::ErrRpcDecode(format!("result decode: {e}")))
+        serde_json::from_slice(&body)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("response not JSON: {e}")))
     }
 
     /// `eth_chainId` — returned as a `u64`. Mainnet won't realistically
@@ -236,6 +270,36 @@ impl RpcClient {
             .await
     }
 
+    /// `eth_call` that reports a revert as [`CallOutcome::Reverted`] with its
+    /// revert data, instead of folding it into [`RmpcError::ErrRpcServer`].
+    /// A JSON-RPC error that is not a revert is still an error.
+    pub async fn eth_call_outcome(
+        &self,
+        req: &CallRequest,
+        tag: Option<&str>,
+    ) -> Result<CallOutcome> {
+        let parsed = self
+            .send("eth_call", json!([req, tag.unwrap_or("latest")]))
+            .await?;
+        match parsed.error {
+            Some(err) => match err.revert_data() {
+                Some(data) => Ok(CallOutcome::Reverted {
+                    data,
+                    message: err.message,
+                }),
+                None if err.is_revert() => Ok(CallOutcome::Reverted {
+                    data: Bytes::new(),
+                    message: err.message,
+                }),
+                None => Err(RmpcError::ErrRpcServer {
+                    code: err.code,
+                    message: err.message,
+                }),
+            },
+            None => decode_result(parsed.result).map(CallOutcome::Returned),
+        }
+    }
+
     /// `eth_sendRawTransaction` — broadcast a signed envelope. Returns the
     /// transaction hash.
     pub async fn send_raw_transaction(&self, raw: &Bytes) -> Result<B256> {
@@ -297,6 +361,17 @@ impl RpcClient {
         u64::from_str_radix(stripped, 16)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("timestamp hex: {e}")))
     }
+}
+
+/// Decode a JSON-RPC `result` into `T`.
+///
+/// `result: null` is a *valid* response (e.g. pending receipt). Hand
+/// through the literal `Value::Null` so callers that decode into
+/// `Option<T>` see `None`. Only treat a missing `result` field as
+/// a protocol violation.
+fn decode_result<T: DeserializeOwned>(result: Option<Value>) -> Result<T> {
+    serde_json::from_value(result.unwrap_or(Value::Null))
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("result decode: {e}")))
 }
 
 /// Multi-endpoint RPC client with automatic failover.
@@ -537,6 +612,30 @@ impl FailoverRpcClient {
         Err(last_err.expect("endpoints is non-empty"))
     }
 
+    /// `eth_call` with the revert as an answer ([`RpcClient::eth_call_outcome`]).
+    /// A revert is a definitive answer from the first endpoint that gives
+    /// one; only transport and non-revert server errors fail over.
+    pub async fn eth_call_outcome(
+        &self,
+        req: &CallRequest,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<CallOutcome> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.eth_call_outcome(req, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!(
+                        "rmpc rpc: eth_call failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
     /// `eth_sendRawTransaction`.
     pub async fn send_raw_transaction(
         &self,
@@ -756,6 +855,82 @@ mod tests {
         let client = RpcClient::new(server.url()).unwrap();
         let err = client.chain_id().await.unwrap_err();
         assert!(matches!(err, RmpcError::ErrRpcTransport(_)), "got {err:?}");
+    }
+
+    /// QA plan U6: a reverted simulation is an answer carrying the revert
+    /// payload, in both shapes nodes use for it.
+    #[tokio::test]
+    async fn eth_call_outcome_returns_revert_data_as_an_answer() {
+        let req = CallRequest {
+            to: address!("0000000000000000000000000000000000000b00"),
+            from: Some(address!("00000000000000000000000000000000000000aa")),
+            data: Bytes::from_static(&[0x12, 0x34, 0x56, 0x78]),
+        };
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted","data":"0x8199f5f3"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error","data":{"message":"reverted","data":"0x8199f5f3"}}}"#,
+        ] {
+            let mut server = mockito::Server::new_async().await;
+            let _m = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            let client = RpcClient::new(server.url()).unwrap();
+            match client.eth_call_outcome(&req, None).await.unwrap() {
+                CallOutcome::Reverted { data, .. } => {
+                    assert_eq!(data.as_ref(), &[0x81, 0x99, 0xf5, 0xf3], "body {body}")
+                }
+                other => panic!("expected Reverted for {body}, got {other:?}"),
+            }
+        }
+    }
+
+    /// A revert without a payload is still a revert. A JSON-RPC error that
+    /// is not a revert stays an error, and a normal return is `Returned`.
+    #[tokio::test]
+    async fn eth_call_outcome_separates_reverts_from_node_errors() {
+        let req = CallRequest {
+            to: address!("0000000000000000000000000000000000000b00"),
+            from: None,
+            data: Bytes::new(),
+        };
+        let cases: [(&str, Option<CallOutcome>); 3] = [
+            (
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#,
+                Some(CallOutcome::Reverted {
+                    data: Bytes::new(),
+                    message: "execution reverted".into(),
+                }),
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#,
+                None,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"result":"0x01"}"#,
+                Some(CallOutcome::Returned(Bytes::from_static(&[0x01]))),
+            ),
+        ];
+        for (body, want) in cases {
+            let mut server = mockito::Server::new_async().await;
+            let _m = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            let client = RpcClient::new(server.url()).unwrap();
+            let got = client.eth_call_outcome(&req, None).await;
+            match want {
+                Some(w) => assert_eq!(got.unwrap(), w, "body {body}"),
+                None => assert!(
+                    matches!(got, Err(RmpcError::ErrRpcServer { code: -32601, .. })),
+                    "body {body}: got {got:?}"
+                ),
+            }
+        }
     }
 
     #[tokio::test]

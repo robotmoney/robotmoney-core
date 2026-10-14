@@ -132,10 +132,26 @@ jobs:
       - name: Fusion proposal / architecture close-out invariant (issue #1249)
         run: python3 .github/scripts/check_fusion_closeout_docs.py
 
-      - name: Governance docs drift (issue #1646)
-        # security-model section references resolve, governance-decisions keeps one
-        # voting-power model, manual-admin-actions names the IC policy, receipt and basket vaults.
+      - name: Self-test governance docs drift guard (issue #1698)
+        # Plants each RouterGovernance voting residue in prd.md and architecture.md and
+        # drops each required phrase, and expects the guard to fire BEFORE the real check runs.
+        run: python3 .github/scripts/check_governance_docs.py --self-test
+
+      - name: Governance docs drift (issue #1646, #1698)
+        # security-model section references resolve; governance-decisions, prd and architecture
+        # keep the no-voting applyReceipt model and none of the deleted RouterGovernance voting
+        # text; manual-admin-actions names the IC policy, receipt and basket vaults.
         run: python3 .github/scripts/check_governance_docs.py
+
+      - name: Self-test no-voting client gate (issue #1698)
+        # Plants each form of the deleted RouterGovernance voting path (doc or comment,
+        # alloy call, human-readable signature, ABI JSON entry, TS object ABI entry) in a
+        # throwaway tree and expects the gate to fail BEFORE the real check runs.
+        run: bash .github/scripts/tests/test_check_no_router_governance_voting.sh
+
+      - name: No RouterGovernance.propose in clients/ (issue #1698)
+        # The voting path is deleted; no client may name, encode or bind propose/vote/execute.
+        run: bash .github/scripts/check_no_router_governance_voting.sh
 
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
@@ -224,6 +240,18 @@ jobs:
         # that crate's tests/ in the same job — so a crate-named job cannot
         # report green over test binaries that do not compile.
         run: python3 .github/scripts/check_rust_test_target_compile_coverage.py
+
+      - name: Self-test reusable-workflow permission guard (QA plan v1 T1)
+        # Drops the nightly's pull-requests grant on its suite-07 call (the 2026-10-07..13
+        # startup_failure), plants a called write above a caller read, a nested call, the
+        # read-all/write-all shorthands, a caller with no permissions block and an empty scan,
+        # and expects each verdict BEFORE the real check runs. Needs PyYAML, installed above.
+        run: python3 scripts/ci/check_reusable_workflow_permissions.py --self-test
+
+      - name: Reusable-workflow callers grant what called jobs ask for (QA plan v1 T1)
+        # A called job that asks for a token scope its caller does not grant makes GitHub refuse
+        # the whole run as startup_failure, so the nightly Twin fork (suite 29) never ran.
+        run: python3 scripts/ci/check_reusable_workflow_permissions.py
 
       - name: Self-test evidence-script sweep (issue #1235)
         # Seeds a compliant fixture plus both defect shapes -- a doc-named

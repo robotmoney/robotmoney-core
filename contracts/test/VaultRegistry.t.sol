@@ -816,6 +816,90 @@ contract VaultRegistryTest is Test {
             assertTrue(IRetireVaultLinks(vaults[i]).retired(), "vault deposit-halt set");
         }
     }
+
+    // ─── ABI gate: no exactness view (QA plan D8, F11) ───────────────────────
+
+    /// @notice QA plan D8 (F11): `isVaultAllExact(address)` read `allExact()` from the vault,
+    ///         a view of the unified vault of ADR-0010 (Rejected). No shipped vault implements
+    ///         it, so the registry view reverted for every registered vault. Both selectors are
+    ///         gone: neither appears in the registry's or any vault's runtime code, and a call
+    ///         to either is refused as an unknown function (no contract here has a fallback).
+    function test_abi_noAllExactSelector() public {
+        bytes4 registryView = bytes4(keccak256("isVaultAllExact(address)"));
+        bytes4 vaultView = bytes4(keccak256("allExact()"));
+
+        TestERC20 usdc = new TestERC20();
+        address swapRouter = makeAddr("allExact-swap-router");
+        address[] memory vaults = new address[](4);
+        vaults[0] = address(
+            new RobotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+        );
+        vaults[1] = address(
+            new ProtocolAssetVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[2] = address(
+            new AgentTokenVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+        vaults[3] = address(
+            new RwaBasketVault(
+                IERC20(address(usdc)),
+                ISwapRouter(swapRouter),
+                type(uint256).max,
+                type(uint256).max,
+                0,
+                admin,
+                admin,
+                admin
+            )
+        );
+
+        assertFalse(
+            _codeContains(address(registry).code, registryView),
+            "registry runtime carries the isVaultAllExact selector"
+        );
+        for (uint256 i = 0; i < vaults.length; i++) {
+            vm.prank(admin);
+            registry.registerVault(vaults[i], meta1);
+            (bool regOk,) =
+                address(registry).staticcall(abi.encodeWithSelector(registryView, vaults[i]));
+            assertFalse(regOk, "registry answers isVaultAllExact");
+            assertFalse(_codeContains(vaults[i].code, vaultView), "vault runtime carries allExact");
+            (bool vaultOk,) = vaults[i].staticcall(abi.encodeWithSelector(vaultView));
+            assertFalse(vaultOk, "vault answers allExact");
+        }
+    }
+
+    /// @dev True when the 4 bytes of `sel` appear anywhere in `code`. Both selectors checked
+    ///      above start with a non-zero byte, so a dispatcher entry for either is a PUSH4 of all
+    ///      four bytes and is always found.
+    function _codeContains(bytes memory code, bytes4 sel) internal pure returns (bool) {
+        if (code.length < 4) return false;
+        for (uint256 i = 0; i + 4 <= code.length; i++) {
+            if (
+                code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2]
+                    && code[i + 3] == sel[3]
+            ) return true;
+        }
+        return false;
+    }
 }
 
 interface IRetireVaultLinks {

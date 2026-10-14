@@ -46,7 +46,13 @@ export default defineConfig({
   projects: [
     {
       name: "dapp",
-      testIgnore: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
+      // consensus-receipts.spec.ts needs a receipt a Fusion QA run anchored and runs only under
+      // playwright.fusion.config.ts. Collected here it skipped on every run (QA plan v1 T5).
+      testIgnore: [
+        "**/safe-proposal-role-grant.spec.ts",
+        "**/governance.spec.ts",
+        "**/consensus-receipts.spec.ts",
+      ],
     },
     {
       name: "safe-governance",

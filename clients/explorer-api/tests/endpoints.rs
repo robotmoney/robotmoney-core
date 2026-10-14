@@ -47,7 +47,10 @@ async fn list_contracts_returns_freshness_header() {
 async fn latest_vault_snapshot_returns_decimal_strings() {
     let s = start_with_seed().await;
     let body: serde_json::Value = http()
-        .get(format!("http://{}/v1/vault/snapshot/latest", s.addr))
+        .get(format!(
+            "http://{}/v1/vault/snapshot/latest?contract=0x1111111111111111111111111111111111111111",
+            s.addr
+        ))
         .send()
         .await
         .unwrap()
@@ -58,6 +61,319 @@ async fn latest_vault_snapshot_returns_decimal_strings() {
     assert_eq!(body["snapshots"][0]["total_supply"], "11111111");
     assert_eq!(body["block_number"], 1000);
     assert!(body["indexed_at"].is_string());
+}
+
+/// QA plan X7 (DI-9): `/v1/vault/snapshot/latest` answers for one vault on the
+/// served chain. It used to read the newest row of the whole table, so it
+/// answered with whichever vault (or chain) had the highest block.
+///
+/// The seed holds the gateway contract's snapshot at block 1000 and vault A's at
+/// block 500 on Base. This test adds a newer row for the gateway contract on the
+/// shadow chain (block 5000) in the same database.
+#[tokio::test]
+async fn latest_snapshot_is_chain_and_vault_scoped() {
+    let s = start_with_seed().await;
+    sqlx::query(
+        "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                       exit_fee_bps, tvl_cap, paused) \
+         VALUES ($1, $2, 5000, 77777777::NUMERIC, 77777777::NUMERIC, 0, 0::NUMERIC, FALSE)",
+    )
+    .bind(common::SHADOW_CHAIN_ID)
+    .bind(vec![0x11u8; 20])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+
+    let get = |query: &'static str| {
+        let url = format!("http://{}/v1/vault/snapshot/latest{query}", s.addr);
+        async move { http().get(url).send().await.unwrap() }
+    };
+
+    // The gateway contract's newest Base row, not the newer shadow-chain row.
+    let resp = get("?contract=0x1111111111111111111111111111111111111111").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let snap = &body["snapshots"][0];
+    assert_eq!(snap["chain_id"], common::PRIMARY_CHAIN_ID);
+    assert_eq!(snap["block_number"], 1000);
+    assert_eq!(snap["total_assets"], "12345678");
+    assert_eq!(body["snapshots"].as_array().unwrap().len(), 1);
+
+    // Vault A's own newest row (block 500), not the gateway's newer block 1000.
+    let resp = get("?contract=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["snapshots"][0]["contract"],
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(body["snapshots"][0]["block_number"], 500);
+    assert_eq!(body["snapshots"][0]["total_assets"], "99999999");
+
+    // No vault named: refused, never "whichever vault is newest".
+    assert_eq!(get("").await.status(), 400);
+    // A malformed address is refused; a vault with no snapshot here is not found.
+    assert_eq!(get("?contract=0x1234").await.status(), 400);
+    assert_eq!(
+        get("?contract=0x9999999999999999999999999999999999999999")
+            .await
+            .status(),
+        404
+    );
+}
+
+/// QA plan X7 (DI-9): `/v1/chains/:chain_id/contracts` lists only the served
+/// chain. It used to bind the path's chain id, so the Base service listed the
+/// shadow chain's contracts from the shared database.
+#[tokio::test]
+async fn list_contracts_serves_only_the_configured_chain() {
+    let s = start_with_seed().await;
+    let resp = http()
+        .get(format!("http://{}/v1/chains/1/contracts", s.addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404, "the shadow chain is not served here");
+
+    let body: serde_json::Value = http()
+        .get(format!("http://{}/v1/chains/8453/contracts", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let contracts = body["contracts"].as_array().unwrap();
+    assert!(!contracts.is_empty());
+    for c in contracts {
+        assert_eq!(c["chain_id"], common::PRIMARY_CHAIN_ID, "{c}");
+    }
+}
+
+/// Seed one exclusion record with its holders' snapshot balances, credits,
+/// claims and close (QA plan X7, core issue 1820).
+#[allow(clippy::too_many_arguments)]
+async fn seed_exclusion_record(
+    pool: &sqlx::PgPool,
+    chain_id: i64,
+    exclusion_id: i64,
+    snapshot_supply: &str,
+    balances: &[([u8; 20], &str)],
+    credits: &[(i64, &str, &str)],
+    claims: &[(i64, [u8; 20], &str)],
+    finalized: Option<(i64, i16, &str)>,
+) {
+    let ledger = vec![0x1Eu8; 20];
+    sqlx::query(
+        "INSERT INTO exclusion_records (chain_id, ledger_address, exclusion_id, vault_address, \
+             adapter_index, adapter_address, snapshot_supply, adapter_value, block_number, \
+             log_index, tx_hash) \
+         VALUES ($1, $2, $3, $4, 2, $5, $6::NUMERIC, 500, $7, 0, $8)",
+    )
+    .bind(chain_id)
+    .bind(&ledger)
+    .bind(exclusion_id)
+    .bind(vec![0xAAu8; 20])
+    .bind(vec![0xADu8; 20])
+    .bind(snapshot_supply)
+    .bind(600 + exclusion_id)
+    .bind(vec![0x60u8; 32])
+    .execute(pool)
+    .await
+    .unwrap();
+    for (holder, balance) in balances {
+        sqlx::query(
+            "INSERT INTO exclusion_holder_balances \
+               (chain_id, ledger_address, exclusion_id, holder, balance_at, block_number) \
+             VALUES ($1, $2, $3, $4, $5::NUMERIC, $6)",
+        )
+        .bind(chain_id)
+        .bind(&ledger)
+        .bind(exclusion_id)
+        .bind(holder.to_vec())
+        .bind(*balance)
+        .bind(600 + exclusion_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (block, amount, total) in credits {
+        sqlx::query(
+            "INSERT INTO exclusion_recoveries (chain_id, block_number, log_index, tx_hash, \
+                 ledger_address, exclusion_id, source, amount, recovered_total) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7::NUMERIC, $8::NUMERIC)",
+        )
+        .bind(chain_id)
+        .bind(*block)
+        .bind(exclusion_id as i32)
+        .bind(vec![0x61u8; 32])
+        .bind(&ledger)
+        .bind(exclusion_id)
+        .bind(*amount)
+        .bind(*total)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (block, holder, amount) in claims {
+        sqlx::query(
+            "INSERT INTO exclusion_claims (chain_id, block_number, log_index, tx_hash, \
+                 ledger_address, exclusion_id, holder, amount) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC)",
+        )
+        .bind(chain_id)
+        .bind(*block)
+        .bind(exclusion_id as i32)
+        .bind(vec![0x62u8; 32])
+        .bind(&ledger)
+        .bind(exclusion_id)
+        .bind(holder.to_vec())
+        .bind(*amount)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    if let Some((block, reason, total)) = finalized {
+        sqlx::query(
+            "INSERT INTO exclusion_finalizations (chain_id, ledger_address, exclusion_id, reason, \
+                 recovered_total, block_number, log_index, tx_hash) \
+             VALUES ($1, $2, $3, $4, $5::NUMERIC, $6, 0, $7)",
+        )
+        .bind(chain_id)
+        .bind(&ledger)
+        .bind(exclusion_id)
+        .bind(reason)
+        .bind(total)
+        .bind(block)
+        .bind(vec![0x63u8; 32])
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// Core issue 1820 (indexer half, QA plan X7): a holder's claim on each
+/// exclusion record is `floor(recovered * balance_at / snapshot_supply) -
+/// claimed`, the ledger's own formula and rounding.
+///
+/// Record 1 (force-removed): 300 USDC recovered over two credits, the holder
+/// held 600 of 1000 shares and has claimed 100, so 180 is owed and 80 is
+/// claimable. Another holder's claim on it does not count against this one.
+/// Record 2 (open): 10 recovered, 333 of 1000 shares, so floor(3.33) = 3. The
+/// same holder's record on the shadow chain is not served.
+#[tokio::test]
+async fn account_exclusion_claims_are_pro_rata_to_the_snapshot() {
+    let s = start_with_seed().await;
+    let holder = [0x33u8; 20];
+    let other = [0x55u8; 20];
+    seed_exclusion_record(
+        &s._pool,
+        common::PRIMARY_CHAIN_ID,
+        1,
+        "1000",
+        &[(holder, "600"), (other, "400")],
+        &[(610, "100", "100"), (620, "200", "300")],
+        &[(630, holder, "100"), (631, other, "50")],
+        Some((640, 2, "300")),
+    )
+    .await;
+    seed_exclusion_record(
+        &s._pool,
+        common::PRIMARY_CHAIN_ID,
+        2,
+        "1000",
+        &[(holder, "333")],
+        &[(650, "10", "10")],
+        &[],
+        None,
+    )
+    .await;
+    seed_exclusion_record(
+        &s._pool,
+        common::SHADOW_CHAIN_ID,
+        3,
+        "1000",
+        &[(holder, "1000")],
+        &[(660, "999", "999")],
+        &[],
+        None,
+    )
+    .await;
+
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x3333333333333333333333333333333333333333/exclusion-claims",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let claims = body["claims"].as_array().unwrap();
+    assert_eq!(
+        claims.len(),
+        2,
+        "the shadow chain's record is not served: {body}"
+    );
+
+    let first = &claims[0];
+    assert_eq!(first["vault"], "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        first["exclusion_ledger"],
+        "0x1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e"
+    );
+    assert_eq!(first["exclusion_id"], 1);
+    assert_eq!(first["adapter_index"], 2);
+    assert_eq!(first["opened_block"], 601);
+    assert_eq!(first["snapshot_supply"], "1000");
+    assert_eq!(first["balance_at"], "600");
+    assert_eq!(first["recovered_usdc"], "300");
+    assert_eq!(first["claimed_usdc"], "100");
+    assert_eq!(first["claimable_usdc"], "80");
+    assert_eq!(first["finalized"], true);
+    assert_eq!(first["finalize_reason"], "force_removed");
+
+    let second = &claims[1];
+    assert_eq!(second["exclusion_id"], 2);
+    assert_eq!(second["recovered_usdc"], "10");
+    assert_eq!(second["claimed_usdc"], "0");
+    assert_eq!(second["claimable_usdc"], "3", "floor, like the ledger");
+    assert_eq!(second["finalized"], false);
+    assert!(second["finalize_reason"].is_null());
+
+    assert_eq!(body["total_claimable_usdc"], "83");
+    assert!(body["block_number"].is_i64());
+
+    // The other holder: floor(300 * 400 / 1000) = 120, minus its own 50.
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x5555555555555555555555555555555555555555/exclusion-claims",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["claims"][0]["claimable_usdc"], "70");
+
+    // An address with no snapshot balance has no claims.
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x9999999999999999999999999999999999999999/exclusion-claims",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["claims"].as_array().unwrap().len(), 0);
+    assert_eq!(body["total_claimable_usdc"], "0");
 }
 
 #[tokio::test]
@@ -713,6 +1029,98 @@ async fn stats_returns_nonzero_tvl_and_depositors() {
     assert!(body["indexed_at"].is_string(), "indexed_at must be present");
 }
 
+/// DI-2: `/v1/stats.total_tvl` leaves a Retired vault out and keeps a DepositsPaused one.
+///
+/// The indexer keeps snapshotting a retired vault while its holders exit, so its newest row is
+/// live, not frozen. Status is filtered here, in the product view: the old rmPROTO stops counting
+/// toward protocol TVL once it is retired, and `/v1/vaults` still lists it with its own
+/// `total_assets`.
+#[tokio::test]
+async fn stats_total_tvl_leaves_out_retired_vaults() {
+    async fn total_tvl(addr: std::net::SocketAddr) -> String {
+        let body: serde_json::Value = http()
+            .get(format!("http://{addr}/v1/stats"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        body["total_tvl"]
+            .as_str()
+            .expect("total_tvl must be a string")
+            .to_string()
+    }
+    let s = start_with_seed().await;
+    // Fixture: gateway snapshot 12345678 + Alpha Vault (Active) 99999999.
+    assert_eq!(total_tvl(s.addr).await, "112345677");
+
+    // Beta Vault is seeded DepositsPaused (status 1) with no snapshot. Give it one, and add a
+    // Retired (status 2) vault that still holds assets.
+    let beta = vec![0xbbu8; 20];
+    let retired = vec![0xb0u8; 20];
+    let reg_tx = vec![0x10u8; 32];
+    sqlx::query(
+        "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+                              registered_at, registered_block, registered_tx) \
+         VALUES ($1, $2, 'Old Protocol Vault', 'VOLATILE', 0, 2, 1748000000, 900, $3)",
+    )
+    .bind(8453_i64)
+    .bind(&retired[..])
+    .bind(&reg_tx[..])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+    for (vault, block, total_assets) in
+        [(&beta, 600_i64, "7000000"), (&retired, 610_i64, "5000000")]
+    {
+        sqlx::query(
+            "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', 900)",
+        )
+        .bind(8453_i64)
+        .bind(&vault[..])
+        .execute(&s._pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                           exit_fee_bps, tvl_cap, paused) \
+             VALUES ($1, $2, $3, $4::NUMERIC, $4::NUMERIC, 0, 1000000000, false)",
+        )
+        .bind(8453_i64)
+        .bind(&vault[..])
+        .bind(block)
+        .bind(total_assets)
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        total_tvl(s.addr).await,
+        "119345677",
+        "the paused vault's 7000000 counts; the retired vault's 5000000 does not"
+    );
+
+    let vaults: serde_json::Value = http()
+        .get(format!("http://{}/v1/vaults", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let old = vaults["vaults"]
+        .as_array()
+        .expect("vaults must be an array")
+        .iter()
+        .find(|v| v["address"].as_str() == Some("0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"))
+        .expect("the retired vault is still listed")
+        .clone();
+    assert_eq!(old["status"], 2);
+    assert_eq!(old["total_assets"], "5000000");
+}
+
 /// Suite-08 AC: GET /v1/stats activity feed entries have correct shape.
 #[tokio::test]
 async fn stats_activity_feed_entry_shape() {
@@ -809,13 +1217,80 @@ async fn account_positions_returns_vault_balances() {
         .iter()
         .find(|p| p["shares"].as_str() == Some("50000000"))
         .expect("vault_a position with shares=50000000 must be present");
-    // usdc_value = 50000000 * 99999999 / 99999999 = 50000000.
+    // usdc_value = floor(50000000 * previewRedeem(99999999) / 99999999), previewRedeem net of the
+    // 25 bps exit fee = 99750000 (core 1795).
     assert_eq!(
-        vault_a_pos["usdc_value"], "50000000",
-        "usdc_value must equal shares when total_assets == total_supply"
+        vault_a_pos["usdc_value"], "49875000",
+        "usdc_value is what a redeem pays after the exit fee, not shares * total_assets / total_supply"
     );
     assert!(body["block_number"].is_i64());
     assert!(body["indexed_at"].is_string());
+}
+
+/// Core 1795 (QA plan X8): `usdc_value` has `previewRedeem` semantics. An outside round trip through
+/// rmAGENT showed `convertToAssets` about 3% above what the redeem paid, and the positions endpoint
+/// priced shares at that gross `shares * total_assets / total_supply`.
+///
+/// The test writes a newer vault A snapshot shaped like rmAGENT: 1000 USDC of assets over 1000 USDC
+/// of supply (a gross share price of 1), and `previewRedeem(totalSupply())` 950 USDC after a 5%
+/// slippage floor. The agent's 50 shares are worth 47.5 USDC at exit, not 50. A later snapshot
+/// without the reading (a row from before migration 0022) serves `null`, never the gross value.
+#[tokio::test]
+async fn account_positions_usdc_value_is_preview_redeem_not_convert_to_assets() {
+    let s = start_with_seed().await;
+
+    vault_a_snapshot(&s._pool, 600, Some("950000000")).await;
+    assert_eq!(
+        vault_a_usdc_value(&s).await,
+        "47500000",
+        "50 shares at previewRedeem: 50 * 950 / 1000 USDC, not the 50 USDC convertToAssets gives"
+    );
+
+    vault_a_snapshot(&s._pool, 700, None).await;
+    assert!(
+        vault_a_usdc_value(&s).await.is_null(),
+        "a snapshot without previewRedeem serves an unknown value, not the gross share price"
+    );
+}
+
+/// A vault A snapshot at `block` shaped like rmAGENT: 1000 USDC of assets over 1000 USDC of supply,
+/// `previewRedeem(totalSupply())` = `preview` (NULL for a row from before migration 0022).
+async fn vault_a_snapshot(pool: &sqlx::PgPool, block: i64, preview: Option<&str>) {
+    sqlx::query(
+        "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                       exit_fee_bps, tvl_cap, paused, preview_redeem_total) \
+         VALUES ($1, $2, $3, 1000000000::NUMERIC, 1000000000::NUMERIC, 0, 5000000000::NUMERIC, FALSE, \
+                 $4::NUMERIC)",
+    )
+    .bind(common::PRIMARY_CHAIN_ID)
+    .bind(vec![0xAAu8; 20])
+    .bind(block)
+    .bind(preview)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The fixture agent's vault A `usdc_value` from `/v1/accounts/:address/positions`.
+async fn vault_a_usdc_value(s: &common::TestServer) -> serde_json::Value {
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x3333333333333333333333333333333333333333/positions",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["positions"]
+        .as_array()
+        .expect("positions must be an array")
+        .iter()
+        .find(|p| p["vault"] == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .expect("the agent holds vault A shares")["usdc_value"]
+        .clone()
 }
 
 /// Suite-08 AC: GET /v1/accounts/:address/positions reflects positions in both

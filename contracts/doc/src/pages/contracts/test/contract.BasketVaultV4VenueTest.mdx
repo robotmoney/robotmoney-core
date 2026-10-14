@@ -4,7 +4,7 @@ title: "BasketVaultV4VenueTest"
 
 # BasketVaultV4VenueTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/BasketVaultV4Venue.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/BasketVaultV4Venue.t.sol)
 
 **Inherits:** Test
 
@@ -284,5 +284,60 @@ so a deposit that moves the price 10 bps reverts. The deploy script raises the b
 
 ```solidity
 function test_slippage_theDefault300bpsCannotCoverThePoolFeeAndImpact() public;
+```
+
+<a id="_depositthenunwind"></a>
+
+### _depositThenUnwind
+
+<i>
+
+Deposit, then let the emergency unwind sell the whole RM position. Returns alice's shares.
+
+</i>
+
+```solidity
+function _depositThenUnwind() internal returns (uint256 shares);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="test_v4_dustdonationdoesnotblockremoveassetorunwind"></a>
+
+### test_V4_dustDonationDoesNotBlockRemoveAssetOrUnwind
+
+After the unwind anyone can send the vault one RM unit. Near tick 0 that unit is worth one USDC unit: its
+5 percent sale floor rounds to zero and the 2.91 percent pool fee rounds its sale to zero, which the adapter
+refuses. Before D6 that unit made every later `emergencyUnwind` revert and `removeAsset` revert
+`AssetStillHeld`, forever. Now the unwind skips the dust leg, `removeAsset` accepts the dust and
+`reabsorbRemovedAsset` leaves it in place.
+
+```solidity
+function test_V4_dustDonationDoesNotBlockRemoveAssetOrUnwind() public;
+```
+
+<a id="test_v4_dustdonationdoesnotblockthelastusdcredeem"></a>
+
+### test_V4_dustDonationDoesNotBlockTheLastUsdcRedeem
+
+The last holder's USDC redeem would sell the whole dust unit. It skips that leg and pays the idle USDC.
+
+```solidity
+function test_V4_dustDonationDoesNotBlockTheLastUsdcRedeem() public;
+```
+
+<a id="test_v4_abalanceabovedustisstillsoldandstillblocksremoveasset"></a>
+
+### test_V4_aBalanceAboveDustIsStillSoldAndStillBlocksRemoveAsset
+
+Dust is only a balance whose sale floor rounds to zero. 100 units (about 100 USDC units, floor about 95)
+still block `removeAsset` and are still sold by the unwind.
+
+```solidity
+function test_V4_aBalanceAboveDustIsStillSoldAndStillBlocksRemoveAsset() public;
 ```
 

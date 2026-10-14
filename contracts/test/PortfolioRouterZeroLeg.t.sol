@@ -38,6 +38,12 @@ contract StrictZeroRevertVault is ERC20 {
         return assets;
     }
 
+    /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+    ///      reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
+    }
+
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
         depositCalls++;
         require(assets != 0, "StrictZeroRevertVault: deposit(0)");

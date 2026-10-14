@@ -1,0 +1,417 @@
+---
+title: "RecorderManipulationForkTest"
+description: "Runs on the Twin chain (a pinned lazy anvil fork of real Base). With FORK_RPC_URL unset the test skips with a named reason (ForkSelect). Production configuration throughout: the shipped PoolKey, the recorder stage's 7_201-slot ring, AgentTokenVault with `maxSlippageBps` 500 and the D10 guard of 400 bps, and the core 1779 keeper cadence of 300 s. Every transaction stays on the local fork."
+---
+
+# RecorderManipulationForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RecorderManipulationFork.t.sol)
+
+**Inherits:** Test
+
+Runs on the Twin chain (a pinned lazy anvil fork of real Base). With FORK_RPC_URL unset the test skips with a
+named reason (ForkSelect). Production configuration throughout: the shipped PoolKey, the recorder stage's
+7_201-slot ring, AgentTokenVault with `maxSlippageBps` 500 and the D10 guard of 400 bps, and the core 1779 keeper
+cadence of 300 s. Every transaction stays on the local fork.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### KEEPER_SECS
+
+<i>
+
+The keeper cadence from core 1779.
+
+</i>
+
+```solidity
+uint256 internal constant KEEPER_SECS = 300;
+```
+
+### HOLD_TICKS
+
+<i>
+
+The held displacement: one record's full clamp (10 ticks per second for 60 s), about 6.2 percent.
+
+</i>
+
+```solidity
+int24 internal constant HOLD_TICKS = 600;
+```
+
+### INVENTORY_TICKS
+
+<i>
+
+The attacker's RM inventory is bought first, before the honest history, so the later sale can push this far
+below the honest price after the pool fee on both legs.
+
+</i>
+
+```solidity
+int24 internal constant INVENTORY_TICKS = 680;
+```
+
+### STEP_USDC
+
+<i>
+
+Swap size of each inventory step. About 0.3 percent of the 1,750 USDC virtual reserve ADR-0005 measured.
+
+</i>
+
+```solidity
+uint256 internal constant STEP_USDC = 5e6;
+```
+
+### GUARD_BPS
+
+<i>
+
+rmAGENT sheet guard (QA plan decision D10).
+
+</i>
+
+```solidity
+uint256 internal constant GUARD_BPS = 400;
+```
+
+### HIGH_LOSS_BPS
+
+<i>
+
+QA plan decision D2: 5 percent of a redeem within 30 minutes is "high".
+
+</i>
+
+```solidity
+uint256 internal constant HIGH_LOSS_BPS = 500;
+```
+
+### ANCHOR_SECS
+
+```solidity
+uint32 internal constant ANCHOR_SECS = 14_400;
+```
+
+## State Variables
+
+### cfg
+
+```solidity
+string internal cfg;
+```
+
+### key
+
+```solidity
+IPoolManagerV4.PoolKey internal key;
+```
+
+### poolManager
+
+```solidity
+address internal poolManager;
+```
+
+### rmToken
+
+```solidity
+address internal rmToken;
+```
+
+### swapRouter02
+
+```solidity
+address internal swapRouter02;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### vault
+
+```solidity
+AgentTokenVault internal vault;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### inventory
+
+```solidity
+uint256 internal inventory;
+```
+
+### inventoryCost
+
+```solidity
+uint256 internal inventoryCost;
+```
+
+### honestTick
+
+```solidity
+int24 internal honestTick;
+```
+
+### probeRm
+
+```solidity
+uint256 internal probeRm;
+```
+
+### floorBefore
+
+```solidity
+uint256 internal floorBefore;
+```
+
+### anchorBefore
+
+```solidity
+uint256 internal anchorBefore;
+```
+
+### rmSold
+
+```solidity
+uint256 internal rmSold;
+```
+
+### pushProceeds
+
+```solidity
+uint256 internal pushProceeds;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_livetick"></a>
+
+### _liveTick
+
+```solidity
+function _liveTick() internal view returns (int24 tick);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tick | `int24` |  |
+
+<a id="_keep-uint256"></a>
+
+### _keep
+
+<i>
+
+`n` keeper records, `KEEPER_SECS` apart.
+
+</i>
+
+```solidity
+function _keep(uint256 n) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="_dropbps-uint256-uint256"></a>
+
+### _dropBps
+
+```solidity
+function _dropBps(uint256 beforeValue, uint256 afterValue) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| beforeValue | `uint256` |  |
+| afterValue | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_anchorvalue-uint256"></a>
+
+### _anchorValue
+
+```solidity
+function _anchorValue(uint256 rmAmount) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rmAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_deployvaultanddeposit"></a>
+
+### _deployVaultAndDeposit
+
+<i>
+
+rmAGENT as the agent stage builds it, on the recorder above, with a 2 USDC deposit from alice.
+
+</i>
+
+```solidity
+function _deployVaultAndDeposit() internal;
+```
+
+<a id="test_recorder_helddisplacementdragssellfloorunderkeepercadence"></a>
+
+### test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence
+
+The E1 model on the real pool. The attacker sells RM until the pool sits at least 600 ticks under the honest
+price and holds it there. The keeper records every 300 s, so it records the held price (it is not a defence).
+After 2100 s the 1800 s NAV TWAP, and the TWAP sell floor of every USDC redeem, has followed the hold by
+more than the 5 percent bar. The 4 hour sell anchor has moved about an eighth as far, so the USDC redeem
+refuses with `SpotBelowSellAnchor` and the lowest price a USDC redeem could execute at stays inside the bar.
+`redeemInKind` still pays the RM. The logs carry the pool depth and the attack's cost for the report.
+
+```solidity
+function test_recorder_heldDisplacementDragsSellFloorUnderKeeperCadence() public;
+```
+
+<a id="_buyinventory"></a>
+
+### _buyInventory
+
+<i>
+
+Attacker inventory, bought before the honest history. Each step pokes the recorder (a no-op in this block).
+
+</i>
+
+```solidity
+function _buyInventory() internal;
+```
+
+<a id="_honesthistory"></a>
+
+### _honestHistory
+
+<i>
+
+Honest history: 2100 s, the vault and a deposit, then a full 4 hour anchor window of keeper records.
+
+</i>
+
+```solidity
+function _honestHistory() internal;
+```
+
+<a id="_push"></a>
+
+### _push
+
+<i>
+
+The push: sell inventory in 1/40 steps until the pool is at least HOLD_TICKS under the honest price.
+
+</i>
+
+```solidity
+function _push() internal;
+```
+
+<a id="_measureandassertbound"></a>
+
+### _measureAndAssertBound
+
+<i>
+
+The drag of the 1800 s floor (E1) and the bound the anchor puts on the executable floor (D5).
+
+</i>
+
+```solidity
+function _measureAndAssertBound() internal;
+```
+
+<a id="_usdcredeemrefusesandinkindpays"></a>
+
+### _usdcRedeemRefusesAndInKindPays
+
+<i>
+
+The fix: the USDC redeem refuses, the in-kind exit pays.
+
+</i>
+
+```solidity
+function _usdcRedeemRefusesAndInKindPays() internal;
+```
+
+<a id="_unwindandlogcost"></a>
+
+### _unwindAndLogCost
+
+<i>
+
+The attacker unwinds with the push proceeds. The RM not bought back is the cost of the push and the hold.
+
+</i>
+
+```solidity
+function _unwindAndLogCost() internal;
+```
+

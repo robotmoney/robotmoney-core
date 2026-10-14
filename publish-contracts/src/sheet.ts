@@ -8,6 +8,7 @@ import { USDC_ADDRESS } from "./usdc.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
+import { ROUTER_STAGE_ELIGIBLE, STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 
 export type Address = `0x${string}`;
 export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
@@ -287,7 +288,7 @@ export function parseSheet(text: string): Sheet {
     if (perDepositCap > tvlCap) throw err(`${p} exceeds ${t}: the per-deposit cap is never above the TVL cap`);
     if (exitFeeBps > 10000n) throw err(`${f} is above 10000`);
     const vault: SheetVault = { tvlCap, perDepositCap, exitFeeBps };
-    if (k !== "USDC") {
+    if ((BASKET_KEYS as readonly VaultKey[]).includes(k)) {
       const [g, l] = basketSheetNames(k) as [string, string];
       const nav = asUint(g, v[g]!), floor = asUint(l, v[l]!);
       // issue 1666: 0 disables ORA-4 (BasketViews.checkNavDeviation), above 2000 is refused by the vault setter. Refuse both before any transaction.
@@ -302,17 +303,20 @@ export function parseSheet(text: string): Sheet {
 
   // deploy-time router configuration
   const eligibleVaults = asVaultKeys("ELIGIBLE_VAULTS", v.ELIGIBLE_VAULTS!);
-  if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
+  // issue 1705: which vault the router stage makes eligible is the stage table's eligibilitySource (rmUSDC today), never a sheet value
+  const fromRouterStage = eligibleVaults.filter((k) => ROUTER_STAGE_ELIGIBLE.includes(k));
+  if (fromRouterStage.length > 0) throw err(`ELIGIBLE_VAULTS lists baskets only: ${fromRouterStage.map((k) => VAULT_NAME[k]).join(", ")} is eligible from the router stage`);
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
   // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
+  // The stage 13 set is the stage table's unpauseInStage13 (issue 1705).
   if (chainId === MAINNET_CHAIN_ID) {
-    const missing = (["USDC", "PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
-    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list USDC, PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+    const missing = STAGE13_UNPAUSE_VAULTS.filter((k) => !unpauseVaults.includes(k));
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list ${andList(STAGE13_UNPAUSE_VAULTS)} on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
-  const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
+  const wantKeys = [...ROUTER_STAGE_ELIGIBLE, ...eligibleVaults].sort().join(",");
   if (weightKeys !== wantKeys) throw err(`ROUTER_WEIGHTS must name exactly rmUSDC and the eligible baskets (${wantKeys}), got ${weightKeys}`);
   // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
   if (chainId === MAINNET_CHAIN_ID) {
@@ -336,6 +340,9 @@ export function parseSheet(text: string): Sheet {
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }
+
+/** "USDC, PROTO, AGENT and RWA". */
+const andList = (xs: readonly string[]): string => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "AGENT:0", "RWA:0"].sort().join(",");
 
@@ -378,7 +385,7 @@ export function eligibilityBps(sheet: Pick<Sheet, "eligibleVaults" | "weights">,
   const eligible = eligibleInOrder(sheet);
   const step = eligible.indexOf(basket);
   if (step < 0) return undefined;
-  const keys = (["USDC", ...eligible] as VaultKey[]).slice(0, step + 2);
+  const keys = ([...ROUTER_STAGE_ELIGIBLE, ...eligible] as VaultKey[]).slice(0, ROUTER_STAGE_ELIGIBLE.length + step + 1);
   const w = new Map(sheet.weights.map((x) => [x.key, x.bps]));
   const final = keys.map((k) => w.get(k) ?? 0);
   if (step === eligible.length - 1) return final;

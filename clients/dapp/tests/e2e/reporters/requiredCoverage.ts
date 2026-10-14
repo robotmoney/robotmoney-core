@@ -17,11 +17,19 @@
  * with a message naming the file, rather than passing quietly.
  *
  * Optional-by-design specs (the env-named real-artifact one) stay out of the
- * list: they are allowed to skip, which is exactly why something else has to be
- * standing coverage. The split is deliberate — see
- * `consensus-receipts-seeded.spec.ts`.
+ * list, which is exactly why something else has to be standing coverage. The
+ * split is deliberate — see `consensus-receipts-seeded.spec.ts`. Since QA plan
+ * v1 T5 the default config does not collect that spec at all (testIgnore); it
+ * runs only under `playwright.fusion.config.ts`.
  *
- * The decision is a pure function so it is unit-testable in both directions
+ * NO SKIPS IN A FULL RUN (QA plan v1 T5)
+ * The spec rule above cannot see a test that skips inside a spec whose other
+ * tests ran. Three tests did exactly that on every suite-10 run (the env-gated
+ * receipt spec and two in `number-formatting.spec.ts`), and the run stayed green.
+ * `evaluateNoSkips` fails a full run that skipped any test, and names it. A test
+ * that cannot run in the default config belongs in a `testIgnore`, not a skip.
+ *
+ * The decisions are pure functions so they are unit-testable in both directions
  * (`tests/unit/requiredCoverage.test.ts`) without booting a devnet.
  */
 
@@ -90,6 +98,35 @@ export function evaluateCoverage(
     }
   }
   return { ok: failures.length === 0, failures };
+}
+
+/**
+ * Decide whether a full run skipped any test (QA plan v1 T5).
+ *
+ * @param skipped  one label per skipped test, `<spec file> › <title>`.
+ */
+export function evaluateNoSkips(skipped: readonly string[]): CoverageVerdict {
+  const failures = skipped.map(
+    (label) =>
+      `test '${label}' was SKIPPED. A skipped test asserts nothing, and a full ` +
+      `suite-10 run skips no test (QA plan v1 T5). Make it run, or take its spec ` +
+      `out of the default config with testIgnore.`,
+  );
+  return { ok: failures.length === 0, failures };
+}
+
+/** Both rules over one run: every required spec executed, and no test skipped. */
+export function evaluateRun(
+  seen: ReadonlyMap<string, SpecOutcome>,
+  skipped: readonly string[],
+  required: readonly string[] = REQUIRED_SPECS,
+): CoverageVerdict {
+  const coverage = evaluateCoverage(seen, required);
+  const skips = evaluateNoSkips(skipped);
+  return {
+    ok: coverage.ok && skips.ok,
+    failures: [...coverage.failures, ...skips.failures],
+  };
 }
 
 /**

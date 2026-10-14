@@ -1,10 +1,14 @@
 // Issue 1727: the govern surface of a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) on 8453, against the fake timelock of govern-world.ts.
 // Per row: unpauses, apply-receipt and release-receipt run in production and in a rehearsal. update-delay, batch and cancel run on 8453 ONLY in a rehearsal, as explicit rows after the unpauses.
 // register-committee (the consensus receipt submitter) is rehearsal and Twin only. Every refusal has a mutation check: the same call with the mode on (or the input fixed) succeeds.
+// QA plan v1 B6 (review CS-2): the submitter Safe authorizes itself in private (commit, reveal, hand-over to the timelock) BEFORE the batch is scheduled, and the public batch is
+// setPolicy + committeeRegister, which no squatter can break during the delay (the contract-level proof is ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun).
 import { describe, expect, test } from "bun:test";
 import { decodeFunctionData, getAddress } from "viem";
 import { EXIT_CODES } from "../src/errors.ts";
-import { GATEWAY_REGISTER_ABI, REGISTER_ROW, SUBMITTER_POLICY_CAP, buildRegisterCalls, registerReadBackProblems, registerRecordKey } from "../src/committee-register.ts";
+import {
+  GATEWAY_REGISTER_ABI, REGISTER_ROW, SUBMITTER_POLICY_CAP, buildRegisterCalls, buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthPolicyProblems, selfAuthStateOf,
+} from "../src/committee-register.ts";
 import { GOVERN_ROWS, TWIN_ONLY_ROWS, runGovern, stageRows, twinOnlyRefused } from "../src/govern.ts";
 import { newManifest } from "../src/runner.ts";
 import { updateTimelockDelay } from "../src/safe/timelock.ts";
@@ -87,17 +91,20 @@ describe("update-delay, batch and cancel on 8453: refused in production, allowed
 });
 
 describe("register-committee: the consensus receipt submitter, through the Safe and the timelock", () => {
-  test("a rehearsal on 8453: ONE batch of authorizeAgent then committeeRegister, a signalling-only policy owned by the timelock, read back, evidence entry in the run manifest", async () => {
+  test("a rehearsal on 8453: the submitter Safe self-authorizes in private, THEN ONE batch of setPolicy then committeeRegister, a signalling-only policy owned by the timelock, read back, evidence entry in the run manifest", async () => {
     const { d, tl, manifest } = mk(REHEARSAL);
     const res = await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER, agentLabel: "rehearsal-submitter" });
     expect(res.rows).toEqual([registerRecordKey(SUBMITTER)]);
-    expect(tl.s.events).toEqual([`scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
+    // QA plan v1 B6: the three submitter-Safe transactions land before the batch is on the timelock, so the address is owned by the timelock before it is public
+    expect(tl.s.events).toEqual(["propose:submitter-commit", "propose:submitter-reveal", "propose:submitter-hand-over", `scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
     const sc = tl.s.scheduled.get(REGISTER_ROW)!;
     expect(sc.form).toBe("batch");
     expect(sc.calls).toHaveLength(2);
     expect(sc.calls.every((c) => c.target === A.gateway)).toBe(true);
     const [auth, reg] = sc.calls.map((c) => decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data as `0x${string}` }));
-    expect(auth!.functionName).toBe("authorizeAgent");
+    expect(auth!.functionName).toBe("setPolicy"); // no first-time authorization in the public batch: nothing a squatter does during the delay can make it revert
+    expect(tl.s.agentOwner.get(SUBMITTER.toLowerCase())).toBe(A.timelock.toLowerCase());
+    expect(tl.s.policies.get(SUBMITTER.toLowerCase())!.shareReceiver).toBe(A.timelock.toLowerCase());
     const [agent, p] = auth!.args as unknown as [string, { active: boolean; maxPerPayment: bigint; maxPerWindow: bigint; shareReceiver: string; maxWithdrawPerPayment: bigint; allowedDestinations: string[] }];
     expect(agent.toLowerCase()).toBe(SUBMITTER.toLowerCase());
     expect(p).toMatchObject({ active: true, maxPerPayment: SUBMITTER_POLICY_CAP, maxPerWindow: SUBMITTER_POLICY_CAP, maxWithdrawPerPayment: 0n });
@@ -108,7 +115,84 @@ describe("register-committee: the consensus receipt submitter, through the Safe 
     expect(tl.s.committee.get(SUBMITTER.toLowerCase())).toBe("rehearsal-submitter");
     const entry = (manifest as unknown as { committee_registrations: Record<string, unknown>[] }).committee_registrations[0]!;
     expect(entry).toMatchObject({ step: REGISTER_ROW, submitter: getAddress(SUBMITTER), agent_label: "rehearsal-submitter", gateway: A.gateway, ic_policy: A.icPolicy, timelock: A.timelock, schedule_status: 1, execute_status: 1 });
-    expect(JSON.stringify(entry)).not.toMatch(/key|pass|secret/i);
+    // the private half is in the evidence as its three transactions; the salt stays in the govern state only
+    expect(entry.self_authorization).toMatchObject({ commit_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/), reveal_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/), hand_over_tx: expect.stringMatching(/^0x[0-9a-f]{64}$/) });
+    expect(JSON.stringify(entry)).not.toMatch(/key|pass|secret|salt/i);
+  });
+
+  test("QA plan v1 B6: a squatter that already owns the submitter's agent is caught before anything is proposed or scheduled (no timelock round spent); mutation: an unowned Safe runs", async () => {
+    const { d, tl, manifest } = mk(REHEARSAL);
+    tl.s.agentOwner.set(SUBMITTER.toLowerCase(), addr(0xbad).toLowerCase());
+    tl.s.agentRole.add(SUBMITTER.toLowerCase());
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("Create a NEW submitter Safe") });
+    expect(tl.s.events).toEqual([]);
+    const ok = mk(REHEARSAL);
+    await expect(go(ok.d, ok.tl, ok.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).resolves.toBeDefined();
+  });
+
+  test("QA plan v1 B6: a timelock-owned agent whose policy is not the signalling-only one (a depositor's agent) is refused, the batch would overwrite it; mutation: the submitter shape passes", async () => {
+    const seed = (tl: ReturnType<typeof fakeTimelock>, cap: bigint) => {
+      tl.s.agentOwner.set(SUBMITTER.toLowerCase(), A.timelock.toLowerCase()); tl.s.agentRole.add(SUBMITTER.toLowerCase());
+      tl.s.policies.set(SUBMITTER.toLowerCase(), { maxPerPayment: cap, maxPerWindow: cap, shareReceiver: SUBMITTER.toLowerCase(), maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n });
+    };
+    const dep = mk(REHEARSAL);
+    seed(dep.tl, 1_000_000n);
+    await expect(go(dep.d, dep.tl, dep.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("is not the submitter's signalling-only one") });
+    expect(dep.tl.s.events).toEqual([]);
+    const own = mk(REHEARSAL);
+    seed(own.tl, SUBMITTER_POLICY_CAP); // the private half done by an earlier run (or by the owners by hand): nothing private is sent again
+    await go(own.d, own.tl, own.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect(own.tl.s.events).toEqual([`scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
+  });
+
+  test("QA plan v1 B6: a run that dies after the commit landed reveals the SAME commitment on the next run (no second commit, same salt); an expired one is replaced by a new salt", async () => {
+    const dying = (tl: ReturnType<typeof fakeTimelock>, action: string) => {
+      const real = tl.api.executeTx as unknown as (...a: unknown[]) => Promise<unknown>;
+      let armed = true;
+      tl.api.executeTx = (async (h: unknown, b: { action?: string }, snd: unknown) => { if (armed && b.action === action) { armed = false; throw new Error("stale RPC"); } return real(h, b, snd); }) as never;
+    };
+    const saltOf = (m: ReturnType<typeof newManifest>) => (m as unknown as { govern: Record<string, { register?: { self_authorization?: { salt?: string } } }> }).govern[registerRecordKey(SUBMITTER)]!.register!.self_authorization!.salt;
+    const { d, tl, manifest } = mk(REHEARSAL);
+    dying(tl, "submitter-reveal");
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toThrow("stale RPC");
+    expect(tl.s.events).toEqual(["propose:submitter-commit", "propose:submitter-reveal"]);
+    const first = saltOf(manifest);
+    expect(first).toMatch(/^0x[0-9a-f]{64}$/);
+    await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect(tl.s.events.slice(2)).toEqual(["propose:submitter-reveal", "propose:submitter-hand-over", `scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
+    expect(saltOf(manifest)).toBe(first);
+    // the commitment's window (256 blocks) ran out before the resume: a new commit, with a new salt
+    const late = mk(REHEARSAL);
+    dying(late.tl, "submitter-reveal");
+    await expect(go(late.d, late.tl, late.manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toThrow("stale RPC");
+    const old = saltOf(late.manifest);
+    late.tl.s.clock += 600n;
+    await go(late.d, late.tl, late.manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect(late.tl.s.events.slice(2, 5)).toEqual(["propose:submitter-commit", "propose:submitter-reveal", "propose:submitter-hand-over"]);
+    expect(saltOf(late.manifest)).not.toBe(old);
+  });
+
+  test("QA plan v1 B6: the private calls hide the agent in the commit, pay the Safe itself in the reveal and hand the agent to the timelock; the state names each step", () => {
+    const salt = `0x${"5a".repeat(32)}` as const;
+    const c = buildSelfAuthCalls(A.gateway, A.timelock, SUBMITTER, salt, 1000n);
+    expect(c.commit.data.toLowerCase()).not.toContain(SUBMITTER.slice(2).toLowerCase()); // the commit names no agent
+    expect(decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.commit.data }).args).toEqual([selfAuthCommitHash(SUBMITTER, salt)]);
+    const rv = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.reveal.data });
+    expect(rv.functionName).toBe("revealAuthorization");
+    expect((rv.args![2] as { shareReceiver: string }).shareReceiver.toLowerCase()).toBe(SUBMITTER.toLowerCase()); // a caller without ADMIN_ROLE must name itself
+    expect(decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.handOver.data })).toMatchObject({ functionName: "transferAgentOwnership", args: [getAddress(SUBMITTER), getAddress(A.timelock)] });
+    const st = (owner: string, agentRole: boolean) => selfAuthStateOf({ owner, agentRole, submitter: SUBMITTER, timelock: A.timelock });
+    expect(st(addr(0), false)).toBe("fresh");
+    expect(st(addr(0), true)).toBe("foreign-role");
+    expect(st(SUBMITTER, true)).toBe("self-owned");
+    expect(st(A.timelock, true)).toBe("handed-over");
+    expect(st(addr(0xbad), true)).toBe("squatted");
+    const shape = { maxPerPayment: 1n, maxPerWindow: 1n, shareReceiver: A.timelock as string, maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n };
+    expect(selfAuthPolicyProblems(shape, SUBMITTER, A.timelock)).toEqual([]);
+    expect(selfAuthPolicyProblems({ ...shape, shareReceiver: SUBMITTER }, SUBMITTER, A.timelock)).toEqual([]);
+    expect(selfAuthPolicyProblems({ ...shape, maxPerWindow: 5n }, SUBMITTER, A.timelock)).toHaveLength(1);
+    expect(selfAuthPolicyProblems({ ...shape, maxWithdrawPerPayment: 1n }, SUBMITTER, A.timelock)).toHaveLength(1);
+    expect(selfAuthPolicyProblems({ ...shape, shareReceiver: addr(0xbad) }, SUBMITTER, A.timelock)).toHaveLength(1);
   });
 
   test("a second run of the same row sends nothing and keeps the same calldata (validUntil is fixed at the first plan)", async () => {
@@ -174,12 +258,19 @@ describe("register-committee: the consensus receipt submitter, through the Safe 
     }
   });
 
-  test("issue 1750: on the Twin chain a key submitter is still accepted (the old path), the evidence entry then has no submitter_safe", async () => {
+  test("issue 1750: on the Twin chain a key submitter is still accepted once it has authorized itself and handed the agent to the timelock; the evidence entry then has no submitter_safe", async () => {
     const d = setup(REHEARSAL, 918453);
     const tl = fakeTimelock(d.sheet, 900n);
     tl.s.submitterKind = null;
     const manifest = newManifest(d.ctx, addr(0xa001));
+    // QA plan v1 B6: the tool cannot sign for a key, so a fresh key is refused with the three private steps named, and nothing is scheduled
+    await expect(go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("transferAgentOwnership") });
+    expect(tl.s.events).toEqual([]);
+    // mutation: the key did the private half itself (owner the timelock, the signalling-only policy paying the key)
+    tl.s.agentOwner.set(SUBMITTER.toLowerCase(), A.timelock.toLowerCase()); tl.s.agentRole.add(SUBMITTER.toLowerCase());
+    tl.s.policies.set(SUBMITTER.toLowerCase(), { maxPerPayment: SUBMITTER_POLICY_CAP, maxPerWindow: SUBMITTER_POLICY_CAP, shareReceiver: SUBMITTER.toLowerCase(), maxWithdrawPerPayment: 0n, maxWithdrawPerWindow: 0n });
     await go(d, tl, manifest, { row: REGISTER_ROW, submitter: SUBMITTER });
+    expect(tl.s.events).toEqual([`scheduleBatch:${REGISTER_ROW}`, `executeBatch:${REGISTER_ROW}`]);
     expect((manifest as unknown as { committee_registrations: Record<string, unknown>[] }).committee_registrations[0]!.submitter_safe).toBeUndefined();
   });
 
@@ -195,6 +286,8 @@ describe("register-committee: the consensus receipt submitter, through the Safe 
     expect(registerReadBackProblems({ ...ok, committeeRole: false })).toHaveLength(1);
     expect(registerReadBackProblems({ ...ok, label: "y" })).toHaveLength(1);
     expect(registerReadBackProblems({ ...ok, owner: addr(1) })).toHaveLength(1);
+    expect(registerReadBackProblems({ ...ok, shareReceiver: A.timelock })).toEqual([]);
+    expect(registerReadBackProblems({ ...ok, shareReceiver: SUBMITTER })).toHaveLength(1); // the batch's setPolicy did not land: shares still go to the Safe
   });
 
   test("the calls are deterministic and differ with the validity, the label and the submitter", () => {

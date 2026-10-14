@@ -47,7 +47,8 @@ impl Network {
     ///
     /// # Base testnet
     /// Reads `BASE_TESTNET_RPC_URL` (required for real testnet connection).
-    /// Returns `None` if not set; tests using this should skip gracefully.
+    /// Returns `None` if not set; the test leg then skips locally and panics
+    /// under CI (QA plan v1 T5).
     ///
     /// An env var that is present but **empty** is treated as unset and yields
     /// `None`. GitHub Actions injects an absent `${{ secrets.X }}` as the empty
@@ -130,9 +131,11 @@ impl Network {
         }
     }
 
-    /// Every network the parameterized e2e tests iterate over. The macro
-    /// [`crate::parameterized_e2e`] runs a single test body once per entry,
-    /// skipping any network whose RPC endpoint is unset.
+    /// Every network the parameterized e2e tests cover. The macro
+    /// [`crate::parameterized_e2e`] makes one test per entry
+    /// (`robot_money_devnet`, `base_testnet`); a new entry needs a new test
+    /// there. A leg whose RPC endpoint is unset skips locally and panics under
+    /// CI (QA plan v1 T5).
     pub const ALL: &'static [Network] = &[Network::RobotMoneyDevnet, Network::BaseTestnet];
 }
 

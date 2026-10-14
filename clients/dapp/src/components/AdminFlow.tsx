@@ -12,6 +12,8 @@ import { Tabs } from "./Tabs";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
+import { useVerifiedCodeTargets } from "../lib/useVerifiedCodeTargets";
+import { describeVerificationCause } from "../lib/gatewayVerifier";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -54,10 +56,21 @@ export function AdminFlow(props: Props) {
   const [shareReceiver, setShareReceiver] = useState("");
 
   const { gatewayVerificationState } = props;
+  // Vaults and the router whose code matched their build-time pin (QA plan U5). Their
+  // previews badge the target "[bytecode verified]" only when they are in this set.
+  const verifiedTargets = useVerifiedCodeTargets();
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,
     gatewayCodeHashVerified: gatewayVerificationState.status === "verified",
     envClass: props.envClass,
+    verifiedTargets,
+    // A vault or router preview refused on the gateway names the gateway's actual cause.
+    gatewayRefusalDetail:
+      gatewayVerificationState.status === "refused"
+        ? describeVerificationCause(gatewayVerificationState.cause)
+        : gatewayVerificationState.status === "verified"
+          ? undefined
+          : "The gateway's code has not been verified yet.",
   };
 
   const tabs = buildAdminTabs({

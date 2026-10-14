@@ -19,6 +19,11 @@ interface Cfg {
   libsAddress?: string;                    // the tick_math address the stub manifest holds (default 0x1009)
   chainId: number;
   vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
+                                           // and its FIRST broadcast transaction is the deployer's CREATE of it (QA plan v1 C2: the receipt's contractAddress)
+  createdOut?: Record<string, string>;     // script file -> the address that CREATE receipt names instead (a manifest that is not the created contract)
+  revertedReceipt?: Record<string, number>; // script file -> the index of a broadcast receipt whose status is 0x0 (forge still reported success)
+  staleNonceReads?: Record<string, number>; // script file -> how many `cast nonce` reads of the sender after its successful broadcast answer the nonce from BEFORE it
+                                           // (QA plan v1 E6, issue 1723: a load-balanced RPC node behind the broadcast block)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
@@ -48,6 +53,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     const reply = cfg.castReplies?.[cmd!];
     if (reply) { process.stderr.write(reply.stderr ?? ""); out(reply.stdout ?? "", reply.code ?? 0); }
     if (cmd === "chain-id") out(String(cfg.chainId));
+    if (cmd === "nonce" && st.stale?.left > 0 && st.stale.who === a0!.toLowerCase()) { st.stale.left--; out(String(st.stale.nonce)); }
     if (cmd === "nonce") out(String(st.nonces[a0!.toLowerCase()] ?? 0));
     if (cmd === "balance") out("10000000000000000000");
     if (cmd === "client") out("stub-node/1.0");
@@ -75,9 +81,15 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     const dir = join("broadcast", file, chain, ...(dry ? ["dry-run"] : []));
     if (n >= 0) {
       mkdirSync(dir, { recursive: true });
+      const hash = (i: number) => `0x${(i + 1).toString(16).padStart(64, "0")}`;
+      // a redeploy (vaultOut) CREATEs its vault in its first transaction; forge copies each receipt's status, sender and created contract from the chain
+      const created = cfg.vaultOut?.[file] !== undefined ? (cfg.createdOut?.[file] ?? cfg.vaultOut[file]!) : undefined;
       writeFileSync(join(dir, "run-latest.json"), JSON.stringify({
-        transactions: Array.from({ length: n }, (_, i) => ({ hash: `0x${(i + 1).toString(16).padStart(64, "0")}`, ...(cfg.creates?.[file]?.[i] ? { transactionType: "CREATE2", contractAddress: cfg.creates[file]![i] } : {}) })),
-        ...(dry ? {} : { receipts: Array.from({ length: n }, () => ({ blockNumber: "0x64" })) }),
+        transactions: Array.from({ length: n }, (_, i) => ({
+          hash: hash(i), ...(cfg.creates?.[file]?.[i] ? { transactionType: "CREATE2", contractAddress: cfg.creates[file]![i] } : {}),
+          ...(i === 0 && created ? { transactionType: "CREATE", contractName: "ProtocolAssetVault", contractAddress: created } : {}),
+        })),
+        ...(dry ? {} : { receipts: Array.from({ length: n }, (_, i) => ({ transactionHash: hash(i), blockNumber: "0x64", status: cfg.revertedReceipt?.[file] === i ? "0x0" : "0x1", from: sender, contractAddress: i === 0 && created ? created : null })) }),
       }));
     }
     const outPath = process.env.DEPLOYMENT_OUT;
@@ -87,6 +99,8 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
         consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: cfg.libsAddress ?? addr(0x1009), adapter: addr(0xa2),
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
+        // issue 1705 C4: the vault stage's three lending adapters (the verify sheet reads them from the vault manifest)
+        aave_adapter: addr(0xada1), compound_adapter: addr(0xada2), moonwell_flagship_adapter: addr(0xada3),
       }));
     }
   };
@@ -107,6 +121,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   const startNonce = st.broadcastStart?.[file] ?? (st.nonces[sender] ?? 0);
   st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: startNonce };
   st.nonces[sender] = startNonce + sent;
+  if (cfg.staleNonceReads?.[file]) st.stale = { who: sender, nonce: startNonce, left: cfg.staleNonceReads[file] };
   writeFiles(sent, false);
   out("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.");
 }

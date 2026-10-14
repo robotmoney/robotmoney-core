@@ -15,10 +15,15 @@
  *
  * All preview values sourced exclusively from useReadContract (AC §11).
  *
+ * Write handlers re-check every gate their button uses before they send, so a
+ * stale simulation cannot go out (issue 1737 part 4), and each write renders its
+ * refusal, wallet error and receipt status (`WriteStatus`, finding DR-9). Leg
+ * share estimates print each leg vault's own symbol (issue 1773).
+ *
  * docs/architecture.md §5.3 — action layer: router deposit.
  * docs/technical/portfolio-router-decisions.md §3.1–3.2.
  */
-import { withGasLimit, ROUTER_DEPOSIT_GAS_LIMIT } from "../lib/depositGas";
+import { withGasLimit, routerDepositGasLimit } from "../lib/depositGas";
 import { useEffect, useState } from "react";
 import {
   useAccount,
@@ -43,6 +48,8 @@ import { useDepositStates } from "../lib/useDepositStates";
 import { depositsBlocked, type DepositState } from "../lib/vaultDepositState";
 import { parseUsdcAmount } from "../lib/format";
 import { ProportionPreview } from "./shared";
+import { WriteStatus } from "./WriteStatus";
+import { useVaultShareSymbols } from "../lib/useVaultShareSymbols";
 
 type Props = Readonly<{
   routerAddress: Address;
@@ -116,8 +123,14 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
       }))
     : [];
 
+  // Each leg vault's own share symbol for the preview's leg summary (issue 1773).
+  const shareSymbolOf = useVaultShareSymbols(
+    legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string"),
+  );
   const routerPreview =
-    depositAssets !== null && legs.length > 0 ? buildRouterPreview(depositAssets, legs, ctx) : null;
+    depositAssets !== null && legs.length > 0
+      ? buildRouterPreview(depositAssets, legs, { ...ctx, shareSymbolOf })
+      : null;
 
   // -------- getEffectiveWeights() live check (AC §7) --------
   // Compare the vault list from preview to the router's current effective
@@ -230,14 +243,24 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     }
   }, [previewError]);
 
+  // Defence in depth (issue 1737 part 4): the same gates as the buttons, plus the simulation's
+  // target, so a handler reached another way with a stale simulation never sends.
+  const sameAddress = (a: unknown): boolean =>
+    typeof a === "string" && a.toLowerCase() === routerAddress.toLowerCase();
+
   const onApprove = () => {
-    if (!approveSim) return;
+    if (!approveSim || routerDepositsClosed) return;
+    if (!sameAddress(approveSim.request.args?.[0])) return;
     approveWrite.writeContract(approveSim.request);
   };
 
   const onDeposit = () => {
-    if (!depositSim) return;
-    depositWrite.writeContract(withGasLimit(depositSim.request, ROUTER_DEPOSIT_GAS_LIMIT));
+    if (!depositSim || !canSimDeposit) return;
+    if (!sameAddress(depositSim.request.address)) return;
+    // The router's entry floor is 1.7M per effective-weight leg (QA plan U3). `previewDeposit` returns
+    // one leg per entry of that vector, and submit requires it to match `getEffectiveWeights()`.
+    const legCount = Math.max(legs.length, currentActiveVaults?.length ?? 0);
+    depositWrite.writeContract(withGasLimit(depositSim.request, routerDepositGasLimit(legCount)));
   };
 
   useEffect(() => {
@@ -323,6 +346,19 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
       >
         Sign router deposit with wallet
       </button>
+
+      <WriteStatus
+        testId="router-deposit-tab-approve"
+        label="USDC approval"
+        write={approveWrite}
+        receipt={approveReceipt}
+      />
+      <WriteStatus
+        testId="router-deposit-tab-deposit"
+        label="Router deposit"
+        write={depositWrite}
+        receipt={depositReceipt}
+      />
 
       {approveSimError && (
         <p className="hint" data-testid="router-deposit-tab-approve-sim-error">

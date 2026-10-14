@@ -18,7 +18,8 @@
 //! 3. `withdraw_balance_insufficient_refuses` — agent holds no shares,
 //!    preflight refuses with `ErrShareBalanceInsufficient`.
 //! 4. `withdraw_over_per_payment_cap_refuses` — shares exceed agent
-//!    `maxPerPayment` policy, preflight refuses with `ErrConfig`.
+//!    `maxPerPayment` policy, preflight refuses with
+//!    `ErrWithdrawCapExceeded` (QA plan U6; `ErrConfig` before).
 //!
 //! Skips with a printed warning when Docker/Foundry are not on PATH.
 
@@ -219,7 +220,7 @@ fn withdraw_balance_insufficient_refuses() {
 // ------------------------------------------------------------- scenario 4
 
 /// Requesting more shares than the agent's `maxPerPayment` policy cap
-/// must be refused by the gateway preflight (`ErrConfig`).
+/// must be refused by the gateway preflight (`ErrWithdrawCapExceeded`).
 #[test]
 fn withdraw_over_per_payment_cap_refuses() {
     require_prereqs("withdraw_over_per_payment_cap_refuses");
@@ -246,8 +247,8 @@ fn withdraw_over_per_payment_cap_refuses() {
         );
         let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("");
         assert!(
-            err == "ErrConfig",
-            "expected ErrConfig (maxPerPayment exceeded); got error={err}\nfull output: {v}"
+            err == "ErrWithdrawCapExceeded",
+            "expected ErrWithdrawCapExceeded (maxPerPayment exceeded); got error={err}\nfull output: {v}"
         );
     });
 }

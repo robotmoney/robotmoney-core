@@ -111,6 +111,20 @@ stance, weight-bps, confidence, rationale-uri, vote-json-hash,
 prompt-hash, inputs-digest, timestamp, schema-version, gas-limit,
 fee-cap, receipt-timeout-secs, pretty).
 
+### committee check-agent
+
+Read-only preflight for `vote-submit`: does the agent hold
+`COMMITTEE_AGENT_ROLE` on the IC policy? Signs nothing, needs no passphrase.
+`--agent` defaults to the keystore's cleartext `address`.
+
+```bash
+rmpc committee --config <CONFIG> check-agent [--agent <ADDR>]
+```
+
+Exit 0 when the role is held, 2 with `ErrNotAllowlisted` when it is not, 3
+when the role could not be read. Treat 3 as unknown, never as registered. The
+swarm skill's `check-preflight.sh` runs it before every tilt.
+
 ## Consensus receipt commands
 
 `rmpc receipt` handles a **consensus recommendation receipt** — the signed
@@ -167,11 +181,13 @@ no operator config TOML, no on-chain write. Use it so a prospective member
 never has to hand-roll Ed25519 code.
 
 **Never ask the owner for their keystore passphrase, and never accept it in
-chat.** Have them write it to a file only they can read and hand you the
-path:
+chat.** Never write a passphrase into a command either: it would land in
+shell history and in this transcript. The owner runs the first command at
+their own terminal. It reads the passphrase with echo off and writes it to a
+file only they can read. Then they hand you the path:
 
 ```bash
-umask 077 && printf '%s' '<passphrase>' > ~/.rmpc-committee-pass
+( umask 077; IFS= read -rsp 'Passphrase: ' p && echo && printf '%s' "$p" > ~/.rmpc-committee-pass )
 export RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE=~/.rmpc-committee-pass
 ```
 

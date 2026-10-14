@@ -24,7 +24,8 @@
 //! - [`governance`] — standing `RouterGovernance.quorumThreshold()` floor check
 //!   (task T22, decision D16). Read-only; it never pauses the gateway.
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
-//!   by the `watchdog-liveness` binary (issue #1378).
+//!   by the `watchdog-liveness` binary (issue #1378), and the explorer-indexer
+//!   lag budget that decides whether a quiet poll may refresh it (DI-5).
 
 #![warn(missing_docs)]
 

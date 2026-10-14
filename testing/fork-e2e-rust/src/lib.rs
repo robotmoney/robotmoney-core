@@ -172,73 +172,105 @@ macro_rules! skip_if_no_devnet_fork {
     };
 }
 
-/// Run a single e2e test body once per [`Network`] (issue #839, decision D3:
+/// Run a single e2e test body on each [`Network`] (issue #839, decision D3:
 /// comprehensive coverage across networks "using parameterized fixtures and
 /// shared test templates to avoid code duplication"). The body receives a
 /// `network: Network` binding and a booted [`ForkFixture`] bound to that
-/// network; it is invoked once for [`Network::RobotMoneyDevnet`] and once for
-/// [`Network::BaseTestnet`].
+/// network.
 ///
-/// A network whose RPC endpoint is unavailable
-/// ([`HarnessError::SkipNoRpc`]) is skipped with an `eprintln!` line rather
-/// than failing — so `cargo test` on a contributor laptop (no testnet secret)
-/// still passes, and CI that *does* set `BASE_TESTNET_RPC_URL` exercises the
-/// live path. At least one network must successfully boot, otherwise the test
-/// is a no-op skip (the same graceful-skip contract every fork-e2e test
-/// honours).
+/// QA plan v1 T5: the macro makes one test per network, in a module named
+/// after the test: `<name>::robot_money_devnet` and `<name>::base_testnet`.
+/// It used to be one test that looped over both networks and skipped a
+/// network with no RPC. The base-testnet-adapters job then passed on the
+/// devnet leg alone, and the Base testnet leg skipped on every run. Now each
+/// leg passes or fails on its own, and a CI step selects a leg by name
+/// (`--skip base_testnet`, or the filter `base_testnet`).
+///
+/// A leg whose RPC endpoint is not configured ([`HarnessError::SkipNoRpc`])
+/// goes through [`network_skip_gate`]: it skips on a contributor laptop and
+/// panics when `CI` is set.
 ///
 /// # Example
 /// ```ignore
 /// parameterized_e2e!(dex_route, |network, fx| {
-///     // single body runs once per network; `fx` is bound to `network`.
+///     // one test per network; `fx` is bound to `network`.
 ///     assert_eq!(fx.chain_id, network.chain_id());
 /// });
 /// ```
 #[macro_export]
 macro_rules! parameterized_e2e {
     ($name:ident, $body:expr) => {
-        #[test]
-        fn $name() {
-            let run = |network: $crate::Network, fx: $crate::ForkFixture| {
-                let f: &dyn Fn($crate::Network, $crate::ForkFixture) = &$body;
-                f(network, fx);
-            };
-            let mut ran = 0usize;
-            for &network in $crate::Network::ALL {
-                match $crate::ForkFixture::for_network(network) {
-                    Ok(fx) => {
-                        eprintln!(
-                            "[{}] running on {} (chain_id={})",
-                            stringify!($name),
-                            network.name(),
-                            fx.chain_id
-                        );
-                        run(network, fx);
-                        ran += 1;
-                    }
-                    Err(e) if e.is_skip() => {
-                        eprintln!(
-                            "[{}] skipping {}: RPC endpoint not configured",
-                            stringify!($name),
-                            network.name()
-                        );
-                    }
-                    Err(e) => panic!(
-                        "[{}] {} boot failed: {e}",
-                        stringify!($name),
-                        network.name()
-                    ),
-                }
-            }
-            if ran == 0 {
-                eprintln!(
-                    "[{}] no network RPC configured; set RMPC_FORK_RPC_URL / \
-                     RMPC_TESTNET_RPC_URL (devnet) or BASE_TESTNET_RPC_URL (testnet) to run.",
-                    stringify!($name)
+        mod $name {
+            #[allow(unused_imports)]
+            use super::*;
+
+            #[test]
+            fn robot_money_devnet() {
+                $crate::run_network_leg(
+                    stringify!($name),
+                    $crate::Network::RobotMoneyDevnet,
+                    &$body,
                 );
+            }
+
+            #[test]
+            fn base_testnet() {
+                $crate::run_network_leg(stringify!($name), $crate::Network::BaseTestnet, &$body);
             }
         }
     };
+}
+
+/// One network leg of [`parameterized_e2e!`]: boot the fixture for `network` and run `body` on
+/// it. A leg with no RPC endpoint goes through [`skip_network_or_refuse`] (QA plan v1 T5), and any
+/// other boot error fails the leg.
+pub fn run_network_leg(test: &str, network: Network, body: &dyn Fn(Network, ForkFixture)) {
+    match ForkFixture::for_network(network) {
+        Ok(fx) => {
+            eprintln!(
+                "[{test}] running on {} (chain_id={})",
+                network.name(),
+                fx.chain_id
+            );
+            body(network, fx);
+        }
+        Err(e) if e.is_skip() => skip_network_or_refuse(test, network, network_rpc_env(network)),
+        Err(e) => panic!("[{test}] {} boot failed: {e}", network.name()),
+    }
+}
+
+/// The env vars that configure `network`'s RPC endpoint, for the skip and refusal messages.
+fn network_rpc_env(network: Network) -> &'static str {
+    match network {
+        Network::RobotMoneyDevnet => "RMPC_TESTNET_RPC_URL or RMPC_FORK_RPC_URL",
+        Network::BaseTestnet => "BASE_TESTNET_RPC_URL",
+    }
+}
+
+/// Decision core for a network leg (or a part of one) whose prerequisite is not configured, split
+/// from the environment read so it is unit-testable (QA plan v1 T5). `ci` is the value of the `CI`
+/// env var and `missing` names what is not configured. Locally the leg skips with a line naming
+/// `missing`. Under CI it panics: a skipped leg is a pass with zero assertions, and the
+/// base-testnet-adapters job reported its Base testnet leg green that way on every run.
+pub fn network_skip_gate(ci: Option<&str>, test: &str, network: Network, missing: &str) {
+    if ci_value_is_ci(ci) {
+        panic!(
+            "[{test}] CI is set but {missing} is not configured for {}. Refusing to skip: a \
+             skipped network leg is a false green. A CI step runs this leg only where it is \
+             configured and leaves it out by name (--skip) elsewhere.",
+            network.name()
+        );
+    }
+    eprintln!(
+        "[{test}] skipping {}: {missing} not configured",
+        network.name()
+    );
+}
+
+/// Environment-reading wrapper over [`network_skip_gate`], used by [`run_network_leg`] and by a
+/// test body whose network leg needs more than an RPC (the Base testnet funder key).
+pub fn skip_network_or_refuse(test: &str, network: Network, missing: &str) {
+    network_skip_gate(std::env::var("CI").ok().as_deref(), test, network, missing);
 }
 
 /// True when `ci` (the value of the `CI` env var) marks a CI run: set and non-empty, and not a
@@ -470,8 +502,8 @@ impl ForkFixture {
     ///   mis-pointed RPC fails loudly.
     ///
     /// Returns [`HarnessError::SkipNoRpc`] when the network's RPC endpoint is
-    /// unset — callers (and the [`crate::parameterized_e2e`] macro) treat that
-    /// as a graceful skip, never a failure.
+    /// unset. The [`crate::parameterized_e2e`] macro hands that to
+    /// [`crate::network_skip_gate`]: a skip locally, a panic under CI (QA plan v1 T5).
     pub fn for_network(network: Network) -> Result<Self, HarnessError> {
         match network {
             Network::RobotMoneyDevnet => {
@@ -562,9 +594,10 @@ impl ForkFixture {
     /// `usdc_units > 0`, `usdc_units` of `usdc_token` to the new account.
     ///
     /// Returns [`HarnessError::SkipNoRpc`] when `BASE_TESTNET_FUNDER_KEY` is
-    /// unset — without a funder we cannot seed an account on a real chain, so
-    /// the dependent test skips gracefully rather than failing. (A deployed CI
-    /// environment provides this secret alongside `BASE_TESTNET_RPC_URL`.)
+    /// unset: without a funder we cannot seed an account on a real chain. The
+    /// caller skips locally and, through [`crate::skip_network_or_refuse`],
+    /// panics under CI (QA plan v1 T5). The CI step that runs the Base testnet
+    /// leg runs only when this secret and `BASE_TESTNET_RPC_URL` are both set.
     pub fn ephemeral_testnet(
         &self,
         usdc_token: Address,
@@ -714,6 +747,13 @@ pub struct Account<'a> {
 }
 
 impl<'a> Account<'a> {
+    /// The private key as 0x-prefixed hex, so a binary that signs for itself (`rmpc`, through a
+    /// keystore made by `rmpc-keystore-import`) can act as this account. Every account here is a
+    /// throwaway key made for one fork test.
+    pub fn private_key_hex(&self) -> String {
+        format!("0x{}", hex::encode(self.signer.to_bytes()))
+    }
+
     /// Sign and broadcast a typed call. Waits for the receipt and
     /// returns it; callers assert on `status`, `gasUsed`, etc.
     pub fn send<C: SolCall>(
@@ -1419,6 +1459,42 @@ mod tests {
         assert!(!devnet_fork_gate(Some("false"), false, Some("http://x")));
         assert!(devnet_fork_gate(None, true, Some("http://x")));
         assert!(devnet_fork_gate(Some("true"), true, Some("http://x")));
+    }
+
+    /// QA plan v1 T5: a `parameterized_e2e!` leg with no RPC (or no testnet funder) panics under
+    /// CI and skips locally. Removing the panic in `network_skip_gate` fails the `should_panic`
+    /// tests, and the base-testnet-adapters job would again pass with the Base testnet leg skipped.
+    #[test]
+    #[should_panic(expected = "Refusing to skip")]
+    fn network_skip_gate_panics_in_ci_for_the_base_testnet_leg() {
+        network_skip_gate(
+            Some("true"),
+            "t",
+            Network::BaseTestnet,
+            network_rpc_env(Network::BaseTestnet),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Refusing to skip")]
+    fn network_skip_gate_panics_in_ci_for_the_devnet_leg() {
+        network_skip_gate(
+            Some("1"),
+            "t",
+            Network::RobotMoneyDevnet,
+            network_rpc_env(Network::RobotMoneyDevnet),
+        );
+    }
+
+    #[test]
+    fn network_skip_gate_skips_locally() {
+        network_skip_gate(None, "t", Network::BaseTestnet, "BASE_TESTNET_FUNDER_KEY");
+        network_skip_gate(
+            Some("false"),
+            "t",
+            Network::RobotMoneyDevnet,
+            network_rpc_env(Network::RobotMoneyDevnet),
+        );
     }
 
     /// The transient-detection predicate that gates [`Rpc::wait_for_receipt`]'s

@@ -63,6 +63,15 @@ submitter can and cannot do holds unchanged for a contract account: the contract
 - **What the tooling pins** (`publish-contracts/src/submitter-safe.ts`): the canonical SafeProxy 1.4.1 code hash, the SafeL2 singleton in slot 0, `VERSION` 1.4.1, threshold 2 or more,
   no module, no guard, the canonical fallback handler. It is never the governing Safe, the timelock, admin (= the deployer), the pauser or the emergency address.
 - **Register it:** `govern --row register-committee --submitter 0x<Safe>`. The checks run before the timelock round is scheduled.
+- **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
+  - **Private half, first.** The submitter Safe authorizes itself on the gateway in three Safe transactions. Its owners sign with `--owner-signer` and `--signer` pays the gas.
+    1. `commitAuthorization(keccak256(abi.encode(safe, safe, salt)))` with a random salt. The commit does not name the agent.
+    2. `revealAuthorization(safe, salt, policy, "")` at least one block later. The Safe reveals for itself, so it passes no consent signature. The Safe now owns its own agent.
+    3. `transferAgentOwnership(safe, timelock)`. The timelock now owns the agent.
+  - **Public half, second.** Only then does the governing Safe schedule the timelock batch: `gateway.setPolicy` (the 1-unit signalling-only policy, shares to the timelock) and `gateway.committeeRegister`.
+  - **Why the order matters.** The old batch scheduled `authorizeAgent(safe)` in public for the whole delay. A squatter could commit and reveal an authorization for the published address first. The batch then reverted `AgentAlreadyOwned`, and the squatter could `revokeAgent` at will, because the gateway has no seize path. Two layers now close it. The gateway refuses a stranger's reveal for another address unless that address signed its consent (issue 1791), and a Safe has no key to sign with. The new batch also carries no first-time authorization, so nothing a stranger does can break it (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun`).
+  - **If the address is already owned.** The tool refuses with `GOVERN` and schedules nothing. Create a new submitter Safe and run the row with it. Against a gateway with the issue 1791 consent check a stranger cannot own a Safe's address at all. Against an older gateway a stranger could claim a published address in advance, such as the old governance Safe below, or win the one-block race between the commit and the reveal. The tool catches both before any timelock round is spent.
+  - **A row that stops part-way resumes from the chain.** The agent owner shows which steps are done. A stored commitment is revealed while its 256-block window lasts. After that the tool commits again with a new salt.
 - **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
   sign, the deployer executes and pays the gas. It refuses fewer owner signers than the threshold, a Safe that differs from `--submitter`, and a Safe transaction without
   `ExecutionSuccess`. It reads the receipt back and requires the stored submitter to be the Safe.
@@ -120,9 +129,17 @@ Rotation is **additive then subtractive**, and it needs no contract change
 because membership is registry state.
 
 1. Provision the new key per §2 and derive its address.
-2. Via the timelock's normal schedule → delay → execute path, grant the new
-   address `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`) and authorize
-   it as a gateway agent (`gateway.authorizeAgent`).
+2. Register the new address with `govern --row register-committee` (§1.1). The
+   new submitter first authorizes ITSELF in private, before anything is public:
+   `gateway.commitAuthorization`, one block later `gateway.revealAuthorization`
+   (its own agent, shares to itself), then
+   `gateway.transferAgentOwnership(new, timelock)`. Only then, via the
+   timelock's normal schedule → delay → execute path, one batch sets the
+   signalling-only policy (`gateway.setPolicy`, shares to the timelock) and
+   grants `COMMITTEE_AGENT_ROLE` (`gateway.committeeRegister`). Never schedule
+   a public `gateway.authorizeAgent` for the new address: during the delay
+   anyone can authorize that address first and own it for good (QA plan v1
+   B6).
 3. Submit one receipt from the new key on a real session and confirm the
    indexer ingested it with `verified = true`.
 4. Revoke the old address: `InvestmentCommitteePolicy.revokeAgent` (an

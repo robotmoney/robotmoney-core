@@ -5,6 +5,9 @@ pragma solidity ^0.8.24;
 // At baseline Q5 and Q4 proved the spoof landed. Issue #1790 (PR 1818) added the
 // gateway identity guard (`p.agent == msg.sender`, else `CommitteeAgentNotCaller`),
 // so those two tests now pin the refusal; Q3 and Q2 were never spoofable.
+// The Q2 squat of a third-party agent address (finding 7) landed at baseline. Issue
+// #1791 requires the agent's EIP-712 consent for that reveal, so it now pins
+// `InvalidAgentConsent`.
 // Run: forge test --match-path 'contracts/test/SecurityReviewRecheckCommitteePoc.t.sol' -vv
 
 import {ICGatewayIntegration} from "./ICGatewayIntegration.t.sol";
@@ -36,16 +39,21 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         });
     }
 
-    /// Permissionless commit/reveal: `owner` authorizes `agent` (may be any
-    /// address that is not already owned) with a policy naming `owner` as
-    /// shareReceiver, as `_validatePolicy` demands of non-admin callers.
+    /// Permissionless commit/reveal: `owner` authorizes `agent` with a policy
+    /// naming `owner` as shareReceiver, as `_validatePolicy` demands of
+    /// non-admin callers. It carries no agent consent, so since issue #1791 it
+    /// lands only when `owner == agent` (the reveal is the agent's own consent).
     function _selfReveal(address owner, address agent, bytes32 salt) internal {
+        _commitAndRoll(owner, agent, salt);
+        vm.prank(owner);
+        gateway.revealAuthorization(agent, salt, _selfPolicy(owner), "");
+    }
+
+    function _commitAndRoll(address owner, address agent, bytes32 salt) internal {
         bytes32 commitment = keccak256(abi.encode(agent, owner, salt));
         vm.prank(owner);
         gateway.commitAuthorization(commitment);
         vm.roll(block.number + 1);
-        vm.prank(owner);
-        gateway.revealAuthorization(agent, salt, _selfPolicy(owner));
     }
 
     // ── Q5: spoof cannot supersede the real member's latest vote (#1790) ────
@@ -138,39 +146,33 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         assertEq(receipt.getReceipt(0).submitter, committeeAgent);
     }
 
-    // ── Q2: permissionless reveal squats a THIRD-PARTY agent address ───────
+    // ── Q2: permissionless reveal can no longer squat a THIRD-PARTY agent ──
 
-    function test_permissionlessRevealSquatsThirdPartyAgentAddress() public {
+    /// @dev Finding 7. At baseline the attacker became the policy owner of a
+    ///      published third-party address, with itself as share receiver, and
+    ///      admin onboarding of that address then reverted `AgentAlreadyOwned`
+    ///      (also after the admin stripped its role). Issue #1791 requires the
+    ///      agent's EIP-712 consent for a non-admin reveal of another address,
+    ///      so the same reveal reverts `InvalidAgentConsent`, nothing is bound,
+    ///      and the admin onboards the address.
+    function test_permissionlessRevealCannotSquatThirdPartyAgentAddress() public {
         // A future committee member's published EOA, not yet gateway-authorized.
         address victim = address(0xD1);
-
-        // Attacker owns the victim's gateway agent entry; victim now holds
-        // AGENT_ROLE with shareReceiver/assetRecipient = attacker.
-        _selfReveal(attacker, victim, keccak256("f3-squat"));
-        assertEq(gateway.agentOwner(victim), attacker);
-        assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), victim));
-        (,,,, address sr, address ar,,) = gateway.agents(victim);
-        assertEq(sr, attacker);
-        assertEq(ar, attacker);
-
-        // Admin cannot onboard the victim: no admin override of agentOwner.
-        vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.authorizeAgent(victim, _selfPolicy(victim));
-
-        // Admin can strip the role, but ownership persists, so onboarding stays blocked.
-        bytes32 agentRole = gateway.AGENT_ROLE();
-        vm.prank(admin);
-        gateway.revokeRole(agentRole, victim);
-        assertEq(gateway.agentOwner(victim), attacker);
-        vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.authorizeAgent(victim, _selfPolicy(victim));
-
-        // Only the squatter can release it.
+        bytes32 salt = keccak256("f3-squat");
+        _commitAndRoll(attacker, victim, salt);
         vm.prank(attacker);
-        gateway.revokeAgent(victim);
-        assertEq(gateway.agentOwner(victim), address(0));
+        vm.expectRevert(RobotMoneyGateway.InvalidAgentConsent.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker), "");
+
+        bytes32 agentRole = gateway.AGENT_ROLE();
+        assertEq(gateway.agentOwner(victim), address(0), "attacker owns the victim's entry");
+        assertFalse(gateway.hasRole(agentRole, victim), "victim got AGENT_ROLE from the squat");
+
+        // Admin onboarding is no longer blocked.
+        vm.prank(admin);
+        gateway.authorizeAgent(victim, _selfPolicy(victim));
+        assertEq(gateway.agentOwner(victim), admin, "admin onboarding blocked");
+        assertTrue(gateway.hasRole(agentRole, victim), "victim not onboarded");
     }
 
     // ── Q2: self-registered agent's fund paths pull only from itself ────────

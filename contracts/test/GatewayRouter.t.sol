@@ -15,6 +15,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AgentConsent} from "./helpers/AgentConsent.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
@@ -48,6 +49,12 @@ contract RouterMockVault is ERC20 {
 
     function previewDeposit(uint256 assets) external pure returns (uint256) {
         return assets;
+    }
+
+    /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+    ///      reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
     }
 
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
@@ -125,6 +132,12 @@ contract LeakyRedeemRouterVault is ERC20 {
 
     function previewDeposit(uint256 assets) external pure returns (uint256) {
         return assets;
+    }
+
+    /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+    ///      reverts (QA plan D4), so a router-leg mock must answer it.
+    function maxDeposit(address) external pure returns (uint256) {
+        return type(uint256).max;
     }
 
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
@@ -2356,8 +2369,16 @@ contract GatewayRouterTest is Test {
             vm.prank(leakyDepositor);
             leakyGateway.commitAuthorization(commitHash);
             vm.roll(block.number + 1);
+            // The depositor binds a distinct agent key, so the reveal carries
+            // the agent's consent (issue #1791).
+            bytes memory consent = AgentConsent.sign(
+                AgentConsent.keyOf("leakyAgent"),
+                address(leakyGateway),
+                leakyDepositor,
+                leakyDepositor
+            );
             vm.prank(leakyDepositor);
-            leakyGateway.revealAuthorization(leakyAgent, salt, p);
+            leakyGateway.revealAuthorization(leakyAgent, salt, p, consent);
         }
 
         // Deposit to mint leaky vault shares into leakyShareReceiver.

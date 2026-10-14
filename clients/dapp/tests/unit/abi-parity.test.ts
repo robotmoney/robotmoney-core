@@ -56,6 +56,8 @@ import {
   routerAbi,
   registryAbi,
   BASKET_VAULT_SHORTLIST_ABI,
+  VAULT_EXCLUSION_ABI,
+  EXCLUSION_LEDGER_ABI,
 } from "../../src/lib/abi";
 import {
   gatewayAbiGenerated,
@@ -66,6 +68,14 @@ import {
   agentTokenVaultAbiGenerated,
   protocolAssetVaultAbiGenerated,
 } from "../../src/lib/abi.generated";
+import * as generated from "../../src/lib/abi.generated";
+
+/**
+ * The ExclusionLedger binding (core 1820, QA plan U5). Read by name so this file still compiles before
+ * `generate_abi_bindings.sh` emits it; until then the pair below fails and says to regenerate.
+ */
+const exclusionLedgerAbiGenerated: readonly unknown[] =
+  ((generated as Record<string, unknown>).exclusionLedgerAbiGenerated as readonly unknown[]) ?? [];
 
 interface AbiParam {
   type: string;
@@ -126,7 +136,24 @@ const PAIRS: readonly AbiPair[] = [
     handMaintained: BASKET_VAULT_SHORTLIST_ABI,
     canonical: protocolAssetVaultAbiGenerated,
   },
+  // Core 1820 (QA plan U5): the exclusion-claim reads on the position card.
+  {
+    label: "VAULT_EXCLUSION_ABI vs RobotMoneyVault",
+    handMaintained: VAULT_EXCLUSION_ABI,
+    canonical: robotMoneyVaultAbiGenerated,
+  },
+  {
+    label: "EXCLUSION_LEDGER_ABI vs ExclusionLedger",
+    handMaintained: EXCLUSION_LEDGER_ABI,
+    canonical: exclusionLedgerAbiGenerated,
+  },
 ];
+
+describe("abi.generated.ts carries every binding the parity check needs", () => {
+  it("has the ExclusionLedger ABI (re-run .github/scripts/generate_abi_bindings.sh)", () => {
+    expect(exclusionLedgerAbiGenerated.length).toBeGreaterThan(0);
+  });
+});
 
 describe("abi.ts <-> abi.generated.ts parity (issue #1281)", () => {
   for (const { label, handMaintained, canonical } of PAIRS) {

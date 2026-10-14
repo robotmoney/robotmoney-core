@@ -314,27 +314,84 @@
       "key": "USDC",
       "stage": "vault",
       "artifact": "RobotMoneyVault",
-      "manifest": "deployments/<chain>/vault.json"
+      "manifest": "deployments/<chain>/vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-USDC",
+      "unpauseInStage13": true,
+      "seed": "sheet:SEED_DEPOSIT_USDC",
+      "eligibilitySource": "router-stage",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyWithdraw",
+        "emergencyWithdrawAdapter",
+        "forceRemoveAdapter",
+        "shutdownVault"
+      ],
+      "registryNameSource": "sheet:VAULT_NAME"
     },
     {
       "key": "PROTO",
       "stage": "proto",
       "artifact": "ProtocolAssetVault",
-      "manifest": "deployments/<chain>/protocol-asset-vault.json"
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-PROTO",
+      "unpauseInStage13": true,
+      "seed": "none",
+      "eligibilitySource": "sheet:ELIGIBLE_VAULTS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script:VAULT_NAME"
     },
     {
       "key": "AGENT",
       "stage": "agent",
       "artifact": "AgentTokenVault",
-      "manifest": "deployments/<chain>/agent-token-vault.json"
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-AGENT",
+      "unpauseInStage13": true,
+      "seed": "none",
+      "eligibilitySource": "sheet:ELIGIBLE_VAULTS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script:VAULT_NAME"
     },
     {
       "key": "RWA",
       "stage": "rwa",
       "artifact": "RwaBasketVault",
-      "manifest": "deployments/<chain>/rwa-basket-vault.json"
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-RWA",
+      "unpauseInStage13": true,
+      "seed": "none",
+      "eligibilitySource": "sheet:ELIGIBLE_VAULTS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script:VAULT_NAME"
     }
   ],
+  "vaultRuleDecisions": {
+    "deployPaused": "issue 1710 and issue 1705 Q1 (a): all four vaults deploy paused and only the Safe, through the timelock, opens them in stage 13 (owner, core 1619: rmUSDC is not special).",
+    "unpauseInStage13": "issue 1520 and issue 1710: stage 13 is one unpause row per vault, none skipped on 8453; the same row reopens a vault after a pause-all (issue 1667).",
+    "seed": "owner decision D3 (2026-10-01): rmUSDC is seeded with 1 USDC to SEED_SHARE_RECEIVER; issue 1705 Q6 (a): no basket seed, the 18-decimal virtual share offset protects all four.",
+    "eligibilitySource": "issue 475 (one registry-backed eligibility gate): the router stage makes rmUSDC eligible at 10000 bps, so the router has a leg from its first block; each basket joins in its own stage from ELIGIBLE_VAULTS through registry.migrateEligibility (issue 1520). Recorded difference, issue 1705 C3.",
+    "emergencyLevers": "issue 1705 Q2 (a): the EMERGENCY_ROLE levers differ by vault family (RobotMoneyVault adapters, BasketVault assets) and are named here per vault for the mainnet test; narrowing them is decided before the final deployment. No lever freezes withdrawals.",
+    "registryNameSource": "issue 1705 C9: the registry stage registers rmUSDC under the sheet's VAULT_NAME, each basket registers itself under its script constant VAULT_NAME. Recorded difference until one source is chosen."
+  },
   "libraries": [
     {
       "name": "tick_math",

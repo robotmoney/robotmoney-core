@@ -19,7 +19,9 @@
 #
 # When clients/dapp/src/lib/configExport.ts changes, regenerate this
 # fixture by running the TS export with the unit-test base config and
-# overwriting this file.
+# overwriting this file. The [signer] comment block is the export's
+# SOFTWARE_KEYSTORE_COMMENT, line for line; dapp_toml_roundtrip.rs reads
+# that array from configExport.ts and fails if a line here drifts.
 
 chain_id             = 31337
 rpc_url              = "http://127.0.0.1:8545"
@@ -29,5 +31,9 @@ vault_address        = "0x0000000000000000000000000000000000000d00"
 gateway_runtime_hash = "0xabababababababababababababababababababababababababababababababababab"
 
 [signer]
+# Software keystore: rmpc deposit, withdraw and withdraw-router sign with it on every
+# chain, Base mainnet included, after a production warning (owner decision 2026-10-06).
+# A hardware wallet, HSM or KMS is optional, never required (owner decision 2026-10-14).
+# rmpc decrypts the key in memory: keep the keystore 0600 and the passphrase out of argv.
 allow_software_fallback = true
 keystore_path = "./agent.keystore.json"

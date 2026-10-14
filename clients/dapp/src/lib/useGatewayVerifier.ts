@@ -19,7 +19,7 @@
 import { useAccount, useChainId } from "wagmi";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Hex } from "viem";
-import { computeVerificationState, ZERO_ADDRESS } from "./gatewayVerifier";
+import { computeVerificationState, refusedVerification, ZERO_ADDRESS } from "./gatewayVerifier";
 import type { VerificationState } from "./gatewayVerifier";
 import { resolveTargetChainId } from "./wagmi";
 import { useRuntimeConfig } from "./RuntimeConfigContext";
@@ -78,19 +78,13 @@ export function useGatewayVerifier(
       return;
     }
     if (targetChainId !== undefined && chainId !== targetChainId) {
-      setState({
-        status: "refused",
-        reason: "unknown_revert",
-      });
+      setState(refusedVerification("wrong-chain"));
       return;
     }
 
     const provider = getInjectedProvider();
     if (!provider) {
-      setState({
-        status: "refused",
-        reason: "unknown_revert",
-      });
+      setState(refusedVerification("no-wallet"));
       return;
     }
 
@@ -124,10 +118,7 @@ export function useGatewayVerifier(
         }
       }
       if (!token.cancelled) {
-        setState({
-          status: "refused",
-          reason: "unknown_revert",
-        });
+        setState(refusedVerification("rpc-failed"));
       }
     }
 

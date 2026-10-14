@@ -1,0 +1,31 @@
+---
+title: "IRecorderHistory"
+---
+
+# IRecorderHistory
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketViews.sol)
+
+<i>
+
+The one recorder-only read the sell anchor needs. A V4 asset's `pool` is always the
+`UniswapV4PriceRecorder` (BasketVault.Venue.V4), which answers it.
+
+</i>
+
+## Functions
+
+<a id="oldestobservation"></a>
+
+### oldestObservation
+
+```solidity
+function oldestObservation() external view returns (uint32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+

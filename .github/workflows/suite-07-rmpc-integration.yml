@@ -381,6 +381,27 @@ jobs:
             --test cli_get_vault \
             --test cli_get_vaults -- --nocapture
 
+      # THE ONLY REAL-EVM PROOF OF THE SHARED WRITE SEAM (QA plan T2)
+      # tests/write_seam_reverted_anvil.rs mines a transaction into a local
+      # anvil, lets it revert there, and asserts `wait_for_successful_receipt`
+      # refuses it as ErrTxReverted. Every other revert test mocks the receipt.
+      # The test returns early when `anvil` is absent, and this job had no
+      # Foundry, so it never ran. The coverage checker credited it anyway: it
+      # read suite 27's `out="$(cargo test --lib 2>&1)"` as a bare `cargo test`.
+      # RMPC_REQUIRE_ANVIL=1 turns a missing anvil into a failure. The floor of
+      # 2 is both tests in the file. A blank local anvil: no fork, no upstream RPC.
+      - name: Install Foundry (anvil for the write-seam test)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: rmpc write seam refuses a reverted transaction on a real EVM (anvil)
+        run: |
+          RMPC_REQUIRE_ANVIL=1 CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
+            --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test write_seam_reverted_anvil -- --nocapture
+
   # PARALLEL TWIN MATRIX (issue #600): one runner per e2e binary, each with its OWN Twin fork at the
   # run pin (no shared port or chain). fail-fast: false so one failing binary does not cancel the
   # others, and the per-binary green/red signal stays independent.

@@ -5,7 +5,7 @@ description: "Every writer of `agents[...]` / `agentOwner[...]` applies the same
 
 # GatewayAgentPolicyAuthorizationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
 
 **Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
 
@@ -20,13 +20,13 @@ caller without ADMIN_ROLE must name itself as `shareReceiver`.
 ### agentU
 
 ```solidity
-address internal agentU = makeAddr("agentU");
+address internal agentU = _keyed("agentU");
 ```
 
 ### agentA
 
 ```solidity
-address internal agentA = makeAddr("agentA");
+address internal agentA = _keyed("agentA");
 ```
 
 ## Functions

@@ -1,0 +1,212 @@
+---
+title: "GatewayAgentConsentTest"
+description: "Agent consent on authorize (issue #1791, review CS-1 and CS-2). A caller without ADMIN_ROLE binds an agent other than itself only with the agent's EIP-712 consent over (agent, owner, shareReceiver, nonce) in this gateway's domain; a consent authorizes once; an address bound without consent (by an ADMIN_ROLE caller) can release itself."
+---
+
+# GatewayAgentConsentTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/GatewayAgentPolicyAuthorization.t.sol)
+
+**Inherits:** [GatewayAgentPolicyFixture](/contracts/test/abstract.GatewayAgentPolicyFixture)
+
+**Title:** GatewayAgentConsentTest
+
+Agent consent on authorize (issue #1791, review CS-1 and CS-2). A
+caller without ADMIN_ROLE binds an agent other than itself only with
+the agent's EIP-712 consent over (agent, owner, shareReceiver, nonce)
+in this gateway's domain; a consent authorizes once; an address bound
+without consent (by an ADMIN_ROLE caller) can release itself.
+
+## State Variables
+
+### agent
+
+```solidity
+address internal agent = _keyed("consentAgent");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+### squatter
+
+```solidity
+address internal squatter = makeAddr("squatter");
+```
+
+## Functions
+
+<a id="_commitandroll-address-address-bytes32"></a>
+
+### _commitAndRoll
+
+```solidity
+function _commitAndRoll(address owner, address a, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| a | `address` |  |
+| salt | `bytes32` |  |
+
+<a id="_signedfor-address-uint256-address-uint256"></a>
+
+### _signedFor
+
+<i>
+
+The agent's consent signed over explicit terms, nonce and domain.
+
+</i>
+
+```solidity
+function _signedFor(address gw, uint256 chainId, address owner, uint256 nonce)
+        internal
+        view
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gw | `address` |  |
+| chainId | `uint256` |  |
+| owner | `address` |  |
+| nonce | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_expectrevealreverts-address-bytes32-igateway-agentpolicy-bytes-bytes4"></a>
+
+### _expectRevealReverts
+
+```solidity
+function _expectRevealReverts(
+        address owner,
+        bytes32 salt,
+        IGateway.AgentPolicy memory p,
+        bytes memory consent,
+        bytes4 selector
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| salt | `bytes32` |  |
+| p | `IGateway.AgentPolicy` |  |
+| consent | `bytes` |  |
+| selector | `bytes4` |  |
+
+<a id="test_squattedagentdeposit_revertswithoutconsent"></a>
+
+### test_squattedAgentDeposit_revertsWithoutConsent
+
+CS-1. A squatter reveals a fresh agent address with itself as
+share receiver. Before issue #1791 the reveal landed and the
+agent's next deposit minted shares to the squatter. Now the
+reveal reverts without the agent's consent (none, the consent the
+agent gave its real depositor, or a signature by another key), so
+the agent holds no AGENT_ROLE and its deposit cannot run. Its real
+depositor binds it with consent and receives the shares.
+
+```solidity
+function test_squattedAgentDeposit_revertsWithoutConsent() public;
+```
+
+<a id="test_revealauthorization_revertsonreplayaftersuccess"></a>
+
+### test_revealAuthorization_revertsOnReplayAfterSuccess
+
+A reveal that succeeded cannot be replayed. The same call again
+finds no commitment. After the owner revokes and commits the same
+hash again, the old consent no longer verifies: its use advanced
+the agent's nonce. A fresh consent at the new nonce works.
+
+```solidity
+function test_revealAuthorization_revertsOnReplayAfterSuccess() public;
+```
+
+<a id="test_revealauthorization_consentboundtogatewaychainandnonce"></a>
+
+### test_revealAuthorization_consentBoundToGatewayChainAndNonce
+
+The consent verifies only for this gateway, this chain and the
+agent's current nonce.
+
+```solidity
+function test_revealAuthorization_consentBoundToGatewayChainAndNonce() public;
+```
+
+<a id="test_revealauthorization_malformedormalleableconsentrefused"></a>
+
+### test_revealAuthorization_malformedOrMalleableConsentRefused
+
+A consent of the wrong length, with a bad `v`, or the high-s
+twin of a valid signature is refused; the canonical one works.
+
+```solidity
+function test_revealAuthorization_malformedOrMalleableConsentRefused() public;
+```
+
+<a id="test_revealauthorization_selfagentneedsnoconsent"></a>
+
+### test_revealAuthorization_selfAgentNeedsNoConsent
+
+An agent revealing for itself needs no signature (the call is
+its consent) and spends no nonce. That binding counts as
+consented, so the agent revokes it as its own owner instead of
+releasing it.
+
+```solidity
+function test_revealAuthorization_selfAgentNeedsNoConsent() public;
+```
+
+<a id="test_releaseagent_bindingwithoutconsent_clearsandfreesaddress"></a>
+
+### test_releaseAgent_bindingWithoutConsent_clearsAndFreesAddress
+
+An ADMIN_ROLE caller binds without consent, through
+`authorizeAgent` or a reveal (whose consent bytes it need not
+fill). The agent can release either binding: policy, owner and
+role are cleared, `AgentRevoked` names the owner it had, and the
+freed address can be bound by the depositor it consents to.
+
+```solidity
+function test_releaseAgent_bindingWithoutConsent_clearsAndFreesAddress() public;
+```
+
+<a id="test_releaseagent_consentedbindingtransferredtoadmin_reverts"></a>
+
+### test_releaseAgent_consentedBindingTransferredToAdmin_reverts
+
+A consented binding stays unreleasable after its owner hands
+it to an ADMIN_ROLE holder; the consent record moves with it.
+
+```solidity
+function test_releaseAgent_consentedBindingTransferredToAdmin_reverts() public;
+```
+
+<a id="test_releaseagent_unboundcaller_reverts"></a>
+
+### test_releaseAgent_unboundCaller_reverts
+
+An address with no binding has nothing to release.
+
+```solidity
+function test_releaseAgent_unboundCaller_reverts() public;
+```
+

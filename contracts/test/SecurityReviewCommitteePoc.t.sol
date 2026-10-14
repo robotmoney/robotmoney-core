@@ -40,7 +40,8 @@ contract SecurityReviewCommitteePoc is ICGatewayIntegration {
         gateway.commitAuthorization(commitment);
         vm.roll(block.number + 1);
         vm.prank(otherAgent);
-        gateway.revealAuthorization(otherAgent, salt, policy);
+        // Revealing for itself is the agent's consent; no signature (issue #1791).
+        gateway.revealAuthorization(otherAgent, salt, policy, "");
 
         // The impostor really does hold AGENT_ROLE: the revert below is the
         // identity guard, not the role modifier. Read the role constants

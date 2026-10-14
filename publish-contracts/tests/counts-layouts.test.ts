@@ -85,7 +85,8 @@ async function runIt(l: Layout, countsDir: string, stage: "plan" | "libs" = "pla
   const real = console.log; console.log = () => {};
   try {
     const code = await l.w.run(["--stage", stage, "--environment", "base-mainnet", "--core-sha", l.x, "--counts-dir", countsDir, ...more], {
-      run: realGit as never, makeSigner: () => { signerMade = true; throw new Error("no signer"); },
+      // the harness passes the committed-dir proof by default (its counts dir is no checkout): undefined puts the CLI's real gitFrozenDirCommitted back
+      run: realGit as never, frozenDirCommitted: undefined, makeSigner: () => { signerMade = true; throw new Error("no signer"); },
       verifyReconstructed: async (f: any) => { await verifyReconstructionOnChain(f.measured.reconstructed, { table, out: { linkOut: OUT, c2Out: OUT } as never, getCode }); },
     });
     const errLine = l.w.logs().reverse().find((e) => e.level === "error");
@@ -340,7 +341,7 @@ describe("the default counts dir cannot satisfy the layout and the error says wh
     const env = { PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: l.w.statePath, STUB_CONFIG: l.w.cfgPath, GITHUB_TOKEN: "t" };
     const args = ["--chain", "8453", "--rpc", "http://rpc.test:8545", "--sheet", l.w.sheetPath, "--signer", "keystore:/dev/shm/stub/DEPLOYER", "--environment", "base-mainnet", "--core-sha", l.x, "--core-dir", l.core, "--evidence", l.w.evidence, "--stage", "plan"];
     const { main } = await import("../src/cli.ts");
-    const code = await main(args, l.w.deps({ env, run: realGit as never, verifyReconstructed: async () => {} }));
+    const code = await main(args, l.w.deps({ env, run: realGit as never, verifyReconstructed: async () => {}, frozenDirCommitted: undefined }));
     expect(code).toBe(EXIT_CODES.COUNTS_MISSING);
     const e = l.w.logs().reverse().find((x) => x.level === "error");
     expect(JSON.stringify(e)).toContain("pass --counts-dir <a clean checkout of dev at Y >= the release sha");

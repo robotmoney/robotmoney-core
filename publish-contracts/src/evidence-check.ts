@@ -24,33 +24,34 @@ import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
 import { applyCalldata } from "./apply-receipt.ts";
-import { REDEPLOY_ROW, buildRedeployCalls, vectorsFromFinal } from "./redeploy-vault.ts";
+import { REDEPLOY_ROW, asVaultCap, buildRedeployCalls, createdVaultProblems, vectorsFromFinal, type DeployReceipt } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
 import { loadStageTable } from "./stage-table.ts";
+import { VAULT_NAME } from "./sheet.ts";
+import { STAGE13_UNPAUSE_ROWS, UNPAUSE_ROW_NAMES, VAULT_RULES, vaultOfUnpauseRow } from "./vault-rules.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
 /**
- * Stage 13 on 8453 (issue 1520): the only operation after the timelock handover is the unpause of each of the four vaults (rmUSDC too since issue 1710: all four deploy paused). One govern entry per vault, each with
+ * Stage 13 on 8453 (issue 1520): the unpause of each of the four vaults (rmUSDC too since issue 1710: all four deploy paused). One govern entry per vault, each with
  * its own schedule transaction, its own execute transaction and its own timelock operation (never a shared one). All are scheduled in one sitting and wait
  * one delay: each execute is at least 172800 s after the same operation's schedule. update-delay, batch and cancel are Twin-only demonstrations of the
- * Safe tool: on 8453 they are rejected here. The names are the unpause rows of the govern CLI (src/govern.ts UNPAUSE_ROWS).
+ * Safe tool: on 8453 they are rejected here. The steps are the stage table's vault rules (issue 1705, src/vault-rules.ts): every vault whose `unpauseInStage13`
+ * is set, by its `unpauseRow`, the same names the govern CLI runs (src/govern.ts stageRows(8453)).
  */
-export const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
-export const VAULTS = ["USDC", ...BASKETS] as const;
-export const GOVERN_STEPS: readonly string[] = VAULTS.map((b) => `unpause-${b}`);
+export const GOVERN_STEPS: readonly string[] = STAGE13_UNPAUSE_ROWS;
 
 /**
  * Issue 1667: a vault the tool paused (pause-all, any of the four) comes back through a Safe -> Timelock unpause round. Every unpause step is required (round 1,
  * stage 13) and may repeat as a numbered ROUND (`round`, default 1): a vault paused again after an executed unpause has a second round with its own schedule, execute
  * and operation id. The one call on any vault the evidence accepts is unpauseDeposits().
  */
-export const USDC_STEP = "unpause-USDC";
-export const UNPAUSE_STEPS: readonly string[] = GOVERN_STEPS;
-const VAULT_OF_STEP: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
+export const UNPAUSE_STEPS: readonly string[] = UNPAUSE_ROW_NAMES;
+/** The evidence vault name (rmUSDC, ...) an unpause step opens. */
+const VAULT_OF_STEP: Record<string, string> = Object.fromEntries(UNPAUSE_ROW_NAMES.map((r) => [r, VAULT_NAME[vaultOfUnpauseRow(r)!]]));
 const UNPAUSE_ABI = parseAbi(["function unpauseDeposits()"]);
 export const unpauseCalldata = (): Hex => encodeFunctionData({ abi: UNPAUSE_ABI, functionName: "unpauseDeposits" });
 const roundOf = (g: any): number => (g?.round === undefined ? 1 : g.round);
@@ -187,7 +188,8 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
 /**
  * A single-vault redeploy (issue 1796, the `redeploy-vault` verb and `govern --row redeploy-vault`), recorded under `vault_redeploys` (never in `govern`, so stage 13 stays the four unpauses).
  * One entry per redeploy: the deploy transactions the deployer sent (`deploy_tx_hashes`, `deploy_count`, all status 1), the vault it replaced (`old_vault`, now Retired) and the vault that replaced
- * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of six calls, one schedule and one execute at least the floor apart, and the read-back: the final default
+ * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of seven calls (QA plan v1 E3: the cap the batch copies is `router_vault_cap`, the old vault's
+ * `router.vaultCap` when the round was planned, a decimal uint256), one schedule and one execute at least the floor apart, and the read-back: the final default
  * vector (`vaults`, `bps`, 10000 bps, the new vault in and the old vault out), voted_weights_active false and the router's effective weights equal to it. A REHEARSAL evidence only: a production
  * evidence may carry none (the verb and the row are refused on 8453 in production).
  */
@@ -210,7 +212,13 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     if (ADDR.test(r?.new_vault ?? "") && lc(r.new_vault) !== lc(ev?.vaults?.[r?.vault]?.address ?? "")) bad(`${w}: new_vault ${r.new_vault} is not the address ${ev?.vaults?.[r?.vault]?.address} the evidence names for ${r?.vault}`);
     if (ADDR.test(r?.registry ?? "") && lc(r.registry) !== lc(ev?.registry?.address ?? "")) bad(`${w}: registry ${r.registry} is not the run's registry ${ev?.registry?.address}`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    if (ADDR.test(r?.deployer ?? "") && ADDR.test(ev?.deployer ?? "") && lc(r.deployer) !== lc(ev.deployer)) bad(`${w}: deployer ${r.deployer} is not the run's deployer ${ev.deployer}: the new vault must be a CREATE by the run's deployer`);
     if (typeof r?.registry_name !== "string" || r.registry_name === "") bad(`${w}: registry_name is missing`);
+    // QA plan v1 E3: the cap the batch's router.setVaultCap(new, ...) carried, so the chain check can rebuild that call
+    const capOk = typeof r?.router_vault_cap === "string" && (() => { try { asVaultCap(r.router_vault_cap); return true; } catch { return false; } })();
+    if (!capOk) bad(`${w}: router_vault_cap ${String(r?.router_vault_cap)} is not a decimal uint256 string (the old vault's router.vaultCap, copied to the new vault by the batch)`);
+    // QA plan v1 E1: the verify after the round compared every contract the redeploy did not replace with --prior-out, a build of the deployment's own sha
+    if (r?.prior_out_sha !== undefined && r.prior_out_sha !== ev?.core_sha) bad(`${w}: prior_out_sha ${String(r.prior_out_sha)} is not the evidence core_sha ${String(ev?.core_sha)}: the contracts the redeploy did not replace are verified against the build of the original deployment sha`);
     // the deploy half: every transaction the deployer sent for the vault, each with status 1
     const hashes: unknown[] = Array.isArray(r?.deploy_tx_hashes) ? r.deploy_tx_hashes : [];
     const st: unknown[] = Array.isArray(r?.deploy_receipt_statuses) ? r.deploy_receipt_statuses : [];
@@ -256,7 +264,7 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
 }
 
 /**
- * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (authorizeAgent, committeeRegister), one schedule and one execute at
+ * Issue 1727, the receipt path of a rehearsal. `committee_registrations`: one entry per submitter, ONE timelock batch (setPolicy, committeeRegister; QA plan v1 B6), one schedule and one execute at
  * least the floor apart. `recorded_receipts`: one entry per receipt the submitter anchored through the gateway (receipt_id, payload_digest, payload_uri, submitter ADDRESS, tx_hash; never a key).
  * Both are refused in a production evidence. In a rehearsal every receipt_applications entry must trace to a recorded receipt with the same digest, by a registered submitter.
  */
@@ -316,6 +324,9 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
     submitterSafeProblems(ev, r, w, false, bad);
     if (typeof r?.agent_label !== "string" || r.agent_label === "") bad(`${w}: agent_label is missing`);
     if (!/^[0-9]+$/.test(String(r?.valid_until ?? ""))) bad(`${w}: valid_until is not a decimal timestamp`);
+    // QA plan v1 B6: the submitter Safe's private self-authorization, as its three transactions (the chain check orders the hand-over before the schedule)
+    const sa = r?.self_authorization;
+    if (sa !== undefined) for (const k of ["commit_tx", "reveal_tx", "hand_over_tx"]) if (sa?.[k] !== undefined && !TX.test(String(sa[k]))) bad(`${w}: self_authorization.${k} is not a transaction hash`);
   }
   const seenRec = new Set<string>();
   for (const r of recs) {
@@ -474,7 +485,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (!(ev?.timelock?.min_delay >= floor)) bad(`timelock min_delay ${ev?.timelock?.min_delay} is under ${floor} s${kind === "rehearsal" ? " (the rehearsal floor)" : ""}`);
   else if (kind === "rehearsal" && rehearsalDelayProblem(ev.timelock.min_delay)) bad(`timelock min_delay ${rehearsalDelayProblem(ev.timelock.min_delay)}: ${kindLabel(kind, ev.timelock.min_delay)} cannot be told from production`);
   if (!(ev?.safe?.owners?.length >= 3) || !(ev?.safe?.threshold >= 2)) bad("safe owners or threshold are under the floor (3 owners, threshold 2)");
-  for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) if (!ADDR.test(ev?.vaults?.[k]?.address ?? "")) bad(`vault ${k} address is missing`);
+  for (const k of VAULT_RULES.map((v) => VAULT_NAME[v.key])) if (!ADDR.test(ev?.vaults?.[k]?.address ?? "")) bad(`vault ${k} address is missing`);
 
   const govern: any[] = Array.isArray(ev?.govern) ? ev.govern : [];
   for (const step of GOVERN_STEPS) if (!govern.some((g) => g?.step === step)) bad(`govern step '${step}' of Stage 13 has no evidence entry`);
@@ -524,7 +535,8 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
 export interface ChainReader {
   getChainId(): Promise<number>;
   getTransactionCount(a: { address: `0x${string}` }): Promise<number>;
-  getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }>;
+  /** `from` and `contractAddress` (a CREATE's created contract, else null) are read for the redeploy deploy transactions only (QA plan v1 C2). */
+  getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }>;
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
   /** Runtime code at an address (viem getCode). Needed only when the evidence records an adopted stage. */
   getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
@@ -536,6 +548,8 @@ const TIMELOCK_ABI = parseAbi([
   "event CallExecuted(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data)",
   "event Cancelled(bytes32 indexed id)",
 ]);
+/** QA plan v1 C2 (issue 1701): the event RouterGovernance.applyReceipt emits. An application's entry must be what the chain applied, not only what the timelock called. */
+const GOVERNANCE_EVENTS_ABI = parseAbi(["event ReceiptApplied(bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
 const REGISTRY_ABI = parseAbi(["function listVaults() view returns (address[])"]);
 const PAUSED_ABI = parseAbi(["function depositsPaused() view returns (bool)"]);
 const lc = (x: string) => x.toLowerCase();
@@ -662,17 +676,19 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
   // (all four vaults deploy paused, issue 1710).
-  for (const b of VAULTS) {
-    const rows = (ev.govern ?? []).filter((g: any) => g?.step === `unpause-${b}`).sort((x: any, y: any) => roundOf(x) - roundOf(y));
+  // A vault the table deploys open (deployPaused false) reads unpaused with no row behind it; every vault does today (issue 1710).
+  for (const v of VAULT_RULES) {
+    const name = VAULT_NAME[v.key], step = v.unpauseRow;
+    const rows = (ev.govern ?? []).filter((g: any) => g?.step === step).sort((x: any, y: any) => roundOf(x) - roundOf(y));
     const row = rows[rows.length - 1];
-    const vault = ev.vaults?.[`rm${b}`]?.address;
+    const vault = ev.vaults?.[name]?.address;
     if (!vault) continue;
     let paused: unknown;
     try { paused = await chain.readContract({ address: vault, abi: PAUSED_ABI, functionName: "depositsPaused" }); }
-    catch (e) { bad(`rm${b}.depositsPaused() not readable (${(e as Error).message})`); continue; }
+    catch (e) { bad(`${name}.depositsPaused() not readable (${(e as Error).message})`); continue; }
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
-    if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
-    if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
+    if (executed && paused !== false) bad(`govern ${step} executed with receipt status 1, but ${name}.depositsPaused() reads ${String(paused)} on chain, want false`);
+    if (!executed && paused === false && v.deployPaused) bad(`${name}.depositsPaused() reads false on chain, but govern ${step} has no executed receipt`);
   }
   return p;
 }
@@ -712,10 +728,32 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(ev.governance.address) && lc(x.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled applyReceipt call`);
+    receiptAppliedProblems(w, r, ex, ev.governance.address, bad);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
   return p;
+}
+
+/**
+ * QA plan v1 C2 (issue 1701): the entry is bound to the chain's own record of the application. The execute tx must carry the governance contract's ReceiptApplied event
+ * for the entry's receipt, with the entry's digest and vector: a forged entry (another vector, another digest) is refused even when its transactions exist.
+ */
+function receiptAppliedProblems(w: string, r: any, ex: Awaited<ReturnType<ChainReader["getTransactionReceipt"]>>, governance: string, bad: (m: string) => void): void {
+  const applied: { receiptId: string; payloadDigest: string; vaults: readonly string[]; bps: readonly bigint[] }[] = [];
+  for (const l of ex.logs) {
+    if (lc(l.address) !== lc(governance)) continue;
+    try {
+      const d: any = decodeEventLog({ abi: GOVERNANCE_EVENTS_ABI, data: l.data, topics: l.topics as [Hex, ...Hex[]] });
+      if (d.eventName === "ReceiptApplied") applied.push(d.args);
+    } catch { /* another event of the governance contract */ }
+  }
+  const key = (vs: readonly unknown[], bs: readonly unknown[]) => vs.map((v, i) => `${lc(String(v))}:${String(bs[i])}`).join(",");
+  const mine = applied.filter((x) => lc(x.receiptId) === lc(r.receipt_id));
+  if (mine.length !== 1) { bad(`${w}: the execute tx has ${mine.length} ReceiptApplied events from the governance contract ${governance} for receipt ${r.receipt_id}, want exactly one: the chain did not apply what the entry records`); return; }
+  const x = mine[0]!;
+  if (lc(x.payloadDigest) !== lc(r.payload_digest)) bad(`${w}: ReceiptApplied names payload digest ${x.payloadDigest}, the entry records ${r.payload_digest}`);
+  if (key(x.vaults, x.bps) !== key(r.vaults, r.bps)) bad(`${w}: ReceiptApplied applied [${key(x.vaults, x.bps)}], the entry records [${key(r.vaults, r.bps)}]: the entry is not the vector the chain applied`);
 }
 
 /**
@@ -757,10 +795,10 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
 }
 
 /**
- * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of six calls with one operation id: the schedule tx has exactly six
- * CallScheduled events, index 0 to 5, whose targets and calldata are rebuilt from the recorded vaults (the new vault's setRegistry(registry), registerVault(new), migrateEligibility(new, true,
- * five legs), migrateEligibility(old, false, four legs), retire(old), the new vault's unpauseDeposits()), each with a delay of at least the floor. The execute tx has the six matching CallExecuted
- * events. The block gap is at least the floor.
+ * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of seven calls with one operation id: the schedule tx has exactly seven
+ * CallScheduled events, index 0 to 6, whose targets and calldata are rebuilt from the recorded vaults and cap (the new vault's setRegistry(registry), registerVault(new),
+ * router.setVaultCap(new, router_vault_cap) (QA plan v1 E3), migrateEligibility(new, true, five legs), migrateEligibility(old, false, four legs), retire(old), the new vault's
+ * unpauseDeposits()), each with a delay of at least the floor. The execute tx has the seven matching CallExecuted events. The block gap is at least the floor.
  * It does not read the chain id: a Twin run uses it too.
  */
 export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
@@ -776,10 +814,17 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
   };
   for (const r of Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []) {
     const w = redeployLabel(r);
-    if (!ADDR.test(r?.old_vault ?? "") || !ADDR.test(r?.new_vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(r?.asset ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || typeof r?.registry_name !== "string" || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
-    for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) await status(`${w} deploy tx ${i}`, h);
+    if (!ADDR.test(r?.old_vault ?? "") || !ADDR.test(r?.new_vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(r?.router ?? "") || !ADDR.test(r?.asset ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || typeof r?.registry_name !== "string" || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
+    // QA plan v1 C2 (issue 1701): new_vault is bound to the chain. One recorded deploy transaction must be the deployer's CREATE of exactly that address.
+    const deployReceipts: DeployReceipt[] = [];
+    for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) {
+      const rc = await status(`${w} deploy tx ${i}`, h);
+      deployReceipts.push(rc ? { hash: String(h), status: rc.status, from: rc.from, contractAddress: rc.contractAddress } : { hash: String(h), status: "not readable" });
+    }
+    // a failed or unreadable receipt is already named above; what is left is the binding itself
+    for (const m of createdVaultProblems(r.new_vault, String(r.deployer ?? ""), deployReceipts)) if (!m.includes("receipt status")) bad(`${w}: new_vault ${m}`);
     let want: ReturnType<typeof buildRedeployCalls>;
-    try { want = buildRedeployCalls({ registry: r.registry, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
+    try { want = buildRedeployCalls({ registry: r.registry, router: r.router, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps, vaultCap: r.router_vault_cap }); } catch { continue; } // the offline check already named it
     const sc = await status(`${w} schedule`, r.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
@@ -808,8 +853,9 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
 
 /**
  * Chain check of `committee_registrations` and `recorded_receipts` (issue 1727). A registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
- * authorizeAgent then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
- * the block gap is at least the floor. A recorded receipt's transaction must have succeeded.
+ * setPolicy then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
+ * the block gap is at least the floor. QA plan v1 B6: an entry that records the submitter Safe's private self-authorization (`self_authorization.hand_over_tx`) must have
+ * handed the agent to the timelock in a block BEFORE the batch was scheduled, so the address was never public while unowned. A recorded receipt's transaction must have succeeded.
  */
 export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor: number): Promise<string[]> {
   const p: string[] = [];
@@ -829,7 +875,7 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
     const want = buildRegisterCalls(r.gateway, r.timelock, r.submitter, r.agent_label, BigInt(r.valid_until));
-    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (authorizeAgent, committeeRegister) in one batch`);
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a registration is exactly ${want.length} calls (setPolicy, committeeRegister) in one batch`);
     scheduled.forEach((e, i) => {
       const c = want[i];
       if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not part of a registration`); return; }
@@ -841,6 +887,15 @@ export async function checkReceiptPathOnChain(ev: any, chain: ChainReader, floor
       if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation`);
     });
     if (scheduled[0] && typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0].id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0].id}`);
+    // QA plan v1 B6: the private hand-over to the timelock came first, the public schedule after it
+    const handOver = r?.self_authorization?.hand_over_tx;
+    if (handOver !== undefined) {
+      if (!TX.test(String(handOver))) bad(`${w}: self_authorization.hand_over_tx is not a transaction hash`);
+      else {
+        const ho = await rcOf(`${w} hand-over`, handOver);
+        if (ho && !(ho.blockNumber < sc.blockNumber)) bad(`${w}: the submitter was handed to the timelock in block ${ho.blockNumber}, not before the batch was scheduled in block ${sc.blockNumber}: the address was public while unowned`);
+      }
+    }
     const schedTs = await ts(sc);
     const ex = await rcOf(`${w} execute`, r.execute_tx);
     if (!ex || !scheduled[0]) continue;
@@ -921,7 +976,7 @@ export interface ChainFixture {
   chainId: number;
   nonces: Record<string, number>;
   /** A list with a `hash` field, not a map keyed by hash: the evidence secret scan reads a bare 64-hex key as key material. */
-  receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[] }[];
+  receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
   /** Runtime code by lower-case address, recorded for the adopted libraries only (issue 1721). Optional: older fixtures have none. */
@@ -938,7 +993,7 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
     getTransactionCount: async ({ address }) => fx.nonces[lc(address)] ?? miss(`nonce of ${address}`),
     getTransactionReceipt: async ({ hash }) => {
       const r = fx.receipts.find((x) => lc(x.hash) === lc(hash)) ?? miss(`receipt ${hash}`);
-      return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs };
+      return { status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs, ...(r.from !== undefined ? { from: r.from } : {}), ...(r.contractAddress !== undefined ? { contractAddress: r.contractAddress } : {}) };
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
     getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
@@ -958,7 +1013,7 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
     getTransactionReceipt: async (a) => {
       const r = await inner.getTransactionReceipt(a);
       fixture.receipts = fixture.receipts.filter((x) => lc(x.hash) !== lc(a.hash));
-      fixture.receipts.push({ hash: lc(a.hash), status: r.status, blockNumber: r.blockNumber.toString(), logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics], data: l.data })) });
+      fixture.receipts.push({ hash: lc(a.hash), status: r.status, blockNumber: r.blockNumber.toString(), logs: r.logs.map((l) => ({ address: l.address, topics: [...l.topics], data: l.data })), ...(r.from !== undefined ? { from: r.from } : {}), ...(r.contractAddress !== undefined ? { contractAddress: r.contractAddress } : {}) });
       return r;
     },
     getBlock: async (a) => {
@@ -985,10 +1040,71 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["PEM private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ["keystore json", /"ciphertext"\s*:|"crypto"\s*:\s*\{/],
   ["mnemonic-like phrase", /\b(?:[a-z]{3,8} ){11,23}[a-z]{3,8}\b/],
-  ["secret assignment", /\b(PRIVATE_KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API_KEY|TOKEN)\s*[=:]\s*\S{6,}/i],
+  // QA plan v1 E8: the camelCase and quoted JSON key forms too (`privateKey: …`, `"private_key": "…"`), not only `PRIVATE_KEY=…`. A value the logger redacted is not a secret.
+  ["secret assignment", /\b(?:(?:PRIVATE[_-]?KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API[_-]?KEY)"?|TOKEN)\s*[=:]\s*(?!"?\[redacted\])\S{6,}/i],
 ];
 
 const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
+
+// ---- hash fields: where a 64-hex value is public (QA plan v1 E8, issue 1689) ----
+
+/** Words of a label or key that name a public hash. `codehash` and `blockhash` are one word in some outputs. */
+const PUBLIC_HASH_WORDS = new Set(["tx", "txs", "txn", "hash", "hashes", "codehash", "codehashes", "blockhash", "transaction", "transactions", "block", "salt", "digest", "digests"]);
+/** Words of a label or key that name a secret. Any one of them wins over a hash word: `privateKeyHash` exempts nothing. */
+const SECRET_WORDS = new Set(["private", "priv", "privkey", "secret", "secrets", "mnemonic", "seed", "password", "passwd", "passphrase", "pass", "pw", "key", "keys", "pk", "sk", "keystore"]);
+/** The lower-case words of a key or label: camelCase, snake_case, kebab-case, dotted and `address:function` names are split. */
+const nameWords = (name: string): string[] => name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+const isSecretName = (name: string): boolean => nameWords(name).some((w) => SECRET_WORDS.has(w));
+const isHashLabel = (name: string): boolean => !isSecretName(name) && nameWords(name).some((w) => PUBLIC_HASH_WORDS.has(w));
+
+/** A label, then its 0x bytes32 value or an inline list of them: `"txHash": "0x…"`, `"tx_hashes": ["0x…", "0x…"]`, `Hash: 0x…`, `schedule_tx=0x…`. The label starts a word, never the tail of a longer one. */
+const LABELLED_B32 = new RegExp(`(?<!\\w)([A-Za-z][\\w.-]*)"?[ \\t]*[:=]?[ \\t]*(?:\\[[ \\t]*)?"?${B32}(?:"[ \\t]*,[ \\t]*"${B32})*`, "g");
+/** A pretty-printed JSON line holding one 0x bytes32 value, `"operation_id": "0x…",`. */
+const KEYED_B32_LINE = new RegExp(`^\\s*"([^"]*)"\\s*:\\s*"${B32}",?\\s*$`);
+/** A pretty-printed JSON line holding one 0x bytes32 list element, `"0x…",`. */
+const ELEMENT_B32_LINE = new RegExp(`^\\s*"${B32}",?\\s*$`);
+const SHA256_VALUE = "sha256:[0-9a-fA-F]{64}(?![0-9a-fA-F])";
+const CONFIG_HASH_KEYS = new Set(["configHashes", "config_hashes"]);
+/** The isomorphism report written on one line: the `configHashes` object and its `sha256:` values. */
+const INLINE_CONFIG_HASHES = /"(?:configHashes|config_hashes)"\s*:\s*\{[^{}]*\}/g;
+/** A pretty-printed `"config/<file>.json": "sha256:<64 hex>",` line. Public only directly under `configHashes` / `config_hashes`. */
+const SHA256_LINE = new RegExp(`^\\s*"[^"]*"\\s*:\\s*"${SHA256_VALUE}",?\\s*$`);
+/** The frozen counts anchor `crossChecked.fileHash`: the bare sha256 of a committed counts file (src/counts.ts fileHashOf). */
+const FILE_HASH_LINE = /^\s*"fileHash"\s*:\s*"[0-9a-f]{64}",?\s*$/;
+
+/** One open container of a pretty-printed JSON file (JSON.stringify(x, null, 2)): its key, if it has one, and whether it is a list. */
+export type OpenContainer = { name?: string; list: boolean };
+
+/** Updates the open containers after `line`: a line that starts with `}` or `]` closes one, a `"name": {`, `"name": [`, `{` or `[` line opens one. */
+function trackContainers(open: OpenContainer[], line: string): void {
+  const t = line.trim();
+  if (/^[}\]]/.test(t)) open.pop();
+  const m = /^(?:"([^"]*)"\s*:\s*)?([[{])$/.exec(t);
+  if (m) open.push({ ...(m[1] !== undefined ? { name: m[1] } : {}), list: m[2] === "[" });
+}
+
+/**
+ * Removes the 64-hex values of one line that sit in a public hash field, judged value by value, never by the line. `open` is the containers open at the line.
+ * 1. a 0x bytes32 right after a label whose words name a public hash (tx, hash, transaction, block, salt, digest);
+ * 2. a pretty-printed JSON line that is one 0x bytes32 value of a key, or one element of a named list (`"topics": [`), when that name is not a secret name;
+ * 3. `sha256:<64 hex>` directly under `configHashes` / `config_hashes` (the isomorphism report, src/isomorphism.ts), pretty-printed or on one line;
+ * 4. the bare sha256 of `crossChecked.fileHash` in a frozen counts file.
+ * A label or key that names a secret (private, key, secret, seed, mnemonic, password) never exempts: `"privateKey": "0x…",` stays and is flagged. So does a bare
+ * 64-hex anywhere else, and a key beside a tx hash on the same line: a hash word elsewhere on the line no longer skips it.
+ */
+export function stripHashFields(line: string, open: readonly OpenContainer[] = []): string {
+  const top = open[open.length - 1];
+  if (FILE_HASH_LINE.test(line) && top?.name === "crossChecked") return line.replace(/[0-9a-f]{64}/, "");
+  if (SHA256_LINE.test(line) && top?.name !== undefined && CONFIG_HASH_KEYS.has(top.name)) return line.replace(new RegExp(SHA256_VALUE), "sha256:");
+  const value = new RegExp(`"${B32}"(,?\\s*)$`);
+  const keyed = KEYED_B32_LINE.exec(line);
+  if (keyed && nameWords(keyed[1]!).length > 0 && !isSecretName(keyed[1]!)) return line.replace(value, '"0x"$1');
+  if (ELEMENT_B32_LINE.test(line) && top?.list && top.name !== undefined && nameWords(top.name).length > 0 && !isSecretName(top.name)) return line.replace(value, '"0x"$1');
+  return line
+    .replace(INLINE_CONFIG_HASHES, (m) => m.replace(new RegExp(SHA256_VALUE, "g"), "sha256:"))
+    .replace(LABELLED_B32, (m, label: string) => (isHashLabel(label) ? m.replace(new RegExp(B32, "g"), "0x") : m));
+}
+
 /** The log events whose operation id is a public timelock operation id (govern.ts, safe/timelock.ts). */
 const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
 
@@ -1012,7 +1128,11 @@ export function stripPublicContexts(line: string): string {
   return out;
 }
 
-/** Scan one evidence folder for secrets. Transaction hashes are 64-hex by design: they are allowed in the fields that name a tx. `strip` is the public-context allowance (a test swaps it to prove widening it is caught). */
+/**
+ * Scan one evidence folder for secrets. Transaction hashes, codehashes, salts and digests are 64-hex by design: each value is allowed only in a hash field
+ * (stripHashFields), never because its line names a hash word somewhere (QA plan v1 E8, issue 1689). `strip` is the public-context allowance (a test swaps it
+ * to prove widening it is caught).
+ */
 export function scanEvidenceFolder(dir: string, strip: (line: string) => string = stripPublicContexts): string[] {
   const hits: string[] = [];
   const walk = (d: string) => {
@@ -1020,10 +1140,12 @@ export function scanEvidenceFolder(dir: string, strip: (line: string) => string 
       const f = join(d, n);
       if (statSync(f).isDirectory()) { walk(f); continue; }
       const text = readFileSync(f, "utf8");
+      const open: OpenContainer[] = [];
       text.split("\n").forEach((line, i) => {
+        const rest = stripHashFields(strip(line), open);
+        trackContainers(open, line);
         for (const [name, re] of SECRET_PATTERNS) {
-          if (name.startsWith("64-hex") && /(tx|hash|transaction|block|codehash|salt|digest|sha|0x[0-9a-fA-F]{64}",?\s*$)/i.test(line)) continue;
-          if (re.test(name.startsWith("64-hex") ? strip(line) : line)) hits.push(`${f}:${i + 1}: ${name}`);
+          if (re.test(name.startsWith("64-hex") ? rest : line)) hits.push(`${f}:${i + 1}: ${name}`);
         }
       });
     }
@@ -1054,6 +1176,7 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   if (typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
     const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
+    await refuseDelayFloorOnMainnet(reader, floor, kind);
     problems.push(...(await checkReceiptApplicationsOnChain(ev, reader, floor)));
     problems.push(...(await checkVotedWeightsClearsOnChain(ev, reader, floor)));
     if (kind === "rehearsal") problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
@@ -1063,8 +1186,23 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
 }
 
 /**
+ * Issue 1701: `--delay-floor` lowers the floor for a Twin run, whose timelock is shorter. Read against chain 8453 it is refused below the 8453 floor of the deployment
+ * kind (172800 s production, the rehearsal floor for a rehearsal): it would accept a schedule-to-execute gap that no 8453 timelock of that kind allows. Undefined: accepted.
+ */
+export function delayFloorRefusal(floor: number, rpcChainId: number, kind: DeploymentKind): string | undefined {
+  if (rpcChainId !== MAINNET_CHAIN_ID) return undefined;
+  const min = delayFloor(MAINNET_CHAIN_ID, kind);
+  return floor < min ? `--delay-floor ${floor} is below ${min} s, the ${kind} delay floor of chain 8453 that the --rpc reads: a shorter floor is for a Twin run only` : undefined;
+}
+/** Reads the --rpc chain id and exits 2 when `delayFloorRefusal` refuses the floor. */
+async function refuseDelayFloorOnMainnet(reader: ChainReader, floor: number, kind: DeploymentKind): Promise<void> {
+  const why = delayFloorRefusal(floor, await reader.getChainId(), kind);
+  if (why) { console.error(`evidence: ${why}`); process.exit(2); }
+}
+
+/**
  * `--vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR` (issue 1796): checks the `vault_redeploys` entries a `redeploy-vault` run wrote to its run manifest (shape, the delay
- * floor, then with --rpc the five-call batch on the timelock). A rehearsal check only: a Twin run or a Base mainnet rehearsal proves the round executes on the real contracts.
+ * floor, then with --rpc the seven-call batch on the timelock). A rehearsal check only: a Twin run or a Base mainnet rehearsal proves the round executes on the real contracts.
  */
 async function checkRedeploysMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
   const need = ["registry", "timelock"].filter((k) => typeof values[k] !== "string");
@@ -1077,7 +1215,9 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   const problems = [...(entries.length > 0 ? [] : ["the run manifest has no vault_redeploys entry"]), ...entries.filter((r) => r?.status !== "governed").map((r) => `${redeployLabel(r)}: status is ${String(r?.status)}, want governed`), ...checkVaultRedeploys(ev, floor, kind)];
   if (typeof values.rpc === "string") {
     const { createPublicClient, http } = await import("viem");
-    problems.push(...(await checkVaultRedeploysOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
+    const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
+    await refuseDelayFloorOnMainnet(reader, floor, kind);
+    problems.push(...(await checkVaultRedeploysOnChain(ev, reader, floor)));
   }
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);

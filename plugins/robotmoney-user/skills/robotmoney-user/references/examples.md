@@ -78,8 +78,8 @@ rmpc deposit --config ./config.toml \
   --order-id 0x2222...2222
 ```
 
-Returns non-zero exit and JSON error `{"code": "ErrInsufficientAllowance",
-...}`.
+Returns exit 2 and JSON `{"status": "refused", "error":
+"ErrAllowanceInsufficient", ...}`.
 
 **Expected agent behavior:**
 
@@ -106,7 +106,7 @@ rmpc deposit --config ./config.toml \
   --order-id 0x3333...3333
 ```
 
-Returns non-zero exit and JSON error `{"code": "ErrDepositsPaused", ...}`.
+Returns exit 2 and JSON `{"status": "refused", "error": "ErrDepositsPaused", ...}`.
 
 **Expected agent behavior:**
 
@@ -127,7 +127,7 @@ rmpc deposit --config ./config.toml \
   --order-id 0x4444...4444
 ```
 
-Returns non-zero exit and JSON error `{"code": "ErrCodeHashMismatch", ...}`.
+Returns exit 2 and JSON `{"status": "refused", "error": "ErrCodeHashMismatch", ...}`.
 
 **Expected agent behavior:**
 

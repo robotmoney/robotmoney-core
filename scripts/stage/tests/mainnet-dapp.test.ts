@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { runCli, type Deps, type RunOpts, type RunResult } from "../core-stack.ts";
 import {
   MAINNET_DAPP_PROJECT,
@@ -47,6 +47,14 @@ const GOVERNANCE = A(0x1004);
 const RECEIPT = A(0x1005);
 const TIMELOCK = A(0x1006);
 const HASH = `0x${"ab".repeat(32)}`;
+// QA plan U5: the router's and each vault's runtime code hash, as DeployTimelock records them.
+const ROUTER_HASH = `0x${"cd".repeat(32)}`;
+const VAULT_HASHES: Record<string, string> = {
+  rmUSDC: `0x${"01".repeat(32)}`,
+  rmPROTO: `0x${"02".repeat(32)}`,
+  rmAGENT: `0x${"03".repeat(32)}`,
+  rmRWA: `0x${"04".repeat(32)}`,
+};
 
 type Json = Record<string, unknown>;
 /** The manifests a rehearsal leaves, reduced to the fields the dapp stack reads. `tweak` edits them before they are written. */
@@ -62,6 +70,10 @@ function fixture(name: string, tweak?: (docs: Record<string, Json>) => void): st
     [manifestOf("timelock")]: {
       chain_id: 8453,
       addresses: { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOVERNANCE, consensus_receipt: RECEIPT, timelock: TIMELOCK, safe: SAFE, vaults: Object.values(VAULTS) },
+      code_hashes: { gateway: HASH, router: ROUTER_HASH },
+      vault_handover: Object.fromEntries(
+        Object.entries(VAULTS).map(([key, address], i) => [`vault_${i}`, { address, code_hash: VAULT_HASHES[key] }]),
+      ),
     },
   };
   for (const [key, addr] of Object.entries(VAULTS)) docs[vf[key]!] = { chain_id: 8453, vault: addr };
@@ -105,6 +117,17 @@ describe("the env builder from the manifests", () => {
     expect(env.VITE_TIMELOCK_ADDRESS).toBe(TIMELOCK);
   });
 
+  // Issue 1737 item 1 (QA plan U5): the builder hands the dapp a code-hash pin for every vault and the router,
+  // equal to the runtime code hash the manifests recorded from the chain.
+  test("emits the vault and router code-hash pins from the timelock manifest", () => {
+    expect(env.VITE_ROUTER_EXPECTED_CODE_HASH).toBe(ROUTER_HASH);
+    const pins = JSON.parse(env.VITE_VAULT_EXPECTED_CODE_HASH!) as Record<string, string>;
+    expect(Object.keys(pins).sort()).toEqual(Object.values(VAULTS).sort());
+    for (const [key, address] of Object.entries(VAULTS)) expect(pins[address]).toBe(VAULT_HASHES[key]);
+    expect(readMainnetManifests(dir).vaultCodeHashes).toEqual(VAULT_HASHES);
+    expect(readMainnetManifests(dir).routerCodeHash).toBe(ROUTER_HASH);
+  });
+
   test("is chain 8453, mainnet class, with an EMPTY faucet key and no devnet RPC", () => {
     expect(env.INDEXER_CHAIN_ID).toBe("8453");
     expect(env.EXPLORER_API_CHAIN_ID).toBe("8453");
@@ -114,7 +137,9 @@ describe("the env builder from the manifests", () => {
     expect(env.VITE_FAUCET_HARNESS_PRIVATE_KEY).toBe("");
     expect(env.VITE_DEVNET_RPC_URL).toBe("");
     expect(env.COMPOSE_PROFILES).toBe("");
-    expect(Object.values(env).some((v) => /^0x[0-9a-f]{64}$/i.test(v) && v !== HASH)).toBe(false);
+    // The only bytes32 values are the public code-hash pins: nothing key-shaped rides along.
+    const pins = new Set([HASH, ROUTER_HASH]);
+    expect(Object.values(env).some((v) => /^0x[0-9a-f]{64}$/i.test(v) && !pins.has(v))).toBe(false);
   });
 
   test("carries the RPC, the start block, the range and loopback URLs on ports that are not the stage ports", () => {
@@ -177,6 +202,19 @@ describe("refusals on the manifests and the options", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("hash", (d) => void (d[manifestOf("gateway")]!.gateway_runtime_hash = "0x12")))))).toBe("manifest-field");
     expect(refusal(() => buildMainnetDappEnv(input(fixture("hash0", (d) => void (d[manifestOf("gateway")]!.gateway_runtime_hash = `0x${"0".repeat(64)}`)))))).toBe("manifest-field");
   });
+  // Issue 1737 item 1 (QA plan U5): a manifest vault or router with no runtime code hash fails the build.
+  test("a vault or the router with no recorded code hash, or a handover entry for another vault", () => {
+    const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
+    const handover = (d: Record<string, Json>) => tl(d).vault_handover as Record<string, Json>;
+    for (const i of [0, 1, 2, 3]) {
+      expect(refusal(() => buildMainnetDappEnv(input(fixture(`vh-missing-${i}`, (d) => void delete handover(d)[`vault_${i}`]!.code_hash))))).toBe("manifest-field");
+      expect(refusal(() => buildMainnetDappEnv(input(fixture(`vh-zero-${i}`, (d) => void (handover(d)[`vault_${i}`]!.code_hash = `0x${"0".repeat(64)}`)))))).toBe("manifest-field");
+    }
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("vh-none", (d) => void delete tl(d).vault_handover))))).toBe("manifest-field");
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("vh-swap", (d) => void (handover(d).vault_1!.address = VAULTS.rmUSDC)))))).toBe("manifest-mismatch");
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("rh-none", (d) => void delete (tl(d).code_hashes as Json).router))))).toBe("manifest-field");
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("rh-short", (d) => void ((tl(d).code_hashes as Json).router = "0x12")))))).toBe("manifest-field");
+  });
   test("manifests that disagree: router, vault order, rmUSDC, timelock addresses", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("rt", (d) => void (d[manifestOf("gateway")]!.gateway_router = A(0x9999))))))).toBe("manifest-mismatch");
     expect(
@@ -228,7 +266,12 @@ describe("refusals on the manifests and the options", () => {
 });
 
 describe("refusals on signing keys and deploy settings", () => {
-  const BAD = ["VITE_FAUCET_HARNESS_PRIVATE_KEY", "DEPLOYER_PRIVATE_KEY", "PRIVATE_KEY", "ETH_KEYSTORE", "MNEMONIC", "KEYSTORE_PASSPHRASE", "SAFE_SIGNER_KEY", "DEPLOYER", "FAUCET_KEY", "STAGE_SHEET", "PUBLISH_MANIFEST_DIR", "deployer_key"];
+  // Issue 1737 item 6 (QA plan U5): PRIVATEKEY, PK, ETH_KEY, WALLET_KEY, SECRET, SEED and STAGE_SHEET_PATH used to pass.
+  // Each name is listed on its own, so dropping one from the matcher fails this test.
+  const BAD = [
+    "VITE_FAUCET_HARNESS_PRIVATE_KEY", "DEPLOYER_PRIVATE_KEY", "PRIVATE_KEY", "ETH_KEYSTORE", "MNEMONIC", "KEYSTORE_PASSPHRASE", "SAFE_SIGNER_KEY", "DEPLOYER", "FAUCET_KEY", "STAGE_SHEET", "PUBLISH_MANIFEST_DIR", "deployer_key",
+    "PRIVATEKEY", "OWNER_PRIVATEKEY", "PK", "OWNER_PK", "PK_HEX", "ETH_KEY", "WALLET_KEY", "SECRET", "API_SECRET", "SEED", "WALLET_SEED", "STAGE_SHEET_PATH",
+  ];
   test("each name is refused when it has a value, and the message names the variable but not the value", () => {
     for (const name of BAD) {
       let msg = "";
@@ -244,6 +287,8 @@ describe("refusals on signing keys and deploy settings", () => {
   });
   test("an empty or unset variable, and ordinary variables, are fine", () => {
     assertNoSigningEnv({ VITE_FAUCET_HARNESS_PRIVATE_KEY: "", DEPLOYER_PRIVATE_KEY: "  ", PATH: "/usr/bin", HOME: "/home/x", POSTGRES_PASSWORD: "x", INDEXER_RPC_URL: RPC, UNSET: undefined });
+    // `PK` matches as a whole word only, and the code-hash pins are not secrets.
+    assertNoSigningEnv({ PKG_CONFIG_PATH: "/usr/lib/pkgconfig", APK_HOME: "/x", VITE_VAULT_EXPECTED_CODE_HASH: "{}", VITE_ROUTER_EXPECTED_CODE_HASH: HASH });
   });
   test("a built env with a faucet key, another env class or another chain is refused", () => {
     const env = buildMainnetDappEnv(input(fixture("envcheck")));
@@ -501,5 +546,73 @@ describe("core-stack dapp --chain 8453", () => {
   });
   test("the Twin-mode verbs are unchanged: dapp up without --chain stays a usage error", async () => {
     expect(await runCli(["dapp", "up"], harness().deps)).toBe(64);
+  });
+});
+
+// ─── the Deploy 2 section of stage-deployment.md (core issue 1782, QA plan U8) ──
+// The operator follows that section to point the stage dapp at Deploy 2. It names the manifests the stack reads,
+// every compose key and one command. These tests keep the three equal to what this tool does, so the doc cannot
+// drift from it. The Deploy 2 addresses stay in the doc only: the fixture here is the same stand-in as above.
+describe("stage-deployment.md: the stage dapp on Deploy 2 matches the 8453 tool", () => {
+  const doc = readFileSync(join(CORE_ROOT, "docs/development/stage-deployment.md"), "utf8");
+  const start = doc.indexOf("## Stage dapp on rm-core-stage-1 pointed at Deploy 2");
+  const end = start < 0 ? -1 : doc.indexOf("\n## ", start + 1);
+  const section = start < 0 ? "" : doc.slice(start, end < 0 ? undefined : end);
+  const lines = section.split("\n");
+  const bullet = (lead: string): string => lines.find((l) => l.startsWith(`- **${lead}**`)) ?? "";
+  const between = (s: string, from: string, to: string): string => {
+    const i = s.indexOf(from);
+    const j = i < 0 ? -1 : s.indexOf(to, i + from.length);
+    return j < 0 ? "" : s.slice(i, j);
+  };
+  const jsonNames = (s: string): string[] => [...s.matchAll(/`([a-z0-9-]+\.json)`/g)].map((m) => m[1]!);
+
+  test("the section is there", () => expect(section.length).toBeGreaterThan(0));
+
+  test("the manifest bullet lists exactly the files the stack reads, and lists none of them as unread", () => {
+    const read: string[] = [];
+    readMainnetManifests(fixture("u8-doc"), (p) => (read.push(basename(p)), readFileSync(p, "utf8")));
+    const line = bullet("Manifest paths.");
+    const listed = jsonNames(between(line, "The 8453 stack reads", "It does not read"));
+    const unread = jsonNames(between(line, "It does not read", "Copy the whole folder"));
+    expect(listed.length).toBeGreaterThan(0);
+    expect([...listed].sort()).toEqual([...new Set(read)].sort());
+    expect(unread.length).toBeGreaterThan(0);
+    expect(unread.filter((n) => read.includes(n))).toEqual([]);
+  });
+
+  test("the overlay key table names every key the builder sets, and only keys the builder or the overlay sets", () => {
+    const env = buildMainnetDappEnv(input(fixture("u8-keys")));
+    const overlay = readFileSync(join(CORE_ROOT, MAINNET_OVERLAY_REL), "utf8");
+    const keys = lines
+      .filter((l) => /^\s*\| `/.test(l))
+      .flatMap((l) => [...(l.split("|")[1] ?? "").matchAll(/`([A-Z][A-Z0-9_]+)`/g)].map((m) => m[1]!));
+    expect(keys.length).toBeGreaterThan(0);
+    expect(Object.keys(env).filter((k) => !keys.includes(k))).toEqual([]);
+    expect(keys.filter((k) => !(k in env) && !new RegExp(`^\\s+${k}:`, "m").test(overlay))).toEqual([]);
+  });
+
+  test("the documented command exits 0 against a fake docker with the documented start block and logs RPC", async () => {
+    const i = lines.findIndex((l) => l.trim().startsWith("bun scripts/stage/core-stack.ts dapp up"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    let cmd = "";
+    for (let j = i; j < lines.length; j++) {
+      const t = lines[j]!.trim();
+      cmd += ` ${t.replace(/\\$/, "")}`;
+      if (!t.endsWith("\\")) break;
+    }
+    // Drop `bun scripts/stage/core-stack.ts`; the RPC placeholder and the manifests copy become the fixture's.
+    const words = cmd.replace("<base rpc url>", RPC).trim().split(/\s+/).slice(2);
+    const after = (flag: string): string | undefined => (words.includes(flag) ? words[words.indexOf(flag) + 1] : undefined);
+    const startBlock = after("--start-block");
+    expect(startBlock).toMatch(/^[0-9]+$/);
+    expect(bullet("Start block.")).toContain(`\`--start-block ${startBlock}\``);
+    const argv = words.map((w, k) => (words[k - 1] === "--manifests" ? MANI : w));
+    expect(argv.slice(0, 4)).toEqual(["dapp", "up", "--chain", "8453"]);
+    const h = harness();
+    expect(await runCli(argv, h.deps)).toBe(0);
+    const env = h.calls[1]!.opts!.env!;
+    expect(env.INDEXER_START_BLOCK).toBe(startBlock!);
+    expect(env.INDEXER_LOGS_RPC_URL).toBe(after("--logs-rpc")!);
   });
 });

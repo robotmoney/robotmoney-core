@@ -174,18 +174,33 @@ export function writeFrozen(dir: string, sha: string, counts: FrozenCounts, meas
   return p;
 }
 
-export type CountsMode = "frozen" | "measure-flag" | "dry-run-measure" | "twin-measure";
+export type CountsMode = "frozen" | "measure-flag" | "dry-run-measure" | "twin-measure" | "redeploy-sha";
 export interface ResolvedCounts { frozen?: FrozenCounts; measure: boolean; mode: CountsMode; file: string }
 
 /**
  * Which counts a run uses.
+ *  - a run at a single-vault redeploy's sha (QA plan v1 E1, `redeploy`): the counts of the ORIGINAL deployment sha, never a file for the redeploy sha (below);
  *  - a frozen file for the SHA exists: it is used (a disagreement with the dry run or the broadcast is COUNT_MISMATCH in the runner);
  *  - --measure: none (the run learns them);
  *  - the file is missing and the run is a --dry-run: none, a WARN names it (a dry run is the step that measures; nothing is written);
  *  - the file is missing, no dry run (so a dry run on 8453 preflights too) and the chain is not 8453: the run measures and writes the file under the counts dir;
  *  - the file is missing on 8453 and the run broadcasts: COUNTS_MISSING, a hard error.
  */
-export function resolveCounts(o: { dir: string; sha: string; measureFlag: boolean; dryRun: boolean; chainId: number; warn?: (event: string, f: Record<string, unknown>) => void }): ResolvedCounts {
+export function resolveCounts(o: {
+  dir: string; sha: string; measureFlag: boolean; dryRun: boolean; chainId: number; warn?: (event: string, f: Record<string, unknown>) => void;
+  /**
+   * QA plan v1 E1 (QD-6, issue 1796): `govern --row redeploy-vault` and `verify --prior-out` at the sha a redeploy round was deployed at. They deploy nothing, so the redeploy
+   * sha needs no frozen file (it never has one: the verb sends no counted stage). The deployment's counts are those of the original sha: its frozen file when the counts dir
+   * holds it, else the per-stage counts the run manifest recorded (each was checked against that frozen file when its stage ran). Nothing is measured, nothing is written.
+   */
+  redeploy?: { originalSha: string; recorded: FrozenCounts };
+}): ResolvedCounts {
+  if (o.redeploy) {
+    const original = frozenPath(o.dir, o.redeploy.originalSha);
+    if (existsSync(original)) return { frozen: loadFrozen(o.dir, o.redeploy.originalSha, { allowAdopted: o.chainId === TWIN_CHAIN_ID }).counts, measure: false, mode: "redeploy-sha", file: original };
+    o.warn?.("counts.redeploy_sha", { file: original, source: "run-manifest", note: "no frozen counts file for the original deployment sha in the counts dir: the counts the run manifest recorded per stage stand in for it (each was checked against that file when its stage ran)" });
+    return { frozen: o.redeploy.recorded, measure: false, mode: "redeploy-sha", file: original };
+  }
   const file = frozenPath(o.dir, o.sha);
   if (o.measureFlag) return { measure: true, mode: "measure-flag", file };
   // A Twin measuring run that adopted a stage marks its file (issue 1721). Its own follow-on verbs (verify, govern) read it back; on the Twin chain only (918453): every other chain, 8453 included, refuses it.

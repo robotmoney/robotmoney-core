@@ -19,24 +19,37 @@
  *     "high"
  * so the user cannot sign a withdrawal-enabled policy without seeing
  * what it permits.
+ *
+ * Commit/reveal (QA plan U4, finding DR-4): a depositor signs
+ * `commitAuthorization` and then `revealAuthorization`, never
+ * `authorizeAgent`. Each has its own preview kind, encoded from the call
+ * object in `commitReveal.ts` that the component also hands to the wallet,
+ * so the previewed function and calldata are the signed ones.
  */
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
 import { gatewayAbi, ROLE_HASH } from "./abi";
-import type { AdminActionName, RoleName, VaultActionName } from "./abi";
+import type { AdminActionName, RoleName, RouterActionName, VaultActionName } from "./abi";
 import type { ProductReasonCode } from "./productReasonCode";
 export type { ProductReasonCode } from "./productReasonCode";
 import { formatUsdc, formatShares } from "./format";
+import {
+  commitAuthorizationCall,
+  revealAuthorizationCall,
+  type CommitInputs,
+  type RevealInputs,
+} from "./commitReveal";
 
 /**
  * Union of every function name that may appear in a structured Preview.
  * Gateway admin actions cover the depositor-owned authorize/revoke/policy
  * surface and the deposit-pause/role switches; vault actions cover the
  * ERC-4626 deposit/redeem entrypoints driven by the Deposit/Withdraw tab
- * (issue #257). Both flow through the same TxPreview component, so the
- * preview success type accepts either.
+ * (issue #257); router actions cover the router deposit and the one-leg
+ * `redeemFor` the Withdraw tab signs (QA plan D9). All flow through the same
+ * TxPreview component, so the preview success type accepts any of them.
  */
-export type PreviewFunctionName = AdminActionName | VaultActionName;
+export type PreviewFunctionName = AdminActionName | VaultActionName | RouterActionName;
 
 export type RiskClass = "low" | "medium" | "high" | "unsafe";
 
@@ -60,6 +73,10 @@ export interface AgentPolicy {
 
 export type AdminAction =
   | { kind: "authorizeAgent"; agent: Address; policy: AgentPolicy }
+  // The depositor path signs these two instead of `authorizeAgent` (QA plan U4,
+  // finding DR-4): the preview must name the call the wallet actually signs.
+  | ({ kind: "commitAuthorization" } & CommitInputs)
+  | ({ kind: "revealAuthorization" } & RevealInputs)
   | { kind: "revokeAgent"; agent: Address }
   | { kind: "pauseDeposits" }
   | { kind: "unpauseDeposits" }
@@ -94,6 +111,12 @@ interface PreviewFailure {
   reason: ProductReasonCode;
   /** Always present even on failure so the operator can paste into a second tool. */
   calldata?: Hex;
+  /**
+   * Optional sentence naming the actual cause when `reason` is the catch-all
+   * (QA plan U5, finding DR-9): a vault or router preview refused because the
+   * gateway is unverified says why the gateway is unverified.
+   */
+  detail?: string;
 }
 
 export type Preview = PreviewSuccess | PreviewFailure;
@@ -105,6 +128,26 @@ export interface PreviewContext {
   gatewayCodeHashVerified: boolean;
   /** "fork" / "devnet" => low-stakes envs; mainnet/testnet => higher risk. */
   envClass: "fork" | "devnet" | "testnet" | "mainnet";
+  /**
+   * Lower-cased non-gateway addresses (vaults, router) whose runtime code hash
+   * matched a build-time pin. A vault or router preview badges its target
+   * "[bytecode verified]" only when the target is in this set: the gateway
+   * hash proves nothing about them (QA plan U4, finding DR-5). AdminFlow fills it
+   * from the build-time vault and router pins (`useVerifiedCodeTargets`, QA plan U5).
+   * Keyed by address, so a context spread onto another vault stays correct.
+   */
+  verifiedTargets?: ReadonlySet<string>;
+  /**
+   * Why `gatewayCodeHashVerified` is false, in one sentence (gatewayVerifier.ts
+   * `describeVerificationCause`). Vault and router previews refused on it carry
+   * this as `detail`, so the refusal names the cause (QA plan U5).
+   */
+  gatewayRefusalDetail?: string;
+}
+
+/** True only when `target` matched its own code-hash pin (see `verifiedTargets`). */
+export function targetCodeHashPinned(ctx: PreviewContext, target: Address): boolean {
+  return ctx.verifiedTargets?.has(target.toLowerCase()) === true;
 }
 
 /**
@@ -139,7 +182,12 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
       return ctx.envClass === "fork" ? "low" : "unsafe";
     case "revokeAgent":
       return "low";
+    case "commitAuthorization":
+      // A commitment stores a hash only. No role, policy or funds change until the reveal,
+      // which is previewed and classified on its own.
+      return "low";
     case "authorizeAgent":
+    case "revealAuthorization":
       // Issue #429: any withdrawal-enabled policy is "high" risk —
       // a stolen agent key can redeem shares to `assetRecipient`
       // within the policy caps. This overrides the deposit-cap
@@ -199,72 +247,44 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         });
         args = [
           { name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` },
+          ...policyArgs(action.policy),
+        ];
+        effect = policyEffect(action.agent, action.policy);
+        break;
+      }
+      case "commitAuthorization": {
+        // Encoded from the same call object the wallet signs (commitReveal.ts).
+        functionName = "commitAuthorization";
+        const call = commitAuthorizationCall(action);
+        calldata = encodeFunctionData({ abi: gatewayAbi, ...call });
+        args = [
           {
-            name: "policy.active",
-            raw: String(action.policy.active),
-            gloss: action.policy.active ? "policy ACTIVE" : "policy INACTIVE",
-          },
-          {
-            name: "policy.validUntil",
-            raw: action.policy.validUntil.toString(),
-            gloss: `expires ${new Date(Number(action.policy.validUntil) * 1000).toISOString()}`,
-          },
-          {
-            name: "policy.maxPerPayment",
-            raw: action.policy.maxPerPayment.toString(),
-            gloss: `${formatUsdc(action.policy.maxPerPayment)} per deposit`,
-          },
-          {
-            name: "policy.maxPerWindow",
-            raw: action.policy.maxPerWindow.toString(),
-            gloss: `${formatUsdc(action.policy.maxPerWindow)} per window`,
-          },
-          {
-            name: "policy.shareReceiver",
-            raw: action.policy.shareReceiver,
-            gloss: `shares -> ${shorten(action.policy.shareReceiver)}`,
+            name: "commitHash",
+            raw: call.args[0],
+            gloss: `keccak256(abi.encode(agent ${shorten(action.agent)}, caller ${shorten(action.committer)}, salt ${shorten(action.salt)}))`,
           },
         ];
-        // Issue #429: surface withdrawal-policy fields and the
-        // assetRecipient destination explicitly. These are decoded
-        // from the same calldata as the deposit caps and form the
-        // agent-key compromise blast radius on the withdraw path.
-        const withdrawalsEnabled = isWithdrawalEnabled(action.policy);
-        args.push(
+        effect =
+          `Records a hidden commitment, bound to caller ${shorten(action.committer)}, to authorize agent ${shorten(action.agent)}. ` +
+          "No role, policy or funds change yet. At least one block later, revealAuthorization(agent, salt, policy) grants AGENT_ROLE " +
+          "with the policy shown in the reveal preview; that policy is not part of this commitment.";
+        break;
+      }
+      case "revealAuthorization": {
+        // Encoded from the same call object the wallet signs (commitReveal.ts).
+        functionName = "revealAuthorization";
+        calldata = encodeFunctionData({ abi: gatewayAbi, ...revealAuthorizationCall(action) });
+        args = [
+          { name: "agent", raw: action.agent, gloss: `Agent EOA ${shorten(action.agent)}` },
           {
-            name: "policy.assetRecipient",
-            raw: action.policy.assetRecipient,
-            gloss: withdrawalsEnabled
-              ? `withdrawn USDC -> ${shorten(action.policy.assetRecipient)} (WARNING: agent can move funds here on key compromise)`
-              : "withdrawals DISABLED (assetRecipient unused)",
+            name: "salt",
+            raw: action.salt,
+            gloss:
+              "salt of the step-1 commitment; keccak256(abi.encode(agent, caller, salt)) must equal it",
           },
-          {
-            name: "policy.maxWithdrawPerPayment",
-            raw: action.policy.maxWithdrawPerPayment.toString(),
-            gloss: withdrawalsEnabled
-              ? `${formatShares(action.policy.maxWithdrawPerPayment)} per withdrawal`
-              : "withdrawals DISABLED (no per-call cap)",
-          },
-          {
-            name: "policy.maxWithdrawPerWindow",
-            raw: action.policy.maxWithdrawPerWindow.toString(),
-            gloss: withdrawalsEnabled
-              ? `${formatShares(action.policy.maxWithdrawPerWindow)} per window (max stolen on agent-key compromise)`
-              : "withdrawals DISABLED (no per-window cap)",
-          },
-        );
-        const expiryIso = new Date(Number(action.policy.validUntil) * 1000).toISOString();
-        if (withdrawalsEnabled) {
-          // WARNING is load-bearing — the test asserts it appears
-          // verbatim in the effect copy so a regression in this
-          // string is caught at CI time. See security review §5.
-          effect =
-            `Address ${shorten(action.agent)} will hold AGENT_ROLE and can call deposit() AND withdraw() within policy caps until ${expiryIso}. ` +
-            `WARNING: withdrawals enabled — up to ${formatShares(action.policy.maxWithdrawPerWindow)} per window can be redeemed by this agent to ${shorten(action.policy.assetRecipient)} (assetRecipient). ` +
-            "If the agent key is compromised, an attacker can drain shares up to the per-window cap. Keep assetRecipient under your sole control and revoke gateway share allowance when unused.";
-        } else {
-          effect = `Address ${shorten(action.agent)} will hold AGENT_ROLE; this lets it call deposit() within policy caps until ${expiryIso}. Withdrawals DISABLED (maxWithdrawPerPayment = 0).`;
-        }
+          ...policyArgs(action.policy),
+        ];
+        effect = `Reveals the step-1 commitment; the signing wallet becomes this agent's recorded owner (agentOwner). ${policyEffect(action.agent, action.policy)}`;
         break;
       }
       case "revokeAgent":
@@ -375,6 +395,82 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
     risk: classifyRisk(action, ctx),
     calldata,
   };
+}
+
+/**
+ * Decoded-arg rows for an agent policy. `authorizeAgent` and `revealAuthorization`
+ * carry the same tuple, so both previews print it through this one function.
+ */
+function policyArgs(policy: AgentPolicy): PreviewArg[] {
+  // Issue #429: surface withdrawal-policy fields and the assetRecipient
+  // destination explicitly. These are decoded from the same calldata as the
+  // deposit caps and form the agent-key compromise blast radius on the
+  // withdraw path.
+  const withdrawalsEnabled = isWithdrawalEnabled(policy);
+  return [
+    {
+      name: "policy.active",
+      raw: String(policy.active),
+      gloss: policy.active ? "policy ACTIVE" : "policy INACTIVE",
+    },
+    {
+      name: "policy.validUntil",
+      raw: policy.validUntil.toString(),
+      gloss: `expires ${new Date(Number(policy.validUntil) * 1000).toISOString()}`,
+    },
+    {
+      name: "policy.maxPerPayment",
+      raw: policy.maxPerPayment.toString(),
+      gloss: `${formatUsdc(policy.maxPerPayment)} per deposit`,
+    },
+    {
+      name: "policy.maxPerWindow",
+      raw: policy.maxPerWindow.toString(),
+      gloss: `${formatUsdc(policy.maxPerWindow)} per window`,
+    },
+    {
+      name: "policy.shareReceiver",
+      raw: policy.shareReceiver,
+      gloss: `shares -> ${shorten(policy.shareReceiver)}`,
+    },
+    {
+      name: "policy.assetRecipient",
+      raw: policy.assetRecipient,
+      gloss: withdrawalsEnabled
+        ? `withdrawn USDC -> ${shorten(policy.assetRecipient)} (WARNING: agent can move funds here on key compromise)`
+        : "withdrawals DISABLED (assetRecipient unused)",
+    },
+    {
+      name: "policy.maxWithdrawPerPayment",
+      raw: policy.maxWithdrawPerPayment.toString(),
+      gloss: withdrawalsEnabled
+        ? `${formatShares(policy.maxWithdrawPerPayment)} per withdrawal`
+        : "withdrawals DISABLED (no per-call cap)",
+    },
+    {
+      name: "policy.maxWithdrawPerWindow",
+      raw: policy.maxWithdrawPerWindow.toString(),
+      gloss: withdrawalsEnabled
+        ? `${formatShares(policy.maxWithdrawPerWindow)} per window (max stolen on agent-key compromise)`
+        : "withdrawals DISABLED (no per-window cap)",
+    },
+  ];
+}
+
+/** The post-state sentence for `agent` holding AGENT_ROLE under `policy`. */
+function policyEffect(agent: Address, policy: AgentPolicy): string {
+  const expiryIso = new Date(Number(policy.validUntil) * 1000).toISOString();
+  if (isWithdrawalEnabled(policy)) {
+    // WARNING is load-bearing — the test asserts it appears
+    // verbatim in the effect copy so a regression in this
+    // string is caught at CI time. See security review §5.
+    return (
+      `Address ${shorten(agent)} will hold AGENT_ROLE and can call deposit() AND withdraw() within policy caps until ${expiryIso}. ` +
+      `WARNING: withdrawals enabled — up to ${formatShares(policy.maxWithdrawPerWindow)} per window can be redeemed by this agent to ${shorten(policy.assetRecipient)} (assetRecipient). ` +
+      "If the agent key is compromised, an attacker can drain shares up to the per-window cap. Keep assetRecipient under your sole control and revoke gateway share allowance when unused."
+    );
+  }
+  return `Address ${shorten(agent)} will hold AGENT_ROLE; this lets it call deposit() within policy caps until ${expiryIso}. Withdrawals DISABLED (maxWithdrawPerPayment = 0).`;
 }
 
 /**

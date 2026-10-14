@@ -15,6 +15,7 @@ import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AgentConsent} from "./helpers/AgentConsent.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
@@ -1594,8 +1595,10 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         vm.prank(other);
         gateway2.commitAuthorization(keccak256(abi.encode(otherAgent, other, salt)));
         vm.roll(block.number + 1);
+        bytes memory consent =
+            AgentConsent.sign(AgentConsent.keyOf("other-agent"), address(gateway2), other, other);
         vm.prank(other);
-        gateway2.revealAuthorization(otherAgent, salt, _policy(other));
+        gateway2.revealAuthorization(otherAgent, salt, _policy(other), consent);
 
         address[] memory bad = new address[](1);
         bad[0] = otherAgent;
@@ -1654,8 +1657,12 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         vm.prank(deployer);
         gateway.commitAuthorization(keccak256(abi.encode(kept, deployer, salt)));
         vm.roll(block.number + 1);
+        // A distinct agent key: the reveal carries its consent (issue #1791).
+        bytes memory consent = AgentConsent.sign(
+            AgentConsent.keyOf("still-deployer-owned"), address(gateway), deployer, deployer
+        );
         vm.prank(deployer);
-        gateway.revealAuthorization(kept, salt, _policy(deployer));
+        gateway.revealAuthorization(kept, salt, _policy(deployer), consent);
         assertEq(gateway.agentOwner(kept), deployer, "fixture: deployer owns the agent");
 
         DeployTimelock.Deployed memory withKept = d;

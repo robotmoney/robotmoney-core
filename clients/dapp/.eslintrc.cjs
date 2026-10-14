@@ -142,6 +142,8 @@ module.exports = {
         // The Fusion acceptance config, same Playwright convention. It landed on
         // the fusion branch without this entry, where dapp-lint-build never ran.
         "playwright.fusion.config.ts",
+        // QA plan U5: the mainnet-class bundle config (issue 1737 item 3), same convention.
+        "playwright.mainnet.config.ts",
         "vite.config.ts",
         "vitest.config.ts",
         "vitest.workspace.ts",

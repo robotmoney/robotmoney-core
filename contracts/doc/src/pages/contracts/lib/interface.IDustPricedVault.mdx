@@ -1,0 +1,51 @@
+---
+title: "IDustPricedVault"
+---
+
+# IDustPricedVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketAssetConfigGuard.sol)
+
+<i>
+
+The vault getters `deactivateAsset` reads from `address(this)` to price a leftover balance (QA plan D6).
+
+</i>
+
+## Functions
+
+<a id="maxslippagebps"></a>
+
+### maxSlippageBps
+
+```solidity
+function maxSlippageBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetusdcvalue-uint256-uint256"></a>
+
+### assetUsdcValue
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

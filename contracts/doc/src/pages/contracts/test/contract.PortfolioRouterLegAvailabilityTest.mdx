@@ -1,0 +1,279 @@
+---
+title: "PortfolioRouterLegAvailabilityTest"
+description: "A two-leg router: rmAGENT on the RM/USDC Uniswap V4 pool (50 percent) and a 1:1 vault (50 percent). rmAGENT is the real AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager, so its `maxDeposit`, `previewDeposit` and ORA-4 guard run production code. The guard starts at the D10 sheet value."
+---
+
+# PortfolioRouterLegAvailabilityTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/PortfolioRouterLegAvailability.t.sol)
+
+**Inherits:** Test
+
+A two-leg router: rmAGENT on the RM/USDC Uniswap V4 pool (50 percent) and a 1:1 vault (50 percent). rmAGENT is the
+real AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager, so its
+`maxDeposit`, `previewDeposit` and ORA-4 guard run production code. The guard starts at the D10 sheet value.
+
+## Constants
+
+### FEE
+
+<i>
+
+The RM V4 pool fee: 29100 hundredths of a bip, 291 bps (config/agent-token-shortlist.json).
+
+</i>
+
+```solidity
+uint24 internal constant FEE = 29100;
+```
+
+### SPACING
+
+```solidity
+int24 internal constant SPACING = 582;
+```
+
+### LEG
+
+```solidity
+uint256 internal constant LEG = 100e6;
+```
+
+### OLD_SHEET_NAV_DEVIATION_BPS
+
+<i>
+
+The rmAGENT sheet value before D4 (twin sheet `VAULT_AGENT_NAV_DEVIATION_BPS`): below the fee band.
+
+</i>
+
+```solidity
+uint256 internal constant OLD_SHEET_NAV_DEVIATION_BPS = 100;
+```
+
+### SHEET_NAV_DEVIATION_BPS
+
+<i>
+
+The rmAGENT sheet value from D4 (decision D10): the 291 bps fee plus a TWAP lag budget.
+
+</i>
+
+```solidity
+uint256 internal constant SHEET_NAV_DEVIATION_BPS = 400;
+```
+
+### DRIFT_TICKS
+
+<i>
+
+An unrecorded drift of 250 ticks (about 2.5 percent) sits inside the 2.91 percent fee band (about 287 ticks), where
+no arbitrage closes it.
+
+</i>
+
+```solidity
+int24 internal constant DRIFT_TICKS = 250;
+```
+
+## State Variables
+
+### pm
+
+```solidity
+MockV4PoolManager internal pm;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### agent
+
+```solidity
+AgentTokenVault internal agent;
+```
+
+### other
+
+```solidity
+MockVault internal other;
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### rm
+
+```solidity
+TestERC20 internal rm;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### c0
+
+```solidity
+address internal c0;
+```
+
+### c1
+
+```solidity
+address internal c1;
+```
+
+### poolId
+
+```solidity
+bytes32 internal poolId;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### depositor
+
+```solidity
+address internal depositor = makeAddr("depositor");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_key"></a>
+
+### _key
+
+```solidity
+function _key() internal view returns (IPoolManagerV4.PoolKey memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IPoolManagerV4.PoolKey` |  |
+
+<a id="_register-address-string"></a>
+
+### _register
+
+<i>
+
+Register `vault` and make it router-eligible. The caller holds the registry's ADMIN_ROLE.
+
+</i>
+
+```solidity
+function _register(address vault, string memory name) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| name | `string` |  |
+
+<a id="_routerdeposit-uint256"></a>
+
+### _routerDeposit
+
+```solidity
+function _routerDeposit(uint256 amount) internal returns (uint256[] memory shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256[]` |  |
+
+<a id="test_rtr5_stalerecorderlegisskippednotreverted"></a>
+
+### test_RTR5_staleRecorderLegIsSkippedNotReverted
+
+CS-4. A stale recorder makes every NAV read on rmAGENT revert, `maxDeposit` and `previewDeposit` included, while
+the registry still says Active. The router previews the leg unavailable and the deposit skips it, renormalising
+the whole amount onto the live leg. Before D4 the leg stayed in the set and the routed deposit reverted
+`UsdcLegTransferFailed(rmAGENT)`. One poke restores the leg on the next deposit.
+
+```solidity
+function test_RTR5_staleRecorderLegIsSkippedNotReverted() public;
+```
+
+<a id="test_rtr5_vaultowndepositpauselegisskippednotreverted"></a>
+
+### test_RTR5_vaultOwnDepositPauseLegIsSkippedNotReverted
+
+The vault's own deposit pause (`EMERGENCY_ROLE` `pauseDeposits()`) is outside the registry. `maxDeposit` reads
+0, so the router skips the leg even though the registry still says Active and the vault still quotes.
+
+```solidity
+function test_RTR5_vaultOwnDepositPauseLegIsSkippedNotReverted() public;
+```
+
+<a id="test_rtr5_quoterevertdropslegandresplitsuntilstable"></a>
+
+### test_RTR5_quoteRevertDropsLegAndResplitsUntilStable
+
+A dropped quote changes the split, so the router re-quotes the survivors. Three 1:1 legs at 40/30/30 on
+1,000 USDC: Y never quotes, Z quotes 300 but not the 429 it gets once Y is gone, X takes everything.
+Preview and execute agree on each round's result, and neither dropped leg is ever called.
+
+```solidity
+function test_RTR5_quoteRevertDropsLegAndResplitsUntilStable() public;
+```
+
+<a id="test_ora4_idlepooldriftinsidefeebanddoesnotrevertrouteddeposit"></a>
+
+### test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit
+
+E6. Spot drifts about 2.5 percent from the recorded TWAP and nobody trades it back, because the drift is
+inside the 2.91 percent fee band. At the old 100 bps sheet value the rmAGENT deposit reverts on ORA-4 and the
+whole routed deposit reverts with it: ORA-4 is not an availability signal, since `previewDeposit` does not run
+it. At the D10 value (400 bps) the same routed deposit funds both legs. The drift is on the side where RM is
+cheaper at spot. On the other side the 500 bps swap bound (291 bps fee plus the drift) binds before the guard.
+
+```solidity
+function test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit() public;
+```
+

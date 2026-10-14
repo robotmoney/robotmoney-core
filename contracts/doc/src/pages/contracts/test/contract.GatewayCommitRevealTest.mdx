@@ -4,7 +4,7 @@ title: "GatewayCommitRevealTest"
 
 # GatewayCommitRevealTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -148,6 +148,35 @@ function _commitHash(address agentAddr, address committer, bytes32 salt)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes32` |  |
+
+<a id="_agentconsent-address"></a>
+
+### _agentConsent
+
+<i>
+
+`agent`'s EIP-712 consent for `owner` as revealer and share
+receiver at its current nonce (issue #1791). Build it before
+`vm.prank`: it reads the nonce from the gateway. Reverts that fire
+before the consent check (commitment, policy, ownership) pass "".
+
+</i>
+
+```solidity
+function _agentConsent(address owner) internal view returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
 
 <a id="test_commitreveal_happypath_authorizesagent"></a>
 

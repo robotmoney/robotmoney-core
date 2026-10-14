@@ -20,9 +20,10 @@ use reqwest::Client;
 use std::collections::HashMap;
 use watchdog::{
     alert::ThresholdKind,
-    config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig},
+    config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig, VaultThresholds},
+    pager_state::ensure_pager_state_table,
     receipt_liveness::ReceiptLivenessConfig,
-    watchdog::{run_cycle, CycleResult},
+    watchdog::{load_cursor, run_cycle, run_cycles_since_cursor, store_cursor, CycleResult},
 };
 
 /// Seed a chain + block into the DB, then insert `agent_deposits` rows.
@@ -135,6 +136,7 @@ fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
+        indexer_lag: Default::default(),
     }
 }
 
@@ -253,6 +255,7 @@ fn config_missing_threshold_is_fatal() {
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
+        indexer_lag: Default::default(),
     };
 
     let err = bad.validate().unwrap_err();
@@ -284,6 +287,127 @@ async fn empty_block_is_ok() {
         .expect("cycle must not error");
 
     assert_eq!(result, CycleResult::Ok);
+
+    server.shutdown();
+}
+
+/// The `custom_details.vault` of a captured breach alert.
+fn alert_vault(body: &[u8]) -> String {
+    let v: serde_json::Value = serde_json::from_slice(body).expect("alert body is JSON");
+    v["payload"]["custom_details"]["vault"]
+        .as_str()
+        .expect("alert names its scope")
+        .to_owned()
+}
+
+/// DI-7: a breach alert the receiver did not confirm is sent again on the next
+/// cycle, and the cursor does not move past its block until it is delivered.
+/// An alert the receiver already confirmed for the same block is not re-sent.
+///
+/// Before the fix a non-2xx was logged, the cursor advanced, and the alert was
+/// never sent again.
+#[tokio::test]
+async fn failed_webhook_is_retried_next_cycle() {
+    use common::ScriptedWebhookServer;
+
+    let fx = pg_fixture().await;
+    // The daemon creates its pager table at startup; this test is that startup.
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+
+    // The receiver confirms the first alert, answers 503 to the second, then
+    // recovers (every later request is answered 202).
+    let server = ScriptedWebhookServer::start(vec![202, 503]).await;
+    let mut config = make_alert_config(500_000, &server.url);
+    // A per-vault override on the seeded vault makes one block raise two
+    // alerts: the global one, then the per-vault one.
+    let vault_hex = "cc".repeat(20);
+    config.vault.insert(
+        vault_hex.clone(),
+        VaultThresholds {
+            per_block_mint_limit_usdc: Some("500000".to_owned()),
+            per_hour_mint_limit_usdc: None,
+            per_block_burn_limit_usdc: None,
+            per_hour_burn_limit_usdc: None,
+        },
+    );
+    let client = Client::new();
+
+    let chain_id = 8453i64;
+    let block_number = 4000i64;
+    // 600_000 > 500_000 for the aggregate and for the vault.
+    seed_deposits(&fx.pool, chain_id, block_number, &[300_000, 300_000]).await;
+    store_cursor(&fx.pool, chain_id, block_number - 1)
+        .await
+        .unwrap();
+
+    // Cycle 1: the global alert lands, the per-vault alert gets a 503.
+    let first = run_cycles_since_cursor(&fx.pool, &config, &client, chain_id, block_number, None)
+        .await
+        .expect("an undelivered alert is a result, not a cycle error");
+    assert_eq!(
+        first,
+        CycleResult::BreachUndelivered(vec![ThresholdKind::PerBlockMint])
+    );
+    assert_eq!(
+        load_cursor(&fx.pool, chain_id).await.unwrap(),
+        Some(block_number - 1),
+        "the cursor must not move past a block whose alert was not delivered"
+    );
+    let attempt = server.drain_captures();
+    assert_eq!(attempt.len(), 2, "both alerts were attempted: {attempt:?}");
+    assert_eq!(
+        (attempt[0].status, alert_vault(&attempt[0].body)),
+        (202, "global".to_owned())
+    );
+    assert_eq!(
+        (attempt[1].status, alert_vault(&attempt[1].body)),
+        (503, vault_hex.clone())
+    );
+
+    // Cycle 2 (the next poll): only the undelivered alert is sent again. It
+    // lands, and the cursor moves past the block.
+    let second = run_cycles_since_cursor(&fx.pool, &config, &client, chain_id, block_number, None)
+        .await
+        .expect("cycle must not error");
+    assert_eq!(
+        second,
+        CycleResult::Breached(vec![ThresholdKind::PerBlockMint])
+    );
+    assert_eq!(
+        load_cursor(&fx.pool, chain_id).await.unwrap(),
+        Some(block_number),
+        "a delivered block releases the cursor"
+    );
+    let retry = server.drain_captures();
+    assert_eq!(
+        retry.len(),
+        1,
+        "the confirmed global alert must not be re-sent: {retry:?}"
+    );
+    assert_eq!(retry[0].status, 202);
+    assert_eq!(alert_vault(&retry[0].body), vault_hex);
+    let body: serde_json::Value = serde_json::from_slice(&retry[0].body).unwrap();
+    assert_eq!(
+        body["dedup_key"],
+        format!("volume_breach:{chain_id}:{block_number}:per_block_mint:{vault_hex}"),
+        "the retry carries the same key the first attempt did"
+    );
+
+    // The block is done: its delivery records are cleared, and nothing is sent
+    // for it again.
+    let left: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM watchdog_pager_state WHERE chain_id = $1 AND dedup_key LIKE 'volume_breach:%'",
+    )
+    .bind(chain_id)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(left, 0, "per-block breach records must not pile up");
+    let third = run_cycles_since_cursor(&fx.pool, &config, &client, chain_id, block_number, None)
+        .await
+        .unwrap();
+    assert_eq!(third, CycleResult::NoData);
+    assert!(server.drain_captures().is_empty(), "nothing re-sent");
 
     server.shutdown();
 }

@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadStageTable } from "../stage/stage-table";
-import { loadStageTable as cliLoadStageTable } from "../../publish-contracts/src/stage-table";
+import { loadStageTable as cliLoadStageTable, VAULT_RULE_FIELDS, differingRuleFields, parseStageTable } from "../../publish-contracts/src/stage-table";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
@@ -28,8 +28,8 @@ describe("stage-table.json", () => {
 
   test("every non-script deploy script in contracts/script has a stage", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
-    // a govern action, not a stage; and the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
-    const skip = new Set(["ActivateBasketVaultEligibility.s.sol", "RedeployProtocolAssetVault.s.sol"]);
+    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row (the stale basket eligibility script is deleted, issue 1705)
+    const skip = new Set(["RedeployProtocolAssetVault.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
@@ -128,6 +128,10 @@ describe("stage-table.json", () => {
     expect(g.description).toContain("only mainnet operation is the unpause of each of the four vaults");
     expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
     expect(g.description).toContain("Twin-only");
+    // issue 1698: router weights change through the one applyReceipt call (release and weights together), never a vote and never a two-call batch
+    expect(g.description).toContain("one RouterGovernance.applyReceipt call through the timelock");
+    expect(g.description).toContain("no voting surface");
+    for (const old of ["setDefaultWeights", "releaseReceipt", "scheduleBatch", "propose", "quorum"]) expect(g.description).not.toContain(old);
     // no 13-row list survives: none of the old matrix rows is named
     for (const old of ["voting-power-quorum", "other-setters", "migrate-eligibility", "router-weights"]) expect(JSON.stringify(g)).not.toContain(old);
     // the deploy-time configuration is read by the stages that set it
@@ -166,6 +170,92 @@ describe("stage-table.json", () => {
         expect(src).not.toMatch(/registerVault|migrateEligibility|setRouterEligible/);
       });
     }
+  });
+
+  // Issue 1705 (QA plan v1 E9 a): one table holds the per-vault rule for every dimension the four vaults are governed by. Every field is present on every
+  // vault, a field on which the vaults differ names its decision, and each rule is what the scripts and contracts do.
+  describe("vault rules (issue 1705)", () => {
+    const vaultSource = (artifact: string): string =>
+      artifact === "RobotMoneyVault" ? read("contracts/RobotMoneyVault.sol") : read("contracts/vaults/BasketVault.sol") + read(`contracts/vaults/${artifact}.sol`);
+    const stageOf = (key: string) => table.stages.find((s) => s.vault === key)!;
+    const govern = (table as unknown as { govern: { mainnetRows: string[] } }).govern;
+
+    test("vault rules: every rule field is present on all four vaults, and the parser refuses a row without one", () => {
+      expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+      for (const v of table.vaults) for (const f of VAULT_RULE_FIELDS) expect([v.key, f, (v as unknown as Record<string, unknown>)[f] !== undefined]).toEqual([v.key, f, true]);
+      const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
+      for (const f of VAULT_RULE_FIELDS) {
+        const t = JSON.parse(JSON.stringify(raw));
+        delete t.vaults[2][f];
+        expect(() => parseStageTable(t), f).toThrow(`vault AGENT: ${f}`);
+      }
+    });
+
+    test("vault rules: a field that differs between vaults names a decision link, and the parser refuses a difference without one", () => {
+      const decisions = table.vaultRuleDecisions as Record<string, string>;
+      const differing = differingRuleFields(table.vaults);
+      expect(differing.length).toBeGreaterThan(0);
+      for (const f of differing) expect([f, decisions[f] ?? ""]).toEqual([f, expect.stringMatching(/\b(?:issue|core) \d{3,5}\b|owner decision/i)]);
+      for (const f of Object.keys(decisions)) expect(VAULT_RULE_FIELDS as readonly string[]).toContain(f);
+      const t = JSON.parse(read("scripts/deploy/stage-table.json"));
+      delete t.vaultRuleDecisions[differing[0]!];
+      expect(() => parseStageTable(t)).toThrow(`the vaults differ on ${differing[0]}`);
+      const u = JSON.parse(read("scripts/deploy/stage-table.json"));
+      u.vaults[1].deployPaused = false; u.vaults[1].unpauseInStage13 = false; // rmPROTO open at deploy, with no decision for the difference
+      delete u.vaultRuleDecisions.deployPaused; delete u.vaultRuleDecisions.unpauseInStage13;
+      expect(() => parseStageTable(u)).toThrow("the vaults differ on deployPaused");
+    });
+
+    test("vault rules: deployPaused is what each vault stage script does (pauseDeposits in the stage)", () => {
+      for (const v of table.vaults) expect([v.key, /\.pauseDeposits\(\)/.test(scriptSource(stageOf(v.key).script.split(":")[0]!))]).toEqual([v.key, v.deployPaused]);
+    });
+
+    test("vault rules: the unpause rows are unpause-<KEY>, and stage 13 (govern.mainnetRows) is exactly the rows the table puts in stage 13", () => {
+      for (const v of table.vaults) expect(v.unpauseRow).toBe(`unpause-${v.key}`);
+      expect(govern.mainnetRows).toEqual(table.vaults.filter((v) => v.unpauseInStage13).map((v) => v.unpauseRow));
+    });
+
+    test("vault rules: the seed is the env name the vault stage requires, and a vault with no seed requires none", () => {
+      for (const v of table.vaults) {
+        const env = stageOf(v.key).requiredEnv;
+        if (v.seed === "none") expect([v.key, env.filter((e) => e.startsWith("SEED_"))]).toEqual([v.key, []]);
+        else expect([v.key, env]).toEqual([v.key, expect.arrayContaining([v.seed.slice("sheet:".length), "SEED_SHARE_RECEIVER"])]);
+      }
+    });
+
+    test("vault rules: router eligibility comes from the router stage (setRouterEligible on the vault stage's address) or from the vault's own stage (ROUTER_DEFAULT_BPS, migrateEligibility)", () => {
+      const router = table.stages.find((s) => s.name === "router")!;
+      for (const v of table.vaults) {
+        if (v.eligibilitySource === "router-stage") {
+          // the router stage reads VAULT_ADDRESS, the vault stage manifest's address, and marks it eligible
+          expect([v.key, v.stage, router.requiredEnv.includes("VAULT_ADDRESS"), /setRouterEligible\(vault_, true\)/.test(read(router.script.split(":")[0]!))]).toEqual([v.key, "vault", true, true]);
+          expect(stageOf(v.key).requiredEnv).not.toContain("ROUTER_DEFAULT_BPS");
+        } else {
+          expect([v.key, stageOf(v.key).requiredEnv.includes("ROUTER_DEFAULT_BPS"), /migrateEligibility/.test(scriptSource(stageOf(v.key).script.split(":")[0]!))]).toEqual([v.key, true, true]);
+        }
+      }
+    });
+
+    test("vault rules: emergencyLevers is exactly the vault contract's EMERGENCY_ROLE functions", () => {
+      for (const v of table.vaults) {
+        const src = vaultSource(v.artifact);
+        const levers = [...src.matchAll(/function\s+(\w+)\s*\([^)]*\)([^{;]*)\{/g)].filter((m) => /onlyRole\(EMERGENCY_ROLE\)/.test(m[2]!)).map((m) => m[1]!);
+        expect([v.key, [...new Set(levers)].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
+      }
+    });
+
+    test("vault rules: registryNameSource is where the registered name comes from (a sheet env a stage reads, or the vault script's constant)", () => {
+      for (const v of table.vaults) {
+        const [where, name] = v.registryNameSource.split(":") as [string, string];
+        if (where === "sheet") {
+          const reg = table.stages.find((s) => s.requiredEnv.includes(name) && /registerVault/.test(read(s.script.split(":")[0]!)));
+          expect([v.key, reg?.name]).toEqual([v.key, "registry"]);
+        } else {
+          const own = read(stageOf(v.key).script.split(":")[0]!);
+          expect([v.key, new RegExp(`string public constant ${name} = "`).test(own), new RegExp(`_registryName\\(\\)[^{]*\\{\\s*return ${name};`).test(own)]).toEqual([v.key, true, true]);
+        }
+      }
+    });
   });
 
   test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {

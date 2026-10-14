@@ -11,6 +11,10 @@
 //! flat schema. If either side renames, removes, or adds a required field
 //! without updating the other, `Config::from_str` will fail at parse time and
 //! the round-trip test will catch it before any consumer is affected.
+//!
+//! The fixture's `[signer]` comment block is checked against the export's
+//! `SOFTWARE_KEYSTORE_COMMENT` array, read from `configExport.ts`, so the
+//! signer decisions the operator reads cannot drift (QA plan U7, DR-12).
 
 mod common;
 
@@ -35,6 +39,42 @@ const TEST_PRIVKEY: [u8; 32] = [
 ];
 
 const FIXTURE_PATH: &str = "tests/fixtures/dapp-exported-config.toml";
+
+/// The dapp module that writes the TOML. Its `SOFTWARE_KEYSTORE_COMMENT`
+/// array is the comment block the fixture must carry.
+const CONFIG_EXPORT_TS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../dapp/src/lib/configExport.ts"
+);
+
+/// Read the `SOFTWARE_KEYSTORE_COMMENT` lines out of `configExport.ts`:
+/// one quoted string per line, between the declaration and its `];`.
+fn export_software_keystore_comment() -> Vec<String> {
+    let ts = std::fs::read_to_string(CONFIG_EXPORT_TS)
+        .unwrap_or_else(|e| panic!("read {CONFIG_EXPORT_TS}: {e}"));
+    let mut out = Vec::new();
+    for line in ts
+        .lines()
+        .skip_while(|l| !l.contains("export const SOFTWARE_KEYSTORE_COMMENT"))
+        .skip(1)
+    {
+        let t = line.trim();
+        if t.starts_with(']') {
+            break;
+        }
+        let t = t.trim_end_matches(',');
+        let unquoted = ['"', '`', '\'']
+            .iter()
+            .find_map(|q| t.strip_prefix(*q).and_then(|s| s.strip_suffix(*q)))
+            .unwrap_or_else(|| panic!("not one quoted string per line: {line:?}"));
+        out.push(unquoted.to_string());
+    }
+    assert!(
+        !out.is_empty(),
+        "SOFTWARE_KEYSTORE_COMMENT not found in {CONFIG_EXPORT_TS}"
+    );
+    out
+}
 
 fn rmpc_bin() -> Command {
     Command::cargo_bin("rmpc").expect("rmpc binary built")
@@ -150,6 +190,80 @@ fn fixture_has_usdc_address() {
         .and_then(|v| v.as_str())
         .expect("usdc_address field present and is a string");
     assert!(!usdc.is_empty(), "usdc_address must not be empty");
+}
+
+/// QA plan U7, finding DR-12: the comment block the dapp writes above
+/// `allow_software_fallback` states the signer decisions. Depositor writes
+/// sign with a software keystore on every chain, Base mainnet included
+/// (owner decision 2026-10-06); hardware is optional, never required (owner
+/// decision 2026-10-14). The old block called the keystore "devnet/test use
+/// only" and said mainnet required an HSM/KMS signer. The fixture carries
+/// the export's lines verbatim, in order, inside `[signer]`, and still loads.
+#[test]
+fn dapp_toml_comment_text_matches_export_and_signer_decisions() {
+    let expected = export_software_keystore_comment();
+    let fixture_toml =
+        std::fs::read_to_string(FIXTURE_PATH).expect("fixture present at known path");
+
+    let fixture_lines: Vec<&str> = fixture_toml.lines().collect();
+    let at = fixture_lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("allow_software_fallback"))
+        .expect("fixture sets allow_software_fallback");
+    assert!(
+        at >= expected.len(),
+        "the comment block must sit above allow_software_fallback"
+    );
+    let block = &fixture_lines[at - expected.len()..at];
+    let want: Vec<&str> = expected.iter().map(String::as_str).collect();
+    assert_eq!(
+        block,
+        want.as_slice(),
+        "fixture [signer] comments drifted from configExport.ts SOFTWARE_KEYSTORE_COMMENT"
+    );
+    let signer_header = fixture_lines
+        .iter()
+        .position(|l| l.trim() == "[signer]")
+        .expect("fixture has a [signer] table");
+    assert!(
+        signer_header < at - expected.len(),
+        "the comment block belongs inside [signer]"
+    );
+
+    let text = expected.join("\n");
+    for claim in [
+        "Base mainnet included",
+        "2026-10-06",
+        "optional, never required",
+        "2026-10-14",
+    ] {
+        assert!(
+            text.contains(claim),
+            "export comment must state {claim:?}:\n{text}"
+        );
+    }
+    for stale in [
+        "UNSAFE FOR PRODUCTION",
+        "devnet/test use only",
+        "require an HSM",
+        "HSM/KMS/device-bound signer",
+    ] {
+        assert!(
+            !fixture_toml.contains(stale),
+            "fixture still carries the superseded claim {stale:?}"
+        );
+    }
+
+    // Comments never trip deny_unknown_fields: the fixture loads as is.
+    Config::from_str(&fixture_toml).expect("fixture with the comment block loads");
+
+    // The marker the credential ADR once documented is an unknown field to
+    // rmpc, so the export must never emit it.
+    let with_marker = format!("unsafe_for_production = true\n{fixture_toml}");
+    assert!(
+        Config::from_str(&with_marker).is_err(),
+        "unsafe_for_production must stay an unknown field, refused by deny_unknown_fields"
+    );
 }
 
 /// Step 2: the loaded config drives a real `rmpc self-check` invocation

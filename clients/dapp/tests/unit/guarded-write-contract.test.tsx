@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider, createConfig, custom, useAccount, useConnect } from "wagmi";
 import { mock } from "wagmi/connectors";
 import { base as wagmiBase, mainnet as wagmiMainnet } from "wagmi/chains";
-import { defineChain, type Address } from "viem";
+import { defineChain, keccak256, type Address } from "viem";
 import { RuntimeConfigProvider } from "../../src/lib/RuntimeConfigContext";
 import { useGuardedWriteContract } from "../../src/lib/useGuardedWriteContract";
 import { WrongChainGate } from "../../src/components/WrongChainGate";
@@ -43,7 +43,12 @@ const WRITE_METHODS = [
   "eth_signTypedData_v4",
 ];
 
-function setup(chainId: number, envClass: string, code: string | null = "0x6001") {
+function setup(
+  chainId: number,
+  envClass: string,
+  code: string | null = "0x6001",
+  extraConfig: Readonly<Record<string, string>> = {},
+) {
   const requests: Array<{ chainId: number; method: string }> = [];
   const t = (id: number) =>
     custom({
@@ -109,7 +114,7 @@ function setup(chainId: number, envClass: string, code: string | null = "0x6001"
   render(
     <WagmiProvider config={config}>
       <QueryClientProvider client={new QueryClient()}>
-        <RuntimeConfigProvider config={{ VITE_ENV_CLASS: envClass }}>
+        <RuntimeConfigProvider config={{ VITE_ENV_CLASS: envClass, ...extraConfig }}>
           <Probe />
           <WrongChainGate>
             <p data-testid="app-body">app</p>
@@ -121,8 +126,13 @@ function setup(chainId: number, envClass: string, code: string | null = "0x6001"
   return { requests, fetched, sent, getWrite: () => write! };
 }
 
-async function connected(chainId: number, envClass: string, code: string | null = "0x6001") {
-  const h = setup(chainId, envClass, code);
+async function connected(
+  chainId: number,
+  envClass: string,
+  code: string | null = "0x6001",
+  extraConfig: Readonly<Record<string, string>> = {},
+) {
+  const h = setup(chainId, envClass, code, extraConfig);
   await act(async () => screen.getByTestId("go").click());
   await waitFor(() =>
     expect(screen.getByTestId("state")).toHaveTextContent(`connected:${chainId}`),
@@ -144,6 +154,13 @@ const fresh = (): {
   args: [1n],
 });
 const call = { address: TARGET, abi, functionName: "deposit", args: [1n] } as const;
+/**
+ * The build-time pin (QA plan U5) that lets a mainnet deposit to `address` through: the hash of the
+ * code the fake wallet answers with.
+ */
+const pinFor = (address: Address, code = "0x6001"): Record<string, string> => ({
+  VITE_VAULT_EXPECTED_CODE_HASH: JSON.stringify({ [address]: keccak256(code as `0x${string}`) }),
+});
 
 describe("useGuardedWriteContract on the mainnet class", () => {
   it.each([1, 918453])("sends NO write when the wallet is on chain %i", async (chainId) => {
@@ -175,7 +192,13 @@ describe("useGuardedWriteContract on the mainnet class", () => {
   });
 
   it("lets the write through, pinned to 8453, when the wallet is on Base", async () => {
-    const { fetched, getWrite } = await connected(8453, "mainnet");
+    const target = fresh();
+    const { fetched, getWrite } = await connected(
+      8453,
+      "mainnet",
+      "0x6001",
+      pinFor(target.address),
+    );
     expect(screen.getByTestId("app-body")).toBeInTheDocument();
     expect(screen.queryByTestId("wrong-chain-gate")).toBeNull();
     expect(getWrite().writeBlocked).toBe(false);
@@ -185,7 +208,7 @@ describe("useGuardedWriteContract on the mainnet class", () => {
     let message = "";
     await act(async () => {
       await getWrite()
-        .writeContractAsync({ ...fresh(), chainId: 1 })
+        .writeContractAsync({ ...target, chainId: 1 })
         .catch((e: Error) => {
           message = `${e.name}: ${e.message.slice(0, 400)}`;
         });
@@ -239,8 +262,9 @@ describe("useGuardedWriteContract on other classes", () => {
   });
 });
 
-// Core issue 1758: a redeem estimated against the pending block reverts Panic(0x11), so every redeem is sent
-// with a fixed gas limit through this one hook (dapp issue 1760).
+// Core issue 1758: an rmUSDC redeem estimated against the pending block can revert Panic(0x11), so a redeem of
+// a configured RobotMoneyVault is sent with a fixed gas limit through this one hook (dapp issue 1760). A basket
+// vault redeem needs more than that limit, so it is left to the wallet's estimate (QA plan U3).
 describe("useGuardedWriteContract redeem gas workaround (core issue 1758)", () => {
   const redeemAbi = [
     {
@@ -262,16 +286,19 @@ describe("useGuardedWriteContract redeem gas workaround (core issue 1758)", () =
     args: [1n, USER, USER] as const,
     ...extra,
   });
+  /** The deployment's RobotMoneyVault (rmUSDC) is the redeem target. */
+  const asRmUsdc = (v: ReturnType<typeof redeem>) => ({ VITE_VAULT_ADDRESS: v.address });
   const GAS_2_5M = "0x2625a0";
 
   it.each(["mainnet", "devnet"])(
-    "sends a redeem on the %s class with gas 2,500,000",
+    "sends an rmUSDC redeem on the %s class with gas 2,500,000",
     async (env) => {
       const chainId = env === "mainnet" ? 8453 : 918453;
-      const { sent, getWrite } = await connected(chainId, env);
+      const v = redeem();
+      const { sent, getWrite } = await connected(chainId, env, "0x6001", asRmUsdc(v));
       await act(async () => {
         await getWrite()
-          .writeContractAsync(redeem())
+          .writeContractAsync(v)
           .catch(() => undefined);
       });
       expect(sent).toHaveLength(1);
@@ -279,30 +306,46 @@ describe("useGuardedWriteContract redeem gas workaround (core issue 1758)", () =
     },
   );
 
-  it("the callback form sends the redeem with gas 2,500,000 too", async () => {
-    const { sent, getWrite } = await connected(8453, "mainnet");
+  it("the callback form sends the rmUSDC redeem with gas 2,500,000 too", async () => {
+    const v = redeem();
+    const { sent, getWrite } = await connected(8453, "mainnet", "0x6001", asRmUsdc(v));
     await act(async () => {
-      getWrite().writeContract(redeem());
+      getWrite().writeContract(v);
       await new Promise((r) => setTimeout(r, 100));
     });
     expect(sent[0]?.gas).toBe(GAS_2_5M);
   });
 
   it("a caller-set gas wins", async () => {
-    const { sent, getWrite } = await connected(8453, "mainnet");
+    const v = redeem({ gas: 1_234_567n });
+    const { sent, getWrite } = await connected(8453, "mainnet", "0x6001", asRmUsdc(v));
     await act(async () => {
       await getWrite()
-        .writeContractAsync(redeem({ gas: 1_234_567n }))
+        .writeContractAsync(v)
         .catch(() => undefined);
     });
     expect(sent[0]?.gas).toBe("0x12d687");
   });
 
-  it("a deposit gets no added gas", async () => {
-    const { sent, getWrite } = await connected(8453, "mainnet");
+  it("a basket vault redeem gets no fixed gas: its floor is above 2,500,000", async () => {
+    const rmUsdc = redeem();
+    const basket = redeem();
+    const { sent, getWrite } = await connected(8453, "mainnet", "0x6001", asRmUsdc(rmUsdc));
     await act(async () => {
       await getWrite()
-        .writeContractAsync(fresh())
+        .writeContractAsync(basket)
+        .catch(() => undefined);
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.gas).toBeUndefined();
+  });
+
+  it("a deposit gets no added gas", async () => {
+    const target = fresh();
+    const { sent, getWrite } = await connected(8453, "mainnet", "0x6001", pinFor(target.address));
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(target)
         .catch(() => undefined);
     });
     expect(sent).toHaveLength(1);

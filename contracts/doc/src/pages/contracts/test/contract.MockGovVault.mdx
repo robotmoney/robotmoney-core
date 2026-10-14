@@ -5,7 +5,7 @@ description: "Minimal ERC-4626-shaped vault mock."
 
 # MockGovVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:** ERC20
 
@@ -106,6 +106,33 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assets | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxdeposit-address"></a>
+
+### maxDeposit
+
+<i>
+
+ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
+reverts (QA plan D4), so a router-leg mock must answer it.
+
+</i>
+
+```solidity
+function maxDeposit(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
 
 **Returns**
 

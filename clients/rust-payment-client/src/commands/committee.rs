@@ -5,9 +5,15 @@
 //! `RobotMoneyGateway.committeeVoteSubmit`, which forwards it to the
 //! `InvestmentCommitteePolicy` contract.
 //!
-//! Subcommand:
+//! Subcommands:
 //! - `vote-submit` — submit a signed allocation vote. The caller needs
 //!   `AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the IC policy.
+//! - `check-agent` — read-only preflight for `vote-submit`: reads
+//!   `hasRole(COMMITTEE_AGENT_ROLE(), agent)` on the IC policy. The swarm
+//!   skill's `plugins/robotmoney-swarm/scripts/check-preflight.sh` runs it
+//!   before the write (review finding DR-1: the guard it replaces called a
+//!   `--dry-run` flag that never existed and grepped an error name rmpc never
+//!   prints, so it passed for every agent).
 //!
 //! rmpc is not a governance signer. Registering a committee agent
 //! (`gateway.committeeRegister`) is an `onlyRole(ADMIN_ROLE)` call, and
@@ -25,9 +31,11 @@
 //! command fails closed before signing when the committee is not configured.
 //!
 //! Exit codes:
-//! - 0 — success.
-//! - 2 — refusal (unauthorized, non-allowlisted agent, bad input).
-//! - 3 — startup failure (missing config, keystore, RPC, etc.).
+//! - 0 — success (`check-agent`: the agent holds `COMMITTEE_AGENT_ROLE`).
+//! - 2 — refusal (unauthorized, non-allowlisted agent, bad input;
+//!   `check-agent`: `ErrNotAllowlisted`, the read succeeded and says no).
+//! - 3 — startup failure (missing config, keystore, RPC, etc.;
+//!   `check-agent`: the role could not be read, so the answer is unknown).
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -40,12 +48,12 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::{compute_fees, FeeBid};
-use crate::gateway::{GatewayVoteParams, RobotMoneyGateway};
+use crate::gateway::{GatewayVoteParams, InvestmentCommitteePolicy, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
-use crate::rpc::FailoverRpcClient;
-use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
+use crate::rpc::{CallRequest, FailoverRpcClient};
+use crate::signer::software::{Keystore, SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
     broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
@@ -119,6 +127,16 @@ pub struct VoteSubmitArgs {
     pub pretty: bool,
 }
 
+/// Args for `rmpc committee check-agent`.
+#[derive(Debug, Clone)]
+pub struct CheckAgentArgs {
+    pub config_path: PathBuf,
+    /// Address to check. `None` reads the cleartext `address` field of the
+    /// configured keystore, the address `vote-submit` signs as.
+    pub agent: Option<String>,
+    pub pretty: bool,
+}
+
 // ─── Output types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -144,6 +162,28 @@ pub struct CommitteeFailure {
     /// allowlisted committee agent", not a rare fault.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
+}
+
+/// `rmpc committee check-agent` result: one role read, pinned to one block.
+/// Printed for both answers. `ok` and `has_role` agree; a "no" also carries
+/// `error: "ErrNotAllowlisted"` so a caller can match the same name
+/// `vote-submit` refuses with. A read that could not run prints a
+/// [`CommitteeFailure`] instead, never this shape with `has_role: false`.
+#[derive(Debug, Serialize)]
+pub struct CheckAgentOutput {
+    pub ok: bool,
+    pub action: String,
+    pub agent: String,
+    pub ic_policy: String,
+    /// `COMMITTEE_AGENT_ROLE()` as the deployed policy returns it.
+    pub committee_agent_role: String,
+    pub has_role: bool,
+    pub chain_id: u64,
+    pub block_number: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 // ─── Public entry points ─────────────────────────────────────────────────────
@@ -408,7 +448,227 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
     EXIT_OK
 }
 
+/// Run `rmpc committee check-agent`. Returns the process exit code.
+///
+/// Answers the one question `vote-submit` cannot answer before it signs: will
+/// `InvestmentCommitteePolicy.submitVote` refuse this agent with
+/// `AgentNotAllowlisted`? It reads `COMMITTEE_AGENT_ROLE()` off the deployed
+/// policy (never a baked-in hash) and `hasRole(role, agent)`, both at the same
+/// block, after checking the RPC serves the configured `chain_id`.
+///
+/// Every outcome prints JSON on stdout, because this command's caller is a
+/// script and rmpc's error log is file-only: 0 with `has_role: true`; 2 with
+/// `has_role: false` and `error: "ErrNotAllowlisted"`; 3 with a
+/// [`CommitteeFailure`] naming why the read did not run. The 3 path exists so
+/// an unreachable RPC can never read as "registered".
+pub fn run_check_agent(args: CheckAgentArgs) -> i32 {
+    let pretty = args.pretty;
+    let cfg = match Config::from_path(&args.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("rmpc committee check-agent: failed to load config: {e}");
+            return check_agent_unknown(e.name(), format!("{e}"), pretty);
+        }
+    };
+
+    let ic_addr = match resolve_ic_address(&cfg, "check-agent", pretty) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+
+    let agent = match resolve_check_agent_address(&cfg, args.agent.as_deref()) {
+        Ok(a) => a,
+        Err((error, message)) => {
+            log::error!("rmpc committee check-agent: {message}");
+            return check_agent_unknown(error, message, pretty);
+        }
+    };
+
+    let rt = match build_rt("check-agent") {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let rpc = match cfg.rpc_client() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("rmpc committee check-agent: rpc client init failed: {e}");
+            return check_agent_unknown(e.name(), format!("{e}"), pretty);
+        }
+    };
+
+    // A role read against the wrong chain answers a different question.
+    let chain_id = match rt.block_on(async { rpc.chain_id().await }) {
+        Ok(id) => id,
+        Err(e) => {
+            log::error!("rmpc committee check-agent: eth_chainId failed: {e}");
+            return check_agent_unknown(e.name(), format!("{e}"), pretty);
+        }
+    };
+    if chain_id != cfg.chain_id {
+        let err = RmpcError::ErrChainIdMismatch;
+        let message = format!(
+            "{err} (RPC eth_chainId = {chain_id}, config chain_id = {})",
+            cfg.chain_id
+        );
+        log::error!("rmpc committee check-agent: {message}");
+        return check_agent_unknown(err.name(), message, pretty);
+    }
+
+    let read = rt.block_on(async { read_committee_agent_role(&rpc, ic_addr, agent).await });
+    let (block_number, role, has_role) = match read {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("rmpc committee check-agent: role read failed: {e}");
+            return check_agent_unknown(e.name(), format!("{e}"), pretty);
+        }
+    };
+
+    log::info!(
+        "rmpc committee check-agent: agent={agent:#x} ic={ic_addr:#x} block={block_number} has_role={has_role}"
+    );
+    let (error, message) = if has_role {
+        (None, None)
+    } else {
+        (
+            Some(RmpcError::ErrNotAllowlisted.name().to_string()),
+            Some(format!(
+                "{agent:#x} does not hold COMMITTEE_AGENT_ROLE on the IC policy {ic_addr:#x} at \
+                 block {block_number}; vote-submit from it would revert with AgentNotAllowlisted. \
+                 Registration is a Safe action (gateway.committeeRegister through the timelock), \
+                 not an rmpc command"
+            )),
+        )
+    };
+    emit(
+        &CheckAgentOutput {
+            ok: has_role,
+            action: "check-agent".to_string(),
+            agent: format!("{agent:#x}"),
+            ic_policy: format!("{ic_addr:#x}"),
+            committee_agent_role: format!("{role:#x}"),
+            has_role,
+            chain_id,
+            block_number,
+            error,
+            message,
+        },
+        pretty,
+    );
+    if has_role {
+        EXIT_OK
+    } else {
+        EXIT_REFUSAL
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Print a `check-agent` failure whose answer is unknown and return
+/// `EXIT_STARTUP_FAIL`. `error` is a variant name rmpc already defines.
+fn check_agent_unknown(error: &str, message: String, pretty: bool) -> i32 {
+    emit_failure(
+        &CommitteeFailure {
+            ok: false,
+            error: error.to_string(),
+            message: Some(message),
+            tx_hash: None,
+        },
+        pretty,
+    );
+    EXIT_STARTUP_FAIL
+}
+
+/// The address `check-agent` reads. `--agent` wins; otherwise the cleartext
+/// `address` field of `[signer].keystore_path`. That field is the one
+/// `SoftwareSigner` checks the decrypted key against before `vote-submit`
+/// signs, so it names the sender without asking for the passphrase.
+///
+/// Errors carry the variant name to print: `ErrConfig` for a bad `--agent`,
+/// the signer's `ErrKeystoreIo` / `ErrKeystoreFormat` for the keystore.
+fn resolve_check_agent_address(
+    cfg: &Config,
+    flag: Option<&str>,
+) -> Result<Address, (&'static str, String)> {
+    if let Some(s) = flag {
+        return Address::from_str(s)
+            .map_err(|e| ("ErrConfig", format!("--agent is not an address: {e}")));
+    }
+    let path = &cfg.signer.keystore_path;
+    let raw = std::fs::read(path).map_err(|e| {
+        (
+            "ErrKeystoreIo",
+            format!(
+                "cannot read [signer].keystore_path {} for the agent address: {e}; \
+                 pass --agent to name it",
+                path.display()
+            ),
+        )
+    })?;
+    let keystore: Keystore = serde_json::from_slice(&raw).map_err(|e| {
+        (
+            "ErrKeystoreFormat",
+            format!("{} is not an rmpc keystore: {e}", path.display()),
+        )
+    })?;
+    Address::from_str(&keystore.address).map_err(|e| {
+        (
+            "ErrKeystoreFormat",
+            format!(
+                "{} has an `address` field that is not an address: {e}",
+                path.display()
+            ),
+        )
+    })
+}
+
+/// `COMMITTEE_AGENT_ROLE()` then `hasRole(role, agent)` on the IC policy, both
+/// at the same block. Returns `(block_number, role, has_role)`.
+async fn read_committee_agent_role(
+    rpc: &FailoverRpcClient,
+    ic_policy: Address,
+    agent: Address,
+) -> crate::errors::Result<(u64, B256, bool)> {
+    let block_number = rpc.block_number().await?;
+    let block_tag = format!("0x{block_number:x}");
+
+    let role_out = rpc
+        .eth_call(
+            &CallRequest {
+                to: ic_policy,
+                from: None,
+                data: InvestmentCommitteePolicy::COMMITTEE_AGENT_ROLECall {}
+                    .abi_encode()
+                    .into(),
+            },
+            Some(&block_tag),
+        )
+        .await?;
+    let role =
+        InvestmentCommitteePolicy::COMMITTEE_AGENT_ROLECall::abi_decode_returns(&role_out, true)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("COMMITTEE_AGENT_ROLE() return: {e}")))?
+            ._0;
+
+    let has_out = rpc
+        .eth_call(
+            &CallRequest {
+                to: ic_policy,
+                from: None,
+                data: InvestmentCommitteePolicy::hasRoleCall {
+                    role,
+                    account: agent,
+                }
+                .abi_encode()
+                .into(),
+            },
+            Some(&block_tag),
+        )
+        .await?;
+    let has_role = InvestmentCommitteePolicy::hasRoleCall::abi_decode_returns(&has_out, true)
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("hasRole() return: {e}")))?
+        ._0;
+
+    Ok((block_number, role, has_role))
+}
 
 fn resolve_ic_address(cfg: &Config, subcommand: &str, pretty: bool) -> Result<Address, i32> {
     match cfg.ic_policy_address.as_deref() {

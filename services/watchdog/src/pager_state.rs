@@ -21,8 +21,9 @@
 //! watchdog already holds the pool.
 
 use sqlx::PgPool;
+use tracing::error;
 
-use crate::receipt_liveness::PagerState;
+use crate::receipt_liveness::{AlertPager, PageAction, PagerState};
 use crate::WatchdogError;
 
 /// DDL for the watchdog's private pager-state table.
@@ -90,4 +91,61 @@ pub async fn save_pager_state(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Remove every row of `chain_id` whose `dedup_key` starts with `prefix`.
+///
+/// Volume-breach keys name one block's breach (DI-7). They only matter while
+/// that block is being retried; once the cursor has moved past it they are
+/// dropped so the table does not grow by one row per breached block forever.
+pub async fn clear_pager_states_with_prefix(
+    pool: &PgPool,
+    chain_id: i64,
+    prefix: &str,
+) -> Result<u64, WatchdogError> {
+    let r = sqlx::query(
+        "DELETE FROM watchdog_pager_state \
+         WHERE chain_id = $1 AND substr(dedup_key, 1, length($2)) = $2",
+    )
+    .bind(chain_id)
+    .bind(prefix)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Commit the outcome of one dispatch and persist the pager's durable state.
+///
+/// Task T08: nothing is committed before the receiver confirmed. On a failed
+/// delivery the pager stays armed and refuses to retry before its failure
+/// floor, so a hard-down receiver is neither hammered at the 12 s poll rate nor
+/// silenced for a whole publishing cadence.
+///
+/// Shared by the standing-condition pagers in `main` and the volume-breach
+/// alerts in [`crate::watchdog::run_cycle`] (DI-7), so every page the watchdog
+/// sends goes through one deliver-then-commit seam.
+pub async fn commit_page(
+    pool: &PgPool,
+    pager: &mut AlertPager,
+    chain_id: i64,
+    dedup_key: &str,
+    now: i64,
+    action: PageAction,
+    sent: Result<(), WatchdogError>,
+) {
+    let ok = match &sent {
+        Ok(()) => true,
+        Err(e) => {
+            error!(dedup_key, "alert dispatch failed, pager stays armed: {e}");
+            false
+        }
+    };
+    if pager.on_page_result(now, action, ok) {
+        if let Err(e) = save_pager_state(pool, chain_id, dedup_key, pager.state()).await {
+            // Durability is best-effort: losing the write must not take the
+            // monitor off-line, but it must never be silent, because the next
+            // restart is then the one that forgets an open incident.
+            error!(dedup_key, "pager state persist failed: {e}");
+        }
+    }
 }

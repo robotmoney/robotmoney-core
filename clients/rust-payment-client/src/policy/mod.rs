@@ -24,7 +24,12 @@
 //! 5. `gateway.vault()` matches `config.vault_address`, and
 //!    `vault.depositsPaused() == false`
 //! 6. `gateway.agents(self).active && validUntil >= now`
-//! 7. `amount <= agents(self).maxPerPayment`
+//!    (`ErrAgentNotAuthorized`, then `ErrPolicyExpired`)
+//! 6b. when the config pins them, `agents(self).shareReceiver ==
+//!    config.share_receiver` and `agentOwner(self) == config.agent_owner`
+//!    (`ErrAgentBindingMismatch`, QA plan D2: a squatter who bound this
+//!    agent address first would otherwise receive its deposits' shares)
+//! 7. `amount <= agents(self).maxPerPayment` (`ErrDepositCapExceeded`)
 //! 8. `effectiveDepositWindowGross(self) + amount <= maxPerWindow`
 //!    (issue #497: rolling-window gross replaces per-calendar-window mapping)
 //! 9. `usdc.allowance(self, gateway) >= amount`
@@ -32,8 +37,12 @@
 //!
 //! For withdrawals, checks 7–8 use the withdrawal-specific cap fields
 //! `maxWithdrawPerPayment` and `maxWithdrawPerWindow` together with
-//! `agentWithdrawWindowGross` instead of the deposit fields. See
-//! `run_withdraw_gateway` and issue #371.
+//! `agentWithdrawWindowGross` instead of the deposit fields, and refuse with
+//! `ErrWithdrawCapExceeded`. See `run_withdraw_gateway` and issue #371.
+//!
+//! After the preflight, [`revert::simulate`] runs the exact calldata as an
+//! `eth_call` and names the contract reverts the preflight cannot see
+//! (router legs, slippage floors), QA plan U6.
 //!
 //! A deposit pause never refuses a withdrawal (core 1494). Checks 3 and 5
 //! refuse deposits only: the withdraw preflight reads the gateway's
@@ -53,6 +62,8 @@ use crate::errors::{Result, RmpcError};
 use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 use serde::Serialize;
+
+pub mod revert;
 
 /// Window length in seconds. Mirrors `RobotMoneyGateway.WINDOW_SECONDS`
 /// (constant on-chain, baked into the contract). Re-reading it on every
@@ -82,6 +93,11 @@ pub struct PreflightReport {
     pub deposits_paused: bool,
     pub agent_active: bool,
     pub agent_valid_until: u64,
+    /// `agents(self).shareReceiver`: who receives a deposit's shares, and
+    /// whose shares `withdrawFromRouter` redeems.
+    pub share_receiver: Address,
+    /// `agents(self).assetRecipient`: where a redemption's USDC lands.
+    pub asset_recipient: Address,
     pub max_per_payment: U256,
     pub max_per_window: U256,
     pub window_gross: U256,
@@ -187,21 +203,14 @@ impl<'a> Preflight<'a> {
             )));
         }
 
-        // 6. agents(self) — active + validUntil
+        // 6. agents(self) — active, binding, validUntil
         let agent = self
-            .call_view_agents(gateway_addr, inputs.signer_address)
+            .check_agent(gateway_addr, inputs.signer_address)
             .await?;
-        if !agent.active {
-            return Err(RmpcError::ErrAgentNotAuthorized);
-        }
-        let now = now_unix();
-        if (agent.validUntil as u64) < now {
-            return Err(RmpcError::ErrAgentNotAuthorized);
-        }
 
         // 7w. shares <= maxWithdrawPerPayment
         if inputs.amount > agent.maxWithdrawPerPayment {
-            return Err(RmpcError::ErrConfig(format!(
+            return Err(RmpcError::ErrWithdrawCapExceeded(format!(
                 "shares {} exceeds agent maxWithdrawPerPayment {}",
                 inputs.amount, agent.maxWithdrawPerPayment,
             )));
@@ -217,7 +226,7 @@ impl<'a> Preflight<'a> {
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxWithdrawPerWindow {
-            return Err(RmpcError::ErrConfig(format!(
+            return Err(RmpcError::ErrWithdrawCapExceeded(format!(
                 "rollingWithdrawGross {} + shares {} exceeds maxWithdrawPerWindow {}",
                 window_gross, inputs.amount, agent.maxWithdrawPerWindow,
             )));
@@ -229,6 +238,8 @@ impl<'a> Preflight<'a> {
             deposits_paused,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
+            share_receiver: agent.shareReceiver,
+            asset_recipient: agent.assetRecipient,
             max_per_payment: agent.maxWithdrawPerPayment,
             max_per_window: agent.maxWithdrawPerWindow,
             window_gross,
@@ -287,21 +298,14 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrDepositsPaused);
         }
 
-        // 6. agents(self) — active + validUntil
+        // 6. agents(self) — active, binding, validUntil
         let agent = self
-            .call_view_agents(gateway_addr, inputs.signer_address)
+            .check_agent(gateway_addr, inputs.signer_address)
             .await?;
-        if !agent.active {
-            return Err(RmpcError::ErrAgentNotAuthorized);
-        }
-        let now = now_unix();
-        if (agent.validUntil as u64) < now {
-            return Err(RmpcError::ErrAgentNotAuthorized);
-        }
 
         // 7. amount <= maxPerPayment
         if inputs.amount > agent.maxPerPayment {
-            return Err(RmpcError::ErrConfig(format!(
+            return Err(RmpcError::ErrDepositCapExceeded(format!(
                 "amount {} exceeds agent maxPerPayment {}",
                 inputs.amount, agent.maxPerPayment,
             )));
@@ -317,7 +321,7 @@ impl<'a> Preflight<'a> {
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxPerWindow {
-            return Err(RmpcError::ErrConfig(format!(
+            return Err(RmpcError::ErrDepositCapExceeded(format!(
                 "rollingDepositGross {} + amount {} exceeds maxPerWindow {}",
                 window_gross, inputs.amount, agent.maxPerWindow,
             )));
@@ -350,6 +354,8 @@ impl<'a> Preflight<'a> {
             deposits_paused: false,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
+            share_receiver: agent.shareReceiver,
+            asset_recipient: agent.assetRecipient,
             max_per_payment: agent.maxPerPayment,
             max_per_window: agent.maxPerWindow,
             window_gross,
@@ -392,7 +398,73 @@ impl<'a> Preflight<'a> {
         Ok(())
     }
 
+    /// Check 6 and 6b, shared by the deposit and withdraw preflights.
+    ///
+    /// Order: an inactive record is `ErrAgentNotAuthorized`. Then the
+    /// binding: when the config pins `share_receiver` or `agent_owner`, the
+    /// chain must agree (`ErrAgentBindingMismatch`, QA plan D2). An agent
+    /// address someone else bound first is refused here, before the expiry
+    /// and caps of a policy the operator never set. Last, `validUntil` in the
+    /// past is `ErrPolicyExpired` (QA plan U6; it printed
+    /// `ErrAgentNotAuthorized` before).
+    ///
+    /// `agentOwner(self)` is read only when `agent_owner` is configured.
+    async fn check_agent(
+        &self,
+        gateway: Address,
+        agent_addr: Address,
+    ) -> Result<RobotMoneyGateway::agentsReturn> {
+        let agent = self.call_view_agents(gateway, agent_addr).await?;
+        if !agent.active {
+            return Err(RmpcError::ErrAgentNotAuthorized);
+        }
+        if let Some(cfg_receiver) = self.config.share_receiver.as_deref() {
+            let configured = parse_addr(cfg_receiver, "share_receiver")?;
+            if agent.shareReceiver != configured {
+                return Err(RmpcError::ErrAgentBindingMismatch {
+                    field: "agents(self).shareReceiver",
+                    on_chain: format!("{:#x}", agent.shareReceiver),
+                    configured: format!("{configured:#x}"),
+                });
+            }
+        }
+        if let Some(cfg_owner) = self.config.agent_owner.as_deref() {
+            let configured = parse_addr(cfg_owner, "agent_owner")?;
+            let on_chain = self.call_view_agent_owner(gateway, agent_addr).await?;
+            if on_chain != configured {
+                return Err(RmpcError::ErrAgentBindingMismatch {
+                    field: "agentOwner(self)",
+                    on_chain: format!("{on_chain:#x}"),
+                    configured: format!("{configured:#x}"),
+                });
+            }
+        }
+        if agent.validUntil < now_unix() {
+            return Err(RmpcError::ErrPolicyExpired);
+        }
+        Ok(agent)
+    }
+
     // --- typed view helpers ---------------------------------------------
+
+    /// `agentOwner(agent)` on the gateway: the address that bound the agent.
+    async fn call_view_agent_owner(&self, gateway: Address, agent: Address) -> Result<Address> {
+        let data = RobotMoneyGateway::agentOwnerCall { _0: agent }.abi_encode();
+        let out = self
+            .rpc
+            .eth_call(
+                &CallRequest {
+                    to: gateway,
+                    from: None,
+                    data: data.into(),
+                },
+                None,
+            )
+            .await?;
+        let decoded = RobotMoneyGateway::agentOwnerCall::abi_decode_returns(&out, true)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("agentOwner() decode: {e}")))?;
+        Ok(decoded._0)
+    }
 
     /// `depositsPaused()` on the gateway or a vault. Both expose the same
     /// `depositsPaused() returns (bool)` view, so one selector serves both.
@@ -638,8 +710,8 @@ impl ChecksOutput {
     }
 
     /// Best-effort partial snapshot when only the [`RmpcError`] is
-    /// available. Mirrors the per-error logic that `self-check`'s `run`
-    /// uses for the same purpose.
+    /// available. The one per-error table: `self-check` and every write
+    /// command call it.
     pub(crate) fn from_err_partial(err: &RmpcError) -> Self {
         let mut c = Self::unknown();
         match err {
@@ -651,6 +723,15 @@ impl ChecksOutput {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
                 c.deposits_paused = true;
+            }
+            // Raised after `agents(self)` read an active record.
+            RmpcError::ErrPolicyExpired
+            | RmpcError::ErrAgentBindingMismatch { .. }
+            | RmpcError::ErrDepositCapExceeded(_)
+            | RmpcError::ErrWithdrawCapExceeded(_) => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+                c.agent_active = true;
             }
             _ => {
                 c.chain_id_match = true;

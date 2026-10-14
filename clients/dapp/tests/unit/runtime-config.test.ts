@@ -346,6 +346,7 @@ describe("gateway expected-code-hash pin is build-time-only (#1375)", () => {
     expect(computeVerificationState(cfg.gateway, cfg.expectedCodeHash, HOSTILE_CODE)).toEqual({
       status: "refused",
       reason: "unknown_revert",
+      cause: "hash-mismatch",
     });
 
     // Proof this assertion is load-bearing rather than vacuous: had the
@@ -385,6 +386,7 @@ describe("gateway expected-code-hash pin is build-time-only (#1375)", () => {
     expect(computeVerificationState(cfg.gateway, cfg.expectedCodeHash, HONEST_CODE)).toEqual({
       status: "refused",
       reason: "unknown_revert",
+      cause: "pin-missing",
     });
   });
 });

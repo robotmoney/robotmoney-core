@@ -1,0 +1,36 @@
+---
+title: "IExposureCappedAdapter"
+description: "Strategy adapter with a per-adapter exposure cap (`MorphoAdapter`)."
+---
+
+# IExposureCappedAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/interfaces/IExposureCappedAdapter.sol)
+
+Strategy adapter with a per-adapter exposure cap (`MorphoAdapter`).
+
+<i>
+
+`setMaxExposure` is `onlyVault` in the adapter. The vault reaches it through
+`RobotMoneyVault.setAdapterMaxExposure`, which is `ADMIN_ROLE`-gated.
+
+</i>
+
+## Functions
+
+<a id="setmaxexposure-uint256"></a>
+
+### setMaxExposure
+
+Set the maximum USDC the adapter may hold in its venue. 0 removes the cap.
+
+```solidity
+function setMaxExposure(uint256 cap) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cap | `uint256` | Cap in 6-decimal USDC units. |
+

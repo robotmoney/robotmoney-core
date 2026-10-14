@@ -203,10 +203,16 @@ error InsufficientAssetsOut();         // assetsReceived < minAssetsOut
 
 ### Calldata construction
 
-`rmpc withdraw` builds the exact ABI-encoded calldata for
-`gateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey, minAssetsOut)`.
-No dynamic dispatch; the ABI is compiled in from the `sol!` macro binding
-for `IGateway`, same pattern as `deposit`.
+`rmpc withdraw` builds the exact ABI-encoded calldata for the one-leg
+`gateway.withdrawFromRouter(orderId, [sourceVault], [shares], [minAssets], deadline, idempotencyKey)`:
+`gateway.withdraw` takes no floor and calls `vault.redeem`, which has no
+minimum-out, so the router's per-leg `minAssetsPerLeg` carries it (QA plan D9).
+`minAssets` is `--min-assets`, or `previewRedeem(shares)` less 0.50% when the
+flag is omitted; `--min-assets 0` sends none. On a gateway without a router
+(single-vault mode) `rmpc withdraw` calls `gateway.withdraw` only for
+`--min-assets 0` and refuses otherwise. No dynamic dispatch; the ABI is
+compiled in from the `sol!` macro binding for `IGateway`, same pattern as
+`deposit`.
 
 ### Signing path
 

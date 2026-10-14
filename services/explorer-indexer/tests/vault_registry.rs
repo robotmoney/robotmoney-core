@@ -14,10 +14,11 @@
 //!    migration 0002, existing `vault_snapshots` rows are still
 //!    countable (AC-3 — preservation of single-vault history).
 //!
-//! 4. `vault_registered_reorg_removes_snapshot_rows`: A reorg above the
-//!    registered block deletes the vault_snapshots rows above the root
-//!    (reorg policy — AC-4 proxy; vaults rows are not block-keyed and
-//!    survive).
+//! 4. `reorg_deletes_snapshot_rows_and_the_orphaned_registration`: a reorg
+//!    below the registered block deletes the vault_snapshots rows above the
+//!    root and the `vaults` row the orphaned `VaultRegistered` wrote; the
+//!    replay registers the vault again at its canonical block (AC-4 proxy,
+//!    QA plan X7 / DI-8).
 //!
 //! 5. `shipped_vault_names_get_their_intended_risk_label`: basket vault names
 //!    index as VOLATILE / SPECULATIVE, not the STABLE_YIELD default.
@@ -170,7 +171,8 @@ async fn vault_registered_event_inserts_vaults_row() {
     stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc = JsonRpc::new(&stub.url);
@@ -263,7 +265,8 @@ async fn vault_status_changed_updates_status() {
     stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub1.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc1 = JsonRpc::new(&stub1.url);
@@ -325,7 +328,8 @@ async fn vault_status_changed_updates_status() {
     stub2.set("eth_getBlockByNumber", stub_block(89, 0xbc, 0xab));
     stub2.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc2 = JsonRpc::new(&stub2.url);
@@ -408,7 +412,8 @@ async fn registered_vault_added_to_watched_address_set() {
     stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub1.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc1 = JsonRpc::new(&stub1.url);
@@ -512,6 +517,7 @@ async fn migration_preserves_existing_vault_snapshots() {
             Some(U256::ZERO),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -528,18 +534,24 @@ async fn migration_preserves_existing_vault_snapshots() {
     assert_eq!(vault_count, 0, "vaults table must start empty");
 }
 
-/// Reorg test (AC-4 proxy): rows above the reorg head in vault_snapshots
-/// are deleted; vaults rows (not block-keyed) survive the reorg.
+/// Reorg test (AC-4 proxy): rows above the reorg root in vault_snapshots
+/// are deleted, and so is the `vaults` row whose `VaultRegistered` block was
+/// orphaned (QA plan X7, DI-8).
 ///
 /// Sequence:
 ///   Tick 1 — register vault at block 50, producing a vaults row.
 ///             Cursor block 65 is stored.
 ///   Tick 2 — reorg at block 65 (new hash).  walk_back returns -1.
-///             delete_above_block(-1) wipes vault_snapshots rows above
-///             -1 but the vaults table has no block_number column so its
-///             rows are unaffected.
+///             delete_above_block(-1) wipes vault_snapshots rows above -1
+///             and the vaults row registered at block 50. The canonical
+///             chain carries the registration at block 52, and the replay
+///             in the same tick registers the vault there.
+///
+/// Before X7 the vaults row survived the wipe with `registered_block` 50, a
+/// block the canonical chain does not have, and a registration that only the
+/// orphaned blocks held stayed in the watched set for good.
 #[tokio::test]
-async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
+async fn reorg_deletes_snapshot_rows_and_the_orphaned_registration() {
     let fx = pg_fixture().await;
 
     let registry_addr = Address::from([0xEEu8; 20]);
@@ -571,7 +583,8 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
     stub1.set("eth_getBlockByNumber", stub_block(65, 0xcc, 0xbb));
     stub1.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc1 = JsonRpc::new(&stub1.url);
@@ -623,16 +636,30 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
             Some(U256::ZERO),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
     let snaps_before = fx.db.count(CountTable::VaultSnapshots).await.unwrap();
     assert!(snaps_before >= 1, "at least one snapshot before reorg");
 
-    // Tick 2: reorg — cursor block 65 now has a different hash.
+    // Tick 2: reorg — cursor block 65 now has a different hash, and the
+    // canonical chain has the registration at block 52.
+    let canonical_reg_log = encode_vault_registered_log(
+        registry_addr,
+        vault_addr,
+        "Test Vault",
+        asset_addr,
+        52u64,
+        [0x12u8; 32],
+        0,
+    );
     let stub2 = StubRpcServer::start().await;
     stub2.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
-    stub2.set("eth_getLogs", serde_json::Value::Array(Vec::new()));
+    stub2.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![canonical_reg_log]),
+    );
     stub2.set(
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
@@ -682,11 +709,18 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         "vault_snapshots row at block 60 must be deleted on full reorg"
     );
 
-    // vaults rows must survive — the vaults table is not block-keyed.
+    // The orphaned registration (block 50) is gone; the replay registered the
+    // vault at its canonical block.
+    let registered: Vec<(Vec<u8>, i64)> =
+        sqlx::query_as("SELECT vault_address, registered_block FROM vaults WHERE chain_id = $1")
+            .bind(8453i64)
+            .fetch_all(fx.db.pool())
+            .await
+            .unwrap();
     assert_eq!(
-        fx.db.count(CountTable::Vaults).await.unwrap(),
-        1,
-        "vaults row must survive reorg (not block-keyed)"
+        registered,
+        vec![(vault_addr.to_vec(), 52)],
+        "the vaults row follows the canonical registration block, not the orphaned one"
     );
 
     stub2.shutdown();
@@ -745,7 +779,8 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
     stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
 
     let rpc = JsonRpc::new(&stub.url);

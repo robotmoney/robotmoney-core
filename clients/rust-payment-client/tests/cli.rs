@@ -77,3 +77,71 @@ fn deposit_help_includes_idempotency_and_deadline_flags() {
     assert!(s.contains("--gas-limit"), "{s}");
     assert!(s.contains("--pretty"), "{s}");
 }
+
+// ------------------------------------------------------------------
+// rmpc-keystore-import helper (QA plan U7, finding DR-11)
+// ------------------------------------------------------------------
+
+/// Anvil/hardhat default account #1 key. NEVER use on a real chain.
+const IMPORT_TEST_PRIVKEY_HEX: &str =
+    "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+
+fn keystore_import() -> Command {
+    Command::cargo_bin("rmpc-keystore-import").expect("rmpc-keystore-import binary built")
+}
+
+/// `RMPC_KEYSTORE_PASSPHRASE=""` used to encrypt the key under a key anyone
+/// can derive. The helper must refuse it as bad input (exit 2), say why on
+/// stderr, and write no keystore.
+#[test]
+fn keystore_import_rejects_empty_passphrase() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let out_path = tmp.path().join("agent.keystore.json");
+
+    keystore_import()
+        .env("RMPC_IMPORT_PRIVKEY_HEX", IMPORT_TEST_PRIVKEY_HEX)
+        .env("RMPC_KEYSTORE_PASSPHRASE", "")
+        .arg(&out_path)
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(contains("RMPC_KEYSTORE_PASSPHRASE"))
+        .stderr(contains("empty"));
+
+    assert!(
+        !out_path.exists(),
+        "no keystore may be written under an empty passphrase"
+    );
+}
+
+/// The keystore the helper writes is owner-only (0600), not the process
+/// umask's 0644, and the helper prints the address it encrypted.
+#[cfg(unix)]
+#[test]
+fn keystore_import_writes_owner_only_keystore() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let out_path = tmp.path().join("agent.keystore.json");
+
+    let out = keystore_import()
+        .env("RMPC_IMPORT_PRIVKEY_HEX", IMPORT_TEST_PRIVKEY_HEX)
+        .env("RMPC_KEYSTORE_PASSPHRASE", "correct horse battery staple")
+        .arg(&out_path)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let addr = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        addr.trim().to_lowercase(),
+        "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
+    );
+    let mode = std::fs::metadata(&out_path)
+        .expect("keystore written")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "keystore mode {mode:o}");
+}

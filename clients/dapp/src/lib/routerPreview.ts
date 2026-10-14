@@ -15,11 +15,15 @@
  *   - unverified gateway bytecode → unsafe / refused;
  *   - the structured shape (target, function, decoded args, effect, risk,
  *     raw calldata) is compatible with TxPreview.
+ *
+ * Each leg's estimated shares print in that leg vault's own `symbol()` (issue
+ * 1773, QA plan U5): the caller passes `ctx.shareSymbolOf` from
+ * `useVaultShareSymbols`. Without it a leg says the neutral "shares".
  */
 import { encodeFunctionData, decodeFunctionData, toFunctionSelector, getAddress } from "viem";
 import type { Address, Hex } from "viem";
 import { routerAbi, type RouterActionName } from "./abi";
-import type { Preview, PreviewContext, RiskClass } from "./preview";
+import { targetCodeHashPinned, type Preview, type PreviewContext, type RiskClass } from "./preview";
 
 /** Per-vault breakdown returned by PortfolioRouter.previewDeposit. */
 export interface LegPreview {
@@ -97,6 +101,8 @@ export function computeVaultListChanged(
 /** Context for a router deposit preview. */
 export interface RouterPreviewContext extends PreviewContext {
   router: Address;
+  /** Each leg vault's own share symbol (`useVaultShareSymbols`). Absent: "shares". */
+  shareSymbolOf?: (vault: string) => string;
 }
 
 /** Extended preview with per-leg breakdown exposed for UI rendering. */
@@ -130,6 +136,7 @@ export function buildRouterPreview(
     return {
       ok: false,
       reason: "unknown_revert" as const,
+      ...(ctx.gatewayRefusalDetail ? { detail: ctx.gatewayRefusalDetail } : {}),
     };
   }
 
@@ -171,7 +178,8 @@ export function buildRouterPreview(
     .map((l) => {
       const pct = formatPercentFromBps(l.weightBps);
       const tag = l.unavailable ? " [UNAVAILABLE — tx will revert]" : "";
-      return `${shorten(l.vault)} ${pct} → ~${formatShares(l.estShares)} shares${tag}`;
+      const unit = shareSymbolOrNeutral(l.vault ? ctx.shareSymbolOf?.(l.vault) : undefined);
+      return `${shorten(l.vault)} ${pct} → ~${formatShares(l.estShares, unit)}${tag}`;
     })
     .join("; ");
 
@@ -182,7 +190,8 @@ export function buildRouterPreview(
   return {
     ok: true,
     target: ctx.router,
-    targetCodeHashKnown: ctx.gatewayCodeHashVerified,
+    // The router's own pin, never the gateway's (QA plan U4).
+    targetCodeHashKnown: targetCodeHashPinned(ctx, ctx.router),
     functionName: "deposit",
     selector,
     args: [
@@ -222,14 +231,16 @@ import {
   formatUsdc as _formatUsdc,
   formatShares as _formatShares,
   formatPercent as _formatPercent,
+  shareSymbolOrNeutral,
 } from "./format";
 
 function formatUsdc(raw: bigint): string {
   return _formatUsdc(raw);
 }
 
-function formatShares(raw: bigint): string {
-  return _formatShares(raw, "rmUSDC");
+/** A leg's estimated shares in that leg vault's own unit, never a literal. */
+function formatShares(raw: bigint, unit: string): string {
+  return _formatShares(raw, unit);
 }
 
 function formatPercentFromBps(bps: bigint): string {

@@ -136,6 +136,22 @@ pub struct Config {
     /// table or the command refuses rather than guessing.
     #[serde(default)]
     pub vault_addresses: Option<BTreeMap<String, String>>,
+    /// The address this agent's deposits must mint shares to (0x-prefixed
+    /// hex). Optional. When set, every deposit and withdraw preflight
+    /// refuses with `ErrAgentBindingMismatch` unless
+    /// `gateway.agents(self).shareReceiver` equals it. Without it, an
+    /// address that bound this agent before the operator did would receive
+    /// the agent's shares unnoticed (QA plan D2, finding CS-1). Set it to the
+    /// `shareReceiver` the operator authorized.
+    #[serde(default)]
+    pub share_receiver: Option<String>,
+    /// The address that owns this agent's gateway binding (0x-prefixed
+    /// hex): the account that revealed the authorization. Optional. When
+    /// set, every deposit and withdraw preflight refuses with
+    /// `ErrAgentBindingMismatch` unless `gateway.agentOwner(self)` equals it
+    /// (QA plan D2).
+    #[serde(default)]
+    pub agent_owner: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
     pub gateway_runtime_hash: String,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.

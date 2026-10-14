@@ -5,13 +5,13 @@
 // and the timelock's role gates (PROPOSER_ROLE on schedule, CANCELLER_ROLE on cancel), so a tool bug that proposes a doomed call fails here, not on the Twin.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { publishLogger } from "../src/log.ts";
 import type { RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
-import { stageManifestName } from "../src/verify/constants.ts";
+import { AGENT_ROLE, stageManifestName } from "../src/verify/constants.ts";
 import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, SAFE_ADMIN_ABI, SAFE_SENTINEL_OWNER, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_APPLY_ABI } from "../src/apply-receipt.ts";
@@ -19,8 +19,9 @@ import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 
 /** The RouterGovernance surface the fake executes (issue 1698): the one apply call and the default-vector setter. The clear call is matched by calldata. */
 const GOVERNANCE_FAKE_ABI = [...GOVERNANCE_APPLY_ABI, ...parseAbi(["function setDefaultWeights(address[] vaults, uint256[] bps)"])] as const;
-import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
-import { REGISTRY_REDEPLOY_ABI, VAULT_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
+import { COMMIT_EXPIRY_BLOCKS, GATEWAY_REGISTER_ABI, selfAuthCommitmentKey } from "../src/committee-register.ts";
+import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
+import { VAULT_UNWIND_GUARD_ABI } from "../src/unwind-guard.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -53,8 +54,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     clock: 1000n, minDelay: startMinDelay, ops: new Map<string, Op>(), log: [] as string[], signed: [] as string[], nonce: 0,
     /** `kind:row` per timelock bundle built, in order: the row is the first word of the description. */
     events: [] as string[],
-    /** The scheduled calls per row, with the timelock predecessor each operation carries (undefined: none). */
-    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string }>(),
+    /** The scheduled calls per row, with the timelock predecessor each operation carries (undefined: none) and the description of the Safe transaction that scheduled it. */
+    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string; description?: string }>(),
     /** The timelock operation id of each scheduled row. */
     ids: new Map<string, Hex>(),
     /** Every transaction hash the fake Safe sent, per timelock operation id: a Safe transaction shared by two operations would show here. */
@@ -75,6 +76,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
+    /** QA plan v1 C2: what getTransactionReceipt adds for a deploy transaction (a redeploy's): its sender, the contract a CREATE made (null for a call) and its status. */
+    txReceipts: new Map<string, { from?: string; contractAddress?: string | null; status?: "success" | "reverted" }>(),
     /** Issue 1727: the gateway's agents (AGENT_ROLE), the IC policy's committee agents (label) and the owner each agent has. An executed authorizeAgent / committeeRegister fills them. */
     /** Issue 1750: what the --submitter is on chain. A canonical 2-of-3 Safe by default; null is a key (no code); a function decides per address. */
     submitterKind: undefined as undefined | null | ((a: Address) => unknown),
@@ -82,7 +85,19 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     statuses: new Map<string, number>(), retiredFlag: new Set<string>(), registryRouter: A.router as Address, timelockIsRegistryAdmin: true,
     /** The vaults linked to the registry (registry() reads A.registry; the redeploy batch's set-once setRegistry adds the new vault) and the vaults the timelock governs. */
     linked: new Set<string>(), governed: new Set<string>(),
+    /** QA plan v1 E3: the router's per-vault cap by lowercase address (vaultCap reads 0, uncapped, for an address never set; an executed setVaultCap writes it), and
+     *  whether the timelock holds the router's ADMIN_ROLE (DeployTimelock grants it at stage 11; setVaultCap reverts without it, as the contract does). */
+    vaultCaps: new Map<string, bigint>(), timelockIsRouterAdmin: true,
+    /** Issue 1698: the weight setter's stage 11 wiring. receiptContract() reads `governanceReceipt` (undefined: the read reverts, a pre-1698 RouterGovernance), and
+     *  hasRole(ADMIN_ROLE, governance) on the register reads `governanceIsReceiptAdmin`. An executed applyReceipt reverts unless both are in place, as the contract does. */
+    governanceReceipt: A.receipt as Address | undefined, governanceIsReceiptAdmin: true,
     agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
+    /** QA plan v1 B6: the gateway's live commitments (by storage key, the commit "block" is the clock) and each agent's stored policy (agents(agent) reads it). */
+    commitments: new Map<string, { committer: string; block: bigint }>(),
+    policies: new Map<string, { maxPerPayment: bigint; maxPerWindow: bigint; shareReceiver: string; maxWithdrawPerPayment: bigint; maxWithdrawPerWindow: bigint }>(),
+    /** QA plan v1 D7: each basket vault's asset rows (assets(i), in order) and the emergency unwind guard per `vault|token` (lowercase). An executed setEmergencyUnwindGuard writes it. */
+    assetRows: new Map<string, { token: Address; active: boolean }[]>(),
+    guards: new Map<string, readonly [bigint, boolean, bigint]>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
@@ -94,8 +109,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     get threshold(): number { return Number(s.threshold); }, set threshold(v: number) { s.threshold = BigInt(v); },
     client: {
       getCode: async () => "0x6001600155",
+      // the chain head: the fake's clock is also its block number (getTransactionReceipt answers the clock of a transaction as its block)
+      getBlockNumber: async () => s.clock,
       getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
-      getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success" }),
+      getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success", ...s.txReceipts.get(hash.toLowerCase()) }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
         if (functionName in s.reads) return s.reads[functionName];
@@ -114,14 +131,17 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
           case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
           case "votedWeightsActive": return s.voted !== undefined;
+          case "vaultCap": return s.vaultCaps.get(String(args?.[0]).toLowerCase()) ?? 0n;
           case "depositsPaused": return s.paused.has(address);
-          case "votingPeriod": return sheet.votingPeriod;
-          case "executionDelay": return sheet.executionDelay;
+          case "receiptContract": if (s.governanceReceipt === undefined) throw new Error("execution reverted"); return s.governanceReceipt;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
-          case "agents": return [true, 0n];
+          // RobotMoneyGateway.agents(agent): the public getter's eight non-array fields (QA plan v1 B6 reads the policy shape)
+          case "agents": { const p = s.policies.get(String(args?.[0]).toLowerCase()); return p ? [true, 0n, p.maxPerPayment, p.maxPerWindow, p.shareReceiver, addr(0), p.maxWithdrawPerPayment, p.maxWithdrawPerWindow] : [false, 0n, 0n, 0n, addr(0), addr(0), 0n, 0n]; }
+          case "commitments": { const c = s.commitments.get(String(args?.[0]).toLowerCase()); return c ? [c.committer, c.block] : [addr(0), 0n]; }
           // the ProposerFloorTimelock counter the tool reads before a PROPOSER_ROLE revoke (B3)
           case "proposerCount": return BigInt([...s.roles].filter((k) => k.startsWith(`${PROPOSER_ROLE_ID}:`)).length);
-          case "hasRole": if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          // the weight setter's register role (issue 1698): ADMIN_ROLE on the receipt register, the releaseReceipt gate inside applyReceipt
+          case "hasRole": if (address === A.receipt && String(args?.[1]).toLowerCase() === A.governance.toLowerCase()) return s.governanceIsReceiptAdmin; if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); if (address === A.registry) return s.timelockIsRegistryAdmin; if (address === A.router) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase() && s.timelockIsRouterAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.gateway) return String(args?.[0]).toLowerCase() === AGENT_ROLE.toLowerCase() ? s.agentRole.has(String(args?.[1]).toLowerCase()) : s.gatewayAdmins.has(String(args?.[1]).toLowerCase()); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
           case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
           case "icPolicy": return A.icPolicy;
           case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
@@ -129,6 +149,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "getOwners": return s.owners;
           case "getThreshold": return s.threshold;
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
+          // QA plan v1 D7: BasketVault.assets(i) (reverts past the end) and the public emergencyUnwindGuard(token) getter (zeros until a guard is set)
+          case "assets": { const r = (s.assetRows.get(address) ?? [])[Number(args?.[0])]; if (!r) throw new Error("execution reverted"); return [r.token, addr(0xf00), 500, r.active, addr(0xad), 0]; }
+          case "emergencyUnwindGuard": return s.guards.get(`${address.toLowerCase()}|${String(args?.[0]).toLowerCase()}`) ?? [0n, false, 0n];
         }
         throw new Error(`fake: ${functionName}`);
       },
@@ -142,13 +165,16 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       if (typeof s.submitterKind === "function") return s.submitterKind(who);
       return { address: who, owners: sheet.safeOwners, threshold: 2, code_hash: SAFE_141.proxyCodehash };
     }) as never,
-    connectSafe: (async () => handle) as never,
+    // the governing Safe, or (QA plan v1 B6) the submitter Safe register-committee drives for its private self-authorization: a 2-of-3 of the sheet's owners
+    connectSafe: (async (c: { safeAddress?: string }) => (c?.safeAddress === undefined || c.safeAddress.toLowerCase() === A.safe.toLowerCase()
+      ? handle
+      : { address: c.safeAddress, chain: handle.chain, owners: [...sheet.safeOwners], threshold: 2, client: handle.client, nonce: async () => s.nonce })) as never,
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
     operationState: (async (_h: unknown, _t: unknown, id: string) => { const o = s.ops.get(id); return o ? { exists: true, pending: o.pending, done: o.done, ready: o.pending && s.clock >= o.readyAt, readyAt: o.readyAt } : { exists: false, pending: false, done: false, ready: false, readyAt: 0n }; }) as never,
     scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: string }[] }) => {
       const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
-      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor });
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor, description: p.description });
       s.ids.set(rowOf(p.description), id);
       return { ...bundle("schedule", id), predecessor: p.predecessor };
     }) as never,
@@ -164,10 +190,36 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       return { ...bundle(`updateDelay.${p.phase}`, id), newDelay: p.newDelay };
     }) as never,
     signTx: (async (_h: unknown, b: { signatures: unknown[] }, signer: Signer) => { s.signed.push(await signer.address()); return { ...b, signatures: [...b.signatures, await signer.address()] }; }) as never,
-    executeTx: (async (_h: unknown, b: any) => {
-      if (b.signatures.length < handle.threshold) throw new Error(`GS020: below threshold (${b.signatures.length} of ${handle.threshold})`);
+    executeTx: (async (_h: any, b: any) => {
+      const threshold: number = _h?.threshold ?? handle.threshold;
+      if (b.signatures.length < threshold) throw new Error(`GS020: below threshold (${b.signatures.length} of ${threshold})`);
       const id: string = b.timelock_operation_id;
-      if (String(b.action).startsWith("safe-")) {
+      if (String(b.action).startsWith("submitter-")) {
+        // QA plan v1 B6: the submitter Safe's own gateway calls, as RobotMoneyGateway runs them with msg.sender = that Safe (commit, reveal, hand-over)
+        const lc = (x: unknown) => String(x).toLowerCase();
+        const me = lc(_h?.address);
+        const d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: b.data });
+        if (d.functionName === "commitAuthorization") s.commitments.set(lc(selfAuthCommitmentKey(d.args[0] as Hex, me as Address)), { committer: me, block: s.clock });
+        else if (d.functionName === "revealAuthorization") {
+          const [agent, salt, p] = d.args as unknown as [Address, Hex, { shareReceiver: string; maxPerPayment: bigint; maxPerWindow: bigint; maxWithdrawPerPayment: bigint; maxWithdrawPerWindow: bigint }];
+          const commitHash = keccak256(encodeAbiParameters([{ type: "address" }, { type: "address" }, { type: "bytes32" }], [agent, me as Address, salt]));
+          const key = lc(selfAuthCommitmentKey(commitHash, me as Address));
+          const c = s.commitments.get(key);
+          if (!c) throw new Error("CommitmentNotFound");
+          if (s.clock <= c.block) throw new Error("CommitmentTooRecent");
+          if (s.clock > c.block + COMMIT_EXPIRY_BLOCKS) throw new Error("CommitmentExpired");
+          s.commitments.delete(key);
+          if (s.agentOwner.has(lc(agent))) throw new Error("AgentAlreadyOwned");
+          if (lc(p.shareReceiver) !== me) throw new Error("ShareReceiverNotAuthorized");
+          s.agentOwner.set(lc(agent), me); s.agentRole.add(lc(agent));
+          s.policies.set(lc(agent), { maxPerPayment: p.maxPerPayment, maxPerWindow: p.maxPerWindow, shareReceiver: lc(p.shareReceiver), maxWithdrawPerPayment: p.maxWithdrawPerPayment, maxWithdrawPerWindow: p.maxWithdrawPerWindow });
+        } else if (d.functionName === "transferAgentOwnership") {
+          if (s.agentOwner.get(lc(d.args[0])) !== me) throw new Error("NotAgentOwner");
+          if (lc(d.args[1]) !== lc(A.timelock)) throw new Error("NewAgentOwnerNotAdmin");
+          s.agentOwner.set(lc(d.args[0]), lc(A.timelock));
+        } else throw new Error(`fake: the submitter Safe does not send ${d.functionName}`);
+      }
+      else if (String(b.action).startsWith("safe-")) {
         // The Safe's own rules (OwnerManager, B4 / T5): the fake reverts what a real SafeL2 1.4.1 reverts, with the Safe's error codes.
         const d = decodeFunctionData({ abi: SAFE_ADMIN_ABI, data: b.data });
         const lc = (x: unknown) => String(x).toLowerCase();
@@ -223,6 +275,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             if (d.functionName === "applyReceipt") {
               const [rid, digest, vaults, bps] = d.args as [Hex, Hex, Address[], bigint[]];
               const id = String(rid).toLowerCase();
+              // the stage 11 wiring: the register it releases from, and the register ADMIN_ROLE releaseReceipt needs
+              if (s.governanceReceipt === undefined || s.governanceReceipt.toLowerCase() !== A.receipt.toLowerCase()) throw new Error("ReceiptContractNotSet");
+              if (!s.governanceIsReceiptAdmin) throw new Error(`AccessControlUnauthorizedAccount(${A.governance})`);
               if (!s.recorded.has(id)) throw new Error(`ReceiptNotRecorded(${rid})`);
               if (s.released.has(id)) throw new Error(`ReceiptAlreadyReleased(${rid})`);
               const stored = s.digests.get(id);
@@ -236,6 +291,18 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
               continue;
             }
             s.weights = { vaults: [...(d.args[0] as Address[])], bps: [...(d.args[1] as bigint[])] };
+            continue;
+          }
+          if (c.target === A.router) {
+            // QA plan v1 E3: PortfolioRouter.setVaultCap as the contract runs it, onlyRole(ADMIN_ROLE) (the timelock after stage 11) and a non-zero vault (ZeroAddress)
+            let d: ReturnType<typeof decodeFunctionData<typeof ROUTER_REDEPLOY_ABI>>;
+            try { d = decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
+            if (d.functionName === "setVaultCap") {
+              if (!s.timelockIsRouterAdmin) throw new Error(`AccessControlUnauthorizedAccount(${A.timelock})`);
+              const [v, cap] = d.args as [Address, bigint];
+              if (BigInt(v) === 0n) throw new Error("ZeroAddress");
+              s.vaultCaps.set(v.toLowerCase(), cap);
+            }
             continue;
           }
           if (c.target === A.registry) {
@@ -262,8 +329,20 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             let d: ReturnType<typeof decodeFunctionData<typeof GATEWAY_REGISTER_ABI>>;
             try { d = decodeFunctionData({ abi: GATEWAY_REGISTER_ABI, data: c.data }); } catch { continue; } // a generic test call with junk calldata changes nothing here
             const who = String(d.args[0]).toLowerCase();
-            if (d.functionName === "authorizeAgent") { s.agentRole.add(who); s.agentOwner.set(who, A.timelock); }
+            // the gateway's owner rules: a first-time authorization reverts on an owned agent (the squat the old batch suffered); setPolicy needs the timelock to be the owner (QA plan v1 B6)
+            const policyOf = (p: any) => ({ maxPerPayment: p.maxPerPayment, maxPerWindow: p.maxPerWindow, shareReceiver: String(p.shareReceiver).toLowerCase(), maxWithdrawPerPayment: p.maxWithdrawPerPayment, maxWithdrawPerWindow: p.maxWithdrawPerWindow });
+            if (d.functionName === "authorizeAgent") { if (s.agentOwner.has(who)) throw new Error("AgentAlreadyOwned"); s.agentRole.add(who); s.agentOwner.set(who, A.timelock); s.policies.set(who, policyOf(d.args[1])); }
+            if (d.functionName === "setPolicy") { if (s.agentOwner.get(who) !== A.timelock.toLowerCase()) throw new Error("NotAgentOwner"); s.policies.set(who, policyOf(d.args[1])); }
             if (d.functionName === "committeeRegister") s.committee.set(who, String(d.args[1]));
+            continue;
+          }
+          if (c.data.startsWith(SET_GUARD_SELECTOR)) {
+            // QA plan v1 D7: BasketVault.setEmergencyUnwindGuard as the contract runs it: onlyRole(ADMIN_ROLE) (the vaults the timelock governs), maxLossBps <= MAX_BPS, an active asset only
+            const [token, min, allowed, loss] = decodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, data: c.data }).args as [Address, bigint, boolean, bigint];
+            if (!s.governed.has(c.target)) throw new Error("AccessControlUnauthorizedAccount");
+            if (loss > 10_000n) throw new Error("InvalidParam");
+            if (!(s.assetRows.get(c.target) ?? []).some((r) => r.active && r.token.toLowerCase() === token.toLowerCase())) throw new Error("AssetNotFound");
+            s.guards.set(`${c.target.toLowerCase()}|${token.toLowerCase()}`, [min, allowed, loss]);
             continue;
           }
           if (c.target !== A.receipt) {
@@ -296,6 +375,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   return { s, api, handle };
 }
 const ROLE_ABI_FAKE = parseAbi(["function grantRole(bytes32 role, address account)", "function revokeRole(bytes32 role, address account)"]);
+const SET_GUARD_SELECTOR = encodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, functionName: "setEmergencyUnwindGuard", args: [addr(1), 1n, true, 0n] }).slice(0, 10);
 /** The timelock role ids the fake seeds for the Safe (keccak256 of the role name, as TimelockController declares them). */
 export const PROPOSER_ROLE_ID: Hex = keccak256(toBytes("PROPOSER_ROLE"));
 export const CANCELLER_ROLE_ID: Hex = keccak256(toBytes("CANCELLER_ROLE"));

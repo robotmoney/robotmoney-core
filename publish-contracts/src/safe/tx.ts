@@ -9,6 +9,7 @@ import { delayFloor, isMainnet } from "../floors.ts";
 import { lc, rpcLabel, sameAddress } from "./chain.ts";
 import { SAFE_ABI, SAFE_VERSION, TIMELOCK_ABI, ZERO_ADDRESS } from "./constants.ts";
 import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
+import { READ_RETRY_DELAY_MS, READ_RETRY_TRIES, awaitRead, type ReadRetry } from "./read-after-write.ts";
 import type { SafeHandle } from "./safe.ts";
 import { recoverSafeSigner, splitSignature, verifySafeSignature, type SignMode } from "./sig.ts";
 import type { Signer } from "./signers.ts";
@@ -332,29 +333,21 @@ export interface ExecuteResult {
   simulated: boolean;
 }
 
-/** How the post-execute nonce read retries on a stale load-balanced RPC (issue 1723). Bounded: it always ends. */
-export interface NonceRetry { tries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> }
-export const NONCE_RETRY_TRIES = 5;
-export const NONCE_RETRY_DELAY_MS = 1000;
+/** How the post-execute nonce read retries on a stale load-balanced RPC (issue 1723). Bounded: it always ends. The shared read-after-write retry (read-after-write.ts). */
+export type NonceRetry = ReadRetry;
+export const NONCE_RETRY_TRIES = READ_RETRY_TRIES;
+export const NONCE_RETRY_DELAY_MS = READ_RETRY_DELAY_MS;
 
 /**
  * Reads the Safe nonce after a landed execution until it is `want`. A load-balanced RPC may answer from a node that has not seen the block yet (stale), although the
- * transaction landed (receipt status success). The read is retried `tries` times with `delayMs` between them. It still fails closed with NONCE_DID_NOT_MOVE, naming the RPC
- * origin, the transaction and the nonces it saw, when every try is stale. A nonce above `want` fails at once: another transaction moved the Safe.
+ * transaction landed (receipt status success). The read is retried `tries` times with `delayMs` between them (awaitRead). It still fails closed with NONCE_DID_NOT_MOVE,
+ * naming the RPC origin, the transaction and the nonces it saw, when every try is stale. A nonce above `want` fails at once: another transaction moved the Safe.
  */
 export async function awaitSafeNonce(handle: SafeHandle, want: number, txHash: Hex, retry: NonceRetry = {}): Promise<number> {
-  const tries = retry.tries ?? NONCE_RETRY_TRIES;
-  const delay = retry.delayMs ?? NONCE_RETRY_DELAY_MS;
-  const sleep = retry.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const seen: number[] = [];
-  for (let i = 1; i <= tries; i++) {
-    const n = await handle.nonce();
-    seen.push(n);
-    if (n === want) return n;
-    if (n > want) break;
-    if (i < tries) await sleep(delay);
-  }
-  throw new SafeToolError("NONCE_DID_NOT_MOVE", `the Safe nonce did not reach ${want} after ${txHash}: read ${seen.join(", ")} in ${seen.length} try(ies) from RPC ${rpcLabel(handle.chain.rpcUrl)} (a stale load-balanced RPC, or another transaction moved the Safe). The transaction landed: read the chain before any retry.`, { tx_hash: txHash, seen, rpc: rpcLabel(handle.chain.rpcUrl) });
+  const r = await awaitRead(() => handle.nonce(), (n) => n === want, retry, (n) => n > want);
+  if (r.ok) return r.last!;
+  if (r.seen.length === 0) throw r.error; // no read answered at all: the RPC's own error, not a nonce
+  throw new SafeToolError("NONCE_DID_NOT_MOVE", `the Safe nonce did not reach ${want} after ${txHash}: read ${r.seen.join(", ")} in ${r.reads} try(ies) from RPC ${rpcLabel(handle.chain.rpcUrl)} (a stale load-balanced RPC, or another transaction moved the Safe). The transaction landed: read the chain before any retry.`, { tx_hash: txHash, seen: r.seen, rpc: rpcLabel(handle.chain.rpcUrl) });
 }
 
 export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender: Signer, opts: ExecuteOpts = {}): Promise<ExecuteResult> {

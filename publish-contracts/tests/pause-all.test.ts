@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
-import { EMERGENCY_ROLE, pauseSignerRole, rolloutReportPath } from "../src/pause-all.ts";
+import { EMERGENCY_ROLE, pauseIncomplete, pauseSignerRole, rolloutReportPath, type PauseAllReport } from "../src/pause-all.ts";
 import { spawnTool, type ProcessRunner } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { manifestBase } from "../src/stage-table.ts";
@@ -450,5 +450,27 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
     expect(c.sends).toEqual([]);
     expect(report(w).pauseAll).toMatchObject({ allPaused: true });
+  });
+});
+
+describe("issue 1701: a pause that is both incomplete and unrecorded", () => {
+  const rep = (manifestRecorded: boolean): PauseAllReport => ({
+    trigger: "manual", reason: "pause-all was run by hand", at: "2026-10-14T00:00:00.000Z", allPaused: false, manifestRecorded,
+    vaults: [
+      { vault: "rmUSDC", key: "USDC", address: "0x0000000000000000000000000000000000003001", signerRole: "emergency", signer: "0x000000000000000000000000000000000000e3e5", depositsPaused: true },
+      { vault: "rmPROTO", key: "PROTO", address: "0x0000000000000000000000000000000000003002", signerRole: "emergency", signer: "0x000000000000000000000000000000000000e3e5", depositsPaused: false },
+    ],
+  });
+  test("the PAUSE error names the open vault AND carries the cancel-pending-unpauses instruction, which a recorded pause does not need", () => {
+    const both = pauseIncomplete(rep(false));
+    expect(both.kind).toBe("PAUSE");
+    expect(both.message).toContain("rmPROTO");
+    expect(both.message).toContain("Pause them by hand now");
+    expect(both.message).toContain("could NOT be recorded");
+    expect(both.message).toContain("Cancel every pending unpause");
+    expect(both.details).toMatchObject({ unpaused: ["rmPROTO"], manifest_recorded: false });
+    const recorded = pauseIncomplete(rep(true));
+    expect(recorded.message).not.toContain("Cancel every pending unpause");
+    expect(recorded.details).not.toHaveProperty("manifest_recorded");
   });
 });

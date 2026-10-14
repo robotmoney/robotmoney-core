@@ -25,6 +25,9 @@
  *      b. Reveal — after at least one block has passed, calls
  *         revealAuthorization(agent, salt, policy). On success we mark this
  *         wallet registered (see useVaultRegistration) and unmount.
+ *      Each step previews the call it signs, built from the same inputs as
+ *      the write (QA plan U4): the commit screen shows commitAuthorization and
+ *      the reveal it leads to, and the reveal screen shows the reveal again.
  *
  * Browser-side keypair generation is intentionally NOT a supported path;
  * see docs/technical/dapp-credential-decisions.md §3.1.
@@ -39,14 +42,16 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
-import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
+import { isAddress, type Address, type Hex } from "viem";
 import { gatewayAbi, erc20Abi } from "../lib/abi";
+import { buildPreview, type AgentPolicy, type PreviewContext } from "../lib/preview";
 import {
-  buildPreview,
-  type AdminAction,
-  type AgentPolicy,
-  type PreviewContext,
-} from "../lib/preview";
+  commitAuthorizationCall,
+  generateSalt,
+  revealAuthorizationCall,
+  type CommitInputs,
+  type RevealInputs,
+} from "../lib/commitReveal";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
@@ -61,6 +66,7 @@ import {
 import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
 import { TxPreview } from "./TxPreview";
+import { WriteStatus } from "./WriteStatus";
 
 type DripStatus =
   | { kind: "idle" }
@@ -93,7 +99,8 @@ type AuthPhase = "commit" | "reveal";
 export function OnboardingWizard(props: Props) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { writeContract, isPending } = useGuardedWriteContract();
+  const authorizeWrite = useGuardedWriteContract();
+  const { writeContract, isPending } = authorizeWrite;
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
 
   // Drip button state — per-asset status for step-1 inline feedback (issue #614).
@@ -205,7 +212,10 @@ export function OnboardingWizard(props: Props) {
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
 
   // Commit/reveal state — persisted between the two sub-steps of step 3.
-  const [salt, setSalt] = useState<Hex | null>(null);
+  // The salt exists before the commit so its preview shows the exact
+  // commitHash; `committed` freezes what the commit bound for the reveal.
+  const [salt] = useState<Hex>(generateSalt);
+  const [committed, setCommitted] = useState<RevealInputs | null>(null);
   // commitTxHash is set when the commit tx hash comes back from the wallet.
   // We wait for its receipt to get the actual on-chain block number.
   const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
@@ -232,16 +242,18 @@ export function OnboardingWizard(props: Props) {
         }
       : null;
 
-  const action: AdminAction | null =
-    validAgent && validReceiver && policy
-      ? {
-          kind: "authorizeAgent",
-          agent: agent as Address,
-          policy,
-        }
-      : null;
+  // Each preview is built from the same inputs its write uses (QA plan U4, DR-4).
+  const commitInputs: CommitInputs | null =
+    address && validAgent && policy ? { agent: agent as Address, committer: address, salt } : null;
+  const revealInputs: RevealInputs | null =
+    committed ?? (validAgent && policy ? { agent: agent as Address, salt, policy } : null);
 
-  const preview = action ? buildPreview(action, props.ctx) : null;
+  const commitPreview = commitInputs
+    ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
+    : null;
+  const revealPreview = revealInputs
+    ? buildPreview({ kind: "revealAuthorization", ...revealInputs }, props.ctx)
+    : null;
 
   // Wait for the commit tx receipt to learn the exact block it mined in.
   // This is needed to correctly gate the reveal: the contract rejects reveals
@@ -268,44 +280,20 @@ export function OnboardingWizard(props: Props) {
     currentBlock !== undefined &&
     currentBlock > commitBlockNumber;
 
-  // Compute commitHash = keccak256(abi.encode(agent, caller, salt)).
-  // Matches the on-chain computation in revealAuthorization.
-  function computeCommitHash(agentAddr: Address, caller: Address, saltHex: Hex): Hex {
-    return keccak256(
-      encodeAbiParameters(
-        [{ type: "address" }, { type: "address" }, { type: "bytes32" }],
-        [agentAddr, caller, saltHex],
-      ),
-    );
-  }
-
-  // Generate a fresh random salt for use in the commit/reveal pair.
-  function generateSalt(): Hex {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    return ("0x" +
-      Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("")) as Hex;
-  }
-
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!address || !validAgent) return;
-    const newSalt = generateSalt();
-    // Capture newSalt in closure so onSuccess can set it even before React
-    // re-renders (React state updates are async).
-    const actualHash = computeCommitHash(agent as Address, address, newSalt);
+    if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
+    // Captured in the closure: onSuccess freezes exactly what this commit bound.
+    const snapshot = revealInputs;
     writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
-        functionName: "commitAuthorization",
-        args: [actualHash],
+        ...commitAuthorizationCall(commitInputs),
       },
       {
         onSuccess: (txHash) => {
-          setSalt(newSalt);
+          setCommitted(snapshot);
           setCommitTxHash(txHash);
           setAuthPhase("reveal");
         },
@@ -315,13 +303,12 @@ export function OnboardingWizard(props: Props) {
 
   const onReveal = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!salt || !action) return;
+    if (!committed || revealPreview?.ok !== true) return;
     writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
-        functionName: "revealAuthorization",
-        args: [action.agent, salt, action.policy],
+        ...revealAuthorizationCall(committed),
       },
       {
         onSuccess: () => {
@@ -496,7 +483,19 @@ export function OnboardingWizard(props: Props) {
             commitment transaction. After it confirms, you will sign the reveal transaction in the
             next step.
           </p>
-          {preview && <TxPreview preview={preview} />}
+          {commitPreview && (
+            <div data-testid="wizard-commit-preview">
+              <TxPreview preview={commitPreview} />
+            </div>
+          )}
+          {revealPreview && (
+            <div data-testid="wizard-next-reveal-preview">
+              <p className="hint">
+                Step 2 signs this reveal, with this policy, after the commit mines:
+              </p>
+              <TxPreview preview={revealPreview} />
+            </div>
+          )}
           <form data-testid="wizard-commit-form" onSubmit={onCommit}>
             <div className="wizard-nav">
               <button type="button" data-testid="step-3-back" onClick={() => setStep(2)}>
@@ -505,11 +504,24 @@ export function OnboardingWizard(props: Props) {
               <button
                 type="submit"
                 data-testid="wizard-commit-submit"
-                disabled={!isConnected || isPending || !validAgent || !validReceiver}
+                disabled={
+                  !isConnected ||
+                  isPending ||
+                  !validAgent ||
+                  !validReceiver ||
+                  commitPreview?.ok !== true ||
+                  revealPreview?.ok !== true
+                }
               >
                 Sign commit transaction
               </button>
             </div>
+            {/* A refused or rejected commit says why (QA plan U5, finding DR-9). */}
+            <WriteStatus
+              testId="wizard-commit"
+              label="Commit"
+              write={{ error: authorizeWrite.error, isPending }}
+            />
           </form>
         </section>
       )}
@@ -527,16 +539,34 @@ export function OnboardingWizard(props: Props) {
               </span>
             )}
           </p>
+          {/* The policy preview again, for the call this button signs (QA plan U4). */}
+          {revealPreview && (
+            <div data-testid="wizard-reveal-preview">
+              <TxPreview preview={revealPreview} />
+            </div>
+          )}
           <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
             <div className="wizard-nav">
               <button
                 type="submit"
                 data-testid="wizard-reveal-submit"
-                disabled={!isConnected || isPending || !revealReady || !salt || !action}
+                disabled={
+                  !isConnected ||
+                  isPending ||
+                  !revealReady ||
+                  !committed ||
+                  revealPreview?.ok !== true
+                }
               >
                 Sign reveal transaction
               </button>
             </div>
+            {/* A refused or rejected reveal says why (QA plan U5, finding DR-9). */}
+            <WriteStatus
+              testId="wizard-reveal"
+              label="Reveal"
+              write={{ error: authorizeWrite.error, isPending }}
+            />
           </form>
           {seedResult && (
             <p

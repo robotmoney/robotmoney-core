@@ -650,3 +650,343 @@ fn handle_log_has_single_erc4626_withdraw_branch() {
          found {matches}; a duplicate branch is unreachable and strands the watchdog burn alarm"
     );
 }
+
+// ── Exclusion records (QA plan X7, core issue 1820) ─────────────────────────
+
+/// One canned `eth_getLogs` entry for `log_data` emitted by `address`.
+fn log_json(
+    address: Address,
+    log_data: &alloy_primitives::LogData,
+    block_number: u64,
+    tx_hash: [u8; 32],
+    log_index: u32,
+) -> serde_json::Value {
+    let topics: Vec<String> = log_data
+        .topics()
+        .iter()
+        .map(|t| format!("{:#x}", t))
+        .collect();
+    serde_json::json!({
+        "address":          format!("{:#x}", address),
+        "topics":           topics,
+        "data":             format!("0x{}", hex::encode(log_data.data.as_ref())),
+        "blockNumber":      format!("0x{:x}", block_number),
+        "blockHash":        format!("0x{}", hex::encode([0xabu8; 32])),
+        "transactionHash":  format!("0x{}", hex::encode(tx_hash)),
+        "transactionIndex": "0x0",
+        "logIndex":         format!("0x{:x}", log_index),
+    })
+}
+
+/// `(holder, balance_at, block_number)` of every stored snapshot balance, by holder.
+async fn exclusion_balances(pool: &sqlx::PgPool) -> Vec<(Vec<u8>, String, i64)> {
+    sqlx::query_as(
+        "SELECT holder, CAST(balance_at AS text), block_number \
+         FROM exclusion_holder_balances WHERE chain_id = $1 ORDER BY holder",
+    )
+    .bind(8453i64)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Rows of `table` on chain 8453. `table` is a literal from the test, never input.
+async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
+    let q = format!("SELECT COUNT(*)::BIGINT FROM {table} WHERE chain_id = 8453");
+    sqlx::query_scalar(&q).fetch_one(pool).await.unwrap()
+}
+
+/// A vault's exclusion record, end to end through `run_once`.
+///
+/// Two depositors hold the vault's shares when the ExclusionLedger opens record 1 (block 55). A
+/// third holder got its shares by a plain transfer, which `wallet_positions` does not follow; it
+/// shows up when it claims (block 60). The indexer stores the record, the credit, the claim and the
+/// close, and reads every holder's `balanceAt` from the ledger: the two depositors when the record
+/// opens, the transferee when it claims. An `ExclusionOpened` from an address that is not the
+/// ledger of a watched vault writes nothing.
+///
+/// A reorg to block 56 then drops the credit, the claim, the close and the transferee's balance,
+/// and keeps the record and the two balances read at its block.
+#[tokio::test]
+async fn exclusion_record_events_store_each_snapshot_holders_balance() {
+    use alloy_sol_types::{SolCall as _, SolEvent as _};
+    use explorer_indexer::abi::{IExclusionLedgerEvents, IExclusionLedgerReads};
+    use explorer_indexer::indexer::exclusion_ledger_of;
+    use std::sync::Arc;
+
+    let fx = pg_fixture().await;
+
+    let vault_addr = Address::from([0xAAu8; 20]);
+    let ledger = exclusion_ledger_of(vault_addr);
+    let impostor = Address::from([0x77u8; 20]);
+    let adapter = Address::from([0xADu8; 20]);
+    let holder_a = Address::from([0x0Au8; 20]);
+    let holder_b = Address::from([0x0Bu8; 20]);
+    let holder_c = Address::from([0x0Cu8; 20]);
+    let id = U256::from(1u64);
+
+    let opened = IExclusionLedgerEvents::ExclusionOpened {
+        exclusionId: id,
+        adapterIndex: U256::from(2u64),
+        adapter,
+        snapshotSupply: U256::from(1_000u64),
+        adapterValue: U256::from(500u64),
+    }
+    .encode_log_data();
+    let spoofed = IExclusionLedgerEvents::ExclusionOpened {
+        exclusionId: U256::from(9u64),
+        adapterIndex: U256::from(0u64),
+        adapter,
+        snapshotSupply: U256::from(1u64),
+        adapterValue: U256::ZERO,
+    }
+    .encode_log_data();
+    let credited = IExclusionLedgerEvents::ExclusionRecoveryCredited {
+        exclusionId: id,
+        source: 2, // AdminRebalance
+        amount: U256::from(300u64),
+        recoveredUsdc: U256::from(300u64),
+    }
+    .encode_log_data();
+    let claimed = IExclusionLedgerEvents::ExclusionClaimed {
+        exclusionId: id,
+        holder: holder_c,
+        amount: U256::from(30u64),
+    }
+    .encode_log_data();
+    let finalized = IExclusionLedgerEvents::ExclusionFinalized {
+        exclusionId: id,
+        reason: 1, // Removed
+        recoveredUsdc: U256::from(300u64),
+    }
+    .encode_log_data();
+
+    let logs = vec![
+        encode_erc4626_deposit_log(
+            vault_addr,
+            holder_a,
+            holder_a,
+            U256::from(600u64),
+            U256::from(600u64),
+            50,
+            [0x50u8; 32],
+            0,
+        ),
+        encode_erc4626_deposit_log(
+            vault_addr,
+            holder_b,
+            holder_b,
+            U256::from(400u64),
+            U256::from(400u64),
+            51,
+            [0x51u8; 32],
+            0,
+        ),
+        log_json(ledger, &opened, 55, [0x55u8; 32], 3),
+        log_json(impostor, &spoofed, 56, [0x56u8; 32], 0),
+        log_json(ledger, &credited, 57, [0x57u8; 32], 1),
+        log_json(ledger, &claimed, 60, [0x60u8; 32], 0),
+        log_json(ledger, &finalized, 62, [0x62u8; 32], 0),
+    ];
+
+    // `balanceAt(holder, 1)` on the ledger: a 600, b 300 (b moved 100 to c before the snapshot),
+    // c 100. Every other read (the vault's snapshot reads) answers zero.
+    let ledger_hex = format!("{:#x}", ledger);
+    let selector = format!(
+        "0x{}",
+        hex::encode(IExclusionLedgerReads::balanceAtCall::SELECTOR)
+    );
+    let word = |v: u64| format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()));
+    let stub = StubRpcServer::start().await;
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if to != ledger_hex || !data.starts_with(&selector) {
+            return Ok(word(0));
+        }
+        // The holder is the low 20 bytes of the first argument word.
+        let holder = data.get(34..74).unwrap_or_default();
+        let balance = if holder == hex::encode(holder_a.as_slice()) {
+            600
+        } else if holder == hex::encode(holder_b.as_slice()) {
+            300
+        } else if holder == hex::encode(holder_c.as_slice()) {
+            100
+        } else {
+            0
+        };
+        Ok(word(balance))
+    }));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = base_config(vault_addr);
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
+
+    let ledger_calls = stub
+        .captured_requests()
+        .into_iter()
+        .filter(|r| {
+            r["method"] == "eth_call"
+                && r["params"][0]["to"].as_str().map(str::to_lowercase)
+                    == Some(format!("{:#x}", ledger))
+        })
+        .count();
+    stub.shutdown();
+    assert_eq!(
+        ledger_calls, 3,
+        "balanceAt is read for the two depositors at the snapshot and the transferee at its claim"
+    );
+
+    let records: Vec<(Vec<u8>, i64, Vec<u8>, i64, String, i64)> = sqlx::query_as(
+        "SELECT ledger_address, exclusion_id, vault_address, adapter_index, \
+                CAST(snapshot_supply AS text), block_number \
+         FROM exclusion_records WHERE chain_id = $1",
+    )
+    .bind(8453i64)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        records,
+        vec![(
+            ledger.to_vec(),
+            1,
+            vault_addr.to_vec(),
+            2,
+            "1000".to_string(),
+            55
+        )],
+        "one record, from the vault's ledger; the impostor's event is ignored"
+    );
+
+    let pool = fx.db.pool();
+    assert_eq!(
+        exclusion_balances(pool).await,
+        vec![
+            (holder_a.to_vec(), "600".to_string(), 55),
+            (holder_b.to_vec(), "300".to_string(), 55),
+            (holder_c.to_vec(), "100".to_string(), 60),
+        ]
+    );
+
+    assert_eq!(table_count(pool, "exclusion_recoveries").await, 1);
+    assert_eq!(table_count(pool, "exclusion_claims").await, 1);
+    assert_eq!(table_count(pool, "exclusion_finalizations").await, 1);
+
+    // A reorg to block 56 orphans the credit, the claim and the close.
+    fx.db.delete_above_block(8453, 56).await.unwrap();
+    assert_eq!(table_count(pool, "exclusion_records").await, 1);
+    assert_eq!(table_count(pool, "exclusion_recoveries").await, 0);
+    assert_eq!(table_count(pool, "exclusion_claims").await, 0);
+    assert_eq!(table_count(pool, "exclusion_finalizations").await, 0);
+    assert_eq!(
+        exclusion_balances(pool).await,
+        vec![
+            (holder_a.to_vec(), "600".to_string(), 55),
+            (holder_b.to_vec(), "300".to_string(), 55),
+        ],
+        "the transferee's balance was read at its orphaned claim and goes with it"
+    );
+}
+
+/// `exclusion_ledger_of` derives the ledger as the vault's first CREATE (nonce 1). That holds only
+/// while `new ExclusionLedger(...)` is the only contract `RobotMoneyVault` ever creates: a creation
+/// before it in the constructor (or in a state-variable initializer, which runs first) moves the
+/// ledger to nonce 2, and the indexer would watch an empty address and miss every exclusion record
+/// with no error. This reads the Solidity source and fails on any other `new <Contract>(`. Its bases
+/// (OpenZeppelin's ERC4626 and ReentrancyGuard, and `AdminFloorAccessControlCounter` over
+/// OpenZeppelin's AccessControl) create nothing. Runs without a DB.
+#[test]
+fn exclusion_ledger_is_the_vaults_only_contract_creation() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("contracts")
+        .join("RobotMoneyVault.sol");
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+
+    // Drop comments, so NatSpec that mentions `new X(` is not code.
+    let mut code = String::new();
+    let mut in_block = false;
+    for line in src.lines() {
+        let mut rest = line;
+        let mut kept = String::new();
+        loop {
+            if in_block {
+                match rest.find("*/") {
+                    Some(end) => {
+                        rest = &rest[end + 2..];
+                        in_block = false;
+                    }
+                    None => break,
+                }
+            } else {
+                let line_comment = rest.find("//");
+                let block_comment = rest.find("/*");
+                match (line_comment, block_comment) {
+                    (Some(l), Some(b)) if b < l => {
+                        kept.push_str(&rest[..b]);
+                        rest = &rest[b + 2..];
+                        in_block = true;
+                    }
+                    (Some(l), _) => {
+                        kept.push_str(&rest[..l]);
+                        break;
+                    }
+                    (None, Some(b)) => {
+                        kept.push_str(&rest[..b]);
+                        rest = &rest[b + 2..];
+                        in_block = true;
+                    }
+                    (None, None) => {
+                        kept.push_str(rest);
+                        break;
+                    }
+                }
+            }
+        }
+        code.push_str(&kept);
+        code.push('\n');
+    }
+
+    // Every `new <Name>(` whose name starts with a capital letter: a contract creation. Array
+    // allocations (`new uint256[](n)`, `new address[](n)`) start lower case.
+    let mut created: Vec<(usize, String)> = Vec::new();
+    for (at, _) in code.match_indices("new ") {
+        let name: String = code[at + 4..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let boundary = at == 0
+            || !code[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        if boundary
+            && name.starts_with(|c: char| c.is_ascii_uppercase())
+            && code[at + 4 + name.len()..].trim_start().starts_with('(')
+        {
+            created.push((at, name));
+        }
+    }
+    assert_eq!(
+        created.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(),
+        vec!["ExclusionLedger"],
+        "RobotMoneyVault must create exactly one contract, its ExclusionLedger, or \
+         `exclusion_ledger_of` (vault CREATE address at nonce 1) no longer finds the ledger"
+    );
+    let constructor = code
+        .find("constructor(")
+        .expect("RobotMoneyVault declares a constructor");
+    let after_constructor = code[constructor..]
+        .find("\n    function ")
+        .map(|i| constructor + i)
+        .unwrap_or(code.len());
+    assert!(
+        (constructor..after_constructor).contains(&created[0].0),
+        "the ExclusionLedger must be created in the constructor"
+    );
+}

@@ -7,20 +7,23 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
-import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey, buildApplyCalls } from "../src/apply-receipt.ts";
+import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey, applyWiringProblems, buildApplyCalls } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { REPO, SHA, sheetText } from "./fixtures.ts";
 import { A, CANCELLER_ROLE_ID, PROPOSER_ROLE_ID, addr, fakeTimelock, sender, setup, signerFor, signers } from "./govern-world.ts";
+import { UNWIND_GUARD_ROW, VAULT_UNWIND_GUARD_ABI, buildUnwindGuardCalls, parseUnwindGuardArgs, unwindGuardRecordKey, type UnwindGuardArgs } from "../src/unwind-guard.ts";
 
 const ALL = {
   ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA",
   ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,AGENT:1000,RWA:1500",
 };
 const DELAY = 172800n;
+/** The rmUSDC unpause row. govern.ts has no rmUSDC special case (issue 1705): its rows come from the stage table, so the test names the row itself. */
+const UNPAUSE_USDC_ROW: GovernRowName = "unpause-USDC";
 const authorizeAgentSelector = toFunctionSelector("authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))");
 const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
 const VAULTS = ["USDC", ...BASKETS] as const;
@@ -1642,6 +1645,8 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // an unknown bucket, a bucket twice
     await refused(world(918453, [...GOOD, { bucket: "memecoins", weight_bps: 0 }]), "is not one of");
     await refused(world(918453, [...GOOD, { bucket: "protocol_tokens", weight_bps: 0 }]), "listed twice");
+    // issue 1701: a bucket named after an Object.prototype member is an unknown bucket (USAGE), never a TypeError
+    for (const bucket of ["constructor", "__proto__", "toString", "hasOwnProperty"]) await refused(world(918453, [...GOOD, { bucket, weight_bps: 0 }]), "is not one of");
     // no weights list, a payload that is not JSON
     await refused(world(918453, [] as never), "no weights list");
     const notJson = world();
@@ -1652,6 +1657,56 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const plain = world();
     plain.tl.s.digests.set(RID, keccak256(toBytes(payloadDoc(GOOD))));
     await refused(plain, "differs from the digest stored");
+  });
+
+  test("issue 1698: applyWiringProblems passes only the wired weight setter (receiptContract() is the register, the register ADMIN_ROLE held); address case does not matter", () => {
+    expect(applyWiringProblems(A.receipt, A.governance, { receiptContract: A.receipt, governanceIsReceiptAdmin: true })).toEqual([]);
+    expect(applyWiringProblems(addr(0xabc), A.governance, { receiptContract: "0x0000000000000000000000000000000000000ABC", governanceIsReceiptAdmin: true })).toEqual([]);
+    expect(applyWiringProblems(A.receipt, A.governance, { receiptContract: undefined, governanceIsReceiptAdmin: true })).toEqual([expect.stringContaining("does not answer receiptContract()")]);
+    expect(applyWiringProblems(A.receipt, A.governance, { receiptContract: addr(0xbad), governanceIsReceiptAdmin: true })).toEqual([expect.stringContaining("would release from another register")]);
+    expect(applyWiringProblems(A.receipt, A.governance, { receiptContract: A.receipt, governanceIsReceiptAdmin: false })).toEqual([expect.stringContaining("ADMIN_ROLE is not held by governance")]);
+    expect(applyWiringProblems(A.receipt, A.governance, { receiptContract: undefined, governanceIsReceiptAdmin: false }).length).toBe(2);
+  });
+
+  test("issue 1698: apply-receipt refuses (GOVERN, nothing sent) when the weight setter is not wired to the receipt register: no receiptContract(), another register, or no register ADMIN_ROLE", async () => {
+    const unwired = async (w: ReturnType<typeof world>, why: string) => {
+      await expect(w.apply({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN, message: expect.stringContaining(why) });
+      expect(w.tl.s.events).toEqual([]);
+      expect(w.tl.s.log).toEqual([]);
+      expect(w.tl.s.released.has(RID)).toBe(false);
+      expect(w.manifest.govern?.[applyRecordKey(RID)]).toBeUndefined();
+    };
+    // a pre-1698 RouterGovernance: receiptContract() reverts, and it has no applyReceipt either
+    const old = world();
+    old.tl.s.governanceReceipt = undefined;
+    await unwired(old, "does not answer receiptContract()");
+    // the weight setter releases from another register than the one this row read the receipt state and digest from
+    const other = world();
+    other.tl.s.governanceReceipt = addr(0xbad);
+    await unwired(other, `not the consensus receipt ${A.receipt}`);
+    // stage 11 never granted the register ADMIN_ROLE, so releaseReceipt inside applyReceipt would revert after the delay
+    const noRole = world();
+    noRole.tl.s.governanceIsReceiptAdmin = false;
+    await unwired(noRole, "ADMIN_ROLE is not held by governance");
+    const e = (await noRole.apply().catch((x: unknown) => x)) as PublishError;
+    expect(e).toBeInstanceOf(PublishError);
+    expect(e.details).toMatchObject({ row: APPLY_ROW, receipt_id: RID });
+  });
+
+  test("issue 1698: a wiring change while the call waits on the timelock is refused before the execute (GOVERN), not left to revert", async () => {
+    const w = world(8453);
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
+    w.tl.s.clock += DELAY;
+    w.tl.s.governanceIsReceiptAdmin = false;
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("ADMIN_ROLE is not held by governance") });
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
+    expect(w.tl.s.released.has(RID)).toBe(false);
+    // wired again: the same command executes the round that waited
+    w.tl.s.governanceIsReceiptAdmin = true;
+    await w.apply({ warp: noWarp });
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "execute:apply-receipt"]);
+    expect(w.tl.s.released.has(RID)).toBe(true);
   });
 
   test("issue 1754: the payload lists the buckets in the receipt's canonical order, the applied vector is in registry order (the order of the signed payload is irrelevant)", async () => {
@@ -1733,5 +1788,191 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // a rerun sends nothing
     await w.apply({ warp: noWarp });
     expect(w.tl.s.events.length).toBe(3);
+  });
+});
+
+// ---- QA plan v1 D7 (review E5, issue 1705 Q2): the emergency unwind guard row ----
+describe("QA plan v1 D7: set-unwind-guard sets a basket vault's emergency unwind guard through the Safe and the timelock", () => {
+  const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
+  const TOK = { a: addr(0x7001), b: addr(0x7002), off: addr(0x7003) };
+  /** rmPROTO lists a, an INACTIVE row, then b; rmAGENT lists a. The timelock holds ADMIN_ROLE on the three baskets (the handover). */
+  const world = (chainId = 918453, sheetOver: Record<string, string> = {}) => {
+    const { ctx, sheet } = setup({ ...ALL, ...sheetOver }, chainId);
+    const tl = fakeTimelock(sheet, DELAY);
+    for (const k of BASKETS) tl.s.governed.add(A.vaults[k]);
+    tl.s.assetRows.set(A.vaults.PROTO, [{ token: TOK.a, active: true }, { token: TOK.off, active: false }, { token: TOK.b, active: true }]);
+    tl.s.assetRows.set(A.vaults.AGENT, [{ token: TOK.a, active: true }]);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    const guard = (args: UnwindGuardArgs, extra: object = {}) => runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, { row: UNWIND_GUARD_ROW, unwindGuard: args, warp: warpTo(tl), emit: (l: string) => out.push(l), ...extra }));
+    return { ctx, sheet, tl, manifest, out, guard };
+  };
+  const ONE: UnwindGuardArgs = { vault: "PROTO", token: TOK.b, "min-usdc-out": "2000000", "max-loss-bps": "500" };
+  const callOf = (token: `0x${string}`, min: bigint, allowed: boolean, loss: bigint) =>
+    encodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, functionName: "setEmergencyUnwindGuard", args: [token, min, allowed, loss] });
+  const guardOf = (tl: ReturnType<typeof fakeTimelock>, vault: string, token: string) => tl.s.guards.get(`${vault.toLowerCase()}|${token.toLowerCase()}`);
+
+  test("the row is on demand: in no default run, no numbered --row and no stage run; accepted on 8453 in production and in a rehearsal and on the Twin chain", () => {
+    expect([...GOVERN_ROWS]).not.toContain(UNWIND_GUARD_ROW);
+    for (const chain of [8453, 918453]) expect([...stageRows(chain)]).not.toContain(UNWIND_GUARD_ROW);
+    expect(() => resolveGovernRow(UNWIND_GUARD_ROW)).toThrow("on-demand");
+    for (const kind of ["production", "rehearsal"] as const) for (const chain of [8453, 918453]) expect(govRowRefusal(UNWIND_GUARD_ROW, chain, kind)).toBeUndefined();
+  });
+
+  test("bad arguments are USAGE and nothing is read or sent: rmUSDC, an unknown vault, no token, a bad token, a zero floor, a loss cap above 10000, an override floor that rounds to zero, a bad override flag", async () => {
+    const bad: [UnwindGuardArgs | undefined, string][] = [
+      [undefined, "vault="],
+      [{ ...ONE, vault: "USDC" }, "rmUSDC has no emergency unwind guard"],
+      [{ ...ONE, vault: "BTC" }, "vault must be one of"],
+      [{ ...ONE, token: undefined }, "token=0x<address>"],
+      [{ ...ONE, token: "0x1234" }, "token must be an address or 'all'"],
+      [{ ...ONE, "min-usdc-out": "0" }, "min-usdc-out 0 is the unset guard"],
+      [{ ...ONE, "min-usdc-out": "1.5" }, "whole number"],
+      [{ ...ONE, "max-loss-bps": undefined }, "max-loss-bps=N"],
+      [{ ...ONE, "max-loss-bps": "10001" }, "InvalidParam"],
+      [{ ...ONE, "max-loss-bps": "10000" }, "override floor zero"],
+      [{ ...ONE, "min-usdc-out": "1" }, "override floor zero"],
+      [{ ...ONE, "override-allowed": "yes" }, "true or false"],
+    ];
+    for (const [args, msg] of bad) {
+      expect(() => parseUnwindGuardArgs(args)).toThrow(msg);
+      const w = world();
+      let connected = 0;
+      const connect = w.tl.api.connectSafe;
+      w.tl.api.connectSafe = (async (...x: unknown[]) => { connected++; return (connect as (...y: unknown[]) => unknown)(...x); }) as never;
+      await expect(w.guard(args as UnwindGuardArgs)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining(msg) });
+      expect(connected).toBe(0);
+      expect(w.tl.s.events).toEqual([]);
+    }
+    // a 10000 cap, or a floor of one unit, is allowed with the override off: the override floor is never used
+    expect(parseUnwindGuardArgs({ ...ONE, "max-loss-bps": "10000", "override-allowed": "false" })).toMatchObject({ maxLossBps: 10000n, overrideAllowed: false });
+    expect(parseUnwindGuardArgs({ ...ONE, "min-usdc-out": "1", "override-allowed": "false" })).toMatchObject({ minUsdcOut: 1n, overrideAllowed: false });
+    // the row's --admin-arg values go with the row only
+    const w = world();
+    await expect(runGovern(w.ctx, stageByName("govern"), w.manifest, opts(w.sheet, w.tl, { row: "unpause-PROTO", unwindGuard: ONE }))).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining(`--row ${UNWIND_GUARD_ROW} only`) });
+  });
+
+  test("one token: ONE setEmergencyUnwindGuard call, scheduled with `schedule` and executed after the delay, read back; the line carries the row; the evidence records the values", async () => {
+    const w = world();
+    const res = await w.guard(ONE);
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    expect(res.rows).toEqual([name]);
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `execute:${UNWIND_GUARD_ROW}`]);
+    const sc = w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!;
+    expect(sc.form).toBe("single");
+    expect(sc.calls).toEqual([{ target: A.vaults.PROTO, data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    // the Safe transaction names the vault and the guard before and after
+    expect(sc.description).toContain(`rmPROTO ${A.vaults.PROTO} from ${TOK.b} (0, false, 0)`);
+    expect(sc.description).toContain(`rmPROTO.setEmergencyUnwindGuard(${TOK.b}, 2000000, true, 500)`);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.a)).toBeUndefined();
+    const lines = w.out.map((l) => JSON.parse(l));
+    expect(lines.map((l) => `${l.row}:${l.phase}:${l.status}`)).toEqual([`${UNWIND_GUARD_ROW}:scheduled:1`, `${UNWIND_GUARD_ROW}:executed:1`]);
+    const e = (w.manifest as { unwind_guards?: any[] }).unwind_guards!;
+    expect(e.length).toBe(1);
+    expect(e[0]).toMatchObject({ step: UNWIND_GUARD_ROW, key: name, round: 1, vault: "PROTO", vault_address: A.vaults.PROTO, tokens: [TOK.b], min_usdc_out: "2000000", override_allowed: true, max_loss_bps: 500, timelock: A.timelock, schedule_status: 1, execute_status: 1 });
+    // never part of stage 13
+    expect(w.manifest.stages.govern).toBeUndefined();
+    expect(Object.keys(w.manifest.govern!)).toEqual([name]);
+  });
+
+  test("token=all: ONE scheduleBatch with one call per ACTIVE asset, in the vault's order (the inactive row gets none)", async () => {
+    const w = world();
+    await w.guard({ ...ONE, token: "all" });
+    const sc = w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!;
+    expect(sc.form).toBe("batch");
+    expect(sc.calls).toEqual([TOK.a, TOK.b].map((t) => ({ target: A.vaults.PROTO, data: callOf(t, 2_000_000n, true, 500n) })));
+    expect(w.tl.s.log).toEqual(["scheduleBatch", "executeBatch"]);
+    for (const t of [TOK.a, TOK.b]) expect(guardOf(w.tl, A.vaults.PROTO, t)).toEqual([2_000_000n, true, 500n]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.off)).toBeUndefined();
+    expect((w.manifest as { unwind_guards?: any[] }).unwind_guards![0].tokens).toEqual([TOK.a, TOK.b]);
+  });
+
+  test("override-allowed defaults to true (QA plan v1 Decisions D3: allowed, Safe-only), and false is sent as false", async () => {
+    expect(parseUnwindGuardArgs(ONE).overrideAllowed).toBe(true);
+    const w = world();
+    await w.guard({ ...ONE, vault: "AGENT", token: TOK.a, "override-allowed": "false", "max-loss-bps": "0" });
+    expect(guardOf(w.tl, A.vaults.AGENT, TOK.a)).toEqual([2_000_000n, false, 0n]);
+    expect(w.tl.s.scheduled.get(UNWIND_GUARD_ROW)!.calls).toEqual([{ target: A.vaults.AGENT, data: callOf(TOK.a, 2_000_000n, false, 0n) }]);
+  });
+
+  test("a token that is not an active asset, a vault with no active asset and a vault whose ADMIN_ROLE the timelock does not hold are refused with GOVERN before anything is scheduled", async () => {
+    const inactive = world();
+    await expect(inactive.guard({ ...ONE, token: TOK.off })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN, message: expect.stringContaining("is not an active asset of rmPROTO") });
+    expect(inactive.tl.s.events).toEqual([]);
+    const empty = world();
+    await expect(empty.guard({ ...ONE, vault: "RWA", token: "all" })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("rmRWA lists no active asset") });
+    expect(empty.tl.s.events).toEqual([]);
+    const ungoverned = world();
+    ungoverned.tl.s.governed.delete(A.vaults.PROTO);
+    await expect(ungoverned.guard(ONE)).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("does not hold ADMIN_ROLE on rmPROTO") });
+    expect(ungoverned.tl.s.events).toEqual([]);
+  });
+
+  test("a guard already in effect is recorded as skipped and nothing is sent; a rerun of an executed run reprints its lines and sends nothing", async () => {
+    const pre = world();
+    pre.tl.s.guards.set(`${A.vaults.PROTO.toLowerCase()}|${TOK.b.toLowerCase()}`, [2_000_000n, true, 500n]);
+    const res = await pre.guard(ONE);
+    expect(res.skipped).toEqual(res.rows);
+    expect(pre.tl.s.events).toEqual([]);
+    expect(pre.manifest.govern![res.rows[0]!]).toMatchObject({ skipped: { reason: expect.stringContaining("already in effect on chain") } });
+    const w = world();
+    await w.guard(ONE);
+    w.out.length = 0;
+    const again = await w.guard(ONE);
+    expect(again.skipped).toEqual([]);
+    expect(w.tl.s.events.length).toBe(2);
+    expect(w.out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed"]);
+    expect((w.manifest as { unwind_guards?: any[] }).unwind_guards!.length).toBe(1);
+  });
+
+  test("other values are another operation, and setting the first values again after a change opens round 2 of their record (a new operation id)", async () => {
+    const w = world();
+    await w.guard(ONE);
+    const first = w.tl.s.ids.get(UNWIND_GUARD_ROW);
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    await w.guard({ ...ONE, "min-usdc-out": "3000000" });
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([3_000_000n, true, 500n]);
+    expect(w.tl.s.ids.get(UNWIND_GUARD_ROW)).not.toBe(first);
+    await w.guard(ONE);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(w.tl.s.events.length).toBe(6);
+    expect(w.manifest.govern![name]).toMatchObject({ round: 2 });
+    expect(w.manifest.govern![roundKey(name, 1)]).toMatchObject({ round: 1, executed: expect.anything() });
+    const ids = new Set((w.manifest as { unwind_guards?: any[] }).unwind_guards!.map((x) => x.operation_id));
+    expect(ids.size).toBe(3);
+  });
+
+  test("on 8453 (production) the row schedules and exits GOVERN_PENDING with a resume command that spells out its --admin-arg values; the resume after the delay executes it; a cancelled operation is scheduled again in the same round", async () => {
+    const w = world(8453);
+    let err: unknown;
+    try { await w.guard(ONE, { warp: noWarp }); } catch (e) { err = e; }
+    const e = err as PublishError;
+    expect(e.kind).toBe("GOVERN_PENDING");
+    expect(String(e.details.next_command)).toContain(`--row ${UNWIND_GUARD_ROW} --admin-arg vault=PROTO --admin-arg token=${TOK.b} --admin-arg min-usdc-out=2000000 --admin-arg max-loss-bps=500 --admin-arg override-allowed=true`);
+    expect(String(e.details.next_command)).toContain("--chain 8453");
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`]);
+    // the operator cancels the operation through the Safe on the timelock, then names the row again: the same round is scheduled again
+    const name = unwindGuardRecordKey("PROTO", [{ data: callOf(TOK.b, 2_000_000n, true, 500n) }]);
+    w.tl.s.ops.delete(w.tl.s.ids.get(UNWIND_GUARD_ROW)!);
+    await expect(w.guard(ONE, { warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `schedule:${UNWIND_GUARD_ROW}`]);
+    expect(w.manifest.govern![`${roundKey(name, 1)}:cancelled-1`]).toBeDefined();
+    w.tl.s.clock += DELAY;
+    await w.guard(ONE, { warp: noWarp });
+    expect(w.tl.s.events).toEqual([`schedule:${UNWIND_GUARD_ROW}`, `schedule:${UNWIND_GUARD_ROW}`, `execute:${UNWIND_GUARD_ROW}`]);
+    expect(guardOf(w.tl, A.vaults.PROTO, TOK.b)).toEqual([2_000_000n, true, 500n]);
+    expect(w.manifest.stages.govern).toBeUndefined();
+  });
+
+  test("buildUnwindGuardCalls: one call per token on the vault, labelled with the vault name and the values", () => {
+    const want = parseUnwindGuardArgs({ ...ONE, token: "all" });
+    const calls = buildUnwindGuardCalls(A.vaults.RWA, { ...want, vault: "RWA" }, [TOK.a, TOK.b]);
+    expect(calls.map((c) => c.target)).toEqual([A.vaults.RWA, A.vaults.RWA]);
+    expect(calls[0]!.label).toBe(`rmRWA.setEmergencyUnwindGuard(${TOK.a}, 2000000, true, 500)`);
+    expect(decodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, data: calls[1]!.data }).args).toEqual([TOK.b, 2_000_000n, true, 500n]);
+    // the record key names the row and the vault, and differs with the values
+    expect(unwindGuardRecordKey("RWA", calls)).toMatch(new RegExp(`^${UNWIND_GUARD_ROW}-RWA-[0-9a-f]{8}$`));
+    expect(unwindGuardRecordKey("RWA", calls)).not.toBe(unwindGuardRecordKey("RWA", calls.slice(0, 1)));
   });
 });

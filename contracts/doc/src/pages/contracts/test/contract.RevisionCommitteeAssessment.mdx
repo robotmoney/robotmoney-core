@@ -4,17 +4,22 @@ title: "RevisionCommitteeAssessment"
 
 # RevisionCommitteeAssessment
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRevisionAssessment.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/SecurityReviewRevisionAssessment.t.sol)
 
 **Inherits:** [SecurityReviewRecheckCommitteePoc](/contracts/test/contract.SecurityReviewRecheckCommitteePoc)
 
 ## Functions
 
-<a id="test_assessment_squattedagentcanjoincommitteeandvote"></a>
+<a id="test_assessment_squatrefusedandmemberjoinscommitteeandvotes"></a>
 
-### test_assessment_squattedAgentCanJoinCommitteeAndVote
+### test_assessment_squatRefusedAndMemberJoinsCommitteeAndVotes
+
+At baseline the attacker squatted the member's address and the member still
+joined the committee and voted while the attacker owned its policy. Since
+issue #1791 the squat itself reverts `InvalidAgentConsent`; the member binds
+its own address (the reveal is its consent), joins the committee and votes.
 
 ```solidity
-function test_assessment_squattedAgentCanJoinCommitteeAndVote() public;
+function test_assessment_squatRefusedAndMemberJoinsCommitteeAndVotes() public;
 ```
 

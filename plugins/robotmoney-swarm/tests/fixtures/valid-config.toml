@@ -1,13 +1,28 @@
-# Committee agent rmpc config fixture — all required fields present.
+# Committee agent rmpc config fixture: a real rmpc operator config, the shape
+# clients/rust-payment-client/src/config.rs loads (deny_unknown_fields), with
+# every key the swarm preflight reads.
 # Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
+#
+# run-tests.sh drives check-preflight.sh with this file and the REAL rmpc
+# binary (review finding DR-1). The fixture used to carry a sectioned layout
+# with `ic_contract_address`, a key rmpc does not have; a fake rmpc hid that.
+#
+# rpc_url is the loopback JSON-RPC stub run-tests.sh starts
+# (tests/ic-policy-rpc-stub.py). It answers the two IC policy reads
+# `rmpc committee check-agent` makes and nothing else.
+# keystore_path is relative to the working directory, which is how rmpc
+# resolves it; run-tests.sh runs the preflight from tests/fixtures/.
+# agent-keystore.json holds only a cleartext address (anvil account #0) and a
+# zero ciphertext: it names the agent and cannot sign anything.
 
-[chain]
-rpc_url = "http://127.0.0.1:8545"
-chain_id = 31337
+chain_id              = 31337
+rpc_url               = "http://127.0.0.1:18545"
+gateway_address       = "0x0000000000000000000000000000000000000b00"
+usdc_address          = "0x0000000000000000000000000000000000000c00"
+vault_address         = "0x0000000000000000000000000000000000000d00"
+ic_policy_address     = "0x0000000000000000000000000000000000000e00"
+gateway_runtime_hash  = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-[gateway]
-address = "0xGateway000000000000000000000000000000000"
-
-[committee]
-ic_contract_address = "0xIC00000000000000000000000000000000000000"
-agent_id = "robotmoney-v1"
+[signer]
+allow_software_fallback = true
+keystore_path           = "agent-keystore.json"

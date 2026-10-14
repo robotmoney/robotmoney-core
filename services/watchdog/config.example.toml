@@ -53,3 +53,13 @@ enabled = true
 expected_cadence_secs = 86400
 # Extra seconds tolerated on top of the cadence before paging.
 grace_secs = 21600
+
+# Explorer-indexer lag budget (QA plan X5, DI-5). A poll that finds no new
+# indexed block refreshes the liveness heartbeat only while the indexer is
+# within this budget. Beyond it the daemon pages `indexer_behind:<chain>` and
+# lets the heartbeat age, so watchdog-liveness reports `stale` as well.
+# Absent means these defaults.
+[indexer_lag]
+max_lag_blocks = 150     # chain head minus indexed head (150 Base blocks = 300 s)
+max_silence_secs = 300   # since the newest indexer run without an error
+repage_secs = 3600

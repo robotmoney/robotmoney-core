@@ -10,7 +10,7 @@ import { keccak256, pad, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
-  SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
+  KEEPER_ROLE, SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
@@ -79,6 +79,8 @@ const RULES: Rule[] = [
   [/^router: WEIGHT_SETTER_ROTATOR_ROLE not held by (timelock|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, { timelock: TIMELOCK, governance: GOV, ...WHO }[m[1]]!)],
   [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE held by timelock$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, TIMELOCK)],
   [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by (safe|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, { governance: GOV, ...WHO }[m[1]]!)],
+  // QA plan v1 C3 (CS-6): a second ADMIN_ROLE member on the weight setter can apply weights without a timelock operation, so the setter is not timelock-gated
+  [/^router: every WEIGHT_SETTER_ROLE holder is timelock-gated$/, (w) => w.chain.grant(GOV, ADMIN_ROLE, OTHER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, DEPLOYER)],
   [/^gateway: not paused$/, (w) => w.chain.set(GATEWAY, "depositsPaused", true)],
@@ -90,6 +92,9 @@ const RULES: Rule[] = [
   [/^(.+): ADMIN_ROLE not held by (deployer|pauser|emergency|safe)$/, (w, m) => w.chain.grant(subject(m[1]), ADMIN_ROLE, WHO[m[2]])],
   [/^(.+): EMERGENCY_ROLE held by emergency key$/, (w, m) => w.chain.revoke(subject(m[1]), EMERGENCY_ROLE, EMERGENCY)],
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
+  // issue 1705 C5: a second emergency key (the pauser, an expected account, so the roles enumeration label stays green), and a rebalance keeper on rmUSDC
+  [/^(vault\[\w+\]): EMERGENCY_ROLE has exactly one holder$/, (w, m) => { w.chain.grant(subject(m[1]), EMERGENCY_ROLE, PAUSER); w.chain.roleGrantedLog(subject(m[1]), EMERGENCY_ROLE, PAUSER, 4100n); }],
+  [/^vault\[rmUSDC\]: KEEPER_ROLE has no holder$/, (w) => { w.chain.grant(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE); w.chain.roleGrantedLog(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE, 4100n); }],
   // deploy-time configuration (issue 1520) and the weight setter's stage 11 wiring (issue 1698: no voting surface, the receipt register and the router instead)
   [/^governance: receiptContract\(\) equals the consensus receipt$/, (w) => w.chain.set(GOV, "receiptContract", OTHER)],
   [/^governance: router\(\) equals the deployed router$/, (w) => w.chain.set(GOV, "router", OTHER)],
@@ -99,7 +104,15 @@ const RULES: Rule[] = [
   [/^router: votedWeightsActive is false after deploy, true after an applied receipt$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
   [/^router: effective weights equal the sheet's launch vector$/, (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
   // issue 1696: a receipt the run manifest says the Safe applied reads not released
-  [/^receipt: applied receipt is released and its weights are on the router$/, (w) => { w.opts.appliedReceipt = { receiptId: `0x${"ab".repeat(32)}`, vaults: Object.values(VAULTS).map((v) => v.address), bps: [9500, 500, 0, 0] }; w.chain.set(REC, "isReleased", () => false); }],
+  // QA plan v1 C2: the application is on chain (ReceiptApplied) and recorded, the router routes by it, and the receipt reads not released
+  [/^receipt: applied receipt is released and its weights are on the router$/, (w) => {
+    const vs = Object.values(VAULTS).map((v) => v.address), bps = [9500, 500, 0, 0], rid = `0x${"ab".repeat(32)}` as `0x${string}`;
+    w.chain.receiptAppliedLog(rid, vs, bps);
+    w.opts.appliedReceipt = { receiptId: rid, vaults: vs, bps };
+    w.chain.set(ROUTER, "votedWeightsActive", true);
+    w.chain.set(ROUTER, "getEffectiveWeights", [vs, bps.map((x) => BigInt(x))]);
+    w.chain.set(REC, "isReleased", () => false);
+  }],
   [/^(vault\[\w+\]): router eligibility equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].routerEligible = false; }],
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
@@ -126,11 +139,27 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): navDeviationGuardBps above zero$/, (w, m) => w.chain.set(subject(m[1]), "navDeviationGuardBps", 0n)],
   // a thin pool: the first asset pool of the vault reports liquidity below the sheet floor
   [/^(vault\[\w+\]): pool liquidity meets the sheet floor$/, (w, m) => w.chain.set(w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets[0]!.pool, "liquidity", 1n)],
+  // QA plan v1 D7: an OPEN basket (the sheet and the chain agree, so the paused-state label stays green) whose first asset never got an unwind guard
+  [/^(vault\[\w+\]): emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault$/, (w, m) => {
+    const key = /\[(\w+)\]/.exec(m[1])![1]!;
+    const a = subject(m[1]);
+    w.sheet.vaults[key]!.expectPaused = false;
+    w.chain.set(a, "depositsPaused", false);
+    const first = w.sheet.vaults[key]!.assets[0]!.token.toLowerCase();
+    const was = w.chain.handlers.get(`${a.toLowerCase()}:emergencyUnwindGuard`)!;
+    w.chain.set(a, "emergencyUnwindGuard", (x: any[]) => (String(x[0]).toLowerCase() === first ? [0n, false, 0n] : was(x)));
+  }],
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
-  // core 1695: the vault bound moved off the launch value (the pool fee alone is 291 bps)
-  [/^(vault\[rmAGENT\]): maxSlippageBps equals 500$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 300n)],
+  // issue 1705 C4 (core 1695 for rmAGENT, whose pool fee alone is 291 bps): the vault bound moved off the config value
+  [/^(vault\[\w+\]): maxSlippageBps equals config$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 499n)],
+  // issue 1705 C4: the second lending adapter registered at another cap than the deploy script sets
+  [/^vault\[rmUSDC\]: adapter set, caps and code-hash allowlist equal the deploy script$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "adapters", (a: any[]) => {
+    const x = w.sheet.vaults.rmUSDC!.adapters![Number(a[0])];
+    if (!x) throw new Error("execution reverted");
+    return [x.address, Number(a[0]) === 1 ? 5000 : x.capBps, true];
+  })],
   [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],

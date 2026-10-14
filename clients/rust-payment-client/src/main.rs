@@ -132,6 +132,7 @@ fn main() {
             config,
             shares,
             source_vault,
+            min_assets,
             order_id,
             idempotency_key,
             deadline_secs,
@@ -143,6 +144,7 @@ fn main() {
             config_path: config,
             shares,
             source_vault,
+            min_assets,
             order_id,
             idempotency_key,
             deadline_secs,
@@ -226,6 +228,13 @@ fn main() {
                     receipt_timeout_secs,
                     gas_limit,
                     fee_cap_wei: fee_cap,
+                    pretty,
+                })
+            }
+            CommitteeSubcommand::CheckAgent { agent } => {
+                commands::committee::run_check_agent(commands::committee::CheckAgentArgs {
+                    config_path: config,
+                    agent,
                     pretty,
                 })
             }

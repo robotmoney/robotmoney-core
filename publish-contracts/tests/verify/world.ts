@@ -4,13 +4,14 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { concatHex, decodeFunctionData, encodeFunctionData, keccak256, toFunctionSelector, parseAbi, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
+import { concatHex, decodeFunctionData, encodeAbiParameters, encodeFunctionData, keccak256, toFunctionSelector, parseAbi, parseAbiItem, toHex, pad, type Hex as VHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { localSafeTxHash } from "../../src/safe/tx.ts";
 import {
   ADMIN_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, coreContracts, stageManifestFile, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT,
-  RM_TOKEN, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED, Z32, ZERO,
+  RM_TOKEN, SAFE_GUARD_SLOT, SAFE_L2_141_SINGLETON, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, SIG_AGENT_AUTHORIZED, SIG_RECEIPT_APPLIED, SIG_ROLE_GRANTED,
+  SIG_VOTED_WEIGHTS_CLEARED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
@@ -79,8 +80,20 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01), venue: 0 }],
 };
 
+/** Issue 1705 C4: rmUSDC's three lending adapters, in registration order, at the vault stage's caps (each has its own runtime code, so three code hashes). */
+export const USDC_ADAPTERS = [
+  { address: addr(0xada1), capBps: 3334 },
+  { address: addr(0xada2), capBps: 3333 },
+  { address: addr(0xada3), capBps: 3333 },
+] as const;
+/** Issue 1705 C4: each basket's swap bound as the deploy leaves it (rmAGENT's config raises it to 500, the others keep the vault default). */
+export const BASKET_SLIPPAGE_BPS: Record<string, bigint> = { rmPROTO: 100n, rmAGENT: 500n, rmRWA: 100n };
+
 /** Issue 1666: the guard every basket carries, and the in-range liquidity of every pool against the sheet floor. */
 export const NAV_GUARD_BPS = 100n;
+/** QA plan v1 D7: the emergency unwind guard of every basket asset (minUsdcOut in USDC units, and the override loss cap). */
+export const UNWIND_MIN_USDC_OUT = 1_000_000n;
+export const UNWIND_MAX_LOSS_BPS = 500n;
 export const POOL_LIQUIDITY = 10n ** 18n;
 export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
 const DEFAULT_BPS = [9500, 500, 0, 0];
@@ -122,6 +135,13 @@ export class FakeChain implements ChainReader {
     const A = a.toLowerCase();
     if (name === "hasRole") return this.has(a, args[0] as Hex, args[1] as Address);
     if (name === "getRoleMemberCount") return BigInt([...this.roles].filter((k) => k.startsWith(`${A}|${(args[0] as string).toLowerCase()}|`) || k.startsWith(`${A}|${args[0] as string}|`)).length);
+    // QA plan v1 C3: AccessControlEnumerable's getRoleMember, in grant order (the weight setter's gating enumerates the router's holders and each holder's ADMIN_ROLE)
+    if (name === "getRoleMember") {
+      const members = [...this.roles].filter((k) => k.startsWith(`${A}|${(args[0] as string).toLowerCase()}|`) || k.startsWith(`${A}|${args[0] as string}|`)).map((k) => k.split("|")[2] as Address);
+      const i = Number(args[1] as bigint);
+      if (i >= members.length) throw new Error(`execution reverted: no role member ${i} on ${a}`);
+      return members[i];
+    }
     if (name === "getOwners" && A === SAFE.toLowerCase()) return this.owners;
     if (name === "getThreshold" && A === SAFE.toLowerCase()) return BigInt(this.threshold);
     if (name === "getModulesPaginated" && A === SAFE.toLowerCase()) return { array: this.modules, next: addr(1) };
@@ -169,6 +189,21 @@ export class FakeChain implements ChainReader {
 
   roleGrantedLog(at: Address, r: Hex, who: Address, block = 100n) {
     this.logs.push({ address: at, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), r, padTopic(who), padTopic(DEPLOYER)], data: "0x", blockNumber: block });
+  }
+
+  /** Issue 1705 C4: an allowlist setter event of a vault (AdapterAllowedSet or AdapterCodeHashAllowedSet), its key in topic 1 and the bool in data. */
+  allowlistLog(at: Address, sig: string, key: Hex, allowed: boolean, block = 2400n) {
+    this.logs.push({ address: at, topics: [keccak256(toHex(sig)), key], data: encodeAbiParameters([{ type: "bool" }], [allowed]) as Hex, blockNumber: block });
+  }
+
+  /** QA plan v1 C2: the weight setter's ReceiptApplied log, the chain's own record of an application (the verifier reads the applied vector from it, never from the run manifest). */
+  receiptAppliedLog(receiptId: Hex, vaults: Address[], bps: number[], block = 4000n, digest: Hex = `0x${"d1".repeat(32)}` as Hex) {
+    this.logs.push({ address: GOV, topics: [keccak256(toHex(SIG_RECEIPT_APPLIED)), receiptId], data: encodeAbiParameters([{ type: "bytes32" }, { type: "address[]" }, { type: "uint256[]" }], [digest, vaults, bps.map((x) => BigInt(x))]) as Hex, blockNumber: block });
+  }
+
+  /** The router's VotedWeightsCleared log (the clear row): an application before it no longer routes deposits. */
+  votedWeightsClearedLog(block: bigint) {
+    this.logs.push({ address: ROUTER, topics: [keccak256(toHex(SIG_VOTED_WEIGHTS_CLEARED))], data: "0x", blockNumber: block });
   }
 }
 
@@ -271,12 +306,14 @@ export function buildWorld(chainId = 8453): World {
   for (const [k, v] of Object.entries(VAULTS)) {
     ch.set(v.address, "registry", REGISTRY);
     ch.grant(v.address, EMERGENCY_ROLE, EMERGENCY);
+    // issue 1705 C5: the timelock stage granted the emergency key its role (the RoleGranted log the holder count is read from)
+    ch.roleGrantedLog(v.address, EMERGENCY_ROLE, EMERGENCY, 2600n);
     const caps = k === "rmUSDC" ? { tvl: 1_000_000_000_000n, per: 100_000_000_000n } : { tvl: 10_000_000_000n, per: 1_000_000_000n };
     ch.set(v.address, "tvlCap", caps.tvl);
     ch.set(v.address, "perDepositCap", caps.per);
     ch.set(v.address, "exitFeeBps", 10n);
     if (v.kind !== "usdc") ch.set(v.address, "navDeviationGuardBps", NAV_GUARD_BPS);
-    if (v.kind === "agent") ch.set(v.address, "maxSlippageBps", 500n);
+    if (v.kind !== "usdc") ch.set(v.address, "maxSlippageBps", BASKET_SLIPPAGE_BPS[k]!);
     ch.set(v.address, "feeRecipient", SAFE);
     const paused = k !== "rmUSDC";
     ch.set(v.address, "depositsPaused", paused);
@@ -291,13 +328,35 @@ export function buildWorld(chainId = 8453): World {
       if (!x) throw new Error("execution reverted");
       return [x.token, x.pool, x.swapFee, true, x.adapter, x.venue];
     });
+    // QA plan v1 D7: every basket asset carries an emergency unwind guard (the Safe sets it through the timelock with govern --row set-unwind-guard). A test zeroes one.
+    if (v.kind !== "usdc") {
+      const guards = new Map(assets.map((x) => [x.token.toLowerCase(), [UNWIND_MIN_USDC_OUT, true, UNWIND_MAX_LOSS_BPS] as const]));
+      ch.set(v.address, "emergencyUnwindGuard", (a: any[]) => guards.get(String(a[0]).toLowerCase()) ?? [0n, false, 0n]);
+    }
     // core 1676: the vault allowlists the codehash of the V4 adapter it was deployed with
     ch.set(v.address, "adapterCodeHashAllowed", (a: any[]) => String(a[0]).toLowerCase() === keccak256(ch.codes.get(V4_ADAPTER.toLowerCase())!).toLowerCase());
     vsheet[k] = {
       tvlCap: caps.tvl, perDepositCap: caps.per, exitFeeBps: 10n, feeRecipient: SAFE, expectPaused: paused, routerEligible: true,
-      ...(v.kind !== "usdc" ? { navDeviationBps: NAV_GUARD_BPS, minPoolLiquidity: POOL_LIQUIDITY_FLOOR } : {}),
-      assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER } : {}),
+      ...(v.kind !== "usdc" ? { navDeviationBps: NAV_GUARD_BPS, minPoolLiquidity: POOL_LIQUIDITY_FLOOR, maxSlippageBps: BASKET_SLIPPAGE_BPS[k]! } : {}),
+      assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER, adapters: USDC_ADAPTERS.map((x) => ({ ...x })) } : {}),
     };
+  }
+
+  // issue 1705 C4: rmUSDC registered its three lending adapters at the deploy script's caps and allowed each address and each code hash, nothing else
+  const usdcVault = VAULTS.rmUSDC!.address;
+  USDC_ADAPTERS.forEach((x, i) => ch.codes.set(x.address.toLowerCase(), `0x6080${(i + 1).toString(16).padStart(4, "0")}` as Hex));
+  const adapterHashes = USDC_ADAPTERS.map((x) => keccak256(ch.codes.get(x.address.toLowerCase())!).toLowerCase());
+  ch.set(usdcVault, "adapterCount", BigInt(USDC_ADAPTERS.length));
+  ch.set(usdcVault, "adapters", (a: any[]) => {
+    const x = USDC_ADAPTERS[Number(a[0])];
+    if (!x) throw new Error("execution reverted");
+    return [x.address, x.capBps, true];
+  });
+  ch.set(usdcVault, "adapterAllowed", (a: any[]) => USDC_ADAPTERS.some((x) => x.address.toLowerCase() === String(a[0]).toLowerCase()));
+  ch.set(usdcVault, "adapterCodeHashAllowed", (a: any[]) => adapterHashes.includes(String(a[0]).toLowerCase()));
+  for (const [i, x] of USDC_ADAPTERS.entries()) {
+    ch.allowlistLog(usdcVault, SIG_ADAPTER_ALLOWED_SET, pad(x.address, { size: 32 }), true);
+    ch.allowlistLog(usdcVault, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, adapterHashes[i]! as Hex, true);
   }
 
   // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a ring of 901 slots and holds no admin.
@@ -322,7 +381,10 @@ export function buildWorld(chainId = 8453): World {
 
   const w = (f: string, o: unknown) => writeFileSync(join(manifestDir, f), JSON.stringify(o, null, 2));
   const file = (stage: string) => stageManifestFile(table, stage);
-  w(file("vault"), { chain_id: chainId, vault: VAULTS.rmUSDC.address, seed_share_receiver: SEED_RECEIVER, seed_shares: SEED_SHARES.toString(), deployer_share_balance_after: 0 });
+  w(file("vault"), {
+    chain_id: chainId, vault: VAULTS.rmUSDC.address, seed_share_receiver: SEED_RECEIVER, seed_shares: SEED_SHARES.toString(), deployer_share_balance_after: 0,
+    aave_adapter: USDC_ADAPTERS[0].address, compound_adapter: USDC_ADAPTERS[1].address, moonwell_flagship_adapter: USDC_ADAPTERS[2].address,
+  });
   w(file("registry"), { chain_id: chainId, registry: REGISTRY });
   w(file("router"), { chain_id: chainId, router: ROUTER });
   w(file("gateway"), { chain_id: chainId, gateway: GATEWAY });

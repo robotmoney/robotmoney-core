@@ -29,6 +29,11 @@
 # - fork_indexer needs the Twin fork (TWIN_RPC_URL, started by .github/actions/twin-fork at the run
 #   pin) and the publish-contracts run (the one deploy driver in this repo), because it deploys its own vault.
 #   A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool.
+# - EXECUTED FLOORS (QA plan v1 T5). Every cargo_test_require_executed.sh call here names its
+#   floor, and the floor is the number of tests the call selects, so one test fewer is red. Before
+#   T5 most calls kept the default floor of 1: the seven read-path targets (49 tests) were green with
+#   one. .github/scripts/check_executed_floors.py (suite 14) counts the tests each call selects and
+#   fails when a floor differs: adding or removing a test means editing its floor in the same PR.
 
 name: explorer-indexer-migrations-reorg
 
@@ -101,21 +106,25 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --no-run
 
+      # QA plan v1 T5: a renamed test would make this filter match nothing, and a bare cargo test
+      # passes with zero tests, so it runs through the executed-test guard too.
       - name: ABI drift gate
         working-directory: services/explorer-indexer
-        run: cargo test --lib -- abi::tests::abi_drift_gate --nocapture
+        run: |
+          CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
+            --lib -- abi::tests::abi_drift_gate --nocapture
 
-      # Vault risk_label classifier (issue 1566). Fails if zero tests ran.
+      # Vault risk_label classifier (issue 1566). Fails below its six tests.
       - name: Vault risk_label classifier lib tests
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
 
       # RPC URL redaction (issue 1729). A keyed RPC URL must never reach logs or
-      # indexer_runs.error. Fails if zero tests ran.
+      # indexer_runs.error. Fails below the eight rpc::tests (QA plan v1 T5).
       - name: RPC transport error URL redaction lib tests
         env:
-          CARGO_TEST_MIN_EXECUTED: "3"
+          CARGO_TEST_MIN_EXECUTED: "8"
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests --nocapture
@@ -137,7 +146,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=22 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test migrations -- --test-threads=1 --nocapture
 
@@ -162,7 +171,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_retry -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=9 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests indexer::tests::configured_start_block --nocapture
           CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --bin indexer -- --nocapture
@@ -178,7 +187,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ --nocapture
@@ -220,7 +229,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test catch_up_budget -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests::backoff rpc::tests::retry_after indexer::tests::catch_up --nocapture
 
       - name: Postgres env requirement
@@ -238,7 +247,7 @@ jobs:
       # tests fails RED instead of passing as a silent skip.
       - name: Consensus receipt indexing + reorg rewrite
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test consensus_receipt_indexing -- --nocapture
 
@@ -283,13 +292,15 @@ jobs:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           echo "::group::services/explorer-indexer/tests/cursor_header_reorg.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test cursor_header_reorg \
             -- --test-threads=1 --nocapture
           echo "::endgroup::"
           echo "::group::services/explorer-indexer/tests/reorg_cursor_vault_status.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 49 tests: reorg_cursor_vault_status 10, account_history 8, account_position_vote_power 2,
+          # committee_indexing 10, multi_vault 6, vault_detail 7, vault_registry 6 (QA plan v1 T5).
+          CARGO_TEST_MIN_EXECUTED=49 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
@@ -344,7 +355,8 @@ jobs:
       - name: explorer-api committee + regime + consensus-receipt endpoint tests
         run: |
           echo "::group::clients/explorer-api/tests/consensus_receipt_api.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 14 tests: committee_api 5, regime_api 1, consensus_receipt_api 8 (QA plan v1 T5).
+          CARGO_TEST_MIN_EXECUTED=14 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test committee_api \
             --test regime_api \
@@ -372,7 +384,8 @@ jobs:
       # dominated by endpoints.rs booting a seeded container per test.
       - name: explorer-api HTTP contract, CORS, router shape, schema parity
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          # 57 tests: endpoints 50, router_introspection 1, cors 4, canonical_schema 2 (QA plan v1 T5).
+          CARGO_TEST_MIN_EXECUTED=57 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \
@@ -384,7 +397,7 @@ jobs:
       # listed. Testcontainer Postgres, same Docker check as above.
       - name: explorer-api index cursor, chain head, deposits_paused, admin events (issue 1731)
         run: |
-          CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test progress_and_admin -- --test-threads=1 --nocapture
 
@@ -393,7 +406,7 @@ jobs:
       # Testcontainer Postgres, same Docker check as above.
       - name: explorer-api boot-time schema guard (compiled binary)
         run: |
-          bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=2 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test boot_schema_guard -- --nocapture
 

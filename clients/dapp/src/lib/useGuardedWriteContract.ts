@@ -11,7 +11,13 @@
  *   2. the target contract has non-empty code on Base (`eth_getCode` through the
  *      connected wallet's provider, which check (1) just established is on 8453),
  *      so an approve or deposit never goes to an address that is empty on the
- *      chain the user is actually on.
+ *      chain the user is actually on, and
+ *   3. for a deposit or an approve, keccak256 of the code of the contract that
+ *      receives the USDC (deposit target) or the allowance (approve spender)
+ *      equals its build-time pin (codePins.ts, QA plan U5, issue 1737). A missing
+ *      pin, unreadable code, no code and a different hash each refuse with a
+ *      `WriteTargetPinError` naming the cause, and nothing reaches the wallet.
+ *      A redeem needs no pin: nothing is paid or approved to its target.
  * An allowed write is also pinned to chain 8453. Be precise about what that does:
  * wagmi's `writeContract` passes `assertChainId: false`, so the pin is not itself
  * a chain assertion there. It selects the 8453 client, and viem's
@@ -19,9 +25,10 @@
  * `ChainMismatchError`. The explicit check in (1) is the guard. The pin is the
  * backstop for a wallet that moved between render and click.
  * Other env classes behave exactly like `useWriteContract`.
- * Every redeem also gets a fixed gas limit (redeemGas.ts, core issue 1758), on every class and path.
+ * A redeem of a RobotMoneyVault (rmUSDC) also gets a fixed gas limit (redeemGas.ts, core issue 1758),
+ * on every class and path. A basket vault redeem does not: it needs more than that limit (QA plan U3).
  */
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
 import { useRuntimeConfig } from "./RuntimeConfigContext";
 import {
@@ -31,7 +38,14 @@ import {
   WrongChainError,
   type WriteGuardState,
 } from "./writeChainGuard";
-import { withRedeemGasWorkaround } from "./redeemGas";
+import { robotMoneyVaultTargets, withRedeemGasWorkaround } from "./redeemGas";
+import {
+  checkCodePin,
+  parseCodePins,
+  pinnedWriteTarget,
+  WriteTargetPinError,
+  type CodePins,
+} from "./codePins";
 
 /** Current guard state: shared by the write hook and the wrong-chain screen. */
 export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean } {
@@ -43,9 +57,21 @@ export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean
 
 /** Targets already seen with code this session. Code does not disappear after Cancun. */
 const targetsWithCode = new Set<string>();
+/**
+ * `address:pin` pairs whose code matched the pin this session. Keyed by both, so a bundle
+ * with another pin for the same address checks again.
+ */
+const pinsMatched = new Set<string>();
 
 type Eip1193 = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
 type CodeSource = { getProvider: () => Promise<unknown> };
+
+/** `eth_getCode` through the connected wallet (on Base: check (1) ran first). Throws when unreadable. */
+async function readCode(source: CodeSource | undefined, address: string): Promise<unknown> {
+  const provider = (await source?.getProvider()) as Eip1193 | undefined;
+  if (!provider) throw new Error("no wallet provider");
+  return provider.request({ method: "eth_getCode", params: [address, "latest"] });
+}
 
 async function assertTargetHasCode(source: CodeSource | undefined, address: unknown) {
   if (typeof address !== "string") throw new WriteTargetCodeError(String(address), "is missing");
@@ -53,9 +79,7 @@ async function assertTargetHasCode(source: CodeSource | undefined, address: unkn
   if (targetsWithCode.has(key)) return;
   let code: unknown;
   try {
-    const provider = (await source?.getProvider()) as Eip1193 | undefined;
-    if (!provider) throw new Error("no wallet provider");
-    code = await provider.request({ method: "eth_getCode", params: [address, "latest"] });
+    code = await readCode(source, address);
   } catch {
     throw new WriteTargetCodeError(address, "could not be checked for contract code");
   }
@@ -65,10 +89,46 @@ async function assertTargetHasCode(source: CodeSource | undefined, address: unkn
   targetsWithCode.add(key);
 }
 
+/** Check (3): a deposit or approve sends funds or an allowance only to code that matches its pin. */
+async function assertTargetPinned(
+  source: CodeSource | undefined,
+  variables: unknown,
+  pins: CodePins,
+) {
+  const target = pinnedWriteTarget(variables);
+  if (target === undefined) return;
+  const pin = pins.get(target.toLowerCase());
+  if (pin === undefined) throw new WriteTargetPinError(target, "pin-missing");
+  const key = `${target.toLowerCase()}:${pin}`;
+  if (pinsMatched.has(key)) return;
+  let code: unknown;
+  try {
+    code = await readCode(source, target);
+  } catch {
+    throw new WriteTargetPinError(target, "code-unreadable");
+  }
+  const result = checkCodePin(target, code, pins);
+  if (!result.ok) throw new WriteTargetPinError(target, result.cause, result.got);
+  pinsMatched.add(key);
+}
+
+/** Checks (2) and (3), in that order, for a write already past the chain check. */
+async function assertWriteTarget(
+  source: CodeSource | undefined,
+  variables: unknown,
+  pins: CodePins,
+) {
+  await assertTargetHasCode(source, (variables as { address?: unknown }).address);
+  await assertTargetPinned(source, variables, pins);
+}
+
 export function useGuardedWriteContract() {
   const base = useWriteContract();
   const { connector } = useAccount();
   const { state } = useWriteChainGuard();
+  const env = useRuntimeConfig();
+  const robotMoneyVaults = useMemo(() => robotMoneyVaultTargets(env), [env]);
+  const codePins = useMemo(() => parseCodePins(env), [env]);
   const [refusal, setRefusal] = useState<Error | null>(null);
   const blocked = isWriteBlocked(state);
   const pinned = state.kind === "ok" ? state.targetChainId : undefined;
@@ -89,6 +149,7 @@ export function useGuardedWriteContract() {
   const pin = (variables: unknown) =>
     withRedeemGasWorkaround(
       pinned === undefined ? variables : { ...(variables as object), chainId: pinned },
+      robotMoneyVaults,
     ) as never;
 
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {
@@ -98,13 +159,13 @@ export function useGuardedWriteContract() {
       return;
     }
     if (pinned === undefined) {
-      base.writeContract(withRedeemGasWorkaround(variables) as never, options as never);
+      base.writeContract(
+        withRedeemGasWorkaround(variables, robotMoneyVaults) as never,
+        options as never,
+      );
       return;
     }
-    assertTargetHasCode(
-      connector as CodeSource | undefined,
-      (variables as { address?: unknown }).address,
-    )
+    assertWriteTarget(connector as CodeSource | undefined, variables, codePins)
       .then(() => base.writeContract(pin(variables), options as never))
       .catch((e: unknown) => refuse(e as Error, variables, options));
   }) as WriteFn;
@@ -121,10 +182,7 @@ export function useGuardedWriteContract() {
     }
     if (pinned !== undefined) {
       try {
-        await assertTargetHasCode(
-          connector as CodeSource | undefined,
-          (variables as { address?: unknown }).address,
-        );
+        await assertWriteTarget(connector as CodeSource | undefined, variables, codePins);
       } catch (e) {
         setRefusal(e as Error);
         throw e;

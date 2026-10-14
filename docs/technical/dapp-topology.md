@@ -78,6 +78,16 @@ the user signs.
 - The dapp trusts the **bundle**, not the **node**, for the pin. A
   gateway address supplied at runtime still has to present bytecode
   hashing to the pinned value before any admin write is enabled.
+- Vaults and the router carry build-time pins too (QA plan U5, issue
+  1737): `VITE_VAULT_EXPECTED_CODE_HASH` (vault address to runtime code
+  hash) and `VITE_ROUTER_EXPECTED_CODE_HASH`. On the `mainnet` class the
+  write guard refuses a deposit, or an approve, unless the code of the
+  contract that receives the USDC or the allowance hashes to its pin. A
+  missing pin, unreadable code, no code and a different hash are four
+  named refusals (`clients/dapp/src/lib/codePins.ts`). A redeem needs no
+  pin, so an exit never depends on a build setting. The 8453 stack
+  builder takes both pins from the timelock manifest and refuses to start
+  when a vault or the router has none.
 
 #### Decision — the code-hash pin is build-time-only (issue #1375)
 
@@ -115,6 +125,11 @@ false for a while.
   immediately before the sign prompt.
 - The wallet's sign prompt is the canonical authorization surface,
   showing calldata derived from on-chain state, not indexer output.
+- A signing target is never taken from the indexer. The Withdraw tab
+  redeems only against the runtime-config vault or a vault the on-chain
+  VaultRegistry lists; an explorer position naming any other address is
+  refused with a visible reason, before any read or simulation against it
+  (`clients/dapp/src/lib/redeemTarget.ts`, QA plan U4).
 
 ### 5. Strict CSP, zero third-party runtime
 

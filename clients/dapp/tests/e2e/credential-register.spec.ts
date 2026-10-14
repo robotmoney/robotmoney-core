@@ -6,7 +6,8 @@
  *
  * Invariants verified here:
  *   1. Filling a valid externally-supplied agent address plus a
- *      share-receiver surfaces a structured authorizeAgent preview.
+ *      share-receiver surfaces structured commitAuthorization and
+ *      revealAuthorization previews (the calls the wallet signs, QA plan U4).
  *   2. The wallet signing button is only enabled after the structured
  *      preview renders.
  *   3. The config-export panel appears (register flow emits a config
@@ -32,7 +33,7 @@ test.beforeAll(() => {
 });
 
 test.describe("register-existing-address flow — UI invariants", () => {
-  test("structured authorizeAgent preview renders for a valid externally-supplied address", async ({
+  test("structured commit and reveal previews render for a valid externally-supplied address", async ({
     page,
   }) => {
     await openDapp(page, endpoints);
@@ -43,8 +44,12 @@ test.describe("register-existing-address flow — UI invariants", () => {
     const preview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(preview).toBeVisible();
 
-    await expect(page.getByTestId("tx-preview-fn").first()).toContainText("authorizeAgent");
-    await expect(page.getByTestId("tx-preview-effect").first()).toContainText("AGENT_ROLE");
+    // QA plan U4: the previews name the calls the wallet signs.
+    const commitPreview = page.getByTestId("authorize-commit-preview");
+    await expect(commitPreview.getByTestId("tx-preview-fn")).toHaveText("commitAuthorization");
+    const revealPreview = page.getByTestId("authorize-next-reveal-preview");
+    await expect(revealPreview.getByTestId("tx-preview-fn")).toHaveText("revealAuthorization");
+    await expect(revealPreview.getByTestId("tx-preview-effect")).toContainText("AGENT_ROLE");
 
     const refusals = await page.locator('[data-testid="refusal-reason"]').count();
     expect(refusals).toBe(0);

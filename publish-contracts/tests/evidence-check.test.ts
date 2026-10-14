@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
-import { applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
+import { applyCalldata, chainReaderFromFixture, checkEvidence, delayFloorRefusal, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, checkVaultRedeploys, checkVaultRedeploysOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
+import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,7 +84,13 @@ const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: numbe
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-interface Opts { clearData?: string; clearTarget?: string; clearDelay?: bigint; clearGap?: number; clearCalls?: number; appDelay?: bigint; appGap?: number; appCalls?: number; appData?: string; appTarget?: string; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+/** QA plan v1 C2: the event RouterGovernance.applyReceipt emits, the chain's own record of an application. */
+const GOV_EV = parseAbi(["event ReceiptApplied(bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
+const appliedLog = (from: string, receiptId: string, digest: string, vaults: string[], bps: number[]) => ({
+  address: from, topics: encodeEventTopics({ abi: GOV_EV, eventName: "ReceiptApplied", args: { receiptId: receiptId as Hex } }) as Hex[],
+  data: encodeAbiParameters([{ type: "bytes32" }, { type: "address[]" }, { type: "uint256[]" }], [digest as Hex, vaults as Hex[], bps.map(BigInt)]),
+});
+interface Opts { appEvent?: false | { from?: string; digest?: string; vaults?: string[]; bps?: number[] }; clearData?: string; clearTarget?: string; clearDelay?: bigint; clearGap?: number; clearCalls?: number; appDelay?: bigint; appGap?: number; appCalls?: number; appData?: string; appTarget?: string; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -114,7 +121,9 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     const target = o.appTarget ?? GOV;
     const sched = Array.from({ length: o.appCalls ?? 1 }, (_, k) => log("CallScheduled", id, o.appDelay, target, data, BigInt(k)));
     add(r.schedule_tx, sched, t0);
-    add(r.execute_tx, [log("CallExecuted", id, 0n, target, data)], t0 + (o.appGap ?? 172800));
+    // QA plan v1 C2: the execute tx carries the governance contract's ReceiptApplied event (appEvent false drops it, an object plants another one)
+    const evt = o.appEvent === false ? [] : [appliedLog(o.appEvent?.from ?? GOV, r.receipt_id, o.appEvent?.digest ?? r.payload_digest, o.appEvent?.vaults ?? r.vaults, o.appEvent?.bps ?? r.bps)];
+    add(r.execute_tx, [log("CallExecuted", id, 0n, target, data), ...evt], t0 + (o.appGap ?? 172800));
   });
   (ev.voted_weights_clears ?? []).forEach((r: any, i: number) => {
     const id = 90 + i;
@@ -273,6 +282,20 @@ describe("receipt_applications: one timelock call, applyReceipt on the governanc
     expect(await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3600n, appGap: 3601 }), 3600)).toEqual([]);
     expect((await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3599n, appGap: 3599 }), 3600)).join("\n")).toContain("under 3600 s");
   });
+  test("forged receipt_applications entry refused: the entry must be the receipt, digest and vector of the chain's ReceiptApplied event (QA plan v1 C2, issue 1701)", async () => {
+    // the entry is edited after the run to the vector the router drifted to: the chain applied another one
+    expect(await chain({}, (e) => { e.receipt_applications[0].bps = [6000, 2000, 2000]; e.receipt_applications[0].effective_bps = [6000, 2000, 2000]; })).toContain("is not the vector the chain applied");
+    // every recorded field and the timelock call agree, and still the chain's event names another vector or digest
+    expect(await chain({ appEvent: { bps: [6000, 2000, 2000] } })).toContain("is not the vector the chain applied");
+    expect(await chain({ appEvent: { digest: h(0xd17) } })).toContain("ReceiptApplied names payload digest");
+    // no ReceiptApplied event, or one from another contract than the governance contract: nothing was applied
+    expect(await chain({ appEvent: false })).toContain("0 ReceiptApplied events");
+    expect(await chain({ appEvent: { from: a(31) } })).toContain("0 ReceiptApplied events");
+    // the standalone check of a Twin run manifest is the same function
+    const e = app();
+    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appEvent: { bps: [6000, 2000, 2000] } }))).join("\n")).toContain("is not the vector the chain applied");
+    expect(await checkReceiptApplicationsOnChain(e, stub(e))).toEqual([]);
+  });
   test("receipt_applications: the template lists the block and an empty list passes", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
     expect(tpl.receipt_applications).toEqual([]);
@@ -307,6 +330,18 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
     const nohash = run({ receipt_applications: [{ ...entry, execute_tx: "" }] });
     expect(nohash.code).toBe(1);
     expect(nohash.err).toContain("execute_tx is missing");
+  });
+});
+
+describe("issue 1701: --delay-floor against chain 8453", () => {
+  test("a floor below the 8453 floor of the deployment kind is refused when the --rpc reads chain 8453; a Twin run keeps its own shorter floor", () => {
+    expect(delayFloorRefusal(3600, 8453, "production")).toContain("below 172800 s");
+    expect(delayFloorRefusal(172799, 8453, "production")).toContain("below 172800 s");
+    expect(delayFloorRefusal(172800, 8453, "production")).toBeUndefined();
+    expect(delayFloorRefusal(899, 8453, "rehearsal")).toContain("below 900 s");
+    expect(delayFloorRefusal(900, 8453, "rehearsal")).toBeUndefined();
+    expect(delayFloorRefusal(3600, 918453, "production")).toBeUndefined();
+    expect(delayFloorRefusal(1, 918453, "rehearsal")).toBeUndefined();
   });
 });
 
@@ -614,5 +649,118 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
     expect(tpl.voted_weights_clears).toEqual([]);
     expect(checkEvidence({ ...good(), voted_weights_clears: [] })).toEqual([]);
+  });
+});
+
+describe("vault_redeploys: new_vault is the contract the deploy created (QA plan v1 C2, issue 1701)", () => {
+  const DEPLOYER = a(20), OLD = a(6) as Hex, NEW = a(0x3012), REG = a(21) as Hex, ROUTER = a(40), ASSET = a(0xc0de) as Hex;
+  const FINAL = [a(5), NEW, a(7), a(8)], BPS4 = [8550, 525, 575, 350];
+  const entry = (): any => ({
+    step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: tl, deployer: DEPLOYER, core_sha: "ab".repeat(20),
+    deploy_start_nonce: 40, deploy_end_nonce: 42, deploy_count: 2, deploy_tx_hashes: [h(0x501), h(0x502)], deploy_receipt_statuses: [1, 1], registry_name: "Robot Money Protocol", asset: ASSET,
+    vaults: FINAL, bps: BPS4, router_vault_cap: "250000000", voted_weights_active: false, effective_vaults: FINAL, effective_bps: BPS4, old_vault_status: "Retired", new_vault_status: "Active",
+    operation_id: h(0x577), schedule_tx: h(0x510), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(0x511), execute_status: 1, execute_block_timestamp: T0 + 900,
+  });
+  const ev = (r: any, over: object = {}) => ({ deployment_kind: "rehearsal", registry: { address: REG }, timelock: { address: tl }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [r], ...over });
+  /** The chain the entry describes: deploy tx 0 is a CREATE of `created` by `creator`, deploy tx 1 a call, then the seven-call batch for the ENTRY's vaults and cap, one delay apart. */
+  const chainOf = (r: any, o: { created?: string; creator?: string } = {}): ChainReader => {
+    const want = buildRedeployCalls({ registry: REG, router: ROUTER as Hex, oldVault: OLD, newVault: r.new_vault, registryName: r.registry_name, asset: ASSET, finalVaults: r.vaults, finalBps: r.bps, vaultCap: r.router_vault_cap });
+    const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
+    const add = (hash: string, logs: any[], ts: number, extra: object = {}) => { receipts.set(hash, { status: "success", blockNumber: bn, logs, ...extra }); blocks.set(bn++, ts); };
+    add(r.deploy_tx_hashes[0], [], 1, { from: o.creator ?? DEPLOYER, contractAddress: o.created ?? NEW });
+    add(r.deploy_tx_hashes[1], [], 1, { from: DEPLOYER, contractAddress: null });
+    add(r.schedule_tx, want.map((c, i) => log("CallScheduled", 0x577, 900n, c.target, c.data, BigInt(i))), T0);
+    add(r.execute_tx, want.map((c, i) => log("CallExecuted", 0x577, 0n, c.target, c.data, BigInt(i))), T0 + 900);
+    return {
+      getChainId: async () => 918453, getTransactionCount: async () => 0,
+      getTransactionReceipt: async ({ hash }) => { const x = receipts.get(hash); if (!x) throw new Error("not found"); return x; },
+      getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
+      readContract: async () => { throw new Error("unused"); },
+    };
+  };
+  test("an entry whose new_vault is the deployer's CREATE passes the offline and the chain check", async () => {
+    expect(checkVaultRedeploys(ev(entry()), 900)).toEqual([]);
+    expect(await checkVaultRedeploysOnChain(ev(entry()), chainOf(entry()), 900)).toEqual([]);
+  });
+  test("vault_redeploys entry whose new_vault is not the created contract is refused", async () => {
+    const e = entry();
+    // the Safe ran a batch for NEW (the entry and the batch agree), but no recorded deploy transaction created NEW: the deploy created another contract
+    const p = (await checkVaultRedeploysOnChain(ev(e), chainOf(e, { created: a(0x3013) }), 900)).join("\n");
+    expect(p).toContain(`new_vault ${NEW} is not the contract a recorded deploy transaction created`);
+    expect(p).toContain(a(0x3013));
+    // NEW was created, but by another sender than the run's deployer
+    expect((await checkVaultRedeploysOnChain(ev(e), chainOf(e, { creator: a(0xbad) }), 900)).join("\n")).toContain("not by the deployer");
+    // offline: the entry's deployer must be the run's deployer when the evidence names one
+    expect(checkVaultRedeploys(ev(e, { deployer: a(0xbad) }), 900).join("\n")).toContain("is not the run's deployer");
+    expect(checkVaultRedeploys(ev(e, { deployer: DEPLOYER }), 900)).toEqual([]);
+  });
+});
+
+describe("evidence secret scan: a hash field exempts its own value, never its line (QA plan v1 E8, issue 1689)", () => {
+  // Synthetic shapes only: none is a real key, hash or receipt.
+  const KEY = "0x" + "c3".repeat(32);
+  const SHA = "5d".repeat(32);
+  /** Writes the files into a fresh folder and scans it: each hit as `name:line: rule`. */
+  const scan = (files: Record<string, string>): string[] => {
+    const d = mkdtempSync(join(tmpdir(), "evidence-e8-"));
+    for (const [n, body] of Object.entries(files)) writeFileSync(join(d, n), body);
+    return scanEvidenceFolder(d).map((x) => x.slice(d.length + 1));
+  };
+  const flagged = (hits: string[], rule = "64-hex") => hits.filter((x) => x.includes(rule)).map((x) => x.split(":")[0]).sort();
+
+  test("a privateKey line is not exempt", () => {
+    // the end-of-line shape `"name": "0x<64 hex>",` once passed under any name: a secret name never passes, as a value, a list or a snake_case key
+    const run = JSON.stringify({ stages: { libs: { txHash: h(1), privateKey: KEY, status: "done" } } }, null, 2) + "\n";
+    expect(run).toContain(`"privateKey": "${KEY}",`);
+    const line = run.split("\n").findIndex((l) => l.includes("privateKey")) + 1;
+    const hits = scan({ "publish-run.json": run });
+    expect(hits).toContain(`publish-run.json:${line}: 64-hex value (private key shape)`);
+    expect(hits).toContain(`publish-run.json:${line}: secret assignment`);
+    expect(hits.every((x) => x.startsWith(`publish-run.json:${line}:`))).toBe(true); // the txHash line above it stays clean
+    expect(flagged(scan({
+      "snake.json": JSON.stringify({ deployer: { private_key: KEY, note: "x" } }, null, 2) + "\n",
+      "list.json": JSON.stringify({ signerKeys: [KEY] }, null, 2) + "\n",
+      "hash-named.json": JSON.stringify({ keyHash: KEY, note: "x" }, null, 2) + "\n",
+    }))).toEqual(["hash-named.json", "list.json", "snake.json"]);
+  });
+
+  test("a hash word elsewhere on the line exempts nothing: a key beside a tx hash, and a bare 64-hex on a hash or tx line, are flagged", () => {
+    expect(flagged(scan({
+      "log.jsonl": JSON.stringify({ event: "tx.sent", hash: h(2), signer: KEY }) + "\n",
+      "notes.txt": `deploy tx ${h(3)} signed with ${KEY}\n`,
+      "env.txt": `PRIVATE_KEY=${KEY} # salt for the libs tx\n`,
+      "bare.json": JSON.stringify({ txHash: "ab".repeat(32) }, null, 2) + "\n",
+      "bare.txt": `block hash ${"ab".repeat(32)}\n`,
+    }))).toEqual(["bare.json", "bare.txt", "env.txt", "log.jsonl", "notes.txt"]);
+  });
+
+  test("a sha256 value passes only directly under configHashes or config_hashes", () => {
+    const iso = { chainId: 8453, configHashes: { "config/dex-pools.json": `sha256:${SHA}` }, codehashes: { "vault[USDC]": h(4) } };
+    expect(scan({
+      "isomorphism-8453.json": JSON.stringify(iso, null, 2) + "\n",
+      "one-line.json": JSON.stringify({ configHashes: iso.configHashes }) + "\n",
+      "snake.json": JSON.stringify({ config_hashes: { "config/rwa-assets.json": `sha256:${SHA}` } }, null, 2) + "\n",
+    })).toEqual([]);
+    expect(flagged(scan({
+      "elsewhere.json": JSON.stringify({ artifacts: { "out/Vault.json": `sha256:${SHA}` } }, null, 2) + "\n",
+      "nested.json": JSON.stringify({ configHashes: { extra: { "config/x.json": `sha256:${SHA}` } } }, null, 2) + "\n",
+      "text.txt": `image sha256:${SHA}\n`,
+    }))).toEqual(["elsewhere.json", "nested.json", "text.txt"]);
+  });
+
+  test("the public hash fields a run writes still scan clean", () => {
+    const manifest = {
+      stages: { libs: { status: "done", txHashes: [h(5), h(6)], firstBlock: 10 } },
+      govern: { "unpause-USDC": { scheduled: { txHash: h(7), operation_id: h(8), salt: h(9), predecessor: h(0) } } },
+      receipt_applications: [{ receipt_id: h(10), payload_digest: h(11), schedule_tx: h(12) }],
+    };
+    const fixture = { receipts: [{ hash: h(13), logs: [{ address: a(1), topics: [h(14), h(15)], data: h(16) }] }], reads: { [`${a(2)}:DEFAULT_ADMIN_ROLE`]: h(0) } };
+    expect(scan({
+      "publish-run.json": JSON.stringify(manifest, null, 2) + "\n",
+      "chain-fixture.json": JSON.stringify(fixture, null, 2) + "\n",
+      "frozen-counts.json": JSON.stringify({ measured: { crossChecked: { sha: "ab".repeat(20), fileHash: SHA } } }, null, 2) + "\n",
+      "govern-stdout.jsonl": [JSON.stringify({ row: "unpause-USDC", phase: "scheduled", txHash: h(17), status: 1 }), JSON.stringify({ event: "stage.done", tx_hashes: [h(18), h(19)] })].join("\n") + "\n",
+      "forge.txt": `[Success] Hash: ${h(20)}\nTransaction hash: ${h(21)}\nblockHash            ${h(22)}\n`,
+    })).toEqual([]);
   });
 });

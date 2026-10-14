@@ -18,6 +18,8 @@ export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const WEIGHT_SETTER_ROTATOR_ROLE = role("WEIGHT_SETTER_ROTATOR_ROLE");
 export const WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE = role("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
+/** RobotMoneyVault (rmUSDC) only: the rebalance keeper. The deploy grants it to no one, and the verifier asserts no holder (issue 1705 C5). */
+export const KEEPER_ROLE = role("KEEPER_ROLE");
 export const DEPOSIT_PAUSER_ROLE = role("DEPOSIT_PAUSER_ROLE");
 export const PROPOSER_ROLE = role("PROPOSER_ROLE");
 export const EXECUTOR_ROLE = role("EXECUTOR_ROLE");
@@ -38,6 +40,12 @@ export const SAFE_SENTINEL: Address = "0x000000000000000000000000000000000000000
 export const SIG_AGENT_AUTHORIZED = "AgentAuthorized(address,address,uint64,uint256,uint256,address)";
 export const SIG_AGENT_OWNERSHIP = "AgentOwnershipTransferred(address,address,address)";
 export const SIG_ROLE_GRANTED = "RoleGranted(bytes32,address,address)";
+// QA plan v1 C2 (issue 1701): scanned to read the applied weight vector from the chain (the weight setter's applyReceipt, the router's clear), never from the run manifest.
+export const SIG_RECEIPT_APPLIED = "ReceiptApplied(bytes32,bytes32,address[],uint256[])";
+export const SIG_VOTED_WEIGHTS_CLEARED = "VotedWeightsCleared()";
+// Issue 1705 C4: replayed to prove the rmUSDC allowlists hold exactly the adapters the vault stage registered (a mapping cannot be listed any other way).
+export const SIG_ADAPTER_ALLOWED_SET = "AdapterAllowedSet(address,bool)";
+export const SIG_ADAPTER_CODE_HASH_ALLOWED_SET = "AdapterCodeHashAllowedSet(bytes32,bool)";
 
 export interface CoreContract { name: string; file: string; field: string; artifact: string }
 

@@ -4099,6 +4099,24 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "setAdapterMaxExposure",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "cap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "setExitFeeBps",
     inputs: [
       {
@@ -4507,6 +4525,31 @@ export const robotMoneyVaultAbiGenerated = [
       },
       {
         name: "lossAmount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "AdapterMaxExposureSet",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "adapter",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "cap",
         type: "uint256",
         indexed: false,
         internalType: "uint256",
@@ -5128,6 +5171,22 @@ export const robotMoneyVaultAbiGenerated = [
         name: "neededRole",
         type: "bytes32",
         internalType: "bytes32",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "AdapterAlreadyActive",
+    inputs: [
+      {
+        name: "adapter",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
       },
     ],
   },
@@ -5778,25 +5837,6 @@ export const registryAbiGenerated = [
     outputs: [
       {
         name: "eligible",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "isVaultAllExact",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "exact",
         type: "bool",
         internalType: "bool",
       },
@@ -7414,6 +7454,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "DeadlineExpired",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "DuplicateVault",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

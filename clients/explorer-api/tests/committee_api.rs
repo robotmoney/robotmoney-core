@@ -19,7 +19,8 @@ use explorer_api::{router, AppState};
 
 const PRIMARY_CHAIN_ID: i64 = 8453;
 
-/// All migrations in order. The committee migration (0014) is the last one.
+/// Migrations in order, through 0019, which keys `committee_votes` by the
+/// emitting policy (DI-10). The track-record route reads that column.
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0001_minimum_tables.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql"),
@@ -43,7 +44,21 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0012_vault_status_events.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0013_vote_power_tally.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0014_committee_tables.sql"),
+    include_str!("../../../services/explorer-indexer/migrations/0015_consensus_receipts.sql"),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0016_consensus_receipts_contract_scope.sql"
+    ),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0017_admin_events_and_chain_head.sql"
+    ),
+    include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0019_committee_votes_contract_scope.sql"
+    ),
 ];
+
+/// The InvestmentCommitteePolicy deployment every seeded vote names.
+const IC_POLICY: [u8; 20] = [0xCCu8; 20];
 
 struct TestServer {
     pub addr: SocketAddr,
@@ -149,32 +164,34 @@ async fn seed_committee_fixture(pool: &sqlx::PgPool) {
     // agent_a: two votes — one verified (vault_a, Overweight, 7000), one unverified (vault_b).
     sqlx::query(
         "INSERT INTO committee_votes \
-         (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+         (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
           stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
           timestamp_secs, verified) \
-         VALUES ($1, 1, 200, 0, $2, $3, $4, 0, 7000, 90, 'https://example.com/v1', $5, 1000000, TRUE)",
+         VALUES ($1, $6, 1, 200, 0, $2, $3, $4, 0, 7000, 90, 'https://example.com/v1', $5, 1000000, TRUE)",
     )
     .bind(PRIMARY_CHAIN_ID)
     .bind(&tx1)
     .bind(&agent_a)
     .bind(&vault_a)
     .bind(&vote_hash)
+    .bind(&IC_POLICY[..])
     .execute(pool)
     .await
     .unwrap();
 
     sqlx::query(
         "INSERT INTO committee_votes \
-         (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+         (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
           stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
           timestamp_secs, verified) \
-         VALUES ($1, 2, 210, 0, $2, $3, $4, 1, 5000, 60, 'https://example.com/v2', $5, 1001000, FALSE)",
+         VALUES ($1, $6, 2, 210, 0, $2, $3, $4, 1, 5000, 60, 'https://example.com/v2', $5, 1001000, FALSE)",
     )
     .bind(PRIMARY_CHAIN_ID)
     .bind(&tx2)
     .bind(&agent_a)
     .bind(&vault_b)
     .bind(&vote_hash)
+    .bind(&IC_POLICY[..])
     .execute(pool)
     .await
     .unwrap();
@@ -182,16 +199,17 @@ async fn seed_committee_fixture(pool: &sqlx::PgPool) {
     // agent_b: one verified vote on vault_a (Neutral, 5000).
     sqlx::query(
         "INSERT INTO committee_votes \
-         (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+         (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
           stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
           timestamp_secs, verified) \
-         VALUES ($1, 3, 150, 0, $2, $3, $4, 1, 5000, 70, 'https://example.com/v3', $5, 900000, TRUE)",
+         VALUES ($1, $6, 3, 150, 0, $2, $3, $4, 1, 5000, 70, 'https://example.com/v3', $5, 900000, TRUE)",
     )
     .bind(PRIMARY_CHAIN_ID)
     .bind(&tx3)
     .bind(&agent_b)
     .bind(&vault_a)
     .bind(&vote_hash)
+    .bind(&IC_POLICY[..])
     .execute(pool)
     .await
     .unwrap();
@@ -272,6 +290,14 @@ async fn get_committee_track_record_returns_vote_history() {
     assert_eq!(votes[0]["vote_id"], 2);
     assert_eq!(votes[1]["vote_id"], 1);
 
+    // Each vote names the policy deployment that emitted it (DI-10).
+    for vote in votes {
+        assert_eq!(
+            vote["contract_address"],
+            format!("0x{}", hex::encode(IC_POLICY))
+        );
+    }
+
     // Freshness.
     assert_eq!(body["block_number"], 1000);
 }
@@ -340,10 +366,10 @@ async fn committee_tilts_count_one_latest_signal_per_member() {
     for i in 0..5i64 {
         sqlx::query(
             "INSERT INTO committee_votes \
-             (chain_id, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
+             (chain_id, contract_address, vote_id, block_number, log_index, tx_hash, agent_address, vault_address, \
               stance, target_weight_bps, confidence, rationale_uri, vote_json_hash, \
               timestamp_secs, verified) \
-             VALUES ($1, $2, 300, $3, $4, $5, $6, 0, $7, 90, 'https://example.com/f', $8, $9, TRUE)",
+             VALUES ($1, $10, $2, 300, $3, $4, $5, $6, 0, $7, 90, 'https://example.com/f', $8, $9, TRUE)",
         )
         .bind(PRIMARY_CHAIN_ID)
         .bind(100 + i)
@@ -356,6 +382,7 @@ async fn committee_tilts_count_one_latest_signal_per_member() {
         // A caller-supplied timestamp that claims to be oldest must not make
         // the chain-latest vote lose.
         .bind(1i64)
+        .bind(&IC_POLICY[..])
         .execute(&s._pool)
         .await
         .unwrap();

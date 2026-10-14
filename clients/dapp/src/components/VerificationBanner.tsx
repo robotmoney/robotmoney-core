@@ -3,9 +3,11 @@
 /**
  * VerificationBanner — gateway bytecode hash verification status.
  * Rendered at the app shell so the refusal banner is visible before
- * wallet connect / before the Agents panel mounts.
+ * wallet connect / before the Agents panel mounts. A refusal names its
+ * cause in one sentence (QA plan U5, finding DR-9).
  */
 import type { VerificationState } from "../lib/useGatewayVerifier";
+import { describeVerificationCause } from "../lib/gatewayVerifier";
 
 type Props = Readonly<{
   state: VerificationState;
@@ -24,7 +26,10 @@ export function VerificationBanner({ state, refresh }: Props) {
         )}
         {state.status === "refused" && (
           <p data-testid="gateway-verification-refused" className="unsafe-banner">
-            <strong>Gateway verification refused — admin writes disabled.</strong> {state.reason}{" "}
+            <strong>Gateway verification refused — admin writes disabled.</strong>{" "}
+            <span data-testid="gateway-verification-cause" data-cause={state.cause}>
+              {describeVerificationCause(state.cause)}
+            </span>{" "}
             <button type="button" data-testid="gateway-verification-retry" onClick={refresh}>
               Re-verify
             </button>

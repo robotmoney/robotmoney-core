@@ -10,11 +10,12 @@
 # (b) form-vote.sh produces schema-conformant vote JSON (ajv-validated against
 #     schemas/committee-vote.json) for all three regime stances,
 # (c) check-preflight.sh fails closed with MissingICConfig when
-#     ic_contract_address is absent from config,
+#     ic_policy_address is absent from config,
 # (d) check-preflight.sh fails closed with RationaleURIUnreachable when the
 #     rationale URI is not reachable,
-# (e) check-preflight.sh fails closed with AgentNotRegistered when rmpc
-#     returns that error variant,
+# (e) check-preflight.sh fails closed with AgentNotRegistered when the real
+#     rmpc reads hasRole(COMMITTEE_AGENT_ROLE, agent) as false, and with
+#     AgentRoleUnreadable when the role cannot be read (review finding DR-1),
 # (f) no restricted paths (contracts/, crates/, clients/rust-payment-client/,
 #     services/) are touched IN THE SAME CHANGE SET as the plugin — a coupling
 #     guard, not a repo-wide veto (see WHY THE CHECKOUT IS FULL-DEPTH below), and
@@ -48,7 +49,9 @@
 # above): an old cached URL into core's onboarding paths should now 404, not
 # redirect. test-onboarding-payload-recipe.sh and the "Install Rust
 # toolchain" / "Cargo cache" / "Build rmpc" steps that only existed to support
-# it were removed along with it — see docs/technical/mcp-decision.md.
+# it were removed along with it — see docs/technical/mcp-decision.md. Those
+# three steps are back for a different reason: AC-2..AC-4 run the real rmpc
+# (DR-1, see "WHY THE SUITE IS MOCKED" below).
 #
 # WHY THERE IS NO paths: FILTER (changed in #1199)
 # The predecessor of this suite was scoped to plugins/robotmoney-committee/**.
@@ -60,8 +63,12 @@
 #
 # WHY THE SUITE IS MOCKED, AND WHERE IT IS NOT OFFLINE
 # CI has no network access to robotmoney.net and no live IC contract, so
-# run-tests.sh (AC-1..AC-4, plugin/skill structure) uses fixture files and a
-# fake rmpc shell script to stay deterministic and fast. One step is NOT
+# run-tests.sh (AC-1..AC-4, plugin/skill structure) uses fixture files, a
+# loopback HTTP server and a loopback JSON-RPC stub to stay deterministic. The
+# rmpc it drives is NOT mocked: a fake rmpc script once printed exactly what the
+# preflight grepped for, which kept a guard green that passed every agent
+# (review finding DR-1). So this job builds rmpc and passes it in as RMPC_BIN.
+# One step is NOT
 # offline: `npm ci` installs the lockfile-pinned ajv validator from
 # registry.npmjs.org, so a registry outage reds this job for a reason unrelated
 # to the change under test. That is the suite's only external dependency.
@@ -129,7 +136,9 @@ jobs:
   robotmoney-swarm:
     name: robotmoney-swarm
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: the job now builds rmpc (DR-1), and a cold cargo cache needs
+    # several minutes of that budget.
+    timeout-minutes: 20
     env:
       # Scoped unit tests of one plugin's helpers and manifests, mocked apart
       # from the lockfile-pinned `npm ci` that installs the ajv validator.
@@ -158,6 +167,18 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build rmpc
+        # AC-2..AC-4 drive check-preflight.sh against the REAL rmpc (DR-1). A
+        # build failure here is a red job, never a skip: run-tests.sh refuses
+        # to run the preflight assertions without an rmpc binary.
+        run: cargo build --locked -p rust-payment-client --bin rmpc
+
       - name: Assert the renamed test entrypoint exists
         # Fails loudly if the tree moves again without this workflow following.
         # Without this, a missing script would be a confusing bash error; with
@@ -173,6 +194,8 @@ jobs:
           # Empty on push/dispatch events, where the guard falls back to
           # origin/dev (present thanks to fetch-depth: 0). Never guessed.
           SWARM_RESTRICTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # The binary the "Build rmpc" step produced.
+          RMPC_BIN: ${{ github.workspace }}/target/debug/rmpc
         run: |
           set -euo pipefail
           bash plugins/robotmoney-swarm/tests/run-tests.sh | tee swarm-tests.log
@@ -200,7 +223,7 @@ jobs:
           # minimum gets edited down, so any slack between the two numbers
           # re-opens exactly the window the check exists to close. They move
           # together, in the same commit.
-          if [[ "$count" -lt 101 ]]; then
-            echo "::error::only $count assertions executed (expected >= 101, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 109 ]]; then
+            echo "::error::only $count assertions executed (expected >= 109, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi

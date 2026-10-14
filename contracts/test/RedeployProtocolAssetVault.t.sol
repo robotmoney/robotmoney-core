@@ -2,6 +2,7 @@
 // Canonical: docs/operations/contract-release-runbooks.md — "Redeploy one vault into a live deployment" (issue 1796)
 pragma solidity ^0.8.24;
 
+import {Vm} from "forge-std/Vm.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -30,6 +31,8 @@ contract RedeployLegVault is ERC20 {
 ///         the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the
 ///         timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is
 ///         replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
+///         QA plan v1 E3: the batch also copies the old vault's router cap to the new vault, and the script pauses the new vault
+///         before its first asset is added.
 contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
     RedeployProtocolAssetVault internal script;
     DeployProtocolAssetVault internal launch;
@@ -38,6 +41,8 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
     address internal timelock = makeAddr("timelock");
     address internal emergency = makeAddr("emergency");
     address internal routerAdmin = makeAddr("routerAdmin");
+    /// @dev The old vault's per-leg router cap. Any nonzero value: a new address reads 0, which the router treats as uncapped.
+    uint256 internal constant OLD_ROUTER_CAP = 250 * 1e6;
 
     RedeployLegVault internal legUsdc;
     RedeployLegVault internal legAgent;
@@ -73,15 +78,18 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         registry.setRouterEligible(address(legRwa), true);
         vm.stopPrank();
 
-        vm.prank(routerAdmin);
+        vm.startPrank(routerAdmin);
         router.setDefaultWeights(_launchVaults(), _launchBps());
+        router.setVaultCap(address(oldProto), OLD_ROUTER_CAP);
+        // The timelock handover of the router (DeployTimelock): the timelock holds ADMIN_ROLE, which the batch's setVaultCap needs.
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        vm.stopPrank();
         vm.startPrank(deployer);
         registry.setRouter(address(router));
         // The timelock handover of the registry: grant first, then drop the deployer.
         registry.grantRole(registry.ADMIN_ROLE(), timelock);
         registry.revokeRole(registry.ADMIN_ROLE(), deployer);
         vm.stopPrank();
-        // The router's ADMIN_ROLE sits with the router admin in this fixture: the batch never calls the router directly.
     }
 
     function _meta(string memory name) internal view returns (VaultRegistry.VaultMetadata memory) {
@@ -163,6 +171,36 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         assertEq(v.registry(), address(0), "still unlinked");
     }
 
+    /// @dev QA plan v1 E3 (review F2): the redeploy pauses the vault right after creating it, before the first `addAsset`. Once an asset is
+    ///      active `maxDeposit` opens, so the earlier add-then-pause order left a window in which a direct deposit into a vault of a live
+    ///      deployment minted shares before the ORA-4 guard was set. The vault's own log order shows the pause came first and was never
+    ///      undone, and `deposit` reverts `DepositsArePaused` (its first check) for as long as the pause holds.
+    function test_redeploy_depositRevertsBetweenCreationAndFirstAddAsset() public {
+        vm.recordLogs();
+        BasketVault v = _redeploy();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 none = type(uint256).max;
+        uint256 paused = none;
+        uint256 firstAsset = none;
+        uint256 unpaused;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(v) || logs[i].topics.length == 0) continue;
+            bytes32 t = logs[i].topics[0];
+            if (t == BasketVault.DepositsPaused.selector && paused == none) paused = i;
+            if (t == BasketVault.AssetAdded.selector && firstAsset == none) firstAsset = i;
+            if (t == BasketVault.DepositsUnpaused.selector) unpaused++;
+        }
+        assertTrue(firstAsset != none, "the script added the config's assets");
+        assertTrue(paused != none, "the script paused the vault");
+        assertLt(paused, firstAsset, "paused before the first addAsset");
+        assertEq(unpaused, 0, "the script never reopens it");
+
+        address holder = makeAddr("holder");
+        vm.prank(holder);
+        vm.expectRevert(BasketVault.DepositsArePaused.selector);
+        v.deposit(1e6, holder);
+    }
+
     // ─── The govern row's batch, on the real registry and router ─────────────
 
     /// @dev Five legs while both vaults are eligible: the old leg keeps its 525 and the new leg takes 0.
@@ -190,11 +228,13 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         v[1] = newVault;
     }
 
-    /// @dev The six calls of the govern row, in its order: the link first, so the vault is bound before it is registered.
+    /// @dev The seven calls of the govern row, in its order: the link first, so the vault is bound before it is registered, then the cap,
+    ///      so the vault is capped before it becomes eligible.
     function _runBatch(BasketVault v) internal {
         vm.startPrank(timelock);
         v.setRegistry(address(registry));
         registry.registerVault(address(v), _meta("Robot Money Protocol"));
+        router.setVaultCap(address(v), router.vaultCap(address(oldProto)));
         (address[] memory five, uint256[] memory fiveBps) = _fiveLegs(address(v));
         registry.migrateEligibility(address(v), true, five, fiveBps);
         registry.migrateEligibility(address(oldProto), false, _newLegs(address(v)), _launchBps());
@@ -230,6 +270,36 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         assertEq(bps[2], 575);
         assertEq(bps[3], 350);
         assertFalse(router.votedWeightsActive(), "no voted vector");
+    }
+
+    /// @dev QA plan v1 E3 (review F2): `vaultCap` is keyed by address and 0 is uncapped, so the new address starts with no per-leg cap.
+    ///      The batch's third call copies the old vault's cap before the new vault becomes eligible: router.vaultCap(new) == vaultCap(old).
+    function test_batch_givesTheNewVaultTheOldVaultsRouterCap() public {
+        BasketVault v = _redeploy();
+        assertEq(router.vaultCap(address(v)), 0, "a new address starts uncapped");
+        _runBatch(v);
+        assertEq(router.vaultCap(address(v)), OLD_ROUTER_CAP, "the new vault carries the old cap");
+        assertEq(
+            router.vaultCap(address(v)),
+            router.vaultCap(address(oldProto)),
+            "router.vaultCap(new) == router.vaultCap(old)"
+        );
+    }
+
+    /// @dev The cap call runs as the timelock on the router: without the router's ADMIN_ROLE the whole batch reverts, which is why the
+    ///      govern row refuses to schedule unless the timelock holds it.
+    function test_batch_capCallNeedsTheTimelockAsRouterAdmin() public {
+        BasketVault v = _redeploy();
+        bytes32 adminRole = router.ADMIN_ROLE();
+        vm.prank(routerAdmin);
+        router.revokeRole(adminRole, timelock);
+        vm.prank(timelock);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, timelock, adminRole
+            )
+        );
+        router.setVaultCap(address(v), OLD_ROUTER_CAP);
     }
 
     function test_batch_retireBeforeMigrateRevertsInContract() public {

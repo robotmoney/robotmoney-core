@@ -406,12 +406,19 @@ is the schema stub that unblocks the implementation issue.
 let registered_vaults: Vec<Address> = db.list_active_vault_addresses(cfg.chain_id).await?;
 ```
 
-`list_active_vault_addresses` reads:
+The query reads every registered vault, whatever its status (QA plan X2, DI-2):
 
 ```sql
 SELECT vault_address FROM vaults
-WHERE chain_id = $1 AND status = 0  -- 0 = Active
+WHERE chain_id = $1  -- Active, DepositsPaused and Retired alike
 ```
+
+A DepositsPaused or Retired vault still has holders who redeem from it (ADR-0009), so its
+`Withdraw` logs, positions and snapshots must keep coming. An Active-only set lost them, and a
+retired vault's last snapshot stayed as its TVL forever. Status is filtered only in product views:
+`/v1/stats.total_tvl` leaves Retired vaults out, and `/v1/vaults` lists every vault with its
+`status` ([indexer.rs `run_inner`](../../services/explorer-indexer/src/indexer.rs), test
+`multi_vault::retired_vault_withdrawals_still_index_and_snapshot`).
 
 The list is used to:
 

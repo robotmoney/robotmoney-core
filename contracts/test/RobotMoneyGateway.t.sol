@@ -12,6 +12,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {AgentConsent} from "./helpers/AgentConsent.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's
 ///      balance-delta defense (`FeeOnTransferDetected`). Charges 1% on transfer.
@@ -209,6 +210,13 @@ contract RobotMoneyGatewayTest is Test {
         gateway.authorizeAgent(who, p);
     }
 
+    /// @dev `agent`'s EIP-712 consent for `owner` as revealer and share
+    ///      receiver at its current nonce (issue #1791). Build it before
+    ///      `vm.prank`: it reads the nonce from the gateway.
+    function _agentConsent(address owner) internal view returns (bytes memory) {
+        return AgentConsent.sign(AgentConsent.keyOf("agent"), address(gateway), owner, owner);
+    }
+
     function _fundAndApprove(address who, uint256 amt) internal {
         usdc.mint(who, amt);
         vm.prank(who);
@@ -368,10 +376,11 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(rolelessEoa);
         gateway.commitAuthorization(commitHash);
 
-        // Reveal after one block
+        // Reveal after one block, carrying the agent's consent (issue #1791).
         vm.roll(block.number + 2);
+        bytes memory consent = _agentConsent(rolelessEoa);
         vm.prank(rolelessEoa);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, consent);
 
         assertEq(gateway.agentOwner(agent), rolelessEoa);
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -421,8 +430,9 @@ contract RobotMoneyGatewayTest is Test {
         gateway.authorizeAgent(agent, p);
 
         // Victim's reveal succeeds — agent belongs to victim
+        bytes memory consent = _agentConsent(victim);
         vm.prank(victim);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, consent);
 
         assertEq(gateway.agentOwner(agent), victim);
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -636,8 +646,9 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(freshDepositor);
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 2);
+        bytes memory consent = _agentConsent(freshDepositor);
         vm.prank(freshDepositor);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, consent);
 
         assertEq(gateway.agentOwner(agent), freshDepositor);
     }
@@ -2470,6 +2481,14 @@ contract GatewayCommitRevealTest is Test {
         return keccak256(abi.encode(agentAddr, committer, salt));
     }
 
+    /// @dev `agent`'s EIP-712 consent for `owner` as revealer and share
+    ///      receiver at its current nonce (issue #1791). Build it before
+    ///      `vm.prank`: it reads the nonce from the gateway. Reverts that fire
+    ///      before the consent check (commitment, policy, ownership) pass "".
+    function _agentConsent(address owner) internal view returns (bytes memory) {
+        return AgentConsent.sign(AgentConsent.keyOf("agent"), address(gateway), owner, owner);
+    }
+
     // -------------------------------------------------------------------
     // Happy path
     // -------------------------------------------------------------------
@@ -2490,11 +2509,12 @@ contract GatewayCommitRevealTest is Test {
         // Advance 1 block.
         vm.roll(block.number + 1);
 
-        // Reveal
+        // Reveal, carrying the agent's consent (issue #1791).
+        bytes memory consent = _agentConsent(depositor);
         vm.prank(depositor);
         vm.expectEmit(true, true, true, false, address(gateway));
         emit IGateway.CommitRevealed(depositor, commitHash, agent);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, consent);
 
         // Agent must be authorized correctly.
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -2517,7 +2537,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, "");
     }
 
     /// @dev AC: reveal with wrong salt reverts CommitmentNotFound (hash mismatch
@@ -2536,7 +2556,7 @@ contract GatewayCommitRevealTest is Test {
         // Reveal with wrong salt: recomputed hash won't match any stored commitment.
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, wrongSalt, p);
+        gateway.revealAuthorization(agent, wrongSalt, p, "");
     }
 
     /// @dev AC: reveal from a different address than the committer reverts.
@@ -2559,7 +2579,7 @@ contract GatewayCommitRevealTest is Test {
         address bob = makeAddr("bob");
         vm.prank(bob);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, "");
     }
 
     /// @dev AC: reveal after COMMIT_EXPIRY_BLOCKS reverts CommitmentExpired.
@@ -2576,7 +2596,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentExpired.selector);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, "");
     }
 
     /// @dev AC: reveal in the same block as the commit reverts CommitmentTooRecent.
@@ -2591,7 +2611,7 @@ contract GatewayCommitRevealTest is Test {
         // No block advance — same block.
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentTooRecent.selector);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, "");
     }
 
     /// @dev AC: front-runner committing for same agent after legitimate commit
@@ -2649,15 +2669,18 @@ contract GatewayCommitRevealTest is Test {
 
         vm.roll(block.number + 1);
 
-        // Alice reveals first — succeeds.
+        // Alice reveals first, with the agent's consent — succeeds.
+        bytes memory consentAlice = _agentConsent(alice);
         vm.prank(alice);
-        gateway.revealAuthorization(agent, saltAlice, pAlice);
+        gateway.revealAuthorization(agent, saltAlice, pAlice, consentAlice);
         assertEq(gateway.agentOwner(agent), alice);
 
-        // Bob's subsequent reveal for the same agent is blocked.
+        // Bob's subsequent reveal for the same agent is blocked, even with
+        // a consent of his own.
+        bytes memory consentBob = _agentConsent(bob);
         vm.prank(bob);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.revealAuthorization(agent, saltBob, pBob);
+        gateway.revealAuthorization(agent, saltBob, pBob, consentBob);
     }
 
     function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public {
@@ -2672,8 +2695,9 @@ contract GatewayCommitRevealTest is Test {
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 1);
 
+        bytes memory consent = _agentConsent(depositor);
         vm.prank(depositor);
-        gateway.revealAuthorization(agent, salt, p);
+        gateway.revealAuthorization(agent, salt, p, consent);
         assertEq(gateway.agentOwner(agent), depositor);
     }
 
@@ -2719,7 +2743,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(RobotMoneyGateway.ShareReceiverNotAuthorized.selector);
-        gateway.revealAuthorization(agent, salt, maliciousPolicy);
+        gateway.revealAuthorization(agent, salt, maliciousPolicy, "");
 
         // Agent must NOT have been authorized.
         assertFalse(gateway.hasRole(agentRole, agent));
@@ -2753,8 +2777,9 @@ contract GatewayCommitRevealTest is Test {
 
         vm.roll(block.number + 1);
 
+        bytes memory consent = _agentConsent(depositor);
         vm.prank(depositor);
-        gateway.revealAuthorization(agent, salt, selfPolicy);
+        gateway.revealAuthorization(agent, salt, selfPolicy, consent);
 
         // Agent must be authorized with depositor as owner and shareReceiver.
         assertTrue(gateway.hasRole(agentRole, agent));

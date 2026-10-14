@@ -3,6 +3,7 @@
 //            docs/adr/ADR-0007-basket-vault-drawdown-redemption-policy.md (core 1665: redeemInKind)
 //            docs/technical/smart-contract-invariants.md (ADP-2, ORA-1, ORA-3, ORA-4)
 // Covers core issue 1676: AgentTokenVault wired to a V4 pool through UniswapV4SwapAdapter and UniswapV4PriceRecorder.
+// Also QA plan v1 D6 (E4, SR-L12): one donated RM unit cannot block `emergencyUnwind`, `removeAsset` or the last USDC redeem.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -350,5 +351,92 @@ contract BasketVaultV4VenueTest is Test {
         vault.setMaxSlippageBps(500);
         _deposit(DEPOSIT);
         assertGt(rm.balanceOf(address(vault)), 0);
+    }
+
+    // ─── Dust liveness (QA plan D6, E4, SR-L12) ─────────────────────
+
+    /// @dev Deposit, then let the emergency unwind sell the whole RM position. Returns alice's shares.
+    function _depositThenUnwind() internal returns (uint256 shares) {
+        _readyVault();
+        vm.warp(block.timestamp + 10);
+        shares = _deposit(DEPOSIT);
+        vm.warp(block.timestamp + 10);
+        vm.prank(admin);
+        vault.emergencyUnwind();
+        assertEq(rm.balanceOf(address(vault)), 0, "the unwind sold all the RM");
+    }
+
+    /// @notice After the unwind anyone can send the vault one RM unit. Near tick 0 that unit is worth one USDC unit: its
+    ///         5 percent sale floor rounds to zero and the 2.91 percent pool fee rounds its sale to zero, which the adapter
+    ///         refuses. Before D6 that unit made every later `emergencyUnwind` revert and `removeAsset` revert
+    ///         `AssetStillHeld`, forever. Now the unwind skips the dust leg, `removeAsset` accepts the dust and
+    ///         `reabsorbRemovedAsset` leaves it in place.
+    function test_V4_dustDonationDoesNotBlockRemoveAssetOrUnwind() public {
+        _depositThenUnwind();
+
+        vm.startPrank(attacker);
+        rm.transfer(address(vault), 1);
+        // The cause: the adapter itself cannot sell one unit, whatever the floor.
+        rm.approve(address(adapter), 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(UniswapV4SwapAdapter.SlippageExceeded.selector, 0, 0)
+        );
+        adapter.swap(address(rm), address(usdc), FEE, 1, 0, attacker, block.timestamp);
+        vm.stopPrank();
+
+        uint256 swaps = pm.swapCount();
+        vm.prank(admin);
+        vault.emergencyUnwind();
+        assertEq(pm.swapCount(), swaps, "the dust leg is skipped, not sold");
+        assertEq(rm.balanceOf(address(vault)), 1, "the dust stays in the vault");
+
+        vm.prank(admin);
+        vault.removeAsset(0);
+        (,,, bool active,,) = vault.assets(0);
+        assertFalse(active, "RM is removed with one unit still held");
+        assertEq(vault.activeAssetCount(), 0);
+
+        // The removed entry's dust: re-absorbing it is a no-op, never a revert (LIFE-6).
+        vault.reabsorbRemovedAsset(0, 0);
+        assertEq(pm.swapCount(), swaps, "the dust is not sold on re-absorb either");
+        assertEq(rm.balanceOf(address(vault)), 1);
+    }
+
+    /// @notice The last holder's USDC redeem would sell the whole dust unit. It skips that leg and pays the idle USDC.
+    function test_V4_dustDonationDoesNotBlockTheLastUsdcRedeem() public {
+        uint256 shares = _depositThenUnwind();
+        vm.prank(attacker);
+        rm.transfer(address(vault), 1);
+
+        uint256 idle = usdc.balanceOf(address(vault));
+        uint256 swaps = pm.swapCount();
+        vm.prank(alice);
+        uint256 out = vault.redeem(shares, alice, alice);
+        assertEq(out, idle, "all the idle USDC is paid");
+        assertEq(pm.swapCount(), swaps, "the dust leg is not sold");
+        assertEq(rm.balanceOf(address(vault)), 1, "the dust stays in the vault");
+    }
+
+    /// @notice Dust is only a balance whose sale floor rounds to zero. 100 units (about 100 USDC units, floor about 95)
+    ///         still block `removeAsset` and are still sold by the unwind.
+    function test_V4_aBalanceAboveDustIsStillSoldAndStillBlocksRemoveAsset() public {
+        _depositThenUnwind();
+        vm.prank(attacker);
+        rm.transfer(address(vault), 100);
+
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.AssetStillHeld.selector);
+        vault.removeAsset(0);
+
+        uint256 swaps = pm.swapCount();
+        vm.prank(admin);
+        vault.emergencyUnwind();
+        assertEq(pm.swapCount(), swaps + 1, "a balance above dust is sold");
+        assertEq(rm.balanceOf(address(vault)), 0);
+
+        vm.prank(admin);
+        vault.removeAsset(0);
+        (,,, bool active,,) = vault.assets(0);
+        assertFalse(active);
     }
 }

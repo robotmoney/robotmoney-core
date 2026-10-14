@@ -170,7 +170,10 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 Adapter onboarding is now a two-step Safe-governed process: governance first
 approves both the exact adapter address and its runtime `codehash`, then calls
 `addAdapter`. `addAdapter` also verifies the adapter reports this vault's USDC
-asset through `USDC()` and this vault address through `VAULT()`. Deposit,
+asset through `USDC()` and this vault address through `VAULT()`. It refuses an
+address that an active entry already holds (`AdapterAlreadyActive`, core 1789),
+so one adapter balance is never counted twice in NAV. A re-add after
+`removeAdapter` or `forceRemoveAdapter` is legal and appends a new entry. Deposit,
 keeper rebalance, and admin rebalance allocation paths re-check eligibility
 before USDC leaves the vault.
 
@@ -377,6 +380,7 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `addAdapter(address, uint16)` | ADMIN | Register new adapter |
 | `removeAdapter(uint256)` | ADMIN | Deactivate empty adapter |
 | `setAdapterCap(uint256, uint16)` | ADMIN | Change per-adapter cap |
+| `setAdapterMaxExposure(uint256, uint256)` | ADMIN | Set an active adapter's `maxExposure` (Morpho only; 0 = uncapped). Emits `AdapterMaxExposureSet` |
 | `setMaxRebalanceBpsPerCall(uint16)` | ADMIN | Adjust rebalance throttle |
 | `setMinRebalanceInterval(uint256)` | ADMIN | Adjust rebalance cooldown |
 | `emergencyWithdraw()` | EMERGENCY | Pull all adapters |
@@ -422,6 +426,8 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 
 **Integrators must not assume raw share amounts equal asset amounts.** Always use `convertToShares` / `convertToAssets` for on-chain math. For display, divide `balanceOf(user)` by `10 ** vault.decimals()` (i.e. by `1e6`).
 
+**`convertToAssets` ignores exit costs** (core 1795). It is the gross share of NAV: it leaves out the exit fee on both vault families and the `maxSlippageBps` floor a BasketVault applies to the swaps of a redeem. To show what a position is worth at exit, use `previewRedeem(shares)`, which a redeem pays at least. A 1 USDC round trip through rmAGENT on Deploy 2 read `convertToAssets` 0.055767, `previewRedeem` 0.052978, and the redeem paid 0.054092. The dapp position card and the explorer's `positions[].usdc_value` use `previewRedeem` (QA plan X8).
+
 ### 8.3 Admin seed deposit (deploy runbook)
 
 **Before opening the vault to the public, the deployer MUST perform a seed deposit.**
@@ -444,6 +450,8 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
 5. Verify `vault.totalAssets() >= 1_000_000 * 9_999 / 10_000`, `vault.totalSupply() > 0`, and `vault.balanceOf(deployer) == 0`.
 6. Call `vault.pauseDeposits()` right after the seed (core 1710): rmUSDC deploys paused like the three basket vaults. The stage 13 `unpause-USDC` row, a Safe operation through the timelock, opens it.
 7. Only after steps 1–6 are confirmed and stage 13 has run: the vault is open to the public (publish the vault address). The deploy authorizes no agent: each depositor authorizes its own.
+
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) deploy paused, and the Safe unpauses each one through the timelock in stage 13. The rule for each vault, with the seed, the router-eligibility source, the emergency levers and the registry-name source, is in `scripts/deploy/stage-table.json` `vaults[]` (issue 1705).
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seed share receiver holds the rmUSDC shares minted for the seed and can participate in future withdrawals.
 
@@ -516,7 +524,8 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - At deposit time `_availabilityAndAmounts` skips each non-depositable leg and renormalises the full amount pro rata across the remaining legs. Nothing is left with the router or returned to the user. If no leg is depositable, `_depositTo` reverts `NoWeightsSet` and no USDC moves. An eligible leg whose computed amount is 0 is not called (issue 1746).
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
-- **Known gap:** `_isDepositable` does not read a vault's own deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`, `shutdown`, or `maxDeposit == 0`). A registry-Active, router-eligible vault with deposits paused stays in the available set, its `vault.deposit` reverts, and the whole routed deposit reverts `UsdcLegTransferFailed(vault)`. Not fixed yet.
+- A vault's own deposit gate counts too (QA plan D4). `_isDepositable` reads the vault's `maxDeposit`: a deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`), `shutdown`, retirement, a full TVL cap or an open rmUSDC exclusion reads 0, and a reverting `maxDeposit` counts as 0. Each funded leg is then quoted with `previewDeposit` at its split amount. A reverting quote (rmAGENT on a stale price recorder) drops the leg, and the split reruns over the survivors. `previewDeposit` reports the same legs unavailable.
+- A leg whose views pass but whose `deposit` reverts still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`. The ORA-4 spot-versus-TWAP guard is the main case, since `previewDeposit` does not run it. The basket deploy script refuses a `NAV_DEVIATION_BPS` at or below any configured pool fee in bps, and rmAGENT's sheet value is 400 against the RM pool's 291 bps fee.
 
 ### 9.1.3 Caps and guards
 
@@ -525,6 +534,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 | Global cap | `setRouterCap(uint256)` | Hard ceiling on total USDC per deposit. 0 = uncapped. |
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
 | Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. The floor is NOT enforced on a skipped leg (unavailable, or computed amount 0): it is never called and returns 0 shares. Before issue 1746 a 0 bps eligible leg was called with `deposit(0)` and a non-zero floor on it tripped. |
+| Redeem floor (QA plan D9, SR-M16) | `minAssetsPerLeg[]` parameter to `redeemFor()` | Revert `SlippageExceeded` if a leg pays less USDC than its floor; a floor of 0 sends none. A direct `vault.redeem` has no minimum-out, and a BasketVault's own sale floor follows a dragged TWAP (core 1793), so it pays under the holder's quote without reverting. A single-vault exit with a floor is the one-leg `redeemFor(holder, holder, [vault], [shares], [floor], deadline)`, after an approval of exactly `shares` to the router that the redeem spends to zero (the dapp Withdraw tab). rmpc sends the same one leg through `gateway.withdrawFromRouter` (QA plan U9). Test: `PortfolioRouterRedeemFloor.t.sol::test_redeemFor_singleLegFloorBindsOnBasketVault`. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |
 | Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
@@ -642,7 +652,7 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | Role | Powers |
 |---|---|
 | ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, `unpauseDeposits()` (also clears the deposit halt `emergencyUnwind` sets), set the emergency-unwind guard. |
-| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
+| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to sell the basket back to USDC on a fast path if normal withdrawal is blocked (oracle failure, liquidity crash). Each leg is floored at the higher of its TWAP value less `maxSlippageBps` and the `minUsdcOut` of its emergency-unwind guard (the guard alone when the oracle is unavailable). `emergencyUnwindWithOverride()` sells only tokens whose guard allows an override, floored at `minUsdcOut` less `maxLossBps`. |
 
 ### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 
@@ -660,7 +670,8 @@ All three subclasses inherit BasketVault behavior and are configured with:
 ### 9.3.7 Key invariants and constraints
 
 - **Small basket positions (core 1778)**: a position worth a few cents can leave a basket leg of a handful of token base units (rmPROTO on Deploy 2: 31 cbBTC units). The pool's one-unit rounding then misses the 1 percent floor and the USDC `redeem` reverts `Too little received`. The supported exit is `redeemInKind(shares, receiver, owner)`, which pays the basket tokens and swaps nothing. The dapp shows this hint when a redeem simulation fails with that reason. The cause and the fix are in [redeem-gas-1482.md](redeem-gas-1482.md).
-- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance).
+- **Dust legs (QA plan v1 D6, SR-L12)**: a basket leg whose TWAP sale floor (value × (1 − `maxSlippageBps`)) rounds to zero USDC units is dust, worth about one USDC unit or less. `redeem` and `emergencyUnwind` skip it, `removeAsset` accepts it, `reabsorbRemovedAsset` leaves it in place, and the USDC sell anchor does not refuse a redeem over it. Without this, one wei of RM sent after an unwind blocked `emergencyUnwind` and `removeAsset` (`AssetStillHeld`) forever, because the V4 adapter refuses a sale that pays zero. `removeAsset` prices a non-zero balance, so it fails closed while the oracle is down.
+- **NAV closure on oracle failure**: If `observe()` reverts (cardinality too low for the configured window), NAV reads fail closed and normal deposits/withdrawals revert. `redeemInKind(shares, receiver, owner)` is the oracle-free holder exit (core 1665): pro-rata idle USDC and active basket tokens less `exitFeeBps`, no TWAP, no swap. Emergency unwind is the only escape path (ADMIN_ROLE must have pre-configured `emergencyUnwindGuard` with a fallback floor and loss tolerance). The Safe sets it through the timelock with `govern --row set-unwind-guard` (QA plan v1 D7), one round per basket in the stage 13 sitting, and the stage 12 verifier fails an open basket whose active asset reads a zero `minUsdcOut`.
 - **Slippage protection**: Deposits and swaps enforce admin-set `maxSlippageBps` (max 500 BPS = 5%). ADMIN_ROLE may tighten but not exceed this hard ceiling.
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.
 - **Equal-weight deposit split** (current): Each deposit splits equally across active assets. Future versions may allow weight vectors (not yet shipped).

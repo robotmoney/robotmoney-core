@@ -9,7 +9,8 @@
  *   3. Open the dapp as admin, navigate to the Deposit/Withdraw tab.
  *   4. Drive Approve → Deposit and assert `vault.balanceOf(admin)`
  *      increases.
- *   5. Drive Withdraw (redeem all rmUSDC) and assert
+ *   5. Drive Withdraw (redeem all rmUSDC; through the router with its share
+ *      approval when the vault is registered, QA plan D9) and assert
  *      `vault.balanceOf(admin)` decreases and `USDC.balanceOf(admin)`
  *      is credited back within `exitFeeBps` tolerance.
  *
@@ -21,6 +22,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
+import { signWithdraw } from "./helpers/withdraw";
 import { erc20Abi, vaultAbi } from "../../src/lib/abi";
 
 const DEPOSIT_USDC = 10_000_000n; // 10 USDC, 6 decimals
@@ -147,12 +149,11 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
 
     await page.getByTestId("withdraw-amount").fill(sharesInput);
 
+    // "redeemFor" on the router route (QA plan D9), "redeem" on the direct one.
     const redeemPreviewFn = page.getByTestId("withdraw-form").getByTestId("tx-preview-fn");
     await expect(redeemPreviewFn).toContainText("redeem", { timeout: 10_000 });
 
-    const withdrawSubmit = page.getByTestId("withdraw-submit");
-    await expect(withdrawSubmit).toBeEnabled({ timeout: 30_000 });
-    await withdrawSubmit.click();
+    await signWithdraw(page);
 
     // Poll until shares strictly decreased and USDC was credited back.
     const sharesAfterRedeem = await waitUntil(async () => {

@@ -299,6 +299,9 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                     ) : (
                       <VaultList onSelectVault={setSelectedVault} />
                     )}
+                    {/* No usdcValues here (core 1795, QA plan X8): PortfolioPosition reads
+                        previewRedeem for the watched address's own shares. A map built here
+                        would be the connected wallet's, not the inspected address's. */}
                     <AccountLayerView
                       apiUrl={cfg.explorerApiUrl}
                       connectedAddress={connectedAddress as Address | undefined}

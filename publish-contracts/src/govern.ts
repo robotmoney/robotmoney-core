@@ -1,10 +1,11 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each of the four vaults (rmUSDC too, issue 1710: all four deploy paused). The docs put exactly this
-// there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
+// STAGE 13 IS THE FOUR VAULT UNPAUSES (issue 1520 retired the older 13-row stage 13; issue 1710 added rmUSDC: all four deploy paused). The rows come from the
+// stage table's vault rules (issue 1705, src/vault-rules.ts), never from a vault literal here. Unpause needs ADMIN_ROLE through the timelock
+// (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The on-demand rows below (apply-receipt, set-unwind-guard, ...) are not stage 13. The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
 // stages), and the verify stage asserts them against the sheet. The governance stage deploys the weight setter (RouterGovernance) with no voting surface
-// (issue 1698): no voter list, voting power, quorum, voting period or execution delay exists on the contract or in the sheet. There is no voting by anyone.
+// (issue 1698): no voter list, voting power, quorum, voting period or execution delay exists on the contract, and the sheet's legacy names for them are ignored. There is no voting by anyone.
 // ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696, issue 1698): the Safe, through the timelock, is the only body that changes any
 // contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it applies the Investment
 // Committee's consensus receipt; that application is the rebalance: ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps),
@@ -39,7 +40,9 @@
 //   apply-receipt                the rebalance (issue 1696, issue 1698): ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) (--receipt-id, --payload FILE),
 // which releases the receipt on the register and writes the receipt's vector to the router (setWeights) in one transaction. Before anything is sent it checks: the receipt is recorded, its
 // stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the vector sums to 10000 bps and lists exactly the
-// registry's router-eligible vaults in registry order, and the receipt is not released. The chain checks the receipt state and the digest again (ReceiptDigestMismatch). After the real delay
+// registry's router-eligible vaults in registry order, and the receipt is not released. It also checks, before the schedule and again before the execute, that the weight setter is
+// wired to that register (receiptContract() names it and governance holds its ADMIN_ROLE; GOVERN, nothing sent), so a miss is not a revert one delay later.
+// The chain checks the receipt state and the digest again (ReceiptDigestMismatch). After the real delay
 // the Safe executes the call and the tool reads isReleased and the router's EFFECTIVE weights (what deposits route by, issue 1743) back. No vote. Never part of stage 13: on 8453 only
 // `--row apply-receipt` names it (own 172800 s delay). Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that
 // mainnet governance works. The applied vector is the router's ACTIVE vector (votedWeightsActive reads true afterwards; the storage keeps its pre-1698 name): an active vector from an
@@ -47,13 +50,22 @@
 //   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which drops the router's active
 // (applied receipt) vector so routing falls back to the default: the emergency lever. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled)
 // when no active vector is set. Runs on 8453 in production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt opens round 2 with the same explicit `--row`.
+//   set-unwind-guard             on demand (QA plan v1 D7, review E5, issue 1705 Q2), `--admin-arg vault=PROTO|AGENT|RWA token=0x..|all min-usdc-out=N max-loss-bps=N [override-allowed=true|false]`:
+// ONE timelock operation on one basket vault, BasketVault.setEmergencyUnwindGuard(token, minUsdcOut, overrideAllowed, maxLossBps) per token (ADMIN_ROLE, the timelock). Before it no stage
+// and no row set the guard, so the oracle-free unwind and emergencyUnwindWithOverride could not run. overrideAllowed defaults to true, set by the Safe only (QA plan v1 Decisions D3).
+// Refused (GOVERN, nothing scheduled) for a token that is not an active asset or a vault whose ADMIN_ROLE the timelock does not hold; a guard already in effect is recorded as
+// skipped. It reads each guard back. Runs on 8453 in production and in a rehearsal, never in stage 13; the stage 12 verifier requires a non-zero minUsdcOut on every active asset
+// of an OPEN basket, so it runs in the same sitting as the unpauses. unwind-guard.ts has the why. Evidence: the run manifest's `unwind_guards` (a record).
 //   redeploy-vault              on demand (issue 1796), no arguments: the Safe, through the timelock, replaces ONE vault of the live deployment (rmPROTO) with the one the `redeploy-vault`
-// verb deployed. ONE timelock batch of six calls (new.setRegistry(registry), registry.registerVault(new), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old,
-// false, four legs), registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused or retired vault. The registry link is the batch's, not the deploy
-// script's (core S5: only DeployTimelock links from a script), and the timelock holds the ADMIN_ROLE that gates it. The order is forced by the contracts (a vault must be made
+// verb deployed. ONE timelock batch of seven calls (new.setRegistry(registry), registry.registerVault(new), router.setVaultCap(new, vaultCap(old)), registry.migrateEligibility(new, true,
+// five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused, retired or uncapped vault.
+// The registry link is the batch's, not the deploy script's (core S5: only DeployTimelock links from a script), and the timelock holds the ADMIN_ROLE that gates it. The cap is the old
+// vault's `router.vaultCap`, read when the round is planned and kept in the plan (QA plan v1 E3): a new address reads 0, uncapped. The order is forced by the contracts (a vault must be made
 // router-ineligible before it is retired, and the router's default vector must span the eligible set), see redeploy-vault.ts. The read-back checks the registry statuses, the
-// eligibility, the new vault's registry link, the router's DEFAULT and EFFECTIVE vectors and the vaults' deposit state. Rehearsal (DEPLOYMENT_KIND=rehearsal) and the Twin chain only: refused on 8453 in production.
-// Never part of stage 13. Its run-manifest key and salt are `redeploy-vault-<KEY>-<ordinal>`; the evidence entry is the `vault_redeploys` entry the verb started.
+// eligibility, the new vault's registry link, router.vaultCap(new) == router.vaultCap(old), the router's DEFAULT and EFFECTIVE vectors and the vaults' deposit state. Rehearsal (DEPLOYMENT_KIND=rehearsal) and the Twin chain only: refused on 8453 in production.
+// The new vault is bound to the chain, not to the run manifest (QA plan v1 C2): it must be the contract a recorded deploy transaction of the sheet's deployer CREATED (the
+// receipt's contractAddress), and the Safe transaction's description names the old and the new address. Never part of stage 13. Its run-manifest key and salt are `redeploy-vault-<KEY>-<ordinal>`; the evidence entry is the `vault_redeploys` entry the verb started.
+// It runs at the original deployment sha or at the sha the verb ran at (the round's `core_sha`, QA plan v1 E1); the salt takes the round's sha, so both name one operation.
 // ROUNDS (issue 1667): every unpause row is a numbered round. The salt carries the round, so a vault that is paused again after an executed unpause
 // gets a NEW timelock operation id on its next `--row unpause-X` run, instead of re-hitting the operation that is already done. The earlier round's
 // record is kept in the run manifest under `<row>:round-<n>`. Only an explicit `--row` opens a new round: a default run that finds an executed row
@@ -66,17 +78,28 @@
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, toHex, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
-import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
+import {
+  APPLY_ROW, GOVERNANCE_WIRING_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, RECEIPT_ROLE_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, applyWiringProblems, buildApplyCalls, planApply,
+} from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
-  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, ZERO, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
-  redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type RedeployRecord, type RedeployVectors,
+  UNWIND_GUARD_ROW, VAULT_UNWIND_GUARD_ABI, buildUnwindGuardCalls, parseUnwindGuardArgs, unwindGuardArgsText, unwindGuardProblems, unwindGuardRecordKey, unwindGuardTargets,
+  type GuardRead, type UnwindGuardArgs, type UnwindGuardWant,
+} from "./unwind-guard.ts";
+import {
+  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, ZERO, buildRedeployCalls, createdVaultProblems, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
+  redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type DeployReceipt, type RedeployRecord, type RedeployVectors,
 } from "./redeploy-vault.ts";
 import { PublishError } from "./errors.ts";
-import { REGISTER_ROW, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls, registerReadBackProblems, registerRecordKey } from "./committee-register.ts";
+import {
+  REGISTER_ROW, COMMIT_EXPIRY_BLOCKS, COMMIT_REVEAL_MARGIN_BLOCKS, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls,
+  buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthCommitmentKey, selfAuthEvidence, selfAuthPolicyProblems, selfAuthStateOf,
+  type RegisterCall, type SelfAuthPhase, type SelfAuthRecord,
+} from "./committee-register.ts";
 import { ADMIN_ROLE, AGENT_ROLE, DEPOSIT_PAUSER_ROLE } from "./verify/constants.ts";
 import { COMMITTEE_AGENT_ROLE } from "./record-receipt.ts";
 import { forbiddenSubmitters, inspectSubmitterSafe, chainFromClient, submitterSafeEvidence, type SubmitterSafeEvidence, type SubmitterSafeInfo } from "./submitter-safe.ts";
@@ -85,6 +108,7 @@ import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts"
 import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
+import { STAGE13_UNPAUSE_ROWS, UNPAUSE_ROW_NAMES, vaultOfUnpauseRow } from "./vault-rules.ts";
 import {
   cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, proposeTx, roleId, scheduleOnTimelock, signTx, timelockMinDelay,
   updateTimelockDelay, TIMELOCK_ROLES, verifyTimelockEffect, type Signer, type SafeHandle, type SafeTxBundle, type TimelockCall,
@@ -128,16 +152,18 @@ export function loadGovernAddrs(ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 
 export interface LabelledCall extends TimelockCall { label: string }
 
-/** The mainnet rows: one unpause per vault (rmUSDC and the three baskets, issue 1710). Each is its own timelock operation, all scheduled in one sitting. */
+/**
+ * The unpause rows: one per vault, each its own timelock operation, all scheduled in one sitting. Derived from the stage table's vault rules (issue 1705,
+ * src/vault-rules.ts): every vault's `unpauseRow`, in table order. No vault is a special case here: rmUSDC deploys paused like the baskets (issue 1710).
+ */
 export { BASKET_KEYS };
-export const UNPAUSE_ROWS = ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"] as const;
+export const UNPAUSE_ROWS: readonly UnpauseRowName[] = UNPAUSE_ROW_NAMES;
 /** Demonstrations of the Safe tool. They exist only as Twin-fork runs and are refused with USAGE on 8453. */
 export const TWIN_ONLY_ROWS = ["update-delay", "batch", "cancel"] as const;
+export type UnpauseRowName = `unpause-${VaultKey}`;
+export type GovernRowName = UnpauseRowName | (typeof TWIN_ONLY_ROWS)[number];
 /** The govern rows in run order: the unpauses, then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
-export const GOVERN_ROWS = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS] as const;
-export type GovernRowName = (typeof GOVERN_ROWS)[number];
-/** The rmUSDC unpause row. Since issue 1710 rmUSDC deploys paused, so this is a stage 13 row like the other three (and the reopen row after a pause-all). */
-export const UNPAUSE_USDC_ROW = "unpause-USDC";
+export const GOVERN_ROWS: readonly GovernRowName[] = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS];
 /** A row that runGovern can plan: every matrix row. */
 export type PlannedRow = GovernRowName;
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;
@@ -154,21 +180,21 @@ export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKi
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW) return undefined;
+  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW) return undefined;
   if (row === REGISTER_ROW) {
     return chainId === BASE_CHAIN_ID && kind !== "rehearsal"
-      ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW}, ${APPLY_ROW} and ${CLEAR_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
+      ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW}, ${APPLY_ROW}, ${CLEAR_ROW} and ${UNWIND_GUARD_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
       : undefined;
   }
   let name: string;
   try { name = resolveGovernRow(row); } catch { return undefined; } // an unknown row is a usage error raised where it always was
   return twinOnlyRefused(name, chainId, kind)
-    ? `--row ${name} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW}, --row ${APPLY_ROW} and --row ${CLEAR_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`
+    ? `--row ${name} is a demonstration of the Safe tool: it runs on a Twin fork only and is refused on chain 8453 (the only mainnet govern stage operation is the vault unpause; the other mainnet actions are --row ${RECEIPT_ROW}, --row ${APPLY_ROW}, --row ${CLEAR_ROW} and --row ${UNWIND_GUARD_ROW}). A Base mainnet REHEARSAL (DEPLOYMENT_KIND=rehearsal in the sheet) may run it.`
     : undefined;
 }
 
-/** The rows a stage run needs on a chain: the unpauses on 8453, every row elsewhere. */
-export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? UNPAUSE_ROWS : GOVERN_ROWS);
+/** The rows a stage run needs on a chain: on 8453 the unpause rows the stage table puts in stage 13 (`unpauseInStage13`), every row elsewhere. */
+export const stageRows = (chainId: number): readonly GovernRowName[] => (chainId === BASE_CHAIN_ID ? STAGE13_UNPAUSE_ROWS : GOVERN_ROWS);
 /**
  * Declared dependencies between rows (row to the row it must follow). The dependent operation carries the other's operation id as the timelock
  * predecessor, so both run in the same resume with no second wait. The unpauses are independent: none is declared.
@@ -438,6 +464,7 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
+  if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|AGENT|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
     const name = GOVERN_ROWS[n - 1];
@@ -445,14 +472,14 @@ export function resolveGovernRow(row: string): PlannedRow {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${CLEAR_ROW})`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${CLEAR_ROW}, ${UNWIND_GUARD_ROW} --admin-arg K=V)`);
 }
 
 /** The calls of one unpause row. Empty means the sheet does not ask for it (the vault stays paused): the row is skipped. */
 export function buildStepCalls(sheet: Sheet, a: GovernAddrs, row: PlannedRow): LabelledCall[] {
   const calls: LabelledCall[] = [];
-  if (row.startsWith("unpause-")) {
-    const k = row.slice("unpause-".length) as VaultKey;
+  const k = vaultOfUnpauseRow(row);
+  if (k) {
     if (sheet.govern.unpauseVaults.includes(k)) calls.push({ label: `${VAULT_NAME[k]}.unpauseDeposits`, target: a.vaults[k], data: encodeFunctionData({ abi: VAULT_ABI, functionName: "unpauseDeposits" }) });
   }
   return calls;
@@ -525,6 +552,8 @@ export interface GovernOpts {
   call?: TwinCall;
   /** With a self-administration row (`--row safe-add-owner` and the others): the arguments of that row. Twin chain only. */
   selfAdmin?: SelfAdminArgs;
+  /** With `--row set-unwind-guard` only (QA plan v1 D7): the vault, the token (or `all`) and the guard values, as `--admin-arg` gave them. */
+  unwindGuard?: UnwindGuardArgs;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -535,8 +564,12 @@ interface PhaseRecord { seq?: number; tx_hash?: string; safe_tx_hash?: string; s
 export interface SelfAdminRecord { data?: Hex; nonce: number; want: string }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
 /** `observed`: the read-back after the execute. `voted_weights_active` is recorded by the clear and redeploy rows (they prove the active vector is gone); an application records the effective vector only (issue 1698: its vector IS the active one). */
-export interface RowRecord { round?: number; admin?: SelfAdminRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+/** `guard` (QA plan v1 D7): what a set-unwind-guard round sets, written before its schedule so a resume and the evidence entry name the same values. */
+export interface GuardRecord { vault: string; vault_address: string; tokens: string[]; min_usdc_out: string; override_allowed: boolean; max_loss_bps: number }
+export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
+/** The `register` part of a register-committee record: what the batch was built from, and (QA plan v1 B6) the private self-authorization with its salt. */
+interface RegisterState { submitter: string; agent_label: string; gateway: string; ic_policy: string; valid_until: string; submitter_safe?: SubmitterSafeEvidence; self_authorization?: SelfAuthRecord }
 
 const rowComplete = (r: RowRecord | undefined): boolean => !!r && !!(r.skipped || r.executed || r.cancelled);
 
@@ -573,10 +606,14 @@ async function warpFor(ctx: RunContext, o: GovernOpts): Promise<((seconds: bigin
 }
 const detected = new WeakMap<object, boolean>();
 
-/** The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage. */
-export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string): string {
+/**
+ * The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage.
+ * `guard`: the arguments of a set-unwind-guard run (QA plan v1 D7), spelled out as its `--admin-arg` flags.
+ */
+export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string, guard?: UnwindGuardWant): string {
   const selfAdmin = row === undefined ? undefined : SELF_ADMIN_ROWS.find((r) => row!.startsWith(`${r}-`));
-  if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
+  if (row?.startsWith(`${UNWIND_GUARD_ROW}-`)) row = `${UNWIND_GUARD_ROW} ${guard ? unwindGuardArgsText(guard) : "--admin-arg K=V (the same --admin-arg values as this run)"}`;
+  else if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
   else if (selfAdmin !== undefined) row = `${selfAdmin} --admin-arg K=V (the same --admin-arg values as this run)`; // the record key carries the calldata hash and the Safe nonce, not the arguments
@@ -609,7 +646,8 @@ async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle:
       continue;
     }
     if (remaining > maxWait) {
-      const next = resumeCommand(ctx, resumeRow, resumePayload);
+      const guard = resumeRow?.startsWith(`${UNWIND_GUARD_ROW}-`) && o.unwindGuard !== undefined ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
+      const next = resumeCommand(ctx, resumeRow, resumePayload, guard);
       const what = rows.length === 1 ? `govern row ${rows[0]} is scheduled` : `govern rows ${rows.join(", ")} are scheduled`;
       throw new PublishError("GOVERN_PENDING", `${what} and become${rows.length === 1 ? "s" : ""} ready at ${latest} (${new Date(Number(latest) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`,
         { ids: ops.map((x) => x.id), row: rows[0], rows, ready_at: latest.toString(), remaining, next_command: next });
@@ -635,8 +673,8 @@ const reader = (handle: SafeHandle): Rd => (address, abi, functionName, args = [
 export async function readBackStep(handle: SafeHandle, a: GovernAddrs, row: PlannedRow): Promise<string[]> {
   const bad: string[] = [];
   const rd = reader(handle);
-  if (row.startsWith("unpause-")) {
-    const k = row.slice("unpause-".length) as VaultKey;
+  const k = vaultOfUnpauseRow(row);
+  if (k) {
     if (await rd<boolean>(a.vaults[k], VAULT_ABI, "depositsPaused")) bad.push(`${VAULT_NAME[k]}.depositsPaused`);
   }
   return bad;
@@ -674,10 +712,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const registering = o.row === REGISTER_ROW;
   const clearing = o.row === CLEAR_ROW;
   const redeploying = o.row === REDEPLOY_ROW;
+  const guarding = o.row === UNWIND_GUARD_ROW;
   if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
+  if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
+  // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
+  const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || guarding || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
@@ -939,14 +981,17 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   /** The evidence entry of an executed registration round (`committee_registrations` of the run manifest, checked by evidence-check). */
   async function recordRegistration(name: string): Promise<void> {
-    const r = state[name] as (RowRecord & { register?: { submitter: string; agent_label: string; gateway: string; ic_policy: string; valid_until: string } }) | undefined;
+    const r = state[name] as (RowRecord & { register?: RegisterState }) | undefined;
     if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash || !r.register) return;
     const at = async (hash: string): Promise<number> => {
       const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
       return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
     };
+    // QA plan v1 B6: the private self-authorization goes into the evidence as its three transactions; the salt stays in the govern state only
+    const { self_authorization: sa, ...reg } = r.register;
+    const selfAuthorization = selfAuthEvidence(sa);
     const entry = {
-      step: REGISTER_ROW, ...r.register, timelock: a.timelock,
+      step: REGISTER_ROW, ...reg, ...(selfAuthorization ? { self_authorization: selfAuthorization } : {}), timelock: a.timelock,
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     };
@@ -957,7 +1002,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   }
 
   if (registering) {
-    // Issue 1727: ONE timelock batch, authorizeAgent + committeeRegister for the consensus receipt submitter. Never part of the matrix. Rehearsal and Twin only.
+    // Issue 1727, QA plan v1 B6 (review CS-2): the submitter Safe first authorizes ITSELF in private (commit, reveal, hand-over to the timelock), THEN one public timelock batch,
+    // setPolicy + committeeRegister, which nothing a stranger does during the delay can break. Never part of the matrix. Rehearsal and Twin only. committee-register.ts has the why.
     const submitter = assertSubmitter(o.submitter);
     const agentLabel = assertAgentLabel(o.agentLabel);
     const gateway = readManifestField(ctx, manifestRef("gateway", "gateway")) as Address;
@@ -967,7 +1013,86 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const read = async <T,>(addr: Address, abi: readonly unknown[], fn: string, args: unknown[] = []): Promise<T> => rd<T>(addr, abi, fn, args);
     if (!rowComplete(state[name])) {
       const cur = state[name];
-      let submitterSafe: SubmitterSafeEvidence | undefined = (cur as { register?: { submitter_safe?: SubmitterSafeEvidence } } | undefined)?.register?.submitter_safe;
+      const prevReg = (cur as { register?: Partial<RegisterState> } | undefined)?.register;
+      let submitterSafe: SubmitterSafeEvidence | undefined = prevReg?.submitter_safe;
+      // validUntil is fixed at the FIRST plan (the private reveal uses it too) and read back from the manifest after that, so a resume rebuilds the same calldata and finds the same operation id
+      const validUntil = BigInt(prevReg?.valid_until ?? (await chainTime(handle)) + BigInt(SUBMITTER_POLICY_SECONDS));
+      const selfAuth: SelfAuthRecord = { ...(prevReg?.self_authorization ?? {}) };
+      const keep = (): void => {
+        state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString(), ...(submitterSafe ? { submitter_safe: submitterSafe } : {}), ...(Object.keys(selfAuth).length ? { self_authorization: selfAuth } : {}) } } as RowRecord;
+        save();
+      };
+      /** The reveal must land in a later block than the commit (CommitmentTooRecent), and executeTx simulates it at the head first: wait until the head is past `block`. */
+      const waitPastBlock = async (block: bigint): Promise<void> => {
+        const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+        for (let i = 0; i < 120; i++) {
+          if ((await handle.client.getBlockNumber({ cacheTime: 0 })) > block) return; // no cached head: a warp or a new block must be seen at once
+          const warp = await warpFor(ctx, o);
+          if (warp) { await warp(1n); continue; } // a Twin fork mines on demand: one second, one block
+          await sleep(o.pollMs ?? 2000);
+        }
+        throw new PublishError("GOVERN", `the chain head did not move past block ${block}, the block of the submitter Safe's commit: the reveal needs a later block. Nothing was scheduled. Run the row again: the commitment is revealed while its window lasts`, { submitter, block: block.toString() });
+      };
+      /**
+       * QA plan v1 B6, the PRIVATE half: before the batch is visible on the timelock the submitter Safe authorizes itself on the gateway (a commit that names no agent,
+       * a reveal at least one block later) and hands the agent to the timelock. Each step is a submitter-Safe transaction signed by its owners (--owner-signer) and paid by
+       * --signer. Resumable from the chain: agentOwner(submitter) says which steps are done, and a stored commitment is reused while enough of its window is left.
+       */
+      const selfAuthorize = async (isSafe: boolean): Promise<void> => {
+        const ownerNow = async () => read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]);
+        const stateNow = async () => selfAuthStateOf({ owner: await ownerNow(), agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), submitter, timelock: a.timelock });
+        let st = await stateNow();
+        if (st === "squatted") throw new PublishError("GOVERN", `${submitter} already has an agent owner on the gateway, ${await ownerNow()}, that is neither the submitter Safe nor the timelock: another account authorized this address first, and the gateway has no way to take it back. This Safe can never be the submitter. Nothing was scheduled. Create a NEW submitter Safe and run the row with it`, { submitter });
+        if (st === "foreign-role") throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway with no agent owner: the role came from elsewhere, nothing to schedule`, { submitter });
+        if (st === "handed-over") {
+          // The timelock owns it: this row's own hand-over (an earlier run), or another agent the timelock owns. Only the signalling-only policy shape is taken as this submitter's.
+          const [, , maxPerPayment, maxPerWindow, shareReceiver, , maxWithdrawPerPayment, maxWithdrawPerWindow] = await read<readonly [boolean, bigint, bigint, bigint, Address, Address, bigint, bigint]>(gateway, GATEWAY_REGISTER_ABI, "agents", [submitter]);
+          const bad = selfAuthPolicyProblems({ maxPerPayment, maxPerWindow, shareReceiver, maxWithdrawPerPayment, maxWithdrawPerWindow }, submitter, a.timelock);
+          if (bad.length) throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway and the timelock owns it, but its policy is not the submitter's signalling-only one (${bad.join("; ")}): it is another agent, a depositor's. Nothing to schedule`, { submitter, problems: bad });
+          ctx.log.log("info", "govern.self_authorized", { row: REGISTER_ROW, submitter, owner: a.timelock });
+          return;
+        }
+        if (!isSafe) {
+          throw new PublishError("GOVERN", `--submitter ${submitter} is a single key and this tool cannot sign for it. Before the batch is scheduled the key authorizes itself in private: gateway.commitAuthorization(keccak256(abi.encode(${submitter}, ${submitter}, salt))) with a random salt, at least one block later gateway.revealAuthorization(${submitter}, salt, a policy paying shares to itself), then gateway.transferAgentOwnership(${submitter}, ${a.timelock}). Run this row again after that. Nothing scheduled.`, { submitter });
+        }
+        const sub = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: submitter, logger: ctx.log });
+        if (sub.address.toLowerCase() !== submitter.toLowerCase()) throw new PublishError("GOVERN", `the Safe the tool connected to (${sub.address}) is not --submitter ${submitter}: nothing sent`, { submitter, connected: sub.address });
+        const propose = api.proposeTx ?? proposeTx;
+        const send = async (call: RegisterCall, action: string): Promise<SelfAuthPhase> => {
+          const b = await signAndExecute(ctx, o, api, sub, await propose(sub, { to: call.target, data: call.data, action, description: `${REGISTER_ROW} private ${action}: ${call.label}` }));
+          if (!b.executed?.tx_hash) throw new PublishError("GOVERN", `the submitter Safe transaction ${action} (${call.label}) was not sent`, { submitter, action });
+          const block = Number((await handle.client.getTransactionReceipt({ hash: b.executed.tx_hash as Hex })).blockNumber);
+          return { tx_hash: b.executed.tx_hash, safe_tx_hash: b.safe_tx_hash, status: b.executed.status, at: new Date().toISOString(), block };
+        };
+        // the hand-over carries no salt: a Safe whose reveal was made outside this run (no stored salt) is handed over all the same
+        const callsFor = (s: Hex | undefined) => buildSelfAuthCalls(gateway, a.timelock, submitter, s ?? `0x${"00".repeat(32)}`, validUntil);
+        if (st === "fresh") {
+          let live = false;
+          if (selfAuth.salt && selfAuth.commit?.block !== undefined) {
+            const [committer] = await read<readonly [Address, bigint]>(gateway, GATEWAY_REGISTER_ABI, "commitments", [selfAuthCommitmentKey(selfAuthCommitHash(submitter, selfAuth.salt), submitter)]);
+            const head = await handle.client.getBlockNumber({ cacheTime: 0 });
+            live = committer.toLowerCase() === submitter.toLowerCase() && head + COMMIT_REVEAL_MARGIN_BLOCKS <= BigInt(selfAuth.commit.block) + COMMIT_EXPIRY_BLOCKS;
+          }
+          if (!live) {
+            // a new random salt hides the agent until the reveal; it is on disk BEFORE the commit is sent, so a run that dies after the commit lands can still reveal
+            selfAuth.salt = toHex(randomBytes(32));
+            delete selfAuth.commit; delete selfAuth.reveal;
+            keep();
+            selfAuth.commit = await send(callsFor(selfAuth.salt).commit, "submitter-commit");
+            keep();
+          }
+          await waitPastBlock(BigInt(selfAuth.commit!.block ?? 0));
+          selfAuth.reveal = await send(callsFor(selfAuth.salt).reveal, "submitter-reveal");
+          keep();
+          st = await stateNow();
+          if (st !== "self-owned") throw new PublishError("GOVERN", `after the reveal ${submitter} reads '${st}' on the gateway (owner ${await ownerNow()}), not owned by itself. Nothing was scheduled. A squatter that won the reveal race makes this Safe unusable: create a NEW submitter Safe`, { submitter, state: st });
+        }
+        selfAuth.hand_over = await send(callsFor(selfAuth.salt).handOver, "submitter-hand-over");
+        keep();
+        st = await stateNow();
+        if (st !== "handed-over") throw new PublishError("GOVERN", `after the hand-over ${submitter} reads '${st}' on the gateway (owner ${await ownerNow()}), not owned by the timelock ${a.timelock}. Nothing was scheduled`, { submitter, state: st });
+        ctx.log.log("info", "govern.self_authorized", { row: REGISTER_ROW, submitter, owner: a.timelock, commit_tx: selfAuth.commit?.tx_hash, reveal_tx: selfAuth.reveal?.tx_hash, hand_over_tx: selfAuth.hand_over.tx_hash });
+      };
       if (cur?.scheduled === undefined) {
         // Nothing of this round is on the timelock yet: refuse what can only revert, before the Safe schedules it and the delay is spent.
         const owners = new Set([...sheet.safeOwners, sheet.admin, sheet.pauser, sheet.emergency, a.safe, a.timelock].map((x) => x.toLowerCase()));
@@ -977,14 +1102,12 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         if (kind === null && ctx.chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", `--submitter ${submitter} has no code: it is a single key. On 8453 the consensus receipt submitter is a multisig (a SafeL2 1.4.1 proxy with threshold 2 or more, separate from the governing Safe). Nothing scheduled.`, { submitter });
         submitterSafe = kind === null ? undefined : submitterSafeEvidence(kind);
         if ((await read<Address>(gateway, GATEWAY_REGISTER_ABI, "icPolicy")).toLowerCase() !== icPolicy.toLowerCase()) throw new PublishError("GOVERN", `the gateway's icPolicy is not the run's IC policy ${icPolicy}: committeeRegister would reach another contract`, { icPolicy });
-        if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds AGENT_ROLE on the gateway: it is registered or is a depositor's agent, nothing to schedule`, { submitter });
-        if (/^0x0{40}$/.test(await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter])) === false) throw new PublishError("GOVERN", `${submitter} already has an agent owner on the gateway: authorizeAgent would revert AgentAlreadyOwned`, { submitter });
         for (const [nm, r] of [["ADMIN_ROLE", ADMIN_ROLE], ["DEPOSIT_PAUSER_ROLE", DEPOSIT_PAUSER_ROLE]] as const) {
           if (await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [r, submitter])) throw new PublishError("GOVERN", `${submitter} holds ${nm} on the gateway: role separation refuses it as an agent`, { submitter });
         }
+        if (await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter])) throw new PublishError("GOVERN", `${submitter} already holds COMMITTEE_AGENT_ROLE on the IC policy: it is registered already, nothing to schedule`, { submitter });
+        await selfAuthorize(kind !== null);
       }
-      // validUntil is fixed at the FIRST plan and read back from the manifest after that, so a resume rebuilds the same calldata and finds the same operation id
-      const validUntil = BigInt((state[name] as { register?: { valid_until?: string } } | undefined)?.register?.valid_until ?? (await chainTime(handle)) + BigInt(SUBMITTER_POLICY_SECONDS));
       const calls = buildRegisterCalls(gateway, a.timelock, submitter, agentLabel, validUntil);
       const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
       const id = await api.operationId(handle, p);
@@ -993,8 +1116,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       const readBack = async () => registerReadBackProblems({
         agentRole: await read<boolean>(gateway, GATEWAY_REGISTER_ABI, "hasRole", [AGENT_ROLE, submitter]), committeeRole: await read<boolean>(icPolicy, IC_REGISTER_ABI, "hasRole", [COMMITTEE_AGENT_ROLE, submitter]),
         label: await read<string>(icPolicy, IC_REGISTER_ABI, "agentId", [submitter]), wantLabel: agentLabel, owner: await read<string>(gateway, GATEWAY_REGISTER_ABI, "agentOwner", [submitter]), timelock: a.timelock,
+        shareReceiver: (await read<readonly unknown[]>(gateway, GATEWAY_REGISTER_ABI, "agents", [submitter]))[4] as string,
       });
-      state[name] = { ...(state[name] ?? { round: 1 }), register: { submitter, agent_label: agentLabel, gateway, ic_policy: icPolicy, valid_until: validUntil.toString(), ...(submitterSafe ? { submitter_safe: submitterSafe } : {}) } } as RowRecord;
+      keep();
       await round(name, {
         id, description: `register committee submitter ${submitter}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REGISTER_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
@@ -1089,8 +1213,117 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     return { rows: [name], skipped: [], opIds };
   }
 
+  /** The evidence entry of an executed set-unwind-guard round (`unwind_guards` of the run manifest). A record: the verifier reads each guard from the chain, never from here. */
+  async function recordUnwindGuard(name: string): Promise<void> {
+    const r = state[name];
+    if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash || !r.guard) return;
+    const at = async (hash: string): Promise<number> => {
+      const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+      return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+    };
+    const entry = {
+      step: UNWIND_GUARD_ROW, key: name, round: r.round ?? 1, ...r.guard, timelock: a.timelock,
+      operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
+      execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
+    };
+    const list = ((manifest as { unwind_guards?: { operation_id?: string }[] }).unwind_guards ??= []);
+    const i = list.findIndex((x) => x.operation_id?.toLowerCase() === String(entry.operation_id).toLowerCase());
+    if (i >= 0) list[i] = entry; else list.push(entry);
+    save();
+  }
+
+  if (guarding) {
+    // QA plan v1 D7 (review E5, issue 1705 Q2): ONE timelock operation, setEmergencyUnwindGuard per token on one basket vault. Never part of the matrix. On 8453 in production and
+    // in a rehearsal, and on the Twin chain. unwind-guard.ts has the why and the values.
+    const want = guardWant!;
+    const vault = a.vaults[want.vault];
+    const vname = VAULT_NAME[want.vault];
+    const rd = reader(handle);
+    // The vault's active asset rows in its own order (assets(i) reverts past the end of the list).
+    const active: Address[] = [];
+    for (let i = 0; i < 64; i++) {
+      let r: readonly unknown[];
+      try { r = await rd<readonly unknown[]>(vault, VAULT_UNWIND_GUARD_ABI, "assets", [BigInt(i)]); } catch { break; }
+      if (r[3] === true) active.push(getAddress(String(r[0])));
+    }
+    const targets = unwindGuardTargets(want, active);
+    if (typeof targets === "string") throw new PublishError("GOVERN", `govern row ${UNWIND_GUARD_ROW}: ${targets}. Nothing was sent`, { row: UNWIND_GUARD_ROW, vault: want.vault, active });
+    const calls = buildUnwindGuardCalls(vault, want, targets);
+    const name = unwindGuardRecordKey(want.vault, calls);
+    const guardsNow = async (): Promise<GuardRead[]> => {
+      const out: GuardRead[] = [];
+      for (const token of targets) {
+        const [minUsdcOut, overrideAllowed, maxLossBps] = await rd<readonly [bigint, boolean, bigint]>(vault, VAULT_UNWIND_GUARD_ABI, "emergencyUnwindGuard", [token]);
+        out.push({ token, minUsdcOut, overrideAllowed, maxLossBps });
+      }
+      return out;
+    };
+    const show = (g: readonly GuardRead[]) => g.map((x) => `${x.token} (${x.minUsdcOut}, ${x.overrideAllowed}, ${x.maxLossBps})`).join(", ");
+    const prev = state[name];
+    if (prev?.scheduled?.operation_id && !rowComplete(prev)) {
+      // The operator cancelled this round's operation through the Safe and named the row again: the same round is scheduled again (a cancelled id is free).
+      const st = await api.operationState(handle, a.timelock, prev.scheduled.operation_id as Hex);
+      if (!st.exists && !st.done) {
+        const n = prev.round ?? 1;
+        let k = 1;
+        while (state[`${roundKey(name, n)}:cancelled-${k}`]) k++;
+        state[`${roundKey(name, n)}:cancelled-${k}`] = prev;
+        state[name] = { round: n };
+        save();
+        ctx.log.log("info", "govern.round_rescheduled", { row: UNWIND_GUARD_ROW, key: name, round: n, cancelled_operation: prev.scheduled.operation_id });
+      }
+    } else if (rowComplete(prev) && unwindGuardProblems(want, await guardsNow()).length > 0) {
+      // Executed (or skipped) earlier, and the chain reads other values now (a later run set them): setting these values again is a NEW round, a new operation.
+      const done = prev!.round ?? 1;
+      state[roundKey(name, done)] = prev!;
+      state[name] = { round: done + 1 };
+      save();
+      ctx.log.log("info", "govern.round_opened", { row: UNWIND_GUARD_ROW, key: name, round: done + 1 });
+    }
+    if (!rowComplete(state[name])) {
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(labelOf(name)), form: calls.length === 1 ? ("single" as const) : ("batch" as const) };
+      const id = await api.operationId(handle, p);
+      const prior = state[name]?.scheduled?.operation_id;
+      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: UNWIND_GUARD_ROW, prior, id });
+      const before = await guardsNow();
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists) {
+        // Nothing of this round is on the timelock yet. A guard already in effect is recorded as skipped and nothing is sent; a call the vault would revert after the delay is refused.
+        if (unwindGuardProblems(want, before).length === 0) {
+          const reason = `already in effect on chain: ${vname} ${show(before)}`;
+          state[name] = { ...(state[name] ?? { round: 1 }), skipped: { at: new Date().toISOString(), reason } };
+          save();
+          ctx.log.log("info", "govern.row_skipped", { row: UNWIND_GUARD_ROW, key: name, reason });
+          return { rows: [name], skipped: [name], opIds };
+        }
+        if (!(await rd<boolean>(vault, VAULT_UNWIND_GUARD_ABI, "hasRole", [ADMIN_ROLE, a.timelock]))) {
+          throw new PublishError("GOVERN", `govern row ${UNWIND_GUARD_ROW}: the timelock ${a.timelock} does not hold ADMIN_ROLE on ${vname} ${vault}, so setEmergencyUnwindGuard would revert after the delay. Nothing was sent`, { row: UNWIND_GUARD_ROW, vault: want.vault });
+        }
+      }
+      const readBack = async () => unwindGuardProblems(want, await guardsNow());
+      state[name] = {
+        ...(state[name] ?? { round: 1 }),
+        guard: { vault: want.vault, vault_address: vault, tokens: [...targets], min_usdc_out: want.minUsdcOut.toString(), override_allowed: want.overrideAllowed, max_loss_bps: Number(want.maxLossBps) },
+      };
+      // The Safe transaction names the guard before and after, so the signers see what changes.
+      await round(name, {
+        id, description: `${vname} emergency unwind guard`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${UNWIND_GUARD_ROW}: ${vname} ${vault} from ${show(before)}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${UNWIND_GUARD_ROW} execute` }),
+      }, UNWIND_GUARD_ROW);
+    } else {
+      // a completed round whose values the chain still reads: reprint its lines, send nothing
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, UNWIND_GUARD_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, UNWIND_GUARD_ROW, "executed", r.executed);
+    }
+    await recordUnwindGuard(name);
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: UNWIND_GUARD_ROW, key: name, vault: want.vault });
+    return { rows: [name], skipped: state[name]?.skipped && !state[name]?.executed ? [name] : [], opIds };
+  }
+
   /** The evidence entry of an executed redeploy round: the `vault_redeploys` entry the verb started, completed with the operation and the read-back (checked by evidence-check). */
-  async function recordRedeploy(name: string, rec: RedeployRecord, vec: RedeployVectors): Promise<void> {
+  async function recordRedeploy(name: string, rec: RedeployRecord, vec: RedeployVectors, vaultCap: string): Promise<void> {
     const r = state[name] as (RowRecord & { observed?: { effective_vaults?: string[]; effective_bps?: number[]; voted_weights_active?: boolean; old_status?: string; new_status?: string } }) | undefined;
     if (!r?.executed?.tx_hash || !r.scheduled?.tx_hash) return;
     const at = async (hash: string): Promise<number> => {
@@ -1098,7 +1331,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
     };
     Object.assign(rec, {
-      status: "governed" as const, vaults: vec.finalVaults, bps: vec.finalBps,
+      status: "governed" as const, vaults: vec.finalVaults, bps: vec.finalBps, router_vault_cap: vaultCap,
       voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
       old_vault_status: r.observed?.old_status, new_vault_status: r.observed?.new_status,
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
@@ -1115,6 +1348,17 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const name = redeployRecordKey(rec.key, rec.ordinal);
     const newVault = rec.new_vault, oldVault = rec.old_vault;
     if (a.vaults[rec.key].toLowerCase() !== newVault.toLowerCase()) throw new PublishError("GOVERN", `the ${VAULT_NAME[rec.key]} manifest names ${a.vaults[rec.key]}, the redeploy record names ${newVault}: the manifests and the run manifest disagree, nothing was scheduled`, { row: REDEPLOY_ROW });
+    // QA plan v1 C2 (issue 1701): both files above are editable. The vault the batch registers, opens and routes deposits to must be the contract the sheet's deployer
+    // CREATED in the round's recorded deploy transactions: their receipts are read from the chain, every run, before anything is scheduled or executed.
+    const deployReceipts: DeployReceipt[] = [];
+    for (const hash of rec.deploy_tx_hashes ?? []) {
+      try {
+        const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+        deployReceipts.push({ hash, status: rc.status, from: rc.from, contractAddress: rc.contractAddress });
+      } catch (e) { deployReceipts.push({ hash, status: `not readable (${(e as Error).message})` }); }
+    }
+    const unbound = createdVaultProblems(newVault, sheet.admin, deployReceipts);
+    if (unbound.length > 0) throw new PublishError("GOVERN", `govern row ${REDEPLOY_ROW}: the run manifest names the new vault ${newVault}, and the chain does not show the deployer ${sheet.admin} created it: ${unbound.join("; ")}. Nothing was scheduled or executed by this run.`, { row: REDEPLOY_ROW, problems: unbound });
     const rd = reader(handle);
     // The operator cancelled this round's operation through the Safe and named the row again: the same round is scheduled again (a cancelled id is free).
     const prev = state[name];
@@ -1130,24 +1374,28 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         ctx.log.log("info", "govern.round_rescheduled", { row: REDEPLOY_ROW, cancelled_operation: prev.scheduled.operation_id });
       }
     }
-    type Plan = { registry_name: string; asset: Address; vaults: Address[]; bps: number[] };
+    // QA plan v1 E3: `vault_cap` is router.vaultCap(old) when the round was planned (a decimal string), the value the batch's setVaultCap gives the new vault.
+    type Plan = { registry_name: string; asset: Address; vaults: Address[]; bps: number[]; vault_cap?: string };
+    const oldVaultCap = async (): Promise<string> => String(await rd<bigint>(a.router, ROUTER_REDEPLOY_ABI, "vaultCap", [oldVault]));
     let vec: RedeployVectors;
+    let vaultCap: string;
     if (!rowComplete(state[name])) {
       let plan = (state[name] as { redeploy?: Plan } | undefined)?.redeploy;
       if (!plan) {
         // First plan of the round: the state the batch starts from must be the state the deploy was made for, or nothing is scheduled.
-        const [listed, [meta, status0], eligible0, registryRouter, tlAdmin, voted, [defVaults, defBps]] = await Promise.all([
+        const [listed, [meta, status0], eligible0, registryRouter, tlAdmin, tlRouterAdmin, voted, [defVaults, defBps]] = await Promise.all([
           rd<Address[]>(a.registry, REGISTRY_REDEPLOY_ABI, "listVaults"),
           rd<[{ name: string; asset: Address }, number]>(a.registry, REGISTRY_REDEPLOY_ABI, "getVault", [oldVault]),
           rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [oldVault]),
           rd<Address>(a.registry, REGISTRY_REDEPLOY_ABI, "router"),
           rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]),
+          rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]),
           rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "votedWeightsActive"),
           rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getDefaultWeights"),
         ]);
         const oldCode = await handle.client.getCode({ address: oldVault });
         const problems = redeployBeforeProblems(oldVault, newVault, {
-          listed, oldStatus: Number(status0), oldEligible: eligible0, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, votedWeightsActive: voted,
+          listed, oldStatus: Number(status0), oldEligible: eligible0, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, timelockIsRouterAdmin: tlRouterAdmin, votedWeightsActive: voted,
           defaultVaults: defVaults, defaultBps: defBps, oldHasCode: !!oldCode && oldCode !== "0x",
         });
         // the new vault must be what the deploy left: closed, unregistered (above), UNLINKED (the batch's first call links it, set-once), governed by the timelock
@@ -1159,13 +1407,23 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           : `the new vault ${newVault} is linked to ${link}, not the deployment's registry ${a.registry}: the link is set-once, so this vault cannot be used; redeploy`);
         if (problems.length > 0) throw new PublishError("GOVERN", `govern row ${REDEPLOY_ROW} cannot start from the state on chain: ${problems.join("; ")}. Nothing was scheduled.`, { row: REDEPLOY_ROW, problems });
         const v = planRedeployVectors({ defaultVaults: defVaults, defaultBps: defBps, oldVault, newVault });
-        plan = { registry_name: meta.name, asset: meta.asset, vaults: v.finalVaults, bps: v.finalBps };
+        plan = { registry_name: meta.name, asset: meta.asset, vaults: v.finalVaults, bps: v.finalBps, vault_cap: await oldVaultCap() };
         state[name] = { ...(state[name] ?? { round: 1 }), redeploy: plan } as RowRecord;
         save();
       }
+      if (plan.vault_cap === undefined) {
+        // A plan written before QA plan v1 E3 has no cap: read it now. If that plan's six-call batch was already scheduled, the operation id differs below and the row
+        // refuses (USAGE): cancel that operation through the Safe and run the row again, which schedules the seven-call batch.
+        plan = { ...plan, vault_cap: await oldVaultCap() };
+        state[name] = { ...(state[name] ?? { round: 1 }), redeploy: plan } as RowRecord;
+        save();
+      }
+      vaultCap = plan.vault_cap!;
       vec = vectorsFromFinal({ finalVaults: plan.vaults, finalBps: plan.bps, oldVault, newVault });
-      const calls = buildRedeployCalls({ registry: a.registry, oldVault, newVault, registryName: plan.registry_name, asset: plan.asset, finalVaults: plan.vaults, finalBps: plan.bps });
-      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      const calls = buildRedeployCalls({ registry: a.registry, router: a.router, oldVault, newVault, registryName: plan.registry_name, asset: plan.asset, finalVaults: plan.vaults, finalBps: plan.bps, vaultCap });
+      // QA plan v1 E1: the row may run at the original sha or at the round's own sha (redeploy-vault.ts redeployShaRun), so the salt is the ROUND's sha, never the
+      // run's: a schedule at one and a resume at the other name the same operation.
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: governSalt(rec.core_sha || ctx.coreSha, ctx.chainId, name), form: "batch" as const };
       const id = await api.operationId(handle, p);
       const prior = state[name]?.scheduled?.operation_id;
       if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: REDEPLOY_ROW, prior, id });
@@ -1184,23 +1442,28 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           defaultVaults, defaultBps, effectiveVaults, effectiveBps,
           newPaused: await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "depositsPaused"), newLinked: (await rd<Address>(newVault, VAULT_REDEPLOY_ABI, "registry")).toLowerCase() === a.registry.toLowerCase(),
           oldRetiredFlag: await rd<boolean>(oldVault, VAULT_REDEPLOY_ABI, "retired"), oldHasCode: !!oldCode && oldCode !== "0x",
+          newVaultCap: await rd<bigint>(a.router, ROUTER_REDEPLOY_ABI, "vaultCap", [newVault]), oldVaultCap: await rd<bigint>(a.router, ROUTER_REDEPLOY_ABI, "vaultCap", [oldVault]),
         });
         if (bad.length === 0) (state[name] as { observed?: unknown }).observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number), old_status: STATUS_NAME[Number(oldStatus)], new_status: STATUS_NAME[Number(newStatus)] };
         return bad;
       };
+      // QA plan v1 C2: the Safe transaction the owners sign names both addresses, not only the call labels.
+      const swap = `${VAULT_NAME[rec.key]} old ${oldVault} -> new ${newVault}`;
       await round(name, {
         id, description: `redeploy ${VAULT_NAME[rec.key]}: ${oldVault} to ${newVault}`, readBack,
-        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REDEPLOY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
-        execute: () => api.executeOnTimelock(handle, { ...p, description: `${REDEPLOY_ROW} execute` }),
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${REDEPLOY_ROW} ${swap}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${REDEPLOY_ROW} execute ${swap}` }),
       }, REDEPLOY_ROW);
     } else {
       const done = state[name] as RowRecord & { redeploy?: Plan };
       if (!done.redeploy) throw new PublishError("GOVERN", `the run manifest holds an executed ${name} with no recorded vector: it cannot be read back`, { row: REDEPLOY_ROW });
       vec = vectorsFromFinal({ finalVaults: done.redeploy.vaults, finalBps: done.redeploy.bps, oldVault, newVault });
+      // a round executed before QA plan v1 E3 carried no cap call: its evidence keeps the old vault's cap as it reads now, and the evidence chain check names the six-call batch
+      vaultCap = done.redeploy.vault_cap ?? await oldVaultCap();
       if (done.scheduled) emitPhase(o, REDEPLOY_ROW, "scheduled", done.scheduled);
       if (done.executed) emitPhase(o, REDEPLOY_ROW, "executed", done.executed);
     }
-    await recordRedeploy(name, rec, vec);
+    await recordRedeploy(name, rec, vec, vaultCap);
     save();
     ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: REDEPLOY_ROW, old_vault: oldVault, new_vault: newVault });
     return { rows: [name], skipped: [], opIds };
@@ -1231,6 +1494,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     }
     const rd = reader(handle);
     if (!rowComplete(state[name])) {
+      // Issue 1698: the stage 11 wiring the one call needs, before the schedule and again before the execute (a wiring change while the call waits is caught here,
+      // not as a revert after the delay). Nothing is sent on a miss.
+      const wiring = {
+        receiptContract: await rd<Address>(governance, GOVERNANCE_WIRING_ABI, "receiptContract").catch(() => undefined),
+        governanceIsReceiptAdmin: await rd<boolean>(receipt, RECEIPT_ROLE_ABI, "hasRole", [ADMIN_ROLE, governance]),
+      };
+      const unwired = applyWiringProblems(receipt, governance, wiring);
+      if (unwired.length > 0) throw new PublishError("GOVERN", `govern row ${APPLY_ROW}: the weight setter is not wired to the consensus receipt register: ${unwired.join("; ")}. Nothing was sent. The timelock stage wires it (setReceiptContract and the register ADMIN_ROLE); fix that wiring through the Safe and the timelock, then run the row again`, { row: APPLY_ROW, receipt_id: receiptId, problems: unwired });
       const recorded = await rd<boolean>(receipt, RECEIPT_ABI, "isRecorded", [receiptId]);
       const released = recorded ? await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]) : false;
       const stored = recorded ? (await rd<{ payloadDigest: Hex }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId])).payloadDigest : undefined;
@@ -1332,7 +1603,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
 
   if (o.call) {
     const { label, target, data } = o.call;
-    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === CLEAR_ROW || label === REDEPLOY_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
+    if (!/^[A-Za-z0-9._-]+$/.test(label) || (GOVERN_ROWS as readonly string[]).includes(label) || label === RECEIPT_ROW || label === APPLY_ROW || label === REGISTER_ROW || label === CLEAR_ROW || label === REDEPLOY_ROW || label === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `call label '${label}': letters, digits, . _ - only, and not a govern row name`);
     const name = `call-${label}`;
     const p = { timelock: a.timelock, calls: [{ target, data }], salt: salt(name), form: "single" as const };
     const id = await api.operationId(handle, p);

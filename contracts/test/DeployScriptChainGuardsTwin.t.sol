@@ -16,7 +16,6 @@ import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitt
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
-import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";
 
 /// @notice On the Twin chain (918453) the strict chain guard does not fire for an unset
 ///         EXPECTED_CHAIN_ID: each script's `run()` either fails on a later required input or
@@ -103,12 +102,6 @@ contract DeployScriptChainGuardsTwinTest is Test {
     function test_rwaBasketVault_run_guardSilentOnTwinChain() public {
         (bool ok, bytes memory d) =
             address(new DeployRwaBasketVault()).call(abi.encodeWithSignature("run()"));
-        _notGuard(ok, d);
-    }
-
-    function test_activateEligibility_run_guardSilentOnTwinChain() public {
-        (bool ok, bytes memory d) =
-            address(new ActivateBasketVaultEligibility()).call(abi.encodeWithSignature("run()"));
         _notGuard(ok, d);
     }
 

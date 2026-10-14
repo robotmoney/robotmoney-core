@@ -5,8 +5,9 @@
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
 // creates it with the Safe tool (the same three owners, threshold 2, a different salt), registers it through the governing Safe and the timelock (govern --row register-committee --submitter),
-// two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: releaseReceipt plus the router weights), then verify a third time and check the run manifest's receipt path (evidence-check).
-// The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN. With GOVERN_IN the govern matrix then runs
+// two of its owners sign the record and the deployer pays the gas (the record-receipt verb with --submitter), the Safe applies it (govern --row apply-receipt: ONE RouterGovernance.applyReceipt call, which releases the receipt and writes the router weights in one transaction, issue 1698), then verify a third time and check the run manifest's receipt path (evidence-check).
+// The order is publish, verify, govern, verify (issue 1667): the second verify runs only with both VERIFY_IN and GOVERN_IN. Between govern and that verify, one set-unwind-guard
+// round per basket stage 13 opened (QA plan v1 D7: the verifier requires the emergency unwind guard on an open basket). With GOVERN_IN the govern matrix then runs
 // one Safe self-administration row on the REAL SafeL2 (QA plan v1 B5, finding T5): `govern --row safe-change-threshold` raises the threshold to the owner count, then
 // restores the sheet's threshold (that second transaction carries every owner's signature and runs while the sheet is stale), before the receipt path.
 // Tests replace the tools with stubs: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts), TWIN_REHEARSAL_CLI (src/rehearsal/cli.ts), TWIN_MERGE_SHEET (src/ci/merge-sheet.ts), CAST (cast).
@@ -15,10 +16,18 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { join } from "node:path";
 import { receiptIdOfBytes, receiptPayloadDigest } from "../receipt-digest.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
-import { parseSheetText } from "../sheet.ts";
+import { BASKET_KEYS, parseSheetText } from "../sheet.ts";
+import { UNWIND_GUARD_ROW } from "../unwind-guard.ts";
 
 /** The one Safe self-administration row the Twin govern matrix runs on the real SafeL2 (QA plan v1 B5): one Safe transaction to the Safe itself, no timelock round. */
 const SELF_ADMIN_MATRIX_ROW = "safe-change-threshold";
+/**
+ * QA plan v1 D7: the emergency unwind guard the Twin sets on every basket stage 13 opened (`govern --row set-unwind-guard ... token=all`), before the post-govern verify, whose
+ * label requires a non-zero minUsdcOut on every active asset of an open basket. The baskets hold nothing when the row runs, so these values prove the row and the label on the
+ * real contracts, never a sizing: on 8453 the operator sizes min-usdc-out from each vault's holding (runbook).
+ */
+const TWIN_UNWIND_MIN_USDC_OUT = "1000000";
+const TWIN_UNWIND_MAX_LOSS_BPS = "500";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
@@ -97,6 +106,13 @@ if (env("GOVERN_IN") === "true") {
   // Stage 13 (the four vault unpauses through the real Safe and timelock). On the Twin fork the 48 hour wait is one time warp.
   stage("govern", join(rh, "govern-rows.txt"));
   exportVar("TWIN_GOVERN_ROWS", join(rh, "govern-rows.txt"));
+  // QA plan v1 D7: one set-unwind-guard round per basket the sheet's GOVERN_UNPAUSE_VAULTS opened, through the real Safe and timelock (one warp each), before the post-govern verify.
+  const unpaused = (parseSheetText(readFileSync(sheet, "utf8")).GOVERN_UNPAUSE_VAULTS ?? fail("the merged sheet has no GOVERN_UNPAUSE_VAULTS")).split(",").map((x) => x.trim());
+  const guarded = BASKET_KEYS.filter((k) => unpaused.includes(k));
+  const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), ["--row", UNWIND_GUARD_ROW, "--admin-arg", `vault=${k}`, "--admin-arg", "token=all",
+    "--admin-arg", `min-usdc-out=${TWIN_UNWIND_MIN_USDC_OUT}`, "--admin-arg", `max-loss-bps=${TWIN_UNWIND_MAX_LOSS_BPS}`]));
+  writeFileSync(join(rh, "unwind-guard-rows.txt"), guardRows.join(""));
+  exportVar("TWIN_UNWIND_GUARD_ROWS", join(rh, "unwind-guard-rows.txt"));
   // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all four vaults unpaused). The Twin run only proves the scripts execute in this
   // order: the 48 hour delay and the Safe signers are proven on 8453 through the real Safe.
   if (env("VERIFY_IN") === "true") {

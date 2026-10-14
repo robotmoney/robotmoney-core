@@ -9,6 +9,8 @@
 //!   skim for run-time issues. Rotates at `[log].rotate_size_mb`, keeps
 //!   `[log].keep_files` rolled files. Default location:
 //!   `$XDG_STATE_HOME/rust-payment-client/logs` (= `~/.local/state/rust-payment-client/logs`).
+//!   `error` lines are also copied to stderr, so a startup failure (exit 3)
+//!   names its cause where the caller sees it.
 //!
 //! - **Audit log** — separate `audit.log` (with the same rotation policy)
 //!   carrying one JSON record per signing decision. Operators ship that
@@ -26,7 +28,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use flexi_logger::{
-    Cleanup, Criterion, DeferredNow, FileSpec, Logger, LoggerHandle, Naming, Record, WriteMode,
+    Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, LoggerHandle, Naming, Record,
+    WriteMode,
 };
 use serde::Serialize;
 
@@ -261,9 +264,15 @@ pub fn init(cfg: &LogConfig) -> Result<PathBuf, String> {
         .basename("rmpc")
         .suppress_timestamp();
 
+    // Error lines also go to stderr. A startup failure (exit 3, nothing on
+    // stdout) logs its cause at `error`; file-only logging left the caller
+    // with an empty stderr, e.g. on a wrong keystore passphrase (QA plan U7,
+    // finding DR-11). Stdout stays the single JSON document. `.format` sets
+    // the stderr format too, so both sinks print the same canonical line.
     let handle = Logger::try_with_str(level_filter.as_str().to_lowercase())
         .map_err(|e| format!("logging: flexi_logger init: {e}"))?
         .log_to_file(file_spec)
+        .duplicate_to_stderr(Duplicate::Error)
         .write_mode(WriteMode::BufferAndFlush)
         .format(diagnostic_format)
         .rotate(

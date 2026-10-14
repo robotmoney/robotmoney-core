@@ -99,6 +99,24 @@ export function requiredSheetNames(row: Pick<StageRow, "requiredEnv" | "vault">)
   return out;
 }
 
+/**
+ * Issue 1705 C4: the lending adapters a vault stage registers, in registration order (rmUSDC: DeployVault.s.sol `_approveAndRegisterAdapters`). `stage` is the
+ * vault stage that writes them. Each adapter names the manifest field that holds it (deployed per run), the script constant that holds its cap and that cap in
+ * bps. The verifier compares the vault's adapter registry, caps and code-hash allowlist with this; the core-parity check reads the constants and the field
+ * names from the script, so a change there fails CI.
+ */
+export interface LendingAdapterWiring { field: string; capConstant: string; capBps: number }
+export const LENDING_ADAPTERS: Partial<Record<VaultKey, { stage: string; adapters: readonly LendingAdapterWiring[] }>> = {
+  USDC: {
+    stage: "vault",
+    adapters: [
+      { field: "aave_adapter", capConstant: "AAVE_BPS", capBps: 3334 },
+      { field: "compound_adapter", capConstant: "COMPOUND_BPS", capBps: 3333 },
+      { field: "moonwell_flagship_adapter", capConstant: "THIRD_VENUE_BPS", capBps: 3333 },
+    ],
+  },
+};
+
 /** The verifier's core contracts: manifest field and the key into the table's `artifacts`. Names and files come from the table. */
 export const CORE_CONTRACT_REFS: { name: string; stage: string; field: string; artifactKey: string }[] = [
   { name: "gateway", stage: "gateway", field: "gateway", artifactKey: "gateway" },
@@ -122,6 +140,8 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
   // core 1676: the verifier reads the V4 adapter and the recorder a vault stage wrote, and the recorder stage's own manifest
   { stage: "agent", field: VAULT_ADAPTER_V4_FIELD },
   { stage: "agent", field: VAULT_RECORDER_FIELD },
+  // issue 1705 C4: the verifier reads the rmUSDC lending adapters the vault stage wrote
+  ...Object.values(LENDING_ADAPTERS).flatMap((w) => w!.adapters.map((a) => ({ stage: w!.stage, field: a.field }))),
 ];
 
 /**
@@ -136,6 +156,12 @@ export const ASSET_CONFIG_FILES: Partial<Record<VaultKey, { file: string; list: 
 };
 /** The manifest field of a basket or agent vault that holds its Uniswap V3 swap adapter. */
 export const VAULT_ADAPTER_FIELD = "adapter";
+
+/**
+ * Issue 1705 C4: each basket's swap bound when its config sets no root `maxSlippageBps` (zero keeps the vault default, BasketVaultDeployBase): the vault
+ * constructor's `_DEFAULT_SLIPPAGE_BPS`. The core-parity check reads the constant from each vault source.
+ */
+export const BASKET_DEFAULT_SLIPPAGE_BPS: Partial<Record<VaultKey, bigint>> = { PROTO: 100n, AGENT: 300n, RWA: 100n };
 /** Core's `venue` names to the on-chain Venue enum index (`BasketVault.Venue`: V3 = 0, V4 = 1, Aerodrome = 2). */
 export const VENUE_INDEX: Record<string, number> = { UniswapV3: 0, UniswapV4: 1 };
 export const VENUE_V3 = 0;

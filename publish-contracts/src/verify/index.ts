@@ -1,14 +1,14 @@
 // The one verifier (stage 12). Same code, same labels on the Twin chain (918453) and Base mainnet (8453).
 // Replaces the three superseded verifier shell scripts and the stage verifier.
 // Read-only: it sends nothing.
-import { encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
-  RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
+  KEEPER_ROLE, RM_TOKEN, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, SIG_AGENT_OWNERSHIP, SIG_RECEIPT_APPLIED, SIG_ROLE_GRANTED, SIG_VOTED_WEIGHTS_CLEARED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
 import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
@@ -16,9 +16,9 @@ import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
-import type { Address, ChainReader, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport } from "./types.ts";
+import type { Address, ChainReader, ExpectedAsset, Hex, LogEntry, VaultSheet, VerifyOptions, VerifyReport, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 
-export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader } from "./types.ts";
+export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 export { viemReader } from "./reader.ts";
 export { loadFrozenCounts, sumFrozenCounts } from "./frozen.ts";
 export { verifySources } from "./sources.ts";
@@ -68,6 +68,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: true, detail: `${chainVaults.length} vaults on chain` };
   });
   const redeploys = opts.redeploys ?? [];
+  // QA plan v1 E1 (DT-2): after a redeploy the checkout's build (artifactsDir) is the redeploy sha's, and only the replacing vault runs it. Every contract the original
+  // deployment created runs the build of the original sha (priorArtifactsDir, --prior-out). No redeploy, or no --prior-out (every round at the original sha): one build.
+  const originalDir = redeploys.length > 0 ? opts.priorArtifactsDir : undefined;
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
   const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault))];
@@ -140,21 +143,31 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const [who, addr] of [["safe", safe], ["deployer", D], ["governance", byName.governance!], ["pauser", sheet.pauser], ["emergency", sheet.emergency]] as Array<[string, Address]>) {
     await c.runEq(`router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by ${who}`, () => hasRole(chain, router, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, addr), false);
   }
+  // QA plan v1 C3 (CS-6, ADR-0002): the timelock delay on a weight change holds only while the weight setter is timelock-gated. A rotation installs whatever
+  // contract the Safe chose, so the run records the current holder's gating (VerifyReport.weightSetter, the verify stage record) and fails on any other gate.
+  const weightSetter = await weightSetterGating(chain, { router, timelock: tl, artifactsDir: originalDir ?? opts.artifactsDir, governanceArtifact: core.find((x) => x.name === "governance")!.artifact });
+  c.push(WEIGHT_SETTER_GATING_LABEL, weightSetter.gating === "timelock", gatingDetail(weightSetter));
   await c.runEq("gateway: not paused", () => chain.read(gateway, "function depositsPaused() view returns (bool)"), false);
   // The router-first split (core 1493): the gateway and the registry both name the router the router stage deployed.
   await c.runEq("gateway: router() equals the deployed router", async () => lc((await chain.read(gateway, "function router() view returns (address)")) as string), lc(router));
   await c.runEq("registry: router() equals the deployed router", async () => lc((await chain.read(registry, "function router() view returns (address)")) as string), lc(router));
 
-  // ---- deploy-time configuration, set by the deployer before the handover and never touched by govern (issue 1520)
-  await deployTimeChecks(c, chain, sheet, { governance: byName.governance!, router, vaults: man.vaults, receipt: byName.receipt!, applied: opts.appliedReceipt });
-
-  // ---- vaults
-  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY] });
-
-  // ---- gateway agents, derived from logs
+  // the chain head bounds every log scan below (the applied receipt, the agents, the role history)
   const head = await chain.blockNumber().catch(() => undefined);
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
+
+  // ---- deploy-time configuration, set by the deployer before the handover and never touched by govern (issue 1520)
+  await deployTimeChecks(c, chain, sheet, {
+    governance: byName.governance!, router, vaults: man.vaults, receipt: byName.receipt!, recorded: opts.appliedReceipt,
+    scan: head === undefined ? undefined : { fromBlock: opts.fromBlock, head, chunk, retryBaseMs },
+  });
+
+  // ---- vaults
+  const vaultScan = head === undefined ? undefined : { fromBlock: opts.fromBlock, head, chunk, retryBaseMs };
+  for (const v of man.vaults) await vaultChecks(c, chain, v, sheet.vaults[v.key], { tl, registry, safe, sheet, recorder: byName.recorder!, artifactsDir: opts.artifactsDir, v4AdapterArtifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY], scan: vaultScan });
+
+  // ---- gateway agents, derived from logs
   if (head === undefined) {
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
@@ -208,19 +221,20 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   for (const n of libNames) await c.run(`library[${n}]: has code`, async () => (await chain.getCode(man.libraries[n])).length > 2);
 
   // ---- code hashes against the build, immutables and links masked
-  // Issue 1796: after a redeploy only the new vault runs the current build. The others (and the retired vault, below) run the build of the original deployment sha.
+  // Issue 1796, QA plan v1 E1: after a redeploy only the replacing vault (and an adapter its manifest names) runs the checkout's build, the redeploy sha's. Every other
+  // contract (core, libraries, the other adapters, the vaults not replaced, and the retired vault below) was created by the original deployment and runs its build.
   const redeployed = new Set(redeploys.map((r) => r.vault));
   const priorDir = opts.priorArtifactsDir;
-  const codeTargets: { label: string; address: Address; artifact: string; dir?: string }[] = [
-    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact })),
-    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, ...(redeploys.length > 0 && !redeployed.has(v.key) ? { dir: priorDir } : {}) })),
-    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]! })),
-    ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
+  const codeTargets: { label: string; address: Address; artifact: string; dir?: string; original: boolean }[] = [
+    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, dir: originalDir, original: true })),
+    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, dir: redeployed.has(v.key) ? undefined : originalDir, original: !redeployed.has(v.key) })),
+    ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]!, dir: redeployed.has(a.vault) ? undefined : originalDir, original: !redeployed.has(a.vault) })),
+    ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: runtime code equals build artifact (masked)`, async () => {
       const r = compareCode(await chain.getCode(t.address), loadArtifact(t.dir ?? opts.artifactsDir, t.artifact));
-      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
+      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.original && originalDir === undefined ? " (after a redeploy at another sha the contracts it did not replace run the original build: pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
     });
   }
 
@@ -243,11 +257,82 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
   });
 
-  return c.report();
+  return { ...c.report(), weightSetter };
 }
 
+export const WEIGHT_SETTER_GATING_LABEL = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
+const ROLE_MEMBER_COUNT = "function getRoleMemberCount(bytes32 role) view returns (uint256)";
+const ROLE_MEMBER = "function getRoleMember(bytes32 role, uint256 index) view returns (address)";
+const roleMembers = async (ch: ChainReader, at: Address, r: Hex): Promise<Address[]> => {
+  const n = Number((await ch.read(at, ROLE_MEMBER_COUNT, [r])) as bigint);
+  const out: Address[] = [];
+  for (let i = 0; i < n; i++) out.push((await ch.read(at, ROLE_MEMBER, [r, BigInt(i)])) as Address);
+  return out;
+};
+
+/**
+ * QA plan v1 C3 (CS-6, ADR-0002 "Why the 1522 bypass stays closed"). Reads every router `WEIGHT_SETTER_ROLE` holder and what gates its weight writes. A holder is
+ * timelock-gated when its runtime code is the RouterGovernance build (its weight writes are all `onlyRole(ADMIN_ROLE)`) and the timelock is its only `ADMIN_ROLE`
+ * member. Any other contract is not: its code is not the reviewed build, so nothing says the timelock stands in front of it. A failed router or code read is
+ * "unreadable", never "timelock". The delay is recorded only: the timelock labels own its floor.
+ */
+async function weightSetterGating(chain: ChainReader, at: { router: Address; timelock: Address; artifactsDir: string; governanceArtifact: string }): Promise<WeightSetterGating> {
+  const delaySeconds = await chain.read(at.timelock, "function getMinDelay() view returns (uint256)").then((d) => Number(d as bigint), () => null);
+  const base = { timelock: at.timelock, delaySeconds };
+  try {
+    const art = loadArtifact(at.artifactsDir, at.governanceArtifact);
+    const holders: WeightSetterHolder[] = [];
+    for (const h of await roleMembers(chain, at.router, WEIGHT_SETTER_ROLE)) {
+      const routerGovernanceCode = compareCode(await chain.getCode(h), art).ok;
+      const admins = await roleMembers(chain, h, ADMIN_ROLE).catch(() => null); // no AccessControlEnumerable: no gate this verifier can read
+      holders.push({ address: h, routerGovernanceCode, admins, timelockGated: routerGovernanceCode && admins !== null && admins.length === 1 && lc(admins[0]!) === lc(at.timelock) });
+    }
+    return { gating: holders.length > 0 && holders.every((h) => h.timelockGated) ? "timelock" : "not-timelock", holders, ...base };
+  } catch {
+    return { gating: "unreadable", holders: [], ...base };
+  }
+}
+
+function gatingDetail(g: WeightSetterGating): string {
+  const delay = g.delaySeconds === null ? "the timelock delay (unreadable)" : `the timelock delay of ${g.delaySeconds} s`;
+  if (g.gating === "unreadable") return "the WEIGHT_SETTER_ROLE holders, their code or the RouterGovernance build could not be read: the gating is unknown";
+  if (g.holders.length === 0) return "WEIGHT_SETTER_ROLE has no holder";
+  const each = g.holders.map((h) => `${h.address} (${h.routerGovernanceCode ? "RouterGovernance build" : "not the RouterGovernance build"}, ADMIN_ROLE ${h.admins === null ? "unreadable" : `[${h.admins.join(", ")}]`})`).join("; ");
+  return g.gating === "timelock"
+    ? `${each}: every weight change waits ${delay}`
+    : `${each}: a holder that is not the RouterGovernance build gated by the timelock ${g.timelock} alone lets weight changes skip ${delay} (ADR-0002, security-model section 7)`;
+}
+
+/** The log window every scan of the run reads: the first deploy block to the chain head. */
+type ScanWindow = { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number };
+/** The weight setter's last `applyReceipt` as the chain logged it (QA plan v1 C2, issue 1701). */
+interface ChainApplied { receiptId: Hex; vaults: Address[]; bps: bigint[]; block: bigint }
+/** What the chain says was applied: the last ReceiptApplied event, and whether the router logged VotedWeightsCleared after it (then no applied vector is active). */
+interface ChainApplication { last?: ChainApplied; active: boolean; clearedAt?: bigint }
+
+/** The later of two logs by block, then by position in the block. A tie keeps the later one in scan order. */
+const later = (a: LogEntry | undefined, b: LogEntry): LogEntry => (a === undefined || b.blockNumber > a.blockNumber || (b.blockNumber === a.blockNumber && (b.logIndex ?? 0) >= (a.logIndex ?? 0)) ? b : a);
+
+/**
+ * QA plan v1 C2 (issue 1701): the applied vector is read from the chain, never from the run manifest. The weight setter emits `ReceiptApplied(receiptId, payloadDigest,
+ * vaults, bps)` from `applyReceipt`, the router emits `VotedWeightsCleared()` from the clear row. A failed scan throws: it never reads as "nothing applied".
+ */
+async function chainApplication(chain: ChainReader, governance: Address, router: Address, w: ScanWindow): Promise<ChainApplication> {
+  const scan = (address: Address, sig: string) => scanLogs(chain, { address, topics: [keccak256(toHex(sig))], fromBlock: w.fromBlock, toBlock: w.head, chunk: w.chunk, retryBaseMs: w.retryBaseMs });
+  const app = (await scan(governance, SIG_RECEIPT_APPLIED)).reduce<LogEntry | undefined>(later, undefined);
+  if (!app) return { active: false };
+  const [, vaults, bps] = decodeAbiParameters([{ type: "bytes32" }, { type: "address[]" }, { type: "uint256[]" }], app.data);
+  const last: ChainApplied = { receiptId: app.topics[1]!, vaults: [...vaults], bps: [...bps], block: app.blockNumber };
+  const clear = (await scan(router, SIG_VOTED_WEIGHTS_CLEARED)).reduce<LogEntry | undefined>(later, undefined);
+  const cleared = clear !== undefined && (clear.blockNumber > app.blockNumber || (clear.blockNumber === app.blockNumber && (clear.logIndex ?? 0) > (app.logIndex ?? 0)));
+  return cleared ? { last, active: false, clearedAt: clear!.blockNumber } : { last, active: true };
+}
+
+const weightKey = (vaults: readonly string[], bps: readonly (bigint | number)[]): string => vaults.map((v, i) => `${lc(v)}:${bps[i]}`).join(",");
+
 async function deployTimeChecks(
-  c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"], at: { governance: Address; router: Address; vaults: ManifestVault[]; receipt: Address; applied?: VerifyOptions["appliedReceipt"] },
+  c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"],
+  at: { governance: Address; router: Address; vaults: ManifestVault[]; receipt: Address; recorded?: VerifyOptions["appliedReceipt"]; scan?: ScanWindow },
 ): Promise<void> {
   // Issue 1698: the weight setter has no voting surface. What stage 11 wired is read back instead: the receipt register `applyReceipt` releases from, the router it
   // writes, and the register ADMIN_ROLE the release needs. Without any of the three the first apply-receipt reverts (ReceiptContractNotSet or AccessControlUnauthorizedAccount).
@@ -257,29 +342,46 @@ async function deployTimeChecks(
   const [rVaults, rBps] = await (async () => {
     try { return (await chain.read(at.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return undefined; }
   })() ?? [undefined, undefined];
-  const gotWeights = rVaults && rBps ? rVaults.map((v, i) => `${lc(v)}:${rBps[i]}`).join(",") : undefined;
+  const gotWeights = rVaults && rBps ? weightKey(rVaults, rBps) : undefined;
   const [eVaults, eBps] = await (async () => {
     try { return (await chain.read(at.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return undefined; }
   })() ?? [undefined, undefined];
-  const gotEffective = eVaults && eBps ? eVaults.map((v, i) => `${lc(v)}:${eBps[i]}`).join(",") : undefined;
+  const gotEffective = eVaults && eBps ? weightKey(eVaults, eBps) : undefined;
   const sheetWant = (): { want?: string; missing: string[] } => {
     const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
     const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
     return missing.length ? { missing } : { want: sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(","), missing };
   };
+  // QA plan v1 C2 (issue 1701): what was applied comes from the chain's events, never from the run manifest (an editable file, so a forged entry could mask router
+  // weight drift). The labels that depend on it fail when the logs cannot be read.
+  let onChain: ChainApplication | undefined;
+  let scanError = "block number unreadable: the ReceiptApplied log scan cannot run";
+  if (at.scan) {
+    try { onChain = await chainApplication(chain, at.governance, at.router, at.scan); }
+    catch (e) { scanError = `ReceiptApplied log scan failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`; }
+  }
   // Issue 1696, issue 1698: after `govern --row apply-receipt` the router's ACTIVE vector is the applied receipt's; the DEFAULT vector stays the sheet's fallback.
-  const appliedWant = at.applied ? at.applied.vaults.map((v, i) => `${lc(v)}:${at.applied!.bps[i]}`).join(",") : undefined;
+  const active = onChain?.active ? onChain.last : undefined;
+  const appliedWant = active ? weightKey(active.vaults, active.bps) : undefined;
   await c.run("router: default weights equal sheet", async () => {
     if (gotWeights === undefined) return { ok: false, detail: "getDefaultWeights unreadable" };
     const s = sheetWant();
     if (s.want === undefined) return { ok: false, detail: `no manifest vault for ${s.missing.join(",")}` };
-    return { ok: gotWeights === s.want, detail: gotWeights === s.want ? `${rVaults!.length} weights${at.applied ? " (the fallback; the applied receipt is the active vector)" : ""}` : `got ${gotWeights}, want ${s.want}` };
+    return { ok: gotWeights === s.want, detail: gotWeights === s.want ? `${rVaults!.length} weights${active ? " (the fallback; the applied receipt is the active vector)" : ""}` : `got ${gotWeights}, want ${s.want}` };
   });
   // Issue 1743: the DEFAULT vector alone is not what the router routes by. An active vector (setWeights, written by applyReceipt) overrides it while votedWeightsActive is true.
-  // The deploy must leave none; an applied receipt must leave exactly one. The EFFECTIVE vector (what deposits use) must be the sheet's launch vector, or the applied receipt's.
-  await c.runEq("router: votedWeightsActive is false after deploy, true after an applied receipt", () => chain.read(at.router, "function votedWeightsActive() view returns (bool)"), at.applied !== undefined);
+  // The deploy must leave none; an applied receipt must leave exactly one (a later clear drops it). The EFFECTIVE vector (what deposits use) must be the sheet's launch
+  // vector, or the vector of the chain's last ReceiptApplied event while it is active.
+  await c.run("router: votedWeightsActive is false after deploy, true after an applied receipt", async () => {
+    if (onChain === undefined) return { ok: false, detail: scanError };
+    const got = (await chain.read(at.router, "function votedWeightsActive() view returns (bool)")) as boolean;
+    const want = active !== undefined;
+    const why = active ? `receipt ${active.receiptId} applied in block ${active.block}` : onChain.last ? `receipt ${onChain.last.receiptId} cleared in block ${onChain.clearedAt}` : "no ReceiptApplied event";
+    return { ok: got === want, detail: got === want ? `${got} (${why})` : `got ${got}, want ${want} (${why})` };
+  });
   await c.run("router: effective weights equal the sheet's launch vector", async () => {
     if (gotEffective === undefined) return { ok: false, detail: "getEffectiveWeights unreadable" };
+    if (onChain === undefined) return { ok: false, detail: scanError };
     let want: string;
     if (appliedWant !== undefined) want = appliedWant;
     else {
@@ -287,20 +389,30 @@ async function deployTimeChecks(
       if (s.want === undefined) return { ok: false, detail: `no manifest vault for ${s.missing.join(",")}` };
       want = s.want;
     }
-    return { ok: gotEffective === want, detail: gotEffective === want ? `${eVaults!.length} effective weights${appliedWant !== undefined ? `, the applied receipt ${at.applied!.receiptId}` : ""}` : `getEffectiveWeights is ${gotEffective}, want ${want}` };
+    return { ok: gotEffective === want, detail: gotEffective === want ? `${eVaults!.length} effective weights${active ? `, the applied receipt ${active.receiptId}` : ""}` : `getEffectiveWeights is ${gotEffective}, want ${want}` };
   });
-  // Always present, so the label set is the same with and without an application. Nothing applied: nothing to check. Applied: released, and the vector is what the router routes by.
+  // Always present, so the label set is the same with and without an application. QA plan v1 C2: the run manifest's record must be what the chain did (the receipt and
+  // the vector of the last ReceiptApplied event, absent exactly when there is none). Then an applied receipt reads released, and an active one routes deposits.
   await c.run("receipt: applied receipt is released and its weights are on the router", async () => {
-    if (!at.applied) return { ok: true, detail: "no receipt applied by govern" };
-    const released = (await chain.read(at.receipt, "function isReleased(bytes32 receiptId) view returns (bool)", [at.applied.receiptId])) as boolean;
-    if (!released) return { ok: false, detail: `receipt ${at.applied.receiptId} reads not released` };
-    return { ok: gotEffective === appliedWant, detail: gotEffective === appliedWant ? `receipt ${at.applied.receiptId} released, ${at.applied.vaults.length} weights route deposits` : `router effective weights ${gotEffective}, the applied receipt's vector is ${appliedWant}` };
+    if (onChain === undefined) return { ok: false, detail: scanError };
+    const last = onChain.last, rec = at.recorded;
+    if (!last) return rec
+      ? { ok: false, detail: `the run manifest records receipt ${rec.receiptId} as applied, the governance contract logged no ReceiptApplied since block ${at.scan!.fromBlock}: the record is not what the chain did` }
+      : { ok: true, detail: "no receipt applied by govern" };
+    if (!rec) return { ok: false, detail: `the chain applied receipt ${last.receiptId} in block ${last.block} and the run manifest records no application: every weight change must be a recorded govern round` };
+    if (lc(rec.receiptId) !== lc(last.receiptId) || weightKey(rec.vaults, rec.bps) !== weightKey(last.vaults, last.bps)) {
+      return { ok: false, detail: `the run manifest records receipt ${rec.receiptId} [${weightKey(rec.vaults, rec.bps)}], the chain's last ReceiptApplied (block ${last.block}) is receipt ${last.receiptId} [${weightKey(last.vaults, last.bps)}]` };
+    }
+    const released = (await chain.read(at.receipt, "function isReleased(bytes32 receiptId) view returns (bool)", [last.receiptId])) as boolean;
+    if (!released) return { ok: false, detail: `receipt ${last.receiptId} reads not released` };
+    if (!active) return { ok: true, detail: `receipt ${last.receiptId} released; its vector was cleared in block ${onChain.clearedAt}, the default vector routes deposits` };
+    return { ok: gotEffective === appliedWant, detail: gotEffective === appliedWant ? `receipt ${last.receiptId} released, ${last.vaults.length} weights route deposits` : `router effective weights ${gotEffective}, the applied receipt's vector is ${appliedWant}` };
   });
 }
 
 async function vaultChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined,
-  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string },
+  ctx: { tl: Address; registry: Address; safe: Address; sheet: VerifyOptions["sheet"]; recorder: Address; artifactsDir: string; v4AdapterArtifact?: string; scan?: VaultScan },
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const { tl, registry, safe, sheet } = ctx;
@@ -314,6 +426,19 @@ async function vaultChecks(
   await c.runEq(`${p}: ADMIN_ROLE not held by safe`, () => hasRole(chain, a, ADMIN_ROLE, safe), false);
   await c.runEq(`${p}: EMERGENCY_ROLE held by emergency key`, () => hasRole(chain, a, EMERGENCY_ROLE, sheet.emergency), true);
   await c.runEq(`${p}: EMERGENCY_ROLE not held by deployer`, () => hasRole(chain, a, EMERGENCY_ROLE, D), false);
+  // Issue 1705 C5: the vaults keep no role enumeration (EIP-170), so the holders are the RoleGranted grantees since the first deploy block that hold the role now.
+  // "held by emergency key" alone passes with a second holder next to it; the roles enumeration label passes a second holder that is an expected account.
+  await c.run(`${p}: ${EMERGENCY_ONE_HOLDER_LABEL}`, async () => {
+    if (!ctx.scan) return { ok: false, detail: "block number unreadable: the RoleGranted scan cannot run" };
+    const holders = await currentRoleHolders(chain, a, EMERGENCY_ROLE, ctx.scan);
+    return { ok: holders.length === 1, detail: `${holders.length} holder(s)${holders.length ? `: ${holders.join(", ")}` : ""}` };
+  });
+  // RobotMoneyVault only: KEEPER_ROLE may call rebalance(), and a keeper could reverse an emergency drain (security review finding 6). The deploy grants it to no one.
+  if (v.kind === "usdc") await c.run(`${p}: ${KEEPER_NO_HOLDER_LABEL}`, async () => {
+    if (!ctx.scan) return { ok: false, detail: "block number unreadable: the RoleGranted scan cannot run" };
+    const holders = await currentRoleHolders(chain, a, KEEPER_ROLE, ctx.scan);
+    return { ok: holders.length === 0, detail: holders.length ? `KEEPER_ROLE is held by ${holders.join(", ")}` : "no grantee holds it" };
+  });
   await c.runEq(`${p}: registry link`, () => chain.read(a, "function registry() view returns (address)"), registry);
   // setRegistry is one-shot: a second call from the deployer must revert (core 1483).
   await c.run(`${p}: a second setRegistry reverts`, async () => {
@@ -322,9 +447,8 @@ async function vaultChecks(
   });
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    if (v.kind === "agent") c.fail(`${p}: ${AGENT_SLIPPAGE_LABEL}`, "no sheet entry for this vault");
-    if (v.kind === "usdc") { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
+    if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS, UNWIND_GUARD_LABEL, SLIPPAGE_LABEL]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
+    if (v.kind === "usdc") { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares", ADAPTER_SET_LABEL]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
   }
   await c.runEq(`${p}: tvlCap equals sheet`, () => chain.read(a, "function tvlCap() view returns (uint256)"), vs.tvlCap);
@@ -344,21 +468,82 @@ async function vaultChecks(
     await c.run(`${p}: totalSupply above zero`, async () =>
       BigInt((await chain.read(a, "function totalSupply() view returns (uint256)")) as bigint) > 0n);
     await seedShareChecks(c, chain, v, D, vs.seedShareReceiver);
+    await adapterSetCheck(c, chain, a, p, vs.adapters, ctx.scan);
   } else {
     await c.run(`${p}: asset config equals sheet`, async () => assetReadBack(chain, a, vs.assets));
     await basketGuardChecks(c, chain, a, p, vs);
+    await unwindGuardCheck(c, chain, a, p, vs);
+    // Issue 1705 C4 (core 1695 for rmAGENT): every basket's swap bound is read back against core's config (or the vault default the config keeps).
+    await c.run(`${p}: ${SLIPPAGE_LABEL}`, async () => {
+      if (vs.maxSlippageBps === undefined) return { ok: false, detail: "the verifier sheet has no expected maxSlippageBps for this vault" };
+      const got = BigInt((await chain.read(a, "function maxSlippageBps() view returns (uint256)")) as bigint);
+      return { ok: got === vs.maxSlippageBps, detail: got === vs.maxSlippageBps ? `${got}` : `got ${got}, want ${vs.maxSlippageBps}` };
+    });
     // rmAGENT launches holding RM only (core 1554). "asset config equals sheet" ties the chain to the sheet, so this ties the sheet to RM.
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
     for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
-    // core 1695: the V4 swap bound is read back from the rmAGENT vault itself (the pool fee alone is 291 bps, so the vault bound must be the launch 500).
-    if (v.kind === "agent") await c.runEq(`${p}: ${AGENT_SLIPPAGE_LABEL}`, () => chain.read(a, "function maxSlippageBps() view returns (uint256)"), AGENT_MAX_SLIPPAGE_BPS);
   }
 }
 
-/** The rmAGENT maxSlippageBps the deploy applies from the config (core 1676, 1695). */
-const AGENT_MAX_SLIPPAGE_BPS = 500n;
-const AGENT_SLIPPAGE_LABEL = `maxSlippageBps equals ${AGENT_MAX_SLIPPAGE_BPS}`;
+/** Issue 1705 C4 (core 1695 for rmAGENT, whose config raises the bound to 500 because the V4 pool fee alone is 291 bps). */
+const SLIPPAGE_LABEL = "maxSlippageBps equals config";
+/** Issue 1705 C5: one emergency key per vault, and no rebalance keeper on rmUSDC. */
+const EMERGENCY_ONE_HOLDER_LABEL = "EMERGENCY_ROLE has exactly one holder";
+const KEEPER_NO_HOLDER_LABEL = "KEEPER_ROLE has no holder";
+/** Issue 1705 C4: rmUSDC's lending adapters against the vault stage (DeployVault.s.sol). */
+const ADAPTER_SET_LABEL = "adapter set, caps and code-hash allowlist equal the deploy script";
+
+type VaultScan = { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number };
+
+/** The accounts that hold `role` on `at` now: every RoleGranted grantee since the first deploy block, kept when hasRole still answers true. */
+async function currentRoleHolders(chain: ChainReader, at: Address, role: Hex, s: VaultScan): Promise<Address[]> {
+  const logs = await scanLogs(chain, { address: at, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), role], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+  const out: Address[] = [];
+  for (const who of new Set(logs.map((l) => lc(topicToAddress(l.topics[2]!)) as Address))) if (await hasRole(chain, at, role, who)) out.push(who);
+  return out;
+}
+
+/** The keys an allowlist setter event left allowed: the last event per key (topic 1) wins, its data word is the bool. */
+async function allowlistAfterEvents(chain: ChainReader, at: Address, sig: string, s: VaultScan): Promise<Set<string>> {
+  const logs = await scanLogs(chain, { address: at, topics: [keccak256(toHex(sig))], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+  const last = new Map<string, boolean>();
+  for (const l of [...logs].sort((x, y) => (x.blockNumber < y.blockNumber ? -1 : x.blockNumber > y.blockNumber ? 1 : 0))) last.set(lc(l.topics[1]!), BigInt(l.data === "0x" ? 0 : l.data) !== 0n);
+  return new Set([...last].filter(([, on]) => on).map(([k]) => k));
+}
+
+/**
+ * Issue 1705 C4: rmUSDC holds exactly the lending adapters its vault stage registered. The registry (`adapterCount`, `adapters(i)`) lists them in registration
+ * order at the deploy script's caps, each active; each is on the address allowlist and its runtime code hash on the code-hash allowlist; and the allowlists hold
+ * nothing else (replayed from AdapterAllowedSet and AdapterCodeHashAllowedSet since the first deploy block, because a mapping cannot be listed).
+ */
+async function adapterSetCheck(c: Collector, chain: ChainReader, a: Address, p: string, want: VaultSheet["adapters"], scan: VaultScan | undefined): Promise<void> {
+  await c.run(`${p}: ${ADAPTER_SET_LABEL}`, async () => {
+    if (!want || want.length === 0) return { ok: false, detail: "the verifier sheet names no adapter for this vault (the vault manifest names them, the deploy script sets their caps)" };
+    const bad: string[] = [];
+    const n = BigInt((await chain.read(a, "function adapterCount() view returns (uint256)")) as bigint);
+    if (n !== BigInt(want.length)) bad.push(`adapterCount ${n}, the deploy script registers ${want.length}`);
+    const hashes: string[] = [];
+    for (const [i, w] of want.entries()) {
+      const [adapter, capBps, active] = (await chain.read(a, "function adapters(uint256 index) view returns (address adapter, uint16 capBps, bool active)", [BigInt(i)])) as [Address, number | bigint, boolean];
+      if (lc(adapter) !== lc(w.address)) bad.push(`adapters(${i}) is ${adapter}, the vault manifest names ${w.address}`);
+      if (Number(capBps) !== w.capBps) bad.push(`adapters(${i}) cap ${capBps} bps, the deploy script sets ${w.capBps}`);
+      if (!active) bad.push(`adapters(${i}) is not active`);
+      if (!((await chain.read(a, "function adapterAllowed(address adapter) view returns (bool)", [w.address])) as boolean)) bad.push(`${w.address} is not on the adapter allowlist`);
+      const hash = keccak256(await chain.getCode(w.address));
+      hashes.push(lc(hash));
+      if (!((await chain.read(a, "function adapterCodeHashAllowed(bytes32 codeHash) view returns (bool)", [hash])) as boolean)) bad.push(`the code hash of ${w.address} is not on the code-hash allowlist`);
+    }
+    if (!scan) bad.push("block number unreadable: the allowlist events cannot be replayed");
+    else {
+      const extraHash = [...(await allowlistAfterEvents(chain, a, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, scan))].filter((h) => !hashes.includes(h));
+      const extraAdapter = [...(await allowlistAfterEvents(chain, a, SIG_ADAPTER_ALLOWED_SET, scan))].map((t) => lc(topicToAddress(t as Hex))).filter((x) => !want.some((w) => lc(w.address) === x));
+      if (extraHash.length) bad.push(`the code-hash allowlist also holds ${extraHash.join(", ")}`);
+      if (extraAdapter.length) bad.push(`the adapter allowlist also holds ${extraAdapter.join(", ")}`);
+    }
+    return { ok: bad.length === 0, detail: bad.length ? bad.join("; ") : `${want.length} adapters at caps ${want.map((w) => w.capBps).join("/")} bps, both allowlists hold exactly them` };
+  });
+}
 
 /** The labels v4AssetChecks pushes. A vault whose sheet lists a V4 asset must pass every one. */
 const V4_LABELS = [
@@ -484,6 +669,43 @@ async function basketGuardChecks(c: Collector, chain: ChainReader, vault: Addres
       if (liq < floor) short.push(`${asset.pool} has ${liq}`);
     }
     return { ok: short.length === 0, detail: short.length ? `below the floor ${floor}: ${short.join(", ")}` : `${vs.assets.length} pools at or above ${floor}` };
+  });
+}
+
+/** QA plan v1 D7: the label unwindGuardCheck pushes on every basket vault. */
+export const UNWIND_GUARD_LABEL = "emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault";
+const UNWIND_GUARD_SIG = "function emergencyUnwindGuard(address token) view returns (uint256 minUsdcOut, bool overrideAllowed, uint256 maxLossBps)";
+
+/**
+ * QA plan v1 D7 (review E5, issue 1705 Q2). Before `govern --row set-unwind-guard` no stage or row set a basket's emergency unwind guard, so every guard read zero: emergencyUnwind
+ * reverted EmergencyFloorUnavailable whenever a TWAP read failed, and emergencyUnwindWithOverride reverted EmergencyUnwindOverrideDisabled. A vault the sheet expects OPEN (its
+ * unpause row executed) takes deposits, so each of its active assets (read from the chain) must read a non-zero minUsdcOut. A vault expected paused takes no deposit: the label
+ * passes and records the values. Only the Safe, through the timelock, sets the guard (the row), so the pre-govern verify sees zeros and passes; the post-govern verify needs the row
+ * run for every unpaused basket. The detail records overrideAllowed and maxLossBps too (QA plan v1 Decisions D3: override allowed, Safe-only), but only minUsdcOut is asserted.
+ */
+async function unwindGuardCheck(c: Collector, chain: ChainReader, vault: Address, p: string, vs: VaultSheet): Promise<void> {
+  await c.run(`${p}: ${UNWIND_GUARD_LABEL}`, async () => {
+    const active: Address[] = [];
+    for (let i = 0; i < 64; i++) {
+      let r: any;
+      try { r = await chain.read(vault, ASSET_SIG, [BigInt(i)]); } catch { break; }
+      const x = Array.isArray(r) ? r : [r.token, r.pool, r.swapFee, r.active, r.adapter, r.venue];
+      if (Boolean(x[3])) active.push(x[0] as Address);
+    }
+    const guards: { token: Address; min: bigint; text: string }[] = [];
+    for (const token of active) {
+      const g = (await chain.read(vault, UNWIND_GUARD_SIG, [token])) as any;
+      const [min, allowed, loss] = Array.isArray(g) ? g : [g.minUsdcOut, g.overrideAllowed, g.maxLossBps];
+      guards.push({ token, min: BigInt(min), text: `${token} minUsdcOut ${BigInt(min)} overrideAllowed ${Boolean(allowed)} maxLossBps ${BigInt(loss)}` });
+    }
+    const values = guards.map((g) => g.text).join("; ");
+    if (vs.expectPaused) return { ok: true, detail: `deposits paused, no guard required until the vault opens${values ? `: ${values}` : ""}` };
+    if (active.length === 0) return { ok: false, detail: "the vault is open and lists no active asset: nothing proves an unwind floor" };
+    const zero = guards.filter((g) => g.min === 0n).map((g) => g.token);
+    return {
+      ok: zero.length === 0,
+      detail: zero.length === 0 ? values : `the vault is open and minUsdcOut is zero for ${zero.join(", ")}: an unwind whose TWAP read fails reverts and the override path is unusable. Run govern --row set-unwind-guard for this vault (${values})`,
+    };
   });
 }
 
@@ -652,7 +874,7 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, s: 
 /**
  * Issue 1796: one single-vault redeploy, after its govern row executed. The vault the registry still lists is RETIRED: withdraw-only, out of the router, still holding its code (the
  * shares of its holders redeem through `redeem`, `withdraw` and `redeemInKind`). The vault that replaced it is the one the vault manifest names (every other label already checks it) and it is Active
- * in the registry. The router's effective weights hold the new vault and not the old one.
+ * in the registry. The router's effective weights hold the new vault and not the old one, and the router caps the new vault's leg as it capped the old one's (QA plan v1 E3).
  */
 async function redeployChecks(
   c: Collector, chain: ChainReader, r: NonNullable<VerifyOptions["redeploys"]>[number],
@@ -672,8 +894,10 @@ async function redeployChecks(
   });
   await c.run(`${p}: runtime code equals the original build artifact (masked)`, async () => {
     if (!ctx.artifact) return { ok: false, detail: "no artifact name for the vault" };
-    const res = compareCode(await chain.getCode(r.oldVault), loadArtifact(ctx.priorDir ?? ctx.artifactsDir, ctx.artifact));
-    return { ok: res.ok, detail: `${ctx.artifact}: ${res.detail}${!res.ok && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of the original sha>)" : ""}` };
+    // QA plan v1 E1: the build that created this vault. A first round's old vault is the original deployment's (--prior-out); a later round's was deployed by the round before.
+    const fromRedeploy = r.oldBuild === "redeploy";
+    const res = compareCode(await chain.getCode(r.oldVault), loadArtifact(fromRedeploy ? ctx.artifactsDir : ctx.priorDir ?? ctx.artifactsDir, ctx.artifact));
+    return { ok: res.ok, detail: `${ctx.artifact} (${fromRedeploy ? "the redeploy build" : "the original build"}): ${res.detail}${!res.ok && !fromRedeploy && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
   });
   const q = `redeploy[${r.vault}]`;
   await c.run(`${q}: the vault manifest names the replacing vault`, async () => {
@@ -685,5 +909,11 @@ async function redeployChecks(
     const [vs] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const ok = vs.some((v) => lc(v) === lc(r.newVault)) && !vs.some((v) => lc(v) === lc(r.oldVault));
     return { ok, detail: `[${vs.join(", ")}]` };
+  });
+  // QA plan v1 E3 (review F2): `vaultCap` is keyed by address and 0 is uncapped, so a replacing vault without the batch's setVaultCap would take routed deposits with no per-leg cap
+  await c.run(`${q}: router.vaultCap(new) equals router.vaultCap(old)`, async () => {
+    const cap = async (v: Address): Promise<bigint> => BigInt((await chain.read(ctx.router, "function vaultCap(address vault) view returns (uint256)", [v])) as bigint);
+    const [now, old] = [await cap(r.newVault), await cap(r.oldVault)];
+    return { ok: now === old, detail: `router.vaultCap(new) ${now}, router.vaultCap(old) ${old}${old === 0n ? " (0: uncapped)" : ""}` };
   });
 }

@@ -82,20 +82,20 @@ releases the receipt and applies its weight vector:
   stored digest equals `keccak256` of the payload bytes, that the receipt is not
   yet released, that the payload's bps sum to 10 000, and that the vault set and
   order equal the registry's router-eligible list;
-- the Safe schedules one `scheduleBatch` whose calls are
-  `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` and the router
-  weight change for that vector (on today's bytecode
-  `RouterGovernance.setDefaultWeights(vaults, bps)`, the `ADMIN_ROLE` call the
-  timelock holds);
-- after the delay the Safe executes the batch, and the tool reads
+- the Safe schedules one call,
+  `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, the
+  `ADMIN_ROLE` call the timelock holds (issue 1698). The weight setter calls
+  `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` and
+  `PortfolioRouter.setWeights(vaults, bps)` inside it (§3.7);
+- after the delay the Safe executes the operation, and the tool reads
   `isReleased(receiptId)` and the router's weights back, failing on any
   difference.
 
-Release and weights are one operation, so a released receipt whose weights were
-not applied, or applied weights whose receipt is unreleased, cannot exist.
+Release and weights are one transaction, so a released receipt whose weights
+were not applied, or applied weights whose receipt is unreleased, cannot exist.
 Admin discretion (D5 in the product proposal) is the Safe's choice of which
 receipt to apply and when. Most receipts are recorded and never applied: the
-Safe applies a receipt by scheduling the batch, and declines one by doing
+Safe applies a receipt by scheduling the call, and declines one by doing
 nothing.
 
 ### 3.3 No voting
@@ -105,8 +105,12 @@ power, no quorum, no voting period, no execution delay, no propose, vote or
 execute.**
 
 Weights are an outcome of the committee's consensus and the Safe's decision to
-apply it, not of a tally. `RouterGovernance.propose`, `vote` and `execute`
-exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. The mainnet test deploys today's bytecode with voter addresses nobody holds keys for. rmpc has no vote command.
+apply it, not of a tally. `RouterGovernance` has no voting path: issue 1698
+deleted the proposal, vote and execute functions with the voter set, voting
+power, quorum, voting period and execution delay, and the weight setter's
+`applyReceipt` call replaced them. rmpc has no vote or proposal-draft command,
+and no client builds a call to the deleted functions (CI gate
+`.github/scripts/check_no_router_governance_voting.sh`).
 
 The IC agent's `committee vote-submit` is a signed tilt the agent sends to the
 committee session. It is not a vote on anything: it changes no contract state
@@ -134,13 +138,13 @@ A receipt has two on-chain states.
 
 | State | Entry condition | Exit conditions |
 |---|---|---|
-| **Recorded** | `recordReceipt` succeeded through the gateway from a `COMMITTEE_AGENT_ROLE` holder. | The `apply-receipt` batch executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
-| **Released** | `releaseReceipt(receiptId)` executed inside the `apply-receipt` batch, which applied the receipt's weights in the same operation. | Terminal. |
+| **Recorded** | `recordReceipt` succeeded through the gateway from a `COMMITTEE_AGENT_ROLE` holder. | The `apply-receipt` operation executes: `Released`. A receipt the Safe never schedules stays `Recorded`. |
+| **Released** | `releaseReceipt(receiptId)` executed inside `RouterGovernance.applyReceipt`, which applied the receipt's weights in the same transaction. | Terminal. |
 
-Events: `ReceiptRecorded` and `ReceiptReleased` on the receipt contract, and
-the router's weight-change event for the applied vector. There is no proposal,
-no vote and no proposal event in the path. The explorer's proposal and vote
-surfaces render nothing on mainnet because there are no proposals.
+Events: `ReceiptRecorded` and `ReceiptReleased` on the receipt contract,
+`ReceiptApplied` on `RouterGovernance`, and the router's weight-change event
+for the applied vector. There is no proposal, no vote and no proposal event in
+the path, and the explorer has no proposal or vote surface.
 
 ### 3.6 setWeights call path
 
@@ -154,10 +158,10 @@ so the timelock cannot grant itself the role through a scheduled operation.
 - `DeployRouterGovernance.s.sol` grants `RouterGovernance` `WEIGHT_SETTER_ROLE`
   and router `ADMIN_ROLE`, and drops the deployer's copies.
 - Stage 11 (`DeployTimelock.s.sol`) grants the `TimelockController`
-  `ADMIN_ROLE` on `RouterGovernance`, which reaches `setDefaultWeights`.
-  On today's bytecode that is the weight call inside the `apply-receipt` batch.
-  The final deployment replaces it with a weight-setter `applyReceipt` call,
-  and the role ends with the timelock.
+  `ADMIN_ROLE` on `RouterGovernance`, which reaches `applyReceipt` and
+  `setDefaultWeights`, and the role ends with the timelock. The same stage
+  points the weight setter at the receipt register (`setReceiptContract`) and
+  grants it `ADMIN_ROLE` there (§3.7).
 - Rotation (core 1616): `RouterGovernance` is replaced without a router
   redeploy through a bounded rotation, not through a role grant. The Safe holds
   `WEIGHT_SETTER_ROTATOR_ROLE` and proposes a contract target on the router
@@ -174,9 +178,9 @@ weight-update path.
 
 **Emergency path.** `RouterGovernance` has no pause or guardian role. The
 emergency lever is `clearVotedWeights` (`ADMIN_ROLE`, through the timelock),
-which returns routing to the default vector. A scheduled `apply-receipt` batch
-that should not run is cancelled on the timelock by the Safe before its delay
-passes.
+which returns routing to the default vector. A scheduled `apply-receipt`
+operation that should not run is cancelled on the timelock by the Safe before
+its delay passes.
 
 ### 3.7 Payload-digest binding of `applyReceipt`
 
@@ -237,7 +241,7 @@ is no token-based governance and no governance token.
 | Issue | Unblocked by this ADR? | Must serialize after |
 |---|---|---|
 | publish-contracts govern row `apply-receipt` (core 1696) | Yes — call path and checks fixed in §3.2 | This ADR |
-| Weight-setter `applyReceipt` call and deletion of `propose`/`vote`/`execute` (contract issue) | Yes — §3.3 and §3.6 | core 1696 |
+| Weight-setter `applyReceipt` call and deletion of `propose`/`vote`/`execute` (issue 1698) | Done — §3.2, §3.3 and §3.7 | core 1696 |
 | Twin rehearsal proving the row through the real Safe and timelock | Yes | core 1696 |
 | Explorer: receipt tables and the applied-weights read surface | Yes — §3.5 | Receipt contract deployed |
 | `rmpc get-governance` | Yes — reads the router weights and the receipt state | Explorer API |
@@ -247,8 +251,9 @@ is no token-based governance and no governance token.
 - The `WEIGHT_SETTER_ROLE` grant (§3.6) cannot happen until
   `RouterGovernance.sol` is deployed to the target network. Deploy scripts
   sequence this explicitly.
-- The contract issue lands before the final deployment, never on the mainnet
-  test, which deploys today's bytecode.
+- The receipt register is deployed after `RouterGovernance` (ic-policy
+  stage), so stage 11 wires `setReceiptContract` and the register's
+  `ADMIN_ROLE` grant before the timelock handover (§3.7).
 
 ---
 
@@ -280,8 +285,8 @@ between record and apply makes the weight call revert.
 
 **Resolution.** The row validates the sum and the vault set against the
 registry before scheduling, and the router validates again at execution. A
-reverting batch applies nothing and releases nothing: the Safe records a new
-receipt round rather than patching the payload.
+reverting `applyReceipt` applies nothing and releases nothing: the Safe records
+a new receipt round rather than patching the payload.
 
 ### 6.4 One operation per receipt
 
@@ -296,8 +301,8 @@ Replacing the weight-setter contract uses the rotation in §3.6. The runbook is
 ### 6.6 No outer share token
 
 `RouterGovernance.sol` must not introduce any token minting, wrapping, or LP
-mechanics. Its only on-chain side effects are router weight calls
-(`docs/architecture.md` §2.2).
+mechanics. Its only on-chain side effects are router weight calls and the
+receipt release inside `applyReceipt` (`docs/architecture.md` §2.2).
 
 ---
 
@@ -316,7 +321,7 @@ function getDefaultWeights() external view returns (address[] memory vaults, uin
 function isReleased(bytes32 receiptId) external view returns (bool);
 ```
 
-`RouterGovernance.activeProposal`, `proposalState` and `cadenceParams` remain
-callable on today's bytecode and report no proposals and voter addresses nobody holds keys for;
-they go away with the contract issue. Implementers must not change the read
-surface above without a new ADR.
+`RouterGovernance.receiptContract()` names the register `applyReceipt` releases
+from. `activeProposal`, `proposalState` and `cadenceParams` were deleted with
+the voting path (issue 1698). Implementers must not change the read surface
+above without a new ADR.

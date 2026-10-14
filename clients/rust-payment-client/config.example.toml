@@ -67,6 +67,18 @@ gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 # deployment block). Set it when the RPC provider caps the eth_getLogs range. Absent: `earliest`.
 # gateway_from_block = 0
 
+# ── Agent binding ─────────────────────────────────────────────────────────────
+#
+# RECOMMENDED. Pin who this agent is bound to on the gateway. When set, every
+# deposit and withdraw refuses with ErrAgentBindingMismatch unless the chain
+# agrees, so an address that bound this agent before you did cannot receive
+# its deposits' shares.
+#
+# The shareReceiver you authorized (gateway.agents(agent).shareReceiver).
+# share_receiver = "0xYOUR_SHARE_RECEIVER"
+# The account that revealed the authorization (gateway.agentOwner(agent)).
+# agent_owner = "0xYOUR_OWNER_ADDRESS"
+
 # ── Gas / fee caps ─────────────────────────────────────────────────────────────
 
 # Hard ceiling on maxFeePerGas in wei.  Per-chain defaults apply when omitted;

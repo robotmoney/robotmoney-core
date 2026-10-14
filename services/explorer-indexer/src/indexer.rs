@@ -14,36 +14,59 @@
 //! 3. Reorg check: compare stored hash for `last_indexed_block` against
 //!    the chain's hash at the same height. On mismatch walk back, then
 //!    `DELETE WHERE block_number > root` and reset `last_indexed_block`.
-//! 4. For the range `[last+1, target]`: fetch all watched logs, fetch
-//!    each block (header+txs), upsert blocks/transactions/events.
+//!    The rows that are not block-numbered are reconciled in the same
+//!    transaction: `vaults` (a registration above the root is deleted) and
+//!    `committee_agents` (derived again from its history, X7 / DI-8).
+//! 4. For the range `[last+1, target]`: fetch all watched logs (the configured
+//!    contracts, every `vaults` row whatever its status (DI-2), and each of
+//!    those vaults' ExclusionLedger (X7)), fetch the header of each block
+//!    that has one, and the receipt of each
+//!    transaction that carries one (never the block's other transactions, X6),
+//!    upsert blocks/transactions/events. When those
+//!    logs register a vault the address set did not hold, fetch that vault's
+//!    own logs and its ledger's from its registration block to `target` in a
+//!    second call and apply them after the registration, in the same tick
+//!    (DI-1).
 //! 5. State snapshots — for every contract whose events touched a block
 //!    in this range, take a snapshot at that block. Sampling cadence
-//!    (issue 1768): a vault with no row gets one at the target block. After
-//!    that, each tick reads the vault and writes a new row only when `total_assets`,
-//!    `total_supply`, `exit_fee_bps`, either cap or the paused flag differs
-//!    from the newest row, or when the newest row is at least
-//!    `SNAPSHOT_HEARTBEAT_BLOCKS` (7200 blocks) behind, which writes an
+//!    (issues 1768, 1781): a vault with no row gets one at the target block.
+//!    After that a tick reads the vault at the target only when it emitted a
+//!    watched log in the tick, holds nothing (zero TVL), has an unknown cap or
+//!    exit value, or its newest row is at least `SNAPSHOT_HEARTBEAT_BLOCKS` (7200 blocks)
+//!    behind ([`snapshot_read`]). A read writes a new row only when `total_assets`,
+//!    `total_supply`, `exit_fee_bps`, either cap, the paused flag or the exit value
+//!    differs from the newest row, except the heartbeat read, which writes an
 //!    identical row on purpose. So every vault has a row at least once per
 //!    heartbeat interval. A zero-TVL vault is NOT re-snapshotted every tick.
 //!    A row with unknown (NULL) caps (issue 1741) is filled by the same
 //!    per-tick read once the caps answer, without repeated identical rows.
+//!    The exit value is `previewRedeem(totalSupply())`, what redeeming every
+//!    share pays after the exit costs; the API prices a position with it
+//!    (core 1795, QA plan X8). A row without it (older than migration 0022)
+//!    is filled the same way.
+//!    Committee regime snapshots are re-derived at the target block as well,
+//!    so a signal that ages out of the freshness window leaves
+//!    `/v1/regime/feed` within one tick, with no event to trigger it (DI-3).
 //! 6. Close the run with `last_indexed_block = target`.
 //!
 //! All errors short-circuit and write to the run's `error` column;
 //! `last_indexed_block` is left at the last block we successfully
-//! committed, so the next run resumes there.
+//! committed, so the next run resumes there. A failed run still records the
+//! chain head it read in step 2, so the head-minus-cursor lag that `/health`
+//! and the watchdog read keeps growing while the indexer is wedged (DI-5).
 
 use crate::abi::{
-    IConsensusRecommendationReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
-    IPortfolioRouterEvents, IRouterGovernanceEvents, ITimelockEvents, IVaultEvents, IVaultReads,
-    IVaultRegistryEvents, Topics,
+    IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
+    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents,
+    IRouterGovernanceEvents, ITimelockEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents,
+    Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::{SolCall, SolEvent};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexerError {
@@ -218,6 +241,8 @@ pub struct IndexerOutcome {
     pub error: Option<String>,
     /// The chain head (`eth_blockNumber`) this tick saw. `None` when the tick failed before reading it.
     /// The explorer reports it next to the last indexed block so a reader can see how far behind the index is.
+    /// A tick that read the head and then failed records it too (DI-5): a wedged indexer's head keeps moving
+    /// while its cursor does not, so `/health` and the watchdog see the lag grow instead of a frozen one.
     pub chain_head_block: Option<i64>,
     /// True when the tick failed because an endpoint refused the request (HTTP 401 or 403). That is a final
     /// answer that retrying every tick cannot change, so the caller backs off instead of hammering.
@@ -899,6 +924,11 @@ pub async fn run_once(
     // error arm cannot persist a cursor pointing at a block this chain never
     // had.
     let mut rollback_cursor = last_indexed;
+    // The chain head `run_inner` read, published as soon as it is read so the error arm can record it
+    // (DI-5). Without it a tick that fails after `eth_blockNumber` (an FK miss, a refused `eth_getLogs`)
+    // left `chain_head_block` NULL, the newest recorded head stayed where the last good tick saw it, and a
+    // wedged indexer read as "5 blocks behind" forever.
+    let mut seen_head: Option<i64> = None;
 
     // T12: drain a bounded batch of the unverified-receipt backlog every tick.
     // Deliberately BEFORE `run_inner`, so it runs on a tick whose log scan later
@@ -919,6 +949,7 @@ pub async fn run_once(
         last_indexed,
         deploy_floor,
         &mut rollback_cursor,
+        &mut seen_head,
     )
     .await
     {
@@ -949,6 +980,12 @@ pub async fn run_once(
             // run's cursor down to root.  Recording `rollback_cursor` here
             // keeps the failed run's audit row internally consistent with the
             // rollback.
+            //
+            // The head this tick read is recorded even though the tick failed
+            // (DI-5): it is what makes a wedged indexer's lag grow.
+            if let Some(head) = seen_head {
+                db.set_run_chain_head(run_id, head).await?;
+            }
             db.finish_run(run_id, None, rollback_cursor, 0, 0, Some(&msg))
                 .await?;
             IndexerOutcome {
@@ -959,7 +996,7 @@ pub async fn run_once(
                 rows_inserted: 0,
                 reorg_detected: false,
                 error: Some(msg),
-                chain_head_block: None,
+                chain_head_block: seen_head,
                 refused,
             }
         }
@@ -983,6 +1020,181 @@ pub fn tick_target(
     (from_block <= target).then_some(target)
 }
 
+/// The address of the `ExclusionLedger` that a `RobotMoneyVault` at `vault` deployed (QA plan X7,
+/// core issue 1820).
+///
+/// The vault creates its ledger in its constructor (`exclusionLedger = new ExclusionLedger(_asset)`),
+/// and that is the only contract it ever creates. A contract's nonce starts at 1 (EIP-161), so the
+/// ledger sits at the CREATE address of the vault with nonce 1. Deriving it needs no RPC call and no
+/// configuration, so the ledger of a vault registered in a tick is watched in that same tick.
+///
+/// A vault of another family (`BasketVault` and its subclasses) creates no contract, so the derived
+/// address holds no code and emits nothing; `handle_log` also accepts an exclusion-record event only
+/// from a derived ledger ([`vault_of_exclusion_ledger`]). The derivation holds only while the ledger
+/// is the vault's first contract creation, which
+/// `vault_detail::exclusion_ledger_is_the_vaults_only_contract_creation` checks in the Solidity
+/// source.
+pub fn exclusion_ledger_of(vault: Address) -> Address {
+    vault.create(1)
+}
+
+/// The watched vault whose ExclusionLedger is `ledger`: the configured vault or a `vaults` row, or
+/// `None`. Exclusion-record events are rare, so one `vaults` read per event is cheap.
+async fn vault_of_exclusion_ledger(
+    db: &Db,
+    cfg: &IndexerConfig,
+    ledger: Address,
+) -> Result<Option<Address>, IndexerError> {
+    if exclusion_ledger_of(cfg.vault) == ledger {
+        return Ok(Some(cfg.vault));
+    }
+    let vaults: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT vault_address FROM vaults WHERE chain_id = $1")
+            .bind(cfg.chain_id)
+            .fetch_all(db.pool())
+            .await
+            .map_err(DbError::from)?;
+    Ok(vaults
+        .iter()
+        .filter_map(|v| <[u8; 20]>::try_from(v.as_slice()).ok())
+        .map(Address::from)
+        .find(|vault| exclusion_ledger_of(*vault) == ledger))
+}
+
+/// Read and store each holder's vault shares at the snapshot of every exclusion record that a log in
+/// `logs` opened or paid from (QA plan X7, core issue 1820). Returns the rows written.
+///
+/// `handle_log` stored the records. A claim is `recovered * balanceAt(holder, id) / snapshotSupply`,
+/// and `balanceAt` lives on the chain, so this makes that one read:
+///
+/// - When a record opens, every known holder of the vault is read
+///   ([`Db::exclusion_snapshot_candidates`]) and each non-zero balance is stored at the record's block.
+/// - A claim from a holder with no stored balance (one who received its shares by a plain transfer,
+///   which `wallet_positions` does not follow) reads that holder, stored at the claim's block.
+///
+/// The read is made at `read_block` (the tick's safe head), not at the log's block. `balanceAt` for an
+/// existing record never changes, and the safe head is a block every node still holds state for, also
+/// during a catch-up against a node that keeps no archive. A failed read fails the tick like a failed
+/// `eth_getLogs`, so the cursor stays and the next tick reads again; every write is idempotent.
+async fn record_exclusion_balances(
+    db: &Db,
+    rpc: &JsonRpc,
+    cfg: &IndexerConfig,
+    topics: &Topics,
+    logs: &[LogEntry],
+    read_block: u64,
+) -> Result<u64, IndexerError> {
+    let mut rows = 0u64;
+    for log in logs {
+        let Some(&topic0) = log.topics.first() else {
+            continue;
+        };
+        let ledger = log.address.into_array();
+        if topic0 == topics.exclusion_opened {
+            let d = IExclusionLedgerEvents::ExclusionOpened::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionOpened: {e}")))?;
+            let id: i64 = d.exclusionId.try_into().unwrap_or(i64::MAX);
+            // No stored record: `handle_log` refused the emitter.
+            let Some(vault) = db.exclusion_record_vault(cfg.chain_id, ledger, id).await? else {
+                continue;
+            };
+            let opened_block = log.block_number as i64;
+            let holders = db
+                .exclusion_snapshot_candidates(cfg.chain_id, vault, ledger, id, opened_block)
+                .await?;
+            for holder in holders {
+                let balance =
+                    exclusion_balance_at(rpc, log.address, holder, d.exclusionId, read_block)
+                        .await?;
+                if balance > U256::ZERO {
+                    rows += db
+                        .insert_exclusion_holder_balance(
+                            cfg.chain_id,
+                            ledger,
+                            id,
+                            holder,
+                            balance,
+                            opened_block,
+                        )
+                        .await?;
+                }
+            }
+        } else if topic0 == topics.exclusion_claimed {
+            let d =
+                IExclusionLedgerEvents::ExclusionClaimed::decode_log(&into_alloy_log(log), true)
+                    .map_err(|e| IndexerError::Decode(format!("ExclusionClaimed: {e}")))?;
+            let id: i64 = d.exclusionId.try_into().unwrap_or(i64::MAX);
+            let holder = d.holder.into_array();
+            if db
+                .exclusion_record_vault(cfg.chain_id, ledger, id)
+                .await?
+                .is_none()
+                || db
+                    .has_exclusion_holder_balance(cfg.chain_id, ledger, id, holder)
+                    .await?
+            {
+                continue;
+            }
+            let balance =
+                exclusion_balance_at(rpc, log.address, holder, d.exclusionId, read_block).await?;
+            if balance > U256::ZERO {
+                rows += db
+                    .insert_exclusion_holder_balance(
+                        cfg.chain_id,
+                        ledger,
+                        id,
+                        holder,
+                        balance,
+                        log.block_number as i64,
+                    )
+                    .await?;
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// `ExclusionLedger.balanceAt(holder, id)` at `block`.
+async fn exclusion_balance_at(
+    rpc: &JsonRpc,
+    ledger: Address,
+    holder: [u8; 20],
+    id: U256,
+    block: u64,
+) -> Result<U256, IndexerError> {
+    let data = IExclusionLedgerReads::balanceAtCall {
+        holder: Address::from(holder),
+        id,
+    }
+    .abi_encode();
+    call_u256(rpc, ledger, data, block).await
+}
+
+/// Every vault a `VaultRegistered` in `logs` names that `watched` does not hold, with the block
+/// of its earliest registration in `logs` (DI-1). These vaults were not in the `eth_getLogs`
+/// filter that produced `logs`, so none of their own logs are in it. A decode failure is returned
+/// rather than skipped: `handle_log` would fail the tick on the same log anyway.
+fn vaults_registered_outside(
+    topics: &Topics,
+    logs: &[LogEntry],
+    watched: &[Address],
+) -> Result<BTreeMap<Address, u64>, IndexerError> {
+    let mut out: BTreeMap<Address, u64> = BTreeMap::new();
+    for log in logs {
+        if log.topics.first() != Some(&topics.vault_registered) {
+            continue;
+        }
+        let decoded = IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("VaultRegistered: {e}")))?;
+        if watched.contains(&decoded.vault) {
+            continue;
+        }
+        let first = out.entry(decoded.vault).or_insert(log.block_number);
+        *first = (*first).min(log.block_number);
+    }
+    Ok(out)
+}
+
 async fn run_inner(
     db: &Db,
     rpc: &JsonRpc,
@@ -990,6 +1202,7 @@ async fn run_inner(
     last_indexed: Option<i64>,
     deploy_floor: u64,
     rollback_cursor: &mut Option<i64>,
+    seen_head: &mut Option<i64>,
 ) -> Result<IndexerOutcome, IndexerError> {
     let topics = Topics::new();
 
@@ -1020,6 +1233,8 @@ async fn run_inner(
     let from_block = first_block(last_indexed, deploy_floor);
 
     let tip = rpc.block_number().await?;
+    // Publish the head before any later step can fail, so the error arm records it (DI-5).
+    *seen_head = i64::try_from(tip).ok();
     let safe_head = tip.saturating_sub(CONFIRMATIONS);
 
     // Say out loud when this run cannot converge. The failure this guards
@@ -1077,15 +1292,22 @@ async fn run_inner(
     };
 
     // Static watched set (gateway, pinned vault, registry, router) plus every
-    // registry-discovered active vault. Without the latter, ERC-4626
+    // registry-discovered vault. Without the latter, ERC-4626
     // `Deposit`/`Withdraw` logs emitted by vaults learned from `VaultRegistered`
     // are never fetched, so their burn volume is invisible to the watchdog
     // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
     // a registered vault that emits a withdrawal in a block where the gateway is
     // idle would otherwise be dropped entirely.
+    //
+    // Every status, not only Active (DI-2). A DepositsPaused (1) or Retired (2) vault still
+    // holds shares, and its holders still redeem from it (ADR-0009: a retired vault is
+    // withdraw-only). Dropping it here lost those `Withdraw` logs, so positions kept exited
+    // shares, the watchdog's burn volume missed them, and the vault's last snapshot (the
+    // old rmPROTO after its redeploy) stayed as its TVL forever. Status is a product
+    // question (`/v1/stats.total_tvl` leaves Retired vaults out), never an indexing one.
     let mut watched = cfg.watched_addresses();
     let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
+        "SELECT vault_address FROM vaults WHERE chain_id = $1 ORDER BY vault_address",
     )
     .bind(cfg.chain_id)
     .fetch_all(db.pool())
@@ -1099,10 +1321,68 @@ async fn run_inner(
             }
         }
     }
+    // The exclusion records of a vault (QA plan X7, core 1820) are events of its ExclusionLedger,
+    // which emits them from its own address. Watch the ledger of every vault watched above. A vault
+    // of another family has no ledger: its derived address holds no code and emits nothing.
+    let ledgers: Vec<Address> = std::iter::once(cfg.vault)
+        .chain(
+            registered_vaults
+                .iter()
+                .filter_map(|v| <[u8; 20]>::try_from(v.as_slice()).ok())
+                .map(Address::from),
+        )
+        .map(exclusion_ledger_of)
+        .collect();
+    for ledger in ledgers {
+        if !watched.contains(&ledger) {
+            watched.push(ledger);
+        }
+    }
     let topic0 = topics.all_topic0();
-    let logs = rpc
+    let mut logs = rpc
         .get_logs(from_block as u64, target, &watched, &topic0)
         .await?;
+
+    // Discovery-tick refetch (DI-1). `watched` was read from `vaults` before any of these logs
+    // were applied, so a vault whose `VaultRegistered` is in `logs` was not in the filter, and the
+    // node returned none of that vault's own Deposit/Withdraw logs between its registration block
+    // and `target`. The next tick starts at `target + 1`, so they would never be fetched (a fresh
+    // rebuild from the deploy floor drops them the same way). Ask for them now, before the cursor
+    // advances: one extra `eth_getLogs`, only on a tick that registers a vault. They are appended,
+    // so `handle_log` applies the `VaultRegistered` (and the `contracts` row `wallet_positions`
+    // references) first, and every step below (block rows, pause snapshots) sees them like any
+    // other log.
+    let discovered = vaults_registered_outside(&topics, &logs, &watched)?;
+    if let Some(&first_registration) = discovered.values().min() {
+        let new_vaults: Vec<Address> = discovered.keys().copied().collect();
+        // Each new vault and its ExclusionLedger (X7), both from the vault's registration block.
+        let mut refetch_from: BTreeMap<Address, u64> = BTreeMap::new();
+        let mut refetch: Vec<Address> = Vec::with_capacity(2 * new_vaults.len());
+        for (&vault, &registered) in &discovered {
+            for address in [vault, exclusion_ledger_of(vault)] {
+                refetch_from.insert(address, registered);
+                refetch.push(address);
+            }
+        }
+        let mut late = rpc
+            .get_logs(first_registration, target, &refetch, &topic0)
+            .await?;
+        // Each address from its vault's registration block. A provider that ignores the address
+        // filter must not replay the logs fetched above.
+        late.retain(|l| {
+            refetch_from
+                .get(&l.address)
+                .is_some_and(|&registered| l.block_number >= registered)
+        });
+        tracing::info!(
+            vaults = new_vaults.len(),
+            first_registration,
+            target,
+            late_logs = late.len(),
+            "vaults registered in this tick; fetched their own logs before advancing the cursor"
+        );
+        logs.extend(late);
+    }
 
     // Group logs by (block_number, contract) so we know which blocks
     // need state snapshots per ADR §3.5 trigger 1.
@@ -1115,13 +1395,36 @@ async fn run_inner(
 
     let mut rows_inserted: i64 = 0;
 
-    // Ingest blocks (and their txs) for every block we touch — only
-    // those with at least one watched event for now, so we don't pull
-    // every tx on Base. The §11 acceptance criterion says "each row
-    // carries chain_id and block_number"; non-event blocks aren't
-    // required by the schema.
+    // Ingest a `blocks` row for every block we touch — only those with at least one watched event,
+    // so we don't pull every block on Base. The §11 acceptance criterion says "each row carries
+    // chain_id and block_number"; non-event blocks aren't required by the schema.
+    //
+    // `transactions` holds only the transactions that carry a watched log (QA plan X6, DI-6). The
+    // hash, the block and the index come from the log; one receipt per transaction adds from, to and
+    // status. The header is fetched without its transactions. Pulling every transaction of the block
+    // with a serial receipt for each cost one request per Base transaction in every event block and
+    // dominated a catch-up (issue 1780). Every read of a block happens before its rows are written, so
+    // a null receipt (an error, see `JsonRpc::tx_receipt`) fails the tick with nothing half-written.
+    let mut log_txs: BTreeMap<u64, BTreeMap<alloy_primitives::B256, u32>> = BTreeMap::new();
+    for log in &logs {
+        log_txs
+            .entry(log.block_number)
+            .or_default()
+            .entry(log.tx_hash)
+            .or_insert(log.tx_index);
+    }
     for &bn in &blocks_with_events {
-        let (header, txs) = rpc.block_with_txs(bn).await?;
+        let header = rpc
+            .block_header(bn)
+            .await?
+            .ok_or_else(|| RpcError::Server {
+                method: "eth_getBlockByNumber".into(),
+                message: format!("block {bn} missing"),
+            })?;
+        let mut txs = Vec::new();
+        for (hash, index) in log_txs.get(&bn).into_iter().flatten() {
+            txs.push((*hash, *index, rpc.tx_receipt(*hash).await?));
+        }
         let r = db
             .insert_block(
                 cfg.chain_id,
@@ -1132,16 +1435,16 @@ async fn run_inner(
             )
             .await?;
         rows_inserted += r as i64;
-        for t in txs {
+        for (hash, index, receipt) in txs {
             let r = db
                 .insert_transaction(
                     cfg.chain_id,
-                    t.tx_hash.0,
+                    hash.0,
                     bn as i64,
-                    t.tx_index as i32,
-                    t.from.into_array(),
-                    t.to.map(|a| a.into_array()),
-                    t.status as i16,
+                    index as i32,
+                    receipt.from.into_array(),
+                    receipt.to.map(|a| a.into_array()),
+                    i16::from(receipt.status),
                 )
                 .await?;
             rows_inserted += r as i64;
@@ -1173,9 +1476,27 @@ async fn run_inner(
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
     }
 
+    // Each holder's share balance at the snapshot of every exclusion record this tick opened or
+    // paid (X7, core 1820). `handle_log` stored the records; the balances need a chain read.
+    rows_inserted +=
+        record_exclusion_balances(db, rpc, cfg, &topics, &logs, safe_head).await? as i64;
+
+    // Committee regime snapshots at the tick's target (DI-3). A committee signal stops counting
+    // once it is older than COMMITTEE_VOTE_FRESHNESS_BLOCKS, and no log announces that, so the
+    // event-time refresh in `handle_log` never sees it. Re-deriving the tilt here writes a row only
+    // for a vault whose aggregate changed (a zero-count row when nobody counts any more), so
+    // `/v1/regime/feed` agrees with `/v1/committee/tilts` at the cursor this tick advances to.
+    if cfg.investment_committee.is_some() {
+        rows_inserted += db
+            .refresh_regime_snapshots(cfg.chain_id, target as i64, None)
+            .await? as i64;
+    }
+
     // Reuse the registered-vault set gathered above for the watched-address
     // union; it drives both the event-driven snapshot (router-deposit path) and
-    // the heartbeat.
+    // the heartbeat. Like the watched set it holds every status (DI-2): a retired
+    // vault's TVL and supply keep moving while its holders exit, and its supply is
+    // the operator's open-obligation signal (retired-v1-vault-maintenance.md).
     let mut heartbeat_vaults = vec![cfg.vault];
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
@@ -1183,6 +1504,13 @@ async fn run_inner(
             if !heartbeat_vaults.contains(&address) {
                 heartbeat_vaults.push(address);
             }
+        }
+    }
+    // A vault registered in this tick takes its first row at `target` now, after the deposits the
+    // refetch above applied, rather than one tick later (DI-1).
+    for vault in discovered.keys() {
+        if !heartbeat_vaults.contains(vault) {
+            heartbeat_vaults.push(*vault);
         }
     }
 
@@ -1231,15 +1559,24 @@ async fn run_inner(
     }
 
     // Heartbeat snapshots — cover the legacy configured vault and every
-    // active vault learned from VaultRegistry events. The PK on
+    // vault learned from VaultRegistry events, whatever its status. The PK on
     // (chain_id, contract, block_number) deduplicates against event-driven
     // snapshots.
+    //
+    // A vault is read at `target` only when `snapshot_read` says so (issue 1781): it has no row, its
+    // heartbeat is due, it is zero-TVL, a cap or its exit value is unknown, or it emitted a watched log
+    // in this tick. Reading every vault every tick cost seven `eth_call`s per vault per tick, which
+    // dominated a catch-up with four vaults. A quiet vault's state moves only through its own events (deposits,
+    // withdrawals, cap, fee, pause, shutdown, in-kind exits, all watched) or through yield and prices,
+    // which the heartbeat samples.
+    let vaults_with_logs: BTreeSet<Address> = logs.iter().map(|l| l.address).collect();
 
     for vault in heartbeat_vaults {
         // The newest stored row decides whether a heartbeat read is worth a new row (issue 1768).
-        let last_snap: Option<(i64, VaultState)> = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<String>, bool)>(
+        let last_snap: Option<(i64, VaultState)> = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<String>, bool, Option<String>)>(
             "SELECT block_number, CAST(total_assets AS text), CAST(total_supply AS text), exit_fee_bps, \
-                    CAST(tvl_cap AS text), CAST(per_deposit_cap AS text), paused \
+                    CAST(tvl_cap AS text), CAST(per_deposit_cap AS text), paused, \
+                    CAST(preview_redeem_total AS text) \
              FROM vault_snapshots \
              WHERE chain_id = $1 AND contract = $2 \
              ORDER BY block_number DESC LIMIT 1",
@@ -1249,30 +1586,31 @@ async fn run_inner(
         .fetch_optional(db.pool())
         .await
         .map_err(DbError::from)?
-        .map(|(bn, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused)| {
+        .map(|(bn, total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused, preview_redeem_total)| {
             (
                 bn,
-                VaultState { total_assets, total_supply, exit_fee_bps, tvl_cap, per_deposit_cap, paused },
+                VaultState {
+                    total_assets,
+                    total_supply,
+                    exit_fee_bps,
+                    tvl_cap,
+                    per_deposit_cap,
+                    paused,
+                    preview_redeem_total,
+                },
             )
         });
-        match &last_snap {
-            None => {
-                rows_inserted +=
-                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, None).await;
-            }
-            Some((prev, state)) => {
-                let due = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
-                // Every tick reads the vault, so a change that no watched event announced (a direct
-                // deposit, a cap change, a pause) is caught within one tick. The read writes a row only
-                // when the state differs from the newest row or the heartbeat is due (issue 1768). A row
-                // whose caps are unknown (issue 1741) is filled by the same read once the caps answer, and
-                // while they stay unreadable the unchanged state writes nothing.
-                let skip_if_equal = if due { None } else { Some(state) };
-                rows_inserted +=
-                    snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, skip_if_equal)
-                        .await;
-            }
-        }
+        let newest = last_snap.as_ref().map(|(bn, state)| (*bn, state));
+        // A read writes a row only when the state differs from the newest row or the heartbeat is due
+        // (issue 1768). A row whose caps are unknown (issue 1741) is filled by the same read once the
+        // caps answer, and while they stay unreadable the unchanged state writes nothing.
+        let skip_if_equal = match snapshot_read(newest, target, vaults_with_logs.contains(&vault)) {
+            SnapshotRead::Skip => continue,
+            SnapshotRead::Write => None,
+            SnapshotRead::WriteIfChanged => newest.map(|(_, state)| state),
+        };
+        rows_inserted +=
+            snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target, skip_if_equal).await;
     }
 
     Ok(IndexerOutcome {
@@ -2162,13 +2500,20 @@ pub async fn handle_log(
             true,
         )
         .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
-        let r = db
+        let mut r = db
             .upsert_committee_agent(
                 cfg.chain_id,
                 decoded.agent.into_array(),
                 &decoded.agentId,
                 log.block_number as i64,
+                log.log_index as i32,
             )
+            .await?;
+        // `registerAgent` on a member that is already registered only relabels it on chain, but
+        // the tilt then counts none of its earlier signals (they predate its latest
+        // registration), so every vault it voted on can move (DI-3).
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
             .await?;
         return Ok(r);
     }
@@ -2177,12 +2522,19 @@ pub async fn handle_log(
         let decoded =
             IInvestmentCommitteePolicyEvents::AgentRevoked::decode_log(&into_alloy_log(log), true)
                 .map_err(|e| IndexerError::Decode(format!("IC AgentRevoked: {e}")))?;
-        let r = db
+        let mut r = db
             .revoke_committee_agent(
                 cfg.chain_id,
                 decoded.agent.into_array(),
                 log.block_number as i64,
+                log.log_index as i32,
             )
+            .await?;
+        // The revoked member's signals stop counting on every vault it voted on. Write the new
+        // aggregate now, a zero-count row where it was the last member, so `/v1/regime/feed`
+        // drops it in the same block `/v1/committee/tilts` does (DI-3).
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, None)
             .await?;
         return Ok(r);
     }
@@ -2216,9 +2568,35 @@ pub async fn handle_log(
             }
         };
 
+        // A member registered before the indexed range has no `committee_agents` row, and the
+        // vote's foreign key used to fail this tick on every retry (DI-4). Write an inactive
+        // placeholder first, so the vote is stored, tilts nothing, and the cursor moves on.
         let mut r = db
+            .insert_committee_agent_placeholder(
+                cfg.chain_id,
+                agent,
+                log.block_number as i64,
+                log.log_index as i32,
+            )
+            .await?;
+        if r > 0 {
+            tracing::warn!(
+                vote_id,
+                agent = %decoded.agent,
+                block_number = log.block_number,
+                "VoteSubmitted from a committee member with no indexed AgentRegistered; \
+                 stored an inactive placeholder agent row, so this vote does not count \
+                 toward the tilt (set INDEXER_START_BLOCK at or below the IC deploy block \
+                 to index the registration)"
+            );
+        }
+
+        // The emitting policy is part of the vote key: a redeployed policy restarts `voteId`
+        // (DI-10, migration 0019).
+        r += db
             .insert_committee_vote(
                 cfg.chain_id,
+                log.address.into_array(),
                 vote_id,
                 log.block_number as i64,
                 log.log_index as i32,
@@ -2235,13 +2613,107 @@ pub async fn handle_log(
             )
             .await?;
 
-        // Refresh the regime snapshot for this vault (verified votes only).
-        if verified {
-            r += db
-                .refresh_regime_snapshot(cfg.chain_id, vault, log.block_number as i64)
-                .await?;
-        }
+        // Refresh the regime snapshot for this vault on every vote, verified or not (DI-3). An
+        // unverified vote still replaces the member's older signal, so its newest view no longer
+        // counts and the aggregate can drop.
+        r += db
+            .refresh_regime_snapshots(cfg.chain_id, log.block_number as i64, Some(vault))
+            .await?;
 
+        return Ok(r);
+    }
+
+    // ─── ExclusionLedger event handlers ───────────────────────────────────────────
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0021.
+    //
+    // Four events, each one append-only row: ExclusionOpened (the record and its snapshot
+    // supply), ExclusionRecoveryCredited, ExclusionFinalized, ExclusionClaimed. The holders'
+    // snapshot balances need a chain read, which `handle_log` cannot make; `run_inner` reads them
+    // after this loop (`record_exclusion_balances`).
+    //
+    // GATED ON THE EMITTING CONTRACT, as the receipt handlers below are: dispatch is on topic-0
+    // over every watched address, so only the ExclusionLedger of a watched vault may write the
+    // exclusion tables.
+    if topic0 == topics.exclusion_opened
+        || topic0 == topics.exclusion_recovery_credited
+        || topic0 == topics.exclusion_finalized
+        || topic0 == topics.exclusion_claimed
+    {
+        let Some(vault) = vault_of_exclusion_ledger(db, cfg, log.address).await? else {
+            tracing::warn!(
+                address = %log.address,
+                block_number = log.block_number,
+                "exclusion-record event from a contract that is not the ExclusionLedger of a \
+                 watched vault; ignored"
+            );
+            return Ok(0);
+        };
+        let ledger = log.address.into_array();
+        let block = log.block_number as i64;
+        let log_index = log.log_index as i32;
+        let tx = log.tx_hash.0;
+        let al = into_alloy_log(log);
+        let r = if topic0 == topics.exclusion_opened {
+            let d = IExclusionLedgerEvents::ExclusionOpened::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionOpened: {e}")))?;
+            db.insert_exclusion_record(
+                cfg.chain_id,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                vault.into_array(),
+                d.adapterIndex.try_into().unwrap_or(i64::MAX),
+                d.adapter.into_array(),
+                d.snapshotSupply,
+                d.adapterValue,
+                block,
+                log_index,
+                tx,
+            )
+            .await?
+        } else if topic0 == topics.exclusion_recovery_credited {
+            let d = IExclusionLedgerEvents::ExclusionRecoveryCredited::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionRecoveryCredited: {e}")))?;
+            db.insert_exclusion_recovery(
+                cfg.chain_id,
+                block,
+                log_index,
+                tx,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                i16::from(d.source),
+                d.amount,
+                d.recoveredUsdc,
+            )
+            .await?
+        } else if topic0 == topics.exclusion_finalized {
+            let d = IExclusionLedgerEvents::ExclusionFinalized::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionFinalized: {e}")))?;
+            db.insert_exclusion_finalization(
+                cfg.chain_id,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                i16::from(d.reason),
+                d.recoveredUsdc,
+                block,
+                log_index,
+                tx,
+            )
+            .await?
+        } else {
+            let d = IExclusionLedgerEvents::ExclusionClaimed::decode_log(&al, true)
+                .map_err(|e| IndexerError::Decode(format!("ExclusionClaimed: {e}")))?;
+            db.insert_exclusion_claim(
+                cfg.chain_id,
+                block,
+                log_index,
+                tx,
+                ledger,
+                d.exclusionId.try_into().unwrap_or(i64::MAX),
+                d.holder.into_array(),
+                d.amount,
+            )
+            .await?
+        };
         return Ok(r);
     }
 
@@ -2711,9 +3183,61 @@ pub struct VaultState {
     pub tvl_cap: Option<String>,
     pub per_deposit_cap: Option<String>,
     pub paused: bool,
+    /// `previewRedeem(totalSupply())`: what redeeming every share pays after the exit costs (core 1795).
+    pub preview_redeem_total: Option<String>,
 }
 
-/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / depositsPaused from a
+/// What a tick does with one vault at its target block (issue 1781, QA plan X6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotRead {
+    /// No `eth_call`s for this vault in this tick.
+    Skip,
+    /// Read the vault and write a row whatever its state.
+    Write,
+    /// Read the vault and write a row only when the state differs from the newest row.
+    WriteIfChanged,
+}
+
+/// Decide whether a tick ending at `target` reads a vault whose newest `vault_snapshots` row is
+/// `newest` (block and state), and whether an unchanged read writes a row (issue 1781).
+///
+/// - No row yet: read and write, so every vault has a first row in the tick that first sees it.
+/// - A row at `target` already (an event-driven snapshot in this tick): no read.
+/// - The newest row is `SNAPSHOT_HEARTBEAT_BLOCKS` or more behind: read and write, an identical row on
+///   purpose (issue 1768).
+/// - Otherwise read, writing only a change, when the vault emitted a watched log in this tick
+///   (`emitted_log`), holds nothing (`total_assets` 0, so its first deposit shows within a tick),
+///   has an unknown cap (the issue 1741 retry), or has no exit value (a row older than migration 0022,
+///   or a failed `previewRedeem` read; core 1795).
+/// - Any other vault is not read. Its state changes only through its own watched events, or through
+///   yield and prices, which the heartbeat samples.
+pub fn snapshot_read(
+    newest: Option<(i64, &VaultState)>,
+    target: u64,
+    emitted_log: bool,
+) -> SnapshotRead {
+    let Some((block, state)) = newest else {
+        return SnapshotRead::Write;
+    };
+    let target = i64::try_from(target).unwrap_or(i64::MAX);
+    if block >= target {
+        return SnapshotRead::Skip;
+    }
+    if target - block >= SNAPSHOT_HEARTBEAT_BLOCKS as i64 {
+        return SnapshotRead::Write;
+    }
+    let zero_tvl = state.total_assets == "0";
+    let unknown_cap = state.tvl_cap.is_none() || state.per_deposit_cap.is_none();
+    let unknown_exit_value = state.preview_redeem_total.is_none();
+    if emitted_log || zero_tvl || unknown_cap || unknown_exit_value {
+        SnapshotRead::WriteIfChanged
+    } else {
+        SnapshotRead::Skip
+    }
+}
+
+/// Read totalAssets / totalSupply / previewRedeem(totalSupply) / exitFeeBps / tvlCap /
+/// perDepositCap / depositsPaused from a
 /// vault at `block` and write a `vault_snapshots` row. The `paused` column
 /// keeps its historical name but stores `depositsPaused()` (a deposit-only
 /// pause; withdrawals are never frozen).
@@ -2767,6 +3291,22 @@ async fn snapshot_vault_address(
         block,
     )
     .await?;
+    // What redeeming the whole supply pays after the exit costs the vault prices itself: the exit fee on both
+    // families and the `maxSlippageBps` floor on a BasketVault (core 1795). The API scales it to a holder's
+    // shares, so a position is shown at `previewRedeem`, never at the gross `convertToAssets`. A failed read is
+    // `None` (stored NULL, served as an unknown value) and the vault is read again next tick.
+    let preview_redeem_total = call_u256(
+        rpc,
+        vault,
+        IVaultReads::previewRedeemCall {
+            shares: total_supply,
+        }
+        .abi_encode(),
+        block,
+    )
+    .await
+    .map_err(|e| tracing::warn!(vault = %vault, block, error = %e, "previewRedeem(totalSupply) read failed; stored as unknown"))
+    .ok();
     let exit_fee_bps = call_u256(
         rpc,
         vault,
@@ -2810,6 +3350,7 @@ async fn snapshot_vault_address(
             tvl_cap: tvl_cap.map(|c| c.to_string()),
             per_deposit_cap: per_deposit_cap.map(|c| c.to_string()),
             paused: deposits_paused,
+            preview_redeem_total: preview_redeem_total.map(|v| v.to_string()),
         };
         if now == *prev {
             return Ok(0);
@@ -2825,6 +3366,7 @@ async fn snapshot_vault_address(
         tvl_cap,
         per_deposit_cap,
         deposits_paused,
+        preview_redeem_total,
     )
     .await
     .map_err(IndexerError::Db)
@@ -3373,6 +3915,85 @@ mod tests {
             configured_start_floor(&cfg),
             None,
             "unset keeps the getCode derivation"
+        );
+    }
+
+    // ── issue 1781 (QA plan X6): which vaults a tick reads ───────────────────
+
+    fn vault_state(total_assets: &str, caps: Option<&str>) -> VaultState {
+        VaultState {
+            total_assets: total_assets.into(),
+            total_supply: total_assets.into(),
+            exit_fee_bps: 0,
+            tvl_cap: caps.map(Into::into),
+            per_deposit_cap: caps.map(Into::into),
+            paused: false,
+            preview_redeem_total: Some(total_assets.into()),
+        }
+    }
+
+    #[test]
+    fn a_tick_reads_only_new_due_touched_zero_tvl_or_unknown_cap_vaults() {
+        let funded = vault_state("5", Some("100"));
+        let target = 2_000u64;
+        let recent = 1_999i64;
+        // A vault that holds value, has known caps and emitted nothing costs no read.
+        assert_eq!(
+            snapshot_read(Some((recent, &funded)), target, false),
+            SnapshotRead::Skip
+        );
+        // Its own watched log reads it; only a change writes a row.
+        assert_eq!(
+            snapshot_read(Some((recent, &funded)), target, true),
+            SnapshotRead::WriteIfChanged
+        );
+        // No row yet: read and write.
+        assert_eq!(snapshot_read(None, target, false), SnapshotRead::Write);
+        // Zero TVL and an unknown cap keep the per-tick read.
+        assert_eq!(
+            snapshot_read(
+                Some((recent, &vault_state("0", Some("100")))),
+                target,
+                false
+            ),
+            SnapshotRead::WriteIfChanged
+        );
+        let mut one_unknown = funded.clone();
+        one_unknown.per_deposit_cap = None;
+        assert_eq!(
+            snapshot_read(Some((recent, &one_unknown)), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        assert_eq!(
+            snapshot_read(Some((recent, &vault_state("5", None))), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        // A row without an exit value (older than migration 0022, or a failed previewRedeem read) is
+        // read on the next tick too, so the positions API is not left without a value (core 1795).
+        let mut no_exit_value = funded.clone();
+        no_exit_value.preview_redeem_total = None;
+        assert_eq!(
+            snapshot_read(Some((recent, &no_exit_value)), target, false),
+            SnapshotRead::WriteIfChanged
+        );
+        // The heartbeat writes an identical row once the interval elapses, and not a block earlier.
+        let heartbeat = SNAPSHOT_HEARTBEAT_BLOCKS as i64;
+        assert_eq!(
+            snapshot_read(Some((target as i64 - heartbeat, &funded)), target, false),
+            SnapshotRead::Write
+        );
+        assert_eq!(
+            snapshot_read(
+                Some((target as i64 - heartbeat + 1, &funded)),
+                target,
+                false
+            ),
+            SnapshotRead::Skip
+        );
+        // A row at the target already (an event-driven snapshot in this tick) is never read again.
+        assert_eq!(
+            snapshot_read(Some((target as i64, &funded)), target, true),
+            SnapshotRead::Skip
         );
     }
 

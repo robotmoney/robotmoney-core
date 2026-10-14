@@ -119,7 +119,9 @@ describe("the stage runner on stub forge and cast", () => {
 
   test("a missing frozen file on 8453 fails before any chain work (hard error)", async () => {
     const w = world({ chainId: 8453, startNonce: 0, writeFrozen: false });
-    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNTS_MISSING);
+    // one owner spec per sheet owner, so the pre-stage-1 owner check (qa-plan B1) passes and the release gate (QA plan v1 E4) is what refuses the missing file
+    const owners = ["A", "B", "C"].flatMap((o) => ["--owner-signer", `keystore:/k/OWNER_${o}`]);
+    expect(await w.run(["--stage", "deploy", ...owners])).toBe(EXIT_CODES.COUNTS_MISSING);
     expect(forgeScripts(w).length).toBe(0);
   });
 

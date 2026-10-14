@@ -5,8 +5,8 @@
 // the governance additions (issue #307), and the multi-vault protocol stats
 // additions (issue #316):
 //   GET /health
-//   GET /v1/chains/:chain_id/contracts
-//   GET /v1/vault/snapshot/latest
+//   GET /v1/chains/:chain_id/contracts               (only the served chain, X7)
+//   GET /v1/vault/snapshot/latest?contract=          (required, X7)
 //   GET /v1/vault/snapshots?from_block=&to_block=
 //   GET /v1/agents/:address
 //   GET /v1/agents/:address/deposits
@@ -23,6 +23,7 @@
 //   GET /v1/accounts/:address/positions
 //   GET /v1/accounts/:address/history
 //   GET /v1/accounts/:address/policies
+//   GET /v1/accounts/:address/exclusion-claims       (core 1820, QA plan X7)
 //
 // Consensus recommendation receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
 //   GET /v1/consensus-receipts                        (protocol scope, ?limit=)
@@ -57,17 +58,19 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, headroom_of, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
-    AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
-    AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
-    CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
+    dec_to_string, exclusion_finalize_reason_label, headroom_of, position_exit_value,
+    proposal_status_label, AccountExclusionClaimsResponse, AccountHistoryEntry,
+    AccountHistoryResponse, AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse,
+    ActivityEvent, AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy,
+    AgentResponse, CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, Freshness, Health, ProposalDetail, ProposalDetailResponse,
-    ProposalSummary, ProposalsResponse, RegimeFeedResponse, RegimeSnapshot, RouterStateResponse,
-    RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse, Vault, VaultDetail,
-    VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
-    VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
+    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, ProposalDetail,
+    ProposalDetailResponse, ProposalSummary, ProposalsResponse, RegimeFeedResponse, RegimeSnapshot,
+    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
+    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
+    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
+    VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -191,7 +194,7 @@ type VaultFeeRow = (
 
 // Row types for the new multi-vault endpoints.
 
-// (chain_id, vault_address, block_number, shares, total_assets, total_supply, indexed_at)
+// (chain_id, vault_address, block_number, shares, preview_redeem_total, total_supply, indexed_at)
 // Used by get_account_positions to join wallet_positions with vault_snapshots.
 type PositionRow = (
     i64,
@@ -264,6 +267,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/accounts/:address/positions", get(get_account_positions))
         .route("/v1/accounts/:address/history", get(get_account_history))
         .route("/v1/accounts/:address/policies", get(get_account_policies))
+        // Exclusion-record claims — core issue 1820, QA plan X7.
+        .route("/v1/accounts/:address/exclusion-claims", get(get_account_exclusion_claims))
         // Investment Committee — issue #1053.
         .route("/v1/committee/agents", get(list_committee_agents))
         .route(
@@ -300,18 +305,51 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     .fetch_optional(&state.pool)
     .await?;
     let progress = indexer_progress(&state).await?;
+    let last_indexed_block = progress.map(|(b, _)| b);
+    let chain_head_block = chain_head_block(&state).await?;
+    // DI-5: `/health` used to say `ok` with a cursor that had not moved for hours, because nothing in it
+    // showed that every tick was failing. The newest FINISHED run is the indexer's current verdict: the run
+    // in flight has no outcome yet, and an older error that a later tick recovered from is history.
+    let last_run_error: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT error FROM indexer_runs \
+         WHERE chain_id = $1 AND finished_at IS NOT NULL \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
     Ok(Json(Health {
-        status: "ok",
-        last_indexed_block: progress.map(|(b, _)| b),
-        chain_head_block: chain_head_block(&state).await?,
+        status: if last_run_error.is_some() {
+            "degraded"
+        } else {
+            "ok"
+        },
+        last_indexed_block,
+        chain_head_block,
+        lag_blocks: chain_head_block
+            .zip(last_indexed_block)
+            .map(|(head, cursor)| head - cursor),
+        last_run_error,
         reorg_count: reorg_count.unwrap_or(0),
     }))
 }
 
+/// GET /v1/chains/:chain_id/contracts
+///
+/// This service serves one chain (`state.chain_id`), and so does this route (QA
+/// plan X7, DI-9). It used to bind the path's chain id, so `/v1/chains/1/contracts`
+/// on the Base service listed another chain's rows from a shared database. A path
+/// chain that is not the served one is 404, like any resource this service does
+/// not have.
 async fn list_contracts(
     State(state): State<AppState>,
     Path(chain_id): Path<i64>,
 ) -> ApiResult<Json<ContractsResponse>> {
+    if chain_id != state.chain_id {
+        return Err(ApiError::NotFound);
+    }
+    let chain_id = state.chain_id;
     // The canonical schema has no `label` column on `contracts`; surface
     // it as null so the wire format stays stable for existing clients.
     let rows: Vec<(Vec<u8>, String)> =
@@ -336,13 +374,40 @@ async fn list_contracts(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LatestSnapshotQuery {
+    /// The vault whose latest snapshot to return. Required.
+    pub contract: Option<String>,
+}
+
+/// GET /v1/vault/snapshot/latest?contract=0x…
+///
+/// The newest `vault_snapshots` row of one vault on the served chain (QA plan
+/// X7, DI-9). It used to read the newest row of the whole table, with no chain
+/// and no vault, so with several vaults (and several chains in one database) it
+/// answered whichever vault was read last. `multi-vault-explorer-decisions.md`
+/// §3.2 named the fix: a required vault parameter, 400 without it. The
+/// parameter is `contract`, the name `/v1/vault/snapshots` already uses. A vault
+/// with no snapshot on this chain is 404.
 async fn latest_vault_snapshot(
     State(state): State<AppState>,
+    Query(q): Query<LatestSnapshotQuery>,
 ) -> ApiResult<Json<VaultSnapshotsResponse>> {
+    let Some(contract) = q.contract.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "contract query parameter is required: the vault whose latest snapshot to return"
+                .into(),
+        ));
+    };
+    let contract = decode_address_param(contract)?;
     let row: Option<SnapshotRow> = sqlx::query_as(
         "SELECT chain_id, contract, block_number, total_assets, total_supply, indexed_at \
-         FROM vault_snapshots ORDER BY block_number DESC LIMIT 1",
+         FROM vault_snapshots \
+         WHERE chain_id = $1 AND contract = $2 \
+         ORDER BY block_number DESC LIMIT 1",
     )
+    .bind(state.chain_id)
+    .bind(&contract[..])
     .fetch_optional(&state.pool)
     .await?;
     match row {
@@ -1125,27 +1190,42 @@ const UNIQUE_DEPOSITORS_SQL: &str = "\
         WHERE addr NOT IN (SELECT owner FROM latest) \
     ) holders";
 
+/// `total_tvl` of `/v1/stats`: the sum of the latest `vault_snapshots.total_assets` per contract,
+/// across the active vaults (architecture.md, Protocol stats).
+///
+/// The indexer snapshots every `vaults` row whatever its status, so a Retired vault's newest row
+/// tracks its holders' exits (DI-2). The status filter lives here, in the product view: a
+/// Retired (2) vault is left out, so the old rmPROTO stops counting toward protocol TVL once it is
+/// retired, while `/v1/vaults` still shows its own live `total_assets`. A DepositsPaused (1) vault
+/// still counts: the pause is temporary and its assets stay deployed. A snapshotted contract with
+/// no `vaults` row (the pinned vault of a deployment without a registry) still counts.
+const TOTAL_TVL_SQL: &str = "\
+    SELECT SUM(latest.total_assets) \
+    FROM ( \
+        SELECT DISTINCT ON (s.chain_id, s.contract) s.total_assets \
+        FROM vault_snapshots s \
+        WHERE s.chain_id = $1 \
+          AND NOT EXISTS ( \
+              SELECT 1 FROM vaults v \
+              WHERE v.chain_id = s.chain_id AND v.vault_address = s.contract AND v.status = 2 \
+          ) \
+        ORDER BY s.chain_id, s.contract, s.block_number DESC \
+    ) AS latest";
+
 /// GET /v1/stats — aggregate TVL, unique depositor count, and global activity feed.
 ///
-/// TVL = sum of the latest total_assets snapshot per registered vault.
+/// TVL = sum of the latest total_assets snapshot per vault, leaving out every
+/// vault whose registry status is Retired (see [`TOTAL_TVL_SQL`]).
 /// Depositor count = distinct addresses currently holding vault shares
 /// (see [`UNIQUE_DEPOSITORS_SQL`]).
 /// Activity feed = last 50 deposit events across all vaults (descending by block).
 /// Chain-scoped to state.chain_id.
 async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsResponse>> {
-    // Aggregate TVL: sum of the most recent total_assets per vault.
-    let tvl_row: (Option<BigDecimal>,) = sqlx::query_as(
-        "SELECT SUM(latest.total_assets) \
-         FROM ( \
-             SELECT DISTINCT ON (chain_id, contract) total_assets \
-             FROM vault_snapshots \
-             WHERE chain_id = $1 \
-             ORDER BY chain_id, contract, block_number DESC \
-         ) AS latest",
-    )
-    .bind(state.chain_id)
-    .fetch_one(&state.pool)
-    .await?;
+    // Aggregate TVL: sum of the most recent total_assets per non-retired vault.
+    let tvl_row: (Option<BigDecimal>,) = sqlx::query_as(TOTAL_TVL_SQL)
+        .bind(state.chain_id)
+        .fetch_one(&state.pool)
+        .await?;
     let total_tvl = tvl_row
         .0
         .as_ref()
@@ -1276,8 +1356,12 @@ async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<Route
 ///
 /// For each vault where the address holds a non-zero share balance (latest
 /// wallet_positions row), computes:
-///   usdc_value = shares * total_assets / total_supply
-/// using the most recent vault_snapshot for that vault.
+///   usdc_value = shares * preview_redeem_total / total_supply
+/// using the most recent vault_snapshot for that vault. `preview_redeem_total`
+/// is the vault's `previewRedeem(totalSupply())` at the snapshot block, so the
+/// value is what a redeem of `shares` pays after the exit fee and (BasketVault)
+/// the slippage floor, never the gross `convertToAssets` value (core 1795, QA
+/// plan X8). A snapshot without it (older than migration 0022) gives `null`.
 /// Chain-scoped to state.chain_id.
 async fn get_account_positions(
     State(state): State<AppState>,
@@ -1286,10 +1370,10 @@ async fn get_account_positions(
     let address_bytes = decode_address_param(&address)?;
 
     // Latest wallet_position per vault for this owner, joined with the
-    // most recent vault_snapshot per vault for the share-price computation.
+    // most recent vault_snapshot per vault for the exit-value computation.
     let rows: Vec<PositionRow> = sqlx::query_as(
         "SELECT wp.chain_id, wp.contract, wp.block_number, wp.shares, \
-                s.total_assets, s.total_supply, wp.indexed_at \
+                s.preview_redeem_total, s.total_supply, wp.indexed_at \
          FROM ( \
              SELECT DISTINCT ON (chain_id, contract) \
                     chain_id, contract, block_number, shares, indexed_at \
@@ -1298,7 +1382,7 @@ async fn get_account_positions(
              ORDER BY chain_id, contract, block_number DESC \
          ) AS wp \
          LEFT JOIN LATERAL ( \
-             SELECT total_assets, total_supply \
+             SELECT preview_redeem_total, total_supply \
              FROM vault_snapshots \
              WHERE chain_id = wp.chain_id AND contract = wp.contract \
              ORDER BY block_number DESC \
@@ -1314,16 +1398,21 @@ async fn get_account_positions(
     let positions: Vec<VaultPosition> = rows
         .into_iter()
         .map(
-            |(_, contract, block_number, shares, total_assets, total_supply, indexed_at)| {
-                // usdc_value = shares * total_assets / total_supply
-                // Use BigDecimal arithmetic; guard against zero supply.
-                let usdc_value = match (total_assets.as_ref(), total_supply.as_ref()) {
-                    (Some(ta), Some(ts)) if ts != &BigDecimal::from(0) => {
-                        let val = &shares * ta / ts;
-                        Some(dec_to_string(&val.with_scale(0)))
-                    }
-                    _ => None,
-                };
+            |(
+                _,
+                contract,
+                block_number,
+                shares,
+                preview_redeem_total,
+                total_supply,
+                indexed_at,
+            )| {
+                let usdc_value = position_exit_value(
+                    &shares,
+                    preview_redeem_total.as_ref(),
+                    total_supply.as_ref(),
+                )
+                .map(|v| dec_to_string(&v));
                 VaultPosition {
                     vault: addr_to_hex(&contract),
                     shares: dec_to_string(&shares),
@@ -1347,6 +1436,136 @@ async fn get_account_positions(
         address: addr_to_hex(&address_bytes),
         positions,
         freshness,
+    }))
+}
+
+// (vault, ledger, exclusion_id, adapter, adapter_index, opened_block, snapshot_supply, balance_at,
+//  recovered, claimed, claimable, finalize_reason)
+type ExclusionClaimRow = (
+    Vec<u8>,
+    Vec<u8>,
+    i64,
+    Vec<u8>,
+    i64,
+    i64,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    Option<i16>,
+);
+
+/// GET /v1/accounts/:address/exclusion-claims — this address's claim on every
+/// exclusion record it held vault shares at (core issue 1820, QA plan X7).
+///
+/// A `RobotMoneyVault` that excludes a funded adapter opens a record in its
+/// `ExclusionLedger`. Recovered USDC goes to the record, not to the vault, and
+/// belongs pro rata to the holders at the record's snapshot, also those who
+/// have since exited. Per record the claim is
+/// `floor(recovered * balance_at / snapshot_supply) - claimed`, never below 0,
+/// the same formula and rounding as `ExclusionLedger.claimable`:
+///
+/// - `recovered` is the record's newest `recoveredUsdc` (credit or close event),
+/// - `balance_at` is the holder's `balanceAt(holder, id)` the indexer read,
+/// - `claimed` is the sum of this holder's `ExclusionClaimed` amounts.
+///
+/// Records with no stored balance for this address are left out. The indexer
+/// reads the balance of every address with a deposit or withdrawal in the vault
+/// at or before the snapshot, and of any other address once it claims; a holder
+/// who only received shares by transfer and never claimed is not listed here,
+/// and the ledger's `claimable(id, holder)` is the authority. Chain-scoped to
+/// `state.chain_id`, freshness is the index cursor.
+async fn get_account_exclusion_claims(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AccountExclusionClaimsResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    let rows: Vec<ExclusionClaimRow> = sqlx::query_as(
+        "SELECT vault_address, ledger_address, exclusion_id, adapter_address, adapter_index, \
+                opened_block, snapshot_supply, balance_at, recovered, claimed, \
+                GREATEST( \
+                    COALESCE(div(recovered * balance_at, NULLIF(snapshot_supply, 0)), 0) - claimed, \
+                    0) AS claimable, \
+                reason \
+         FROM ( \
+             SELECT r.vault_address, r.ledger_address, r.exclusion_id, r.adapter_address, \
+                    r.adapter_index, r.block_number AS opened_block, r.snapshot_supply, \
+                    b.balance_at, \
+                    GREATEST(COALESCE(rec.recovered, 0), COALESCE(f.recovered_total, 0)) \
+                        AS recovered, \
+                    COALESCE(paid.claimed, 0) AS claimed, \
+                    f.reason \
+             FROM exclusion_holder_balances b \
+             JOIN exclusion_records r \
+               ON r.chain_id = b.chain_id AND r.ledger_address = b.ledger_address \
+              AND r.exclusion_id = b.exclusion_id \
+             LEFT JOIN LATERAL ( \
+                 SELECT MAX(x.recovered_total) AS recovered FROM exclusion_recoveries x \
+                 WHERE x.chain_id = r.chain_id AND x.ledger_address = r.ledger_address \
+                   AND x.exclusion_id = r.exclusion_id \
+             ) rec ON TRUE \
+             LEFT JOIN LATERAL ( \
+                 SELECT SUM(c.amount) AS claimed FROM exclusion_claims c \
+                 WHERE c.chain_id = b.chain_id AND c.ledger_address = b.ledger_address \
+                   AND c.exclusion_id = b.exclusion_id AND c.holder = b.holder \
+             ) paid ON TRUE \
+             LEFT JOIN exclusion_finalizations f \
+               ON f.chain_id = r.chain_id AND f.ledger_address = r.ledger_address \
+              AND f.exclusion_id = r.exclusion_id \
+             WHERE b.chain_id = $1 AND b.holder = $2 \
+         ) t \
+         ORDER BY vault_address, ledger_address, exclusion_id",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut total = BigDecimal::from(0);
+    let claims: Vec<ExclusionClaim> = rows
+        .into_iter()
+        .map(
+            |(
+                vault,
+                ledger,
+                exclusion_id,
+                adapter,
+                adapter_index,
+                opened_block,
+                snapshot_supply,
+                balance_at,
+                recovered,
+                claimed,
+                claimable,
+                reason,
+            )| {
+                total += &claimable;
+                ExclusionClaim {
+                    vault: addr_to_hex(&vault),
+                    exclusion_ledger: addr_to_hex(&ledger),
+                    exclusion_id,
+                    adapter: addr_to_hex(&adapter),
+                    adapter_index,
+                    opened_block,
+                    snapshot_supply: dec_to_string(&snapshot_supply),
+                    balance_at: dec_to_string(&balance_at),
+                    recovered_usdc: dec_to_string(&recovered),
+                    claimed_usdc: dec_to_string(&claimed),
+                    claimable_usdc: dec_to_string(&claimable),
+                    finalized: reason.is_some(),
+                    finalize_reason: reason.map(|r| exclusion_finalize_reason_label(r).to_string()),
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(AccountExclusionClaimsResponse {
+        address: addr_to_hex(&address_bytes),
+        claims,
+        total_claimable_usdc: dec_to_string(&total),
+        freshness: latest_freshness(&state).await?,
     }))
 }
 
@@ -1630,6 +1849,11 @@ type CommitteeAgentRow = (Vec<u8>, String, bool, i64, Option<i64>);
 /// GET /v1/committee/agents
 ///
 /// Returns all registered committee agents (active and revoked).
+///
+/// A member whose `AgentRegistered` lies below the indexed range shows up once
+/// it votes, with an empty `agent_id`, `active = false` and no `revoked_at`.
+/// That is the indexer's placeholder row (DI-4): it knows the address voted,
+/// not when or under what label it was registered.
 async fn list_committee_agents(
     State(state): State<AppState>,
 ) -> ApiResult<Json<CommitteeAgentsResponse>> {
@@ -1658,8 +1882,9 @@ async fn list_committee_agents(
     Ok(Json(CommitteeAgentsResponse { agents, freshness }))
 }
 
-// (vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified, block_number, timestamp_secs)
-type TrackRecordRow = (i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
+// (contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified,
+//  block_number, timestamp_secs)
+type TrackRecordRow = (Vec<u8>, i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
 
 /// GET /v1/committee/agents/:address/track-record
 ///
@@ -1671,7 +1896,7 @@ async fn get_committee_track_record(
     let addr_bytes = decode_address_param(&address)?;
 
     let rows: Vec<TrackRecordRow> = sqlx::query_as(
-        "SELECT vote_id, vault_address, stance, target_weight_bps, confidence, \
+        "SELECT contract_address, vote_id, vault_address, stance, target_weight_bps, confidence, \
                 rationale_uri, verified, block_number, timestamp_secs \
          FROM committee_votes \
          WHERE chain_id = $1 AND agent_address = $2 \
@@ -1685,16 +1910,19 @@ async fn get_committee_track_record(
     let votes = rows
         .into_iter()
         .map(
-            |(vote_id, vault, stance, weight, conf, uri, verified, block, ts)| CommitteeVoteEntry {
-                vote_id,
-                vault: format!("0x{}", hex::encode(vault)),
-                stance,
-                target_weight_bps: weight,
-                confidence: conf,
-                rationale_uri: uri,
-                verified,
-                block_number: block,
-                timestamp_secs: ts,
+            |(contract, vote_id, vault, stance, weight, conf, uri, verified, block, ts)| {
+                CommitteeVoteEntry {
+                    contract_address: format!("0x{}", hex::encode(contract)),
+                    vote_id,
+                    vault: format!("0x{}", hex::encode(vault)),
+                    stance,
+                    target_weight_bps: weight,
+                    confidence: conf,
+                    rationale_uri: uri,
+                    verified,
+                    block_number: block,
+                    timestamp_secs: ts,
+                }
             },
         )
         .collect();
@@ -1744,13 +1972,27 @@ type RegimeSnapshotRow = (Vec<u8>, BigDecimal, i32, i64, DateTime<Utc>);
 /// GET /v1/regime/feed
 ///
 /// Returns the latest regime snapshot per vault (most recent block_number).
+///
+/// The indexer writes a new snapshot whenever a vault's tilt changes: on every
+/// committee vote, registration and revocation, and at each tick when a signal
+/// ages out of the freshness window (DI-3). When no member counts any more it
+/// writes a zero-count row. A vault whose latest row is that zero-count row is
+/// left out here, as `/v1/committee/tilts` leaves out a vault with no counted
+/// signal: an `avg_weight_bps` of 0 from nobody would read as a committee view
+/// of 0 bps. The filter runs after the latest row is picked, so an older
+/// non-zero row never comes back.
 async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<RegimeFeedResponse>> {
     let rows: Vec<RegimeSnapshotRow> = sqlx::query_as(
-        "SELECT DISTINCT ON (vault_address) \
-                vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
-         FROM regime_snapshots \
-         WHERE chain_id = $1 \
-         ORDER BY vault_address, block_number DESC",
+        "SELECT vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
+         FROM ( \
+             SELECT DISTINCT ON (vault_address) \
+                    vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
+             FROM regime_snapshots \
+             WHERE chain_id = $1 \
+             ORDER BY vault_address, block_number DESC \
+         ) latest \
+         WHERE vote_count > 0 \
+         ORDER BY vault_address",
     )
     .bind(state.chain_id)
     .fetch_all(&state.pool)

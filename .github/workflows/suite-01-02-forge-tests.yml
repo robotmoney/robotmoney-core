@@ -153,7 +153,7 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -189,13 +189,11 @@ jobs:
         #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
         #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
         #     the UniswapV3SwapAdapter on the fee 500 pool.
-        #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.
         #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
           bun scripts/ci/check-set-registry-owner.ts
@@ -372,6 +370,8 @@ jobs:
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
       - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
+      - name: forge test (a held RM price drags the recorder sell floor; the USDC sell anchor bounds it, live RM pool — core 1793)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RecorderManipulationFork.t.sol"
       - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
 
@@ -508,7 +508,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/565372849346ef905691dda58e5b85471470138a/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -99,6 +99,15 @@ Minimum enforced interval between rebalance calls (1 hour).
 
 ```solidity
 uint256 public constant MIN_REBALANCE_INTERVAL_FLOOR = 1 hours;
+```
+
+### exclusionLedger
+
+The exclusion record of this vault: holds recovered USDC and pays snapshot
+holders. Deployed by the constructor, one per vault.
+
+```solidity
+ExclusionLedger public immutable exclusionLedger;
 ```
 
 ### ADAPTER_CALL_GAS_FLOOR
@@ -236,7 +245,9 @@ address public quarantineAddress;
 
 ### shutdown
 
-Whether the vault has been permanently shut down. Irreversible.
+Whether the vault is shut down (`shutdownVault`, `EMERGENCY_ROLE`). Deposits stay
+closed and the TVL cap stays 0 until `ADMIN_ROLE` reverses it with `restoreVault`.
+Withdrawals are never blocked by it.
 
 ```solidity
 bool public shutdown;
@@ -304,6 +315,28 @@ Timestamp of the most recent completed rebalance.
 
 ```solidity
 uint256 public lastRebalanceAt;
+```
+
+### openExclusionOf
+
+Open exclusion record id per registry index (0 = none). An entry with an open
+record never counts in NAV, never receives USDC, and keeps deposits closed.
+
+```solidity
+mapping(uint256 index => uint256 exclusionId) public openExclusionOf;
+```
+
+### _exclusionSnapshots
+
+<i>
+
+True once the first record opened. From then on `_update` checkpoints every share
+balance change in the ledger before it happens.
+
+</i>
+
+```solidity
+bool private _exclusionSnapshots;
 ```
 
 ## Functions
@@ -444,9 +477,12 @@ ADP-2 (F-14): an adapter whose eligibility was revoked while still registered as
 `active` (allowlist withdrawn or codehash de-listed) is EXCLUDED from NAV. A
 revoked adapter is no longer trusted to price its holdings, so continuing to count
 its self-reported balance would let a compromised/lying adapter inflate the share
-price (and, on the withdrawal side, drain honest holders' idle USDC). Eligibility
-is restorable via `setAdapterAllowed`, and the funds remain drainable by EMERGENCY
-via `emergencyWithdrawAdapter`, so this is an exclusion-not-confiscation.
+price (and, on the withdrawal side, drain honest holders' idle USDC). An entry under
+an open exclusion record is not counted either, even if its eligibility returned.
+Exclusion is not confiscation (core 1820): whatever is recovered from the adapter
+goes to `exclusionLedger`, never to idle, and is paid pro rata to the holders at
+the moment of exclusion. So recovery never raises this NAV, and the ledger's USDC
+is never part of it.
 
 ```solidity
 function totalAssets() public view override returns (uint256);
@@ -466,13 +502,40 @@ function totalAssets() public view override returns (uint256);
 
 An adapter contributes to NAV / receives proportional withdrawals only when it is
 both registered-active AND currently eligible (allowlisted + codehash-pinned +
-identity-bound). Centralises the ADP-2 NAV-side check so `totalAssets` and
-`_pullProportional` can never drift apart.
+identity-bound) AND has no open exclusion record. Centralises the ADP-2 NAV-side
+check so `totalAssets` and `_pullProportional` can never drift apart.
 
 </i>
 
 ```solidity
 function _isAdapterCounted(uint256 i) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_isadapterusable-uint256"></a>
+
+### _isAdapterUsable
+
+<i>
+
+Entry `i` may price into NAV and take or return USDC: no open exclusion record
+(core 1820) and currently eligible. Does not check `active`.
+
+</i>
+
+```solidity
+function _isAdapterUsable(uint256 i) internal view returns (bool);
 ```
 
 **Parameters**
@@ -761,7 +824,8 @@ function _depositsClosed() internal view returns (bool);
 core 1788: an active adapter that fails `_isAdapterEligible` is excluded from
 `totalAssets()`. Minting against that reduced NAV would hand the new depositor a
 slice of the excluded balance once eligibility is restored, so deposits stay
-closed for as long as any active adapter is ineligible. Withdrawals are unaffected.
+closed for as long as any active adapter is ineligible or under an open exclusion
+record (core 1820). Withdrawals are unaffected. True means "an exclusion is open".
 
 </i>
 
@@ -975,6 +1039,30 @@ function _withdraw(
 | assets | `uint256` |  |
 | shares | `uint256` |  |
 
+<a id="_update-address-address-uint256"></a>
+
+### _update
+
+<i>
+
+core 1820: once any exclusion record exists, report both pre-change balances to the
+ledger before every mint, burn and transfer, so a holder's claim stays fixed at its
+balance at exclusion. Exiting or transferring later never moves the claim.
+
+</i>
+
+```solidity
+function _update(address from, address to, uint256 value) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| value | `uint256` |  |
+
 <a id="_pullproportional-uint256"></a>
 
 ### _pullProportional
@@ -1017,6 +1105,18 @@ function _pullProportional(uint256 assetsNeeded) internal returns (uint256);
 
 Register a new strategy adapter. Restricted to `ADMIN_ROLE`.
 
+<i>
+
+Reverts `AdapterAlreadyActive` when any ACTIVE entry already holds `adapter_`:
+two active entries for one contract count its balance twice in `totalAssets()`
+(core 1789). Only active entries are scanned. Re-adding an address after
+`removeAdapter` or `forceRemoveAdapter` is legal and appends a NEW entry; this
+family never reactivates an inactive entry in place (unlike the basket family's
+`BasketAssetConfigGuard.reuseOrRejectDuplicate`). Inactive entries are never
+counted, so the stale entry cannot double count.
+
+</i>
+
 ```solidity
 function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE);
 ```
@@ -1036,20 +1136,38 @@ Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN
 
 <i>
 
-Setting `allowed_ = false` on an adapter that is already active quarantines it:
-its balance is excluded from `totalAssets()` (ADP-2), deposits and mints close
-while it stays active (core 1788), keeper `rebalance()` neither pulls from nor
-allocates to it, and new `addAdapter` calls for the address revert. Withdrawals
-stay open and are paid from eligible adapters and idle USDC only. A holder who
-exits during the exclusion is paid at the reduced NAV and forfeits any share of
-the excluded balance; holders who stay keep their full claim when eligibility is
-restored or the funds are recovered. Recovery is explicit: `emergencyWithdrawAdapter`
-(EMERGENCY) drains it, then `removeAdapter` / `forceRemoveAdapter` deactivates it.
+Setting `allowed_ = false` on an adapter that is already active excludes it:
+its balance leaves `totalAssets()` (ADP-2), deposits and mints close while it
+stays active (core 1788), keeper `rebalance()` neither pulls from nor allocates to
+it, and new `addAdapter` calls for the address revert. Withdrawals stay open and
+are paid from eligible adapters and idle USDC only.
 
 </i>
 
+Exclusion record (core 1820, owner decision 2026-10-13): in the same call the vault
+opens a record in `exclusionLedger` with a snapshot of every holder's shares (skipped
+when no shares exist). Every USDC later recovered from the adapter is credited to
+that record, never to idle, by all three recovery paths: `emergencyWithdrawAdapter`
+(and `emergencyWithdraw`), `adminRebalance`, and restoration here. It is paid pro
+rata to the holders at the snapshot through `ExclusionLedger.claim`. A holder who
+exits during the exclusion is paid at the reduced NAV AND keeps the claim; a holder
+who stays gets the same per-share recovery; shares minted or bought later get none.
+A redeem that would pay 0 USDC during the exclusion reverts
+`ZeroPayoutDuringExclusion` instead of burning the shares.
+
+Setting `allowed_ = true` while the entry has an open record restores it: the
+vault first withdraws the adapter's whole balance into the record, then closes the
+record (`Restored`), and only then does the empty entry count in NAV again. If the
+adapter cannot pay out, the call reverts; drain it with `emergencyWithdrawAdapter` /
+`adminRebalance` first. `removeAdapter` (drained) and `forceRemoveAdapter` (loss
+borne by snapshot holders only) also close the record. A closed record stays
+claimable forever.
+
 ```solidity
-function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE);
+function setAdapterAllowed(address adapter_, bool allowed_)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant;
 ```
 
 **Parameters**
@@ -1065,10 +1183,18 @@ function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(AD
 
 Approve or revoke an adapter runtime bytecode hash. Restricted to `ADMIN_ROLE`.
 
+<i>
+
+Revoking a hash excludes every active adapter that runs it, and restoring it
+restores them, with the same exclusion-record rules as `setAdapterAllowed`.
+
+</i>
+
 ```solidity
 function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
         external
-        onlyRole(ADMIN_ROLE);
+        onlyRole(ADMIN_ROLE)
+        nonReentrant;
 ```
 
 **Parameters**
@@ -1078,11 +1204,25 @@ function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
 | codeHash_ | `bytes32` | Runtime bytecode hash whose eligibility should change. |
 | allowed_ | `bool` | True to allow onboarding/allocation, false to revoke future allocations. |
 
+<a id="syncexclusions"></a>
+
+### syncExclusions
+
+Open or restore exclusion records to match current adapter eligibility.
+Permissionless. The governance levers above do this themselves; this catches an
+entry that became ineligible (or eligible) without one, for example through its
+own `USDC()` / `VAULT()` views.
+
+```solidity
+function syncExclusions() external nonReentrant;
+```
+
 <a id="removeadapter-uint256"></a>
 
 ### removeAdapter
 
 Deactivate an adapter. The adapter must hold zero assets. Restricted to `ADMIN_ROLE`.
+Closes the entry's open exclusion record, if any (`Removed`, core 1820).
 
 ```solidity
 function removeAdapter(uint256 index) external onlyRole(ADMIN_ROLE);
@@ -1111,6 +1251,33 @@ function setAdapterCap(uint256 index, uint16 newCapBps) external onlyRole(ADMIN_
 | index | `uint256` | Registry index of the adapter. |
 | newCapBps | `uint16` | New maximum allocation cap in basis points (1–10 000). |
 
+<a id="setadaptermaxexposure-uint256-uint256"></a>
+
+### setAdapterMaxExposure
+
+Set the exposure cap of an active adapter that has one (`MorphoAdapter`,
+FS-VLT-10). Restricted to `ADMIN_ROLE`. The adapter's `setMaxExposure` is
+`onlyVault`, so this vault call is the only way to set it.
+
+<i>
+
+Reverts `AdapterNotFound` for an inactive or unknown index. An adapter without
+`setMaxExposure` (Aave, Compound) makes the call revert. Read the result back with
+the adapter's `maxExposure()`.
+
+</i>
+
+```solidity
+function setAdapterMaxExposure(uint256 index, uint256 cap) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | Registry index of the adapter. |
+| cap | `uint256` | Maximum USDC the adapter may hold in its venue; 0 removes the cap. |
+
 <a id="rebalance"></a>
 
 ### rebalance
@@ -1131,6 +1298,15 @@ function rebalance() external nonReentrant;
 
 Admin-specified precision rebalance: sets each adapter to an explicit target balance.
 Restricted to `ADMIN_ROLE`.
+
+<i>
+
+The ADMIN recovery path for an excluded adapter (core 1788): a pull from an entry
+under an open exclusion record is credited to that record, not left idle (core
+1820, E2), so the drain cannot hand the excluded value to today's holders. No entry
+under an open record can be allocated to.
+
+</i>
 
 ```solidity
 function adminRebalance(uint256[] calldata targetBalances)
@@ -1221,6 +1397,8 @@ function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant;
 
 Pause deposits and withdraw all assets from a single adapter. Restricted to `EMERGENCY_ROLE`.
 Withdrawals remain open so users can redeem assets pulled into idle USDC.
+USDC drained from an entry under an open exclusion record goes to that record
+instead of idle (core 1820), for the holders at the moment of exclusion.
 
 ```solidity
 function emergencyWithdrawAdapter(uint256 index)
@@ -1235,12 +1413,72 @@ function emergencyWithdrawAdapter(uint256 index)
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index of the adapter to drain. |
 
+<a id="_emergencypull-uint256-bool"></a>
+
+### _emergencyPull
+
+<i>
+
+One emergency drain of active entry `i`, tolerant of a failing adapter. Emits
+`EmergencyWithdrawAdapterCalled` per outcome. `single` is the single-adapter lever:
+only it reports an empty adapter. A pull from an entry under an open exclusion
+record is credited to it (core 1820).
+
+</i>
+
+```solidity
+function _emergencyPull(uint256 i, bool single) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| single | `bool` |  |
+
+<a id="_drain-uint256-exclusionledger-recoverysource"></a>
+
+### _drain
+
+<i>
+
+Withdraw entry `i`'s whole reported balance, tolerant of a failing adapter, and
+credit it to `i`'s open exclusion record if there is one (core 1820). `ok` is false
+when `totalAssets` or `withdraw` reverted (then `actual` is 0); `empty` when the
+adapter reported no balance (nothing is called then).
+
+</i>
+
+```solidity
+function _drain(uint256 i, ExclusionLedger.RecoverySource source)
+        internal
+        returns (bool ok, uint256 actual, bool empty);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| actual | `uint256` |  |
+| empty | `bool` |  |
+
 <a id="forceremoveadapter-uint256"></a>
 
 ### forceRemoveAdapter
 
 Force-remove an adapter without withdrawing its assets (last-resort action).
 Assets in the adapter are treated as lost. Restricted to `EMERGENCY_ROLE`.
+An open exclusion record on the entry closes (`ForceRemoved`, core 1820): it
+keeps what was recovered, and the rest is a loss for the snapshot holders only.
 
 ```solidity
 function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE);
@@ -1467,6 +1705,100 @@ function _setDepositsPaused(bool paused_) internal;
 | ---- | ---- | ----------- |
 | paused_ | `bool` |  |
 
+<a id="_vaultusdc"></a>
+
+### _vaultUsdc
+
+<i>
+
+USDC this vault holds right now (idle).
+
+</i>
+
+```solidity
+function _vaultUsdc() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_syncexclusions-bool"></a>
+
+### _syncExclusions
+
+<i>
+
+core 1820. For every active entry: an ineligible entry with no open record gets
+one, with a snapshot of the share supply (skipped while no shares exist: there is
+no holder to protect). When `restore` is set, an eligible entry that still has an
+open record is restored: its whole balance is withdrawn into the record, then the
+record closes (`Restored`) and the now-empty entry counts again. If the adapter
+cannot pay out, the restore reverts `AdapterNotEmpty`. Opening never calls the
+adapter from here (the ledger try/catches its informational `totalAssets()`), so
+excluding is never blocked.
+
+</i>
+
+```solidity
+function _syncExclusions(bool restore) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| restore | `bool` |  |
+
+<a id="_creditexclusion-uint256-uint256-exclusionledger-recoverysource"></a>
+
+### _creditExclusion
+
+<i>
+
+core 1820: move the USDC that arrived since `before` (the vault balance before a
+pull from entry `i`) into `i`'s open exclusion record. No-op without an open
+record. The balance delta, not the adapter's return value, is what moves: an
+excluded adapter is untrusted, and overstating its return must not take idle USDC.
+
+</i>
+
+```solidity
+function _creditExclusion(uint256 i, uint256 before, ExclusionLedger.RecoverySource source)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| before | `uint256` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+
+<a id="_finalizeexclusion-uint256-exclusionledger-finalizereason"></a>
+
+### _finalizeExclusion
+
+<i>
+
+core 1820: close entry `i`'s open exclusion record, if any. It stays claimable.
+
+</i>
+
+```solidity
+function _finalizeExclusion(uint256 i, ExclusionLedger.FinalizeReason reason) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| reason | `ExclusionLedger.FinalizeReason` |  |
+
 <a id="_isadaptereligible-address"></a>
 
 ### _isAdapterEligible
@@ -1636,6 +1968,27 @@ function _targetBpsForIndex(uint256 index) internal view returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="_requireactiveadapter-uint256"></a>
+
+### _requireActiveAdapter
+
+<i>
+
+Reverts `AdapterNotFound` unless `index` names an active registry entry. One shared
+guard for every index-taking adapter lever keeps the vault under EIP-170.
+
+</i>
+
+```solidity
+function _requireActiveAdapter(uint256 index) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
 <a id="_activeadaptercount"></a>
 
 ### _activeAdapterCount
@@ -1670,7 +2023,7 @@ function adapterCount() external view returns (uint256);
 
 ### isShutdown
 
-Whether the vault has been permanently shut down.
+Whether the vault is shut down. `restoreVault` (`ADMIN_ROLE`) reverses it.
 
 ```solidity
 function isShutdown() external view returns (bool);
@@ -1895,6 +2248,22 @@ event AdapterCapUpdated(uint256 indexed index, uint16 oldBps, uint16 newBps);
 | index | `uint256` | Registry index of the adapter. |
 | oldBps | `uint16` | Previous cap in basis points. |
 | newBps | `uint16` | New cap in basis points. |
+
+### AdapterMaxExposureSet
+
+Emitted when governance sets an adapter's exposure cap through the vault.
+
+```solidity
+event AdapterMaxExposureSet(uint256 indexed index, address indexed adapter, uint256 cap);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | Registry index of the adapter. |
+| adapter | `address` | Address of the adapter contract. |
+| cap | `uint256` | New cap in USDC units; 0 means uncapped. |
 
 ### AdapterForceRemoved
 
@@ -2315,6 +2684,22 @@ Adapter registry already holds `MAX_ADAPTERS`; cannot add another.
 error MaxAdaptersReached();
 ```
 
+### AdapterAlreadyActive
+
+`addAdapter` named an address that an ACTIVE registry entry already holds.
+A second active entry would count one balance twice in NAV (core 1789).
+
+```solidity
+error AdapterAlreadyActive(address adapter, uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` | Adapter address that is already registered and active. |
+| index | `uint256` | Registry index of the active entry that holds it. |
+
 ### AdapterNotFound
 
 Provided adapter index is out of range or refers to an inactive entry.
@@ -2376,6 +2761,16 @@ error AdapterNotAllowed(address adapter);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | adapter | `address` | Adapter address that failed the address allowlist check. |
+
+### ZeroPayoutDuringExclusion
+
+A redeem would burn shares for 0 USDC while an active adapter is excluded from
+NAV (core 1820, E2). The shares keep their exclusion claim either way; the vault
+refuses the empty exit instead of burning them for nothing.
+
+```solidity
+error ZeroPayoutDuringExclusion();
+```
 
 ### AdapterCodeHashNotAllowed
 
