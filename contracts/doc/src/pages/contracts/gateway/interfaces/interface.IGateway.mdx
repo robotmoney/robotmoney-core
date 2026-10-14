@@ -5,7 +5,7 @@ description: "Minimal interface stub for the RobotMoney deposit gateway."
 
 # IGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7a511cdfa72db50d9966938a824287f2a66cea9/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:** IGateway
 
@@ -442,7 +442,8 @@ function committeeRegister(address agent, string calldata agentId_) external;
 ### committeeVoteSubmit
 
 Forward a signed committee vote to the IC policy contract.
-Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set.
+Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+if `p.agent != msg.sender` (issue #1790).
 
 ```solidity
 function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)

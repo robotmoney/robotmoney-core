@@ -70,6 +70,66 @@ pub struct Db {
 /// (which does not call sqlx-cli) can still apply schema.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// How far back, in blocks, a committee signal still counts toward the tilt
+/// aggregate: 7 days of 2-second Base blocks. Committee agents form a tilt on
+/// the daily regime feed, which the product renders unavailable after 48 hours
+/// (`docs/product/20260623-product-proposal-investment-committee-v0.md` §3.2),
+/// so a signal a week old no longer describes the member's current view.
+pub const COMMITTEE_VOTE_FRESHNESS_BLOCKS: i64 = 7 * 24 * 60 * 60 / 2;
+
+/// Per-vault committee tilt as of `as_of_block`: `(vault_address, avg
+/// target_weight_bps, member count)`, ordered by vault.
+///
+/// One definition shared by the indexer's regime snapshots and the API's
+/// `/v1/committee/tilts` (issue #1790), so the two surfaces cannot disagree:
+///
+/// - **Latest per member and vault.** Only each member's newest signal on a
+///   vault counts, ordered by chain position (`block_number`, `log_index`),
+///   never by the caller-supplied `timestamp_secs`. A newer signal replaces an
+///   older one even when the newer memo failed verification.
+/// - **Membership.** The member must be active in `committee_agents`, and a
+///   signal from before its latest registration does not count.
+/// - **Verified.** The member's latest signal counts only if its memo hash
+///   verified (architecture §5.4).
+/// - **Freshness.** The latest signal must sit within
+///   [`COMMITTEE_VOTE_FRESHNESS_BLOCKS`] of `as_of_block`. Signals above
+///   `as_of_block` are ignored.
+///
+/// `vault` narrows the result to one vault; `None` returns every vault.
+pub async fn committee_tilts(
+    pool: &PgPool,
+    chain_id: i64,
+    as_of_block: i64,
+    vault: Option<[u8; 20]>,
+) -> Result<Vec<(Vec<u8>, BigDecimal, i64)>, sqlx::Error> {
+    sqlx::query_as(
+        "WITH latest AS ( \
+           SELECT DISTINCT ON (v.vault_address, v.agent_address) \
+                  v.vault_address, v.target_weight_bps, v.verified, v.block_number \
+           FROM committee_votes v \
+           JOIN committee_agents a \
+             ON a.chain_id = v.chain_id AND a.agent_address = v.agent_address \
+           WHERE v.chain_id = $1 \
+             AND v.block_number <= $2 \
+             AND a.active = TRUE \
+             AND v.block_number >= a.registered_at \
+             AND ($3::BYTEA IS NULL OR v.vault_address = $3) \
+           ORDER BY v.vault_address, v.agent_address, v.block_number DESC, v.log_index DESC \
+         ) \
+         SELECT vault_address, AVG(target_weight_bps::NUMERIC), COUNT(*) \
+         FROM latest \
+         WHERE verified = TRUE AND block_number > $2 - $4 \
+         GROUP BY vault_address \
+         ORDER BY vault_address",
+    )
+    .bind(chain_id)
+    .bind(as_of_block)
+    .bind(vault.map(|v| v.to_vec()))
+    .bind(COMMITTEE_VOTE_FRESHNESS_BLOCKS)
+    .fetch_all(pool)
+    .await
+}
+
 /// One way the database's applied schema disagrees with the migration set this
 /// binary embeds.
 ///
@@ -1968,33 +2028,23 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    /// Compute verified vote aggregate for a vault and upsert the regime
-    /// snapshot row.  Returns the number of rows affected (0 or 1).
+    /// Compute the committee tilt for a vault as of `block_number` and upsert
+    /// the regime snapshot row. Returns the number of rows affected (0 or 1).
+    ///
+    /// The aggregate is [`committee_tilts`]: one signal per active member
+    /// (issue #1790), so a flood of votes from one member moves it by one vote.
     pub async fn refresh_regime_snapshot(
         &self,
         chain_id: i64,
         vault_address: [u8; 20],
         block_number: i64,
     ) -> Result<u64, DbError> {
-        // Aggregate over all verified votes for this vault.
-        let row: Option<(Option<bigdecimal::BigDecimal>, Option<i64>)> = sqlx::query_as(
-            "SELECT AVG(target_weight_bps::numeric), COUNT(*) \
-             FROM committee_votes \
-             WHERE chain_id = $1 AND vault_address = $2 AND verified = TRUE",
-        )
-        .bind(chain_id)
-        .bind(&vault_address[..])
-        .fetch_optional(&self.pool)
-        .await?;
-        let (avg, cnt) = row.unwrap_or((None, None));
-        let avg_f: f64 = avg
-            .and_then(|a| a.to_string().parse::<f64>().ok())
-            .unwrap_or(0.0);
-        let cnt_i = cnt.unwrap_or(0) as i32;
-        if cnt_i == 0 {
+        let rows = committee_tilts(&self.pool, chain_id, block_number, Some(vault_address)).await?;
+        let Some((_, avg, cnt)) = rows.into_iter().next() else {
             return Ok(0);
-        }
-        self.upsert_regime_snapshot(chain_id, vault_address, block_number, avg_f, cnt_i)
+        };
+        let avg_f: f64 = avg.to_string().parse::<f64>().unwrap_or(0.0);
+        self.upsert_regime_snapshot(chain_id, vault_address, block_number, avg_f, cnt as i32)
             .await
     }
 

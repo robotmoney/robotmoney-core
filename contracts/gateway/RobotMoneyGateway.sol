@@ -148,6 +148,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `committeeRegister()` or `committeeVoteSubmit()` called but no IC
     ///         policy contract is configured (`icPolicy == address(0)`).
     error ICPolicyNotSet();
+    /// @notice `committeeVoteSubmit()` called with `p.agent != msg.sender`. A
+    ///         committee signal is the caller's own (architecture §4.8 identity
+    ///         model), so one gateway agent cannot file it under another
+    ///         member's address (issue #1790).
+    error CommitteeAgentNotCaller();
     /// @notice `consensusRecordReceipt()` called but no consensus receipt contract
     ///         is configured (`consensusReceipt == address(0)`).
     error ConsensusReceiptNotSet();
@@ -1515,9 +1520,15 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @notice Forward a signed committee vote to the IC policy contract.
-    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set,
+    ///         if `p.agent` is not the caller (`CommitteeAgentNotCaller`), or
     ///         if the IC contract's own guards fail (agent not allowlisted,
     ///         invalid vote fields, etc.).
+    ///
+    ///         `p.agent` must equal `msg.sender` (issue #1790): the IC contract
+    ///         checks `COMMITTEE_AGENT_ROLE` on `p.agent`, so without this bind
+    ///         any `AGENT_ROLE` holder could file a signal under a registered
+    ///         member's address.
     ///
     ///         The gateway is the sole permitted caller of `IC.submitVote`
     ///         (enforced by the IC contract's `onlyGateway` modifier). This
@@ -1532,6 +1543,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         returns (uint256 voteId)
     {
         if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
+        if (p.agent != msg.sender) revert CommitteeAgentNotCaller();
         voteId = icPolicy.submitVote(p);
     }
 

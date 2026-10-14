@@ -622,7 +622,8 @@ on anything.
 **Identity model.** A committee agent's identity is its registered EOA: it
 submits its own vote through the gateway, so `msg.sender` is the
 authorization, the same identity model the gateway uses for agent actions
-(§5.2). On-chain signature recovery and EIP-712 structured-vote domains are
+(§5.2). `committeeVoteSubmit` enforces it: the vote's `agent` field must equal
+`msg.sender`, or the gateway reverts `CommitteeAgentNotCaller` (issue 1790). On-chain signature recovery and EIP-712 structured-vote domains are
 not used — the codebase has no EIP-712 path, and `msg.sender`-via-gateway
 is sufficient when the agent submits its own vote. (Structured-data
 signatures would only be needed to authenticate a vote authored by one
@@ -1196,7 +1197,14 @@ same reorg-rewrite handling. Because the structured tilt is off-chain
 the memo at `rationale_uri`, verifies `keccak256(memo) == vote_digest`, and
 stores the per-vault tilts only when the hash matches — a memo that is
 missing or fails the digest check is recorded as an unverified commitment,
-never as tilt data. The API then exposes protocol-scope committee reads
+never as tilt data. The per-vault tilt aggregate counts one signal per
+member: each active member's latest vote on the vault in chain order, only if
+that vote verified, only if it was cast after the member's latest
+registration, and only if it sits within the freshness window (7 days of
+blocks) of the indexed block. A flood of votes from one member moves the
+aggregate by one vote. The indexer's regime snapshots and the API's tilt read
+share this one query (`explorer_indexer::db::committee_tilts`, issue 1790).
+The API then exposes protocol-scope committee reads
 (registered agents, recent votes across all agents, per-vault tilt
 aggregate, per-agent track record) and an account-scope read (the votes
 submitted by a given agent address). The regime feed is exposed as a
