@@ -10,7 +10,7 @@ import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
 import { stageManifestName } from "../src/verify/constants.ts";
 import { SAFE_141, type Signer } from "../src/safe/index.ts";
-import { RECEIPT_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
+import { RECEIPT_ABI, SAFE_ADMIN_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
@@ -59,6 +59,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     recorded: new Set<string>(), released: new Set<string>(),
     /** The vaults that read depositsPaused true. All four vaults deploy paused (issue 1710); an executed unpauseDeposits opens a vault, a test pauses one by adding it. */
     paused: new Set<string>([A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA]),
+    /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
+    owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
     /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
     listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),
@@ -109,11 +111,13 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
-          case "hasRole": if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "hasRole": if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
           case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
           case "icPolicy": return A.icPolicy;
           case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
           case "isRecorded": return s.recorded.has(String(args?.[0]).toLowerCase());
+          case "getOwners": return s.owners;
+          case "getThreshold": return s.threshold;
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
         }
         throw new Error(`fake: ${functionName}`);
@@ -153,13 +157,29 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     executeTx: (async (_h: unknown, b: any) => {
       if (b.signatures.length < handle.threshold) throw new Error("below threshold");
       const id: string = b.timelock_operation_id;
-      if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
+      if (String(b.action).startsWith("safe-")) {
+        const d = decodeFunctionData({ abi: SAFE_ADMIN_ABI, data: b.data });
+        const lc = (x: unknown) => String(x).toLowerCase();
+        if (d.functionName === "addOwnerWithThreshold") { s.owners.push(String(d.args[0])); s.threshold = d.args[1]; }
+        else if (d.functionName === "removeOwner") { s.owners = s.owners.filter((x) => lc(x) !== lc(d.args[1])); s.threshold = d.args[2]; }
+        else if (d.functionName === "swapOwner") s.owners = s.owners.map((x) => (lc(x) === lc(d.args[1]) ? String(d.args[2]) : x));
+        else if (d.functionName === "changeThreshold") s.threshold = d.args[0];
+      }
+      else if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "cancel") s.ops.delete(id);
       else if (b.action === "execute") {
         // a TimelockController refuses an operation whose predecessor is not done
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
+          if (c.target === A.timelock) {
+            try {
+              const d = decodeFunctionData({ abi: ROLE_ABI_FAKE, data: c.data });
+              const k = `${String(d.args[0])}:${String(d.args[1]).toLowerCase()}`;
+              if (d.functionName === "grantRole") s.roles.add(k); else s.roles.delete(k);
+            } catch { /* updateDelay and the other timelock self-calls change no role */ }
+            continue;
+          }
           if (c.target === A.governance) {
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
@@ -210,10 +230,12 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,
+    proposeTx: (async (_h: unknown, o: { to: string; data: Hex; action?: string }) => { s.events.push(`propose:${o.action}`); return { ...bundle(o.action ?? "call", keccak256(o.data)), to: o.to, data: o.data }; }) as never,
     verifyTimelockEffect: (async () => ({ ok: true, detail: "", state: {} })) as never,
   };
   return { s, api, handle };
 }
+const ROLE_ABI_FAKE = parseAbi(["function grantRole(bytes32 role, address account)", "function revokeRole(bytes32 role, address account)"]);
 export const decodeKey = (d: bigint) => encodeFunctionData({ abi: parseAbi(["function updateDelay(uint256 newDelay)"]), functionName: "updateDelay", args: [d] });
 
 export const signers = (sheet: ReturnType<typeof parseSheet>, n = 3): Signer[] => sheet.safeOwners.slice(0, n).map((o) => ({ kind: "keystore", modes: ["raw"], address: async () => o }) as unknown as Signer);
