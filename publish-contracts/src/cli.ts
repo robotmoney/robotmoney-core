@@ -30,7 +30,7 @@ import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
-import { signerFromSpec, type Signer } from "./safe/index.ts";
+import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
@@ -119,6 +119,8 @@ export interface CliDeps {
   cwd?: string;
   makeSigner?: (spec: string) => PublishSigner;
   ownerSigner?: (spec: string) => Promise<Signer>;
+  /** Tests: the cast runner behind hardware owner signers. */
+  castRunner?: CastRunner;
   safeApi?: RunContext["safeApi"];
   govern?: Partial<GovernOpts>;
   /** Test seam: the Safe tool calls behind the prove-control step (default: the real ones). */
@@ -244,6 +246,9 @@ export function parseCli(argv: string[]): Parsed {
     if (!/^0x[0-9a-fA-F]{40}$/.test(target)) throw new PublishError("USAGE", `--call-target must be an address, got '${target}'`);
     if (!/^0x([0-9a-fA-F]{2})+$/.test(data)) throw new PublishError("USAGE", "--call-data must be 0x-prefixed hex calldata");
     call = { label, target, data };
+  }
+  for (const s of (v["owner-signer"] as string[] | undefined) ?? []) {
+    if (isHardwareSpecLike(s) && !parseOwnerHardwareSpec(s)) throw new PublishError("USAGE", `bad --owner-signer '${s}': a hardware owner is ledger:PATH@0xOWNER or trezor:PATH@0xOWNER (PATH like m/44'/60'/0'/0/0)\n${USAGE}`);
   }
   if (stage !== "plan") need("signer", v.signer); // for record-receipt it is the submitter
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
@@ -388,10 +393,19 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return 0;
     }
     // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
+    // Safe owner signers: --owner-signer, else on the Twin chain the rehearsal's own SAFE_OWNER_* keystores beside the deployer keystore (owner-signers.ts).
     const ownerSigners = async (c: RunContext): Promise<Signer[]> => {
-      const mk = deps.ownerSigner ?? ((s: string) => signerFromSpec(s));
+      // A hardware owner asks the operator for its device before every read and every signature; keystore specs need no device.
+      const devicePrompt = async (r: { kind: string; owner: string; hdPath: string; phase: string }) => {
+        const ask = deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined);
+        if (!ask) throw new PublishError("SIGNER", `a ${r.kind} owner signer needs an interactive terminal to ask for the device of ${r.owner}`);
+        await ask(`Attach and unlock the ${r.kind} for Safe owner ${r.owner} (${r.hdPath}) to ${r.phase === "address" ? "read its address" : r.phase === "sign" ? "sign" : "send"}, then press Enter: `);
+      };
+      const mk = deps.ownerSigner ?? ((s: string) => parseOwnerHardwareSpec(s) ? ownerHardwareSigner(s, { prompt: devicePrompt, runner: deps.castRunner }) : signerFromSpec(s));
       const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-      return Promise.all(specs.map((s) => mk(s)));
+      const out: Signer[] = [];
+      for (const s of specs) { const sg = await mk(s); await sg.address(); out.push(sg); } // in order, one device at a time
+      return out;
     };
     // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
     if (a.verb === "record-receipt") {
