@@ -16,7 +16,7 @@ Three CI/cron jobs monitor upstream contract liveness and governance:
 | Governance proposals | `scripts/monitor-governance-proposals.sh` | On-chain proposal targeting adapter contracts |
 | Circle USDC upgrade | `scripts/monitor-usdc-upgrade.sh` | `Upgraded` or `AdminChanged` event on USDC proxy |
 
-All three jobs run on a nightly schedule (GitHub Actions: `.github/workflows/suite-18-upstream-monitoring.yml`)
+All three jobs run on a nightly schedule (GitHub Actions: `.github/workflows/suite-18-live-monitoring.yml`)
 and on every push to `main` and `dev`. Each job emits structured JSON to stdout and
 exits non-zero when an alert condition is detected.
 
@@ -227,7 +227,7 @@ a live RPC. The test suite verifies:
 
 ## §5 CI wiring {#ci}
 
-CI workflow: `.github/workflows/suite-18-upstream-monitoring.yml`
+CI workflow: `.github/workflows/suite-18-live-monitoring.yml`
 
 The workflow runs:
 
@@ -236,4 +236,7 @@ The workflow runs:
 3. **On `workflow_dispatch`** — for manual operator runs.
 
 The nightly run requires the `BASE_RPC_URL` secret to be set in the repository.
-If the secret is absent, the live-check steps are skipped and only the mock tests run.
+If the secret is absent on the scheduled run, the `Require BASE_RPC_URL on the nightly
+schedule` preflight step (`scripts/monitor-require-rpc.sh`) fails the job with `::error`, so
+the nightly never reports success while running no monitors. On `workflow_dispatch` without the
+secret it only warns and the live-check steps are skipped.

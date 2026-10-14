@@ -1,0 +1,66 @@
+# Canonical: docs/technical/upstream-monitoring-runbook.md §5
+name: upstream-live-monitoring
+on:
+  push:
+    branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-monitor:
+    name: live-monitor
+    env:
+      CI_CLASS: heavy
+    # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
+    # push/PR so contributor CI never depends on the BASE_RPC_URL secret.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Require BASE_RPC_URL on the nightly schedule
+        # Fails the scheduled run loudly when the secret is missing so the
+        # nightly can never report success while running no monitors. On
+        # workflow_dispatch it only warns and the steps below skip as before.
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: bash scripts/monitor-require-rpc.sh
+
+      - name: Venue liveness (Compound v3 / Aave v3)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live venue-liveness check"
+            exit 0
+          fi
+          bash scripts/monitor-venue-liveness.sh
+
+      - name: Governance proposals (Compound / Aave)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live governance check"
+            exit 0
+          fi
+          bash scripts/monitor-governance-proposals.sh
+
+      - name: USDC upgrade (Circle)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live USDC upgrade check"
+            exit 0
+          fi
+          bash scripts/monitor-usdc-upgrade.sh
