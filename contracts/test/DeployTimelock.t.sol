@@ -1521,6 +1521,19 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         vm.prank(other);
         gateway2.commitAuthorization(keccak256(abi.encode(otherAgent, other, salt)));
         vm.roll(block.number + 1);
+        vm.prank(otherAgent);
+        gateway2.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    other,
+                    keccak256(
+                        abi.encodeCall(
+                            gateway2.revealAuthorization, (otherAgent, salt, _policy(other))
+                        )
+                    )
+                )
+            )
+        );
         vm.prank(other);
         gateway2.revealAuthorization(otherAgent, salt, _policy(other));
 
@@ -1581,6 +1594,17 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         vm.prank(deployer);
         gateway.commitAuthorization(keccak256(abi.encode(kept, deployer, salt)));
         vm.roll(block.number + 1);
+        vm.prank(kept);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    deployer,
+                    keccak256(
+                        abi.encodeCall(gateway.revealAuthorization, (kept, salt, _policy(deployer)))
+                    )
+                )
+            )
+        );
         vm.prank(deployer);
         gateway.revealAuthorization(kept, salt, _policy(deployer));
         assertEq(gateway.agentOwner(kept), deployer, "fixture: deployer owns the agent");

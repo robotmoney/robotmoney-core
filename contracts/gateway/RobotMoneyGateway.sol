@@ -103,6 +103,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         owner. The existing owner must call `setPolicy` to update or
     ///         `revokeAgent` to release the address before a new authorization.
     error AgentAlreadyOwned();
+    /// @notice `revealAuthorization` named an `agent` other than the caller, and the
+    ///         agent has not consented to the caller as owner for this exact call.
+    ///         The agent must first submit the consent hash from its own key through
+    ///         `commitAuthorization`: `keccak256(abi.encode(owner, keccak256(callData)))`
+    ///         where `callData` is the full `revealAuthorization` calldata. (core 1791.)
+    error OwnerConsentMissing();
     /// @notice `revealAuthorization` called but no prior commitment exists for
     ///         this commit hash. The depositor must call `commitAuthorization`
     ///         first and wait at least one block.
@@ -110,8 +116,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `revealAuthorization` called after the commitment has expired
     ///         (block.number > commitBlock + COMMIT_EXPIRY_BLOCKS).
     error CommitmentExpired();
-    /// @notice `revealAuthorization` called from a different address than the
-    ///         one that submitted the commitment.
+    /// @notice Unused since core 1791 (the check was unreachable: the commit hash binds
+    ///         the caller). Kept so the ABI and its clients do not change.
     error CommitmentOwnerMismatch();
     /// @notice `revealAuthorization` called but `keccak256(agent, msg.sender, salt)`
     ///         does not match the stored commitment hash.
@@ -650,18 +656,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // 1. Commitment must exist.
         if (c.committer == address(0)) revert CommitmentNotFound();
 
-        // 2. Revealer must be the original committer.
-        //
-        // Note: this branch is defense-in-depth only. Because the commit hash
-        // is computed as `keccak256(abi.encode(agent, msg.sender, salt))` at
-        // commit time, a caller with a different `msg.sender` would produce a
-        // different hash. The lookup above returns a zero-committer entry for
-        // that hash (no matching commitment), which already reverts at step 1.
-        // The `CommitmentOwnerMismatch` check here is therefore unreachable
-        // through the current API surface.
-        // coverage:unreachable
-        if (c.committer != msg.sender) revert CommitmentOwnerMismatch();
-
         // 3. Must wait at least one block (front-running protection).
         if (block.number <= uint256(c.blockNumber)) revert CommitmentTooRecent();
 
@@ -677,6 +671,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 6. Perform the authorization (same logic as authorizeAgent).
         _authorizeAgentInternal(agent, p);
+        // 7. The agent must have consented to this caller and this exact policy
+        //    (core 1791), checked after the policy rules so their errors keep
+        //    their order. The consent is a `commitAuthorization` the agent made from
+        //    its own key; it is cleared here. An agent that reveals for itself
+        //    consents by calling.
+        if (agent != msg.sender) {
+            bytes32 ck =
+                _commitmentKey(keccak256(abi.encode(msg.sender, keccak256(msg.data))), agent);
+            if (commitments[ck].committer != agent) revert OwnerConsentMissing();
+            delete commitments[ck];
+        }
     }
 
     /// @inheritdoc IGateway
@@ -800,7 +805,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         returns (bytes32 paymentId, uint256 sharesMinted)
     {
         // Gas guard (core 1482): at entry, before any state-dependent work.
-        if (gasleft() < DEPOSIT_GAS_FLOOR) revert InsufficientGas(gasleft(), DEPOSIT_GAS_FLOOR);
+        _requireGas(DEPOSIT_GAS_FLOOR);
         if (_depositsPaused) {
             revert DepositsArePaused();
         }
@@ -1004,6 +1009,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // slither-disable-end reentrancy-balance
     }
 
+    /// @dev Revert `InsufficientGas` when less than `floor` gas is left. One copy for all
+    ///      four entry checks keeps the gateway under the EIP-170 size limit (core 1791).
+    function _requireGas(uint256 floor) internal view {
+        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+    }
+
     /// @dev Entry gas floor for `depositTo`. The router floor scales with the effective legs.
     function _requireDepositGas(bool isRouter) internal view {
         uint256 floor = DEPOSIT_GAS_FLOOR;
@@ -1011,7 +1022,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             (address[] memory legs,) = routerContract.getEffectiveWeights();
             floor = ROUTER_DEPOSIT_BASE_GAS + legs.length * ROUTER_DEPOSIT_GAS_PER_LEG;
         }
-        if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+        _requireGas(floor);
     }
 
     /// @dev Internal args struct to avoid stack-too-deep in `depositTo`.
@@ -1154,7 +1165,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         bytes32 idempotencyKey
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut) {
         // Gas guard (core 1482): at entry, before any state-dependent work.
-        if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
+        _requireGas(WITHDRAW_GAS_FLOOR);
         // core 1494: no pause applies. Withdrawals stay open while deposits are paused.
 
         AgentPolicy memory p = agents[msg.sender];
@@ -1328,7 +1339,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
                 if (sharesPerLeg[i] != 0) legs++;
             }
             uint256 floor = ROUTER_WITHDRAW_BASE_GAS + legs * ROUTER_WITHDRAW_GAS_PER_LEG;
-            if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
+            _requireGas(floor);
         }
 
         // Build args struct early to collapse locals onto the heap.

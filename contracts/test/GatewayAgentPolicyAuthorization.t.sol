@@ -82,6 +82,14 @@ abstract contract GatewayAgentPolicyFixture is Test {
         bytes32 salt = keccak256(abi.encode("salt", agent));
         _commit(owner, agent, salt);
         vm.roll(block.number + 1);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    owner, keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(owner);
         gateway.revealAuthorization(agent, salt, p);
     }
@@ -249,6 +257,16 @@ contract GatewayAgentPolicyAuthorizationTest is GatewayAgentPolicyFixture {
         vm.roll(block.number + 1);
 
         IGateway.AgentPolicy memory p = _fuzzPolicy(caller, seed);
+        // The fresh agent consents to the caller for this exact reveal (core 1791).
+        vm.prank(freshReveal);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    caller,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (freshReveal, salt, p)))
+                )
+            )
+        );
 
         (bool okSet, bytes4 selSet) = _try(caller, abi.encodeCall(gateway.setPolicy, (owned, p)));
         (bool okReveal, bytes4 selReveal) =

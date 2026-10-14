@@ -345,7 +345,14 @@ interface IGateway {
     ///         address, the caller identity, and a caller-chosen salt so that
     ///         a mempool observer cannot front-run the reveal with a different
     ///         depositor address.
-    /// @param commitHash `keccak256(abi.encode(agent, msg.sender, salt))`.
+    ///         An agent address also uses this to consent to an owner (core 1791):
+    ///         from its own key it submits
+    ///         `keccak256(abi.encode(owner, keccak256(callData)))`, where `callData` is
+    ///         the full `revealAuthorization(agent, salt, policy)` calldata `owner` will
+    ///         send. That reveal then consumes it, so the consent covers one agent, one
+    ///         policy and one salt. Without the consent the reveal reverts
+    ///         `OwnerConsentMissing`, so nobody can take an address that never agreed.
+    /// @param commitHash `keccak256(abi.encode(agent, msg.sender, salt))`, or the consent hash above.
     function commitAuthorization(bytes32 commitHash) external;
 
     /// @notice Phase-2 of the two-phase commit/reveal agent authorization.
@@ -353,7 +360,9 @@ interface IGateway {
     ///         authorize the agent with the supplied policy. Reverts if no
     ///         prior commitment matches, if the commitment has expired, if
     ///         `msg.sender` is not the original committer, or if the hash
-    ///         does not match.
+    ///         does not match. For an `agent` other than the caller it also
+    ///         reverts `OwnerConsentMissing` unless the agent consented to this
+    ///         caller and this exact call through `commitAuthorization`.
     /// @dev    Must be called at least one block after `commitAuthorization`.
     ///         The policy is checked by the same validator as `setPolicy`:
     ///         a caller without `ADMIN_ROLE` must name itself as
