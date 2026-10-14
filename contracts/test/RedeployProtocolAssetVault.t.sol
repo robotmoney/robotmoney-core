@@ -26,6 +26,23 @@ contract RedeployLegVault is ERC20 {
 
     function retire() external {}
     function unretire() external {}
+
+    /// @dev A leg that accepts a router deposit: pulls the USDC and mints one share per unit.
+    function deposit(uint256 assets, address receiver) external returns (uint256) {
+        ERC20(asset).transferFrom(msg.sender, address(this), assets);
+        _mint(receiver, assets);
+        return assets;
+    }
+}
+
+/// @dev A broadcast that died after the deploy and the configuration and before the handover: only `_deployConfigured` ran.
+contract InterruptedRedeploy is RedeployProtocolAssetVault {
+    function deployOnly(Params memory p, string memory json) external returns (address vault) {
+        Cfg memory cfg = _parseCfg(json, "assets");
+        vm.startPrank(p.admin);
+        vault = _deployConfigured(p, cfg).vault;
+        vm.stopPrank();
+    }
 }
 
 /// @notice Single-vault redeploy of rmPROTO into a live deployment (issue 1796).
@@ -344,12 +361,280 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture, SafeGovernance {
 
     function test_oldVaultStillRedeemsAfterRetire() public {
         BasketVault v = _redeploy();
+        address holder = makeAddr("old holder");
+        deal(address(oldProto), holder, 1_000e18, true);
+        uint256 supplyBefore = oldProto.totalSupply();
         _runBatch(v);
-        // retire() halts deposits only. The redeem path is untouched: a holder with zero shares redeems zero and does not revert on the retire flag.
+        // Registered, retired and ineligible: the old vault is still listed with its history.
         assertTrue(oldProto.retired());
-        assertEq(oldProto.maxDeposit(address(this)), 0, "no new deposits");
+        (, VaultRegistry.VaultStatus st) = registry.getVault(address(oldProto));
+        assertEq(uint256(st), uint256(VaultRegistry.VaultStatus.Retired));
+        assertFalse(registry.isRouterEligible(address(oldProto)));
+        address[] memory listed = registry.listVaults();
+        bool found;
+        for (uint256 i; i < listed.length; i++) {
+            if (listed[i] == address(oldProto)) found = true;
+        }
+        assertTrue(found, "still listed");
+        // Old shares are not moved by the cutover.
+        assertEq(oldProto.balanceOf(holder), 1_000e18, "holder shares untouched");
+        assertEq(oldProto.totalSupply(), supplyBefore, "supply untouched");
+        // Retirement stops deposits only. The holder still exits in kind and the shares burn.
+        assertEq(oldProto.maxDeposit(holder), 0, "no new deposits");
+        assertEq(oldProto.maxRedeem(holder), 1_000e18, "redeem stays open");
+        vm.expectEmit(true, true, false, true, address(oldProto));
+        emit BasketVault.RedeemedInKind(holder, holder, 400e18);
+        vm.prank(holder);
+        oldProto.redeemInKind(400e18, holder, holder);
         assertEq(
-            oldProto.maxRedeem(address(this)), 0, "nothing to redeem for a holder without shares"
+            oldProto.balanceOf(holder), 600e18, "in-kind exit burned the shares after retirement"
         );
+    }
+
+    // ─── Bootstrap: interrupted, mis-bound, bound once, no self-granted admin (issue 1796) ──────────────────────────────────
+
+    function test_bootstrap_interruptedBeforeHandoverStaysClosedUnregisteredAndUnbound() public {
+        InterruptedRedeploy died = new InterruptedRedeploy();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        BasketVault v = BasketVault(died.deployOnly(p, json));
+        // The state a dead broadcast leaves: configured, but closed, unregistered, unbound and not governed by anyone but the deployer.
+        assertTrue(v.depositsPaused(), "closed");
+        assertGt(v.assetCount(), 0, "configured");
+        assertEq(v.registry(), address(0), "unbound");
+        assertEq(registry.listVaults().length, 4, "unregistered");
+        assertFalse(registry.isRouterEligible(address(v)), "ineligible");
+        assertEq(v.maxDeposit(address(this)), 0, "no deposit can enter");
+        assertTrue(v.hasRole(v.ADMIN_ROLE(), deployer), "only the deployer governs it so far");
+        assertFalse(v.hasRole(v.ADMIN_ROLE(), timelock), "the timelock holds nothing yet");
+        // The registry cannot adopt it as a retirable vault: it refuses an unregistered vault and the router never lists it.
+        vm.prank(timelock);
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
+        registry.retire(address(v));
+        // The router default vector does not hold it: a deposit cannot reach it.
+        (address[] memory legs,) = router.getEffectiveWeights();
+        for (uint256 i; i < legs.length; i++) {
+            assertTrue(legs[i] != address(v));
+        }
+    }
+
+    function _bindTo(address reg) internal {
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        p.registry = reg;
+        script.runRedeployInProcess(p, json, timelock, emergency);
+    }
+
+    function test_bootstrap_incorrectBindingFailsClosed_noCode() public {
+        vm.expectRevert(bytes("REGISTRY_ADDRESS has no code"));
+        this.bindExternal(makeAddr("nothing"));
+    }
+
+    function test_bootstrap_incorrectBindingFailsClosed_notARegistry() public {
+        vm.expectRevert();
+        this.bindExternal(address(usdc));
+    }
+
+    function test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern() public {
+        VaultRegistry other = new VaultRegistry(deployer);
+        vm.expectRevert(bytes("timelock lacks ADMIN_ROLE on REGISTRY_ADDRESS"));
+        this.bindExternal(address(other));
+    }
+
+    function bindExternal(address reg) external {
+        _bindTo(reg);
+    }
+
+    function test_bootstrap_registryIsBoundExactlyOnce() public {
+        BasketVault v = _redeploy();
+        assertEq(v.registry(), address(registry));
+        // Neither the timelock (ADMIN_ROLE holder) nor anyone else can rebind it, even to the same registry.
+        vm.startPrank(timelock);
+        vm.expectRevert(BasketVault.RegistryAlreadySet.selector);
+        v.setRegistry(address(registry));
+        vm.expectRevert(BasketVault.RegistryAlreadySet.selector);
+        v.setRegistry(makeAddr("other registry"));
+        vm.stopPrank();
+        vm.prank(deployer);
+        vm.expectRevert();
+        v.setRegistry(makeAddr("other registry"));
+        assertEq(v.registry(), address(registry), "binding unchanged");
+    }
+
+    function test_bootstrap_deployerKeepsNoRoleAnywhere() public {
+        BasketVault v = _redeploy();
+        assertFalse(v.hasRole(v.ADMIN_ROLE(), deployer));
+        assertFalse(v.hasRole(v.EMERGENCY_ROLE(), deployer));
+        assertFalse(registry.hasRole(registry.ADMIN_ROLE(), deployer), "no live registry role");
+        assertFalse(router.hasRole(router.ADMIN_ROLE(), deployer), "no live router role");
+        assertFalse(router.hasRole(router.ADMIN_ROLE(), routerAdmin), "router admin handed over");
+    }
+
+    function test_bootstrap_aTimelockWithoutAdminCannotGrantItselfAdmin() public {
+        InterruptedRedeploy died = new InterruptedRedeploy();
+        BasketVaultDeployBase.Params memory p = _params();
+        p.swapRouter = _configRouter(json);
+        BasketVault v = BasketVault(died.deployOnly(p, json));
+        bytes32 admin = v.ADMIN_ROLE();
+        // The timelock holds no ADMIN_ROLE on a vault that has not been handed over: a direct call and a scheduled batch both fail.
+        vm.prank(timelock);
+        vm.expectRevert();
+        v.grantRole(admin, timelock);
+        address[] memory targets = new address[](1);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory data = new bytes[](1);
+        targets[0] = address(v);
+        data[0] = abi.encodeCall(v.grantRole, (admin, timelock));
+        _safeExec(
+            committee,
+            timelock,
+            abi.encodeCall(
+                governor.scheduleBatch, (targets, values, data, bytes32(0), bytes32(0), DELAY)
+            )
+        );
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert();
+        governor.executeBatch(targets, values, data, bytes32(0), bytes32(0));
+        assertFalse(v.hasRole(admin, timelock), "still not admin");
+        // The script's own order is the only grant path: the deployer, still admin, grants it.
+        assertTrue(_redeploy().hasRole(admin, timelock));
+    }
+
+    // ─── Local pause, stale operations, restore-old recovery (issue 1796) ───────────────────────────────────────────────────
+
+    function _fundDeposit(uint256 amount) internal {
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+    }
+
+    function test_localPause_ofALiveLegRevertsTheWholeRouterDeposit() public {
+        BasketVault v = _redeploy();
+        _runBatch(v);
+        // Mock legs take deposits; the new vault is the registry-Active, router-eligible rmPROTO leg.
+        _fundDeposit(1_000_000);
+        vm.prank(emergency);
+        v.pauseDeposits();
+        // The registry still says Active and eligible, so the router counts the leg as depositable and the leg's own pause reverts the WHOLE deposit.
+        uint256 before = usdc.balanceOf(address(this));
+        vm.expectRevert();
+        router.deposit(1_000_000, new uint256[](0));
+        assertEq(usdc.balanceOf(address(this)), before, "nothing moved: all-or-revert");
+        assertEq(legUsdc.balanceOf(address(this)), 0);
+        // Only the registry status (a governance retire or pause of the vault in the registry) makes the router skip the leg.
+        assertTrue(registry.isRouterEligible(address(v)));
+    }
+
+    function test_stale_unpauseOfTheRetiredOldVaultIsHarmlessToRouting() public {
+        BasketVault v = _redeploy();
+        _runBatch(v);
+        // A stale unpause scheduled for the OLD vault before the cutover would still execute (the timelock holds ADMIN_ROLE on it), so the tool
+        // must cancel it: the contract-side facts it relies on are that the old vault is retired, ineligible and never routed to, whatever happens.
+        assertTrue(oldProto.retired());
+        assertFalse(registry.isRouterEligible(address(oldProto)));
+        vm.prank(deployer); // the old vault was never handed over in this fixture: its admin is the deployer
+        oldProto.unpauseDeposits();
+        assertEq(oldProto.maxDeposit(address(this)), 0, "retired: still no deposits");
+        (address[] memory legs,) = router.getEffectiveWeights();
+        for (uint256 i; i < legs.length; i++) {
+            assertTrue(legs[i] != address(oldProto));
+        }
+    }
+
+    function _restoreBatch(BasketVault v)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory data)
+    {
+        targets = new address[](4);
+        values = new uint256[](4);
+        data = new bytes[](4);
+        for (uint256 i; i < 4; i++) {
+            targets[i] = address(registry);
+        }
+        // The mirror of the forward batch: the new vault stays in its slot, the old one joins right after it at 0 bps.
+        address[] memory five = new address[](5);
+        five[0] = address(legUsdc);
+        five[1] = address(v);
+        five[2] = address(oldProto);
+        five[3] = address(legAgent);
+        five[4] = address(legRwa);
+        uint256[] memory fiveBps = new uint256[](5);
+        fiveBps[0] = 8550;
+        fiveBps[1] = 525;
+        fiveBps[2] = 0;
+        fiveBps[3] = 575;
+        fiveBps[4] = 350;
+        data[0] = abi.encodeCall(registry.reactivate, (address(oldProto)));
+        data[1] =
+            abi.encodeCall(registry.migrateEligibility, (address(oldProto), true, five, fiveBps));
+        data[2] = abi.encodeCall(
+            registry.migrateEligibility, (address(v), false, _launchVaults(), _launchBps())
+        );
+        data[3] = abi.encodeCall(registry.retire, (address(v)));
+    }
+
+    function _runRestore(BasketVault v) internal {
+        (address[] memory targets, uint256[] memory values, bytes[] memory data) = _restoreBatch(v);
+        assertTrue(
+            _safeExec(
+                committee,
+                timelock,
+                abi.encodeCall(
+                    governor.scheduleBatch,
+                    (targets, values, data, bytes32(0), bytes32(uint256(1)), DELAY)
+                )
+            )
+        );
+        vm.warp(block.timestamp + DELAY);
+        governor.executeBatch(targets, values, data, bytes32(0), bytes32(uint256(1)));
+    }
+
+    function test_restoreOld_putsTheOldVaultBackAndRetiresTheNewOneKeepingItsExits() public {
+        BasketVault v = _redeploy();
+        _runBatch(v);
+        // A holder of the new vault.
+        address holder = makeAddr("holder");
+        deal(address(v), holder, 1_000e18, true);
+        _runRestore(v);
+
+        (, VaultRegistry.VaultStatus oldStatus) = registry.getVault(address(oldProto));
+        (, VaultRegistry.VaultStatus newStatus) = registry.getVault(address(v));
+        assertEq(uint256(oldStatus), uint256(VaultRegistry.VaultStatus.Active), "old active again");
+        assertEq(uint256(newStatus), uint256(VaultRegistry.VaultStatus.Retired), "new retired");
+        assertFalse(oldProto.retired(), "old reopened");
+        assertTrue(v.retired(), "new deposits halted");
+        assertTrue(registry.isRouterEligible(address(oldProto)));
+        assertFalse(registry.isRouterEligible(address(v)));
+        assertEq(registry.listVaults().length, 5, "both generations stay listed");
+        (address[] memory legs, uint256[] memory bps) = router.getEffectiveWeights();
+        assertEq(legs, _launchVaults(), "old vault back in its slot");
+        assertEq(bps, _launchBps(), "split unchanged");
+        // Retirement stops deposits only: the new vault's holder keeps the exit.
+        assertEq(v.maxDeposit(holder), 0);
+        assertEq(v.maxRedeem(holder), 1_000e18, "holder exit retained");
+    }
+
+    function test_restoreOld_reactivationMustComeBeforeEligibility() public {
+        BasketVault v = _redeploy();
+        _runBatch(v);
+        (address[] memory targets, uint256[] memory values, bytes[] memory data) = _restoreBatch(v);
+        // Reorder: eligibility first. The router refuses a default vector naming the Retired old vault, so the whole batch reverts.
+        bytes memory first = data[0];
+        data[0] = data[1];
+        data[1] = first;
+        _safeExec(
+            committee,
+            timelock,
+            abi.encodeCall(
+                governor.scheduleBatch,
+                (targets, values, data, bytes32(0), bytes32(uint256(2)), DELAY)
+            )
+        );
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert();
+        governor.executeBatch(targets, values, data, bytes32(0), bytes32(uint256(2)));
+        (, VaultRegistry.VaultStatus oldStatus) = registry.getVault(address(oldProto));
+        assertEq(uint256(oldStatus), uint256(VaultRegistry.VaultStatus.Retired), "nothing applied");
+        assertTrue(registry.isRouterEligible(address(v)));
     }
 }

@@ -238,7 +238,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
-  for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
+  for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, emergency: sheet.emergency, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
 
   // ---- deployer nonce equals the sum of the frozen counts
   await c.run("deployer: nonce equals sum of frozen counts", async () => {
@@ -670,7 +670,7 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, s: 
  */
 async function redeployChecks(
   c: Collector, chain: ChainReader, r: NonNullable<VerifyOptions["redeploys"]>[number],
-  ctx: { registry: Address; router: Address; tl: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string },
+  ctx: { registry: Address; router: Address; tl: Address; emergency: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string },
 ): Promise<void> {
   const p = `retired[${r.vault}]`;
   const status = async (v: Address): Promise<number> => Number(((await chain.read(ctx.registry, "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)", [v])) as [unknown, number])[1]);
@@ -679,6 +679,8 @@ async function redeployChecks(
   await c.runEq(`${p}: not router-eligible`, () => chain.read(ctx.registry, "function isRouterEligible(address vault) view returns (bool)", [r.oldVault]), false);
   await c.runEq(`${p}: deposits halted by the registry retire`, () => chain.read(r.oldVault, "function retired() view returns (bool)"), true);
   await c.runEq(`${p}: registry link`, () => chain.read(r.oldVault, "function registry() view returns (address)"), ctx.registry);
+  await c.runEq(`${p}: timelock holds ADMIN_ROLE`, () => chain.read(r.oldVault, "function hasRole(bytes32 role, address account) view returns (bool)", [ADMIN_ROLE, ctx.tl]), true);
+  await c.runEq(`${p}: emergency key holds EMERGENCY_ROLE`, () => chain.read(r.oldVault, "function hasRole(bytes32 role, address account) view returns (bool)", [EMERGENCY_ROLE, ctx.emergency]), true);
   await c.run(`${p}: runtime code serves redeemInKind`, async () => {
     const sel = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
     const code = (await chain.getCode(r.oldVault)).toLowerCase();
@@ -696,6 +698,14 @@ async function redeployChecks(
   });
   if (r.routerVaultCap !== undefined) await c.runEq(`${q}: router per-address cap equals approved old cap`, () => chain.read(ctx.router, "function vaultCap(address vault) view returns (uint256)", [r.newVault]), BigInt(r.routerVaultCap));
   await c.runEq(`${q}: replacing vault registry status is Active`, () => status(r.newVault), 0);
+  await c.runEq(`${q}: no voted vector is active`, () => chain.read(ctx.router, "function votedWeightsActive() view returns (bool)"), false);
+  await c.run(`${q}: default and effective vectors are the same unique four legs`, async () => {
+    const [dv, db] = (await chain.read(ctx.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const [ev, eb] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
+    const same = dv.length === ev.length && dv.every((a, i) => lc(a) === lc(ev[i]!) && db[i] === eb[i]);
+    const ok = same && new Set(dv.map(lc)).size === dv.length && dv.length === 4 && db.reduce((t, x) => t + x, 0n) === 10000n;
+    return { ok, detail: `default [${dv.join(", ")}] effective [${ev.join(", ")}]` };
+  });
   await c.run(`${q}: router effective weights hold the replacing vault and not the retired one`, async () => {
     const [vs] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
     const ok = vs.length === 4 && new Set(vs.map(lc)).size === 4 && vs.filter((v) => lc(v) === lc(r.newVault)).length === 1 && !vs.some((v) => lc(v) === lc(r.oldVault));

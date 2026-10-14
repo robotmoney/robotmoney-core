@@ -517,6 +517,213 @@ async fn registered_vault_added_to_watched_address_set() {
     stub2.shutdown();
 }
 
+/// A standalone `Withdraw` of `vault` at `block` with the given tx byte (no router, gateway or registry event beside it).
+fn encode_exit_log(vault: Address, owner: Address, block: u64, tx_byte: u8) -> serde_json::Value {
+    use alloy_sol_types::SolEvent as _;
+    let exit = explorer_indexer::abi::IVaultEvents::Withdraw {
+        caller: owner,
+        receiver: owner,
+        owner,
+        assets: U256::from(52_500u64),
+        shares: U256::from(50_000u64),
+    }
+    .encode_log_data();
+    serde_json::json!({
+        "address": format!("{:#x}", vault),
+        "topics": exit.topics().iter().map(|t| format!("{:#x}", t)).collect::<Vec<_>>(),
+        "data": format!("0x{}", hex::encode(exit.data)),
+        "blockNumber": format!("0x{:x}", block), "blockHash": format!("0x{}", "bc".repeat(32)),
+        "transactionHash": format!("0x{}", hex::encode([tx_byte; 32])),
+        "transactionIndex": "0x0", "logIndex": "0x1"
+    })
+}
+
+/// Issue 1796: the cutover interval. The old generation is registered and then retired (status 2). One later interval holds the
+/// registration of the NEW generation and a standalone exit from each generation, with no router or gateway event. The indexer must
+/// discover the new vault inside that very interval (backfill), keep watching the retired one, and record both exits. A restart
+/// (a new run from the saved cursor) keeps watching the retired vault.
+#[tokio::test]
+async fn cutover_interval_backfills_old_and_new_generation_exits_and_survives_restart() {
+    let fx = pg_fixture().await;
+    let registry_addr = Address::from([0xEEu8; 20]);
+    let old_vault = Address::from([0xA9u8; 20]);
+    let new_vault = Address::from([0xAAu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
+    let cfg = IndexerConfig {
+        chain_id: 8453,
+        chain_name: "base".into(),
+        rpc_label: "stub".into(),
+        gateway: Address::from([0xBBu8; 20]),
+        vault: Address::from([0xCCu8; 20]),
+        registry: Some(registry_addr),
+        router_governance: None,
+        portfolio_router: None,
+        investment_committee: None,
+        consensus_receipt: None,
+        timelock: None,
+        safe: None,
+        max_blocks_per_tick: 200,
+        start_block: None,
+        end_block: Some(65),
+        feature_flags: 4,
+    };
+
+    // Interval 1: the old generation is registered.
+    let stub1 = StubRpcServer::start().await;
+    stub1.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub1.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![
+            encode_vault_registered_log(
+                registry_addr,
+                old_vault,
+                "Robot Money Protocol",
+                asset_addr,
+                50,
+                [0x11u8; 32],
+                0,
+            ),
+            // the retirement: a real VaultStatusChanged(Retired) event, so the status survives any re-derivation
+            encode_vault_status_changed_log(
+                registry_addr,
+                old_vault,
+                2,
+                1_748_000_100,
+                55,
+                [0x12u8; 32],
+                1,
+            ),
+        ]),
+    );
+    stub1.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub1.set(
+        "eth_getTransactionReceipt",
+        serde_json::json!({ "status": "0x1" }),
+    );
+    let o1 = run_once(&fx.db, &JsonRpc::new(&stub1.url), &cfg)
+        .await
+        .unwrap();
+    assert!(o1.error.is_none(), "old registration tick: {:?}", o1.error);
+    stub1.shutdown();
+    let status1: i16 =
+        sqlx::query_scalar("SELECT status FROM vaults WHERE chain_id = $1 AND vault_address = $2")
+            .bind(8453_i64)
+            .bind(old_vault.as_slice())
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        status1, 2,
+        "the retirement event was applied in its own interval"
+    );
+
+    // Interval 2: the new generation registers in block 80, the old holder exits in 85, the new holder exits in 88.
+    let mut logs = vec![
+        encode_vault_registered_log(
+            registry_addr,
+            new_vault,
+            "Robot Money Protocol",
+            asset_addr,
+            80,
+            [0x22u8; 32],
+            0,
+        ),
+        encode_exit_log(old_vault, Address::from([0x88u8; 20]), 85, 0x33),
+        encode_exit_log(new_vault, Address::from([0x99u8; 20]), 88, 0x44),
+    ];
+    for l in logs.iter_mut() {
+        l["blockHash"] = serde_json::Value::String(format!("0x{}", "ab".repeat(32)));
+    }
+    let cfg2 = IndexerConfig {
+        end_block: Some(89),
+        ..cfg.clone()
+    };
+    let mut seen_filters: Vec<Vec<String>> = Vec::new();
+    // Pass 0 is the cutover interval. Pass 1 is a RESTART (a new stub, a new connection, the same database) that continues from the saved
+    // cursor: the next interval holds one more standalone exit of the retired old vault and nothing else.
+    for pass in 0..2 {
+        let stub = StubRpcServer::start().await;
+        let (head, end, block, hash, parent) = if pass == 0 {
+            ("0x5e", 89, 89, 0xab, 0xaa)
+        } else {
+            ("0x64", 95, 89, 0xab, 0xaa)
+        };
+        let pass_logs = if pass == 0 {
+            logs.clone()
+        } else {
+            vec![encode_exit_log(
+                old_vault,
+                Address::from([0x77u8; 20]),
+                93,
+                0x55,
+            )]
+        };
+        stub.set("eth_blockNumber", serde_json::Value::String(head.into()));
+        stub.set("eth_getLogs", serde_json::Value::Array(pass_logs));
+        stub.set(
+            "eth_call",
+            serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+        );
+        stub.set("eth_getBlockByNumber", stub_block(block, hash, parent));
+        stub.set(
+            "eth_getTransactionReceipt",
+            serde_json::json!({ "status": "0x1" }),
+        );
+        let cfg_pass = IndexerConfig {
+            end_block: Some(end),
+            ..cfg2.clone()
+        };
+        let o = run_once(&fx.db, &JsonRpc::new(&stub.url), &cfg_pass)
+            .await
+            .unwrap();
+        assert!(o.error.is_none(), "cutover pass {pass}: {:?}", o.error);
+        for r in stub.captured_requests() {
+            if r.get("method").and_then(|m| m.as_str()) == Some("eth_getLogs") {
+                if let Some(a) = r["params"][0]["address"].as_array() {
+                    seen_filters.push(
+                        a.iter()
+                            .map(|x| x.as_str().unwrap().to_lowercase())
+                            .collect(),
+                    );
+                }
+            }
+        }
+        stub.shutdown();
+        assert_eq!(
+            fx.db.count(CountTable::Vaults).await.unwrap(),
+            2,
+            "both generations stay registered (pass {pass})"
+        );
+        assert_eq!(
+            fx.db.count(CountTable::VaultTransferEvents).await.unwrap(),
+            if pass == 0 { 2 } else { 3 },
+            "pass 0 records the old holder exit and the new holder exit once each; the restart adds only the later old-vault exit (pass {pass})"
+        );
+    }
+    // The main log request of the interval names the NEW vault (found by in-interval discovery) and the retired OLD one.
+    let want_new = format!("{:#x}", new_vault);
+    let want_old = format!("{:#x}", old_vault);
+    assert!(
+        seen_filters
+            .iter()
+            .any(|f| f.contains(&want_new) && f.contains(&want_old)),
+        "an eth_getLogs filter must hold both generations; got {seen_filters:?}"
+    );
+    // The retired vault keeps its status: the indexer never reactivates it from an exit.
+    let status: i16 =
+        sqlx::query_scalar("SELECT status FROM vaults WHERE chain_id = $1 AND vault_address = $2")
+            .bind(8453_i64)
+            .bind(old_vault.as_slice())
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(status, 2, "old generation stays Retired");
+}
+
 /// AC-3: Existing vault_snapshots rows are preserved after migration 0002.
 ///
 /// We directly insert a vault_snapshots row (simulating pre-existing

@@ -78,6 +78,13 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         require(emergency != address(0), "EMERGENCY_ADDRESS=0");
         require(emergency != p.admin, "EMERGENCY_ADDRESS == deployer");
         require(timelock != p.admin, "TIMELOCK_ADDRESS == deployer");
+        // The binding target must be the deployment's real registry: a contract that answers hasRole and already gives the timelock ADMIN_ROLE. A wrong
+        // address (another contract, a registry the timelock does not govern) reverts here, before anything is deployed. The timelock is never used to
+        // grant itself a role: the deployer, still the vault's admin, grants it (_handOver).
+        require(
+            IAccessControl(p.registry).hasRole(ADMIN_ROLE, timelock),
+            "timelock lacks ADMIN_ROLE on REGISTRY_ADDRESS"
+        );
 
         d = _deployConfigured(p, cfg);
         _assertTickMathLinkIntegrity(d.vault, p.tvlCap);

@@ -1,0 +1,39 @@
+---
+title: "InterruptedRedeploy"
+---
+
+# InterruptedRedeploy
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f9285f2d57ebe0159c827a0783ba1c3b0f1976f/contracts/test/RedeployProtocolAssetVault.t.sol)
+
+**Inherits:** [RedeployProtocolAssetVault](/contracts/script/contract.RedeployProtocolAssetVault)
+
+<i>
+
+A broadcast that died after the deploy and the configuration and before the handover: only `_deployConfigured` ran.
+
+</i>
+
+## Functions
+
+<a id="deployonly-params-string"></a>
+
+### deployOnly
+
+```solidity
+function deployOnly(Params memory p, string memory json) external returns (address vault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| json | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+

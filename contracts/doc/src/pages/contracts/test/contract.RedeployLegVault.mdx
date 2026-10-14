@@ -4,7 +4,7 @@ title: "RedeployLegVault"
 
 # RedeployLegVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/test/RedeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f9285f2d57ebe0159c827a0783ba1c3b0f1976f/contracts/test/RedeployProtocolAssetVault.t.sol)
 
 **Inherits:** ERC20
 
@@ -53,4 +53,31 @@ function retire() external;
 ```solidity
 function unretire() external;
 ```
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+<i>
+
+A leg that accepts a router deposit: pulls the USDC and mints one share per unit.
+
+</i>
+
+```solidity
+function deposit(uint256 assets, address receiver) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| receiver | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 

@@ -180,6 +180,7 @@ contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
 contracts/test/contract.InterlockMockVault.mdx
+contracts/test/contract.InterruptedRedeploy.mdx
 contracts/test/contract.InvForeignToken.mdx
 contracts/test/contract.InvUSDC.mdx
 contracts/test/contract.InvestmentCommitteePolicyTest.mdx

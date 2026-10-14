@@ -5,7 +5,7 @@ description: "Single-vault redeploy of rmPROTO into a live deployment (issue 179
 
 # RedeployProtocolAssetVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/test/RedeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f9285f2d57ebe0159c827a0783ba1c3b0f1976f/contracts/test/RedeployProtocolAssetVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture), [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -369,5 +369,174 @@ function test_batch_revertAtEveryCallRestoresAllState() public;
 
 ```solidity
 function test_oldVaultStillRedeemsAfterRetire() public;
+```
+
+<a id="test_bootstrap_interruptedbeforehandoverstaysclosedunregisteredandunbound"></a>
+
+### test_bootstrap_interruptedBeforeHandoverStaysClosedUnregisteredAndUnbound
+
+```solidity
+function test_bootstrap_interruptedBeforeHandoverStaysClosedUnregisteredAndUnbound() public;
+```
+
+<a id="_bindto-address"></a>
+
+### _bindTo
+
+```solidity
+function _bindTo(address reg) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `address` |  |
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_nocode"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_noCode
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_noCode() public;
+```
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_notaregistry"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_notARegistry
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_notARegistry() public;
+```
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_registrythetimelockdoesnotgovern"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern() public;
+```
+
+<a id="bindexternal-address"></a>
+
+### bindExternal
+
+```solidity
+function bindExternal(address reg) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `address` |  |
+
+<a id="test_bootstrap_registryisboundexactlyonce"></a>
+
+### test_bootstrap_registryIsBoundExactlyOnce
+
+```solidity
+function test_bootstrap_registryIsBoundExactlyOnce() public;
+```
+
+<a id="test_bootstrap_deployerkeepsnoroleanywhere"></a>
+
+### test_bootstrap_deployerKeepsNoRoleAnywhere
+
+```solidity
+function test_bootstrap_deployerKeepsNoRoleAnywhere() public;
+```
+
+<a id="test_bootstrap_atimelockwithoutadmincannotgrantitselfadmin"></a>
+
+### test_bootstrap_aTimelockWithoutAdminCannotGrantItselfAdmin
+
+```solidity
+function test_bootstrap_aTimelockWithoutAdminCannotGrantItselfAdmin() public;
+```
+
+<a id="_funddeposit-uint256"></a>
+
+### _fundDeposit
+
+```solidity
+function _fundDeposit(uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="test_localpause_ofalivelegrevertsthewholerouterdeposit"></a>
+
+### test_localPause_ofALiveLegRevertsTheWholeRouterDeposit
+
+```solidity
+function test_localPause_ofALiveLegRevertsTheWholeRouterDeposit() public;
+```
+
+<a id="test_stale_unpauseoftheretiredoldvaultisharmlesstorouting"></a>
+
+### test_stale_unpauseOfTheRetiredOldVaultIsHarmlessToRouting
+
+```solidity
+function test_stale_unpauseOfTheRetiredOldVaultIsHarmlessToRouting() public;
+```
+
+<a id="_restorebatch-basketvault"></a>
+
+### _restoreBatch
+
+```solidity
+function _restoreBatch(BasketVault v)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| data | `bytes[]` |  |
+
+<a id="_runrestore-basketvault"></a>
+
+### _runRestore
+
+```solidity
+function _runRestore(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="test_restoreold_putstheoldvaultbackandretiresthenewonekeepingitsexits"></a>
+
+### test_restoreOld_putsTheOldVaultBackAndRetiresTheNewOneKeepingItsExits
+
+```solidity
+function test_restoreOld_putsTheOldVaultBackAndRetiresTheNewOneKeepingItsExits() public;
+```
+
+<a id="test_restoreold_reactivationmustcomebeforeeligibility"></a>
+
+### test_restoreOld_reactivationMustComeBeforeEligibility
+
+```solidity
+function test_restoreOld_reactivationMustComeBeforeEligibility() public;
 ```
 

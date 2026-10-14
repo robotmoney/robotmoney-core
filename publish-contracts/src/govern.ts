@@ -674,7 +674,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
    * An operation already done on chain is left to the read-back (there is nothing left to cancel). Other rows (Twin-only, receipt, generic) are not unpauses.
    */
   async function refuseIfPausedSince(name: string, p: RoundPlan): Promise<void> {
-    if (!name.startsWith("unpause-")) return;
+    // The redeploy batch ends with new.unpauseDeposits(): a pause-all recorded after its schedule makes it stale in the same way (issue 1796).
+    const redeployRound = name.startsWith(`${REDEPLOY_ROW}-`);
+    if (!name.startsWith("unpause-") && !redeployRound) return;
     const rec = state[name];
     if (!rec?.scheduled || rec.executed) return;
     const newest = livePauses().filter((e) => e.seq > (rec.scheduled!.seq ?? 0)).pop();
@@ -682,7 +684,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const st = await api.operationState(handle, a.timelock, p.id);
     if (st.done || !st.exists) return; // done: nothing left to cancel, the read-back decides. Gone: already cancelled, waitReady names the fresh-round command.
     const next = resumeCommand(ctx, name);
-    throw new PublishError("GOVERN", `govern row ${name} (round ${rec.round ?? 1}) will NOT execute: operation ${p.id} was scheduled (sequence ${rec.scheduled.seq ?? 0}) before pause-all #${newest.seq} (${newest.trigger}, ${newest.at}), which paused the vaults on purpose. Executing it would reopen ${VAULT_NAME[name.slice("unpause-".length) as VaultKey]}. Nothing was sent. First cancel the operation through the Safe on the timelock, with a Safe transaction that calls cancel(${p.id}) on ${a.timelock} (the tool has no cancel on chain ${ctx.chainId}). Then open a fresh round: ${next}`,
+    throw new PublishError("GOVERN", `govern row ${name} (round ${rec.round ?? 1}) will NOT execute: operation ${p.id} was scheduled (sequence ${rec.scheduled.seq ?? 0}) before pause-all #${newest.seq} (${newest.trigger}, ${newest.at}), which paused the vaults on purpose. Executing it would reopen ${redeployRound ? "the redeployed vault (its last call is unpauseDeposits)" : VAULT_NAME[name.slice("unpause-".length) as VaultKey]}. Nothing was sent. First cancel the operation through the Safe on the timelock, with a Safe transaction that calls cancel(${p.id}) on ${a.timelock} (the tool has no cancel on chain ${ctx.chainId}). Then open a fresh round: ${next}`,
       { row: name, round: rec.round ?? 1, operation_id: p.id, timelock: a.timelock, pause_seq: newest.seq, pause_at: newest.at, pause_trigger: newest.trigger, scheduled_seq: rec.scheduled.seq ?? 0, next_command: next });
   }
 
@@ -1128,7 +1130,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       await round(name, {
         id, description: `apply receipt ${receiptId}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
-        execute: () => api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` }),
+        execute: async () => {
+          // Issue 1796: the operation is not done, so a receipt that reads released was released by another path after the schedule (a stale operation): its releaseReceipt would revert the whole batch.
+          if (await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: receipt ${receiptId} was released after operation ${id} was scheduled. Nothing was sent. Cancel the operation through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
+          return api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` });
+        },
       }, APPLY_ROW);
     } else {
       const r = state[name]!;

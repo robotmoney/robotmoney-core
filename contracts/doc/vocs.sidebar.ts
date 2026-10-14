@@ -293,6 +293,7 @@ export const sidebar = [
             { text: "GuardHarness", link: "/contracts/test/contract.GuardHarness" },
             { text: "ICGatewayIntegration", link: "/contracts/test/contract.ICGatewayIntegration" },
             { text: "InterlockMockVault", link: "/contracts/test/contract.InterlockMockVault" },
+            { text: "InterruptedRedeploy", link: "/contracts/test/contract.InterruptedRedeploy" },
             { text: "InvForeignToken", link: "/contracts/test/contract.InvForeignToken" },
             { text: "InvUSDC", link: "/contracts/test/contract.InvUSDC" },
             { text: "InvestmentCommitteePolicyTest", link: "/contracts/test/contract.InvestmentCommitteePolicyTest" },

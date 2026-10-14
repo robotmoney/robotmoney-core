@@ -75,6 +75,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     statuses: new Map<string, number>(), retiredFlag: new Set<string>(), registryRouter: A.router as Address, timelockIsRegistryAdmin: true,
     /** The vaults a redeploy left linked to the registry (registry() reads A.registry) and the vaults the timelock governs. */
     linked: new Set<string>(), governed: new Set<string>(),
+    /** Issue 1796: a call of a timelock batch that reverts. The fake timelock is ATOMIC like the contract: a throwing call leaves the batch's earlier effects undone. */
+    failOn: undefined as undefined | ((c: { target: string; data: Hex }) => boolean),
     agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
     /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
@@ -170,10 +172,13 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "cancel") s.ops.delete(id);
       else if (b.action === "execute") {
+        const snap = { listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops) };
+        try {
         // a TimelockController refuses an operation whose predecessor is not done
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
+          if (s.failOn?.(c)) throw new Error("injected revert");
           if (c.target === A.governance) {
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
@@ -228,6 +233,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           const d = decodeFunctionData({ abi: RECEIPT_ABI, data: c.data });
           if (d.functionName === "releaseReceipt") s.released.add(String(d.args[0]).toLowerCase());
         }
+        } catch (e) { Object.assign(s, snap); throw e; }
       }
       else if (b.action === "updateDelay.schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "updateDelay.execute") { s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n }); s.minDelay = b.newDelay; }

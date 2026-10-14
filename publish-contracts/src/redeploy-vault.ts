@@ -43,6 +43,7 @@ export const REGISTRY_REDEPLOY_ABI = parseAbi([
   "function registerVault(address vault, (string name, address asset, uint256 registeredAt) metadata)",
   "function migrateEligibility(address vault, bool eligible, address[] defaultVaults, uint256[] defaultBps)",
   "function retire(address vault)",
+  "function reactivate(address vault)",
   "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)",
   "function listVaults() view returns (address[])",
   "function isRouterEligible(address vault) view returns (bool)",
@@ -198,6 +199,27 @@ export function buildRedeployCalls(i: RedeployCallInputs): RedeployCall[] {
     { label: "registry.migrateEligibility(old, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
     { label: "registry.retire(old)", target: i.registry, data: reg("retire", [i.oldVault]) },
     { label: "new.unpauseDeposits()", target: i.newVault, data: encodeFunctionData({ abi: VAULT_REDEPLOY_ABI, functionName: "unpauseDeposits" }) },
+  ];
+}
+
+export interface RestoreOldInputs { registry: Address; oldVault: Address; newVault: Address; currentVaults: readonly string[]; currentBps: readonly (bigint | number)[] }
+
+/**
+ * The approved RESTORE-OLD recovery (issue 1796): the inverse of the six-call batch, never automatic because the old vault keeps the known redeem defect. Four calls, one atomic
+ * timelock batch, in the one order the contracts allow: reactivate(old) FIRST (Retired -> Active, deposits reopened), then TWO matching eligibility migrations (old in beside the
+ * new vault at 0 bps, then the new vault out with the old vault back in its slot at the unchanged weight), then retire(new). Retiring the new vault halts its deposits only: its
+ * holders keep redeem and redeemInKind. The same vector helper serves both directions with the roles swapped, so the two migrations mirror the forward ones exactly.
+ */
+export function buildRestoreOldCalls(i: RestoreOldInputs): RedeployCall[] {
+  if (i.currentVaults.some((v) => lc(v) === lc(i.oldVault))) throw new PublishError("GOVERN", `restore-old: the router's default vector already holds the old vault ${i.oldVault}`);
+  const restored = i.currentVaults.map((v) => (lc(v) === lc(i.newVault) ? i.oldVault : v));
+  const v = vectorsFromFinal({ finalVaults: restored, finalBps: i.currentBps, oldVault: i.newVault, newVault: i.oldVault });
+  const reg = (functionName: "migrateEligibility" | "retire" | "reactivate", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
+  return [
+    { label: "registry.reactivate(old)", target: i.registry, data: reg("reactivate", [i.oldVault]) },
+    { label: "registry.migrateEligibility(old, true, five legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, true, v.fiveVaults, v.fiveBps.map(BigInt)]) },
+    { label: "registry.migrateEligibility(new, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.newVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
+    { label: "registry.retire(new)", target: i.registry, data: reg("retire", [i.newVault]) },
   ];
 }
 
