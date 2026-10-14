@@ -1,14 +1,16 @@
-// The govern row `clear-voted-weights` (issue 1743): the Safe, through the timelock, clears the router's VOTED weight vector so routing falls back to the DEFAULT vector.
-// A voted vector (PortfolioRouter.setWeights, or a passed RouterGovernance proposal) overrides the default while votedWeightsActive is true. The deploy no longer leaves one,
-// but the first Base mainnet deployment did (its router stage called setWeights), and a vote can set one later. apply-receipt writes the DEFAULT vector, so it refuses while one is active.
+// The govern row `clear-voted-weights` (issue 1743, issue 1698): the Safe, through the timelock, clears the router's ACTIVE weight vector so routing falls back to the DEFAULT vector.
+// The active vector is the one `RouterGovernance.applyReceipt` wrote (PortfolioRouter.setWeights); it overrides the default while votedWeightsActive is true. The router storage
+// keeps its pre-1698 "voted" name for ABI stability: there is no voting (issue 1698 deleted it), the active vector is always an applied consensus receipt, or the one the first
+// Base mainnet deployment's router stage left (it called setWeights). This row is the emergency lever: a receipt vector that should no longer route is dropped here, through the
+// timelock, and the default routes again until the next receipt is applied. apply-receipt does NOT need it first: a new receipt replaces the active vector in one call.
 // One call: RouterGovernance.clearVotedWeights() (onlyRole(ADMIN_ROLE), held by the timelock), which forwards to PortfolioRouter.clearVotedWeights() (onlyRole(ADMIN_ROLE), held by
-// RouterGovernance). No contract change: both functions exist on today's bytecode. This module is pure: it reads no chain and sends nothing.
+// RouterGovernance). No contract change: both functions exist on the deployed bytecode. This module is pure: it reads no chain and sends nothing.
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 
 export const CLEAR_ROW = "clear-voted-weights";
 export const GOVERNANCE_CLEAR_ABI = parseAbi(["function clearVotedWeights()"]);
 
-/** The run-manifest key of the row. A later round (a vote set a voted vector again) is `clear-voted-weights:round-N`, like the unpause rows. */
+/** The run-manifest key of the row. A later round (a later applied receipt set an active vector again) is `clear-voted-weights:round-N`, like the unpause rows. */
 export const CLEAR_RECORD_KEY = CLEAR_ROW;
 
 /** The one call of a clear round: clearVotedWeights() on the deployed RouterGovernance. */

@@ -90,14 +90,13 @@ const RULES: Rule[] = [
   [/^(.+): ADMIN_ROLE not held by (deployer|pauser|emergency|safe)$/, (w, m) => w.chain.grant(subject(m[1]), ADMIN_ROLE, WHO[m[2]])],
   [/^(.+): EMERGENCY_ROLE held by emergency key$/, (w, m) => w.chain.revoke(subject(m[1]), EMERGENCY_ROLE, EMERGENCY)],
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
-  // deploy-time configuration (issue 1520)
-  [/^governance: votingPower of every voter equals sheet$/, (w) => w.chain.set(GOV, "votingPower", 1n)],
-  [/^governance: quorumThreshold equals sheet$/, (w) => w.chain.set(GOV, "quorumThreshold", 99n)],
-  [/^governance: votingPeriod equals sheet$/, (w) => w.chain.set(GOV, "votingPeriod", 99_999n)],
-  [/^governance: executionDelay equals sheet$/, (w) => w.chain.set(GOV, "executionDelay", 99_999n)],
+  // deploy-time configuration (issue 1520) and the weight setter's stage 11 wiring (issue 1698: no voting surface, the receipt register and the router instead)
+  [/^governance: receiptContract\(\) equals the consensus receipt$/, (w) => w.chain.set(GOV, "receiptContract", OTHER)],
+  [/^governance: router\(\) equals the deployed router$/, (w) => w.chain.set(GOV, "router", OTHER)],
+  [/^receipt: ADMIN_ROLE held by governance$/, (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
   [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
-  // issue 1743: a voted vector on the router overrides the default vector
-  [/^router: votedWeightsActive is false after deploy$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+  // issue 1743: an active (applied receipt) vector on the router overrides the default vector; the deploy leaves none
+  [/^router: votedWeightsActive is false after deploy, true after an applied receipt$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
   [/^router: effective weights equal the sheet's launch vector$/, (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
   // issue 1696: a receipt the run manifest says the Safe applied reads not released
   [/^receipt: applied receipt is released and its weights are on the router$/, (w) => { w.opts.appliedReceipt = { receiptId: `0x${"ab".repeat(32)}`, vaults: Object.values(VAULTS).map((v) => v.address), bps: [9500, 500, 0, 0] }; w.chain.set(REC, "isReleased", () => false); }],

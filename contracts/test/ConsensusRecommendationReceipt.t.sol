@@ -406,10 +406,22 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
             .call(abi.encodeWithSignature("transfer(address,uint256)", address(this), 1));
         assertFalse(ok2, "receipt contract must not have ERC-20 transfer");
 
-        // 3. No `RouterGovernance.execute(uint256)`.
+        // 3. No weight-setter entry point: neither the deleted `execute(uint256)` nor
+        //    `RouterGovernance.applyReceipt(bytes32,bytes32,address[],uint256[])`.
         (bool ok3,) =
             address(receipts).call(abi.encodeWithSignature("execute(uint256)", uint256(0)));
-        assertFalse(ok3, "receipt contract must not have RouterGovernance.execute");
+        assertFalse(ok3, "receipt contract must not have the old RouterGovernance.execute");
+        (bool ok3b,) = address(receipts)
+            .call(
+                abi.encodeWithSignature(
+                    "applyReceipt(bytes32,bytes32,address[],uint256[])",
+                    bytes32(0),
+                    bytes32(0),
+                    new address[](0),
+                    new uint256[](0)
+                )
+            );
+        assertFalse(ok3b, "receipt contract must not have RouterGovernance.applyReceipt");
 
         // 4. No `PortfolioRouter.setWeights(address[],uint16[])`.
         address[] memory vaults = new address[](0);

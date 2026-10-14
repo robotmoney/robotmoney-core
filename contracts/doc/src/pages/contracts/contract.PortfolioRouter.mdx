@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -192,9 +192,12 @@ mapping(address => uint256) public vaultCap;
 
 ### _weightVaultList
 
-Ordered list of vaults included in the voted (active) weight
-vector. Set by governance on a successful proposal execution
-via `setWeights`. Empty until the first vote passes.
+Ordered list of vaults included in the applied (active) weight
+vector. Set by the weight setter when a consensus receipt is
+applied (`RouterGovernance.applyReceipt` → `setWeights`). Empty
+until the first receipt is applied. The storage keeps its
+pre-1698 "voted" name so the read surface (`votedWeightsActive`,
+`clearVotedWeights`) stays ABI-stable for the tools that read it.
 
 ```solidity
 address[] private _weightVaultList;
@@ -211,10 +214,10 @@ uint256[] private _weightBps;
 
 ### votedWeightsActive
 
-True when the voted weight vector is in effect. False means the
-router falls back to `defaultWeights` (the on-chain below-quorum
-fallback). Set true by `setWeights`, set false by
-`clearVotedWeights`. See ADR-0002.
+True when the applied weight vector is in effect. False means the
+router falls back to `defaultWeights` (the on-chain fallback).
+Set true by `setWeights`, set false by `clearVotedWeights`.
+See ADR-0002.
 
 ```solidity
 bool public votedWeightsActive;
@@ -223,10 +226,10 @@ bool public votedWeightsActive;
 ### _defaultWeightVaultList
 
 Ordered list of vaults included in the default (fallback) weight
-vector. Used by `previewDeposit`/`deposit` whenever the voted
-vector is not active — i.e. no proposal has ever passed or
-governance has reverted to the default after a failed quorum.
-Admin-settable; survives proposal execution unchanged. ADR-0002.
+vector. Used by `previewDeposit`/`deposit` whenever the applied
+vector is not active — i.e. no receipt has been applied yet or
+governance has cleared the applied vector. Admin-settable;
+survives a receipt application unchanged. ADR-0002.
 
 ```solidity
 address[] private _defaultWeightVaultList;
@@ -342,9 +345,10 @@ function executeWeightSetterRotation(address expectedNewHolder)
 ### setWeights
 
 Set the vault weight vector. All vaults must be registered in the
-VaultRegistry and must be marked router-eligible there. The bps
-values must sum to exactly BPS_DENOMINATOR.
-Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
+VaultRegistry and must be marked router-eligible there, no vault
+may appear twice, and the bps values must sum to exactly
+BPS_DENOMINATOR. Restricted to `WEIGHT_SETTER_ROLE`, held only by
+RouterGovernance, which reaches it from `applyReceipt`.
 
 ```solidity
 function setWeights(address[] calldata vaults, uint256[] calldata bps)
@@ -363,11 +367,11 @@ function setWeights(address[] calldata vaults, uint256[] calldata bps)
 
 ### setDefaultWeights
 
-Set the default (below-quorum fallback) weight vector. Used by
-`previewDeposit`/`deposit` whenever the voted vector is not
-active — when no proposal has ever passed, or governance has
-reverted to the default after a proposal failed quorum. This
-vector survives proposal execution unchanged. ADR-0002.
+Set the default (fallback) weight vector. Used by
+`previewDeposit`/`deposit` whenever the applied vector is not
+active — when no receipt has been applied yet, or governance has
+cleared the applied vector. This vector survives a receipt
+application unchanged. ADR-0002.
 
 All vaults must be registered AND router-eligible, the bps must
 sum to BPS_DENOMINATOR, and the length must equal the registry's
@@ -451,10 +455,10 @@ function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) i
 
 ### clearVotedWeights
 
-Clear the voted weight vector and revert routing to
-`defaultWeights`. Intended for governance to fall back to the
-default after the most recent proposal failed quorum. Restricted
-to `ADMIN_ROLE`. ADR-0002.
+Clear the applied weight vector and revert routing to
+`defaultWeights`. The emergency lever: an applied receipt vector
+that should no longer route is cleared here, through the
+timelock. Restricted to `ADMIN_ROLE`. ADR-0002.
 
 ```solidity
 function clearVotedWeights() external onlyRole(ADMIN_ROLE);
@@ -1085,10 +1089,10 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 Return true iff `vault` is router-eligible AND its registry
 lifecycle status is `Active` — i.e. it can be written into a
 weight vector and accept a routed deposit right now. This is the
-exact predicate `setWeights`/`setDefaultWeights` enforce; governance
-(`RouterGovernance.propose`) reads it so a proposal that would
-render router deposits non-executable can never enter the voting
-pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+exact predicate `setWeights`/`setDefaultWeights` enforce; the
+govern tool reads it before scheduling an `applyReceipt` so a
+vector that would render router deposits non-executable is never
+scheduled (GOV-4, no self-DoS). Never reverts: returns false for a
 zero address, an EOA, an asset mismatch, an unregistered vault, or
 any non-Active status.
 
@@ -1134,6 +1138,30 @@ function _requireActiveAndEligible(address vault) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` |  |
+
+<a id="_requirenoduplicatebefore-address-uint256"></a>
+
+### _requireNoDuplicateBefore
+
+<i>
+
+Revert `DuplicateVault` when `vaults[i]` already appears at an
+earlier index. Quadratic over a vector of at most a handful of legs
+(the registry's router-eligible set), checked only at configuration
+time by `setWeights` and `_setDefaultWeights` (HR-L-9 / CS-5).
+
+</i>
+
+```solidity
+function _requireNoDuplicateBefore(address[] calldata vaults, uint256 i) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| i | `uint256` |  |
 
 <a id="_requireroutereligible-address"></a>
 
@@ -1577,6 +1605,25 @@ error VaultNotRouterEligible(address vault);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` | The vault address that lacks the eligibility flag. |
+
+### DuplicateVault
+
+A weight vector names the same vault twice. Without this check a
+duplicate default (`[A, A]`) passes the `length ==
+routerEligibleCount` check while leaving an eligible vault out,
+and a duplicate applied vector double-counts one leg (HR-L-9 /
+CS-5, issue #1698). A digest binds a vector but does not prove
+it is unique, so the receipt path relies on this check too.
+
+```solidity
+error DuplicateVault(address vault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` | The vault address that appears more than once. |
 
 ### OnlyRegistry
 

@@ -1,0 +1,119 @@
+---
+title: "RouterGovernanceSafeTimelockTest"
+description: "The production route, with no vm.prank on any governed path: two of three owners sign, the real SafeL2 proxy runs `execTransaction`, the Safe schedules on the timelock, the delay passes, the Safe executes, the timelock calls `applyReceipt`, and the weight setter releases the receipt and sets the router weights in that one transaction."
+---
+
+# RouterGovernanceSafeTimelockTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/RouterGovernance.t.sol)
+
+**Inherits:** [RouterGovernanceFixture](/contracts/test/abstract.RouterGovernanceFixture)
+
+The production route, with no vm.prank on any governed path: two of
+three owners sign, the real SafeL2 proxy runs `execTransaction`, the
+Safe schedules on the timelock, the delay passes, the Safe executes,
+the timelock calls `applyReceipt`, and the weight setter releases the
+receipt and sets the router weights in that one transaction.
+
+## Constants
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### RECEIPT_ID
+
+```solidity
+bytes32 internal constant RECEIPT_ID = keccak256("receipt-via-timelock");
+```
+
+### DIGEST
+
+```solidity
+bytes32 internal constant DIGEST = keccak256("payload-via-timelock");
+```
+
+## State Variables
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_applyreceipt_setsweightsinonecall"></a>
+
+### test_applyReceipt_setsWeightsInOneCall
+
+The acceptance test of issue #1698: one scheduled call, executed
+through the real Safe and timelock, leaves `isReleased` true and
+the router weights equal to the vector. Before the delay nothing
+moved; after it the operation cannot be replayed.
+
+```solidity
+function test_applyReceipt_setsWeightsInOneCall() public;
+```
+
+<a id="test_applyreceipt_directsafecall_isrefused_exactreason"></a>
+
+### test_applyReceipt_directSafeCall_isRefused_exactReason
+
+The Safe calling the weight setter directly, with two real owner
+signatures, is refused: only the timelock holds ADMIN_ROLE.
+
+```solidity
+function test_applyReceipt_directSafeCall_isRefused_exactReason() public;
+```
+
+<a id="test_applyreceipt_viatimelock_digestmismatchreleasesnothing"></a>
+
+### test_applyReceipt_viaTimelock_digestMismatchReleasesNothing
+
+A scheduled apply whose digest is not the recorded one fails at
+execution: the Safe reports GS013, the receipt stays unreleased,
+and no weight lands. The Safe records a new round instead.
+
+```solidity
+function test_applyReceipt_viaTimelock_digestMismatchReleasesNothing() public;
+```
+
+<a id="test_timelockcannotcallsetweightsdirectly"></a>
+
+### test_timelockCannotCallSetWeightsDirectly
+
+The timelock cannot bypass the weight setter: it holds no
+WEIGHT_SETTER_ROLE, so a scheduled router.setWeights fails.
+
+```solidity
+function test_timelockCannotCallSetWeightsDirectly() public;
+```
+
+<a id="test_submitterandweightsetteraredisjoint"></a>
+
+### test_submitterAndWeightSetterAreDisjoint
+
+The committee submitter that recorded the receipt holds no weight
+authority, and the weight setter is no committee member (§3.4).
+
+```solidity
+function test_submitterAndWeightSetterAreDisjoint() public view;
+```
+

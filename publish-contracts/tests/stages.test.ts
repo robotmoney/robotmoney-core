@@ -122,9 +122,12 @@ describe("stage list built from core's stage table", () => {
 
 describe("deploy-time configuration is consumed by the deployer stages 4 to 10, never by govern (issue 1520)", () => {
   const stage = (n: string) => STAGES.find((s) => s.name === n)!;
-  test("the governance stage takes voting power, quorum, voting period and execution delay", () => {
-    expect(stage("governance").requiredEnv).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
-    expect(requiredSheetNames(stage("governance"))).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+  test("the governance stage deploys the weight setter from the admin and the router alone: no voting input exists (issue 1698)", () => {
+    expect(stage("governance").requiredEnv).toEqual(["ADMIN_ADDRESS", "ROUTER_ADDRESS", "DEPLOYMENT_OUT"]);
+    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) {
+      expect(stage("governance").requiredEnv).not.toContain(gone);
+      expect(requiredSheetNames(stage("governance"))).not.toContain(gone);
+    }
   });
   test("each basket stage takes the caps, the exit fee, the fee recipient and the router eligibility with the default weights", () => {
     for (const n of ["proto", "agent", "rwa"]) {
@@ -138,16 +141,17 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
     const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
     expect(between).toEqual(["router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa"]);
     const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
-    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
+    for (const k of ["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
+    // issue 1698: no deployer stage reads a voting name any more
+    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(consumed.has(k), k).toBe(false);
     for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);
     expect(stage("govern").requiredEnv).toEqual([]);
   });
-  test("stageEnv hands the sheet values to the stages: voters and power to governance, the eligibility vector to each basket", () => {
+  test("stageEnv hands the sheet values to the stages: the admin and the router to governance (no voting input), the eligibility vector to each basket", () => {
     const { ctx, sheet } = setup();
     const gov = stageEnv(ctx, stage("governance"));
-    expect(gov.VOTER_ADDRESSES.toLowerCase()).toBe(sheet.voters.join(",").toLowerCase());
-    expect(gov.VOTER_POWER).toBe(sheet.voterPower.toString());
-    expect(gov.QUORUM_THRESHOLD).toBe(sheet.quorum.toString());
+    expect(gov.ADMIN_ADDRESS.toLowerCase()).toBe(sheet.admin.toLowerCase());
+    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(gov[gone], gone).toBeUndefined();
     // the example sheet makes PROTO, AGENT and RWA eligible with the launch vector USDC 9500, PROTO 500, AGENT 0, RWA 0
     expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("9500,500");
     expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");

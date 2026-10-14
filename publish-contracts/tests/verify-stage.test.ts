@@ -74,10 +74,11 @@ describe("stage 12: the one verifier", () => {
     expect(v.vaults.rmUSDC!.minPoolLiquidity).toBeUndefined();
   });
 
-  test("the verifier sheet carries every deploy-time value of the sheet: voting power, quorum, periods, eligibility and the router default weights (issue 1520)", () => {
-    const { ctx, sheet } = setup();
+  test("the verifier sheet carries every deploy-time value of the sheet: eligibility and the router default weights, and no voting block (issues 1520, 1698)", () => {
+    const { ctx } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
-    expect(v.governance).toEqual({ voters: sheet.voters, voterPower: sheet.voterPower, quorum: sheet.quorum, votingPeriod: sheet.votingPeriod, executionDelay: sheet.executionDelay });
+    // issue 1698: the weight setter has no voters, quorum or periods, so the verifier sheet has no governance block to compare
+    expect((v as unknown as Record<string, unknown>).governance).toBeUndefined();
     // the example sheet makes PROTO, AGENT and RWA eligible: rmUSDC always is
     expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: true, rmRWA: true });
     expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 9500 }, { vault: "rmPROTO", bps: 500 }, { vault: "rmAGENT", bps: 0 }, { vault: "rmRWA", bps: 0 }]);

@@ -162,13 +162,27 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({ SAFE_OWNERS: "0x000000000000000000000000000000000000c001,0x000000000000000000000000000000000000c002" })).message).toContain("3 owners");
     expect(refused(sheetText({ SAFE_OWNERS: "0x000000000000000000000000000000000000a001,0x000000000000000000000000000000000000c002,0x000000000000000000000000000000000000c003" })).message).toContain("Safe owner");
     expect(refused(sheetText({ PAUSER_ADDRESS: "0x000000000000000000000000000000000000a001" })).message).toContain("same address");
-    expect(refused(sheetText({ QUORUM_THRESHOLD: "1" })).message).toContain("QUORUM");
     expect(refused(sheetText({ FEE_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000a001" })).message).toContain("deployer");
     expect(refused(sheetText({ SEED_DEPOSIT_USDC: "0" })).message).toContain("SEED");
     expect(refused(sheetText({ SAFE_VERSION: "1.3.0" })).message).toContain("1.4.1");
     expect(refused(sheetText({ EXPECTED_CHAIN_ID: "8453" })).message).toContain("EXPECTED_CHAIN_ID");
     expect(refused(sheetText({ ROUTER_WEIGHTS: "USDC:5000,PROTO:2500,RWA:1500" })).message).toContain("10000");
     expect(refused(sheetText({ ROUTER_WEIGHTS: "USDC:6000,PROTO:4000" })).message).toContain("exactly");
+  });
+
+  test("issue 1698: the legacy voting names are accepted and ignored, never required, and still shape-checked", () => {
+    // the example sheet carries them: nothing of them reaches the parsed sheet
+    const s = parseSheet(exampleText()) as unknown as Record<string, unknown>;
+    for (const k of ["voters", "voterPower", "quorum", "votingPeriod", "executionDelay"]) expect(s[k], k).toBeUndefined();
+    // a sheet without them parses the same
+    const bare = parseSheet(sheetText({ VOTER_ADDRESSES: null, VOTER_POWER: null, QUORUM_THRESHOLD: null, VOTING_PERIOD: null, EXECUTION_DELAY: null }));
+    expect(bare.safeOwners).toEqual(parseSheet(exampleText()).safeOwners);
+    for (const n of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(REQUIRED_NAMES).not.toContain(n);
+    // the pre-1698 floors are gone: a quorum of 1, a voting period under 3600 and a voter that is also a role all pass
+    expect(() => parseSheet(sheetText({ QUORUM_THRESHOLD: "1", VOTING_PERIOD: "1", EXECUTION_DELAY: "1", VOTER_ADDRESSES: "0x000000000000000000000000000000000000a001" }))).not.toThrow();
+    // a value that is not of the name's shape is still a typo
+    expect(refused(sheetText({ VOTER_ADDRESSES: "0x123" })).message).toContain("VOTER_ADDRESSES");
+    expect(refused(sheetText({ QUORUM_THRESHOLD: "two" })).message).toContain("QUORUM_THRESHOLD");
   });
 
   test("sheet diff lists only the names that differ", () => {

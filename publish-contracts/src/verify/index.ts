@@ -115,7 +115,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("gateway: DEPOSIT_PAUSER_ROLE held by pauser", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, sheet.pauser), true);
   await c.runEq("gateway: DEPOSIT_PAUSER_ROLE not held by deployer", () => hasRole(chain, gateway, DEPOSIT_PAUSER_ROLE, D), false);
   await c.runEq("router: ADMIN_ROLE held by governance", () => hasRole(chain, router, ADMIN_ROLE, byName.governance), true);
-  // setWeights is gated by WEIGHT_SETTER_ROLE: only RouterGovernance holds it, so the timelock and the Safe cannot bypass the vote.
+  // setWeights is gated by WEIGHT_SETTER_ROLE: only RouterGovernance holds it, so the timelock and the Safe cannot bypass the receipt path (applyReceipt, issue 1698).
   await c.runEq("router: WEIGHT_SETTER_ROLE held by governance", () => hasRole(chain, router, WEIGHT_SETTER_ROLE, byName.governance), true);
   const setterHolders: Array<[string, Address]> = [["timelock", tl], ["deployer", D], ["safe", safe], ["pauser", sheet.pauser], ["emergency", sheet.emergency]];
   for (const [who, addr] of setterHolders) {
@@ -249,53 +249,52 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
 async function deployTimeChecks(
   c: Collector, chain: ChainReader, sheet: VerifyOptions["sheet"], at: { governance: Address; router: Address; vaults: ManifestVault[]; receipt: Address; applied?: VerifyOptions["appliedReceipt"] },
 ): Promise<void> {
-  const g = sheet.governance;
-  await c.run("governance: votingPower of every voter equals sheet", async () => {
-    const bad: string[] = [];
-    for (const v of g.voters) if (BigInt((await chain.read(at.governance, "function votingPower(address voter) view returns (uint256)", [v])) as bigint) !== g.voterPower) bad.push(v);
-    return { ok: bad.length === 0, detail: bad.length ? `differs from ${g.voterPower} for ${bad.join(",")}` : `${g.voters.length} voters at ${g.voterPower}` };
-  });
-  await c.runEq("governance: quorumThreshold equals sheet", () => chain.read(at.governance, "function quorumThreshold() view returns (uint256)"), g.quorum);
-  await c.runEq("governance: votingPeriod equals sheet", () => chain.read(at.governance, "function votingPeriod() view returns (uint64)"), g.votingPeriod);
-  await c.runEq("governance: executionDelay equals sheet", () => chain.read(at.governance, "function executionDelay() view returns (uint64)"), g.executionDelay);
+  // Issue 1698: the weight setter has no voting surface. What stage 11 wired is read back instead: the receipt register `applyReceipt` releases from, the router it
+  // writes, and the register ADMIN_ROLE the release needs. Without any of the three the first apply-receipt reverts (ReceiptContractNotSet or AccessControlUnauthorizedAccount).
+  await c.runEq("governance: receiptContract() equals the consensus receipt", async () => lc((await chain.read(at.governance, "function receiptContract() view returns (address)")) as string), lc(at.receipt));
+  await c.runEq("governance: router() equals the deployed router", async () => lc((await chain.read(at.governance, "function router() view returns (address)")) as string), lc(at.router));
+  await c.runEq("receipt: ADMIN_ROLE held by governance", () => hasRole(chain, at.receipt, ADMIN_ROLE, at.governance), true);
   const [rVaults, rBps] = await (async () => {
     try { return (await chain.read(at.router, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return undefined; }
   })() ?? [undefined, undefined];
   const gotWeights = rVaults && rBps ? rVaults.map((v, i) => `${lc(v)}:${rBps[i]}`).join(",") : undefined;
-  // Issue 1696: after `govern --row apply-receipt` the router holds the applied receipt's vector, not the sheet's.
+  const [eVaults, eBps] = await (async () => {
+    try { return (await chain.read(at.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return undefined; }
+  })() ?? [undefined, undefined];
+  const gotEffective = eVaults && eBps ? eVaults.map((v, i) => `${lc(v)}:${eBps[i]}`).join(",") : undefined;
+  const sheetWant = (): { want?: string; missing: string[] } => {
+    const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
+    const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
+    return missing.length ? { missing } : { want: sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(","), missing };
+  };
+  // Issue 1696, issue 1698: after `govern --row apply-receipt` the router's ACTIVE vector is the applied receipt's; the DEFAULT vector stays the sheet's fallback.
   const appliedWant = at.applied ? at.applied.vaults.map((v, i) => `${lc(v)}:${at.applied!.bps[i]}`).join(",") : undefined;
   await c.run("router: default weights equal sheet", async () => {
     if (gotWeights === undefined) return { ok: false, detail: "getDefaultWeights unreadable" };
-    if (appliedWant !== undefined) return { ok: gotWeights === appliedWant, detail: gotWeights === appliedWant ? `${rVaults!.length} weights, set by the applied receipt ${at.applied!.receiptId}` : `got ${gotWeights}, want the applied receipt's ${appliedWant}` };
-    const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
-    const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
-    if (missing.length) return { ok: false, detail: `no manifest vault for ${missing.join(",")}` };
-    const want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
-    return { ok: gotWeights === want, detail: gotWeights === want ? `${rVaults!.length} weights` : `got ${gotWeights}, want ${want}` };
+    const s = sheetWant();
+    if (s.want === undefined) return { ok: false, detail: `no manifest vault for ${s.missing.join(",")}` };
+    return { ok: gotWeights === s.want, detail: gotWeights === s.want ? `${rVaults!.length} weights${at.applied ? " (the fallback; the applied receipt is the active vector)" : ""}` : `got ${gotWeights}, want ${s.want}` };
   });
-  // Issue 1743: the DEFAULT vector alone is not what the router routes by. A voted vector (setWeights) overrides it while votedWeightsActive is true,
-  // so the deploy must leave no voted vector, and the EFFECTIVE vector (what deposits use) must be the sheet's launch vector (or the applied receipt's).
-  await c.runEq("router: votedWeightsActive is false after deploy", () => chain.read(at.router, "function votedWeightsActive() view returns (bool)"), false);
+  // Issue 1743: the DEFAULT vector alone is not what the router routes by. An active vector (setWeights, written by applyReceipt) overrides it while votedWeightsActive is true.
+  // The deploy must leave none; an applied receipt must leave exactly one. The EFFECTIVE vector (what deposits use) must be the sheet's launch vector, or the applied receipt's.
+  await c.runEq("router: votedWeightsActive is false after deploy, true after an applied receipt", () => chain.read(at.router, "function votedWeightsActive() view returns (bool)"), at.applied !== undefined);
   await c.run("router: effective weights equal the sheet's launch vector", async () => {
-    let eff: [string[], bigint[]];
-    try { eff = (await chain.read(at.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]]; } catch { return { ok: false, detail: "getEffectiveWeights unreadable" }; }
-    const got = eff[0].map((v, i) => `${lc(v)}:${eff[1][i]}`).join(",");
+    if (gotEffective === undefined) return { ok: false, detail: "getEffectiveWeights unreadable" };
     let want: string;
     if (appliedWant !== undefined) want = appliedWant;
     else {
-      const addrOf = new Map(at.vaults.map((v) => [v.key, v.address]));
-      const missing = sheet.defaultWeights.filter((w) => !addrOf.has(w.vault)).map((w) => w.vault);
-      if (missing.length) return { ok: false, detail: `no manifest vault for ${missing.join(",")}` };
-      want = sheet.defaultWeights.map((w) => `${lc(addrOf.get(w.vault)!)}:${w.bps}`).join(",");
+      const s = sheetWant();
+      if (s.want === undefined) return { ok: false, detail: `no manifest vault for ${s.missing.join(",")}` };
+      want = s.want;
     }
-    return { ok: got === want, detail: got === want ? `${eff[0].length} effective weights` : `getEffectiveWeights is ${got}, want ${want}` };
+    return { ok: gotEffective === want, detail: gotEffective === want ? `${eVaults!.length} effective weights${appliedWant !== undefined ? `, the applied receipt ${at.applied!.receiptId}` : ""}` : `getEffectiveWeights is ${gotEffective}, want ${want}` };
   });
-  // Always present, so the label set is the same with and without an application. Nothing applied: nothing to check. Applied: released, and the vector is on the router.
+  // Always present, so the label set is the same with and without an application. Nothing applied: nothing to check. Applied: released, and the vector is what the router routes by.
   await c.run("receipt: applied receipt is released and its weights are on the router", async () => {
     if (!at.applied) return { ok: true, detail: "no receipt applied by govern" };
     const released = (await chain.read(at.receipt, "function isReleased(bytes32 receiptId) view returns (bool)", [at.applied.receiptId])) as boolean;
     if (!released) return { ok: false, detail: `receipt ${at.applied.receiptId} reads not released` };
-    return { ok: gotWeights === appliedWant, detail: gotWeights === appliedWant ? `receipt ${at.applied.receiptId} released, ${at.applied.vaults.length} weights on the router` : `router weights ${gotWeights}, the applied receipt's vector is ${appliedWant}` };
+    return { ok: gotEffective === appliedWant, detail: gotEffective === appliedWant ? `receipt ${at.applied.receiptId} released, ${at.applied.vaults.length} weights route deposits` : `router effective weights ${gotEffective}, the applied receipt's vector is ${appliedWant}` };
   });
 }
 

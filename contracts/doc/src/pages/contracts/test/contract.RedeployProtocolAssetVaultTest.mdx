@@ -1,0 +1,357 @@
+---
+title: "RedeployProtocolAssetVaultTest"
+description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796). The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults, the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts."
+---
+
+# RedeployProtocolAssetVaultTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/RedeployProtocolAssetVault.t.sol)
+
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+
+Single-vault redeploy of rmPROTO into a live deployment (issue 1796).
+The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults,
+the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the
+timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is
+replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
+
+## State Variables
+
+### script
+
+```solidity
+RedeployProtocolAssetVault internal script;
+```
+
+### launch
+
+```solidity
+DeployProtocolAssetVault internal launch;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### timelock
+
+```solidity
+address internal timelock = makeAddr("timelock");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### legUsdc
+
+```solidity
+RedeployLegVault internal legUsdc;
+```
+
+### legAgent
+
+```solidity
+RedeployLegVault internal legAgent;
+```
+
+### legRwa
+
+```solidity
+RedeployLegVault internal legRwa;
+```
+
+### oldProto
+
+```solidity
+BasketVault internal oldProto;
+```
+
+### json
+
+```solidity
+string internal json;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_meta-string"></a>
+
+### _meta
+
+```solidity
+function _meta(string memory name) internal view returns (VaultRegistry.VaultMetadata memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `VaultRegistry.VaultMetadata` |  |
+
+<a id="_launchvaults"></a>
+
+### _launchVaults
+
+```solidity
+function _launchVaults() internal view returns (address[] memory v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+
+<a id="_launchbps"></a>
+
+### _launchBps
+
+```solidity
+function _launchBps() internal pure returns (uint256[] memory b);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256[]` |  |
+
+<a id="_redeploy"></a>
+
+### _redeploy
+
+```solidity
+function _redeploy() internal returns (BasketVault v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="test_redeploy_handsthevaultoverandleavesitclosedandunregistered"></a>
+
+### test_redeploy_handsTheVaultOverAndLeavesItClosedAndUnregistered
+
+```solidity
+function test_redeploy_handsTheVaultOverAndLeavesItClosedAndUnregistered() public;
+```
+
+<a id="test_redeploy_configuredlikethelaunchvault"></a>
+
+### test_redeploy_configuredLikeTheLaunchVault
+
+```solidity
+function test_redeploy_configuredLikeTheLaunchVault() public;
+```
+
+<a id="test_redeploy_refusesaneoatimelock"></a>
+
+### test_redeploy_refusesAnEoaTimelock
+
+```solidity
+function test_redeploy_refusesAnEoaTimelock() public;
+```
+
+<a id="test_redeploy_refusesanemergencykeythatisthedeployer"></a>
+
+### test_redeploy_refusesAnEmergencyKeyThatIsTheDeployer
+
+```solidity
+function test_redeploy_refusesAnEmergencyKeyThatIsTheDeployer() public;
+```
+
+<a id="test_redeploy_deployercannotlinktheregistryafterhandover"></a>
+
+### test_redeploy_deployerCannotLinkTheRegistryAfterHandover
+
+<i>
+
+The link is ADMIN_ROLE-gated and the deploy dropped the deployer's ADMIN_ROLE: only the timelock can link, in the batch.
+
+</i>
+
+```solidity
+function test_redeploy_deployerCannotLinkTheRegistryAfterHandover() public;
+```
+
+<a id="_fivelegs-address"></a>
+
+### _fiveLegs
+
+<i>
+
+Five legs while both vaults are eligible: the old leg keeps its 525 and the new leg takes 0.
+
+</i>
+
+```solidity
+function _fiveLegs(address newVault)
+        internal
+        view
+        returns (address[] memory v, uint256[] memory b);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newVault | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+| b | `uint256[]` |  |
+
+<a id="_newlegs-address"></a>
+
+### _newLegs
+
+```solidity
+function _newLegs(address newVault) internal view returns (address[] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newVault | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+
+<a id="_runbatch-basketvault"></a>
+
+### _runBatch
+
+<i>
+
+The six calls of the govern row, in its order: the link first, so the vault is bound before it is registered.
+
+</i>
+
+```solidity
+function _runBatch(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="test_batch_replacesthevaultandkeepsthesplit"></a>
+
+### test_batch_replacesTheVaultAndKeepsTheSplit
+
+```solidity
+function test_batch_replacesTheVaultAndKeepsTheSplit() public;
+```
+
+<a id="test_batch_retirebeforemigraterevertsincontract"></a>
+
+### test_batch_retireBeforeMigrateRevertsInContract
+
+```solidity
+function test_batch_retireBeforeMigrateRevertsInContract() public;
+```
+
+<a id="test_batch_linkstheregistryfirstsotheregistrydrivesthenewvault"></a>
+
+### test_batch_linksTheRegistryFirstSoTheRegistryDrivesTheNewVault
+
+<i>
+
+The link lands first in the batch, as the timelock (ADMIN_ROLE on the new vault). After the batch the registry is the one
+address that drives the vault's deposit-halt leg, so a later status change through the registry reaches the vault.
+
+</i>
+
+```solidity
+function test_batch_linksTheRegistryFirstSoTheRegistryDrivesTheNewVault() public;
+```
+
+<a id="test_batch_withoutthelinktheregistrycannotdrivethenewvault"></a>
+
+### test_batch_withoutTheLinkTheRegistryCannotDriveTheNewVault
+
+<i>
+
+Without the link the registry's status setter reverts in the vault's `OnlyRegistry` guard: a batch that forgot the link
+would leave a vault the registry cannot retire, which is why the link is in the batch and not optional.
+
+</i>
+
+```solidity
+function test_batch_withoutTheLinkTheRegistryCannotDriveTheNewVault() public;
+```
+
+<a id="test_batch_registrylinkissetonce"></a>
+
+### test_batch_registryLinkIsSetOnce
+
+<i>
+
+The link is set-once: a second redeploy round, or a re-run batch, cannot re-point it.
+
+</i>
+
+```solidity
+function test_batch_registryLinkIsSetOnce() public;
+```
+
+<a id="test_batch_athreelegintermediateisalsovalidbutthefivelegorderneverexposesit"></a>
+
+### test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt
+
+```solidity
+function test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt() public;
+```
+
+<a id="test_batch_newvaultcannotbeweightedbeforeitisregistered"></a>
+
+### test_batch_newVaultCannotBeWeightedBeforeItIsRegistered
+
+```solidity
+function test_batch_newVaultCannotBeWeightedBeforeItIsRegistered() public;
+```
+
+<a id="test_oldvaultstillredeemsafterretire"></a>
+
+### test_oldVaultStillRedeemsAfterRetire
+
+```solidity
+function test_oldVaultStillRedeemsAfterRetire() public;
+```
+

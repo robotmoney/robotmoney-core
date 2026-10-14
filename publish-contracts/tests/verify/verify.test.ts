@@ -64,12 +64,16 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const vaults = () => Object.values(VAULTS).map((v) => v.address);
   const BPS = [4000, 3000, 2000, 1000];
-  /** The router holds the applied vector and the receipt reads released. */
-  const applied = (over: { released?: boolean; routerBps?: number[] } = {}) => {
+  const ACTIVE = "router: votedWeightsActive is false after deploy, true after an applied receipt";
+  /**
+   * The state applyReceipt leaves (issue 1698): the receipt reads released, the applied vector is the router's ACTIVE one (votedWeightsActive true, getEffectiveWeights
+   * reads it) and the DEFAULT vector is untouched (still the sheet's launch vector).
+   */
+  const applied = (over: { released?: boolean; routerBps?: number[]; active?: boolean } = {}) => {
     const w = buildWorld();
     w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
     w.chain.set(REC, "isReleased", () => over.released ?? true);
-    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    w.chain.set(ROUTER, "votedWeightsActive", over.active ?? true);
     w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
     return w;
   };
@@ -81,22 +85,32 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), BPS.map((x) => BigInt(x))]);
     expect(failed(await verifyDeployment(w.opts)).sort()).toEqual(["router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
   });
-  test("applied, released and on the router: every check passes, the sheet vector having been superseded", async () => {
+  test("applied, released and active on the router: every check passes, the default still equals the sheet", async () => {
     const r = await verifyDeployment(applied().opts);
     expect(failed(r)).toEqual([]);
     expect(r.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
     expect(r.checks.find((c) => c.label === LABEL)!.detail).toContain(RID);
+    expect(r.checks.find((c) => c.label === ACTIVE)).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.label === "router: default weights equal sheet")!.detail).toContain("fallback");
   });
   test("applied but the receipt reads not released fails the label", async () => {
     expect(failed(await verifyDeployment(applied({ released: false }).opts))).toEqual([LABEL]);
   });
-  test("applied but the router holds another vector fails the label and the weights label", async () => {
-    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
+  test("applied but the router routes by another vector fails the label and the effective label, not the default label", async () => {
+    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: effective weights equal the sheet's launch vector"].sort());
+  });
+  test("applied but the router reads no active vector fails the active label: the applied vector must be the one deposits route by (issue 1698)", async () => {
+    expect(failed(await verifyDeployment(applied({ active: false }).opts))).toEqual([ACTIVE]);
+  });
+  test("applied but the default vector moved fails the default label: applyReceipt never touches the fallback", async () => {
+    const w = applied();
+    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), BPS.map((x) => BigInt(x))]);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["router: default weights equal sheet"]);
   });
 });
 
-describe("the voted vector must not override the launch vector (issue 1743)", () => {
-  const ACTIVE = "router: votedWeightsActive is false after deploy";
+describe("the active vector must not override the launch vector before a receipt is applied (issue 1743)", () => {
+  const ACTIVE = "router: votedWeightsActive is false after deploy, true after an applied receipt";
   const EFFECTIVE = "router: effective weights equal the sheet's launch vector";
   const vaults = () => Object.values(VAULTS).map((v) => v.address);
   test("the healthy world passes both labels", async () => {

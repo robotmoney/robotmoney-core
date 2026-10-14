@@ -1,10 +1,10 @@
-// Issue 1796: redeploy ONE vault (rmPROTO) into a live deployment. The pure parts (vectors, the five-call batch, the before and after checks), the `redeploy-vault` verb
+// Issue 1796: redeploy ONE vault (rmPROTO) into a live deployment. The pure parts (vectors, the six-call batch with the registry link first, the before and after checks), the `redeploy-vault` verb
 // (stub forge and cast, a fake chain reader), the govern row (the in-memory Safe and timelock of tests/govern-world.ts, which enforces the contract rules the batch order exists for),
 // the verifier's retired-vault labels and the evidence entry. The real contracts run in contracts/test/RedeployProtocolAssetVault.t.sol and in the fork rehearsal.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex } from "viem";
 import { EXIT_CODES } from "../src/errors.ts";
 import { parseCli, USAGE } from "../src/cli.ts";
 import { GOVERN_ROWS, govRowRefusal, resumeCommand, runGovern, stageRows } from "../src/govern.ts";
@@ -66,16 +66,24 @@ describe("the vectors", () => {
 
 describe("the batch", () => {
   const calls = () => buildRedeployCalls({ registry: A.registry, oldVault: OLD, newVault: NEW, registryName: "Robot Money Protocol", asset: addr(0xc0de), finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS });
-  test("five calls in the one order the contracts allow: register, make the new vault eligible, drop the old one, retire it, open the new one", () => {
+  test("six calls in the one order the contracts allow: link the registry, register, make the new vault eligible, drop the old one, retire it, open the new one", () => {
     const c = calls();
-    expect(c.map((x) => x.target)).toEqual([A.registry, A.registry, A.registry, A.registry, NEW]);
-    const d = c.slice(0, 4).map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
+    expect(c.map((x) => x.target)).toEqual([NEW, A.registry, A.registry, A.registry, A.registry, NEW]);
+    const link = decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[0]!.data });
+    expect(link.functionName).toBe("setRegistry");
+    expect(link.args).toEqual([A.registry]);
+    const d = c.slice(1, 5).map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
     expect(d.map((x) => x.functionName)).toEqual(["registerVault", "migrateEligibility", "migrateEligibility", "retire"]);
     expect(d[0]!.args).toEqual([NEW, { name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 0n }]);
     expect(d[1]!.args).toEqual([NEW, true, [USDC, OLD, NEW, AGENT, RWA], [8550n, 525n, 0n, 575n, 350n]]);
     expect(d[2]!.args).toEqual([OLD, false, [USDC, NEW, AGENT, RWA], [8550n, 525n, 575n, 350n]]);
     expect(d[3]!.args).toEqual([OLD]);
-    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[4]!.data }).functionName).toBe("unpauseDeposits");
+    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[5]!.data }).functionName).toBe("unpauseDeposits");
+  });
+  test("the registry link is the first call, on the new vault, before it is registered: no vault deploy script links (core S5), the timelock does", () => {
+    const names = calls().map((x) => x.label);
+    expect(names[0]).toBe("new.setRegistry(registry)");
+    expect(names.findIndex((l) => l.includes("setRegistry"))).toBeLessThan(names.findIndex((l) => l.includes("registerVault(new)")));
   });
   test("the old vault is made ineligible before it is retired (the registry reverts RetireWhileRouterEligible otherwise)", () => {
     const names = calls().map((x) => x.label);
@@ -105,7 +113,7 @@ describe("the state before and after", () => {
   const v = vectorsFromFinal({ finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS, oldVault: OLD, newVault: NEW });
   const after = (o: Partial<RedeployAfter> = {}): RedeployAfter => ({
     oldStatus: 2, newStatus: 0, oldEligible: false, newEligible: true, eligibleCount: 4, votedWeightsActive: false, defaultVaults: v.finalVaults, defaultBps: v.finalBps,
-    effectiveVaults: v.finalVaults, effectiveBps: v.finalBps, newPaused: false, oldRetiredFlag: true, oldHasCode: true, ...o,
+    effectiveVaults: v.finalVaults, effectiveBps: v.finalBps, newPaused: false, newLinked: true, oldRetiredFlag: true, oldHasCode: true, ...o,
   });
   test("the state the batch must leave passes, and each deviation is named", () => {
     expect(redeployReadBackProblems(v, after())).toEqual([]);
@@ -119,6 +127,7 @@ describe("the state before and after", () => {
     expect(p({ defaultBps: [8550, 525, 575, 351] })).toContain("getDefaultWeights");
     expect(p({ effectiveVaults: [USDC, OLD, AGENT, RWA] })).toContain("getEffectiveWeights");
     expect(p({ newPaused: true })).toContain("depositsPaused");
+    expect(p({ newLinked: false })).toContain("not linked to the registry");
     expect(p({ oldRetiredFlag: false })).toContain("retired()");
     expect(p({ oldHasCode: false })).toContain("no code");
   });
@@ -159,7 +168,7 @@ describe("the command line", () => {
     expect(() => parseCli(["govern", "--prior-out", "/o", ...base])).toThrow("--prior-out goes with the verify");
   });
   test("the usage text documents the verb, the row and both arguments", () => {
-    for (const w of ["redeploy-vault", "--vault KEY", "--prior-out DIR", "--row redeploy-vault", "registry.retire(old)"]) expect(USAGE).toContain(w);
+    for (const w of ["redeploy-vault", "--vault KEY", "--prior-out DIR", "--row redeploy-vault", "new.setRegistry(registry)", "registry.retire(old)"]) expect(USAGE).toContain(w);
   });
 });
 
@@ -184,7 +193,7 @@ function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: bool
         case "votedWeightsActive": return o.voted ?? false;
         case "getDefaultWeights": return [o.defaultVaults ?? DEF_VAULTS, (o.defaultBps ?? DEF_BPS).map(BigInt)];
         case "depositsPaused": return o.newPaused ?? true;
-        case "registry": return o.newLinked === false ? addr(0) : REG;
+        case "registry": return o.newLinked ? REG : addr(0); // the deploy leaves the vault unlinked: the govern batch links it
         case "hasRole": return lc(at) === lc(REG) ? lc(String(args[1])) === lc(TL) : lc(String(args[1])) === lc(TL) ? (o.newAdmin ?? true) : false;
       }
       throw new Error(`fake chain: ${fn}`);
@@ -275,7 +284,7 @@ describe("the redeploy-vault verb", () => {
     expect(early.forge()).toEqual([]);
   });
   test("it refuses a deployment that is not in the state the round starts from, and sends nothing", async () => {
-    for (const bad of [{ oldEligible: false }, { oldStatus: 2 }, { voted: true }, { listed: [USDC, AGENT, RWA] }] as const) {
+    for (const bad of [{ oldEligible: false }, { oldStatus: 2 }, { voted: true }, { listed: [USDC, AGENT, RWA] }] as Parameters<typeof chainOf>[0][]) {
       const t = verbWorld();
       expect(await t.run([], { chainReader: () => chainOf(bad) })).toBe(EXIT_CODES.REFUSED);
       expect(t.forge()).toEqual([]);
@@ -287,8 +296,8 @@ describe("the redeploy-vault verb", () => {
     expect(await t.run()).toBe(EXIT_CODES.SIGNER);
     expect(t.forge()).toEqual([]);
   });
-  test("a deploy that leaves a vault the registry already lists, an open vault or a deployer admin is not accepted, and the old manifest stays", async () => {
-    for (const bad of [{ newPaused: false }, { newAdmin: false }, { newLinked: false }, { listed: [USDC, OLD, AGENT, RWA, NEW] }]) {
+  test("a deploy that leaves a vault the registry already lists, an open vault, a deployer admin or an already linked vault is not accepted, and the old manifest stays", async () => {
+    for (const bad of [{ newPaused: false }, { newAdmin: false }, { newLinked: true }, { listed: [USDC, OLD, AGENT, RWA, NEW] }]) {
       const t = verbWorld();
       // the before-state check runs with the listing as given: only the AFTER reads differ, so the chain answers the first reads cleanly
       let n = 0;
@@ -324,7 +333,7 @@ function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {
   const tl = fakeTimelock(d.sheet, 900n);
   tl.s.weights = { vaults: [...DEF_VAULTS], bps: DEF_BPS.map(BigInt) };
   tl.s.paused = new Set([NEW]); // the old vault was unpaused by stage 13; the new one deploys closed
-  tl.s.linked.add(NEW); tl.s.governed.add(NEW);
+  tl.s.governed.add(NEW); // the timelock holds ADMIN_ROLE on the new vault; it is NOT linked: the batch's first call links it
   // the vault manifest names the new vault, as the verb leaves it
   writeFileSync(join(d.ctx.coreDir, "deployments", String(chainId), "protocol-asset-vault.json"), JSON.stringify({ vault: NEW }));
   const manifest = newManifest(d.ctx, addr(0xa001));
@@ -341,15 +350,17 @@ function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {
 }
 
 describe("the govern row", () => {
-  test("it schedules ONE batch of five calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
+  test("it schedules ONE batch of six calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
     const w = rowWorld();
+    expect(w.tl.s.linked.has(NEW)).toBe(false);
     await w.go();
     expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
     const sched = w.tl.s.scheduled.get("redeploy-vault")!;
     expect(sched.form).toBe("batch");
-    expect(sched.calls).toHaveLength(5);
-    expect(sched.calls.map((c) => c.target)).toEqual([A.registry, A.registry, A.registry, A.registry, NEW]);
-    // the chain: the new vault is listed, eligible and open, the old one retired and ineligible, the split unchanged across the new vault
+    expect(sched.calls).toHaveLength(6);
+    expect(sched.calls.map((c) => c.target)).toEqual([NEW, A.registry, A.registry, A.registry, A.registry, NEW]);
+    // the chain: the new vault is linked, listed, eligible and open, the old one retired and ineligible, the split unchanged across the new vault
+    expect(w.tl.s.linked.has(NEW)).toBe(true);
     expect(w.tl.s.listed).toEqual([USDC, OLD, AGENT, RWA, NEW]);
     expect(w.tl.s.ineligible.has(OLD)).toBe(true);
     expect(w.tl.s.ineligible.has(NEW)).toBe(false);
@@ -421,9 +432,9 @@ describe("the govern row", () => {
   test("refused before anything is scheduled: the registry already lists the new vault", () => refuses((w) => w.tl.s.listed.push(NEW), "already lists the new vault"));
   test("refused before anything is scheduled: the registry is linked to another router", () => refuses((w) => { w.tl.s.registryRouter = addr(0x77); }, "RouterNotLinked"));
   test("refused before anything is scheduled: the timelock is not the registry admin", () => refuses((w) => { w.tl.s.timelockIsRegistryAdmin = false; }, "ADMIN_ROLE on the registry"));
-  test("refused before anything is scheduled: the new vault is already open, not linked, or not governed by the timelock", async () => {
+  test("refused before anything is scheduled: the new vault is already open, already linked (the batch's set-once link would revert), or not governed by the timelock", async () => {
     await refuses((w) => w.tl.s.paused.delete(NEW), "is not deposit-paused");
-    await refuses((w) => w.tl.s.linked.delete(NEW), "not linked to the registry");
+    await refuses((w) => w.tl.s.linked.add(NEW), "already linked to the registry");
     await refuses((w) => w.tl.s.governed.delete(NEW), "does not hold ADMIN_ROLE on the new vault");
   });
   test("refused when the vault manifest and the run record name different vaults", async () => {
@@ -474,10 +485,10 @@ function chainFor(e: ReturnType<typeof entry>, o: { calls?: number; delay?: bigi
   const receipts = new Map<string, { status: "success" | "reverted"; blockNumber: bigint; logs: { address: string; topics: readonly Hex[]; data: Hex }[] }>();
   const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: { address: string; topics: readonly Hex[]; data: Hex }[], ts: number, status: "success" | "reverted" = "success") => { receipts.set(hash, { status, blockNumber: bn, logs }); blocks.set(bn++, ts); };
-  const sched = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallScheduled", args: { id: h(77) as Hex, index: BigInt(i) } }), data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [(i === 0 && o.target ? o.target : c.target) as Address, 0n, i === 0 && o.data ? o.data : c.data, h(0) as Hex, o.delay ?? 900n]) });
-  const exec = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallExecuted", args: { id: h(77) as Hex, index: BigInt(i) } }), data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [c.target as Address, 0n, c.data]) });
+  const sched = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallScheduled", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [(i === 0 && o.target ? o.target : c.target) as Address, 0n, i === 0 && o.data ? o.data : c.data, h(0) as Hex, o.delay ?? 900n]) });
+  const exec = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallExecuted", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [c.target as Address, 0n, c.data]) });
   e.deploy_tx_hashes.forEach((x, i) => add(x, [], 1, o.failedDeploy && i === 0 ? "reverted" : "success"));
-  add(e.schedule_tx, want.slice(0, o.calls ?? 5).map((c, i) => sched(i, c)), T0);
+  add(e.schedule_tx, want.slice(0, o.calls ?? want.length).map((c, i) => sched(i, c)), T0);
   add(e.execute_tx, want.map((c, i) => exec(i, c)), T0 + (o.gap ?? 900));
   return {
     getChainId: async () => 8453, getTransactionCount: async () => 0,
@@ -513,7 +524,7 @@ describe("the evidence entry", () => {
   test("the chain check rejects a batch of the wrong size, the wrong call, the wrong target, a short delay, a short gap and a failed deploy transaction", async () => {
     const e = entry();
     const on = async (o: Parameters<typeof chainFor>[1]) => (await checkVaultRedeploysOnChain(ev(), chainFor(e, o), 900)).join("\n");
-    expect(await on({ calls: 4 })).toContain("exactly 5 calls");
+    expect(await on({ calls: 5 })).toContain("exactly 6 calls");
     expect(await on({ data: "0x12345678" })).toContain("calldata is not");
     expect(await on({ target: addr(0x31) })).toContain("target");
     expect(await on({ delay: 60n })).toContain("delay");

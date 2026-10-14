@@ -4,7 +4,7 @@ title: "PortfolioRouterTest"
 
 # PortfolioRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -957,6 +957,39 @@ registry's router-eligible vault count.
 
 ```solidity
 function test_setDefaultWeights_revertsIfLengthMismatch() public;
+```
+
+<a id="test_setdefaultweights_rejectsduplicatevault"></a>
+
+### test_setDefaultWeights_rejectsDuplicateVault
+
+HR-L-9 / CS-5 (issue #1698): a duplicate default `[A, A]` passes the
+`length == routerEligibleCount` check while leaving vault B out. It
+is refused by name, and the default stays untouched.
+
+```solidity
+function test_setDefaultWeights_rejectsDuplicateVault() public;
+```
+
+<a id="test_setweights_rejectsduplicatevault"></a>
+
+### test_setWeights_rejectsDuplicateVault
+
+The applied (voted) vector refuses a duplicate vault too: a digest
+binds a vector but does not prove it is unique (issue #1698).
+
+```solidity
+function test_setWeights_rejectsDuplicateVault() public;
+```
+
+<a id="test_setdefaultweights_acceptsdistinctvaults"></a>
+
+### test_setDefaultWeights_acceptsDistinctVaults
+
+The duplicate check does not refuse a distinct full-length vector.
+
+```solidity
+function test_setDefaultWeights_acceptsDistinctVaults() public;
 ```
 
 <a id="test_redeemfor_unauthorizedcaller_reverts"></a>

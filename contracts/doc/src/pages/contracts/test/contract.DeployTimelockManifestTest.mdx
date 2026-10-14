@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -111,12 +111,17 @@ shared variable lets one test write to another test's path.
 function test_manifestTests_passAnExplicitPath_neverSetDeploymentOut() public view;
 ```
 
-<a id="test_manifestrecordsthequorumflooritwasdeployedunder"></a>
+<a id="test_manifestrecordsthereceiptregistergovernanceappliesfrom"></a>
 
-### test_manifestRecordsTheQuorumFloorItWasDeployedUnder
+### test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom
+
+Issue #1698: the manifest records the receipt register the weight
+setter applies from. This fixture runs the ceremony without a
+register, so both the address and the release-role row read
+empty; the wired case is DeployTimelockCommittee.t.sol.
 
 ```solidity
-function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view;
+function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view;
 ```
 
 <a id="test_manifestrecordszerolistedagents_whennonelisted"></a>

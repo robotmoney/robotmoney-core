@@ -3,14 +3,12 @@
 // ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each of the four vaults (rmUSDC too, issue 1710: all four deploy paused). The docs put exactly this
 // there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
-// stages), and the verify stage asserts them against the sheet. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY
-// are constructor arguments of today's RouterGovernance bytecode only: there is no voting by anyone, the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for, and
-// RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
-// deployment, when a weight-setter applyReceipt call will replace them.
-// ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696): the Safe, through the timelock, is the only body that changes any
-// contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it submits the Investment
-// Committee's consensus receipt; that submission is the rebalance: ONE timelock batch, releaseReceipt(receiptId) plus the weight change (on today's
-// bytecode RouterGovernance.setDefaultWeights(vaults, bps)), read back as isReleased and the router weights. Never part of stage 13.
+// stages), and the verify stage asserts them against the sheet. The governance stage deploys the weight setter (RouterGovernance) with no voting surface
+// (issue 1698): no voter list, voting power, quorum, voting period or execution delay exists on the contract or in the sheet. There is no voting by anyone.
+// ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696, issue 1698): the Safe, through the timelock, is the only body that changes any
+// contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it applies the Investment
+// Committee's consensus receipt; that application is the rebalance: ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps),
+// which releases the receipt on the register and writes the vector to the router in one transaction, read back as isReleased and the router's EFFECTIVE weights. Never part of stage 13.
 // The rows (GOVERN_ROWS):
 //   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
 //                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
@@ -23,29 +21,38 @@
 //   safe-add-owner, safe-remove-owner, safe-swap-owner, safe-change-threshold   (issue 1645) Safe self-administration: one direct Safe transaction to the Safe itself.
 //   timelock-grant-role, timelock-revoke-role                                   (issue 1645) a Safe -> Timelock self-call: the timelock calls itself after the delay.
 // The self-administration rows are TWIN-ONLY until the owner decides otherwise (owner question 2, default (a)): refused with USAGE on 8453, before the Safe is read.
+// SHEET AND ROSTER (QA plan v1 B4): every other row refuses (GOVERN) when the Safe's live owners or threshold differ from the sheet's SAFE_OWNERS / SAFE_THRESHOLD. The
+// self-administration rows are exempt, because their purpose is that change: they read back against their own arguments (safeAdminEffect), before the send (a change
+// already in effect is reprinted from its record or recorded as skipped, never sent twice) and after it. The operator then updates the sheet (runbook section 9). The
+// Safe's own rules (GS201 threshold above owner count, GS203, GS204) are checked before anything is proposed. A record is keyed on the row, the calldata and the
+// Safe nonce (selfAdminRecordKey), so add X, remove X, add X is three transactions, while a rerun of a change still in effect sends nothing.
 // A Safe module, guard or fallback-handler change has no row and is refused by name (refuseSafeConfigChange): the Safe contract itself would accept a
 // well-formed one from two owners, so the control is this tool plus the verifier (no module, no guard, the canonical handler), not the contract.
-// The Safe's own timelock role is given up by timelock-revoke-role, which waits the delay. The tool never builds renounceRole (owner question 1, default (b)).
+// The Safe's own timelock role is given up by timelock-revoke-role, which waits the delay. The tool never builds renounceRole (owner question 1, default (b)), and it refuses
+// timelock-revoke-role PROPOSER_ROLE for the last holder before anything is sent (assertNotLastProposer): the deployed timelock is a ProposerFloorTimelock, which reverts that
+// revoke (and a renounce) with LastProposerFloor, so the governed contracts can never be left with no proposer (CS-3). Grant a second proposer first.
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
-//   apply-receipt                the Twin rehearsal's rebalance (issue 1696): ONE timelock batch, releaseReceipt(receiptId) plus the router weight change for the
-// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
-// vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
-// the batch and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
-// Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
-// Issue 1743: apply-receipt writes the DEFAULT vector, so it REFUSES (GOVERN, nothing sent) while router.votedWeightsActive() is true, and its read-back checks the EFFECTIVE weights
-// (what deposits route by) equal the receipt's vector, with votedWeightsActive false. The deploy no longer leaves a voted vector.
-//   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's voted vector
-// so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no voted vector is active. Runs on 8453 in
-// production and in a rehearsal, never in stage 13, with its own delay. A later vote that sets a voted vector again opens round 2 with the same explicit `--row`.
+//   apply-receipt                the rebalance (issue 1696, issue 1698): ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) (--receipt-id, --payload FILE),
+// which releases the receipt on the register and writes the receipt's vector to the router (setWeights) in one transaction. Before anything is sent it checks: the receipt is recorded, its
+// stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the vector sums to 10000 bps and lists exactly the
+// registry's router-eligible vaults in registry order, and the receipt is not released. The chain checks the receipt state and the digest again (ReceiptDigestMismatch). After the real delay
+// the Safe executes the call and the tool reads isReleased and the router's EFFECTIVE weights (what deposits route by, issue 1743) back. No vote. Never part of stage 13: on 8453 only
+// `--row apply-receipt` names it (own 172800 s delay). Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that
+// mainnet governance works. The applied vector is the router's ACTIVE vector (votedWeightsActive reads true afterwards; the storage keeps its pre-1698 name): an active vector from an
+// earlier receipt is replaced, never a refusal. The DEFAULT vector (the deploy-time fallback) is not touched.
+//   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which drops the router's active
+// (applied receipt) vector so routing falls back to the default: the emergency lever. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled)
+// when no active vector is set. Runs on 8453 in production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt opens round 2 with the same explicit `--row`.
 //   redeploy-vault              on demand (issue 1796), no arguments: the Safe, through the timelock, replaces ONE vault of the live deployment (rmPROTO) with the one the `redeploy-vault`
-// verb deployed. ONE timelock batch of five calls (registry.registerVault(new), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs),
-// registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused or retired vault. The order is forced by the contracts (a vault must be made
+// verb deployed. ONE timelock batch of six calls (new.setRegistry(registry), registry.registerVault(new), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old,
+// false, four legs), registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused or retired vault. The registry link is the batch's, not the deploy
+// script's (core S5: only DeployTimelock links from a script), and the timelock holds the ADMIN_ROLE that gates it. The order is forced by the contracts (a vault must be made
 // router-ineligible before it is retired, and the router's default vector must span the eligible set), see redeploy-vault.ts. The read-back checks the registry statuses, the
-// eligibility, the router's DEFAULT and EFFECTIVE vectors and the vaults' deposit state. Rehearsal (DEPLOYMENT_KIND=rehearsal) and the Twin chain only: refused on 8453 in production.
+// eligibility, the new vault's registry link, the router's DEFAULT and EFFECTIVE vectors and the vaults' deposit state. Rehearsal (DEPLOYMENT_KIND=rehearsal) and the Twin chain only: refused on 8453 in production.
 // Never part of stage 13. Its run-manifest key and salt are `redeploy-vault-<KEY>-<ordinal>`; the evidence entry is the `vault_redeploys` entry the verb started.
 // ROUNDS (issue 1667): every unpause row is a numbered round. The salt carries the round, so a vault that is paused again after an executed unpause
 // gets a NEW timelock operation id on its next `--row unpause-X` run, instead of re-hitting the operation that is already done. The earlier round's
@@ -65,7 +72,7 @@ import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
-  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
+  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, ZERO, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
   redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type RedeployRecord, type RedeployVectors,
 } from "./redeploy-vault.ts";
 import { PublishError } from "./errors.ts";
@@ -235,6 +242,22 @@ export function assertSelfAdminAllowed(chainId: number, row: string): void {
   if (chainId === BASE_CHAIN_ID) throw new PublishError("USAGE", `--row ${row} is Safe or timelock self-administration: it runs on a Twin fork only and is refused on chain 8453 until the owner decides otherwise (issue 1645)`, { row });
 }
 
+/** The deployed timelock is a ProposerFloorTimelock (contracts/ProposerFloorTimelock.sol): it counts PROPOSER_ROLE holders and reverts a revoke or renounce of the last one. */
+const PROPOSER_FLOOR_ABI = parseAbi(["function proposerCount() view returns (uint256)"]);
+/**
+ * Owner question 1 of issue 1645, default (b), and CS-3: the Safe gives up PROPOSER_ROLE through the delay and never as the last holder. The contract floors it
+ * (LastProposerFloor at execute, after the Safe transaction and the delay); the tool refuses the same revoke before anything is sent. Any other role, and
+ * any account that does not hold PROPOSER_ROLE, passes through: the chain decides those.
+ */
+export async function assertNotLastProposer(rd: Rd, timelock: Address, role: Hex, account: Address): Promise<void> {
+  if (role.toLowerCase() !== roleId("PROPOSER_ROLE").toLowerCase()) return;
+  if (!(await rd<boolean>(timelock, ROLE_ABI, "hasRole", [role, account]))) return;
+  const count = await rd<bigint>(timelock, PROPOSER_FLOOR_ABI, "proposerCount");
+  if (count === 1n) {
+    throw new PublishError("GOVERN", `--row timelock-revoke-role PROPOSER_ROLE ${account}: it is the last proposer, and the timelock (ProposerFloorTimelock) reverts the revoke with LastProposerFloor at execute. Nothing is scheduled. Grant PROPOSER_ROLE to another account first (--row timelock-grant-role), then revoke this one`, { row: "timelock-revoke-role", account, proposer_count: 1 });
+  }
+}
+
 const need = (v: string | undefined, row: string, flag: string): string => {
   if (v === undefined) throw new PublishError("USAGE", `--row ${row} needs ${flag}`, { row });
   return v;
@@ -250,36 +273,141 @@ const thresholdArg = (v: number | string | undefined, row: string): bigint => {
   return BigInt(s);
 };
 
+/** The Safe's linked-list head marker (`SENTINEL_OWNERS` in OwnerManager): the predecessor of the first owner, and never an owner itself. */
+export const SAFE_SENTINEL_OWNER = "0x0000000000000000000000000000000000000001" as Address;
+
+/**
+ * The arguments of a Safe self-administration row, parsed and checksummed (USAGE on bad input). This is what the row wants and what its read-back
+ * checks (safeAdminEffect): the sheet is not consulted, because the row's purpose is to make the sheet's SAFE_OWNERS / SAFE_THRESHOLD stale. The
+ * predecessor the Safe's linked list needs (`prevOwner`) is chain state, not an argument: buildSelfAdminCall reads it from the live owner list.
+ */
+export type SafeAdminWant =
+  | { row: "safe-add-owner"; owner: Address; threshold: bigint }
+  | { row: "safe-remove-owner"; owner: Address; threshold: bigint }
+  | { row: "safe-swap-owner"; oldOwner: Address; newOwner: Address }
+  | { row: "safe-change-threshold"; threshold: bigint };
+export type SafeAdminRow = (typeof SAFE_ADMIN_ROWS)[number];
+export const isSafeAdminRow = (row: string): row is SafeAdminRow => (SAFE_ADMIN_ROWS as readonly string[]).includes(row);
+
+export function parseSafeAdminArgs(row: SafeAdminRow, args: SelfAdminArgs): SafeAdminWant {
+  switch (row) {
+    case "safe-add-owner": return { row, owner: addrArg(args.owner, row, "--admin-arg owner=0x.."), threshold: thresholdArg(args.threshold, row) };
+    case "safe-remove-owner": return { row, owner: addrArg(args.owner, row, "--admin-arg owner=0x.."), threshold: thresholdArg(args.threshold, row) };
+    case "safe-swap-owner": return { row, oldOwner: addrArg(args.oldOwner, row, "--admin-arg old-owner=0x.."), newOwner: addrArg(args.newOwner, row, "--admin-arg new-owner=0x..") };
+    case "safe-change-threshold": return { row, threshold: thresholdArg(args.threshold, row) };
+  }
+}
+
+/** The stable text of what a self-administration row wants (lower-case addresses): the run manifest keeps it per record so a rerun can find the record of the same change. */
+export function selfAdminWantKey(want: SafeAdminWant | { row: TimelockAdminRow; role: Hex; account: Address }): string {
+  const lc = (x: string) => x.toLowerCase();
+  switch (want.row) {
+    case "safe-add-owner": case "safe-remove-owner": return `${want.row}:${lc(want.owner)}:${want.threshold}`;
+    case "safe-swap-owner": return `${want.row}:${lc(want.oldOwner)}:${lc(want.newOwner)}`;
+    case "safe-change-threshold": return `${want.row}:${want.threshold}`;
+    case "timelock-grant-role": case "timelock-revoke-role": return `${want.row}:${lc(want.role)}:${lc(want.account)}`;
+  }
+}
+export type TimelockAdminRow = (typeof TIMELOCK_ADMIN_ROWS)[number];
+
+/** The state a Safe self-administration row leaves behind, in words (log lines and refusals). */
+export function describeSafeAdminWant(want: SafeAdminWant): string {
+  switch (want.row) {
+    case "safe-add-owner": return `${want.owner} is an owner and the threshold is ${want.threshold}`;
+    case "safe-remove-owner": return `${want.owner} is not an owner and the threshold is ${want.threshold}`;
+    case "safe-swap-owner": return `${want.newOwner} is an owner in place of ${want.oldOwner}`;
+    case "safe-change-threshold": return `the threshold is ${want.threshold}`;
+  }
+}
+
+/** The Safe's owner list and threshold as the chain reports them (getOwners, getThreshold). */
+export interface SafeRoster { owners: readonly Address[]; threshold: bigint }
+
+/**
+ * The read-back of a Safe self-administration row against its own arguments: what the live roster says about the owner change and about the threshold.
+ * Both true: the change is in effect (a rerun sends nothing). Before the send the same reading decides whether there is anything to send.
+ */
+export function safeAdminEffect(want: SafeAdminWant, live: SafeRoster): { owner: boolean; threshold: boolean; problems: string[] } {
+  const has = (x: string) => live.owners.some((y) => y.toLowerCase() === x.toLowerCase());
+  const problems: string[] = [];
+  let owner = true, threshold = true;
+  switch (want.row) {
+    case "safe-add-owner": owner = has(want.owner); if (!owner) problems.push(`${want.owner} is not an owner`); break;
+    case "safe-remove-owner": owner = !has(want.owner); if (!owner) problems.push(`${want.owner} is still an owner`); break;
+    case "safe-swap-owner": owner = !has(want.oldOwner) && has(want.newOwner); if (!owner) problems.push(`the swap ${want.oldOwner} -> ${want.newOwner} is not in effect`); break;
+    case "safe-change-threshold": break;
+  }
+  if ("threshold" in want) { threshold = live.threshold === want.threshold; if (!threshold) problems.push(`getThreshold is ${live.threshold}, want ${want.threshold}`); }
+  return { owner, threshold, problems };
+}
+
+/**
+ * The rules the Safe contract (OwnerManager) enforces on the change, checked here so a transaction the Safe would revert is never proposed or signed:
+ * GS201 (threshold above the owner count after the change), GS203 (the zero address, the sentinel or the Safe itself as an owner), GS204 (already an owner).
+ * Returns the problem, or undefined when the Safe would accept the call.
+ */
+export function safeRuleProblem(want: SafeAdminWant, live: SafeRoster, safe: Address): string | undefined {
+  const has = (x: string) => live.owners.some((y) => y.toLowerCase() === x.toLowerCase());
+  const invalid = (x: Address) => x.toLowerCase() === "0x0000000000000000000000000000000000000000" || x.toLowerCase() === SAFE_SENTINEL_OWNER.toLowerCase() || x.toLowerCase() === safe.toLowerCase();
+  const n = BigInt(live.owners.length);
+  switch (want.row) {
+    case "safe-add-owner":
+      if (invalid(want.owner)) return `${want.owner} cannot be an owner (GS203)`;
+      if (has(want.owner)) return `${want.owner} is already an owner (GS204)`;
+      if (want.threshold > n + 1n) return `threshold ${want.threshold} is above the owner count after the change (${n + 1n}) (GS201)`;
+      return undefined;
+    case "safe-remove-owner":
+      if (want.threshold > n - 1n) return `threshold ${want.threshold} is above the owner count after the change (${n - 1n}) (GS201)`;
+      return undefined;
+    case "safe-swap-owner":
+      if (invalid(want.newOwner)) return `${want.newOwner} cannot be an owner (GS203)`;
+      if (has(want.newOwner)) return `${want.newOwner} is already an owner (GS204)`;
+      return undefined;
+    case "safe-change-threshold":
+      if (want.threshold > n) return `threshold ${want.threshold} is above the owner count (${n}) (GS201)`;
+      return undefined;
+  }
+}
+
+/**
+ * The live Safe roster against the sheet's SAFE_OWNERS and SAFE_THRESHOLD: the differences found, an empty list is a match. Every govern row but the
+ * self-administration rows refuses on a difference; after a self-administration row the operator updates the sheet (runbook section 9).
+ */
+export function sheetRosterProblems(live: { owners: readonly string[]; threshold: number | bigint }, sheet: Pick<Sheet, "safeOwners" | "safeThreshold">): string[] {
+  const sorted = (xs: readonly string[]) => xs.map((x) => x.toLowerCase()).sort().join(",");
+  const bad: string[] = [];
+  if (sorted(live.owners) !== sorted(sheet.safeOwners)) bad.push(`owners on chain ${sorted(live.owners)}, sheet SAFE_OWNERS ${sorted(sheet.safeOwners)}`);
+  if (BigInt(live.threshold) !== BigInt(sheet.safeThreshold)) bad.push(`threshold on chain ${live.threshold}, sheet SAFE_THRESHOLD ${sheet.safeThreshold}`);
+  return bad;
+}
+
 /** The one call of a self-administration row. `owners` is the Safe's owner list on chain (for the predecessor the Safe's linked list needs). */
 export function buildSelfAdminCall(row: SelfAdminRow, a: Pick<GovernAddrs, "safe" | "timelock">, args: SelfAdminArgs, owners: readonly Address[]): LabelledCall {
   const prevOf = (o: Address): Address => {
     const i = owners.findIndex((x) => x.toLowerCase() === o.toLowerCase());
     if (i < 0) throw new PublishError("USAGE", `${o} is not an owner of the Safe`, { row });
-    return i === 0 ? ("0x0000000000000000000000000000000000000001" as Address) : owners[i - 1]!;
+    return i === 0 ? SAFE_SENTINEL_OWNER : owners[i - 1]!;
   };
   let call: LabelledCall;
   switch (row) {
     case "safe-add-owner": {
-      const owner = addrArg(args.owner, row, "--admin-arg owner=0x..");
-      const threshold = thresholdArg(args.threshold, row);
-      call = { label: `safe.addOwnerWithThreshold(${owner}, ${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "addOwnerWithThreshold", args: [owner, threshold] }) };
+      const w = parseSafeAdminArgs(row, args) as Extract<SafeAdminWant, { row: "safe-add-owner" }>;
+      call = { label: `safe.addOwnerWithThreshold(${w.owner}, ${w.threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "addOwnerWithThreshold", args: [w.owner, w.threshold] }) };
       break;
     }
     case "safe-remove-owner": {
-      const owner = addrArg(args.owner, row, "--admin-arg owner=0x..");
-      const threshold = thresholdArg(args.threshold, row);
-      call = { label: `safe.removeOwner(${owner}, ${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "removeOwner", args: [prevOf(owner), owner, threshold] }) };
+      const w = parseSafeAdminArgs(row, args) as Extract<SafeAdminWant, { row: "safe-remove-owner" }>;
+      call = { label: `safe.removeOwner(${w.owner}, ${w.threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "removeOwner", args: [prevOf(w.owner), w.owner, w.threshold] }) };
       break;
     }
     case "safe-swap-owner": {
-      const oldOwner = addrArg(args.oldOwner, row, "--admin-arg old-owner=0x..");
-      const newOwner = addrArg(args.newOwner, row, "--admin-arg new-owner=0x..");
-      call = { label: `safe.swapOwner(${oldOwner} -> ${newOwner})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "swapOwner", args: [prevOf(oldOwner), oldOwner, newOwner] }) };
+      const w = parseSafeAdminArgs(row, args) as Extract<SafeAdminWant, { row: "safe-swap-owner" }>;
+      call = { label: `safe.swapOwner(${w.oldOwner} -> ${w.newOwner})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "swapOwner", args: [prevOf(w.oldOwner), w.oldOwner, w.newOwner] }) };
       break;
     }
     case "safe-change-threshold": {
-      const threshold = thresholdArg(args.threshold, row);
-      call = { label: `safe.changeThreshold(${threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "changeThreshold", args: [threshold] }) };
+      const w = parseSafeAdminArgs(row, args) as Extract<SafeAdminWant, { row: "safe-change-threshold" }>;
+      call = { label: `safe.changeThreshold(${w.threshold})`, target: a.safe, data: encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "changeThreshold", args: [w.threshold] }) };
       break;
     }
     case "timelock-grant-role":
@@ -295,6 +423,13 @@ export function buildSelfAdminCall(row: SelfAdminRow, a: Pick<GovernAddrs, "safe
   refuseSafeConfigChange(call.data);
   return call;
 }
+
+/**
+ * The run-manifest key of a self-administration record: the row, the calldata and the Safe nonce the transaction was proposed at (issue 1645, QA plan v1 B4).
+ * One row name serves many different changes (the calldata), and the same change can be made again after it was undone (add X, remove X, add X: the nonce),
+ * so no later change ever adopts an earlier record and reprints it unsent. A rerun of a change still in effect finds its record by `selfAdminWantKey`.
+ */
+export const selfAdminRecordKey = (row: SelfAdminRow, data: Hex, nonce: number): string => `${row}-${keccak256(data).slice(2, 10)}-n${nonce}`;
 
 /** `--row` value to a row name: a 1-based number or a name. Anything else is a usage error. */
 export function resolveGovernRow(row: string): PlannedRow {
@@ -396,8 +531,11 @@ export interface GovernOpts {
 export interface TwinCall { label: string; target: Address; data: Hex }
 
 interface PhaseRecord { seq?: number; tx_hash?: string; safe_tx_hash?: string; status?: number; at: string; operation_id?: string; ready_at?: string; note?: string; [k: string]: unknown }
+/** A self-administration record's identity (issue 1645, B4): the calldata sent (none for a skip), the Safe nonce it was proposed at, and the row's arguments as `selfAdminWantKey` spells them. */
+export interface SelfAdminRecord { data?: Hex; nonce: number; want: string }
 /** What the run manifest keeps per row. A row is complete when it is skipped, executed or (for cancel) cancelled. */
-export interface RowRecord { round?: number; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+/** `observed`: the read-back after the execute. `voted_weights_active` is recorded by the clear and redeploy rows (they prove the active vector is gone); an application records the effective vector only (issue 1698: its vector IS the active one). */
+export interface RowRecord { round?: number; admin?: SelfAdminRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 
 const rowComplete = (r: RowRecord | undefined): boolean => !!r && !!(r.skipped || r.executed || r.cancelled);
@@ -437,9 +575,11 @@ const detected = new WeakMap<object, boolean>();
 
 /** The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage. */
 export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string): string {
+  const selfAdmin = row === undefined ? undefined : SELF_ADMIN_ROWS.find((r) => row!.startsWith(`${r}-`));
   if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
+  else if (selfAdmin !== undefined) row = `${selfAdmin} --admin-arg K=V (the same --admin-arg values as this run)`; // the record key carries the calldata hash and the Safe nonce, not the arguments
   return `bun publish-contracts/src/cli.ts govern${row === undefined ? "" : ` --row ${row}`} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
 }
 
@@ -541,7 +681,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
-  if (handle.owners.map((x) => x.toLowerCase()).sort().join() !== sheet.safeOwners.map((x) => x.toLowerCase()).sort().join()) throw new PublishError("GOVERN", "the Safe's owners on chain differ from the sheet", {});
+  // The sheet's SAFE_OWNERS and SAFE_THRESHOLD must describe the live Safe for every row but the self-administration rows, whose purpose is to change the live
+  // roster: those read back against their own arguments (safeAdminEffect) and the operator updates the sheet afterwards (runbook section 9, QA plan v1 B4).
+  const stale = sheetRosterProblems(handle, sheet);
+  if (stale.length && selfAdminRow === undefined) {
+    throw new PublishError("GOVERN", `the Safe's owners or threshold on chain differ from the sheet: ${stale.join("; ")}. After a Safe self-administration row (${SAFE_ADMIN_ROWS.join(", ")}) update SAFE_OWNERS and SAFE_THRESHOLD in the sheet to what the chain reads (runbook section 9)`, { problems: stale });
+  }
+  if (stale.length) ctx.log.log("warn", "govern.sheet_stale", { row: selfAdminRow, problems: stale, hint: "update SAFE_OWNERS and SAFE_THRESHOLD in the sheet to what the chain reads after this change (runbook section 9)" });
   ctx.log.log("info", "stage.start", { stage: row.name, safe: a.safe, timelock: a.timelock });
   const state = (manifest.govern ??= {}) as GovernState;
   const salt = (name: string) => governSalt(ctx.coreSha, ctx.chainId, name);
@@ -905,7 +1051,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         ctx.log.log("info", "govern.round_rescheduled", { row: CLEAR_ROW, round: n, cancelled_operation: prev.scheduled.operation_id });
       }
     } else if (rowComplete(prev)) {
-      // An executed round, and the router reads a voted vector again (a vote passed since): a NEW round, a new operation.
+      // An executed round, and the router reads an active vector again (a receipt was applied since): a NEW round, a new operation.
       if (!(await votedNow())) throw new PublishError("GOVERN", `govern row ${CLEAR_ROW} executed in round ${prev!.round ?? 1} and router.votedWeightsActive() reads false: there is nothing to clear`, { row: CLEAR_ROW, round: prev!.round ?? 1 });
       const done = prev!.round ?? 1;
       state[roundKey(name, done)] = prev!;
@@ -1004,10 +1150,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           listed, oldStatus: Number(status0), oldEligible: eligible0, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, votedWeightsActive: voted,
           defaultVaults: defVaults, defaultBps: defBps, oldHasCode: !!oldCode && oldCode !== "0x",
         });
-        // the new vault must be what the deploy left: closed, unregistered (above), linked, governed by the timelock
+        // the new vault must be what the deploy left: closed, unregistered (above), UNLINKED (the batch's first call links it, set-once), governed by the timelock
         if (!(await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "depositsPaused"))) problems.push(`the new vault ${newVault} is not deposit-paused`);
-        if (!(await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]))) problems.push(`the timelock does not hold ADMIN_ROLE on the new vault ${newVault}: the batch's unpause would revert`);
-        if ((await rd<Address>(newVault, VAULT_REDEPLOY_ABI, "registry")).toLowerCase() !== a.registry.toLowerCase()) problems.push(`the new vault ${newVault} is not linked to the registry`);
+        if (!(await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]))) problems.push(`the timelock does not hold ADMIN_ROLE on the new vault ${newVault}: the batch's setRegistry and unpause would revert`);
+        const link = await rd<Address>(newVault, VAULT_REDEPLOY_ABI, "registry");
+        if (link.toLowerCase() !== ZERO) problems.push(link.toLowerCase() === a.registry.toLowerCase()
+          ? `the new vault ${newVault} is already linked to the registry: the batch's setRegistry would revert RegistryAlreadySet (the link was sent outside this row)`
+          : `the new vault ${newVault} is linked to ${link}, not the deployment's registry ${a.registry}: the link is set-once, so this vault cannot be used; redeploy`);
         if (problems.length > 0) throw new PublishError("GOVERN", `govern row ${REDEPLOY_ROW} cannot start from the state on chain: ${problems.join("; ")}. Nothing was scheduled.`, { row: REDEPLOY_ROW, problems });
         const v = planRedeployVectors({ defaultVaults: defVaults, defaultBps: defBps, oldVault, newVault });
         plan = { registry_name: meta.name, asset: meta.asset, vaults: v.finalVaults, bps: v.finalBps };
@@ -1033,7 +1182,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           oldEligible: await rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [oldVault]), newEligible: await rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [newVault]),
           eligibleCount: Number(await rd<bigint>(a.registry, REGISTRY_REDEPLOY_ABI, "routerEligibleCount")), votedWeightsActive,
           defaultVaults, defaultBps, effectiveVaults, effectiveBps,
-          newPaused: await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "depositsPaused"), oldRetiredFlag: await rd<boolean>(oldVault, VAULT_REDEPLOY_ABI, "retired"), oldHasCode: !!oldCode && oldCode !== "0x",
+          newPaused: await rd<boolean>(newVault, VAULT_REDEPLOY_ABI, "depositsPaused"), newLinked: (await rd<Address>(newVault, VAULT_REDEPLOY_ABI, "registry")).toLowerCase() === a.registry.toLowerCase(),
+          oldRetiredFlag: await rd<boolean>(oldVault, VAULT_REDEPLOY_ABI, "retired"), oldHasCode: !!oldCode && oldCode !== "0x",
         });
         if (bad.length === 0) (state[name] as { observed?: unknown }).observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number), old_status: STATUS_NAME[Number(oldStatus)], new_status: STATUS_NAME[Number(newStatus)] };
         return bad;
@@ -1057,7 +1207,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   }
 
   if (applying) {
-    // Issue 1696: ONE timelock batch, releaseReceipt + the router weight change. Never part of the matrix, on 8453 only when named with a receipt id and a payload.
+    // Issue 1696, issue 1698: ONE timelock call, RouterGovernance.applyReceipt (release + the router weight change in one transaction). Never part of the matrix, on 8453 only when named with a receipt id and a payload.
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32>`);
     if (o.payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE (the receipt payload, whose receipt digest, keccak256 of the domain line + the canonical bytes, is the digest the receipt stored)`);
     const receiptId = assertReceiptId(o.receiptId);
@@ -1087,23 +1237,23 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       const listed = await rd<Address[]>(a.registry, REGISTRY_ELIGIBLE_ABI, "listVaults");
       const eligible: Address[] = [];
       for (const v of listed) if (await rd<boolean>(a.registry, REGISTRY_ELIGIBLE_ABI, "isRouterEligible", [v])) eligible.push(v);
-      const votedWeightsActive = await rd<boolean>(a.router, ROUTER_WEIGHTS_ABI, "votedWeightsActive");
-      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined, votedWeightsActive });
-      const calls = buildApplyCalls(receipt, governance, receiptId, vec);
-      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      // Issue 1698: an active vector from an earlier receipt is no refusal. applyReceipt writes the ACTIVE vector, so this receipt replaces it; the default is untouched.
+      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
+      const payloadDigest = receiptPayloadDigest(payload); // planApply proved it equals the stored digest; the chain checks it again (ReceiptDigestMismatch)
+      const calls = buildApplyCalls(governance, receiptId, payloadDigest, vec);
+      // ONE call: `schedule`, never `scheduleBatch`. The form is part of the operation id, so a resume after the contract change cannot adopt a pre-1698 batch.
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "single" as const };
       const id = await api.operationId(handle, p);
       const prior = state[name]?.scheduled?.operation_id;
       if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: APPLY_ROW, receipt_id: receiptId, prior, id });
       const readBack = async () => {
-        const [defaultVaults, defaultBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getDefaultWeights");
         const [effectiveVaults, effectiveBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getEffectiveWeights");
-        const votedWeightsActive = await rd<boolean>(a.router, ROUTER_WEIGHTS_ABI, "votedWeightsActive");
-        const bad = applyReadBackProblems(receiptId, await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]), { defaultVaults, defaultBps, effectiveVaults, effectiveBps, votedWeightsActive }, vec);
+        const bad = applyReadBackProblems(receiptId, await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]), { effectiveVaults, effectiveBps }, vec);
         // the evidence records what the read-back saw, so a later change of the router never rewrites the entry
-        if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
+        if (bad.length === 0) state[name]!.observed = { effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
         return bad;
       };
-      state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: receiptPayloadDigest(payload) } };
+      state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: payloadDigest } };
       await round(name, {
         id, description: `apply receipt ${receiptId}`, readBack,
         schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
@@ -1132,9 +1282,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
     };
     const entry = {
-      step: APPLY_ROW, receipt_id: receiptId, target: receipt, governance, vaults: r.apply.vaults, bps: r.apply.bps, payload_digest: r.apply.payload_digest,
-      // issue 1743: the EFFECTIVE weights the read-back saw after the execute, and the voted flag (false)
-      voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
+      // issue 1698: the one call targets `governance`; `receipt` is the register it released the receipt on (read back as isReleased), and `payload_digest` is what the call named
+      step: APPLY_ROW, receipt_id: receiptId, governance, receipt, vaults: r.apply.vaults, bps: r.apply.bps, payload_digest: r.apply.payload_digest,
+      // issue 1743: the EFFECTIVE weights the read-back saw after the execute (the applied vector is the active one, so no voted flag is recorded)
+      effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     };
@@ -1207,43 +1358,84 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (selfAdminRow !== undefined) {
     const args = o.selfAdmin ?? {};
     const rd = reader(handle);
-    const owners = await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners");
-    const c = buildSelfAdminCall(selfAdminRow, a, args, owners);
-    // one row name can be used for many different changes: the calldata picks the record
-    const name = `${selfAdminRow}-${keccak256(c.data).slice(2, 10)}`;
-    if (rowComplete(state[name])) { reprint(name); save(); return { rows: [name], skipped: [], opIds }; }
-    if (SAFE_ADMIN_ROWS.includes(selfAdminRow as never)) {
+    const live: SafeRoster = { owners: await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners"), threshold: await rd<bigint>(a.safe, SAFE_ADMIN_ABI, "getThreshold") };
+    /** The records of this row that want the same change (`selfAdminWantKey`), newest Safe nonce first. */
+    const recordsOf = (wantKey: string) => Object.entries(state).filter(([k, r]) => k.startsWith(`${selfAdminRow}-`) && r.admin?.want === wantKey).sort(([, x], [, y]) => (y.admin?.nonce ?? 0) - (x.admin?.nonce ?? 0));
+    /** A change that already reads in effect with no record of it (another tool made it, or this tool crashed between the execute and the save): nothing to send. */
+    const skipInEffect = (wantKey: string, nonce: number, reason: string): GovernResult => {
+      const name = `${selfAdminRow}-${keccak256(toBytes(wantKey)).slice(2, 10)}-n${nonce}`;
+      state[name] = { admin: { nonce, want: wantKey }, skipped: { at: new Date().toISOString(), reason } };
+      save();
+      ctx.log.log("info", "govern.row_skipped", { row: name, reason });
+      return { rows: [name], skipped: [name], opIds };
+    };
+    if (isSafeAdminRow(selfAdminRow)) {
+      const want = parseSafeAdminArgs(selfAdminRow, args);
+      const wantKey = selfAdminWantKey(want);
+      const nonce = await handle.nonce();
+      // The read-back against the row's own arguments, BEFORE the send: a change already in effect is a rerun (reprint its record) or a skip (no record), never a second transaction.
+      const before = safeAdminEffect(want, live);
+      if (before.owner && before.threshold) {
+        const prior = recordsOf(wantKey)[0];
+        if (prior) { reprint(prior[0]); save(); return { rows: [prior[0]], skipped: [], opIds }; }
+        return skipInEffect(wantKey, nonce, `already in effect on chain: ${describeSafeAdminWant(want)} (no record of it in this run manifest)`);
+      }
+      if (before.owner && !before.threshold && "threshold" in want && want.row !== "safe-change-threshold") {
+        throw new PublishError("USAGE", `--row ${selfAdminRow}: the owner change is already in effect (${describeSafeAdminWant(want)}), only the threshold differs (${before.problems.join(", ")}). The Safe would revert the call: run --row safe-change-threshold --admin-arg threshold=${want.threshold} instead`, { row: selfAdminRow, problems: before.problems });
+      }
+      // The Safe's own rules (OwnerManager), checked before anything is proposed or signed: a call the Safe would revert is never sent.
+      const rule = safeRuleProblem(want, live, a.safe);
+      if (rule !== undefined) throw new PublishError("USAGE", `--row ${selfAdminRow} would be reverted by the Safe: ${rule}. Nothing was sent`, { row: selfAdminRow, problem: rule, owners: live.owners.length, threshold: live.threshold.toString() });
+      const c = buildSelfAdminCall(selfAdminRow, a, args, live.owners);
+      const name = selfAdminRecordKey(selfAdminRow, c.data, nonce);
       const bundle = await (api.proposeTx ?? proposeTx)(handle, { to: a.safe, data: c.data, action: selfAdminRow, description: c.label });
       const done = await signAndExecute(ctx, o, api, handle, bundle);
-      const after = { owners: await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners"), threshold: await rd<bigint>(a.safe, SAFE_ADMIN_ABI, "getThreshold") };
-      const want = decodeFunctionData({ abi: SAFE_ADMIN_ABI, data: c.data });
-      const has = (x: string) => after.owners.some((y) => y.toLowerCase() === x.toLowerCase());
-      const bad: string[] = [];
-      if (want.functionName === "addOwnerWithThreshold" && !has(want.args[0])) bad.push("the new owner is not an owner");
-      if (want.functionName === "removeOwner" && has(want.args[1])) bad.push("the removed owner is still an owner");
-      if (want.functionName === "swapOwner" && (has(want.args[1]) || !has(want.args[2]))) bad.push("the swap did not happen");
-      const wantThreshold = want.functionName === "addOwnerWithThreshold" || want.functionName === "changeThreshold" ? want.args[want.functionName === "changeThreshold" ? 0 : 1] : want.functionName === "removeOwner" ? want.args[2] : undefined;
-      if (wantThreshold !== undefined && after.threshold !== wantThreshold) bad.push(`getThreshold is ${after.threshold}, want ${wantThreshold}`);
+      const after: SafeRoster = { owners: await rd<Address[]>(a.safe, SAFE_ADMIN_ABI, "getOwners"), threshold: await rd<bigint>(a.safe, SAFE_ADMIN_ABI, "getThreshold") };
+      const bad = safeAdminEffect(want, after).problems;
       if (bad.length) throw new PublishError("GOVERN", `govern row ${selfAdminRow} read-back failed: ${bad.join(", ")}`, { bad });
       const ex: PhaseRecord = { at: new Date().toISOString(), ...note(done) };
-      state[name] = { executed: ex };
+      state[name] = { admin: { data: c.data, nonce, want: wantKey }, executed: ex };
       save();
+      ctx.log.log("info", "govern.sheet_update_needed", { row: selfAdminRow, owners: after.owners, threshold: after.threshold.toString(), hint: "update SAFE_OWNERS and SAFE_THRESHOLD in the sheet to these values (runbook section 9)" });
       emitPhase(o, selfAdminRow, "executed", ex);
-    } else {
-      const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
-      const id = await api.operationId(handle, p);
-      const decoded = decodeFunctionData({ abi: ROLE_ABI, data: c.data });
-      const [role, account] = decoded.args as [Hex, Address];
-      await round(name, {
-        id, description: c.label,
-        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${selfAdminRow}: ${c.label}` }),
-        execute: () => api.executeOnTimelock(handle, { ...p, description: `${selfAdminRow} execute` }),
-        readBack: async () => {
-          const has = await rd<boolean>(a.timelock, ROLE_ABI, "hasRole", [role, account]);
-          return has === (selfAdminRow === "timelock-grant-role") ? [] : [`timelock.hasRole(${role}, ${account}) is ${has}`];
-        },
-      }, selfAdminRow);
+      save();
+      return { rows: [name], skipped: [], opIds };
     }
+    const c = buildSelfAdminCall(selfAdminRow, a, args, live.owners);
+    const decoded = decodeFunctionData({ abi: ROLE_ABI, data: c.data });
+    const [role, account] = decoded.args as [Hex, Address];
+    const wantKey = selfAdminWantKey({ row: selfAdminRow, role, account });
+    const readBack = async () => {
+      const has = await rd<boolean>(a.timelock, ROLE_ABI, "hasRole", [role, account]);
+      return has === (selfAdminRow === "timelock-grant-role") ? [] : [`timelock.hasRole(${role}, ${account}) is ${has}`];
+    };
+    // A round scheduled by an earlier run and not yet executed resumes under its own key (the salt, so the operation id, is the key's).
+    const open = recordsOf(wantKey).find(([, r]) => !rowComplete(r));
+    let name: string;
+    if (open) name = open[0];
+    else {
+      const inEffect = (await readBack()).length === 0;
+      if (inEffect) {
+        const prior = recordsOf(wantKey)[0];
+        if (prior) { reprint(prior[0]); save(); return { rows: [prior[0]], skipped: [], opIds }; }
+        return skipInEffect(wantKey, await handle.nonce(), `already in effect on chain: ${c.label} (no record of it in this run manifest)`);
+      }
+      // The chain would refuse it too (ProposerFloorTimelock.LastProposerFloor), at execute, after a Safe transaction and a delay: refuse before anything is sent.
+      if (selfAdminRow === "timelock-revoke-role") await assertNotLastProposer(rd, a.timelock, role, account);
+      const nonce = await handle.nonce();
+      name = selfAdminRecordKey(selfAdminRow, c.data, nonce);
+      // saved before the schedule is sent: a crash between the send and the phase record still finds this key, so the resume adopts the operation (same salt) instead of scheduling a second one
+      state[name] = { admin: { data: c.data, nonce, want: wantKey } };
+      save();
+    }
+    const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
+    const id = await api.operationId(handle, p);
+    await round(name, {
+      id, description: c.label,
+      schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${selfAdminRow}: ${c.label}` }),
+      execute: () => api.executeOnTimelock(handle, { ...p, description: `${selfAdminRow} execute` }),
+      readBack,
+    }, selfAdminRow);
     save();
     return { rows: [name], skipped: [], opIds };
   }

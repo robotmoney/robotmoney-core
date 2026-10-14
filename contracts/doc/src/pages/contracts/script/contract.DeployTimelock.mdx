@@ -5,7 +5,7 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -37,6 +37,10 @@ hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
 CANCELLER_ROLE on the TimelockController, and no other account
 does: no single signer can propose or cancel (security-model §4).
+- The timelock is a ProposerFloorTimelock (issue #1645 question 1,
+CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
+delay or renounced in an instant Safe transaction. The Safe gives
+up the role only after a second proposer holds it.
 - EXECUTOR_ROLE is open: it is held by address(0), so any address
 can execute an operation whose delay has elapsed. One policy, no
 switch (core 1521).
@@ -75,6 +79,12 @@ committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 same rule). ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock.
+Issue #1698: the weight setter
+(GOVERNANCE_ADDRESS) also gets ADMIN_ROLE on
+it (its `releaseReceipt` gate) and is pointed
+at it with `setReceiptContract`, so
+`applyReceipt` releases and sets weights in
+one call.
 AGENT_ADDRESSES        — comma-separated gateway agents the deployer
 owns (issue #1476): the deploy agent the
 gateway stage authorizes (DeployGateway.s.sol).
@@ -180,7 +190,8 @@ bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 <i>
 
 security-model.md §4: production timelock delay floor, 48 hours. Enforced
-by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
+by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin
+plus the last-proposer floor (ProposerFloorTimelock).
 
 </i>
 

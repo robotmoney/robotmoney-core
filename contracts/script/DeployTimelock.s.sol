@@ -9,6 +9,7 @@ import {console2} from "forge-std/console2.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
@@ -44,12 +45,14 @@ interface IGatewayAgentOwnership {
 }
 
 /// @title DeployTimelock
-/// @dev Minimal read surface on RouterGovernance, so the manifest can record
-///      the quorum the topology actually landed on without importing the whole
-///      contract into this script.
-interface IRouterGovernanceQuorum {
-    function quorumThreshold() external view returns (uint256);
-    function MIN_QUORUM_THRESHOLD() external view returns (uint256);
+/// @dev Minimal surface on RouterGovernance (issue #1698): the receipt register
+///      the weight setter's `applyReceipt` releases from. The register is
+///      deployed after RouterGovernance (ic-policy stage), so this ceremony
+///      wires it, while the deployer still holds governance ADMIN_ROLE, and the
+///      manifest records what the topology actually landed on.
+interface IRouterGovernanceReceipt {
+    function setReceiptContract(address receipt_) external;
+    function receiptContract() external view returns (address);
 }
 
 /// @notice Deploy an OZ TimelockController and complete the privileged-role
@@ -80,6 +83,10 @@ interface IRouterGovernanceQuorum {
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
 ///           CANCELLER_ROLE on the TimelockController, and no other account
 ///           does: no single signer can propose or cancel (security-model §4).
+///         - The timelock is a ProposerFloorTimelock (issue #1645 question 1,
+///           CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
+///           delay or renounced in an instant Safe transaction. The Safe gives
+///           up the role only after a second proposer holds it.
 ///         - EXECUTOR_ROLE is open: it is held by address(0), so any address
 ///           can execute an operation whose delay has elapsed. One policy, no
 ///           switch (core 1521).
@@ -118,6 +125,12 @@ interface IRouterGovernanceQuorum {
 ///           CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 ///                                    same rule). ADMIN_ROLE +
 ///                                    DEFAULT_ADMIN_ROLE move to the timelock.
+///                                    Issue #1698: the weight setter
+///                                    (GOVERNANCE_ADDRESS) also gets ADMIN_ROLE on
+///                                    it (its `releaseReceipt` gate) and is pointed
+///                                    at it with `setReceiptContract`, so
+///                                    `applyReceipt` releases and sets weights in
+///                                    one call.
 ///           AGENT_ADDRESSES        — comma-separated gateway agents the deployer
 ///                                    owns (issue #1476): the deploy agent the
 ///                                    gateway stage authorizes (DeployGateway.s.sol).
@@ -159,7 +172,8 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
     /// @dev security-model.md §4: production timelock delay floor, 48 hours. Enforced
-    ///      by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
+    ///      by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin
+    ///      plus the last-proposer floor (ProposerFloorTimelock).
     uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
     /// @dev Issue 1727 (owner decision 2026-10-10): the delay floor of a rehearsal, an explicit mode selected by the env var DEPLOYMENT_KIND=rehearsal (the publish-contracts
     ///      sheet line of the same name). A rehearsal delay is 900 s up to 172799 s, on every chain, so the delay on chain always agrees with the kind. The default (variable
@@ -545,19 +559,28 @@ contract DeployTimelock is ExpectedChainGuard {
     }
 
     function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {
-        // 1. Deploy TimelockController.
+        // 1. Deploy the timelock: ProposerFloorTimelock, an OZ TimelockController
+        //    whose _revokeRole refuses to drop the last PROPOSER_ROLE holder
+        //    (revokeRole and renounceRole both; issue #1645 question 1, CS-3).
         //    proposers = [safe], executors = [address(0)], admin = address(0)
         //    OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
         //    proposer and canceller. address(0) as executor opens EXECUTOR_ROLE
         //    to any caller once the delay has elapsed (security-model §4; core 1521).
         //    admin = address(0) means the timelock is self-administered
-        //    (the safe can change delay/roles only through the timelock).
+        //    (the safe can change delay/roles only through the timelock). With the
+        //    floor, the Safe can give up PROPOSER_ROLE only after another proposer
+        //    holds it, so the governed contracts can never lose every proposer.
         address[] memory proposers = new address[](1);
         proposers[0] = d.safe;
         address[] memory executors = new address[](1);
         executors[0] = address(0);
 
-        timelock = new TimelockController(d.minDelay, proposers, executors, address(0));
+        ProposerFloorTimelock floored =
+            new ProposerFloorTimelock(d.minDelay, proposers, executors, address(0));
+        // The floor counted the one proposer the constructor granted. A count of 1 is
+        // what makes the Safe's own PROPOSER_ROLE irrevocable until a second proposer exists.
+        require(floored.proposerCount() == 1, "Timelock proposer floor did not count the Safe");
+        timelock = floored;
 
         // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is
         // permissionless (anyone may `commitAuthorization`/`revealAuthorization`),
@@ -706,23 +729,23 @@ contract DeployTimelock is ExpectedChainGuard {
         // conditions must BOTH hold when it finishes, and neither is implied
         // by the other:
         //
-        //   (a) RouterGovernance holds the role, or the approving body can
-        //       approve and cannot act — every proposal that reaches quorum
-        //       reverts inside `execute()`;
+        //   (a) RouterGovernance holds the role, or the weight setter cannot
+        //       act — every receipt the Safe schedules reverts inside
+        //       `applyReceipt()`;
         //   (b) the deployer EOA does NOT hold it, or a single key can move
-        //       weights directly and the whole propose/vote/delay path is
-        //       decorative.
+        //       weights directly and the whole Safe -> timelock -> applyReceipt
+        //       path is decorative.
         //
         // Before the grant is asserted, because a governance contract that
         // cannot act is a broken deployment, not a safer one.
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
-            "R7: RouterGovernance lacks router ADMIN_ROLE - execute() cannot reach setWeights"
+            "R7: RouterGovernance lacks router ADMIN_ROLE - setDefaultWeights() cannot reach the router"
         );
 
         require(
             IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, d.governance),
-            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - execute() cannot reach setWeights"
+            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - applyReceipt() cannot reach setWeights"
         );
         // Defence in depth: DeployRouterGovernance already drops the deployer's
         // WEIGHT_SETTER_ROLE. Drop it here too, while the deployer still holds
@@ -791,6 +814,19 @@ contract DeployTimelock is ExpectedChainGuard {
         );
 
         // RouterGovernance
+        //
+        // Issue #1698: point the weight setter at the receipt register first,
+        // while the deployer still holds governance ADMIN_ROLE. The register is
+        // deployed after RouterGovernance (ic-policy stage), so this is the one
+        // place both addresses are known before the handover. The matching
+        // ADMIN_ROLE grant on the register itself is in the receipt block below.
+        if (d.consensusReceipt != address(0)) {
+            IRouterGovernanceReceipt(d.governance).setReceiptContract(d.consensusReceipt);
+            require(
+                IRouterGovernanceReceipt(d.governance).receiptContract() == d.consensusReceipt,
+                "RouterGovernance receipt register not set - applyReceipt() would refuse"
+            );
+        }
         IAccessControl(d.governance).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(timelock)),
@@ -847,6 +883,16 @@ contract DeployTimelock is ExpectedChainGuard {
             require(
                 IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, address(timelock)),
                 "Timelock missing ADMIN_ROLE on consensus receipt"
+            );
+            // Issue #1698: the weight setter releases a receipt inside
+            // `applyReceipt`, so it needs the register's ADMIN_ROLE (the
+            // `releaseReceipt` gate). ADMIN_ROLE's admin on the register is
+            // DEFAULT_ADMIN_ROLE, which the weight setter does not get: it can
+            // release, never grant.
+            IAccessControl(d.consensusReceipt).grantRole(ADMIN_ROLE, d.governance);
+            require(
+                IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance),
+                "RouterGovernance missing ADMIN_ROLE on consensus receipt - applyReceipt() cannot release"
             );
             IAccessControl(d.consensusReceipt).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
             require(
@@ -909,7 +955,9 @@ contract DeployTimelock is ExpectedChainGuard {
     }
 
     function _logResult(Deployed memory d) internal pure {
-        console2.log("TimelockController deployed and ADMIN_ROLE transferred on all five contracts");
+        console2.log(
+            "ProposerFloorTimelock (TimelockController with the last-proposer floor) deployed and ADMIN_ROLE transferred on all five contracts"
+        );
         console2.log("  timelock    :", address(d.timelock));
         console2.log("  safe        :", d.safe);
         console2.log("  emergency   :", d.emergency);
@@ -959,13 +1007,10 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeString(obj, "deployment_kind", d.rehearsal ? "rehearsal" : "production");
-        vm.serializeUint(
-            obj, "quorum_threshold", IRouterGovernanceQuorum(d.governance).quorumThreshold()
-        );
-        vm.serializeUint(
-            obj,
-            "min_quorum_threshold",
-            IRouterGovernanceQuorum(d.governance).MIN_QUORUM_THRESHOLD()
+        // Issue #1698: the receipt register the weight setter applies from, as
+        // the chain reads it back (zero when the ceremony ran without one).
+        vm.serializeAddress(
+            obj, "governance_receipt", IRouterGovernanceReceipt(d.governance).receiptContract()
         );
         // Kept flat as well as inside `addresses`: existing readers (the
         // smoke-test fixture, the explorer env writer) index this file by these
@@ -1114,6 +1159,14 @@ contract DeployTimelock is ExpectedChainGuard {
             roles,
             "timelock_has_governance_admin_role",
             IAccessControl(d.governance).hasRole(ADMIN_ROLE, address(d.timelock))
+        );
+        // Issue #1698: the weight setter can release the receipt it applies.
+        // False when the ceremony ran without a receipt register.
+        vm.serializeBool(
+            roles,
+            "governance_has_receipt_admin_role",
+            d.consensusReceipt != address(0)
+                && IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance)
         );
         // Aggregates over every vault; the per-vault rows are in `vault_handover`.
         // Computed in helpers so this function stays inside the non-viaIR stack

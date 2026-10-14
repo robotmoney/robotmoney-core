@@ -14,13 +14,15 @@ Severity reflects both impact and prerequisites. Findings 1 and 2 require an adm
 
 **Post-baseline remediation:** core issue 1788 (merged as PR 1814, `d5c6a2e1`) changed `RobotMoneyVault` after this baseline. Deposits now close while any active adapter is ineligible, keeper `rebalance()` skips ineligible adapters, and it reverts while deposits are paused or the vault is shut down. This closes the window-deposit and keeper-recovery paths of finding 1 and the mechanism of finding 6. The affected review tests now assert the remediated behavior. Findings 1 and 6 below describe the baseline.
 
+Core issue 1790 (PR 1818) changed `RobotMoneyGateway.committeeVoteSubmit` after this baseline: it now reverts `CommitteeAgentNotCaller` when `p.agent != msg.sender`, so a gateway agent can no longer file a signal under another member's address. The finding 3 reproductions were flipped to assert the refusal. The indexer's latest-per-member aggregation changed under the same issue. Finding 3 below describes the baseline.
+
 ## Review conclusions
 
 | # | Finding | Severity / disposition | Required conditions | Evidence |
 |---|---|---|---|---|
 | 1 | Deposits remain open while funded adapter value is excluded from NAV | Medium | ADMIN excludes value before deposits pause; value subsequently returns to NAV | Reproduced at baseline; window-deposit and keeper paths remediated by 1788 |
 | 2 | Duplicate strategy adapter registration overpays early redeemers | Medium | ADMIN registers an already-active adapter again | Reproduced value extraction |
-| 3 | A gateway agent can attribute a committee signal to another member | Low under advisory-only use | An allowlisted committee member exists; attacker self-registers at the gateway | On-chain spoofing reproduced; aggregation inspected in source |
+| 3 | A gateway agent can attribute a committee signal to another member | Low under advisory-only use | An allowlisted committee member exists; attacker self-registers at the gateway | On-chain spoofing reproduced at baseline; gateway identity guard remediated by 1790; aggregation inspected in source |
 | 4 | One voter meets quorum under example deployment values | Imminent retirement; no separate fix | Voting retained and used with quorum 2 and voter power 1000 | Reproduced on reviewed bytecode; removal accepted |
 | 5 | Emergency force removal reprices exits before recoverable value is settled | Medium; authority decision tracked | EMERGENCY removes a funded adapter | Reproduced |
 | 6 | Keeper rebalance can reverse an emergency withdrawal | Info if keeper role is unheld; Medium if granted | A keeper can call after the rebalance interval | Reproduced at baseline; remediated by 1788 |
@@ -74,9 +76,9 @@ Both duplicate entries reject ordinary removal while the shared adapter balance 
 
 Permissionless gateway registration is intended. It grants a depositor-tier `AGENT_ROLE`, not committee authority. However, `committeeVoteSubmit` forwards caller-controlled `p.agent`; the policy checks that supplied address's committee role without binding it to the caller.
 
-**Reproduction:** A self-registered gateway agent submits under an existing committee member's address. The record names that member, and a later spoof becomes that member's `latestVoteByAgent`. See `test_permissionlessAgentCanImpersonateCommitteeMember` and `test_spoofedVoteSupersedesMembersLatestVote`.
+**Reproduction:** A self-registered gateway agent submits under an existing committee member's address. The record names that member, and a later spoof becomes that member's `latestVoteByAgent`. Originally reproduced at baseline. After 1790, `test_selfRevealedAgentCannotImpersonateCommitteeMember` and `test_spoofedVoteCannotSupersedeMembersLatestVote` assert that the gateway reverts `CommitteeAgentNotCaller`, the vote log stays empty, and the member's own latest vote is unchanged. `test_selfRevealedAgentCannotVoteUnderOwnAddress` asserts the IC contract refuses the same agent under its own address (`AgentNotAllowlisted`), so the permissionless gateway tier has no route into the vote log.
 
-The indexer copies the event's agent address and verifies a rationale body against its supplied hash (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220, 2612-2646`). Its aggregation averages all verified votes without latest-per-agent deduplication or a committee-membership join (`services/explorer-indexer/src/db.rs:1979-1983`; `clients/explorer-api/src/routes.rs:1720-1727`). This permits repeated attacker-authored records to bias the public aggregate if their rationale bodies verify. `test_spoofedVotesFloodUnderMemberName` proves repeated on-chain submissions only; HTTP verification, database ingestion and dashboard rendering were not tested end to end. Repeated legitimate member submissions can also bias this aggregate after caller authentication is fixed.
+The indexer copies the event's agent address and verifies a rationale body against its supplied hash (`services/explorer-indexer/src/indexer.rs:2179, 2203-2220, 2612-2646`). Its aggregation averages all verified votes without latest-per-agent deduplication or a committee-membership join (`services/explorer-indexer/src/db.rs:1979-1983`; `clients/explorer-api/src/routes.rs:1720-1727`). This permits repeated attacker-authored records to bias the public aggregate if their rationale bodies verify. At baseline the flood test proved repeated on-chain submissions only; after 1790, `test_spoofedVoteFloodRevertsUnderMemberName` asserts every repeated submission reverts and leaves the vote log empty. HTTP verification, database ingestion and dashboard rendering were not tested end to end. Repeated legitimate member submissions can also bias this aggregate after caller authentication is fixed.
 
 **Severity and boundary:** Low under the owner's advisory-only committee-signal model and imminent governance-voting retirement. Receipt anchoring passes the real `msg.sender` and checks committee membership; receipt release is ADMIN-gated. `test_selfRegisteredAgentCannotAnchorReceipt` confirms that the spoofing path cannot anchor a receipt. This finding does not demonstrate unauthorized router-weight changes. Reassess severity if a consumer uses the affected feed as an authoritative allocation or receipt input.
 
@@ -182,10 +184,10 @@ Next actions are to assign remediation owners for finding 1's remaining exit-ent
 
 ## Verification
 
-All commands run from the review worktree. Tests assert current behavior, including vulnerabilities; passing tests do not mean the defects are fixed. Tests for paths remediated by 1788 assert the fixed behavior.
+All commands run from the review worktree. Tests assert current behavior, including vulnerabilities; passing tests do not mean the defects are fixed. Tests for paths remediated by 1788 and 1790 assert the fixed behavior.
 
-- `forge test --match-path 'contracts/test/SecurityReview*Poc.t.sol' --match-test 'test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption|test_revokedAdapterWindowDepositBlocked|test_permissionlessAgentCanImpersonateCommitteeMember' -vv` — 3 passed.
-- `forge test --match-path 'contracts/test/SecurityReviewRecheck*.t.sol' --match-test 'test_f1|test_f2|test_O|test_spoofed|test_selfRegistered|test_permissionlessReveal|test_singleVoter' -vv` — 22 passed.
+- `forge test --match-path 'contracts/test/SecurityReview*Poc.t.sol' --match-test 'test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption|test_revokedAdapterWindowDepositBlocked|test_selfRevealedAgentCannotImpersonateCommitteeMember' -vv` — 3 passed.
+- `forge test --match-path 'contracts/test/SecurityReviewRecheck*.t.sol' --match-test 'test_f1|test_f2|test_O|test_spoofed|test_selfRegistered|test_selfRevealed|test_permissionlessReveal|test_singleVoter' -vv` — 23 passed.
 - `forge test --match-path contracts/test/SecurityReviewRevisionAssessment.t.sol --match-test test_assessment -vv` — 3 passed: policy squatting does not inherently prevent committee participation; the pre-1788 orphan redistribution sequence is now blocked; transient V4 samples persist without another record.
 - `forge test --match-path contracts/test/RobotMoneyVault.t.sol --match-test test_ADP2_revokedAdapterExcludedFromNavAndPulls -vv` — 1 passed; the existing regression asserts the reduced payout during exclusion.
 

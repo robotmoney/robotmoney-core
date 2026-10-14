@@ -345,7 +345,7 @@ contract DeployAssertionsTest is SafeFixture {
             new RobotMoneyGateway(usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0));
         _aclRegistry = new VaultRegistry(_aclDeployer);
         _aclRouter = new PortfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
-        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer, 7 days, 1 days, 2);
+        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer);
         // R7: DeployRouterGovernance grants this at deploy time and
         // DeployTimelock asserts it before handing over. Without it the
         // handover refuses — correctly, because the approving body would be

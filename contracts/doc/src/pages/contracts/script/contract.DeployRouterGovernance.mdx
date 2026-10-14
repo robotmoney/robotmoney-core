@@ -1,49 +1,50 @@
 ---
 title: "DeployRouterGovernance"
-description: "Foundry deploy script for the RouterGovernance contract. Deploys RouterGovernance with the deployer as ADMIN_ROLE and writes a deployment JSON readable by the smoke-test fixture."
+description: "Foundry deploy script for the RouterGovernance contract, the router's weight setter. Deploys RouterGovernance with the deployer as ADMIN_ROLE and writes a deployment JSON readable by the smoke-test fixture."
 ---
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
 **Title:** DeployRouterGovernance
 
-Foundry deploy script for the RouterGovernance contract.
-Deploys RouterGovernance with the deployer as ADMIN_ROLE and
-writes a deployment JSON readable by the smoke-test fixture.
+Foundry deploy script for the RouterGovernance contract, the
+router's weight setter. Deploys RouterGovernance with the deployer as
+ADMIN_ROLE and writes a deployment JSON readable by the smoke-test
+fixture.
 
 The smoke-test devnet startup sequence runs this script after
-DeployPortfolioRouter so that the dapp's Governance tab reads
+DeployPortfolioRouter so that the dapp's allocation surface reads
 live on-chain data in CI.
 
 It also grants the freshly deployed RouterGovernance `ADMIN_ROLE`
-on the PortfolioRouter. Without that grant the approving body can
-approve and cannot act: a proposal reaches quorum, clears its
-execution delay, and then `execute()` reverts inside
+and `WEIGHT_SETTER_ROLE` on the PortfolioRouter, and drops the
+deployer's `WEIGHT_SETTER_ROLE`. Without the grants the weight
+setter cannot act: `applyReceipt` reverts inside
 `router.setWeights`, leaving the deployer EOA as the only address
 that can move allocation weights — the exact inversion
 project-fusion.md §4.3 names as the governance-topology gap. The
 caller must therefore hold `ADMIN_ROLE` on the router, which the
 deployer does until `DeployTimelock` hands it to the timelock.
 
+There is no voting (issue #1698): no voter list, voting power,
+quorum, voting period or execution delay is read or set. The
+receipt register the weight setter releases from
+(`ConsensusRecommendationReceipt`) is deployed later, in the
+ic-policy stage, so stage 11 (`DeployTimelock`) wires it with
+`RouterGovernance.setReceiptContract` and grants the weight setter
+`ADMIN_ROLE` on it, before handing ADMIN_ROLE here to the timelock.
+
 Required env vars:
 ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ROUTER_ADDRESS     — deployed PortfolioRouter address
-
-Also required (unset or malformed reverts, there is no default):
-VOTING_PERIOD      — voting period in seconds
-EXECUTION_DELAY    — delay from voting end to execution in seconds
-(at least the contract's MIN_EXECUTION_DELAY)
-QUORUM_THRESHOLD   — minimum FOR voting power for quorum (greater than 1)
-VOTER_ADDRESSES    — comma list of the voters; each gets VOTER_POWER (issue 1520: set by the deployer, before the timelock handover)
-VOTER_POWER        — voting power of each voter, above 0
 EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
 DEPLOYMENT_OUT     — path for the output JSON (required, no default)
 
-The router ADMIN_ROLE grant always runs: no flag skips it.
+The router role grants always run: no flag skips them.
 
 ## Constants
 
@@ -76,22 +77,18 @@ function run() external returns (Deployed memory d);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` | Struct containing the deployed governance and key parameters. |
+| d | `Deployed` | Struct containing the deployed governance and the router. |
 
-<a id="runinprocesswith-address-address-uint64-uint64-uint256"></a>
+<a id="runinprocesswith-address-address"></a>
 
 ### runInProcessWith
 
 In-process variant for forge tests. No broadcast, no JSON written.
 
 ```solidity
-function runInProcessWith(
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_
-    ) external returns (Deployed memory d);
+function runInProcessWith(address admin_, address router_)
+        external
+        returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -100,65 +97,21 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | admin_ | `address` | Address to receive ADMIN_ROLE. |
 | router_ | `address` | Deployed PortfolioRouter address. |
-| votingPeriod_ | `uint64` | Voting period in seconds. |
-| executionDelay_ | `uint64` | Delay from voting end to execution in seconds. |
-| quorumThreshold_ | `uint256` | Minimum FOR voting power for quorum. |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| d | `Deployed` | Struct containing the deployed governance and key parameters. |
+| d | `Deployed` | Struct containing the deployed governance and the router. |
 
-<a id="runinprocesswithvoters-address-address-uint64-uint64-uint256-address-uint256"></a>
-
-### runInProcessWithVoters
-
-In-process variant that also sets the voting power of every voter, as `run()` does. No broadcast, no JSON written.
-
-```solidity
-function runInProcessWithVoters(
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_,
-        address[] calldata voters_,
-        uint256 power_
-    ) external returns (Deployed memory d);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| admin_ | `address` |  |
-| router_ | `address` |  |
-| votingPeriod_ | `uint64` |  |
-| executionDelay_ | `uint64` |  |
-| quorumThreshold_ | `uint256` |  |
-| voters_ | `address[]` | Voters, each given `power_`. |
-| power_ | `uint256` | Voting power of each voter. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-
-<a id="_deploy-address-address-address-uint64-uint64-uint256"></a>
+<a id="_deploy-address-address-address"></a>
 
 ### _deploy
 
 ```solidity
-function _deploy(
-        address granter_,
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_
-    ) internal returns (Deployed memory d);
+function _deploy(address granter_, address admin_, address router_)
+        internal
+        returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -168,64 +121,12 @@ function _deploy(
 | granter_ | `address` |  |
 | admin_ | `address` |  |
 | router_ | `address` |  |
-| votingPeriod_ | `uint64` |  |
-| executionDelay_ | `uint64` |  |
-| quorumThreshold_ | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
-
-<a id="_setvotingpower-deployed-address-uint256"></a>
-
-### _setVotingPower
-
-<i>
-
-Voting power is deploy-time configuration: the deployer holds ADMIN_ROLE on the governance contract it just deployed, so it sets
-the power of every voter here, before DeployTimelock hands ADMIN_ROLE away. Each value is read back.
-
-</i>
-
-```solidity
-function _setVotingPower(Deployed memory d, address[] memory voters, uint256 power) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| d | `Deployed` |  |
-| voters | `address[]` |  |
-| power | `uint256` |  |
-
-<a id="_envvotersrequired-string"></a>
-
-### _envVotersRequired
-
-<i>
-
-A required comma list of non-zero addresses, no repeat.
-
-</i>
-
-```solidity
-function _envVotersRequired(string memory key) internal view returns (address[] memory voters);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| key | `string` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| voters | `address[]` |  |
 
 <a id="_grantrouteradmin-deployed-address"></a>
 
@@ -234,10 +135,10 @@ function _envVotersRequired(string memory key) internal view returns (address[] 
 <i>
 
 Give the governance contract the router `ADMIN_ROLE` its
-`execute()` needs, then read the role back. The read-back is the
-point: a silent failure here produces a deployment that looks
-complete, passes every liveness check, and only fails days later
-when the first real proposal tries to land its weights.
+`setDefaultWeights` and `clearVotedWeights` need, then read the role
+back. The read-back is the point: a silent failure here produces a
+deployment that looks complete, passes every liveness check, and
+only fails days later when the first receipt is applied.
 
 </i>
 
@@ -314,9 +215,6 @@ struct Deployed {
         RouterGovernance governance;
         PortfolioRouter router;
         address admin;
-        uint64 votingPeriod;
-        uint64 executionDelay;
-        uint256 quorumThreshold;
     }
 ```
 
@@ -327,7 +225,4 @@ struct Deployed {
 | governance | `RouterGovernance` |  |
 | router | `PortfolioRouter` |  |
 | admin | `address` |  |
-| votingPeriod | `uint64` |  |
-| executionDelay | `uint64` |  |
-| quorumThreshold | `uint256` |  |
 

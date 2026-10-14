@@ -1586,6 +1586,59 @@ contract PortfolioRouterTest is SafeGovernance {
         router.setDefaultWeights(vaults, bps);
     }
 
+    /// @notice HR-L-9 / CS-5 (issue #1698): a duplicate default `[A, A]` passes the
+    ///         `length == routerEligibleCount` check while leaving vault B out. It
+    ///         is refused by name, and the default stays untouched.
+    function test_setDefaultWeights_rejectsDuplicateVault() public {
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultA);
+        bps[0] = 5_000;
+        bps[1] = 5_000;
+        assertEq(registry.routerEligibleCount(), 2, "precondition: the length check passes");
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.DuplicateVault.selector, address(vaultA))
+        );
+        router.setDefaultWeights(vaults, bps);
+        assertEq(router.defaultWeightsLength(), 0, "no default written");
+    }
+
+    /// @notice The applied (voted) vector refuses a duplicate vault too: a digest
+    ///         binds a vector but does not prove it is unique (issue #1698).
+    function test_setWeights_rejectsDuplicateVault() public {
+        address[] memory vaults = new address[](3);
+        uint256[] memory bps = new uint256[](3);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        vaults[2] = address(vaultB);
+        bps[0] = 2_000;
+        bps[1] = 4_000;
+        bps[2] = 4_000;
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.DuplicateVault.selector, address(vaultB))
+        );
+        router.setWeights(vaults, bps);
+        assertFalse(router.votedWeightsActive(), "no vector written");
+    }
+
+    /// @notice The duplicate check does not refuse a distinct full-length vector.
+    function test_setDefaultWeights_acceptsDistinctVaults() public {
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultB);
+        vaults[1] = address(vaultA);
+        bps[0] = 1_000;
+        bps[1] = 9_000;
+        vm.prank(admin);
+        router.setDefaultWeights(vaults, bps);
+        (address[] memory got,) = router.getDefaultWeights();
+        assertEq(got[0], address(vaultB));
+        assertEq(got[1], address(vaultA));
+    }
+
     // ─── redeemFor: authorization guards (issue #751) ──────────────────────────
 
     /// @notice An unauthorized caller cannot redeemFor — the confused-deputy

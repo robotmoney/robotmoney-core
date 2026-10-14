@@ -15,8 +15,8 @@ export function parseSheetJson(text: string): VerifySheet {
     if (v.seed !== undefined) v.seed = BigInt(v.seed);
     v.assets ??= [];
   }
-  const g = j.governance;
-  if (g) for (const k of ["voterPower", "quorum", "votingPeriod", "executionDelay"]) g[k] = BigInt(g[k]);
+  // issue 1698: a `governance` block (voters, quorum, periods) in an older sheet JSON is ignored, the weight setter has no voting surface to compare it with
+  delete j.governance;
   return j as VerifySheet;
 }
 

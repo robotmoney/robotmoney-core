@@ -4,7 +4,7 @@ title: "FvInvariantsTest"
 
 # FvInvariantsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:** Test
 
@@ -279,17 +279,20 @@ the whole router deposit (NC-4).
 function test_RTR5_previewMatchesExecute() public;
 ```
 
-<a id="test_gov4_proposalcannotselfdosrouter"></a>
+<a id="test_gov4_appliedvectorcannotselfdosrouter"></a>
 
-### test_GOV4_proposalCannotSelfDosRouter
+### test_GOV4_appliedVectorCannotSelfDosRouter
 
-GOV-4 (F-05/RTR-4) — a governance proposal that would render router
-deposits non-executable can never be executed. propose() rejects a
-weight vector containing a Paused/Retired vault up front, so a
-self-DoS proposal never enters the voting pipeline.
+GOV-4 (F-05/RTR-4) — an applied weight vector that would render router
+deposits non-executable can never be written. The weight setter
+(RouterGovernance, holder of WEIGHT_SETTER_ROLE) reaches the router
+only through `setWeights`, which rejects a vector containing a
+Paused/Retired vault, so a self-DoS vector never lands (issue #1698
+deleted the propose-time pre-check along with voting; the router's
+own guard is the one that holds).
 
 ```solidity
-function test_GOV4_proposalCannotSelfDosRouter() public;
+function test_GOV4_appliedVectorCannotSelfDosRouter() public;
 ```
 
 <a id="_deployrouterstack"></a>

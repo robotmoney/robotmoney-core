@@ -1,63 +1,51 @@
 ---
 title: "GovernanceSeparationInvariant"
-description: "Verifies the §3.4 decision that the committee and the RouterGovernance voter set are separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy and non-zero voting power on `RouterGovernance`."
+description: "Verifies the §3.4 decision that the committee and the weight setter are separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy and any weight-setting authority: `WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on the PortfolioRouter, or `ADMIN_ROLE` on RouterGovernance (the timelock's seat, from which `applyReceipt` is reached)."
 ---
 
 # GovernanceSeparationInvariant
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/GovernanceSeparationInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/GovernanceSeparationInvariant.t.sol)
 
 **Inherits:** Test
 
 **Title:** GovernanceSeparationInvariant
 
-Verifies the §3.4 decision that the committee and the
-RouterGovernance voter set are separate bodies: no address may
-hold both `COMMITTEE_AGENT_ROLE` on the InvestmentCommitteePolicy
-and non-zero voting power on `RouterGovernance`.
+Verifies the §3.4 decision that the committee and the weight setter
+are separate bodies: no address may hold both `COMMITTEE_AGENT_ROLE`
+on the InvestmentCommitteePolicy and any weight-setting authority:
+`WEIGHT_SETTER_ROLE` or `ADMIN_ROLE` on the PortfolioRouter, or
+`ADMIN_ROLE` on RouterGovernance (the timelock's seat, from which
+`applyReceipt` is reached).
 
 The two bodies are separately administered (committee agents are
-allowlisted through the IC policy's `COMMITTEE_AGENT_ROLE`;
-governance voters are given power by `ADMIN_ROLE` via
-`RouterGovernance.setVotingPower`). There is deliberately no
-on-chain link between them — INV-4's signalling-only boundary
-(`docs/prd.md` §12) is a *control*, not a label, precisely because
-the parties that recommend and the parties that approve never
-overlap. The invariant asserted here is a deployment-level
-invariant over that live state.
+allowlisted through the IC policy's `COMMITTEE_AGENT_ROLE`; the
+weight setter's admin is granted by `ADMIN_ROLE` on
+`RouterGovernance`). There is deliberately no on-chain link between
+them — INV-4's signalling-only boundary (`docs/prd.md` §12) is a
+*control*, not a label, precisely because the parties that recommend
+and the party that applies never overlap. The invariant asserted
+here is a deployment-level invariant over that live state.
 
 It is a security-model change (requiring a new ADR against INV-4)
-to grant a committee agent voting power or to grant a voter the
-COMMITTEE_AGENT_ROLE, so this test fails loudly if that overlap
-ever appears in the configured topology. It also pins that the
-approving body's quorum reflects a real (&lt; total voter power)
-threshold rather than the MVP default of one, resolving the §3.4
-open concern.
+to grant a committee agent any weight-setting authority or to grant
+the weight setter's admin the COMMITTEE_AGENT_ROLE, so this test
+fails loudly if that overlap ever appears in the configured topology.
+There is no voter set and no quorum (issue #1698): the only
+threshold in the path is the Safe's signer threshold.
 
 ## Constants
 
-### VOTER_POWER
+### ADMIN_ROLE
 
 ```solidity
-uint256 internal constant VOTER_POWER = 100e18;
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 ```
 
-### VOTING_PERIOD
+### WEIGHT_SETTER_ROLE
 
 ```solidity
-uint64 internal constant VOTING_PERIOD = 1 days;
-```
-
-### EXECUTION_DELAY
-
-```solidity
-uint64 internal constant EXECUTION_DELAY = 1 days;
-```
-
-### QUORUM_THRESHOLD
-
-```solidity
-uint256 internal constant QUORUM_THRESHOLD = 250e18;
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ## State Variables
@@ -86,22 +74,10 @@ address internal committeeRobotMoney = makeAddr("committee-robotmoney");
 address internal committeeWoon = makeAddr("committee-woon");
 ```
 
-### voter1
+### timelock
 
 ```solidity
-address internal voter1 = makeAddr("gov-voter-1");
-```
-
-### voter2
-
-```solidity
-address internal voter2 = makeAddr("gov-voter-2");
-```
-
-### voter3
-
-```solidity
-address internal voter3 = makeAddr("gov-voter-3");
+address internal timelock = makeAddr("timelock");
 ```
 
 ### intruder
@@ -114,6 +90,12 @@ address internal intruder = makeAddr("intruder");
 
 ```solidity
 InvestmentCommitteePolicy internal ic;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
 ```
 
 ### gov
@@ -132,21 +114,25 @@ RouterGovernance internal gov;
 function setUp() public;
 ```
 
-<a id="_separationholds"></a>
+<a id="_setsweights-address"></a>
 
-### _separationHolds
+### _setsWeights
 
 <i>
 
-True iff no address holds both COMMITTEE_AGENT_ROLE and non-zero
-RouterGovernance voting power. Written as a predicate so the whole
-topology can be swept in one place.
+True iff `account` holds any weight-setting authority.
 
 </i>
 
 ```solidity
-function _separationHolds() internal view returns (bool);
+function _setsWeights(address account) internal view returns (bool);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
 
 **Returns**
 
@@ -160,7 +146,7 @@ function _separationHolds() internal view returns (bool);
 
 <i>
 
-True iff `account` has COMMITTEE_AGENT_ROLE AND non-zero power.
+True iff `account` has COMMITTEE_AGENT_ROLE AND weight-setting authority.
 
 </i>
 
@@ -181,36 +167,54 @@ function _overlap(bytes32 committeeRole, address account) internal view returns 
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
-<a id="test_committeeagentshavenovotingpower"></a>
+<a id="_separationholds"></a>
 
-### test_committeeAgentsHaveNoVotingPower
+### _separationHolds
 
-The configured committee agents hold COMMITTEE_AGENT_ROLE but
-have ZERO voting power.
+<i>
+
+True iff no address holds both. Written as a predicate so the whole
+topology can be swept in one place.
+
+</i>
 
 ```solidity
-function test_committeeAgentsHaveNoVotingPower() public view;
+function _separationHolds() internal view returns (bool);
 ```
 
-<a id="test_votersarenotcommitteeagents"></a>
+**Returns**
 
-### test_votersAreNotCommitteeAgents
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
-The configured governance voters hold non-zero power but do NOT
-hold COMMITTEE_AGENT_ROLE.
+<a id="test_committeeagentssetnoweights"></a>
+
+### test_committeeAgentsSetNoWeights
+
+The configured committee agents hold COMMITTEE_AGENT_ROLE but
+NO weight-setting authority.
 
 ```solidity
-function test_votersAreNotCommitteeAgents() public view;
+function test_committeeAgentsSetNoWeights() public view;
+```
+
+<a id="test_weightsettersarenotcommitteeagents"></a>
+
+### test_weightSettersAreNotCommitteeAgents
+
+The weight setter and its admin (the timelock) hold weight
+authority but do NOT hold COMMITTEE_AGENT_ROLE.
+
+```solidity
+function test_weightSettersAreNotCommitteeAgents() public view;
 ```
 
 <a id="test_committeeholdersarerecognisedbypolicy"></a>
 
 ### test_committeeHoldersAreRecognisedByPolicy
 
-No committee agent holds COMMITTEE_AGENT_ROLE. It is a
-security-model change (new ADR against INV-4) for a committee
-agent to hold voting power, so the mutually-exclusive membership
-is asserted directly.
+The configured committee agents are recognised by the policy.
 
 ```solidity
 function test_committeeHoldersAreRecognisedByPolicy() public view;
@@ -226,42 +230,50 @@ The full configured topology satisfies the separation invariant.
 function test_separationInvariantHolds() public view;
 ```
 
-<a id="test_invariantflagscommitteeagentwithvotingpower"></a>
+<a id="test_deployerholdsnoweightauthority"></a>
 
-### test_invariantFlagsCommitteeAgentWithVotingPower
+### test_deployerHoldsNoWeightAuthority
 
-A committee agent who receives voting power (a security-model
-change needing an ADR against INV-4) is flagged by the
-invariant. This asserts the predicate catches the overlap it is
-supposed to prevent; it mutates only the test's own live state,
-never the shipped topology.
+The deployer kept nothing: the only weight authorities are the
+weight setter (router roles) and the timelock (its ADMIN_ROLE).
 
 ```solidity
-function test_invariantFlagsCommitteeAgentWithVotingPower() public;
+function test_deployerHoldsNoWeightAuthority() public view;
 ```
 
-<a id="test_invariantflagsvotergivencommitteerole"></a>
+<a id="test_invariantflagscommitteeagentgivenweightsetteradmin"></a>
 
-### test_invariantFlagsVoterGivenCommitteeRole
+### test_invariantFlagsCommitteeAgentGivenWeightSetterAdmin
 
-A voter who is additionally granted COMMITTEE_AGENT_ROLE (a
+A committee agent who receives the weight setter's ADMIN_ROLE (a
+security-model change needing an ADR against INV-4) is flagged by
+the invariant. This asserts the predicate catches the overlap it
+is supposed to prevent; it mutates only the test's own live
+state, never the shipped topology.
+
+```solidity
+function test_invariantFlagsCommitteeAgentGivenWeightSetterAdmin() public;
+```
+
+<a id="test_invariantflagscommitteeagentgivenweightsetterrole"></a>
+
+### test_invariantFlagsCommitteeAgentGivenWeightSetterRole
+
+A committee agent who receives the router's WEIGHT_SETTER_ROLE is
+flagged too (the role is self-administered: only a holder grants it).
+
+```solidity
+function test_invariantFlagsCommitteeAgentGivenWeightSetterRole() public;
+```
+
+<a id="test_invariantflagsweightsetteradmingivencommitteerole"></a>
+
+### test_invariantFlagsWeightSetterAdminGivenCommitteeRole
+
+The timelock seat additionally granted COMMITTEE_AGENT_ROLE (a
 security-model change) is flagged by the invariant.
 
 ```solidity
-function test_invariantFlagsVoterGivenCommitteeRole() public;
-```
-
-<a id="test_quorumreflectsthevoterset"></a>
-
-### test_quorumReflectsTheVoterSet
-
-The approving body's quorum is a meaningful fraction of the
-voter set, not the single-voter MVP default of 1 — resolving the
-§3.4 open concern ("the approving body's quorum is currently
-1"). One voter with any nonzero power can no longer carry a
-weight proposal.
-
-```solidity
-function test_quorumReflectsTheVoterSet() public view;
+function test_invariantFlagsWeightSetterAdminGivenCommitteeRole() public;
 ```
 

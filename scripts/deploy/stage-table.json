@@ -112,11 +112,6 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "ROUTER_ADDRESS",
-        "QUORUM_THRESHOLD",
-        "VOTING_PERIOD",
-        "EXECUTION_DELAY",
-        "VOTER_ADDRESSES",
-        "VOTER_POWER",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -268,7 +263,7 @@
   ],
   "govern": {
     "stage": 13,
-    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY are constructor arguments of today's RouterGovernance bytecode, not governance: there is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696), never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. The governance stage deploys the weight setter (RouterGovernance) with no voting surface (issue 1698): there is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696), one RouterGovernance.applyReceipt call through the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
     "mainnetRows": [
       "unpause-USDC",
       "unpause-PROTO",
@@ -303,7 +298,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/protocol-asset-vault.json",
-      "manifestNotes": "Single-vault redeploy into a live deployment (issue 1796), run by the redeploy-vault verb only: no frozen count, no stage. The script deploys the vault closed and unregistered, links the registry and hands ADMIN_ROLE to the timelock and EMERGENCY_ROLE to the emergency key. The Safe registers it, moves router eligibility and retires the old vault through the timelock (govern row redeploy-vault).",
+      "manifestNotes": "Single-vault redeploy into a live deployment (issue 1796), run by the redeploy-vault verb only: no frozen count, no stage. The script deploys the vault closed, unregistered and unlinked, and hands ADMIN_ROLE to the timelock and EMERGENCY_ROLE to the emergency key. The Safe links the registry (set-once, the timelock's ADMIN_ROLE), registers it, moves router eligibility and retires the old vault through the timelock in one batch (govern row redeploy-vault). No vault deploy script links the registry (core S5).",
       "libraries": [
         "tick_math"
       ],
@@ -370,7 +365,7 @@
     "router": "PortfolioRouter",
     "registry": "VaultRegistry",
     "governance": "RouterGovernance",
-    "timelock": "TimelockController",
+    "timelock": "ProposerFloorTimelock",
     "icPolicy": "InvestmentCommitteePolicy",
     "receipt": "ConsensusRecommendationReceipt",
     "recorder": "UniswapV4PriceRecorder",

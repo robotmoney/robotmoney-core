@@ -4,17 +4,27 @@ title: "SecurityReviewCommitteePoc"
 
 # SecurityReviewCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/SecurityReviewCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
 ## Functions
 
-<a id="test_permissionlessagentcanimpersonatecommitteemember"></a>
+<a id="test_selfrevealedagentcannotimpersonatecommitteemember"></a>
 
-### test_permissionlessAgentCanImpersonateCommitteeMember
+### test_selfRevealedAgentCannotImpersonateCommitteeMember
+
+<i>
+
+Issue #1790: a gateway agent that self-registered through the
+permissionless commit/reveal path (AGENT_ROLE, no
+COMMITTEE_AGENT_ROLE) cannot submit a vote carrying the allowlisted
+committeeAgent's address in calldata. The gateway refuses before
+the IC contract sees the vote, so nothing is recorded.
+
+</i>
 
 ```solidity
-function test_permissionlessAgentCanImpersonateCommitteeMember() public;
+function test_selfRevealedAgentCannotImpersonateCommitteeMember() public;
 ```
 

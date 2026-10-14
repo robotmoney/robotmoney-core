@@ -8,6 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
 import { PublishError, isPublishError } from "./errors.ts";
 import { PLAINTEXT_ENV, isMainnet } from "./floors.ts";
+import { actionsProofReason, proofLogFields, type ActionsProof } from "./actions-proof.ts";
 import type { DeploymentKind } from "./chains.ts";
 import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
 import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
@@ -106,9 +107,9 @@ export interface RunManifest {
   firstBlock?: number;
   stages: Record<string, StageRecord>;
   govern?: Record<string, unknown>;
-  /** One entry per executed `govern --row apply-receipt` round (issue 1696): the evidence-check `receipt_applications` shape. */
+  /** One entry per executed `govern --row apply-receipt` round (issue 1696, issue 1698: one applyReceipt call): the evidence-check `receipt_applications` shape. */
   receipt_applications?: unknown[];
-  /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
+  /** One entry per executed `govern --row clear-voted-weights` round (issue 1743): the active (applied receipt) vector dropped, routing back on the default. */
   voted_weights_clears?: unknown[];
   /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
   vault_redeploys?: RedeployRecord[];
@@ -278,6 +279,8 @@ export interface RunContext {
   /** Typed confirmation. Returns what the operator typed. Throws REFUSED when no human can answer. */
   prompt?: (question: string) => Promise<string>;
   githubActions: boolean;
+  /** qa-plan B2 (DT-3): the verified GitHub OIDC token of this job, when CONFIRM=environment on 8453 (actions-proof.ts). Undefined: no proof, so no environment confirmation on 8453. */
+  actionsProof?: ActionsProof;
   /** Process environment, filtered before it reaches a child. */
   baseEnv: Record<string, string | undefined>;
   /** Injected for tests. Defaults to the real Safe tool. */
@@ -456,7 +459,13 @@ export async function deployerNonce(ctx: RunContext, who: string): Promise<numbe
 export async function confirmStage(ctx: RunContext, stage: string, summary: string): Promise<void> {
   if (ctx.caller.confirm === "environment") {
     if (!ctx.githubActions) throw new PublishError("REFUSED", "CONFIRM=environment is valid only inside GitHub Actions, behind an Environment with required reviewers");
-    ctx.log.log("info", "confirm.environment", { stage, environment: ctx.environment });
+    // qa-plan B2 (DT-3): on 8453 the Actions flag is not the proof. The verified OIDC token for this Environment is, and it is checked again
+    // here, at every broadcast, so a context built without one (or for another Environment) never confirms a stage on 8453.
+    if (isMainnet(ctx.chainId)) {
+      const why = actionsProofReason({ githubActions: ctx.githubActions, env: ctx.baseEnv, environment: ctx.environment, proof: ctx.actionsProof });
+      if (why) throw new PublishError("FLOOR", `${why} (stage ${stage} on chain ${ctx.chainId}; nothing was sent)`, { stage, chainId: ctx.chainId });
+    }
+    ctx.log.log("info", "confirm.environment", { stage, environment: ctx.environment, ...(ctx.actionsProof ? { proof: proofLogFields(ctx.actionsProof) } : {}) });
     return;
   }
   if (ctx.caller.yes) {

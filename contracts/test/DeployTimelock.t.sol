@@ -11,6 +11,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
@@ -151,13 +152,7 @@ contract DeployTimelockTest is SafeGovernance {
         );
         registry = new VaultRegistry(address(script));
         router = new PortfolioRouter(address(usdc), address(registry), address(script));
-        governance = new RouterGovernance(
-            address(router),
-            address(script),
-            7 days, // votingPeriod
-            1 days, // executionDelay
-            2 // quorumThreshold — RouterGovernance.MIN_QUORUM_THRESHOLD (D16)
-        );
+        governance = new RouterGovernance(address(router), address(script));
         // R7: DeployTimelock now refuses a handover that would leave the
         // approving body unable to act, so the fixture must reflect what
         // DeployRouterGovernance does at deploy time — grant governance
@@ -399,6 +394,81 @@ contract DeployTimelockTest is SafeGovernance {
         );
         d.timelock.cancel(bytes32(uint256(1)));
         vm.stopPrank();
+    }
+
+    // ─── Issue #1645 question 1 / CS-3: the last proposer floor ───────────────
+
+    /// @notice The deployed timelock is a ProposerFloorTimelock. With the Safe as the only
+    ///         proposer, `revokeRole(PROPOSER_ROLE, safe)` scheduled through the delay is refused
+    ///         at execute with `LastProposerFloor`, and the Safe's instant `renounceRole` is
+    ///         refused the same way, so the governed contracts can never lose every proposer.
+    ///         After a second proposer is granted through the delay the Safe's role can go, and
+    ///         the floor then protects the remaining holder. Every Safe step is a real
+    ///         two-signature execTransaction; the exact inner reason is read on the open
+    ///         executor path and through the Safe's own simulateAndRevert.
+    function test_lastProposerCannotBeRevokedOrRenounced() public {
+        ProposerFloorTimelock tl = ProposerFloorTimelock(payable(address(d.timelock)));
+        bytes32 proposer = tl.PROPOSER_ROLE();
+        assertEq(tl.proposerCount(), 1, "the Safe is the only proposer after the handover");
+
+        // 1. revokeRole through the delay: the Safe schedules it, execute is refused.
+        bytes memory revokeSafe = abi.encodeCall(IAccessControl.revokeRole, (proposer, safe));
+        bytes32 salt = keccak256("last-proposer-revoke");
+        _govSchedule(safe, d.timelock, address(d.timelock), revokeSafe, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        // EXECUTOR_ROLE is open, so the exact inner reason shows on a direct execute...
+        vm.expectRevert(ProposerFloorTimelock.LastProposerFloor.selector);
+        d.timelock.execute(address(d.timelock), 0, revokeSafe, bytes32(0), salt);
+        // ...and the Safe's own execute is refused with GS013 (the Safe hides the inner error).
+        bytes memory exec = abi.encodeCall(
+            d.timelock.execute, (address(d.timelock), 0, revokeSafe, bytes32(0), salt)
+        );
+        bytes memory sigs = _twoOwnerSignatures(_safeDigest(safe, address(d.timelock), exec));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe, address(d.timelock), exec, sigs);
+        assertTrue(tl.hasRole(proposer, safe), "the Safe lost PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "proposer count changed on a refused revoke");
+
+        // 2. renounceRole: an instant Safe transaction, refused by the contract.
+        bytes memory renounce = abi.encodeCall(IAccessControl.renounceRole, (proposer, safe));
+        _assertSafeCallReverts(
+            safe,
+            address(d.timelock),
+            renounce,
+            abi.encodeWithSelector(ProposerFloorTimelock.LastProposerFloor.selector)
+        );
+        sigs = _twoOwnerSignatures(_safeDigest(safe, address(d.timelock), renounce));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(safe, address(d.timelock), renounce, sigs);
+        assertTrue(tl.hasRole(proposer, safe), "the Safe renounced PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "proposer count changed on a refused renounce");
+
+        // 3. A second proposer first: then the Safe's role goes through the delay, and the
+        //    floor moves to the remaining holder.
+        _govRun(
+            safe,
+            d.timelock,
+            address(d.timelock),
+            abi.encodeCall(IAccessControl.grantRole, (proposer, newAdmin)),
+            keccak256("second-proposer-grant"),
+            MIN_DELAY
+        );
+        assertEq(tl.proposerCount(), 2, "second proposer not counted");
+        _govRun(
+            safe,
+            d.timelock,
+            address(d.timelock),
+            revokeSafe,
+            keccak256("safe-revoke-with-second-proposer"),
+            MIN_DELAY
+        );
+        assertFalse(tl.hasRole(proposer, safe), "the Safe still holds PROPOSER_ROLE");
+        assertEq(tl.proposerCount(), 1, "the remaining proposer is not counted");
+        // The remaining proposer is an EOA here, so its own renounce is a plain call.
+        vm.expectRevert(ProposerFloorTimelock.LastProposerFloor.selector);
+        vm.prank(newAdmin);
+        tl.renounceRole(proposer, newAdmin);
+        assertTrue(tl.hasRole(proposer, newAdmin), "the last proposer renounced");
     }
 
     // ─── AC3: Direct ADMIN_ROLE call from Safe EOA reverts ────────────────────
@@ -1074,7 +1144,7 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         gateway = new RobotMoneyGateway(usdc, vault, deployer, makeAddr("floor-pauser"), address(0));
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1206,8 +1276,7 @@ contract DeployTimelockManifestTest is SafeGovernance {
             new RobotMoneyGateway(usdc, vault, deployer, makeAddr("manifest-pauser"), address(0));
         VaultRegistry registry = new VaultRegistry(deployer);
         PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        RouterGovernance governance =
-            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        RouterGovernance governance = new RouterGovernance(address(router), deployer);
 
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
@@ -1301,9 +1370,14 @@ contract DeployTimelockManifestTest is SafeGovernance {
         assertFalse(vm.contains(src, setter), "a test sets the shared DEPLOYMENT_OUT variable");
     }
 
-    function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view {
-        assertEq(manifest.readUint(".min_quorum_threshold"), 2);
-        assertGt(manifest.readUint(".quorum_threshold"), 1);
+    /// @notice Issue #1698: the manifest records the receipt register the weight
+    ///         setter applies from. This fixture runs the ceremony without a
+    ///         register, so both the address and the release-role row read
+    ///         empty; the wired case is DeployTimelockCommittee.t.sol.
+    function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view {
+        assertEq(manifest.readAddress(".governance_receipt"), address(0));
+        assertFalse(manifest.readBool(".roles.governance_has_receipt_admin_role"));
+        assertTrue(manifest.readBool(".roles.timelock_has_governance_admin_role"));
     }
 
     /// @notice A run with no listed agent records a listed count of zero, so
@@ -1380,7 +1454,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
 
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1507,8 +1581,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
             new RobotMoneyGateway(usdc2, vault2, deployer2, makeAddr("pauser2"), address(0));
         VaultRegistry registry2 = new VaultRegistry(deployer2);
         PortfolioRouter router2 = new PortfolioRouter(address(usdc2), address(registry2), deployer2);
-        RouterGovernance governance2 =
-            new RouterGovernance(address(router2), deployer2, 7 days, 1 days, 2);
+        RouterGovernance governance2 = new RouterGovernance(address(router2), deployer2);
         vm.prank(deployer2);
         router2.grantRole(ADMIN_ROLE, address(governance2));
         vm.prank(deployer2);
@@ -1643,8 +1716,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         VaultRegistry registry_ = new VaultRegistry(deployer_);
         PortfolioRouter router_ =
             new PortfolioRouter(address(dep_.usdc), address(registry_), deployer_);
-        RouterGovernance governance_ =
-            new RouterGovernance(address(router_), deployer_, 7 days, 1 days, 2);
+        RouterGovernance governance_ = new RouterGovernance(address(router_), deployer_);
         vm.prank(deployer_);
         router_.grantRole(ADMIN_ROLE, address(governance_));
         vm.prank(deployer_);
@@ -1862,8 +1934,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
 
         VaultRegistry registry = new VaultRegistry(deployer);
         PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        RouterGovernance governance =
-            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        RouterGovernance governance = new RouterGovernance(address(router), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -2252,7 +2323,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0));
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);

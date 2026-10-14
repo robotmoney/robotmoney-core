@@ -103,7 +103,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         // hands every router role to address(script) and drops its own, which leaves the
         // router exactly as a script-built one.
         router = new PortfolioRouter(address(usdc), address(registry), address(this));
-        governance = new RouterGovernance(address(router), address(script), 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), address(script));
         // R7: mirror DeployRouterGovernance's router ADMIN_ROLE grant, which
         // DeployTimelock now asserts before completing the handover.
         router.grantRole(keccak256("ADMIN_ROLE"), address(governance));
@@ -227,6 +227,26 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         );
     }
 
+    /// @notice Issue #1698: the ceremony points the weight setter at the receipt
+    ///         register and gives it the register's ADMIN_ROLE, so one
+    ///         `applyReceipt` call can release a receipt and set the weights.
+    function test_governance_isWiredToTheReceiptRegisterByTheCeremony() public {
+        ConsensusRecommendationReceipt receipts = _deployReceiptAndRun(address(this), address(0));
+        assertEq(
+            address(governance.receiptContract()),
+            address(receipts),
+            "weight setter does not point at the receipt register"
+        );
+        assertTrue(
+            receipts.hasRole(ADMIN_ROLE, address(governance)),
+            "weight setter cannot release receipts: applyReceipt would revert"
+        );
+        assertFalse(
+            receipts.hasRole(DEFAULT_ADMIN_ROLE, address(governance)),
+            "weight setter must release, never administer, the register"
+        );
+    }
+
     function test_deployer_noLongerHasRolesOnReceipt() public {
         ConsensusRecommendationReceipt receipts = _deployReceiptAndRun(address(this), address(0));
         assertFalse(
@@ -274,9 +294,23 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         ConsensusRecommendationReceipt receipts = _deployReceiptAndRun(address(script), address(0));
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
+        // Issue #1698: the receipt's ADMIN_ROLE (its `releaseReceipt` gate) is held by
+        // exactly the timelock and the weight setter, whose `applyReceipt` releases
+        // inside the same call that sets the weights. Nobody else.
         address[] memory receiptAdmins = RoleHolders.holders(logs, address(receipts), ADMIN_ROLE);
-        assertEq(receiptAdmins.length, 1, "receipt: exactly one ADMIN_ROLE holder");
-        assertEq(receiptAdmins[0], address(d.timelock), "receipt: the timelock is the only admin");
+        assertEq(receiptAdmins.length, 2, "receipt: the timelock and the weight setter only");
+        assertTrue(
+            (receiptAdmins[0] == address(d.timelock) && receiptAdmins[1] == address(governance))
+                || (receiptAdmins[1] == address(d.timelock)
+                    && receiptAdmins[0] == address(governance)),
+            "receipt: holders are the timelock and the weight setter"
+        );
+        address[] memory receiptRoots =
+            RoleHolders.holders(logs, address(receipts), DEFAULT_ADMIN_ROLE);
+        assertEq(receiptRoots.length, 1, "receipt: exactly one DEFAULT_ADMIN_ROLE holder");
+        assertEq(
+            receiptRoots[0], address(d.timelock), "receipt: the timelock is the only root admin"
+        );
 
         // The IC policy keeps the gateway's separate, intentional ADMIN_ROLE (architecture.md
         // §4.9): the holders are exactly the timelock and the gateway, nobody else.

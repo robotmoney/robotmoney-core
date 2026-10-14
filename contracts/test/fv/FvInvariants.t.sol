@@ -564,43 +564,51 @@ contract FvInvariantsTest is Test {
         router.deposit(amount, new uint256[](0));
     }
 
-    /// @notice GOV-4 (F-05/RTR-4) — a governance proposal that would render router
-    ///         deposits non-executable can never be executed. propose() rejects a
-    ///         weight vector containing a Paused/Retired vault up front, so a
-    ///         self-DoS proposal never enters the voting pipeline.
-    function test_GOV4_proposalCannotSelfDosRouter() public {
+    /// @notice GOV-4 (F-05/RTR-4) — an applied weight vector that would render router
+    ///         deposits non-executable can never be written. The weight setter
+    ///         (RouterGovernance, holder of WEIGHT_SETTER_ROLE) reaches the router
+    ///         only through `setWeights`, which rejects a vector containing a
+    ///         Paused/Retired vault, so a self-DoS vector never lands (issue #1698
+    ///         deleted the propose-time pre-check along with voting; the router's
+    ///         own guard is the one that holds).
+    function test_GOV4_appliedVectorCannotSelfDosRouter() public {
         (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vault) =
             _deployRouterStack();
 
-        // Stand up governance and hand it ADMIN_ROLE on the router so propose →
-        // execute → setWeights is the only weight-setting path.
-        RouterGovernance gov =
-            new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 2);
+        // Stand up the weight setter and hand it the router roles so
+        // applyReceipt → setWeights is the only weight-setting path.
+        RouterGovernance gov = new RouterGovernance(address(router), address(this));
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
+        router.revokeRole(router.WEIGHT_SETTER_ROLE(), address(this));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);
         vaults[0] = address(vault);
         bps[0] = 10_000;
 
-        // While Active, propose succeeds.
-        uint256 pid = gov.propose(vaults, bps);
-        assertGt(pid, 0, "proposal created while Active");
-        gov.cancel(pid);
+        // While Active, the weight setter's vector lands.
+        vm.prank(address(gov));
+        router.setWeights(vaults, bps);
+        assertTrue(router.votedWeightsActive(), "vector written while Active");
 
-        // Pause the vault: a proposal that would route deposits to it must be
-        // rejected at propose() time (GOV-4) — it can never become executable.
+        // Pause the vault: a vector that would route deposits to it is rejected by
+        // the router (GOV-4) — the weight setter cannot write it.
         registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
         assertFalse(
             router.isRouterEligibleAndActive(address(vault)),
             "eligible but not Active means not routable"
         );
+        vm.prank(address(gov));
         vm.expectRevert(
-            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vault))
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vault),
+                VaultRegistry.VaultStatus.DepositsPaused
+            )
         );
-        gov.propose(vaults, bps);
+        router.setWeights(vaults, bps);
 
         // Silence unused-var warnings.
         usdc;

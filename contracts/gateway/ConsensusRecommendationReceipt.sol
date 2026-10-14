@@ -56,7 +56,10 @@ contract ConsensusRecommendationReceipt is
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
-    /// @notice Releases receipts. Held by the `TimelockController` (INV-3).
+    /// @notice Releases receipts. Held by the `TimelockController` (INV-3) and,
+    ///         since issue #1698, by the weight setter (`RouterGovernance`),
+    ///         whose `applyReceipt` releases a receipt and writes its weights
+    ///         in one transaction. Stage 11 grants both.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /// @notice Mirror of `InvestmentCommitteePolicy.COMMITTEE_AGENT_ROLE`. This
@@ -215,7 +218,9 @@ contract ConsensusRecommendationReceipt is
     //
     // This contract has NO treasury-spend function, NO router-weight setter, NO
     // `receive` and NO `fallback`. It holds no ERC-20 balance and cannot call
-    // `RouterGovernance.execute()`, `PortfolioRouter.setWeights()` or
-    // `RobotMoneyGateway.deposit()`. Verified by
+    // `RouterGovernance.applyReceipt()`, `PortfolioRouter.setWeights()` or
+    // `RobotMoneyGateway.deposit()`. The weight setter calls `releaseReceipt`
+    // on this contract inside `applyReceipt` (issue #1698); this contract never
+    // calls back. Verified by
     // ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary.
 }

@@ -1,9 +1,14 @@
-// The govern row `apply-receipt` (issue 1696): the Safe, through the timelock, applies one consensus receipt as ONE batch.
+// The govern row `apply-receipt` (issue 1696, issue 1698): the Safe, through the timelock, applies one consensus receipt as ONE timelock call.
 // The Safe multisig through the timelock is the only body that changes Robot Money contract configuration, router weights included. There is no vote.
-// The batch is releaseReceipt(receiptId) on the ConsensusRecommendationReceipt and the router weight change for the receipt's vector (on today's bytecode
-// RouterGovernance.setDefaultWeights(vaults, bps), the ADMIN call the timelock holds). Release and weights are one operation: partial state is impossible.
-// When the contract issue lands the weight-setter applyReceipt call replaces the weights call, and `buildApplyCalls` is the only function that changes.
-// This module is pure: it reads no chain and sends nothing. govern.ts reads the chain, calls `planApply` and sends the batch.
+// The call is RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) (ADMIN_ROLE, held by the timelock): the weight setter releases the receipt
+// on the ConsensusRecommendationReceipt and writes the receipt's vector to the router (PortfolioRouter.setWeights) in the same transaction. Release and weights
+// are one call on one contract: a released receipt whose weights were not applied, or applied weights whose receipt is unreleased, cannot exist
+// (governance-decisions.md 3.2). The chain checks the receipt is recorded and unreleased and that the digest the call names is the digest the register stored
+// (ReceiptDigestMismatch); the vector-to-payload equality is checked HERE before anything is scheduled, and attested by the Safe signatures over the calldata.
+// The applied vector is the router's ACTIVE vector: `getEffectiveWeights()` reads it and `votedWeightsActive()` reads true (the storage keeps its pre-1698 name for
+// ABI stability). The DEFAULT vector (`setDefaultWeights`) stays the fallback and is not touched by an application. A later receipt replaces the active vector;
+// the clear row (clear-voted-weights.ts) drops it so routing falls back to the default.
+// This module is pure: it reads no chain and sends nothing. govern.ts reads the chain, calls `planApply` and sends the call.
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { PublishError } from "./errors.ts";
@@ -11,13 +16,14 @@ import type { VaultKey } from "./sheet.ts";
 
 export const APPLY_ROW = "apply-receipt";
 
-/** Receipt payload bucket to basket vault. The same table as rmpc governance draft-proposal (clients/rust-payment-client governance_draft.rs). */
+/** Receipt payload bucket to basket vault. The same table as the committee payload schema (schemas/consensus-receipt). */
 export const BUCKET_VAULT: Readonly<Record<string, VaultKey>> = {
   conservative_defi_yield: "USDC", protocol_tokens: "PROTO", agent_tokens: "AGENT", real_world_assets: "RWA",
 };
 
-export const GOVERNANCE_WEIGHTS_ABI = parseAbi(["function setDefaultWeights(address[] vaults, uint256[] bps)"]);
-/** The router reads govern needs: the DEFAULT vector, the EFFECTIVE vector deposits route by, and whether a voted vector overrides the default (issue 1743). */
+/** The one call of an application (issue 1698): the weight setter releases the receipt and sets the router weights. */
+export const GOVERNANCE_APPLY_ABI = parseAbi(["function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
+/** The router reads govern needs: the DEFAULT vector (the fallback), the EFFECTIVE vector deposits route by, and whether an applied vector is active over the default. */
 export const ROUTER_WEIGHTS_ABI = parseAbi([
   "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)",
   "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)",
@@ -30,7 +36,6 @@ export const REGISTRY_ELIGIBLE_ABI = parseAbi([
 export const RECEIPT_RECORD_ABI = parseAbi([
   "function getReceiptById(bytes32 receiptId) view returns ((bytes32 receiptId, bytes32 payloadDigest, string payloadUri, address submitter, uint64 recordedAt, uint64 releasedAt, bool released))",
 ]);
-const RELEASE_ABI = parseAbi(["function releaseReceipt(bytes32 receiptId)"]);
 
 export const BPS_TOTAL = 10_000;
 
@@ -54,8 +59,6 @@ export interface ApplyInputs {
   vaultOf: Readonly<Record<VaultKey, Address>>;
   /** When an operation of this round is already on the timelock the receipt-state checks (recorded, not released) are not repeated: the round is in flight. */
   inFlight?: boolean;
-  /** router.votedWeightsActive(). While true the router routes by the voted vector, so a default-weights change (this batch) would not change routing at all. */
-  votedWeightsActive: boolean;
 }
 
 const usage = (message: string, details: Record<string, unknown> = {}): never => { throw new PublishError("USAGE", message, details); };
@@ -92,11 +95,9 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
 /**
  * Pre-send validation. Throws USAGE (nothing was sent) unless: the receipt is recorded, its stored digest equals the receipt digest (receipt-digest.ts) of the payload bytes, the
  * vector sums to 10000 bps and lists exactly the registry's router-eligible vaults (it is arranged in registry order), and the receipt is not yet released.
+ * An applied vector already active on the router is no refusal (issue 1698): `applyReceipt` writes the ACTIVE vector, so the new receipt replaces it.
  */
 export function planApply(i: ApplyInputs): WeightVector {
-  // Issue 1743: apply-receipt writes the DEFAULT vector. A voted vector on top of it makes the whole batch a no-op for routing, so refuse before anything is sent,
-  // in flight or not (a vote that activated after the schedule is caught before the execute). The clear row removes the voted vector first.
-  if (i.votedWeightsActive) throw new PublishError("GOVERN", `VOTED_WEIGHTS_ACTIVE: router.votedWeightsActive() is true, so the router routes by the voted vector and setDefaultWeights would not change routing. Nothing was sent. Run the clear row first: bun publish-contracts/src/cli.ts govern --row clear-voted-weights (a Safe -> Timelock round), then apply the receipt`, { error: "VOTED_WEIGHTS_ACTIVE", receipt_id: i.receiptId });
   if (!i.inFlight) {
     if (!i.recorded) usage(`receipt ${i.receiptId} is not recorded on the receipt contract: nothing to apply`, { receipt_id: i.receiptId });
     if (i.released) usage(`receipt ${i.receiptId} is already released: nothing to apply`, { receipt_id: i.receiptId });
@@ -118,32 +119,35 @@ export function planApply(i: ApplyInputs): WeightVector {
 
 export interface ApplyCall { label: string; target: Address; data: Hex }
 
-/** The two calls of the one batch, in order: release, then the weight change. The only function that changes when the weight-setter applyReceipt lands. */
-export function buildApplyCalls(receipt: Address, governance: Address, receiptId: Hex, v: WeightVector): ApplyCall[] {
+/** The calldata of `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`: the one call of an application. evidence-check rebuilds it from the evidence entry. */
+export const applyCalldata = (receiptId: Hex | string, payloadDigest: Hex | string, vaults: readonly string[], bps: readonly (bigint | number)[]): Hex =>
+  encodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, functionName: "applyReceipt", args: [receiptId as Hex, payloadDigest as Hex, vaults as Address[], bps.map(BigInt)] });
+
+/**
+ * The ONE call of an application (issue 1698): `governance.applyReceipt(receiptId, payloadDigest, vaults, bps)`. The list has exactly one entry: the row schedules it
+ * with `schedule`, never `scheduleBatch`. `payloadDigest` is the receipt digest of the payload bytes, which planApply proved equal to the stored one; the chain checks it again.
+ */
+export function buildApplyCalls(governance: Address, receiptId: Hex, payloadDigest: Hex, v: WeightVector): ApplyCall[] {
   return [
-    { label: `receipt.releaseReceipt(${receiptId})`, target: receipt, data: encodeFunctionData({ abi: RELEASE_ABI, functionName: "releaseReceipt", args: [receiptId] }) },
-    { label: `governance.setDefaultWeights([${v.vaults.join(",")}],[${v.bps.join(",")}])`, target: governance, data: encodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, functionName: "setDefaultWeights", args: [v.vaults, v.bps.map(BigInt)] }) },
+    { label: `governance.applyReceipt(${receiptId}, ${payloadDigest}, [${v.vaults.join(",")}], [${v.bps.join(",")}])`, target: governance, data: applyCalldata(receiptId, payloadDigest, v.vaults, v.bps) },
   ];
 }
 
 /** The vector as the `addr:bps` string the read-backs compare. Addresses are lower-cased. */
 export const vectorKey = (vaults: readonly string[], bps: readonly (bigint | number)[]): string => vaults.map((a, k) => `${lc(a)}:${bps[k]}`).join(",");
 
-/** What the router reads back after the batch executed. */
-export interface RouterReadBack { defaultVaults: readonly string[]; defaultBps: readonly bigint[]; effectiveVaults: readonly string[]; effectiveBps: readonly bigint[]; votedWeightsActive: boolean }
+/** What the router reads back after the call executed: the EFFECTIVE vector, what deposits route by. */
+export interface RouterReadBack { effectiveVaults: readonly string[]; effectiveBps: readonly bigint[] }
 
 /**
- * Read-back problems: the receipt must read released, the router's default weights must equal the vector, no voted vector may override it and the EFFECTIVE weights
- * (what deposits route by, issue 1743) must equal the vector too. An empty list is a pass.
+ * Read-back problems: the receipt must read released and the router's EFFECTIVE weights (`getEffectiveWeights()`, what deposits route by, issue 1743) must equal
+ * the applied vector. The default vector is not read: an application does not touch it. An empty list is a pass.
  */
 export function applyReadBackProblems(receiptId: Hex, released: boolean, r: RouterReadBack, v: WeightVector): string[] {
   const bad: string[] = [];
   if (!released) bad.push(`receipt.isReleased(${receiptId}) is false`);
   const want = vectorKey(v.vaults, v.bps);
-  const gotDefault = vectorKey(r.defaultVaults, r.defaultBps);
-  if (gotDefault !== want) bad.push(`router.getDefaultWeights() is [${gotDefault}], want [${want}]`);
-  if (r.votedWeightsActive) bad.push("router.votedWeightsActive() is true: the voted vector overrides the default, so routing did not change");
   const gotEffective = vectorKey(r.effectiveVaults, r.effectiveBps);
-  if (gotEffective !== want) bad.push(`router.getEffectiveWeights() is [${gotEffective}], want [${want}]`);
+  if (gotEffective !== want) bad.push(`router.getEffectiveWeights() is [${gotEffective}], want [${want}]: the applied vector is not what deposits route by`);
   return bad;
 }

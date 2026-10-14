@@ -14,6 +14,7 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
@@ -23,10 +24,11 @@ import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
-///         InvestmentCommitteePolicy, adapter admin, role revoke, `setVotingPower` after the
-///         handover, `RouterGovernance.cancel` after the handover, and the AgentTokenVault
-///         non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
-///         the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
+///         InvestmentCommitteePolicy, adapter admin, role revoke, `setDefaultWeights` and
+///         `setReceiptContract` on RouterGovernance after the handover (issue #1698 deleted
+///         the voting surface), and the AgentTokenVault non-asset setters. Two owners sign,
+///         the real SafeL2 proxy runs `execTransaction`, the timelock waits, the timelock
+///         calls the contract. Nothing pranks the Safe.
 contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
@@ -49,7 +51,6 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     MockGovVault internal vaultB;
 
     address internal pauser = makeAddr("pauser");
-    address internal voter = makeAddr("voter");
     address internal agent = makeAddr("agent");
 
     function setUp() public {
@@ -65,7 +66,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         ic = new InvestmentCommitteePolicy(address(this), address(gateway));
         registry = new VaultRegistry(address(this));
         router = new PortfolioRouter(address(usdc), address(registry), address(this));
-        gov = new RouterGovernance(address(router), address(this), 7 days, 1 days, 2);
+        gov = new RouterGovernance(address(router), address(this));
         agentVault = new AgentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(new ShortlistStubSwapRouter())),
@@ -77,7 +78,12 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
             address(this)
         );
 
-        // Two router-eligible vaults so a governance proposal is valid.
+        // Stage 7: the weight setter holds the router roles (setDefaultWeights needs ADMIN_ROLE).
+        router.grantRole(ADMIN_ROLE, address(gov));
+        router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(gov));
+        router.revokeRole(keccak256("WEIGHT_SETTER_ROLE"), address(this));
+
+        // Two router-eligible vaults so a default weight vector is valid.
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
         registry.registerVault(
@@ -184,46 +190,48 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
 
     // ─── RouterGovernance after the handover ──────────────────────────────────
 
-    function test_routerGovernance_setVotingPower_afterHandover_viaSafeThenTimelock() public {
-        assertEq(gov.votingPower(voter), 0);
-        _runChecked(
-            address(gov),
-            abi.encodeCall(RouterGovernance.setVotingPower, (voter, 3)),
-            keccak256("voting-power")
-        );
-        assertEq(gov.votingPower(voter), 3, "voting power set by the timelock");
-        assertEq(gov.totalVotingPower(), 3);
-    }
-
-    function test_routerGovernance_cancel_afterHandover_viaSafeThenTimelock() public {
-        address[] memory vaults = new address[](2);
+    function _sixtyForty() internal view returns (address[] memory vaults, uint256[] memory bps) {
+        vaults = new address[](2);
         vaults[0] = address(vaultA);
         vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
+        bps = new uint256[](2);
         bps[0] = 6000;
         bps[1] = 4000;
+    }
+
+    function test_routerGovernance_setDefaultWeights_afterHandover_viaSafeThenTimelock() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
         _runChecked(
             address(gov),
-            abi.encodeCall(RouterGovernance.propose, (vaults, bps)),
-            keccak256("propose")
+            abi.encodeCall(RouterGovernance.setDefaultWeights, (vaults, bps)),
+            keccak256("default-weights")
         );
-        assertEq(
-            uint256(gov.proposalState(1)),
-            uint256(RouterGovernance.ProposalState.Active),
-            "proposal created through the timelock"
-        );
+        (address[] memory got, uint256[] memory gotBps) = router.getDefaultWeights();
+        assertEq(got.length, 2, "default vector set by the timelock");
+        assertEq(got[0], address(vaultA));
+        assertEq(gotBps[1], 4000);
+        assertFalse(router.votedWeightsActive(), "the default is not an applied vector");
+    }
 
-        _runChecked(address(gov), abi.encodeCall(RouterGovernance.cancel, (1)), keccak256("cancel"));
-        assertEq(
-            uint256(gov.proposalState(1)),
-            uint256(RouterGovernance.ProposalState.Cancelled),
-            "proposal cancelled by the timelock"
+    /// @notice Issue #1698: the register the weight setter's applyReceipt releases from is
+    ///         set through the timelock (stage 11 sets it before the handover; a later change
+    ///         is a Safe-scheduled operation).
+    function test_routerGovernance_setReceiptContract_afterHandover_viaSafeThenTimelock() public {
+        ConsensusRecommendationReceipt register =
+            new ConsensusRecommendationReceipt(address(this), address(gateway), address(ic));
+        assertEq(address(gov.receiptContract()), address(0));
+        _runChecked(
+            address(gov),
+            abi.encodeCall(RouterGovernance.setReceiptContract, (address(register))),
+            keccak256("receipt-register")
         );
+        assertEq(address(gov.receiptContract()), address(register), "register set by the timelock");
     }
 
     function test_routerGovernance_directSafeCall_isRefused_exactReason() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
         _expectDirectSafeCallRefused(
-            safe, address(gov), abi.encodeCall(RouterGovernance.setVotingPower, (voter, 3))
+            safe, address(gov), abi.encodeCall(RouterGovernance.setDefaultWeights, (vaults, bps))
         );
     }
 

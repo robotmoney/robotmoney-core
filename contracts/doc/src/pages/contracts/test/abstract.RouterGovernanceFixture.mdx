@@ -1,0 +1,188 @@
+---
+title: "RouterGovernanceFixture"
+---
+
+# RouterGovernanceFixture
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/RouterGovernance.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+<i>
+
+The weight-setter topology stage 7 and stage 11 build: the weight setter
+holds the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE and the register's
+ADMIN_ROLE, and points at the register. `govAdmin` is who holds the
+weight setter's ADMIN_ROLE (the deployer before stage 11, the timelock
+after it).
+
+</i>
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+```
+
+### PAYLOAD_URI
+
+```solidity
+string internal constant PAYLOAD_URI = "https://robotmoney.net/api/swarm/receipts/session-1";
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### register
+
+```solidity
+ConsensusRecommendationReceipt internal register;
+```
+
+### policy
+
+```solidity
+MockCommitteePolicy internal policy;
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### registryAdmin
+
+```solidity
+address internal registryAdmin = makeAddr("registryAdmin");
+```
+
+### receiptAdmin
+
+```solidity
+address internal receiptAdmin = makeAddr("receiptAdmin");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("committee-submitter");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+## Functions
+
+<a id="_buildtopology-address"></a>
+
+### _buildTopology
+
+```solidity
+function _buildTopology(address govAdmin) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| govAdmin | `address` |  |
+
+<a id="_record-bytes32-bytes32"></a>
+
+### _record
+
+<i>
+
+Records `receiptId` with `digest` as the committee submitter would,
+through the gateway (this contract).
+
+</i>
+
+```solidity
+function _record(bytes32 receiptId, bytes32 digest) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| digest | `bytes32` |  |
+
+<a id="_sixtyforty"></a>
+
+### _sixtyForty
+
+```solidity
+function _sixtyForty() internal view returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="_assertweights-address-uint256"></a>
+
+### _assertWeights
+
+```solidity
+function _assertWeights(address[] memory vaults, uint256[] memory bps) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+

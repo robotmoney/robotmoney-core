@@ -1,0 +1,143 @@
+---
+title: "RedeployProtocolAssetVault"
+description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796)."
+---
+
+# RedeployProtocolAssetVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/script/RedeployProtocolAssetVault.s.sol)
+
+**Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
+
+**Title:** RedeployProtocolAssetVault
+
+Single-vault redeploy of rmPROTO into a live deployment (issue 1796).
+
+Required env vars (no defaults), the launch inputs plus two:
+ADMIN_ADDRESS, SWAP_ROUTER, REGISTRY_ADDRESS, TVL_CAP, PER_DEPOSIT_CAP, EXIT_FEE_BPS, FEE_RECIPIENT,
+NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
+TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
+EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
+REGISTRY_ADDRESS is read and checked for code only: the vault is left unlinked for the govern batch.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external override returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="runredeployinprocess-params-string-address-address"></a>
+
+### runRedeployInProcess
+
+In-process variant for forge tests. No broadcast and no manifest. Every call runs as `p.admin` under a prank.
+
+```solidity
+function runRedeployInProcess(
+        Params memory p,
+        string memory json,
+        address timelock,
+        address emergency
+    ) external returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| json | `string` |  |
+| timelock | `address` |  |
+| emergency | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_redeploy-params-cfg-address-address"></a>
+
+### _redeploy
+
+<i>
+
+Deploy and configure exactly like the launch vault, check the library link, then hand the vault over. The caller owns the
+broadcast (or prank) context: every call is made as `p.admin`.
+
+</i>
+
+```solidity
+function _redeploy(Params memory p, Cfg memory cfg, address timelock, address emergency)
+        internal
+        returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| cfg | `Cfg` |  |
+| timelock | `address` |  |
+| emergency | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_handover-address-address-address-address"></a>
+
+### _handOver
+
+<i>
+
+Mirrors the role block of `DeployTimelock._deployAndWire` without the registry link: move EMERGENCY_ROLE to the emergency
+key, then grant ADMIN_ROLE to the timelock and revoke it from the deployer. The registry link is the timelock's first call in
+the govern batch, so the vault must leave here unlinked. Every step is read back, so a half-finished handover reverts the
+whole deploy.
+
+</i>
+
+```solidity
+function _handOver(address vault, address deployer, address timelock, address emergency)
+        internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| deployer | `address` |  |
+| timelock | `address` |  |
+| emergency | `address` |  |
+

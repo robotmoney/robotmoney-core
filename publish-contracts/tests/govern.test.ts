@@ -6,15 +6,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
-import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector } from "viem";
-import { APPLY_ROW, GOVERNANCE_WEIGHTS_ABI, applyRecordKey } from "../src/apply-receipt.ts";
+import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
+import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey, buildApplyCalls } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, buildSelfAdminCall, refuseSafeConfigChange, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
 import { REPO, SHA, sheetText } from "./fixtures.ts";
-import { A, addr, fakeTimelock, sender, setup, signers } from "./govern-world.ts";
+import { A, CANCELLER_ROLE_ID, PROPOSER_ROLE_ID, addr, fakeTimelock, sender, setup, signerFor, signers } from "./govern-world.ts";
 
 const ALL = {
   ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA",
@@ -1076,15 +1076,17 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
     const o0 = sheet.safeOwners[0]!;
+    // the fake Safe's roster is live (B4): once o0 is swapped out it can no longer sign, so the later rows need signers for the owners the rows added
+    const ownerSigners = [...signers(sheet), signerFor(NEW), signerFor(NEW2)];
     await run(ctx, manifest, sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).toContain(NEW);
     expect(tl.s.threshold).toBe(3n);
-    await run(ctx, manifest, sheet, tl, { row: "safe-swap-owner", selfAdmin: { oldOwner: o0, newOwner: NEW2 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-swap-owner", selfAdmin: { oldOwner: o0, newOwner: NEW2 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).not.toContain(o0);
     expect(tl.s.owners).toContain(NEW2);
-    await run(ctx, manifest, sheet, tl, { row: "safe-remove-owner", selfAdmin: { owner: NEW, threshold: 2 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-remove-owner", selfAdmin: { owner: NEW, threshold: 2 }, emit: (l: string) => out.push(l) });
     expect(tl.s.owners).not.toContain(NEW);
-    await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 }, emit: (l: string) => out.push(l) });
+    await run(ctx, manifest, sheet, tl, { ownerSigners, row: "safe-change-threshold", selfAdmin: { threshold: 3 }, emit: (l: string) => out.push(l) });
     expect(tl.s.threshold).toBe(3n);
     expect(out.map((l) => JSON.parse(l).row)).toEqual(["safe-add-owner", "safe-swap-owner", "safe-remove-owner", "safe-change-threshold"]);
     expect(tl.s.events.filter((e) => e.startsWith("schedule"))).toEqual([]);
@@ -1119,7 +1121,9 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
     expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: NEW }, emit: (l: string) => out.push(l) });
-    expect(tl.s.roles.size).toBe(0);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(false);
+    // the Safe's own proposer and canceller roles (seeded, as after the timelock stage) are untouched
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
     expect(out.map((l) => JSON.parse(l).phase)).toEqual(["scheduled", "executed", "scheduled", "executed"]);
     expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
   });
@@ -1128,6 +1132,292 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     const { ctx, sheet } = setup(ALL);
     const tl = fakeTimelock(sheet, DELAY);
     await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", selfAdmin: { threshold: 3 } })).rejects.toMatchObject({ kind: "USAGE" });
+  });
+
+  // B3 / CS-3: the last-proposer floor. The deployed timelock (ProposerFloorTimelock) reverts a revoke or renounce of the last PROPOSER_ROLE holder; the tool refuses first.
+  test("timelock-revoke-role PROPOSER_ROLE for the last holder (the Safe) is refused with GOVERN before anything is scheduled", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const err = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: A.safe } }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("last proposer");
+    expect(err.message).toContain("timelock-grant-role");
+    expect(tl.s.events).toEqual([]);
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
+    expect(Object.keys(manifest.govern ?? {})).toEqual([]);
+  });
+
+  test("with a second proposer granted the Safe's own PROPOSER_ROLE goes through the delay, and the floor then protects the remaining holder", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } });
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: A.safe } });
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(false);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+    // NEW is the last proposer now
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: ROLE, account: NEW } })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(tl.s.events.length).toBe(4);
+  });
+
+  test("the floor is PROPOSER_ROLE only, and only for a holder: a CANCELLER_ROLE revoke and a revoke of a non-holder reach the timelock", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const rd = (async (address: Address, abi: readonly unknown[], functionName: string, args: unknown[] = []) => tl.handle.client.readContract({ address, abi, functionName, args })) as never;
+    await expect(assertNotLastProposer(rd, A.timelock, keccak256(toBytes("CANCELLER_ROLE")), A.safe)).resolves.toBeUndefined();
+    await expect(assertNotLastProposer(rd, A.timelock, roleHash, NEW)).resolves.toBeUndefined();
+    await expect(assertNotLastProposer(rd, A.timelock, roleHash, A.safe)).rejects.toMatchObject({ kind: "GOVERN" });
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: "CANCELLER_ROLE", account: A.safe } });
+    expect(tl.s.events).toEqual(["schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+    expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
+  });
+});
+
+// QA plan v1 B4 (QD-5, DT-7, T5): the self-administration rows after a Safe change. The sheet compare exempts them (they read back against their own arguments),
+// the executed record is keyed on calldata plus the Safe nonce, the fake connectSafe returns the live roster, and the fake Safe enforces the Safe's own rules.
+describe("QA plan v1 B4: self-administration rows after the Safe changes", () => {
+  const NEW = addr(0x9001), NEW2 = addr(0x9002), ROLE = "PROPOSER_ROLE";
+  const roleHash = keccak256(toBytes(ROLE));
+  /** The signers a run needs once the rows added owners: the sheet's plus the added ones (what `--owner-signer` names for them). */
+  const withNew = (sheet: ReturnType<typeof parseSheet>) => ({ ownerSigners: [...signers(sheet), signerFor(NEW), signerFor(NEW2)] });
+  const rejection = (p: Promise<unknown>) => p.then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+
+  test("the fake connectSafe returns the live owner set and threshold, not the sheet's", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const before = await tl.api.connectSafe({} as never);
+    expect(before.owners).toEqual(sheet.safeOwners);
+    expect(before.threshold).toBe(sheet.safeThreshold);
+    await run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 } });
+    const after = await tl.api.connectSafe({} as never);
+    expect(after.owners).toEqual([...sheet.safeOwners, NEW]);
+    expect(after.threshold).toBe(3);
+  });
+
+  test("second owner row after safe-add-owner", async () => {
+    // after safe-add-owner the live roster differs from the sheet: the next self-administration rows still run (a read-back against their own arguments),
+    // a stage row is refused until the operator updates SAFE_OWNERS / SAFE_THRESHOLD (runbook section 9), then it runs
+    const { ctx, sheet, lines } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const out: string[] = [];
+    await run(ctx, manifest, sheet, tl, { row: "safe-add-owner", selfAdmin: { owner: NEW, threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW]);
+    expect(sheetRosterProblems(tl.handle, sheet).length).toBe(2);
+    await run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "safe-add-owner", selfAdmin: { owner: NEW2, threshold: 3 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW, NEW2]);
+    await run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "safe-change-threshold", selfAdmin: { threshold: 4 }, emit: (l: string) => out.push(l) });
+    expect(tl.s.threshold).toBe(4n);
+    expect(out.map((l) => JSON.parse(l).row)).toEqual(["safe-add-owner", "safe-add-owner", "safe-change-threshold"]);
+    expect(tl.s.events).toEqual(["propose:safe-add-owner", "propose:safe-add-owner", "propose:safe-change-threshold"]);
+    expect(lines.some((l) => l.includes("govern.sheet_stale"))).toBe(true);
+    expect(lines.some((l) => l.includes("govern.sheet_update_needed"))).toBe(true);
+    // a stage row is refused while the sheet is stale; the refusal names the sheet keys and the runbook section, and nothing is sent
+    const err = await rejection(run(ctx, manifest, sheet, tl, { ...withNew(sheet), row: "unpause-PROTO", warp: warpTo(tl) }));
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("SAFE_OWNERS");
+    expect(err.message).toContain("SAFE_THRESHOLD");
+    expect(err.message).toContain("section 9");
+    expect(tl.s.events.length).toBe(3);
+    // the runbook step: the sheet updated to what the chain reads, the stage row runs against the same Safe
+    const updated = setup({ ...ALL, SAFE_OWNERS: [...sheet.safeOwners, NEW, NEW2].join(","), SAFE_THRESHOLD: "4" });
+    expect(sheetRosterProblems(tl.handle, updated.sheet)).toEqual([]);
+    await run(updated.ctx, newManifest(updated.ctx, addr(0xa001)), updated.sheet, tl, { ...withNew(sheet), row: "unpause-PROTO", warp: warpTo(tl) });
+    expect(tl.s.paused.has(A.vaults.PROTO)).toBe(false);
+    expect(tl.s.events.slice(3)).toEqual(["schedule:unpause-PROTO", "execute:unpause-PROTO"]);
+  });
+
+  test("safe-change-threshold above owner count refused", async () => {
+    // the Safe's own rules (GS201, GS203, GS204) are checked before anything is proposed: USAGE, nothing sent, the roster unchanged
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const refused = (row: string, selfAdmin: object) => rejection(run(ctx, manifest, sheet, tl, { ...withNew(sheet), row, selfAdmin }));
+    const n = sheet.safeOwners.length;
+    let err = await refused("safe-change-threshold", { threshold: n + 1 });
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-add-owner", { owner: NEW, threshold: n + 2 }); // the owner count after the change is n + 1
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: n }); // the owner count after the change is n - 1
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("GS201");
+    err = await refused("safe-add-owner", { owner: addr(0), threshold: 2 });
+    expect(err.message).toContain("GS203");
+    err = await refused("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: sheet.safeOwners[1] });
+    expect(err.message).toContain("GS204");
+    // an owner change already in effect whose threshold differs: the Safe would revert the add (GS204), the tool names the row that does what is left
+    err = await refused("safe-add-owner", { owner: sheet.safeOwners[1], threshold: 3 });
+    expect(err.kind).toBe("USAGE");
+    expect(err.message).toContain("safe-change-threshold");
+    expect(tl.s.events).toEqual([]);
+    expect(tl.s.threshold).toBe(2n);
+    expect(tl.s.owners).toEqual(sheet.safeOwners);
+    expect(Object.keys(manifest.govern ?? {})).toEqual([]);
+  });
+
+  test("the fake Safe enforces the Safe's own rules: threshold above owner count, wrong prevOwner, an owner added twice, a cancel below threshold, a cancel without CANCELLER_ROLE", async () => {
+    const { sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const sigs = sheet.safeOwners.slice(0, 2);
+    const send = (action: string, data: string, signatures: unknown[] = sigs) => tl.api.executeTx(tl.handle, { action, data, signatures, timelock_operation_id: `0x${"1".repeat(64)}` } as never, sender);
+    const enc = (functionName: string, args: unknown[]) => encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: functionName as never, args: args as never });
+    await expect(send("safe-change-threshold", enc("changeThreshold", [4n]))).rejects.toThrow("GS201");
+    await expect(send("safe-remove-owner", enc("removeOwner", [sheet.safeOwners[0], sheet.safeOwners[2], 2n]))).rejects.toThrow("GS205"); // the predecessor of owner 2 is owner 1
+    await expect(send("safe-swap-owner", enc("swapOwner", [sheet.safeOwners[0], sheet.safeOwners[2], NEW]))).rejects.toThrow("GS205");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [sheet.safeOwners[1], 2n]))).rejects.toThrow("GS204");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [A.safe, 2n]))).rejects.toThrow("GS203");
+    await expect(send("safe-add-owner", enc("addOwnerWithThreshold", [NEW, 2n]), sigs.slice(0, 1))).rejects.toThrow("GS020");
+    expect(tl.s.owners).toEqual(sheet.safeOwners);
+    expect(tl.s.threshold).toBe(2n);
+    expect(tl.s.nonce).toBe(0);
+    // a cancel below threshold, then a cancel and a schedule by a Safe that no longer holds the timelock role
+    await expect(send("cancel", "0x", sigs.slice(0, 1))).rejects.toThrow("GS020");
+    tl.s.roles.delete(`${CANCELLER_ROLE_ID}:${A.safe.toLowerCase()}`);
+    await expect(send("cancel", "0x")).rejects.toThrow("CANCELLER_ROLE");
+    tl.s.roles.delete(`${PROPOSER_ROLE_ID}:${A.safe.toLowerCase()}`);
+    await expect(send("schedule", "0x")).rejects.toThrow("PROPOSER_ROLE");
+    expect(tl.s.nonce).toBe(0);
+    // the well-formed call goes through: the right predecessor, a threshold the owner count allows
+    await send("safe-remove-owner", enc("removeOwner", [sheet.safeOwners[1], sheet.safeOwners[2], 2n]));
+    expect(tl.s.owners).toEqual(sheet.safeOwners.slice(0, 2));
+    expect(tl.s.nonce).toBe(1);
+  });
+
+  test("add X, remove X, add X is three Safe transactions: the record is keyed on the calldata and the Safe nonce, so the third is not skipped as the first", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (row: string, selfAdmin: object, out: string[] = []) => run(ctx, manifest, sheet, tl, { ...withNew(sheet), row, selfAdmin, emit: (l: string) => out.push(l) });
+    await x("safe-add-owner", { owner: NEW, threshold: 2 });
+    await x("safe-remove-owner", { owner: NEW, threshold: 2 });
+    await x("safe-add-owner", { owner: NEW, threshold: 2 });
+    expect(tl.s.events).toEqual(["propose:safe-add-owner", "propose:safe-remove-owner", "propose:safe-add-owner"]);
+    expect(tl.s.owners).toEqual([...sheet.safeOwners, NEW]);
+    const records = manifest.govern as Record<string, any>;
+    const keys = Object.keys(records);
+    expect(keys.length).toBe(3);
+    const addData = encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "addOwnerWithThreshold", args: [NEW, 2n] });
+    const removeData = encodeFunctionData({ abi: SAFE_ADMIN_ABI, functionName: "removeOwner", args: [sheet.safeOwners[2]!, NEW, 2n] });
+    expect(keys).toContain(selfAdminRecordKey("safe-add-owner", addData, 0));
+    expect(keys).toContain(selfAdminRecordKey("safe-remove-owner", removeData, 1));
+    expect(keys).toContain(selfAdminRecordKey("safe-add-owner", addData, 2));
+    for (const k of keys) {
+      expect(records[k].admin.nonce).toBe(Number(k.slice(k.lastIndexOf("-n") + 2)));
+      expect(records[k].executed.tx_hash).toBeDefined();
+    }
+    expect(records[selfAdminRecordKey("safe-add-owner", addData, 0)].admin.want).toBe(records[selfAdminRecordKey("safe-add-owner", addData, 2)].admin.want);
+    // a rerun of the change still in effect reprints the newest record and sends nothing
+    const again: string[] = [];
+    await x("safe-add-owner", { owner: NEW, threshold: 2 }, again);
+    expect(tl.s.events.length).toBe(3);
+    expect(again.length).toBe(1);
+    expect(JSON.parse(again[0]!).txHash).toBe(records[selfAdminRecordKey("safe-add-owner", addData, 2)].executed.tx_hash);
+    expect(Object.keys(records).length).toBe(3);
+  });
+
+  test("grant X, revoke X, grant X is three timelock rounds with three operation ids; a rerun of a role in effect sends nothing; a revoke of a non-holder is a skip", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (row: string, account = NEW) => run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row, selfAdmin: { role: ROLE, account } });
+    await x("timelock-grant-role");
+    await x("timelock-revoke-role");
+    await x("timelock-grant-role");
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+    const records = manifest.govern as Record<string, any>;
+    const grants = Object.keys(records).filter((k) => k.startsWith("timelock-grant-role-"));
+    expect(grants.length).toBe(2);
+    expect(new Set(grants.map((k) => records[k].scheduled.operation_id)).size).toBe(2);
+    expect(grants.map((k) => records[k].admin.nonce).sort()).toEqual([0, 4]);
+    await x("timelock-grant-role");
+    expect(tl.s.events.length).toBe(6);
+    const r = await x("timelock-revoke-role", NEW2);
+    expect(r.skipped.length).toBe(1);
+    expect(records[r.rows[0]!].skipped.reason).toContain("already in effect");
+    expect(tl.s.events.length).toBe(6);
+  });
+
+  test("a timelock round scheduled by an earlier run resumes under its own key: no second schedule, one execute", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    const x = (extra: object) => run(ctx, manifest, sheet, tl, { row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW }, ...extra });
+    // no warp on a non-mainnet chain with a long delay: the run exits GOVERN_PENDING after the schedule (the crash-between-phases shape)
+    await expect(x({ warp: false, maxWaitSeconds: 1 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const keys = Object.keys(manifest.govern ?? {});
+    expect(keys.length).toBe(1);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role"]);
+    await x({ warp: warpTo(tl) });
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+    expect(Object.keys(manifest.govern ?? {})).toEqual(keys);
+    expect(tl.s.roles.has(`${roleHash}:${NEW.toLowerCase()}`)).toBe(true);
+  });
+
+  test("a change already in effect with no record is recorded as skipped and sends nothing (another tool made it, or a crash between the execute and the save)", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    tl.s.threshold = 3n;
+    const r = await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(r.skipped.length).toBe(1);
+    expect(tl.s.events).toEqual([]);
+    expect((manifest.govern as Record<string, any>)[r.rows[0]!].skipped.reason).toContain("already in effect");
+    // the same again: the skip record is the prior record of this change, nothing is sent and no second record is written
+    const r2 = await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(r2.rows).toEqual(r.rows);
+    expect(Object.keys(manifest.govern ?? {}).length).toBe(1);
+  });
+
+  test("cancel below threshold: after safe-change-threshold raises the threshold, a run with fewer owner signers than the live threshold sends nothing", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const manifest = newManifest(ctx, addr(0xa001));
+    await run(ctx, manifest, sheet, tl, { row: "safe-change-threshold", selfAdmin: { threshold: 3 } });
+    expect(tl.handle.threshold).toBe(3);
+    const err = await rejection(run(ctx, manifest, sheet, tl, { ownerSigners: signers(sheet, 2), warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } }));
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("2 of the 3");
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold"]);
+    // with three signers the same row goes through the Safe at its new threshold
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } });
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+  });
+
+  test("the roster helpers: sheetRosterProblems names the sheet key that differs, safeAdminEffect reads a row's arguments back, safeRuleProblem is the Safe's rule", () => {
+    const { sheet } = setup(ALL);
+    const live = { owners: sheet.safeOwners, threshold: 2n };
+    expect(sheetRosterProblems(live, sheet)).toEqual([]);
+    expect(sheetRosterProblems({ owners: [...sheet.safeOwners].reverse(), threshold: 2 }, sheet)).toEqual([]); // order does not matter
+    expect(sheetRosterProblems({ owners: [...sheet.safeOwners, NEW], threshold: 2n }, sheet).join()).toContain("SAFE_OWNERS");
+    expect(sheetRosterProblems({ owners: sheet.safeOwners, threshold: 3 }, sheet).join()).toContain("SAFE_THRESHOLD");
+    const add = parseSafeAdminArgs("safe-add-owner", { owner: NEW, threshold: 3 });
+    expect(safeAdminEffect(add, live)).toMatchObject({ owner: false, threshold: false });
+    expect(safeAdminEffect(add, { owners: [...sheet.safeOwners, NEW], threshold: 3n })).toMatchObject({ owner: true, threshold: true, problems: [] });
+    expect(safeAdminEffect(add, { owners: [...sheet.safeOwners, NEW], threshold: 2n })).toMatchObject({ owner: true, threshold: false });
+    const swap = parseSafeAdminArgs("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: NEW });
+    expect(safeAdminEffect(swap, live).owner).toBe(false);
+    expect(safeAdminEffect(swap, { owners: [NEW, ...sheet.safeOwners.slice(1)], threshold: 2n }).problems).toEqual([]);
+    expect(safeRuleProblem(add, live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: NEW, threshold: 5 }), live, A.safe)).toContain("GS201");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: A.safe, threshold: 2 }), live, A.safe)).toContain("GS203");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-add-owner", { owner: sheet.safeOwners[0], threshold: 2 }), live, A.safe)).toContain("GS204");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: 3 }), live, A.safe)).toContain("GS201");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-remove-owner", { owner: sheet.safeOwners[0], threshold: 2 }), live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-swap-owner", { oldOwner: sheet.safeOwners[0], newOwner: sheet.safeOwners[1] }), live, A.safe)).toContain("GS204");
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-change-threshold", { threshold: 3 }), live, A.safe)).toBeUndefined();
+    expect(safeRuleProblem(parseSafeAdminArgs("safe-change-threshold", { threshold: 4 }), live, A.safe)).toContain("GS201");
+  });
+
+  test("the resume command of a self-administration record names the row and the --admin-arg values, never the calldata hash", () => {
+    const next = resumeCommand({ chainId: 918453, coreSha: SHA }, selfAdminRecordKey("timelock-grant-role", "0x1234", 7));
+    expect(next).toContain("--row timelock-grant-role --admin-arg");
+    expect(next).not.toContain("-n7");
   });
 });
 
@@ -1254,34 +1544,38 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(w.tl.s.log).toEqual([]);
   };
 
-  test("apply-receipt schedules one batch through the Safe: releaseReceipt then the weight change, and one executeBatch after the delay", async () => {
+  test("apply-receipt schedules ONE call through the Safe, RouterGovernance.applyReceipt (release and weights in one transaction), and one execute after the delay (issue 1698)", async () => {
     const w = world();
     const out: string[] = [];
     const res = await w.apply({ warp: warpTo(w.tl), emit: (l: string) => out.push(l) });
     expect(res.rows).toEqual([applyRecordKey(RID)]);
-    // exactly one scheduleBatch and one executeBatch, nothing else
-    expect(w.tl.s.log).toEqual(["scheduleBatch", "executeBatch"]);
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "executeBatch:apply-receipt"]);
+    // exactly one schedule and one execute (the single form, never a batch), nothing else
+    expect(w.tl.s.log).toEqual(["schedule", "execute"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "execute:apply-receipt"]);
     const sc = w.tl.s.scheduled.get("apply-receipt")!;
-    expect(sc.form).toBe("batch");
-    expect(sc.calls.length).toBe(2);
-    expect(sc.calls[0]).toEqual({ target: A.receipt, data: buildReleaseCall(A.receipt, RID).data });
-    const d0 = decodeFunctionData({ abi: RECEIPT_ABI, data: sc.calls[0]!.data as `0x${string}` });
-    expect(d0.functionName).toBe("releaseReceipt");
-    expect(d0.args).toEqual([RID]);
-    expect(sc.calls[1]!.target).toBe(A.governance);
-    const d1 = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: sc.calls[1]!.data as `0x${string}` });
-    expect(d1.functionName).toBe("setDefaultWeights");
-    expect(d1.args).toEqual([WANT_VAULTS, WANT_BPS]);
+    expect(sc.form).toBe("single");
+    expect(sc.calls.length).toBe(1);
+    const digest = receiptPayloadDigest(toBytes(payloadDoc(GOOD)));
+    expect(sc.calls[0]).toEqual({ target: A.governance, data: buildApplyCalls(A.governance, RID, digest, { vaults: WANT_VAULTS, bps: [5000, 3000, 2000] })[0]!.data });
+    const d0 = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
+    expect(d0.functionName).toBe("applyReceipt");
+    expect(d0.args).toEqual([RID, digest, WANT_VAULTS, WANT_BPS]);
+    // no separate releaseReceipt call: the release happens inside applyReceipt (the fake register marks it released when the call executes)
+    expect(sc.calls.some((c) => c.target === A.receipt)).toBe(false);
+    expect(w.tl.s.released.has(RID)).toBe(true);
+    // the applied vector is the router's ACTIVE vector; the DEFAULT vector did not move
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    expect(w.tl.s.weights).toEqual({ vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.RWA], bps: [6000n, 2500n, 1500n] });
     // the schedule is signed by owners and sent as ONE Safe transaction, and the lines carry the row
     expect(w.tl.s.safeTxs.get(w.tl.s.ids.get("apply-receipt")!)!.length).toBe(2);
     const lines = out.map((l) => JSON.parse(l));
     expect(lines.map((l) => `${l.row}:${l.phase}`)).toEqual(["apply-receipt:scheduled", "apply-receipt:executed"]);
     expect(lines.every((l) => l.status === 1 && /^0x[0-9a-f]{64}$/.test(l.txHash))).toBe(true);
-    // the evidence entry (receipt_applications) carries both Safe transactions, the vector and block times one delay apart
+    // the evidence entry (receipt_applications) carries both Safe transactions, the vector, the digest the call named and block times one delay apart
     const entries = (w.manifest as { receipt_applications?: any[] }).receipt_applications!;
     expect(entries.length).toBe(1);
-    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, target: A.receipt, governance: A.governance, vaults: WANT_VAULTS, bps: [5000, 3000, 2000], schedule_status: 1, execute_status: 1 });
+    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, governance: A.governance, receipt: A.receipt, vaults: WANT_VAULTS, bps: [5000, 3000, 2000], payload_digest: digest, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000], schedule_status: 1, execute_status: 1 });
+    expect(entries[0]).not.toHaveProperty("voted_weights_active");
     expect(entries[0].execute_block_timestamp - entries[0].schedule_block_timestamp).toBeGreaterThanOrEqual(Number(DELAY));
     expect(entries[0].schedule_tx).not.toBe(entries[0].execute_tx);
     // never in the matrix
@@ -1289,20 +1583,25 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(Object.keys(w.manifest.govern!)).toEqual([applyRecordKey(RID)]);
   });
 
-  test("apply-receipt read-back asserts isReleased and the router weights equal the payload vector, and exits GOVERN when either differs", async () => {
+  test("apply-receipt read-back asserts isReleased and the router's EFFECTIVE weights equal the payload vector, and exits GOVERN when either differs", async () => {
     const ok = world();
     await ok.apply({ warp: warpTo(ok.tl) });
     expect(ok.tl.s.released.has(RID)).toBe(true);
-    expect(ok.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
-    // the router reads another vector after the batch executed
+    expect(ok.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    // the router routes by another vector after the call executed
     const wrongWeights = world();
-    wrongWeights.tl.s.reads.getDefaultWeights = [WANT_VAULTS, [6000n, 2500n, 1500n]];
+    wrongWeights.tl.s.reads.getEffectiveWeights = [WANT_VAULTS, [6000n, 2500n, 1500n]];
     await expect(wrongWeights.apply({ warp: warpTo(wrongWeights.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN });
     // the router reads the vault list in another order
     const wrongOrder = world();
-    wrongOrder.tl.s.reads.getDefaultWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA], WANT_BPS];
+    wrongOrder.tl.s.reads.getEffectiveWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA], WANT_BPS];
     await expect(wrongOrder.apply({ warp: warpTo(wrongOrder.tl) })).rejects.toMatchObject({ kind: "GOVERN" });
-    // the receipt reads not released after the batch executed
+    // the DEFAULT vector is not the read-back's business (issue 1698: applyReceipt does not touch it): a default that differs from the receipt vector passes
+    const defaultDiffers = world();
+    defaultDiffers.tl.s.reads.getDefaultWeights = [[A.vaults.USDC], [10000n]];
+    await defaultDiffers.apply({ warp: warpTo(defaultDiffers.tl) });
+    expect(defaultDiffers.tl.s.released.has(RID)).toBe(true);
+    // the receipt reads not released after the call executed
     const notReleased = world();
     notReleased.tl.s.reads.isReleased = false;
     await expect(notReleased.apply({ warp: warpTo(notReleased.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN });
@@ -1362,8 +1661,9 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     w.tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], bps: [6000n, 2500n, 500n, 1000n] };
     await w.apply({ warp: warpTo(w.tl) });
     const sc = w.tl.s.scheduled.get("apply-receipt")!;
-    const d1 = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: sc.calls[1]!.data as `0x${string}` });
-    expect(d1.args).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], [8550n, 525n, 575n, 350n]]);
+    const d1 = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
+    expect(d1.args).toEqual([RID, w.tl.s.digests.get(RID)!, [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], [8550n, 525n, 575n, 350n]]);
+    expect(w.tl.s.voted).toEqual({ vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], bps: [8550n, 525n, 575n, 350n] });
   });
 
   test("apply-receipt is not in stage 13: stageRows(8453) is the four unpauses and GOVERN_ROWS has no apply-receipt", () => {
@@ -1394,7 +1694,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // named, it runs on 8453 and is its own operation, scheduled alone
     const named = world(8453);
     await expect(named.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(named.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(named.tl.s.events).toEqual(["schedule:apply-receipt"]);
   });
 
   test("apply-receipt pending and cancelled rounds: a pending round exits GOVERN_PENDING with the resume command and a cancelled operation schedules again with a newer seq", async () => {
@@ -1408,7 +1708,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(e.details.ready_at).toBe((1000n + DELAY).toString());
     expect(String(e.details.next_command)).toContain(`--row ${APPLY_ROW} --receipt-id ${RID} --payload ${w.file}`);
     expect(String(e.details.next_command)).toContain("--chain 8453");
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
     expect(w.tl.s.released.has(RID)).toBe(false);
     // a resume before the delay pends again and sends nothing
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
@@ -1419,7 +1719,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const firstId = (w.manifest.govern![key] as { scheduled: { operation_id: string } }).scheduled.operation_id;
     w.tl.s.ops.delete(firstId);
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "schedule:apply-receipt"]);
     const again = w.manifest.govern![key] as { scheduled: { seq: number; operation_id: string } };
     expect(again.scheduled.seq).toBeGreaterThan(firstSeq);
     expect(again.scheduled.operation_id).toBe(firstId); // a cancelled id may be scheduled again
@@ -1427,9 +1727,9 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // after the delay the same command executes and reads released and the weights back
     w.tl.s.clock += DELAY;
     await w.apply({ warp: noWarp, emit: (l: string) => out.push(l) });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "scheduleBatch:apply-receipt", "executeBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "schedule:apply-receipt", "execute:apply-receipt"]);
     expect(w.tl.s.released.has(RID)).toBe(true);
-    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
     // a rerun sends nothing
     await w.apply({ warp: noWarp });
     expect(w.tl.s.events.length).toBe(3);

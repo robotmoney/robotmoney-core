@@ -112,26 +112,29 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///      deposit leg's size; aggregate per-vault exposure across calls is not tracked here.
     mapping(address => uint256) public vaultCap;
 
-    /// @notice Ordered list of vaults included in the voted (active) weight
-    ///         vector. Set by governance on a successful proposal execution
-    ///         via `setWeights`. Empty until the first vote passes.
+    /// @notice Ordered list of vaults included in the applied (active) weight
+    ///         vector. Set by the weight setter when a consensus receipt is
+    ///         applied (`RouterGovernance.applyReceipt` → `setWeights`). Empty
+    ///         until the first receipt is applied. The storage keeps its
+    ///         pre-1698 "voted" name so the read surface (`votedWeightsActive`,
+    ///         `clearVotedWeights`) stays ABI-stable for the tools that read it.
     address[] private _weightVaultList;
 
     /// @notice Weight in basis points for each vault in `_weightVaultList`.
     ///         Parallel array — must always sum to BPS_DENOMINATOR.
     uint256[] private _weightBps;
 
-    /// @notice True when the voted weight vector is in effect. False means the
-    ///         router falls back to `defaultWeights` (the on-chain below-quorum
-    ///         fallback). Set true by `setWeights`, set false by
-    ///         `clearVotedWeights`. See ADR-0002.
+    /// @notice True when the applied weight vector is in effect. False means the
+    ///         router falls back to `defaultWeights` (the on-chain fallback).
+    ///         Set true by `setWeights`, set false by `clearVotedWeights`.
+    ///         See ADR-0002.
     bool public votedWeightsActive;
 
     /// @notice Ordered list of vaults included in the default (fallback) weight
-    ///         vector. Used by `previewDeposit`/`deposit` whenever the voted
-    ///         vector is not active — i.e. no proposal has ever passed or
-    ///         governance has reverted to the default after a failed quorum.
-    ///         Admin-settable; survives proposal execution unchanged. ADR-0002.
+    ///         vector. Used by `previewDeposit`/`deposit` whenever the applied
+    ///         vector is not active — i.e. no receipt has been applied yet or
+    ///         governance has cleared the applied vector. Admin-settable;
+    ///         survives a receipt application unchanged. ADR-0002.
     address[] private _defaultWeightVaultList;
 
     /// @notice Weight in basis points for each vault in `_defaultWeightVaultList`.
@@ -323,6 +326,15 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vault The vault address that lacks the eligibility flag.
     error VaultNotRouterEligible(address vault);
 
+    /// @notice A weight vector names the same vault twice. Without this check a
+    ///         duplicate default (`[A, A]`) passes the `length ==
+    ///         routerEligibleCount` check while leaving an eligible vault out,
+    ///         and a duplicate applied vector double-counts one leg (HR-L-9 /
+    ///         CS-5, issue #1698). A digest binds a vector but does not prove
+    ///         it is unique, so the receipt path relies on this check too.
+    /// @param vault The vault address that appears more than once.
+    error DuplicateVault(address vault);
+
     /// @notice `applyMigrationDefaultWeights` was called by an address other
     ///         than the linked `VaultRegistry`. That entry point exists solely
     ///         so the registry can set the default-weight vector atomically with
@@ -444,9 +456,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Admin: weight management ────────────────────────────────────────────
 
     /// @notice Set the vault weight vector. All vaults must be registered in the
-    ///         VaultRegistry and must be marked router-eligible there. The bps
-    ///         values must sum to exactly BPS_DENOMINATOR.
-    ///         Restricted to `WEIGHT_SETTER_ROLE`, held only by RouterGovernance.
+    ///         VaultRegistry and must be marked router-eligible there, no vault
+    ///         may appear twice, and the bps values must sum to exactly
+    ///         BPS_DENOMINATOR. Restricted to `WEIGHT_SETTER_ROLE`, held only by
+    ///         RouterGovernance, which reaches it from `applyReceipt`.
     /// @param vaults  Ordered list of vault addresses.
     /// @param bps     Parallel weight array in basis points (must sum to 10 000).
     function setWeights(address[] calldata vaults, uint256[] calldata bps)
@@ -464,6 +477,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             // reverts VaultNotActive for any DepositsPaused/Retired vault so a
             // non-depositable vector can never be written and self-DoS deposits.
             _requireActiveAndEligible(vaults[i]);
+            _requireNoDuplicateBefore(vaults, i);
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
@@ -476,18 +490,18 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             _weightBps.push(bps[i]);
         }
 
-        // A passed vote overrides the default vector. `defaultWeights` itself
-        // is left untouched so it remains the post-vote fallback. ADR-0002.
+        // An applied receipt overrides the default vector. `defaultWeights`
+        // itself is left untouched so it remains the fallback. ADR-0002.
         votedWeightsActive = true;
 
         emit WeightsSet(vaults, bps);
     }
 
-    /// @notice Set the default (below-quorum fallback) weight vector. Used by
-    ///         `previewDeposit`/`deposit` whenever the voted vector is not
-    ///         active — when no proposal has ever passed, or governance has
-    ///         reverted to the default after a proposal failed quorum. This
-    ///         vector survives proposal execution unchanged. ADR-0002.
+    /// @notice Set the default (fallback) weight vector. Used by
+    ///         `previewDeposit`/`deposit` whenever the applied vector is not
+    ///         active — when no receipt has been applied yet, or governance has
+    ///         cleared the applied vector. This vector survives a receipt
+    ///         application unchanged. ADR-0002.
     ///
     ///         All vaults must be registered AND router-eligible, the bps must
     ///         sum to BPS_DENOMINATOR, and the length must equal the registry's
@@ -548,6 +562,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             // routed vector, so it must hold the same "eligible AND Active"
             // invariant. Reverts VaultNotActive for any DepositsPaused/Retired vault.
             _requireActiveAndEligible(vaults[i]);
+            // A duplicate default is what lets `length == routerEligibleCount`
+            // hold while an eligible vault is left out (HR-L-9 / CS-5).
+            _requireNoDuplicateBefore(vaults, i);
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
@@ -563,10 +580,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         emit DefaultWeightsSet(vaults, bps);
     }
 
-    /// @notice Clear the voted weight vector and revert routing to
-    ///         `defaultWeights`. Intended for governance to fall back to the
-    ///         default after the most recent proposal failed quorum. Restricted
-    ///         to `ADMIN_ROLE`. ADR-0002.
+    /// @notice Clear the applied weight vector and revert routing to
+    ///         `defaultWeights`. The emergency lever: an applied receipt vector
+    ///         that should no longer route is cleared here, through the
+    ///         timelock. Restricted to `ADMIN_ROLE`. ADR-0002.
     function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
         delete _weightVaultList;
         delete _weightBps;
@@ -1234,10 +1251,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Return true iff `vault` is router-eligible AND its registry
     ///         lifecycle status is `Active` — i.e. it can be written into a
     ///         weight vector and accept a routed deposit right now. This is the
-    ///         exact predicate `setWeights`/`setDefaultWeights` enforce; governance
-    ///         (`RouterGovernance.propose`) reads it so a proposal that would
-    ///         render router deposits non-executable can never enter the voting
-    ///         pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+    ///         exact predicate `setWeights`/`setDefaultWeights` enforce; the
+    ///         govern tool reads it before scheduling an `applyReceipt` so a
+    ///         vector that would render router deposits non-executable is never
+    ///         scheduled (GOV-4, no self-DoS). Never reverts: returns false for a
     ///         zero address, an EOA, an asset mismatch, an unregistered vault, or
     ///         any non-Active status.
     /// @param vault Address of the vault to check.
@@ -1268,6 +1285,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             revert VaultNotActive(vault, status);
         }
         _requireRouterEligible(vault);
+    }
+
+    /// @dev Revert `DuplicateVault` when `vaults[i]` already appears at an
+    ///      earlier index. Quadratic over a vector of at most a handful of legs
+    ///      (the registry's router-eligible set), checked only at configuration
+    ///      time by `setWeights` and `_setDefaultWeights` (HR-L-9 / CS-5).
+    function _requireNoDuplicateBefore(address[] calldata vaults, uint256 i) internal pure {
+        for (uint256 j = 0; j < i; j++) {
+            if (vaults[j] == vaults[i]) revert DuplicateVault(vaults[i]);
+        }
     }
 
     /// @dev Revert unless `vault` exposes an ERC-4626 `asset()` view equal to

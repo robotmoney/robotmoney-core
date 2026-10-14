@@ -23,6 +23,7 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProble
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
+import { applyCalldata } from "./apply-receipt.ts";
 import { REDEPLOY_ROW, buildRedeployCalls, vectorsFromFinal } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
@@ -65,16 +66,13 @@ export const releaseCalldata = (receiptId: string): Hex => encodeFunctionData({ 
 const releaseLabel = (r: any) => `release-receipt ${r?.receipt_id}`;
 
 /**
- * A post-launch receipt application (issue 1696, `govern --row apply-receipt`), recorded under `receipt_applications` (never in `govern`, so stage 13 stays the
- * four unpauses). One entry per receipt: ONE timelock batch of exactly two calls, releaseReceipt(receipt_id) on the receipt contract (`consensus_receipt.address`)
- * then setDefaultWeights(vaults, bps) on the governance contract (`governance.address`), one schedule and one execute at least MAINNET_DELAY_FLOOR apart.
+ * A post-launch receipt application (issue 1696, issue 1698, `govern --row apply-receipt`), recorded under `receipt_applications` (never in `govern`, so stage 13 stays
+ * the four unpauses). One entry per receipt: ONE timelock call, applyReceipt(receipt_id, payload_digest, vaults, bps) on the governance contract (`governance.address`),
+ * which releases the receipt on the receipt contract (`receipt`, equal to `consensus_receipt.address`) and writes the vector to the router in one transaction; one
+ * schedule and one execute at least MAINNET_DELAY_FLOOR apart. The entry carries the `payload_digest` the call named (the chain refused any other).
  * The Twin run writes the same entries into the run manifest and `--receipt-applications` checks them (a Twin run proves execution only, not mainnet governance).
  */
-const APPLY_WEIGHTS_ABI = parseAbi(["function setDefaultWeights(address[] vaults, uint256[] bps)"]);
-export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]): [Hex, Hex] => [
-  releaseCalldata(receiptId),
-  encodeFunctionData({ abi: APPLY_WEIGHTS_ABI, functionName: "setDefaultWeights", args: [vaults as Hex[], bps.map(BigInt)] }),
-];
+export { applyCalldata };
 const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
 
 /** Operations built INSIDE this module for the rehearsal cancel row. Identity-based and never serialised: a `cancelled` field in evidence JSON means nothing. */
@@ -119,25 +117,30 @@ function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
     else if (seen.has(lc(r.receipt_id))) bad(`${w}: receipt_id has more than one evidence entry`);
     else seen.add(lc(r.receipt_id));
     if (r?.step !== undefined && r.step !== "apply-receipt") bad(`${w}: step '${r.step}' is not apply-receipt`);
-    if (lc(r?.target ?? "") !== lc(ev?.consensus_receipt?.address ?? "")) bad(`${w}: target ${r?.target} is not the receipt contract ${ev?.consensus_receipt?.address}`);
+    // issue 1698: the one call targets the governance contract; `receipt` names the register it released the receipt on (an older entry's `target` was that register)
+    const receiptAddr = r?.receipt ?? r?.target;
+    if (lc(receiptAddr ?? "") !== lc(ev?.consensus_receipt?.address ?? "")) bad(`${w}: receipt ${receiptAddr} is not the receipt contract ${ev?.consensus_receipt?.address}`);
     if (lc(r?.governance ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: governance ${r?.governance} is not the governance contract ${ev?.governance?.address}`);
+    if (!TX.test(r?.payload_digest ?? "")) bad(`${w}: payload_digest is not a bytes32: the applyReceipt call names the digest the register stored, and the entry must carry it`);
     const vaults: unknown[] = Array.isArray(r?.vaults) ? r.vaults : [];
     const bps: unknown[] = Array.isArray(r?.bps) ? r.bps : [];
     if (vaults.length === 0 || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not a list of distinct addresses with one weight each`);
     else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
     if (releasedIds(ev).has(lc(r?.receipt_id ?? ""))) bad(`${w}: the receipt is also under receipt_releases: a receipt is released once`);
-    effectiveReadBackProblems(w, r, vaults, bps, bad);
+    // an application makes its vector the ACTIVE one (votedWeightsActive reads true afterwards), so no voted flag is required of it: the effective vector is the proof
+    effectiveReadBackProblems(w, r, vaults, bps, bad, false);
   }
   return apps;
 }
 
 /**
- * Issue 1743: the router's EFFECTIVE weights are what deposits route by. After an application (or a clear) the read-back saw votedWeightsActive false, and the entry records it
- * (`voted_weights_active: false`, `effective_vaults`, `effective_bps`). A voted vector on top of the default would leave routing unchanged while the default read right.
+ * Issue 1743: the router's EFFECTIVE weights are what deposits route by. After an application or a clear the entry records what the read-back saw (`effective_vaults`,
+ * `effective_bps`). A clear (and a redeploy) also records `voted_weights_active: false`: the active vector is gone and the default routes again (`wantVotedFalse`).
+ * An application does not (issue 1698): its vector IS the active one, so the effective vector equal to the applied vector is the whole proof.
  * `vaults` / `bps` are the vector the entry claims the router holds (the applied one); undefined for a clear entry, which only needs a well formed vector.
  */
-function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, bad: (m: string) => void): void {
-  if (r?.voted_weights_active !== false) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want false: the read-back must show no voted vector overriding the default (issue 1743)`);
+function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, bad: (m: string) => void, wantVotedFalse = true): void {
+  if (wantVotedFalse && r?.voted_weights_active !== false) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want false: the read-back must show no active vector overriding the default (issue 1743)`);
   const ev: unknown[] = Array.isArray(r?.effective_vaults) ? r.effective_vaults : [];
   const eb: unknown[] = Array.isArray(r?.effective_bps) ? r.effective_bps : [];
   if (ev.length === 0 || ev.length !== eb.length || !ev.every((v) => typeof v === "string" && ADDR.test(v)) || !eb.every((x) => Number.isInteger(x) && (x as number) >= 0) || (eb as number[]).reduce((t, x) => t + x, 0) !== 10000) {
@@ -184,7 +187,7 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
 /**
  * A single-vault redeploy (issue 1796, the `redeploy-vault` verb and `govern --row redeploy-vault`), recorded under `vault_redeploys` (never in `govern`, so stage 13 stays the four unpauses).
  * One entry per redeploy: the deploy transactions the deployer sent (`deploy_tx_hashes`, `deploy_count`, all status 1), the vault it replaced (`old_vault`, now Retired) and the vault that replaced
- * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of five calls, one schedule and one execute at least the floor apart, and the read-back: the final default
+ * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of six calls, one schedule and one execute at least the floor apart, and the read-back: the final default
  * vector (`vaults`, `bps`, 10000 bps, the new vault in and the old vault out), voted_weights_active false and the router's effective weights equal to it. A REHEARSAL evidence only: a production
  * evidence may carry none (the verb and the row are refused on 8453 in production).
  */
@@ -675,9 +678,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
 }
 
 /**
- * Chain check of `receipt_applications` (issue 1696). Each entry is ONE timelock batch: the schedule tx has exactly two CallScheduled events with one operation
- * id (the recorded operation_id), index 0 releaseReceipt(receipt_id) on the receipt contract, index 1 setDefaultWeights(vaults, bps) on the governance contract,
- * each with a delay of at least MAINNET_DELAY_FLOOR. The execute tx has the two matching CallExecuted events. The block gap is at least MAINNET_DELAY_FLOOR.
+ * Chain check of `receipt_applications` (issue 1696, issue 1698). Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event (the recorded
+ * operation_id), target the governance contract, calldata applyReceipt(receipt_id, payload_digest, vaults, bps) rebuilt from the entry, a delay of at least
+ * MAINNET_DELAY_FLOOR. The execute tx has the matching CallExecuted event. The block gap is at least MAINNET_DELAY_FLOOR.
  * It does not read the chain id: a Twin run uses it too (run it with `--receipt-applications`).
  */
 export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
@@ -694,28 +697,21 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
   for (const r of Array.isArray(ev?.receipt_applications) ? ev.receipt_applications : []) {
     const w = applyLabel(r);
     if (!TX.test(r?.receipt_id ?? "") || !ADDR.test(ev.consensus_receipt?.address ?? "") || !ADDR.test(ev.governance?.address ?? "") || !Array.isArray(r.vaults) || !Array.isArray(r.bps) || r.vaults.length !== r.bps.length) continue; // the offline check already named it
+    if (!TX.test(r?.payload_digest ?? "")) continue; // the offline check already named it
     const sc = await status(`${w} schedule`, r.schedule_tx);
     if (!sc) continue;
-    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
-    if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock`); continue; }
-    const [relData, wData] = applyCalldata(r.receipt_id, r.vaults, r.bps);
-    const wantCalls = [{ target: ev.consensus_receipt.address as string, data: relData, what: `releaseReceipt(${r.receipt_id})` }, { target: ev.governance.address as string, data: wData, what: "setDefaultWeights(vaults, bps) of the recorded vector" }];
-    if (scheduled.length !== wantCalls.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an application is exactly ${wantCalls.length} calls (release, then weights) in one batch`);
-    scheduled.forEach((e, i) => {
-      const want = wantCalls[i];
-      if (want === undefined) { bad(`${w}: CallScheduled call ${i} is not part of an application`); return; }
-      if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${want.target}`);
-      else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${want.what}`);
-      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
-      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
-      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
-    });
-    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled");
+    if (scheduled.length !== 1) { bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an application is exactly one call, applyReceipt on the governance contract (issue 1698)`); continue; }
+    const want = applyCalldata(r.receipt_id, r.payload_digest, r.vaults, r.bps);
+    const e = scheduled[0]!;
+    if (lc(e.target) !== lc(ev.governance.address)) bad(`${w}: CallScheduled target ${e.target} is not the governance contract ${ev.governance.address}`);
+    else if (lc(e.data) !== lc(want)) bad(`${w}: CallScheduled calldata is not applyReceipt(${r.receipt_id}, ${r.payload_digest}, vaults, bps) of the recorded vector`);
+    if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(e.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${e.id}`);
     const schedTs = await ts(sc);
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
-    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
-    if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
+    if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(ev.governance.address) && lc(x.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled applyReceipt call`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -747,7 +743,7 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
     if (scheduled.length !== 1) { bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a clear is exactly one call`); continue; }
     const e = scheduled[0]!;
     if (lc(e.target) !== lc(ev.governance.address)) bad(`${w}: CallScheduled target ${e.target} is not the governance contract ${ev.governance.address}`);
-    else if (lc(e.data) !== lc(want)) bad(`${w}: CallScheduled calldata is not clearVotedWeights()`);
+    else if (lc(e.data) !== lc(want)) bad(`${w}: CallScheduled calldata is not clearVotedWeights()`); // the emergency lever: the active (applied receipt) vector is dropped
     if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
     if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(e.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${e.id}`);
     const schedTs = await ts(sc);
@@ -761,9 +757,10 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
 }
 
 /**
- * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of five calls with one operation id: the schedule tx has exactly five
- * CallScheduled events, index 0 to 4, whose targets and calldata are rebuilt from the recorded vaults (registerVault(new), migrateEligibility(new, true, five legs), migrateEligibility(old, false,
- * four legs), retire(old), the new vault's unpauseDeposits()), each with a delay of at least the floor. The execute tx has the five matching CallExecuted events. The block gap is at least the floor.
+ * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of six calls with one operation id: the schedule tx has exactly six
+ * CallScheduled events, index 0 to 5, whose targets and calldata are rebuilt from the recorded vaults (the new vault's setRegistry(registry), registerVault(new), migrateEligibility(new, true,
+ * five legs), migrateEligibility(old, false, four legs), retire(old), the new vault's unpauseDeposits()), each with a delay of at least the floor. The execute tx has the six matching CallExecuted
+ * events. The block gap is at least the floor.
  * It does not read the chain id: a Twin run uses it too.
  */
 export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
@@ -802,7 +799,7 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
     const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
-    if (executed.length !== want.length || !executed.every((e, i) => lc(e.target) === lc(want[i]!.target) && lc(e.data) === lc(want[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the five scheduled calls`);
+    if (executed.length !== want.length || !executed.every((e, i) => lc(e.target) === lc(want[i]!.target) && lc(e.data) === lc(want[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the ${want.length} scheduled calls`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }

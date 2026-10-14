@@ -59,11 +59,16 @@ describe("YES and plaintext keys are keyed to the chain id", () => {
   test("measure is refused on 8453", () => {
     expect(kind(() => assertFloors(base(8453, good, { measure: true })))).toContain("--measure");
   });
-  test("CONFIRM=environment needs GitHub Actions and an environment name on 8453", () => {
+  test("CONFIRM=environment needs GitHub Actions, the runner's id-token request token, an environment name and a verified OIDC token for it on 8453 (qa-plan B2)", () => {
     const c = callerInputs({ CONFIRM: "environment" });
+    const inActions = { GITHUB_ACTIONS: "true", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runner-request-token" };
+    const proof = { repository: "robotmoney/release-driver", repositoryOwner: "robotmoney", environment: "mainnet", sub: "repo:robotmoney/release-driver:environment:mainnet" };
     expect(kind(() => assertFloors(base(8453, good, { caller: c })))).toContain("GitHub Actions");
-    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, environment: "local" })))).toContain("--environment");
-    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, environment: "mainnet" })))).toBeUndefined();
+    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, environment: "mainnet" })))).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, env: inActions, environment: "local" })))).toContain("--environment");
+    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, env: inActions, environment: "mainnet" })))).toContain("verified GitHub OIDC token");
+    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, env: inActions, environment: "mainnet", actionsProof: { ...proof, environment: "other" } })))).toContain("'other'");
+    expect(kind(() => assertFloors(base(8453, good, { caller: c, githubActions: true, env: inActions, environment: "mainnet", actionsProof: proof })))).toBeUndefined();
   });
   test("plaintextSignerReason is silent for a clean spec", () => {
     expect(plaintextSignerReason("ledger", {})).toBeUndefined();

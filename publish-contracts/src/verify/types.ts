@@ -66,15 +66,6 @@ export interface VaultSheet {
   contract?: string;
 }
 
-/** Deploy-time governance configuration the deployer sets before the timelock handover (issue 1520). */
-export interface GovernanceSheet {
-  voters: Address[];
-  voterPower: bigint;
-  quorum: bigint;
-  votingPeriod: bigint;
-  executionDelay: bigint;
-}
-
 export interface VerifySheet {
   chainId: number;
   deployer: Address;
@@ -126,9 +117,10 @@ export interface VerifyOptions {
    */
   controlProof?: { txHash: Hex; nonce: number };
   /**
-   * The last consensus receipt the Safe applied through `govern --row apply-receipt` (issue 1696), from the run manifest: the receipt id and the vector the
-   * router took. Absent: no receipt was applied and the router default weights must equal the sheet. Present: the receipt must read released and the router
-   * default weights must equal this vector (the sheet vector was superseded by the application).
+   * The last consensus receipt the Safe applied through `govern --row apply-receipt` (issue 1696, issue 1698), from the run manifest: the receipt id and the vector the
+   * router took. Absent: no receipt was applied, `votedWeightsActive()` must read false and the router's EFFECTIVE weights must equal the sheet's launch vector. Present:
+   * the receipt must read released, `votedWeightsActive()` must read true (the applied vector is the active one) and the EFFECTIVE weights must equal this vector. The
+   * DEFAULT vector equals the sheet in both cases: an application never touches it.
    */
   appliedReceipt?: { receiptId: Hex; vaults: Address[]; bps: number[] };
   /**

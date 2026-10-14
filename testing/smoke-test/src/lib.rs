@@ -1729,9 +1729,9 @@ impl Fixture {
         Ok(id)
     }
 
-    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696): `govern --row apply-receipt` schedules ONE batch
-    /// (releaseReceipt plus the router weight change), waits the real delay (one time warp on the fork) and executes it. Returns the govern lines
-    /// (scheduled, executed), each with a tx hash and receipt status 1.
+    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696, issue 1698): `govern --row apply-receipt` schedules ONE call,
+    /// `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` (the release and the router weight change in one transaction), waits the real
+    /// delay (one time warp on the fork) and executes it. Returns the govern lines (scheduled, executed), each with a tx hash and receipt status 1.
     pub fn apply_fixture_receipt(
         &self,
         file: &str,

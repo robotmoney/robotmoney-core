@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -58,20 +58,38 @@ function _selfReveal(address owner, address agent, bytes32 salt) internal;
 | agent | `address` |  |
 | salt | `bytes32` |  |
 
-<a id="test_spoofedvotesupersedesmemberslatestvote"></a>
+<a id="test_spoofedvotecannotsupersedememberslatestvote"></a>
 
-### test_spoofedVoteSupersedesMembersLatestVote
+### test_spoofedVoteCannotSupersedeMembersLatestVote
 
 ```solidity
-function test_spoofedVoteSupersedesMembersLatestVote() public;
+function test_spoofedVoteCannotSupersedeMembersLatestVote() public;
 ```
 
-<a id="test_spoofedvotesfloodundermembername"></a>
+<a id="test_spoofedvotefloodrevertsundermembername"></a>
 
-### test_spoofedVotesFloodUnderMemberName
+### test_spoofedVoteFloodRevertsUnderMemberName
 
 ```solidity
-function test_spoofedVotesFloodUnderMemberName() public;
+function test_spoofedVoteFloodRevertsUnderMemberName() public;
+```
+
+<a id="test_selfrevealedagentcannotvoteunderownaddress"></a>
+
+### test_selfRevealedAgentCannotVoteUnderOwnAddress
+
+<i>
+
+With the spoof closed, the only address the attacker may put in
+`p.agent` is itself, and the IC contract refuses that because the
+attacker holds AGENT_ROLE on the gateway but not
+COMMITTEE_AGENT_ROLE on the policy. Together with Q5/Q4 this shows
+the permissionless gateway tier has no route into the vote log.
+
+</i>
+
+```solidity
+function test_selfRevealedAgentCannotVoteUnderOwnAddress() public;
 ```
 
 <a id="test_selfregisteredagentcannotanchorreceipt"></a>

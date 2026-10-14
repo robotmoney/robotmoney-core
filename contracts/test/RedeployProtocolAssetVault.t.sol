@@ -3,6 +3,7 @@
 pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {RedeployProtocolAssetVault} from "../script/RedeployProtocolAssetVault.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
@@ -26,7 +27,8 @@ contract RedeployLegVault is ERC20 {
 
 /// @notice Single-vault redeploy of rmPROTO into a live deployment (issue 1796).
 ///         The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults,
-///         the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script. The govern row's batch is
+///         the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the
+///         timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is
 ///         replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
 contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
     RedeployProtocolAssetVault internal script;
@@ -113,7 +115,7 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
     function test_redeploy_handsTheVaultOverAndLeavesItClosedAndUnregistered() public {
         BasketVault v = _redeploy();
         assertTrue(v.depositsPaused(), "deployed closed");
-        assertEq(v.registry(), address(registry), "registry linked");
+        assertEq(v.registry(), address(0), "registry link left to the govern batch");
         assertTrue(v.hasRole(v.ADMIN_ROLE(), timelock), "timelock holds ADMIN");
         assertTrue(v.hasRole(v.EMERGENCY_ROLE(), emergency), "emergency key holds EMERGENCY");
         assertFalse(v.hasRole(v.ADMIN_ROLE(), deployer), "deployer dropped ADMIN");
@@ -148,6 +150,19 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         script.runRedeployInProcess(p, json, timelock, deployer);
     }
 
+    /// @dev The link is ADMIN_ROLE-gated and the deploy dropped the deployer's ADMIN_ROLE: only the timelock can link, in the batch.
+    function test_redeploy_deployerCannotLinkTheRegistryAfterHandover() public {
+        BasketVault v = _redeploy();
+        vm.prank(deployer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, deployer, v.ADMIN_ROLE()
+            )
+        );
+        v.setRegistry(address(registry));
+        assertEq(v.registry(), address(0), "still unlinked");
+    }
+
     // ─── The govern row's batch, on the real registry and router ─────────────
 
     /// @dev Five legs while both vaults are eligible: the old leg keeps its 525 and the new leg takes 0.
@@ -175,8 +190,10 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         v[1] = newVault;
     }
 
+    /// @dev The six calls of the govern row, in its order: the link first, so the vault is bound before it is registered.
     function _runBatch(BasketVault v) internal {
         vm.startPrank(timelock);
+        v.setRegistry(address(registry));
         registry.registerVault(address(v), _meta("Robot Money Protocol"));
         (address[] memory five, uint256[] memory fiveBps) = _fiveLegs(address(v));
         registry.migrateEligibility(address(v), true, five, fiveBps);
@@ -200,6 +217,7 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         assertEq(uint256(newStatus), uint256(VaultRegistry.VaultStatus.Active), "new active");
         assertTrue(oldProto.retired(), "old vault deposits halted");
         assertFalse(v.depositsPaused(), "new vault open");
+        assertEq(v.registry(), address(registry), "linked by the batch");
 
         (address[] memory vaults, uint256[] memory bps) = router.getEffectiveWeights();
         assertEq(vaults.length, 4);
@@ -225,6 +243,44 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         );
         registry.retire(address(oldProto));
         vm.stopPrank();
+    }
+
+    /// @dev The link lands first in the batch, as the timelock (ADMIN_ROLE on the new vault). After the batch the registry is the one
+    ///      address that drives the vault's deposit-halt leg, so a later status change through the registry reaches the vault.
+    function test_batch_linksTheRegistryFirstSoTheRegistryDrivesTheNewVault() public {
+        BasketVault v = _redeploy();
+        assertEq(v.registry(), address(0), "unlinked before the batch");
+        _runBatch(v);
+        assertEq(v.registry(), address(registry), "linked by the batch");
+        assertFalse(v.retired(), "open after the batch");
+
+        vm.startPrank(timelock);
+        registry.setVaultStatus(address(v), VaultRegistry.VaultStatus.DepositsPaused);
+        assertTrue(v.retired(), "the registry halted deposits through the link");
+        registry.setVaultStatus(address(v), VaultRegistry.VaultStatus.Active);
+        assertFalse(v.retired(), "and reopened them");
+        vm.stopPrank();
+    }
+
+    /// @dev Without the link the registry's status setter reverts in the vault's `OnlyRegistry` guard: a batch that forgot the link
+    ///      would leave a vault the registry cannot retire, which is why the link is in the batch and not optional.
+    function test_batch_withoutTheLinkTheRegistryCannotDriveTheNewVault() public {
+        BasketVault v = _redeploy();
+        vm.startPrank(timelock);
+        registry.registerVault(address(v), _meta("Robot Money Protocol"));
+        vm.expectRevert(BasketVault.OnlyRegistry.selector);
+        registry.setVaultStatus(address(v), VaultRegistry.VaultStatus.DepositsPaused);
+        vm.stopPrank();
+    }
+
+    /// @dev The link is set-once: a second redeploy round, or a re-run batch, cannot re-point it.
+    function test_batch_registryLinkIsSetOnce() public {
+        BasketVault v = _redeploy();
+        _runBatch(v);
+        vm.prank(timelock);
+        vm.expectRevert(BasketVault.RegistryAlreadySet.selector);
+        v.setRegistry(address(registry));
+        assertEq(v.registry(), address(registry), "unchanged");
     }
 
     function test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt() public {

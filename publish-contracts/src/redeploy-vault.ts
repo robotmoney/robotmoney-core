@@ -1,8 +1,11 @@
 // Redeploy ONE vault (rmPROTO) into a live deployment (issue 1796, owner decision 2026-10-13). Two halves, one record in the run manifest:
 //   1. the `redeploy-vault` verb (runRedeployVault): the DEPLOYER signs the vault deploy script contracts/script/RedeployProtocolAssetVault.s.sol. The new vault is
-//      deployed CLOSED and UNREGISTERED, linked to the registry, with ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched.
-//   2. the govern row `redeploy-vault` (govern.ts): the Safe, through the timelock, in ONE batch: registerVault(new), migrateEligibility(new, true, ...),
+//      deployed CLOSED, UNREGISTERED and UNLINKED (registry() is zero), with ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched.
+//   2. the govern row `redeploy-vault` (govern.ts): the Safe, through the timelock, in ONE batch: new.setRegistry(registry), registerVault(new), migrateEligibility(new, true, ...),
 //      migrateEligibility(old, false, ...), retire(old), new.unpauseDeposits(). This module builds the calls, plans the vectors and checks the read-back.
+// WHY THE LINK IS IN THE BATCH. `setRegistry` is set-once and ADMIN_ROLE-gated, and no vault deploy script may call it (core S5, scripts/ci/check-set-registry-owner.ts:
+// DeployTimelock is the one script that links). The timelock holds ADMIN_ROLE on the new vault after the deploy, so it links as the first call of the batch: the vault is
+// bound to the registry before it is registered, and the registry can retire it from then on.
 // WHY ONE BATCH. The registry refuses to retire a router-eligible vault (RetireWhileRouterEligible), and the router refuses a default vector whose length differs from
 // the registry's eligible count. So the order is forced: make the NEW vault eligible first (a five-leg default vector: the old leg keeps its weight, the new leg takes 0),
 // then drop the OLD vault (a four-leg vector: the new vault takes the old vault's weight in the old vault's slot), then retire the old vault, then open the new one.
@@ -20,7 +23,7 @@ import {
   broadcastFile, castOut, childEnv, confirmStage, deployerNonce, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
   outputSecrets, readTxCount, saveRunManifest, stageEnv, vaultConfigGate, type RunContext, type RunManifest,
 } from "./runner.ts";
-import { VAULT_NAME, type VaultKey } from "./sheet.ts";
+import { VAULT_NAME } from "./sheet.ts";
 import { getStageTable, type StageRow } from "./stages.ts";
 import { manifestBase, manifestFile, redeployRow as tableRedeployRow } from "./stage-table.ts";
 import { viemReader } from "./verify/reader.ts";
@@ -51,6 +54,7 @@ export const REGISTRY_REDEPLOY_ABI = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 export const VAULT_REDEPLOY_ABI = parseAbi([
+  "function setRegistry(address newRegistry)",
   "function unpauseDeposits()",
   "function depositsPaused() view returns (bool)",
   "function retired() view returns (bool)",
@@ -65,6 +69,8 @@ export const ROUTER_REDEPLOY_ABI = parseAbi([
 
 const lc = (x: string): string => x.toLowerCase();
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
+/** What `registry()` reads on a vault nobody has linked yet. */
+export const ZERO = "0x0000000000000000000000000000000000000000" as Address;
 
 /** The run-manifest key and the salt input of one redeploy round of a vault (`redeploy-vault-PROTO-1`). */
 export const redeployRecordKey = (key: RedeployKey, ordinal: number): string => `${REDEPLOY_ROW}-${key}-${ordinal}`;
@@ -183,11 +189,12 @@ export interface RedeployCall { label: string; target: Address; data: Hex }
 
 export interface RedeployCallInputs { registry: Address; oldVault: Address; newVault: Address; registryName: string; asset: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[] }
 
-/** The five calls of the round, in the one order the contracts allow (see the header). The same builder serves govern and the evidence chain check. */
+/** The six calls of the round, in the one order the contracts allow (see the header): the registry link first. The same builder serves govern and the evidence chain check. */
 export function buildRedeployCalls(i: RedeployCallInputs): RedeployCall[] {
   const v = vectorsFromFinal({ finalVaults: i.finalVaults, finalBps: i.finalBps, oldVault: i.oldVault, newVault: i.newVault });
   const reg = (functionName: "registerVault" | "migrateEligibility" | "retire", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
   return [
+    { label: "new.setRegistry(registry)", target: i.newVault, data: encodeFunctionData({ abi: VAULT_REDEPLOY_ABI, functionName: "setRegistry", args: [i.registry] }) },
     { label: "registry.registerVault(new)", target: i.registry, data: reg("registerVault", [i.newVault, { name: i.registryName, asset: i.asset, registeredAt: 0n }]) },
     { label: "registry.migrateEligibility(new, true, five legs)", target: i.registry, data: reg("migrateEligibility", [i.newVault, true, v.fiveVaults, v.fiveBps.map(BigInt)]) },
     { label: "registry.migrateEligibility(old, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
@@ -223,7 +230,7 @@ export function redeployBeforeProblems(oldVault: string, newVault: string | unde
   if (!b.oldEligible) bad.push("the old vault is not router-eligible: there is no router slot to move");
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
-  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: a voted vector overrides the default, so the split the batch keeps is not the split deposits use. Run --row clear-voted-weights first");
+  if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the old vault) overrides the default, so the split the batch keeps is not the split deposits use. Run --row clear-voted-weights first, then apply a receipt over the new vault set afterwards");
   if (!b.defaultVaults.some((v) => lc(v) === lc(oldVault))) bad.push(`the router's default vector does not hold the old vault: [${b.defaultVaults.join(", ")}]`);
   return bad;
 }
@@ -242,13 +249,15 @@ export interface RedeployAfter {
   effectiveVaults: readonly string[];
   effectiveBps: readonly (bigint | number)[];
   newPaused: boolean;
+  /** `new.registry()` equals the deployment's registry: the batch's first call linked it. */
+  newLinked: boolean;
   oldRetiredFlag: boolean;
   oldHasCode: boolean;
 }
 
 const vkey = (v: readonly string[], b: readonly (bigint | number)[]): string => v.map((a, k) => `${lc(a)}:${b[k]}`).join(",");
 
-/** What must hold after the batch executed. An empty list is a pass. The router's effective vector is what deposits route by: it must be the final vector with no voted vector over it. */
+/** What must hold after the batch executed. An empty list is a pass. The router's effective vector is what deposits route by: it must be the final vector with no applied receipt vector over it. */
 export function redeployReadBackProblems(v: RedeployVectors, a: RedeployAfter): string[] {
   const bad: string[] = [];
   if (a.oldStatus !== STATUS_RETIRED) bad.push(`the old vault's registry status is ${STATUS_NAME[a.oldStatus] ?? a.oldStatus}, want Retired`);
@@ -256,11 +265,12 @@ export function redeployReadBackProblems(v: RedeployVectors, a: RedeployAfter): 
   if (a.oldEligible) bad.push("the old vault is still router-eligible");
   if (!a.newEligible) bad.push("the new vault is not router-eligible");
   if (a.eligibleCount !== v.finalVaults.length) bad.push(`registry.routerEligibleCount() is ${a.eligibleCount}, want ${v.finalVaults.length}`);
-  if (a.votedWeightsActive) bad.push("router.votedWeightsActive() is true");
+  if (a.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector overrides the default the batch left");
   const want = vkey(v.finalVaults, v.finalBps);
   if (vkey(a.defaultVaults, a.defaultBps) !== want) bad.push(`router.getDefaultWeights() is [${vkey(a.defaultVaults, a.defaultBps)}], want [${want}]`);
   if (vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
   if (a.newPaused) bad.push("the new vault still reads depositsPaused true");
+  if (!a.newLinked) bad.push("the new vault is not linked to the registry: the batch's setRegistry did not land");
   if (!a.oldRetiredFlag) bad.push("the old vault's retired() flag is false: its deposit halt did not run");
   if (!a.oldHasCode) bad.push("the old vault has no code: it must keep serving redeem and redeemInKind");
   return bad;
@@ -398,13 +408,14 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   const newVault = written.vault as Address;
   if (typeof newVault !== "string" || !ADDR.test(newVault) || lc(newVault) === lc(oldVault)) throw new PublishError("MANIFEST", `${tmpPath} has no new vault address (or it is the old one)`, { stage: row.name });
 
-  // What the deploy must have left: a closed vault, no role on the deployer, the timelock admin, the registry link, and not listed yet.
+  // What the deploy must have left: a closed vault, no role on the deployer, the timelock admin, NO registry link (the batch's first call sets it), and not listed yet.
   const bad: string[] = [];
   const rd = async <T,>(sig: string, args: unknown[] = []): Promise<T> => chain.read(newVault, sig, args) as Promise<T>;
   if (!(await rd<boolean>("function depositsPaused() view returns (bool)"))) bad.push("the new vault is not deposit-paused");
   if (!(await rd<boolean>("function hasRole(bytes32 role, address account) view returns (bool)", [ADMIN_ROLE, timelock]))) bad.push("the timelock does not hold ADMIN_ROLE on the new vault");
   if (await rd<boolean>("function hasRole(bytes32 role, address account) view returns (bool)", [ADMIN_ROLE, deployer])) bad.push("the deployer still holds ADMIN_ROLE on the new vault");
-  if (lc(await rd<string>("function registry() view returns (address)")) !== lc(registry)) bad.push("the new vault is not linked to the registry");
+  const link = await rd<string>("function registry() view returns (address)");
+  if (lc(link) !== lc(ZERO)) bad.push(`the new vault is already linked to ${link}: the govern batch links the registry (set-once), the deploy must leave it unlinked`);
   if ((await chain.read(registry, "function listVaults() view returns (address[])") as string[]).some((v) => lc(v) === lc(newVault))) bad.push("the registry already lists the new vault");
   if (bad.length > 0) throw new PublishError("VERIFY", `the new ${VAULT_NAME[key]} ${newVault} is not in the state the deploy must leave: ${bad.join("; ")}. The old vault was not touched. Do not run the govern row.`, { newVault, bad });
 

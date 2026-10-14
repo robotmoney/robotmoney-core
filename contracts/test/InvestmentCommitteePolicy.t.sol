@@ -271,7 +271,8 @@ contract InvestmentCommitteePolicyTest is Test {
     ///         This test asserts the property structurally: any ETH sent to
     ///         the contract reverts (no `receive`/`fallback`), and the contract
     ///         bytecode contains none of the function selectors for
-    ///         `RouterGovernance.execute(uint256)` (0x168e3b1f),
+    ///         the deleted `RouterGovernance.execute(uint256)` (0x168e3b1f) and
+    ///         its replacement `RouterGovernance.applyReceipt(...)`,
     ///         `RobotMoneyGateway.deposit(...)`, or ERC-20 `transfer`.
     function testSignallingOnlyBoundary() public {
         // 1. No ether receive: sending ETH reverts.
@@ -284,10 +285,22 @@ contract InvestmentCommitteePolicyTest is Test {
         (bool ok2,) = address(ic).call(transferSelector);
         assertFalse(ok2, "IC must not have ERC-20 transfer");
 
-        // 3. No `execute(uint256)` selector (RouterGovernance).
+        // 3. No weight-setter selector: neither the deleted `execute(uint256)` nor
+        //    `RouterGovernance.applyReceipt(bytes32,bytes32,address[],uint256[])`.
         bytes memory executeSelector = abi.encodeWithSignature("execute(uint256)", uint256(0));
         (bool ok3,) = address(ic).call(executeSelector);
-        assertFalse(ok3, "IC must not have RouterGovernance.execute");
+        assertFalse(ok3, "IC must not have the old RouterGovernance.execute");
+        (bool ok3b,) = address(ic)
+            .call(
+                abi.encodeWithSignature(
+                    "applyReceipt(bytes32,bytes32,address[],uint256[])",
+                    bytes32(0),
+                    bytes32(0),
+                    new address[](0),
+                    new uint256[](0)
+                )
+            );
+        assertFalse(ok3b, "IC must not have RouterGovernance.applyReceipt");
 
         // 4. Vote count only increases — it can never drain funds (pure storage write).
         uint256 before = ic.voteCount();

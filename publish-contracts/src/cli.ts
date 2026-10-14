@@ -9,7 +9,8 @@ import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { exitCodeOf, isPublishError, PublishError } from "./errors.ts";
-import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { assertFloors, assertOwnerSignerSpec, assertSignerSpec, readRpcChainId, isMainnet, MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "./floors.ts";
+import { ACTIONS_TOKEN_ENV, proveActions, proofLogFields, type ActionsProof } from "./actions-proof.ts";
 import { kindLabel } from "./chains.ts";
 import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
@@ -24,8 +25,9 @@ import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
-import { callerInputs, parseSheet } from "./sheet.ts";
+import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
+import { PROOF_STAGE } from "./control-proof.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
@@ -77,19 +79,21 @@ export const USAGE = `publish contracts
                      the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
   --admin-arg K=V    govern with a self-administration row (Twin chain 918453 only, refused on 8453): safe-add-owner, safe-remove-owner, safe-swap-owner, safe-change-threshold
                      (one Safe transaction to the Safe) and timelock-grant-role, timelock-revoke-role (a Safe -> Timelock round). Keys: owner, old-owner, new-owner, threshold, role, account.
-                     --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696): ONE timelock batch,
-                     releaseReceipt plus the router weight change for the payload's vector, refused with USAGE (nothing sent) unless the receipt is recorded and
-                     unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
-                     registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
-                     --row clear-voted-weights (no other argument) clears the router's VOTED weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(), so routing
-                     falls back to the default vector. Refused (nothing scheduled) when no voted vector is active. apply-receipt refuses while one is active. Production and rehearsal, never part of stage 13.
+                     --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698): ONE timelock call,
+                     RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and writes the payload's vector to the router in one transaction.
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the
+                     vector sums to 10000 bps and lists the registry's router-eligible vaults in registry order. Not part of stage 13. After the delay the same command executes it and
+                     reads isReleased and the router's EFFECTIVE weights back. An applied vector already active is replaced, never a refusal.
+                     --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
+                     so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is set. Production and rehearsal, never part of stage 13.
                      --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,
                      gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
-                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of five calls, registry.registerVault(new), registry.migrateEligibility(new, true, five legs),
-                     registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
-                     on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new vault is the closed, linked, timelock-governed one the verb left.
+                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of six calls, new.setRegistry(registry), registry.registerVault(new),
+                     registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind.
+                     Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new
+                     vault is the closed, UNLINKED, timelock-governed one the verb left (the link is set-once: the timelock sets it as the batch's first call, no deploy script does).
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a checkout built at the ORIGINAL deployment sha. The vaults the redeploy did not replace (and the retired one) run the code of that build, so their code hashes are compared with it.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
@@ -110,7 +114,9 @@ export const USAGE = `publish contracts
   --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
-                     beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453.
+                     beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
+                     prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. env:signer is refused as an owner (exit 29). A run on 8453
+                     that reaches prove-control with fewer specs than the sheet has owners is refused before stage 1 (exit 24), never after stages 1-10 have broadcast.
   --emergency-signer S  pause-all, and the automatic pause after a failed verify: the EMERGENCY key signer spec, needed once the handover has begun. On the Twin chain with none given: the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
@@ -164,6 +170,8 @@ export interface CliDeps {
   recordApi?: RecordApi;
   /** Test seam: the blank local chain a --dry-run simulates on. Default: anvil, when installed. */
   startChain?: ChainStarter;
+  /** Test seam (qa-plan B2): the Actions-only proof behind CONFIRM=environment on 8453. Default: fetch and verify the job's GitHub OIDC token. */
+  actionsProof?: typeof proveActions;
 }
 
 export interface Parsed {
@@ -288,6 +296,24 @@ export function selectVerbStages(verb: Verb): string[] {
   return [verb];
 }
 
+/**
+ * The owner-signer shortfall of a run on 8453, decided BEFORE stage 1 (owner decision 2026-10-14, qa-plan B1). prove-control needs a signer
+ * for EVERY sheet owner (core 1618), and it runs after stages 1-10: with too few `--owner-signer` specs a publish used to broadcast those ten
+ * stages and die at CONTROL_NOT_PROVEN with the deployer holding every role. So a run whose stages include prove-control is refused here,
+ * with the same kind, when fewer specs than sheet owners are given. Not checked: the Twin chain (its owners default from the rehearsal keys,
+ * owner-signers.ts), a dry run (it skips prove-control, runner.ts), the plan (no signer) and the verbs that have no proof stage. A govern run
+ * keeps its own in-run refusal (GOVERN, before any send): it broadcasts nothing before the Safe's signature count is checked.
+ */
+export function ownerSignerShortfall(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; specs: string[]; sheet: Pick<Sheet, "safeOwners"> }): PublishError | undefined {
+  if (i.chainId !== MAINNET_CHAIN_ID || i.dryRun || i.stage === "plan") return undefined;
+  if (i.verb === "pause-all" || i.verb === "record-receipt" || i.verb === REDEPLOY_VERB) return undefined;
+  const names = i.verb ? selectVerbStages(i.verb) : selectStages(i.stage);
+  if (!names.includes(PROOF_STAGE)) return undefined;
+  const have = i.specs.length, need = i.sheet.safeOwners.length;
+  if (have >= need) return undefined;
+  return new PublishError("CONTROL_NOT_PROVEN", `${have} --owner-signer spec${have === 1 ? "" : "s"} for a Safe of ${need} owners: ${PROOF_STAGE} needs a signer for EVERY owner, so the run is refused before stage 1 and nothing was sent. Pass --owner-signer for each owner of the sheet (keystore:PATH, ledger:PATH@0xOWNER or trezor:PATH@0xOWNER).`, { have, need, stage: PROOF_STAGE });
+}
+
 /** `--stage` to stage names. Default: everything through verify. govern is explicit (or `all`). */
 export function selectStages(stage: string | undefined): string[] {
   const through = (last: string) => STAGE_NAMES.slice(0, STAGE_NAMES.indexOf(last) + 1);
@@ -362,13 +388,26 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     });
     if (rpcChainId !== MAINNET_CHAIN_ID && rpcChainId !== TWIN_CHAIN_ID) throw new PublishError("CHAIN", `chain ${rpcChainId} is not supported: publish contracts runs on ${TWIN_CHAIN_ID} (rehearsal) and ${MAINNET_CHAIN_ID} (mainnet)`);
     for (const spec of a.ownerSigners) assertOwnerSignerSpec(spec, { rpcChainId, rpc: a.rpc, env });
-    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions: env.GITHUB_ACTIONS === "true", measure: a.measure });
+    // qa-plan B2 (DT-3): CONFIRM=environment on 8453 is accepted on one proof only, the job's GitHub OIDC token verified for --environment. It is
+    // fetched HERE, before any floor or signer, and only when the runner's request token is present: a laptop with GITHUB_ACTIONS=true has none,
+    // and the floor below refuses it by name. A token that does not verify is a FLOOR exit, never a skip.
+    const githubActions = env.GITHUB_ACTIONS === "true";
+    let actionsProof: ActionsProof | undefined;
+    if (caller.confirm === "environment" && isMainnet(rpcChainId) && githubActions && env[ACTIONS_TOKEN_ENV]) {
+      actionsProof = await (deps.actionsProof ?? proveActions)(env, { environment: a.environment });
+      log.log("info", "run.actions_proof", { chain_id: rpcChainId, ...proofLogFields(actionsProof) });
+    }
+    assertFloors({ rpcChainId, rpc: a.rpc, sheet, argChainId: a.chain, caller, signerSpec: a.signer, env, environment: a.environment, githubActions, actionsProof, measure: a.measure });
     if (sheet.kind === "rehearsal") log.log("warn", "run.deployment_kind", { deployment_kind: sheet.kind, label: kindLabel(sheet.kind, sheet.timelockMinDelay), note: "a REHEARSAL with a short timelock delay: never a production deployment" });
     // A row this chain and kind refuse is refused HERE, before any signer exists: no passphrase prompt for a row that can never run (production update-delay, batch, cancel, register-committee on 8453).
     const rowRefusal = govRowRefusal(a.row, rpcChainId, sheet.kind);
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
+    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1): the
+    // proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
+    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet });
+    if (shortfall !== undefined) throw shortfall;
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
@@ -391,7 +430,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions: env.GITHUB_ACTIONS === "true", baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
       };
     };
@@ -426,7 +465,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       };
       const mk = deps.ownerSigner ?? ((s: string) => parseOwnerHardwareSpec(s) ? ownerHardwareSigner(s, { prompt: devicePrompt, runner: deps.castRunner }) : signerFromSpec(s));
       const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-      return Promise.all(specs.map((s) => mk(s)));
+      // In order, one device (or one passphrase prompt) at a time: each owner is built and its address read before the next is asked for, so
+      // prompts never interleave and a wrong device stops here, before the Safe is touched (PR 1693; the hunk the qa merge dropped).
+      const out: Signer[] = [];
+      for (const s of specs) { const sg = await mk(s); await sg.address(); out.push(sg); }
+      return out;
     };
     // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
     if (a.verb === "record-receipt") {

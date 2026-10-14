@@ -1,8 +1,10 @@
 // Chain-id keyed floors. One rule: guards apply on 8453 and nothing else changes. No flag or env switch lifts a floor on 8453.
 // The ONE exception (issue 1727, owner decision 2026-10-10): the sheet line DEPLOYMENT_KIND=rehearsal lowers the timelock delay floor to 900 s for a Base mainnet rehearsal. Every other floor stays.
 // Plan principles 4, 5, 6, 18, 19; issue devops 55 (S6). The chain id comes from the RPC (`cast chain-id`), never from a hostname.
+// CONFIRM=environment on 8453 (qa-plan B2, DT-3) is accepted on one proof only: the job's GitHub OIDC token, verified for --environment (actions-proof.ts).
 import { PublishError } from "./errors.ts";
 import { isLoopbackRpc } from "./safe/chain.ts";
+import { actionsProofReason, type ActionsProof } from "./actions-proof.ts";
 import type { Sheet, CallerInputs } from "./sheet.ts";
 
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID, MAINNET_DELAY_FLOOR, REHEARSAL_DELAY_FLOOR, isMainnet, delayFloor, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
@@ -45,15 +47,19 @@ export function assertSignerSpec(spec: string, i: { rpcChainId: number; rpc: str
 }
 
 /**
- * A Safe owner signer spec (--owner-signer). The signer-spec floors apply, and on 8453 the owner must be a hardware wallet: a
- * software keystore (with or without a passphrase file) and env:signer are refused (OWNER_SIGNER_NOT_HARDWARE).
+ * A Safe owner signer spec (--owner-signer). Hardware signing is optional, never required (owner decision 2026-10-14; the hardware-only
+ * floor of core 1668 is reverted). On 8453 an owner is an encrypted keystore whose passphrase is typed at the hidden prompt (`keystore:PATH`)
+ * or a device bound to its owner (`ledger:PATH@0xOWNER`, `trezor:PATH@0xOWNER`; the grammar is the CLI parser's check). The signer-spec
+ * floors still apply: plaintext material, a raw key and a passphrase file are refused (FLOOR). `env:signer` / `env:funder` are refused as
+ * owners too (OWNER_SIGNER_REFUSED): that is the credential engine's hand-off of ONE key, the deployer's, with its passphrase in the
+ * environment, never a Safe owner's.
  */
 export function assertOwnerSignerSpec(spec: string, i: { rpcChainId: number; rpc: string; env?: Record<string, string | undefined> }): void {
-  if (isMainnet(i.rpcChainId) && spec !== "ledger" && spec !== "trezor") {
-    const kind = /^(keystore|env|plaintext|private-key|key|loopback-key|address)(:|$)/.exec(spec)?.[1] ?? "an unrecognised spec"; // never echo a spec that may be key material
-    throw new PublishError("OWNER_SIGNER_NOT_HARDWARE", `owner signer '${kind}' is not a hardware wallet: on chain ${MAINNET_CHAIN_ID} every Safe owner signs with ledger or trezor`, { kind });
-  }
   assertSignerSpec(spec, i);
+  if (isMainnet(i.rpcChainId) && /^env(:|$)/.test(spec)) {
+    // never echo the spec: the message names the family only
+    throw new PublishError("OWNER_SIGNER_REFUSED", `owner signer 'env' is refused on chain ${MAINNET_CHAIN_ID}: a Safe owner's passphrase is typed at the hidden prompt (keystore:PATH) or the key is on a device (ledger:PATH@0xOWNER, trezor:PATH@0xOWNER), never read from the environment`, { kind: "env" });
+  }
 }
 
 export interface FloorInput {
@@ -69,6 +75,11 @@ export interface FloorInput {
   env?: Record<string, string | undefined>;
   environment?: string;
   githubActions?: boolean;
+  /**
+   * qa-plan B2 (DT-3): the verified GitHub OIDC token of the job, obtained by the CLI (actions-proof.ts) when CONFIRM=environment on 8453.
+   * Undefined when none could be obtained: the floor then refuses CONFIRM=environment on 8453, whatever GITHUB_ACTIONS says.
+   */
+  actionsProof?: ActionsProof;
   /** Frozen counts are being measured (rehearsal only). */
   measure?: boolean;
 }
@@ -106,8 +117,10 @@ export function assertFloors(i: FloorInput): void {
     const why = plaintextSignerReason(i.signerSpec ?? "", i.env ?? {});
     if (why) throw floor(`plaintext signing is refused on chain 8453: ${why}`);
     if (i.caller.confirm === "environment") {
-      if (!i.githubActions) throw floor("CONFIRM=environment is valid only inside GitHub Actions, behind an Environment with required reviewers");
-      if (!i.environment || i.environment === "local") throw floor("CONFIRM=environment needs --environment set to the GitHub Environment name");
+      // qa-plan B2 (DT-3): GITHUB_ACTIONS=true is a string anyone exports. On 8453 the proof is the job's GitHub OIDC token, verified for
+      // this Environment (actions-proof.ts); without it, or for another Environment, CONFIRM=environment is refused and the prompt stands.
+      const why = actionsProofReason({ githubActions: !!i.githubActions, env: i.env ?? {}, environment: i.environment, proof: i.actionsProof });
+      if (why) throw floor(why, { chainId, environment: i.environment });
     }
   }
 }

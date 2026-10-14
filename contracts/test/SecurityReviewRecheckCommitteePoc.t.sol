@@ -2,6 +2,9 @@
 pragma solidity ^0.8.24;
 
 // Adversarial re-check of finding 3 of docs/code-review/20261012-security-review.md (committee vote attribution).
+// At baseline Q5 and Q4 proved the spoof landed. Issue #1790 (PR 1818) added the
+// gateway identity guard (`p.agent == msg.sender`, else `CommitteeAgentNotCaller`),
+// so those two tests now pin the refusal; Q3 and Q2 were never spoofable.
 // Run: forge test --match-path 'contracts/test/SecurityReviewRecheckCommitteePoc.t.sol' -vv
 
 import {ICGatewayIntegration} from "./ICGatewayIntegration.t.sol";
@@ -45,17 +48,18 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         gateway.revealAuthorization(agent, salt, _selfPolicy(owner));
     }
 
-    // ── Q5: spoof supersedes the real member's latest vote ─────────────────
+    // ── Q5: spoof cannot supersede the real member's latest vote (#1790) ────
 
-    function test_spoofedVoteSupersedesMembersLatestVote() public {
+    function test_spoofedVoteCannotSupersedeMembersLatestVote() public {
         // Real member votes Overweight 6000 bps.
         IInvestmentCommitteePolicy.VoteParams memory real = _defaultVoteParams();
         vm.prank(committeeAgent);
         uint256 realId = gateway.committeeVoteSubmit(real);
         assertEq(ic.latestVoteByAgent(committeeAgent), realId);
 
-        // Attacker self-registers and back-runs with an opposite vote under
-        // the member's address.
+        // Attacker self-registers and tries to back-run with an opposite vote
+        // under the member's address. The gateway refuses it before the IC
+        // contract is reached.
         _selfReveal(attacker, attacker, keccak256("f3-spoof"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.stance = IInvestmentCommitteePolicy.Stance.Underweight;
@@ -63,37 +67,56 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         spoof.voteJsonHash = keccak256("attacker-memo");
         spoof.rationaleUri = "https://attacker.example/memo.json";
         vm.prank(attacker);
-        uint256 spoofId = gateway.committeeVoteSubmit(spoof);
+        vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
+        gateway.committeeVoteSubmit(spoof);
 
-        // "Latest wins" readers (architecture.md L581, latestVoteByAgent) now
-        // see the attacker's vote as the member's live position.
-        assertEq(ic.latestVoteByAgent(committeeAgent), spoofId);
-        InvestmentCommitteePolicy.Vote memory v = ic.getVote(spoofId);
+        // "Latest wins" readers (architecture.md L581, latestVoteByAgent) still
+        // see the member's own vote as the live position, unchanged.
+        assertEq(ic.latestVoteByAgent(committeeAgent), realId);
+        InvestmentCommitteePolicy.Vote memory v = ic.getVote(realId);
         assertEq(v.agent, committeeAgent);
-        assertEq(uint8(v.stance), uint8(InvestmentCommitteePolicy.Stance.Underweight));
-        assertEq(v.targetWeightBps, 0);
-        // The real vote is not reverted or deleted: append-only, no DoS.
-        assertEq(ic.voteCount(), 2);
+        assertEq(uint8(v.stance), uint8(InvestmentCommitteePolicy.Stance.Overweight));
+        assertEq(v.targetWeightBps, 6000);
+        assertEq(ic.voteCount(), 1, "only the member's own vote is recorded");
     }
 
-    // ── Q4: unbounded flood under a member's name (aggregate dominance) ─────
+    // ── Q4: flood under a member's name is refused on every attempt (#1790) ─
 
-    function test_spoofedVotesFloodUnderMemberName() public {
+    function test_spoofedVoteFloodRevertsUnderMemberName() public {
         _selfReveal(attacker, attacker, keccak256("f3-flood"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.targetWeightBps = 0;
+        // Varying the memo hash per attempt does not matter: the identity guard
+        // fires on `p.agent != msg.sender` before any vote field is read.
         for (uint256 i = 0; i < 25; i++) {
             spoof.voteJsonHash = keccak256(abi.encode("attacker-memo", i));
             vm.prank(attacker);
+            vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
             gateway.committeeVoteSubmit(spoof);
         }
-        // Every on-chain row names the member. This test does not serve matching
-        // rationale bodies or run the indexer: verification and aggregation are
-        // source-inspected concerns, not end-to-end assertions of this fixture.
-        assertEq(ic.voteCount(), 25);
-        for (uint256 i = 0; i < 25; i++) {
-            assertEq(ic.getVote(i).agent, committeeAgent);
-        }
+        // No on-chain row names the member, so there is nothing for the
+        // indexer's aggregate to pick up.
+        assertEq(ic.voteCount(), 0, "flood must leave the vote log empty");
+    }
+
+    // ── Q4b: the self-registered agent has no vote path under its own name ──
+
+    /// @dev With the spoof closed, the only address the attacker may put in
+    ///      `p.agent` is itself, and the IC contract refuses that because the
+    ///      attacker holds AGENT_ROLE on the gateway but not
+    ///      COMMITTEE_AGENT_ROLE on the policy. Together with Q5/Q4 this shows
+    ///      the permissionless gateway tier has no route into the vote log.
+    function test_selfRevealedAgentCannotVoteUnderOwnAddress() public {
+        _selfReveal(attacker, attacker, keccak256("f3-own"));
+        bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
+        assertFalse(ic.hasRole(committeeRole, attacker));
+
+        IInvestmentCommitteePolicy.VoteParams memory own = _defaultVoteParams();
+        own.agent = attacker;
+        vm.prank(attacker);
+        vm.expectRevert(InvestmentCommitteePolicy.AgentNotAllowlisted.selector);
+        gateway.committeeVoteSubmit(own);
+        assertEq(ic.voteCount(), 0);
     }
 
     // ── Q3: receipt anchoring is NOT spoofable (confirms report) ────────────

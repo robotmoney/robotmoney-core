@@ -83,9 +83,6 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
 export const NAV_GUARD_BPS = 100n;
 export const POOL_LIQUIDITY = 10n ** 18n;
 export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
-export const VOTER_A = addr(0xb001);
-export const VOTER_B = addr(0xb002);
-const GOV_SHEET = { voters: [VOTER_A, VOTER_B], voterPower: 1000n, quorum: 2n, votingPeriod: 3600n, executionDelay: 3600n };
 const DEFAULT_BPS = [9500, 500, 0, 0];
 
 type Handler = (args: any[]) => unknown;
@@ -254,13 +251,15 @@ export function buildWorld(chainId = 8453): World {
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
   ch.set(REGISTRY, "vaultCount", 4n);
   ch.set(REGISTRY, "isRouterEligible", () => true);
-  // deploy-time configuration (issue 1520): voting power, quorum, voting period, execution delay and the router default weights
-  ch.set(GOV, "votingPower", () => GOV_SHEET.voterPower);
-  ch.set(GOV, "quorumThreshold", GOV_SHEET.quorum);
-  ch.set(GOV, "votingPeriod", GOV_SHEET.votingPeriod);
-  ch.set(GOV, "executionDelay", GOV_SHEET.executionDelay);
+  // the weight setter's stage 11 wiring (issue 1698, no voting surface): the receipt register applyReceipt releases from, the router it writes, and the register
+  // ADMIN_ROLE the release needs (DeployTimelock grants it to RouterGovernance and logs it like every other grant)
+  ch.set(GOV, "receiptContract", REC);
+  ch.set(GOV, "router", ROUTER);
+  ch.grant(REC, ADMIN_ROLE, GOV);
+  ch.roleGrantedLog(REC, ADMIN_ROLE, GOV, 115n);
+  // deploy-time configuration (issue 1520): the router default weights
   ch.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
-  // issue 1743: no voted vector is active, so the effective vector is the default one
+  // issue 1743: no active (applied receipt) vector after the deploy, so the effective vector is the default one
   ch.set(ROUTER, "votedWeightsActive", false);
   ch.set(ROUTER, "getEffectiveWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
   // the deploy authorizes no agent: the gateway carries no AgentAuthorized log and nobody holds AGENT_ROLE
@@ -343,7 +342,6 @@ export function buildWorld(chainId = 8453): World {
 
   const sheet: VerifySheet = {
     chainId, deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safeOwners: [...OWNERS], safeThreshold: 2, timelockDelay: delay, vaults: vsheet,
-    governance: { ...GOV_SHEET, voters: [...GOV_SHEET.voters] },
     defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
   };
   ch.txs.set(PROOF_TX.toLowerCase(), { to: SAFE, input: proofInput(chainId), value: 0n, status: "success" });

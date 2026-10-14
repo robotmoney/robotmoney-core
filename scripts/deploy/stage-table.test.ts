@@ -115,7 +115,6 @@ describe("stage-table.json", () => {
       );
     const src = all("contracts").join("\n");
     for (const [k, name] of Object.entries(table.artifacts)) {
-      if (name === "TimelockController") continue; // OpenZeppelin, deployed by DeployTimelock
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
@@ -133,7 +132,9 @@ describe("stage-table.json", () => {
     for (const old of ["voting-power-quorum", "other-setters", "migrate-eligibility", "router-weights"]) expect(JSON.stringify(g)).not.toContain(old);
     // the deploy-time configuration is read by the stages that set it
     const env = (n: string) => table.stages.find((s) => s.name === n)!.requiredEnv;
-    expect(env("governance")).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+    // issue 1698: the governance stage deploys the weight setter with no voting surface, so no voter or quorum input exists
+    expect(env("governance")).toEqual(["ADMIN_ADDRESS", "ROUTER_ADDRESS", "DEPLOYMENT_OUT"]);
+    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(env("governance")).not.toContain(gone);
     for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
   });
 

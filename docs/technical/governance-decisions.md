@@ -178,6 +178,50 @@ which returns routing to the default vector. A scheduled `apply-receipt` batch
 that should not run is cancelled on the timelock by the Safe before its delay
 passes.
 
+### 3.7 Payload-digest binding of `applyReceipt`
+
+**The register commits to the receipt's canonical bytes; the chain binds the
+apply to that commitment by calldata; the vector-to-payload equality is checked
+by the tool before scheduling and attested by the Safe signatures.** (Decided
+with issue 1698, 2026-10-14.)
+
+`ConsensusRecommendationReceipt` stores `payloadDigest = keccak256("robotmoney:consensus-receipt:v1\n" || canonical JSON || "\n")`
+(the scheme in `publish-contracts/src/receipt-digest.ts`). The EVM cannot
+parse that JSON into `(vaults, bps)`, so no contract can prove on chain that a
+vector *is* the payload's allocation. What the chain can prove, it does:
+
+- `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`
+  (`ADMIN_ROLE`, the timelock) refuses a receipt that is not recorded, one that
+  is already released, and a `payloadDigest` that differs from the digest the
+  committee submitter recorded (`ReceiptDigestMismatch`). The digest therefore
+  sits in the scheduled calldata beside the vector, and both are what the Safe
+  owners sign.
+- The router validates the vector itself (`setWeights`: every vault
+  router-eligible and Active, no duplicate vault, bps sum 10 000). A digest
+  binds a vector but does not prove it is unique, so the duplicate check is the
+  router's, not the digest's.
+- Release and weights are one transaction: the weight setter calls
+  `releaseReceipt` and `setWeights` in `applyReceipt`, so a refused vector
+  releases nothing and a released receipt always carries its weights.
+
+The `apply-receipt` govern row derives the vector from the payload file,
+checks `receiptPayloadDigest(file) == stored digest` before scheduling (§3.2),
+and schedules the one call with that digest. A forged vector would have to
+pass two of three Safe signers reviewing calldata whose digest names the exact
+receipt; that review, plus the timelock delay in which the Safe can cancel, is
+the binding this design relies on. Recording a second digest beside the
+payload digest (for example a `keccak256(abi.encode(vaults, bps))` the
+committee would commit to at `recordReceipt`) was considered and deferred: it
+changes the gateway write path, the rmpc submitter and the indexer for a check
+the Safe review already performs.
+
+Roles: the weight setter (`RouterGovernance`) holds `ADMIN_ROLE` on the
+register (its `releaseReceipt` gate) beside the timelock, never
+`DEFAULT_ADMIN_ROLE`: it can release, not administer. Stage 11
+(`DeployTimelock`) grants it and points the weight setter at the register with
+`setReceiptContract`, since the register is deployed after `RouterGovernance`
+(ic-policy stage).
+
 ---
 
 ## 4. Authority source
