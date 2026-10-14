@@ -229,6 +229,8 @@ contracts/test/contract.ProtocolGuardHarness.mdx
 contracts/test/contract.QuorumFloorInvariantTest.mdx
 contracts/test/contract.ReadCountingAdapter.mdx
 contracts/test/contract.ReceiptRoleStub.mdx
+contracts/test/contract.RecheckUsdc.mdx
+contracts/test/contract.RecheckVault.mdx
 contracts/test/contract.RecorderDeployHarness.mdx
 contracts/test/contract.RecordingSwapRouter.mdx
 contracts/test/contract.RedeemGasGuardsTest.mdx
@@ -236,6 +238,9 @@ contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantToken.mdx
 contracts/test/contract.ReentrantVault.mdx
 contracts/test/contract.RevertingRetireVault.mdx
+contracts/test/contract.RevisionCommitteeAssessment.mdx
+contracts/test/contract.RevisionRecorderAssessment.mdx
+contracts/test/contract.RevisionVaultAssessment.mdx
 contracts/test/contract.RobotMoneyGatewayTest.mdx
 contracts/test/contract.RobotMoneyRouterRedeemGasRootCauseTest.mdx
 contracts/test/contract.RobotMoneyVault4626Conformance.mdx
@@ -260,6 +265,11 @@ contracts/test/contract.RwaGuardHarness.mdx
 contracts/test/contract.RwaVaultB20ForkTest.mdx
 contracts/test/contract.RwaVaultB20Test.mdx
 contracts/test/contract.SafeIntegrationTest.mdx
+contracts/test/contract.SecurityReviewCommitteePoc.mdx
+contracts/test/contract.SecurityReviewPoc.mdx
+contracts/test/contract.SecurityReviewRecheckCommitteePoc.mdx
+contracts/test/contract.SecurityReviewRecheckGovernancePoc.mdx
+contracts/test/contract.SecurityReviewRecheckVaultPoc.mdx
 contracts/test/contract.ShareLeakRedeemVault.mdx
 contracts/test/contract.ShareLeakVault.mdx
 contracts/test/contract.ShortfallAdapter.mdx

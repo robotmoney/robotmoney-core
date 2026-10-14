@@ -1,0 +1,243 @@
+---
+title: "SecurityReviewRecheckVaultPoc"
+---
+
+# SecurityReviewRecheckVaultPoc
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
+
+**Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
+
+<i>
+
+Adversarial re-check of docs/code-review/20261012-security-review.md, vault side.
+Fixture facts (RobotMoneyVaultTest.setUp): `admin` holds ADMIN_ROLE and EMERGENCY_ROLE,
+`adapter` is registry index 0 at a 100% cap, no exit fee.
+
+</i>
+
+## State Variables
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### keeper
+
+```solidity
+address internal keeper = makeAddr("keeper");
+```
+
+## Functions
+
+<a id="_granthotkeys"></a>
+
+### _grantHotKeys
+
+```solidity
+function _grantHotKeys() internal;
+```
+
+<a id="_secondadapter"></a>
+
+### _secondAdapter
+
+```solidity
+function _secondAdapter() internal returns (MockAdapter second);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| second | `MockAdapter` |  |
+
+<a id="_addduplicate"></a>
+
+### _addDuplicate
+
+```solidity
+function _addDuplicate() internal;
+```
+
+<a id="test_f1_keeperrebalanceskipsrevokedadapter"></a>
+
+### test_f1_keeperRebalanceSkipsRevokedAdapter
+
+Remediated by core 1788 (PR 1814): deposits close during exclusion, and KEEPER
+`rebalance()` skips the ineligible adapter instead of pulling it into NAV.
+
+```solidity
+function test_f1_keeperRebalanceSkipsRevokedAdapter() public;
+```
+
+<a id="test_f1_holderexitduringwindowstrandssurplusbehindvirtualshares"></a>
+
+### test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares
+
+A holder exiting during exclusion loses its share-based recovery entitlement.
+After restoration at zero supply, an ordinary new deposit does not capture the surplus.
+This does not prove unconditional permanent lock: further ADMIN eligibility changes
+can redistribute it, as SecurityReviewRevisionAssessment demonstrates.
+
+```solidity
+function test_f1_holderExitDuringWindowStrandsSurplusBehindVirtualShares() public;
+```
+
+<a id="test_f1_emergencywithdrawadapteronrevokedadapterrecoverstoexistingholders"></a>
+
+### test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders
+
+Remediated by core 1788 (PR 1814): with no window depositor, `emergencyWithdrawAdapter`
+on a revoked adapter returns the recovered value to the holders who funded it.
+
+```solidity
+function test_f1_emergencyWithdrawAdapterOnRevokedAdapterRecoversToExistingHolders() public;
+```
+
+<a id="test_f1_pausebeforerevokecloseswindow"></a>
+
+### test_f1_pauseBeforeRevokeClosesWindow
+
+Mitigation available today: the EMERGENCY hot key pauses before the revoke executes.
+
+```solidity
+function test_f1_pauseBeforeRevokeClosesWindow() public;
+```
+
+<a id="test_f2_partialredeempaysdoubledpriceandemptiesvault"></a>
+
+### test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault
+
+A PARTIAL redemption succeeds and is paid at the doubled share price: half the
+shares take the entire deposit and the vault is left empty.
+
+```solidity
+function test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault() public;
+```
+
+<a id="test_f2_firstredeemertakessecondholdersbacking"></a>
+
+### test_f2_firstRedeemerTakesSecondHoldersBacking
+
+With two holders the FIRST full redeemer takes the second holder's backing.
+The second holder's full redemption reverts on the double-counted dust remainder.
+
+```solidity
+function test_f2_firstRedeemerTakesSecondHoldersBacking() public;
+```
+
+<a id="test_f2_laterfullredemptionrevertsafterpartialextraction"></a>
+
+### test_f2_laterFullRedemptionRevertsAfterPartialExtraction
+
+The revert face: after a partial extraction a later holder's FULL redemption reverts
+because the share-implied gross exceeds what the single real adapter holds.
+
+```solidity
+function test_f2_laterFullRedemptionRevertsAfterPartialExtraction() public;
+```
+
+<a id="test_f2_depositafterduplicatemintsatinflatedprice"></a>
+
+### test_f2_depositAfterDuplicateMintsAtInflatedPrice
+
+A deposit AFTER the duplicate is minted at the inflated price: same amount, about half
+the shares. Routing still places the full deposit.
+
+```solidity
+function test_f2_depositAfterDuplicateMintsAtInflatedPrice() public;
+```
+
+<a id="test_f2_removeadapterblockedonbothentries"></a>
+
+### test_f2_removeAdapterBlockedOnBothEntries
+
+`removeAdapter` cannot undo the duplicate directly: both entries read the same balance.
+
+```solidity
+function test_f2_removeAdapterBlockedOnBothEntries() public;
+```
+
+<a id="test_f2_adminonlyrecoveryrestoresaccounting"></a>
+
+### test_f2_adminOnlyRecoveryRestoresAccounting
+
+ADMIN-only clean recovery with no deposit pause:
+adminRebalance([0,0]) -> removeAdapter(1) -> adminRebalance([X,0]).
+
+```solidity
+function test_f2_adminOnlyRecoveryRestoresAccounting() public;
+```
+
+<a id="test_f2_forceremoveduplicatefixesnavbutpausesandmisreportsloss"></a>
+
+### test_f2_forceRemoveDuplicateFixesNavButPausesAndMisreportsLoss
+
+EMERGENCY recovery: `forceRemoveAdapter(1)` fixes NAV in one call but pauses deposits
+and emits `AdapterForceRemoved` with lossAmount equal to the full (not lost) balance.
+
+```solidity
+function test_f2_forceRemoveDuplicateFixesNavButPausesAndMisreportsLoss() public;
+```
+
+<a id="test_o1a_forceremoveallfunded_redeemburnssharesforzero"></a>
+
+### test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero
+
+EMERGENCY force-removes the only funded adapter. NAV -> 0. `maxRedeem` still promises
+the full balance while `redeem` burns every share for 0 USDC. The USDC stays in the
+adapter; only ADMIN `addAdapter` brings it back, and with zero supply the ERC4626
+virtual shares then own it.
+
+```solidity
+function test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero() public;
+```
+
+<a id="test_o1b_forceremovepartial_exitsunderpaidstayersoverpaid"></a>
+
+### test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid
+
+Partial force-remove: exits during the exclusion are under-paid; stayers are over-paid
+after ADMIN re-adds. Mirror image of finding 1, triggerable by the EMERGENCY key alone
+and NOT closed by the deposit pause.
+
+```solidity
+function test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid() public;
+```
+
+<a id="test_o2_keeperrebalanceblockedafteremergencywithdraw"></a>
+
+### test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw
+
+SR-M10, remediated by core 1788 (PR 1814): KEEPER `rebalance()` reverts while
+deposits are paused, so it cannot re-deploy emergency-rescued idle USDC.
+
+```solidity
+function test_O2_keeperRebalanceBlockedAfterEmergencyWithdraw() public;
+```
+
+<a id="test_o3_dustdonationblocksremoveadapter"></a>
+
+### test_O3_dustDonationBlocksRemoveAdapter
+
+1 wei donated to an adapter blocks ADMIN `removeAdapter`; only the EMERGENCY
+write-off path bypasses it.
+
+```solidity
+function test_O3_dustDonationBlocksRemoveAdapter() public;
+```
+
+<a id="test_o4_forceremovewithidle_payoutisidleonly"></a>
+
+### test_O4_forceRemoveWithIdle_payoutIsIdleOnly
+
+Force-removed funded adapter plus some idle: redeem does not revert but pays out only
+the idle share.
+
+```solidity
+function test_O4_forceRemoveWithIdle_payoutIsIdleOnly() public;
+```
+
