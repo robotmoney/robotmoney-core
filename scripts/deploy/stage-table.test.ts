@@ -28,7 +28,8 @@ describe("stage-table.json", () => {
 
   test("every non-script deploy script in contracts/script has a stage", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
-    const skip = new Set(["ActivateBasketVaultEligibility.s.sol"]); // a govern action, not a stage
+    // a govern action, not a stage; and the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
+    const skip = new Set(["ActivateBasketVaultEligibility.s.sol", "RedeployProtocolAssetVault.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
@@ -134,6 +135,36 @@ describe("stage-table.json", () => {
     const env = (n: string) => table.stages.find((s) => s.name === n)!.requiredEnv;
     expect(env("governance")).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
     for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
+  });
+
+  describe("redeploys (issue 1796)", () => {
+    const rows = (table as unknown as { redeploys?: { vault: string; script: string; requiredEnv: string[]; optionalEnv: string[]; manifest: string; libraries: string[]; create2Libraries?: string[] }[] }).redeploys ?? [];
+    test("only rmPROTO has a redeploy row, on the vault's own manifest, and it is not a stage", () => {
+      expect(rows.map((r) => r.vault)).toEqual(["PROTO"]);
+      expect(table.stages.map((s) => s.script)).not.toContain(rows[0]!.script);
+      expect(rows[0]!.manifest).toBe(table.vaults.find((v) => v.key === "PROTO")!.manifest);
+    });
+    for (const r of rows) {
+      const [file, contract] = r.script.split(":");
+      test(`${r.vault}: script and contract exist and every env name is read by it`, () => {
+        expect(existsSync(join(ROOT, file))).toBe(true);
+        expect(read(file)).toMatch(new RegExp(`contract ${contract}\\b`));
+        const src = scriptSource(file) + read("contracts/script/DeployProtocolAssetVault.s.sol") + read("contracts/script/BasketVaultDeployBase.sol");
+        for (const name of [...r.requiredEnv, ...r.optionalEnv]) expect(src).toContain(`"${name}"`);
+        expect(r.requiredEnv).toContain("DEPLOYMENT_OUT");
+      });
+      test(`${r.vault}: the redeploy reads the same sheet inputs as the vault's launch stage, plus the timelock and the emergency key`, () => {
+        const stage = table.stages.find((s) => s.vault === r.vault)!;
+        const launch = stage.requiredEnv.filter((n) => n !== "ROUTER_DEFAULT_BPS");
+        expect([...r.requiredEnv].sort()).toEqual([...launch, "TIMELOCK_ADDRESS", "EMERGENCY_ADDRESS"].sort());
+        expect(r.libraries).toEqual(stage.libraries);
+        expect(r.create2Libraries).toEqual(stage.create2Libraries);
+      });
+      test(`${r.vault}: the redeploy script never registers the vault and never touches router eligibility`, () => {
+        const src = read(file);
+        expect(src).not.toMatch(/registerVault|migrateEligibility|setRouterEligible/);
+      });
+    }
   });
 
   test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {

@@ -131,6 +131,18 @@ export interface VerifyOptions {
    * default weights must equal this vector (the sheet vector was superseded by the application).
    */
   appliedReceipt?: { receiptId: Hex; vaults: Address[]; bps: number[] };
+  /**
+   * Issue 1796: the single-vault redeploys the run has finished (deployed AND governed): per redeploy the vault, the vault it replaced (now retired) and the vault that replaced it (the
+   * address the vault manifest names). The vault set check then expects registry.listVaults() to be the manifests plus the retired vaults, and the retired vaults get their own labels.
+   */
+  redeploys?: { vault: string; oldVault: Address; newVault: Address }[];
+  /**
+   * Issue 1796: forge out/ of a checkout at the ORIGINAL deployment sha. With redeploys, the vaults the redeploy did not replace (and the retired ones) run the code of that build, so their
+   * code hashes are compared with this directory. Absent: the current `artifactsDir` is used for every vault.
+   */
+  priorArtifactsDir?: string;
+  /** Issue 1796: the deployer transactions the redeploys sent (the sum of their deploy counts). They are outside every frozen stage count and move the deployer nonce. */
+  redeployDeployerTxs?: number;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
-// Usage: bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
+// Usage: bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
+//        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
@@ -22,6 +23,7 @@ import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProble
 import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
 import { REGISTER_ROW, buildRegisterCalls } from "./committee-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
+import { REDEPLOY_ROW, buildRedeployCalls, vectorsFromFinal } from "./redeploy-vault.ts";
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
@@ -176,6 +178,68 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
   const clears = clearShapeProblems(ev, (m) => p.push(m));
   forbidCancelFields(clears, (e) => String(e?.step ?? "entry"), (m) => p.push(m));
   operationProblems(clears.map((r) => ({ ...r, step: clearLabel(r) })), (m) => p.push(m), floor);
+  return p;
+}
+
+/**
+ * A single-vault redeploy (issue 1796, the `redeploy-vault` verb and `govern --row redeploy-vault`), recorded under `vault_redeploys` (never in `govern`, so stage 13 stays the four unpauses).
+ * One entry per redeploy: the deploy transactions the deployer sent (`deploy_tx_hashes`, `deploy_count`, all status 1), the vault it replaced (`old_vault`, now Retired) and the vault that replaced
+ * it (`new_vault`, the address `vaults.<vault>.address` names), ONE timelock batch of five calls, one schedule and one execute at least the floor apart, and the read-back: the final default
+ * vector (`vaults`, `bps`, 10000 bps, the new vault in and the old vault out), voted_weights_active false and the router's effective weights equal to it. A REHEARSAL evidence only: a production
+ * evidence may carry none (the verb and the row are refused on 8453 in production).
+ */
+const redeployLabel = (r: any) => `${REDEPLOY_ROW} ${r?.vault ?? "?"} round ${Number.isInteger(r?.ordinal) ? r.ordinal : 1}`;
+function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) => void): any[] {
+  const rs: any[] = ev?.vault_redeploys === undefined ? [] : Array.isArray(ev.vault_redeploys) ? ev.vault_redeploys : (bad("vault_redeploys is not a list"), []);
+  if (kind !== "rehearsal") {
+    if (rs.length > 0) bad("vault_redeploys is present in a production evidence: redeploying one vault into a live deployment is an experiment on a rehearsal and is refused on 8453 in production (issue 1796)");
+    return [];
+  }
+  const seen = new Set<string>();
+  for (const r of rs) {
+    const w = redeployLabel(r);
+    if (r?.step !== undefined && r.step !== REDEPLOY_ROW) bad(`${w}: step '${r.step}' is not ${REDEPLOY_ROW}`);
+    if (typeof r?.vault !== "string" || !ADDR.test(ev?.vaults?.[r.vault]?.address ?? "")) bad(`${w}: vault '${String(r?.vault)}' is not one of the evidence's vaults`);
+    const id = `${r?.vault}:${Number.isInteger(r?.ordinal) ? r.ordinal : 1}`;
+    if (seen.has(id)) bad(`${w}: more than one evidence entry for this round`); else seen.add(id);
+    for (const k of ["old_vault", "new_vault", "registry", "router", "timelock", "deployer", "asset"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+    if (ADDR.test(r?.old_vault ?? "") && ADDR.test(r?.new_vault ?? "") && lc(r.old_vault) === lc(r.new_vault)) bad(`${w}: the old and the new vault are the same address`);
+    if (ADDR.test(r?.new_vault ?? "") && lc(r.new_vault) !== lc(ev?.vaults?.[r?.vault]?.address ?? "")) bad(`${w}: new_vault ${r.new_vault} is not the address ${ev?.vaults?.[r?.vault]?.address} the evidence names for ${r?.vault}`);
+    if (ADDR.test(r?.registry ?? "") && lc(r.registry) !== lc(ev?.registry?.address ?? "")) bad(`${w}: registry ${r.registry} is not the run's registry ${ev?.registry?.address}`);
+    if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    if (typeof r?.registry_name !== "string" || r.registry_name === "") bad(`${w}: registry_name is missing`);
+    // the deploy half: every transaction the deployer sent for the vault, each with status 1
+    const hashes: unknown[] = Array.isArray(r?.deploy_tx_hashes) ? r.deploy_tx_hashes : [];
+    const st: unknown[] = Array.isArray(r?.deploy_receipt_statuses) ? r.deploy_receipt_statuses : [];
+    if (!Number.isInteger(r?.deploy_count) || r.deploy_count < 1) bad(`${w}: deploy_count is not a positive integer`);
+    else if (hashes.length !== r.deploy_count) bad(`${w}: ${hashes.length} deploy tx hashes for deploy_count ${r.deploy_count}`);
+    hashes.forEach((h, i) => { if (typeof h !== "string" || !TX.test(h)) bad(`${w}: deploy tx hash ${i} is missing or malformed`); });
+    if (st.length !== hashes.length) bad(`${w}: ${st.length} deploy receipt statuses for ${hashes.length} deploy tx hashes`);
+    st.forEach((x, i) => { if (x !== 1) bad(`${w}: deploy receipt ${i} status is ${x}, not 1`); });
+    // the govern half: the final vector and the read-back
+    const vaults: unknown[] = Array.isArray(r?.vaults) ? r.vaults : [];
+    const bps: unknown[] = Array.isArray(r?.bps) ? r.bps : [];
+    if (vaults.length === 0 || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not a list of distinct addresses with one weight each`);
+    else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
+    else {
+      try { vectorsFromFinal({ finalVaults: vaults as string[], finalBps: bps as number[], oldVault: r.old_vault, newVault: r.new_vault }); } catch (e) { bad(`${w}: ${(e as Error).message}`); }
+    }
+    effectiveReadBackProblems(w, r, vaults, bps, bad);
+    if (r?.old_vault_status !== "Retired") bad(`${w}: old_vault_status is ${String(r?.old_vault_status)}, want Retired`);
+    if (r?.new_vault_status !== "Active") bad(`${w}: new_vault_status is ${String(r?.new_vault_status)}, want Active`);
+  }
+  return rs;
+}
+/** The deployer transactions the redeploys sent. They are outside every frozen stage count, so the final deployer nonce adds them. */
+const redeployTxs = (ev: any): number => (Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []).reduce((t: number, r: any) => t + (Number.isInteger(r?.deploy_count) && r.deploy_count > 0 ? r.deploy_count : 0), 0);
+/** The vaults a redeploy retired: still listed by the registry. */
+const retiredVaults = (ev: any): string[] => (Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []).map((r: any) => lc(String(r?.old_vault ?? ""))).filter((a: string) => a !== "");
+/** Offline check of `vault_redeploys` alone (shape, both transactions, statuses and the delay floor). An empty list is a pass. */
+export function checkVaultRedeploys(ev: any, floor: number = MAINNET_DELAY_FLOOR, kind: DeploymentKind = "rehearsal"): string[] {
+  const p: string[] = [];
+  const rs = redeployShapeProblems(ev, kind, (m) => p.push(m));
+  forbidCancelFields(rs, (e) => String(e?.step ?? "entry"), (m) => p.push(m));
+  operationProblems(rs.map((r) => ({ ...r, step: redeployLabel(r) })), (m) => p.push(m), floor);
   return p;
 }
 const releasedIds = (ev: any): Set<string> => new Set<string>((Array.isArray(ev?.receipt_releases) ? ev.receipt_releases : []).map((r: any) => lc(String(r?.receipt_id ?? ""))));
@@ -436,16 +500,17 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   }
   const applications = applicationShapeProblems(ev, bad);
   const clears = clearShapeProblems(ev, bad);
+  const redeploys = redeployShapeProblems(ev, kind, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
-  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
   const start = startNonceOf(ev, kind, bad);
-  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start)}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
+  if (frozenCounts && ev?.deployer_nonce_final !== finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start) + redeployTxs(ev)) bad(`deployer_nonce_final ${ev?.deployer_nonce_final} differs from ${start ? `the start nonce ${start} plus ` : ""}the summed frozen counts plus the prove-control transaction${redeployTxs(ev) ? ` plus the ${redeployTxs(ev)} redeploy transaction(s)` : ""} ${finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), start) + redeployTxs(ev)}${Object.keys(adoptedTxsOfEvidence(ev)).length ? " (adopted stages counted at the transactions the deployer sent)" : ""}`);
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
@@ -498,9 +563,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   };
   const id = await chain.getChainId();
   if (id !== MAINNET_CHAIN_ID) { bad(`the RPC reports chain ${id}, evidence is read on ${MAINNET_CHAIN_ID}`); return p; }
-  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad));
+  const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad)) + redeployTxs(ev);
   const nonce = await chain.getTransactionCount({ address: ev.deployer });
-  if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction say ${want}`);
+  if (nonce !== want) bad(`deployer nonce on chain is ${nonce}, the summed frozen counts plus the prove-control transaction${redeployTxs(ev) ? ` plus the ${redeployTxs(ev)} redeploy transaction(s)` : ""} say ${want}`);
 
   const status = async (what: string, hash: string) => {
     try {
@@ -524,7 +589,8 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
 
   try {
     const listed = ((await chain.readContract({ address: ev.registry.address, abi: REGISTRY_ABI, functionName: "listVaults" })) as string[]).map(lc).sort();
-    const recorded = Object.values(ev.vaults ?? {}).map((v: any) => lc(v?.address ?? "")).sort();
+    // a vault a redeploy retired is still listed by the registry (issue 1796)
+    const recorded = [...Object.values(ev.vaults ?? {}).map((v: any) => lc(v?.address ?? "")), ...retiredVaults(ev)].sort();
     if (JSON.stringify(listed) !== JSON.stringify(recorded)) bad(`registry.listVaults() [${listed.join(",")}] differs from the manifest vaults [${recorded.join(",")}]`);
   } catch (e) { bad(`registry.listVaults() not readable (${(e as Error).message})`); }
 
@@ -543,7 +609,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     // an unpause round is exactly one call: unpauseDeposits() on that step's own vault. Any other call on a vault (rmUSDC included) is refused.
     if (scheduled.length !== 1) bad(`govern ${g.step}: the schedule tx has ${scheduled.length} CallScheduled events, an unpause is exactly one call`);
     for (const e of scheduled) {
-      if (!vaultAddr || lc(e.target) !== lc(vaultAddr)) bad(`govern ${g.step}: CallScheduled target ${e.target} is not ${VAULT_OF_STEP[g0.step]} ${vaultAddr}`);
+      // an unpause scheduled before a redeploy targeted the vault the redeploy later replaced (issue 1796): that vault is the entry's old_vault
+      const earlier = (Array.isArray(ev.vault_redeploys) ? ev.vault_redeploys : []).filter((r: any) => r?.vault === VAULT_OF_STEP[g0.step]).map((r: any) => lc(String(r?.old_vault ?? "")));
+      if (!vaultAddr || (lc(e.target) !== lc(vaultAddr) && !earlier.includes(lc(e.target)))) bad(`govern ${g.step}: CallScheduled target ${e.target} is not ${VAULT_OF_STEP[g0.step]} ${vaultAddr}`);
       else if (lc(e.data) !== lc(unpauseCalldata())) bad(`govern ${g.step}: CallScheduled calldata is not ${VAULT_OF_STEP[g0.step]}.unpauseDeposits(): the only call a govern round may make on a vault`);
     }
     // one operation per unpause: a timelock operation id belongs to one step only
@@ -587,6 +655,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   }
   p.push(...(await checkReceiptApplicationsOnChain(ev, chain, FLOOR)));
   p.push(...(await checkVotedWeightsClearsOnChain(ev, chain, FLOOR)));
+  p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
   // (all four vaults deploy paused, issue 1710).
@@ -685,6 +754,55 @@ export async function checkVotedWeightsClearsOnChain(ev: any, chain: ChainReader
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
     if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(ev.governance.address) && lc(x.data) === lc(want))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled clear`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
+  }
+  return p;
+}
+
+/**
+ * Chain check of `vault_redeploys` (issue 1796). Every deploy transaction succeeded. Each entry is ONE timelock batch of five calls with one operation id: the schedule tx has exactly five
+ * CallScheduled events, index 0 to 4, whose targets and calldata are rebuilt from the recorded vaults (registerVault(new), migrateEligibility(new, true, five legs), migrateEligibility(old, false,
+ * four legs), retire(old), the new vault's unpauseDeposits()), each with a delay of at least the floor. The execute tx has the five matching CallExecuted events. The block gap is at least the floor.
+ * It does not read the chain id: a Twin run uses it too.
+ */
+export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const status = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  for (const r of Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []) {
+    const w = redeployLabel(r);
+    if (!ADDR.test(r?.old_vault ?? "") || !ADDR.test(r?.new_vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(r?.asset ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || typeof r?.registry_name !== "string" || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
+    for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) await status(`${w} deploy tx ${i}`, h);
+    let want: ReturnType<typeof buildRedeployCalls>;
+    try { want = buildRedeployCalls({ registry: r.registry, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
+    const sc = await status(`${w} schedule`, r.schedule_tx);
+    if (!sc) continue;
+    const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock`); continue; }
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, a redeploy round is exactly ${want.length} calls in one batch`);
+    scheduled.forEach((e, i) => {
+      const c = want[i];
+      if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not part of a redeploy round`); return; }
+      if (lc(e.target) !== lc(c.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${c.target} (${c.label})`);
+      else if (lc(e.data) !== lc(c.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${c.label}`);
+      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
+    });
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
+    const schedTs = await ts(sc);
+    const ex = await status(`${w} execute`, r.execute_tx);
+    if (!ex) continue;
+    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
+    if (executed.length !== want.length || !executed.every((e, i) => lc(e.target) === lc(want[i]!.target) && lc(e.data) === lc(want[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the five scheduled calls`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }
@@ -947,6 +1065,27 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   console.log(`evidence ok (${m.receipt_applications.length} receipt application(s)${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/**
+ * `--vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR` (issue 1796): checks the `vault_redeploys` entries a `redeploy-vault` run wrote to its run manifest (shape, the delay
+ * floor, then with --rpc the five-call batch on the timelock). A rehearsal check only: a Twin run or a Base mainnet rehearsal proves the round executes on the real contracts.
+ */
+async function checkRedeploysMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
+  const need = ["registry", "timelock"].filter((k) => typeof values[k] !== "string");
+  if (need.length) { console.error(`evidence: --vault-redeploys needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
+  const m = JSON.parse(readFileSync(values["vault-redeploys"] as string, "utf8"));
+  const entries: any[] = Array.isArray(m.vault_redeploys) ? m.vault_redeploys : [];
+  const ev = { deployment_kind: kind, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
+  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
+  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const problems = [...(entries.length > 0 ? [] : ["the run manifest has no vault_redeploys entry"]), ...entries.filter((r) => r?.status !== "governed").map((r) => `${redeployLabel(r)}: status is ${String(r?.status)}, want governed`), ...checkVaultRedeploys(ev, floor, kind)];
+  if (typeof values.rpc === "string") {
+    const { createPublicClient, http } = await import("viem");
+    problems.push(...(await checkVaultRedeploysOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
+  }
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);
+}
+
 /** The per-stage cap from core's stage table in this checkout. */
 function adoptableFromTable(): AdoptableLibraries {
   const t = loadStageTable(new URL("../../", import.meta.url).pathname);
@@ -954,11 +1093,12 @@ function adoptableFromTable(): AdoptableLibraries {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
   if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
   const kind = kindArg as DeploymentKind;
   if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
+  if (values["vault-redeploys"]) return checkRedeploysMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));
   let counts: Record<string, number> | undefined;

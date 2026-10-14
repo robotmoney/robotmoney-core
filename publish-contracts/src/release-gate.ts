@@ -4,6 +4,7 @@
 //      A rehearsal tag never satisfies a production plan and the reverse (RELEASE_TAG_KIND).
 //   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING). A reconstructed baseline is also proven committed in the COUNTS checkout (issue 1740, gitFrozenDirCommitted)
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts exits 0 (CI_NOT_GREEN)
+//   (the single-vault redeploy, issue 1796, skips step 2: it has no frozen counts of its own)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -56,6 +57,11 @@ export interface ReleaseGateInput {
    * same bytes (gitFrozenDirCommitted). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
    */
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
+  /**
+   * Default true. False for the single-vault redeploy (issue 1796): it deploys one vault into a live deployment and has no frozen counts of its own (the counts file belongs to the
+   * original deployment sha). The tag of the kind, the remote tag object and green CI are still required.
+   */
+  requireCounts?: boolean;
 }
 
 const DUBIOUS = "git refuses a checkout owned by another user (safe.directory): the counts checkout must be owned by the operator";
@@ -150,8 +156,8 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const tag = await tagForKind(i);
   if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version>${i.kind === "rehearsal" ? "-rehearsal" : ""} tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
   await (i.remoteTag ?? ((d, t) => verifyRemoteTag(d, t)))(i.coreDir, tag);
-  const frozen = loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING; a reconstructed baseline is also verified against the stage table here
-  if (frozen.measured.reconstructed) {
+  const frozen = i.requireCounts === false ? undefined : loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING; a reconstructed baseline is also verified against the stage table here
+  if (frozen?.measured.reconstructed) {
     if (!i.verifyReconstructed) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json is a reconstructed baseline (issue 1733) and the gate has no way to re-verify it on chain: it is refused`, { sha: i.sha });
     await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
     await assertBaselineCommitted({ countsDir: i.countsDir, sha: i.sha, frozen, frozenDirCommitted: i.frozenDirCommitted, anchorCommitted: i.anchorCommitted });
