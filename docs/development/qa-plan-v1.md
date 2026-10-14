@@ -141,6 +141,16 @@ The vault accounting, reentrancy, role handover and rounding are clean. The bran
 | P3 | Stage 3 clients: bind rmpc signing to an implementation-version field in the gateway authorization digest (default mechanism; if it needs Solidity, it moves into P1); dapp, explorer and indexer disclose implementation and freeze state. | #1810 | per issue |
 | P4 | Stage 4 Twin rehearsal of deploy, upgrade, freeze and rejected post-freeze upgrade, as a named nightly job. | #1811 | per issue |
 
+## Workstream S — Security review and fixes (after P, before Q)
+
+A fresh adversarial security review of the whole branch once every workstream above has landed, followed by fixes, repeated until a round finds nothing new.
+
+| ID | Task | Acceptance |
+|---|---|---|
+| S1 | Whole-system security review per `review-security` and `review-tests`: map assets, trust boundaries and authority transitions as they now stand on the branch; finders per lens (contracts, economics, deploy tooling, indexer/API, clients and keys, CI and supply chain); each candidate refuted by three independent skeptics before it counts; n-order composition pass. Paired artifacts `docs/code-review/20261014-review-security-claude.md` and `.json` in the review-contract format, with prior IDs kept for still-open findings. | report + JSON on the branch |
+| S2 | Fix every confirmed `critical`/`high`/`medium` finding on the branch, lane by lane, with a regression test per fix; `low`/`info` fixed when the change is local. Compile checks only. | each finding has a fix commit and a test |
+| S3 | Re-review the fixed areas (new round of S1 limited to changed files plus one whole-system composition pass). Repeat S2/S3 until a round confirms zero new `medium`-or-above findings, at most three rounds; record what the last round left open. | review JSON shows no open ≥ medium, or the open list is explicit |
+
 ## Phase Q — Final QA (only after every task above)
 
 1. Build everything: `forge build`, `bun x tsc`, `cargo check --workspace`, dapp build.
@@ -184,4 +194,4 @@ The vault accounting, reentrancy, role handover and rounding are clean. The bran
 
 ## Order of execution
 
-A1–A6 → B1–B6 → C1–C3 → D1–D9 → E1–E10 → X1–X9 → U1–U8 → T1–T5 → W1–W6 → P0–P4 → Q. Within a workstream the table order is the dependency order. X, U and T do not touch contracts or `publish-contracts` and may run in parallel with D and E once A and B are done.
+A1–A6 → B1–B6 → C1–C3 → D1–D9 → E1–E10 → X1–X9 → U1–U8 → T1–T5 → W1–W6 → P0–P4 → S1–S3 → Q. Within a workstream the table order is the dependency order. X, U and T do not touch contracts or `publish-contracts` and may run in parallel with D and E once A and B are done.
