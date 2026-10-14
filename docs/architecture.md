@@ -966,6 +966,17 @@ Agent ownership and policy rules (issue #1476):
 - the account that first authorizes an agent is its recorded owner: any
   account through `commitAuthorization` + `revealAuthorization`, an
   `ADMIN_ROLE` holder also through `authorizeAgent`;
+- an agent address must consent before another account becomes its owner
+  (issue #1791). For a reveal naming an `agent` other than the caller, the
+  agent first submits, from its own key through `commitAuthorization`,
+  `keccak256(abi.encode(owner, keccak256(callData)))`, where `callData` is the
+  exact `revealAuthorization(agent, salt, policy)` calldata the owner will
+  send. The reveal consumes that consent, so it covers one agent, one salt and
+  one policy. Without it the reveal reverts `OwnerConsentMissing`, and nobody
+  can squat an address that never agreed. An agent that reveals for itself
+  consents by calling. A depositor's distinct agent key therefore signs one
+  `commitAuthorization` transaction before the depositor reveals. `authorizeAgent`
+  stays `ADMIN_ROLE`-only and is not bound by consent;
 - only the recorded owner can call `setPolicy`, `revokeAgent` or
   `transferAgentOwnership` on that agent; `ADMIN_ROLE` grants no
   authority over an agent it does not own;

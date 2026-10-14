@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/263a23d1290368f7c94a6f9e3ccc267b1cb4f7e7/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -96,6 +96,16 @@ function test_selfRegisteredAgentCannotAnchorReceipt() public;
 
 ```solidity
 function test_permissionlessRevealSquatsThirdPartyAgentAddress() public;
+```
+
+<a id="test_consenttooneownerdoesnotletanotherownerreveal"></a>
+
+### test_consentToOneOwnerDoesNotLetAnotherOwnerReveal
+
+A consent names one owner and one exact reveal: another owner cannot use it.
+
+```solidity
+function test_consentToOneOwnerDoesNotLetAnotherOwnerReveal() public;
 ```
 
 <a id="test_selfregisteredagentcannotpullanotherholdersshares"></a>

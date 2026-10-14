@@ -1901,6 +1901,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "OwnerConsentMissing",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "PaymentIdAlreadyUsed",
     inputs: [],
   },
