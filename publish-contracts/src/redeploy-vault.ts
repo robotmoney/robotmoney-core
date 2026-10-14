@@ -61,6 +61,8 @@ export const ROUTER_REDEPLOY_ABI = parseAbi([
   "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)",
   "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)",
   "function votedWeightsActive() view returns (bool)",
+  "function vaultCap(address vault) view returns (uint256)",
+  "function setVaultCap(address vault, uint256 cap)",
 ]);
 
 const lc = (x: string): string => x.toLowerCase();
@@ -106,6 +108,7 @@ export interface RedeployRecord {
   deploy_last_block?: number;
   /** The file the old vault's manifest was kept as (a name in the manifest directory). */
   retired_manifest?: string;
+  replacement_manifest?: string;
   started_at: string;
   deployed_at?: string;
   // ---- govern half
@@ -181,14 +184,16 @@ export function planRedeployVectors(i: { defaultVaults: readonly string[]; defau
 
 export interface RedeployCall { label: string; target: Address; data: Hex }
 
-export interface RedeployCallInputs { registry: Address; oldVault: Address; newVault: Address; registryName: string; asset: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[] }
+export interface RedeployCallInputs { router: Address; routerVaultCap: bigint; registry: Address; oldVault: Address; newVault: Address; registryName: string; asset: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[] }
 
-/** The five calls of the round, in the one order the contracts allow (see the header). The same builder serves govern and the evidence chain check. */
+/** The six calls of the round, in the one order the contracts allow (see the header). The same builder serves govern and the evidence chain check. */
 export function buildRedeployCalls(i: RedeployCallInputs): RedeployCall[] {
+  if (typeof i.routerVaultCap !== "bigint" || i.routerVaultCap < 0n) throw new PublishError("GOVERN", "router vault cap must be an explicitly recorded non-negative bigint");
   const v = vectorsFromFinal({ finalVaults: i.finalVaults, finalBps: i.finalBps, oldVault: i.oldVault, newVault: i.newVault });
   const reg = (functionName: "registerVault" | "migrateEligibility" | "retire", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
   return [
     { label: "registry.registerVault(new)", target: i.registry, data: reg("registerVault", [i.newVault, { name: i.registryName, asset: i.asset, registeredAt: 0n }]) },
+    { label: "router.setVaultCap(new, approved old cap)", target: i.router, data: encodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, functionName: "setVaultCap", args: [i.newVault, i.routerVaultCap] }) },
     { label: "registry.migrateEligibility(new, true, five legs)", target: i.registry, data: reg("migrateEligibility", [i.newVault, true, v.fiveVaults, v.fiveBps.map(BigInt)]) },
     { label: "registry.migrateEligibility(old, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
     { label: "registry.retire(old)", target: i.registry, data: reg("retire", [i.oldVault]) },
@@ -327,7 +332,9 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   if (open?.status === "deployed") throw new PublishError("RESUME", `${VAULT_NAME[key]} was already redeployed to ${open.new_vault} (round ${open.ordinal}) and the govern row has not run: bun publish-contracts/src/cli.ts govern --row ${REDEPLOY_ROW} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same arguments). Nothing was sent.`);
   if (open?.status === "started" && !ctx.resume) throw new PublishError("RESUME", `an earlier ${REDEPLOY_VERB} of ${VAULT_NAME[key]} started at nonce ${open.deploy_start_nonce} and did not finish: continue it with --resume and the same arguments, never a fresh run`);
   if (!existsSync(finalPath)) throw new PublishError("MANIFEST", `${finalPath} is missing: the vault manifest of the live ${VAULT_NAME[key]}`);
-  const current = readJson(finalPath);
+  const latest = [...mine].reverse().find((r) => r.status === "governed");
+  const currentPath = latest?.replacement_manifest ? join(dir, latest.replacement_manifest) : finalPath;
+  const current = readJson(currentPath);
   const oldVault = (open?.old_vault ?? current.vault) as Address;
   if (typeof oldVault !== "string" || !ADDR.test(oldVault)) throw new PublishError("MANIFEST", `${finalPath} has no vault address`);
   const registry = String(readJson(join(dir, `${manifestBase(t.stages.find((s) => s.name === "registry")!.manifest)}.json`)).registry) as Address;
@@ -410,11 +417,13 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
 
   // The old vault's manifest is kept, then the new vault takes the vault's own manifest.
   const retiredName = `${manifestBase(own.manifest)}.retired-${ordinal}.json`;
-  copyFileSync(finalPath, join(dir, retiredName));
-  renameSync(tmpPath, finalPath);
+  copyFileSync(currentPath, join(dir, retiredName));
+  const replacementName = `${manifestBase(own.manifest)}.replacement-${ordinal}.json`;
+  if (existsSync(join(dir, replacementName))) throw new PublishError("MANIFEST", "replacement manifest already exists; reconcile interrupted broadcast before retry");
+  renameSync(tmpPath, join(dir, replacementName));
   Object.assign(rec, {
     status: "deployed" as const, new_vault: newVault, deploy_end_nonce: nonce1, deploy_count: sent.count, deploy_tx_hashes: sent.hashes, deploy_receipt_statuses: sent.hashes.map(() => 1),
-    deploy_first_block: sent.firstBlock, deploy_last_block: sent.lastBlock, retired_manifest: retiredName, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
+    deploy_first_block: sent.firstBlock, deploy_last_block: sent.lastBlock, retired_manifest: retiredName, replacement_manifest: replacementName, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
   });
   saveRunManifest(ctx.evidenceDir, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, new_vault: newVault, old_vault: oldVault, start_nonce: startNonce, end_nonce: nonce1, count: sent.count });

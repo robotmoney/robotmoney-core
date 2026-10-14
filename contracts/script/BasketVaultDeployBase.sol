@@ -336,6 +336,9 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         d.registry = p.registry;
         d.tokens = new address[](cfg.assets.length);
 
+        // Close the bootstrap deposit window before any active asset is installed.
+        vault.pauseDeposits();
+        d.paused = true;
         _addAssets(vault, p, cfg, d);
 
         // Issue 1666: the ORA-4 deposit guard is nonzero before the timelock handover, on every chain. The vault default is 0, which
@@ -356,9 +359,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             );
         }
 
-        // Deployed paused. The govern stage unpauses after the checks pass.
-        vault.pauseDeposits();
-        d.paused = true;
+        // Remains paused through configuration and handover.
     }
 
     /// @dev TickMath link integrity for one vault (finding L3-D1). The reference is the library

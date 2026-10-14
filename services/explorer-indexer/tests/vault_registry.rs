@@ -438,11 +438,37 @@ async fn registered_vault_added_to_watched_address_set() {
         "vault must be registered"
     );
     stub1.shutdown();
+    // Retirement survives restart: holder exits must stay watched without router activity.
+    sqlx::query("UPDATE vaults SET status = 2 WHERE chain_id = $1 AND vault_address = $2")
+        .bind(8453_i64)
+        .bind(vault_addr.as_slice())
+        .execute(fx.db.pool())
+        .await
+        .unwrap();
 
     // Tick 2 — advance the cursor; capture the eth_getLogs request.
     let stub2 = StubRpcServer::start().await;
     stub2.set("eth_blockNumber", serde_json::Value::String("0x5e".into())); // 94
-    stub2.set("eth_getLogs", serde_json::Value::Array(Vec::new()));
+                                                                            // A standalone old-holder exit after retirement, with no router event.
+    let owner = Address::from([0x88u8; 20]);
+    use alloy_sol_types::SolEvent as _;
+    let exit = explorer_indexer::abi::IVaultEvents::Withdraw {
+        caller: owner,
+        receiver: owner,
+        owner,
+        assets: U256::from(52_500u64),
+        shares: U256::from(50_000u64),
+    }
+    .encode_log_data();
+    let exit_log = serde_json::json!({
+        "address": format!("{:#x}", vault_addr),
+        "topics": exit.topics().iter().map(|t| format!("{:#x}", t)).collect::<Vec<_>>(),
+        "data": format!("0x{}", hex::encode(exit.data)),
+        "blockNumber": "0x58", "blockHash": format!("0x{}", "bc".repeat(32)),
+        "transactionHash": format!("0x{}", "77".repeat(32)),
+        "transactionIndex": "0x0", "logIndex": "0x0"
+    });
+    stub2.set("eth_getLogs", serde_json::Value::Array(vec![exit_log]));
     stub2.set(
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
@@ -457,11 +483,17 @@ async fn registered_vault_added_to_watched_address_set() {
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();
     assert!(o2.error.is_none(), "second tick: {:?}", o2.error);
 
+    assert_eq!(
+        fx.db.count(CountTable::VaultTransferEvents).await.unwrap(),
+        1,
+        "retired standalone exit must remain in public history after restart"
+    );
     // Find the eth_getLogs request and assert the registered vault is in its
     // address filter alongside the static watched addresses.
     let requests = stub2.captured_requests();
     let get_logs = requests
         .iter()
+        .rev()
         .find(|r| r.get("method").and_then(|m| m.as_str()) == Some("eth_getLogs"))
         .expect("indexer must issue eth_getLogs");
     let addrs: Vec<String> = get_logs["params"][0]["address"]

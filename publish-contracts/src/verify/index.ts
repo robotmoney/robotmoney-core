@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
 // The one verifier (stage 12). Same code, same labels on the Twin chain (918453) and Base mainnet (8453).
 // Replaces the three superseded verifier shell scripts and the stage verifier.
 // Read-only: it sends nothing.
@@ -32,6 +34,16 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const { chain, sheet } = opts;
   const { table } = opts;
   const man = loadManifests(opts.manifestDir, table);
+  for (const r of opts.redeploys ?? []) {
+    if (!r.replacementManifest) continue;
+    const v = man.vaults.find((v) => v.key === r.vault);
+    if (!v) throw new Error(`missing original generation manifest for ${r.vault}`);
+    const replacement = JSON.parse(readFileSync(join(opts.manifestDir, r.replacementManifest), "utf8"));
+    if (!isAddress(replacement.vault) || lc(replacement.vault) !== lc(r.newVault)) throw new Error("replacement manifest address differs from migration record");
+    v.address = r.newVault;
+    v.data = replacement;
+    v.source = r.replacementManifest;
+  }
   const safeName = manifestBase(SAFE_MANIFEST);
   const tlName = stageManifestName(table, "timelock");
 
@@ -68,6 +80,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: true, detail: `${chainVaults.length} vaults on chain` };
   });
   const redeploys = opts.redeploys ?? [];
+  if (opts.appliedReceipt && redeploys.length) opts = { ...opts, appliedReceipt: { ...opts.appliedReceipt, vaults: opts.appliedReceipt.vaults.map((v) => redeploys.find((r) => lc(r.oldVault) === lc(v))?.newVault ?? v) } };
   const manifestSet = man.vaults.map((v) => lc(v.address));
   // Issue 1796: a vault the registry still lists after a redeploy is the retired one. The label stays the same: the manifests plus the retired vaults equal the registry.
   const expectedSet = [...manifestSet, ...redeploys.map((r) => lc(r.oldVault))];
@@ -681,10 +694,11 @@ async function redeployChecks(
     const m = ctx.vaults.find((v) => v.key === r.vault);
     return { ok: !!m && lc(m.address) === lc(r.newVault), detail: m ? `manifest ${m.address}, run record ${r.newVault}` : "no manifest vault" };
   });
+  if (r.routerVaultCap !== undefined) await c.runEq(`${q}: router per-address cap equals approved old cap`, () => chain.read(ctx.router, "function vaultCap(address vault) view returns (uint256)", [r.newVault]), BigInt(r.routerVaultCap));
   await c.runEq(`${q}: replacing vault registry status is Active`, () => status(r.newVault), 0);
   await c.run(`${q}: router effective weights hold the replacing vault and not the retired one`, async () => {
     const [vs] = (await chain.read(ctx.router, "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)")) as [string[], bigint[]];
-    const ok = vs.some((v) => lc(v) === lc(r.newVault)) && !vs.some((v) => lc(v) === lc(r.oldVault));
+    const ok = vs.length === 4 && new Set(vs.map(lc)).size === 4 && vs.filter((v) => lc(v) === lc(r.newVault)).length === 1 && !vs.some((v) => lc(v) === lc(r.oldVault));
     return { ok, detail: `[${vs.join(", ")}]` };
   });
 }

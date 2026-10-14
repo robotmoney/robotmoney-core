@@ -5,7 +5,7 @@ description: "Production deploy script for `ProtocolAssetVault` (rmPROTO). One p
 
 # DeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/script/DeployProtocolAssetVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -50,7 +50,7 @@ string public constant CONFIG_FILE = "config/protocol-assets.json";
 Forge broadcast entrypoint.
 
 ```solidity
-function run() external returns (Deployed memory d);
+function run() external virtual returns (Deployed memory d);
 ```
 
 **Returns**

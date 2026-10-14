@@ -1,5 +1,9 @@
 // Stage 12 verify: the one verifier (src/verify). The CLI builds the verifier's sheet from the frozen sheet, reads the expected
 // asset config from the core config file (never from the chain it is checking) and fails the run on any failed check.
+import { writeFileSync } from "node:fs";
+import { keccak256 } from "viem";
+import { checkVaultRedeploys, checkVaultRedeploysOnChain } from "./evidence-check.ts";
+import { buildMigrationOverlay } from "./migration-overlay.ts";
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
@@ -183,7 +187,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
     ...(governedRedeploys.length > 0 ? {
-      redeploys: governedRedeploys.map((r) => ({ vault: r.vault, oldVault: r.old_vault, newVault: r.new_vault! })),
+      redeploys: governedRedeploys.map((r) => ({ vault: r.vault, oldVault: r.old_vault, newVault: r.new_vault!, replacementManifest: r.replacement_manifest, routerVaultCap: typeof r.router_vault_cap === "string" ? r.router_vault_cap : undefined })),
       redeployDeployerTxs: governedRedeploys.reduce((t, r) => t + (r.deploy_count ?? 0), 0),
       ...(ctx.priorArtifactsDir ? { priorArtifactsDir: ctx.priorArtifactsDir } : {}),
     } : {}),
@@ -193,7 +197,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     const read = deps.depositsPaused ?? readDepositsPaused;
     for (const v of VAULT_STAGES) {
       const want = mode === "pre-govern";
-      const vault = readManifestField(ctx, manifestRef(v.stage, "vault")) as `0x${string}`;
+      const vault = governedRedeploys.find((r) => r.key === v.key)?.new_vault ?? readManifestField(ctx, manifestRef(v.stage, "vault")) as `0x${string}`;
       let got: boolean | string;
       try { got = await read(ctx.rpc, vault); } catch (e) { got = (e as Error).message; }
       if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, `unpause-${v.key}`)}` : ""}` });
@@ -215,6 +219,17 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length };
   saveRunManifest(ctx.evidenceDir, manifest);
   if (!report.ok) throw new PublishError("VERIFY", `the verifier reports ${failed.length} failure(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { failed: failed.map((c) => c.label) });
+  if (governedRedeploys.length) {
+    const evidence = { deployment_kind: ctx.sheet.kind, registry: { address: governedRedeploys[0]!.registry }, timelock: { address: governedRedeploys[0]!.timelock }, vault_redeploys: governedRedeploys, vaults: Object.fromEntries(governedRedeploys.map((r) => [r.vault, { address: r.new_vault }])) };
+    const chain = viemReader(ctx.rpc);
+    const floor = Number(await chain.read(governedRedeploys[0]!.timelock, "function getMinDelay() view returns (uint256)"));
+    const problems = [...checkVaultRedeploys(evidence, floor, ctx.sheet.kind), ...await checkVaultRedeploysOnChain(evidence, createPublicClient({ transport: http(ctx.rpc) }), floor)];
+    if (problems.length) throw new PublishError("VERIFY", `migration evidence failed: ${problems.join("; ")}`);
+    const hashes: Record<string, string> = {};
+    for (const r of governedRedeploys) for (const a of [r.old_vault, r.new_vault!]) hashes[a.toLowerCase()] = keccak256(await chain.getCode(a));
+    const overlay = buildMigrationOverlay(ctx.chainId, await chain.blockNumber(), governedRedeploys, hashes);
+    writeFileSync(join(manifestDir(ctx), "current-vaults.json"), JSON.stringify(overlay, null, 2) + "\n");
+  }
   ctx.log.log("info", "stage.done", { stage: row.name, checks: report.checks.length });
   // release deploy only (8453): record the third-party dependency manifest. Non-fatal: a failure is a named WARN.
   await recordDependencyManifest({ chainId: ctx.chainId, rpc: ctx.rpc, coreDir: ctx.coreDir, coreSha: ctx.coreSha, log: ctx.log, baseEnv: ctx.baseEnv ?? {}, dryRun: ctx.dryRun }, deps.recorderSpawn);

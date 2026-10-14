@@ -135,7 +135,7 @@ export interface VerifyOptions {
    * Issue 1796: the single-vault redeploys the run has finished (deployed AND governed): per redeploy the vault, the vault it replaced (now retired) and the vault that replaced it (the
    * address the vault manifest names). The vault set check then expects registry.listVaults() to be the manifests plus the retired vaults, and the retired vaults get their own labels.
    */
-  redeploys?: { vault: string; oldVault: Address; newVault: Address }[];
+  redeploys?: { vault: string; oldVault: Address; newVault: Address; replacementManifest?: string; routerVaultCap?: string }[];
   /**
    * Issue 1796: forge out/ of a checkout at the ORIGINAL deployment sha. With redeploys, the vaults the redeploy did not replace (and the retired ones) run the code of that build, so their
    * code hashes are compared with this directory. Absent: the current `artifactsDir` is used for every vault.

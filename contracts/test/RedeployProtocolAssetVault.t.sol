@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/operations/contract-release-runbooks.md — "Redeploy one vault into a live deployment" (issue 1796)
 pragma solidity ^0.8.24;
+import {Vm} from "forge-std/Vm.sol";
+
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
@@ -28,12 +32,15 @@ contract RedeployLegVault is ERC20 {
 ///         The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults,
 ///         the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script. The govern row's batch is
 ///         replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
-contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
+contract RedeployProtocolAssetVaultTest is BasketDeployFixture, SafeGovernance {
     RedeployProtocolAssetVault internal script;
     DeployProtocolAssetVault internal launch;
     PortfolioRouter internal router;
 
-    address internal timelock = makeAddr("timelock");
+    address internal timelock;
+    TimelockController internal governor;
+    address internal committee;
+    uint256 internal constant DELAY = 1800;
     address internal emergency = makeAddr("emergency");
     address internal routerAdmin = makeAddr("routerAdmin");
 
@@ -46,7 +53,10 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
     function setUp() public {
         _fixtureSetUp();
         // The timelock is a contract in the real deployment: the script refuses an EOA.
-        vm.etch(timelock, hex"00");
+        _installSafeSet();
+        committee = _newDefaultSafe();
+        governor = _newGovTimelock(committee, DELAY);
+        timelock = address(governor);
         script = new RedeployProtocolAssetVault();
         launch = new DeployProtocolAssetVault();
         router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
@@ -79,7 +89,11 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         registry.grantRole(registry.ADMIN_ROLE(), timelock);
         registry.revokeRole(registry.ADMIN_ROLE(), deployer);
         vm.stopPrank();
-        // The router's ADMIN_ROLE sits with the router admin in this fixture: the batch never calls the router directly.
+        vm.startPrank(routerAdmin);
+        router.setVaultCap(address(oldProto), 525000);
+        router.grantRole(router.ADMIN_ROLE(), timelock);
+        router.revokeRole(router.ADMIN_ROLE(), routerAdmin);
+        vm.stopPrank();
     }
 
     function _meta(string memory name) internal view returns (VaultRegistry.VaultMetadata memory) {
@@ -123,6 +137,29 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         assertEq(listed.length, 4, "the redeploy does not register: the Safe does");
         assertFalse(registry.isRouterEligible(address(v)), "ineligible until govern");
         assertEq(registry.routerEligibleCount(), 4, "count untouched");
+    }
+
+    function test_redeploy_pausePrecedesFirstActiveAsset() public {
+        vm.recordLogs();
+        BasketVault v = _redeploy();
+        Vm.Log[] memory events = vm.getRecordedLogs();
+        bool paused;
+        bool assetSeen;
+        for (uint256 i; i < events.length; i++) {
+            if (events[i].emitter != address(v)) continue;
+            if (events[i].topics[0] == keccak256("DepositsPaused(address)")) paused = true;
+            if (
+                events[i].topics[0]
+                    == keccak256("AssetAdded(uint256,address,address,uint24,address,uint8)")
+            ) {
+                assertTrue(paused, "active asset configured before pause");
+                assetSeen = true;
+            }
+        }
+        // Asset count makes the assertion meaningful even if the event signature changes.
+        assertGt(v.assetCount(), 0);
+        assertTrue(paused);
+        assertTrue(assetSeen, "asset-add events must be covered");
     }
 
     function test_redeploy_configuredLikeTheLaunchVault() public {
@@ -175,15 +212,56 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         v[1] = newVault;
     }
 
-    function _runBatch(BasketVault v) internal {
-        vm.startPrank(timelock);
-        registry.registerVault(address(v), _meta("Robot Money Protocol"));
+    function _batch(BasketVault v)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory data)
+    {
+        targets = new address[](6);
+        values = new uint256[](6);
+        data = new bytes[](6);
+        targets[0] = address(registry);
+        targets[1] = address(router);
+        targets[2] = address(registry);
+        targets[3] = address(registry);
+        targets[4] = address(registry);
+        targets[5] = address(v);
         (address[] memory five, uint256[] memory fiveBps) = _fiveLegs(address(v));
-        registry.migrateEligibility(address(v), true, five, fiveBps);
-        registry.migrateEligibility(address(oldProto), false, _newLegs(address(v)), _launchBps());
-        registry.retire(address(oldProto));
-        v.unpauseDeposits();
-        vm.stopPrank();
+        data[0] =
+            abi.encodeCall(registry.registerVault, (address(v), _meta("Robot Money Protocol")));
+        data[1] = abi.encodeCall(router.setVaultCap, (address(v), uint256(525000)));
+        data[2] = abi.encodeCall(registry.migrateEligibility, (address(v), true, five, fiveBps));
+        data[3] = abi.encodeCall(
+            registry.migrateEligibility,
+            (address(oldProto), false, _newLegs(address(v)), _launchBps())
+        );
+        data[4] = abi.encodeCall(registry.retire, (address(oldProto)));
+        data[5] = abi.encodeCall(v.unpauseDeposits, ());
+    }
+
+    function _schedule(BasketVault v, bytes32 salt) internal returns (bytes32 id) {
+        (address[] memory targets, uint256[] memory values, bytes[] memory data) = _batch(v);
+        assertTrue(
+            _safeExec(
+                committee,
+                timelock,
+                abi.encodeCall(
+                    governor.scheduleBatch, (targets, values, data, bytes32(0), salt, DELAY)
+                )
+            )
+        );
+        return governor.hashOperationBatch(targets, values, data, bytes32(0), salt);
+    }
+
+    function _execute(BasketVault v, bytes32 salt) internal {
+        (address[] memory targets, uint256[] memory values, bytes[] memory data) = _batch(v);
+        governor.executeBatch(targets, values, data, bytes32(0), salt);
+    }
+
+    function _runBatch(BasketVault v) internal {
+        _schedule(v, bytes32(0));
+        vm.warp(block.timestamp + DELAY);
+        _execute(v, bytes32(0));
     }
 
     function test_batch_replacesTheVaultAndKeepsTheSplit() public {
@@ -214,45 +292,54 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         assertFalse(router.votedWeightsActive(), "no voted vector");
     }
 
-    function test_batch_retireBeforeMigrateRevertsInContract() public {
+    function test_batch_quorumDelayCancellationReplay() public {
         BasketVault v = _redeploy();
-        vm.startPrank(timelock);
-        registry.registerVault(address(v), _meta("Robot Money Protocol"));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                VaultRegistry.RetireWhileRouterEligible.selector, address(oldProto)
-            )
+        (address[] memory targets, uint256[] memory values, bytes[] memory data) = _batch(v);
+        bytes memory schedule = abi.encodeCall(
+            governor.scheduleBatch, (targets, values, data, bytes32(0), bytes32(0), DELAY)
         );
-        registry.retire(address(oldProto));
-        vm.stopPrank();
+        bytes memory oneSignature = _oneOwnerSignature(_safeDigest(committee, timelock, schedule));
+        vm.expectRevert(bytes("GS020"));
+        _safeExecWith(committee, timelock, schedule, oneSignature);
+        bytes32 id = _schedule(v, bytes32(0));
+        vm.expectRevert();
+        _execute(v, bytes32(0));
+        _govCancel(committee, governor, id);
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert();
+        _execute(v, bytes32(0));
+        _schedule(v, bytes32(0));
+        vm.warp(block.timestamp + DELAY);
+        _execute(v, bytes32(0));
+        assertTrue(governor.isOperationDone(id));
+        vm.expectRevert();
+        _execute(v, bytes32(0));
     }
 
-    function test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt() public {
-        // The alternative order (drop the old vault first) works too: it leaves a three-leg router for the time between the two
-        // calls. The govern row uses the five-leg order inside ONE timelock batch, so no observer sees either state.
+    function test_batch_revertAtEveryCallRestoresAllState() public {
         BasketVault v = _redeploy();
-        vm.startPrank(timelock);
-        registry.registerVault(address(v), _meta("Robot Money Protocol"));
-        address[] memory three = new address[](3);
-        three[0] = address(legUsdc);
-        three[1] = address(legAgent);
-        three[2] = address(legRwa);
-        uint256[] memory b = new uint256[](3);
-        b[0] = 9075;
-        b[1] = 575;
-        b[2] = 350;
-        registry.migrateEligibility(address(oldProto), false, three, b);
-        registry.retire(address(oldProto));
-        vm.stopPrank();
-        assertEq(registry.routerEligibleCount(), 3);
-    }
-
-    function test_batch_newVaultCannotBeWeightedBeforeItIsRegistered() public {
-        BasketVault v = _redeploy();
-        (address[] memory five, uint256[] memory fiveBps) = _fiveLegs(address(v));
-        vm.prank(timelock);
-        vm.expectRevert(VaultRegistry.NotRegistered.selector);
-        registry.migrateEligibility(address(v), true, five, fiveBps);
+        (address[] memory targets,, bytes[] memory data) = _batch(v);
+        bytes32 id = _schedule(v, bytes32(0));
+        vm.warp(block.timestamp + DELAY);
+        for (uint256 i; i < targets.length; i++) {
+            vm.mockCallRevert(targets[i], data[i], bytes("injected failure"));
+            vm.expectRevert();
+            _execute(v, bytes32(0));
+            vm.clearMockedCalls();
+            assertFalse(governor.isOperationDone(id));
+            assertEq(registry.listVaults().length, 4);
+            assertEq(registry.routerEligibleCount(), 4);
+            assertTrue(registry.isRouterEligible(address(oldProto)));
+            assertFalse(registry.isRouterEligible(address(v)));
+            assertFalse(oldProto.retired());
+            assertTrue(v.depositsPaused());
+            assertEq(router.vaultCap(address(v)), 0);
+            (address[] memory legs, uint256[] memory weights) = router.getEffectiveWeights();
+            assertEq(legs, _launchVaults());
+            assertEq(weights, _launchBps());
+        }
+        _execute(v, bytes32(0));
+        assertEq(router.vaultCap(address(v)), 525000);
     }
 
     function test_oldVaultStillRedeemsAfterRetire() public {

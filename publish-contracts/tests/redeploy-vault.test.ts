@@ -4,12 +4,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex } from "viem";
+import { getAddress, decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex } from "viem";
 import { EXIT_CODES } from "../src/errors.ts";
 import { parseCli, USAGE } from "../src/cli.ts";
 import { GOVERN_ROWS, govRowRefusal, resumeCommand, runGovern, stageRows } from "../src/govern.ts";
 import {
-  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems, redeployRecordKey, redeployRefusal,
+  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems, redeployRecordKey, redeployRefusal,
   redeploysOf, vectorsFromFinal, type RedeployAfter, type RedeployBefore, type RedeployRecord,
 } from "../src/redeploy-vault.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunManifest } from "../src/runner.ts";
@@ -65,17 +65,18 @@ describe("the vectors", () => {
 });
 
 describe("the batch", () => {
-  const calls = () => buildRedeployCalls({ registry: A.registry, oldVault: OLD, newVault: NEW, registryName: "Robot Money Protocol", asset: addr(0xc0de), finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS });
-  test("five calls in the one order the contracts allow: register, make the new vault eligible, drop the old one, retire it, open the new one", () => {
+  const calls = () => buildRedeployCalls({ router: A.router, routerVaultCap: 525000n, registry: A.registry, oldVault: OLD, newVault: NEW, registryName: "Robot Money Protocol", asset: addr(0xc0de), finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS });
+  test("six calls in the one order the contracts allow: register, make the new vault eligible, drop the old one, retire it, open the new one", () => {
     const c = calls();
-    expect(c.map((x) => x.target)).toEqual([A.registry, A.registry, A.registry, A.registry, NEW]);
-    const d = c.slice(0, 4).map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
+    expect(c.map((x) => x.target)).toEqual([A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
+    const d = c.filter((x) => x.target === A.registry).map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
     expect(d.map((x) => x.functionName)).toEqual(["registerVault", "migrateEligibility", "migrateEligibility", "retire"]);
-    expect(d[0]!.args).toEqual([NEW, { name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 0n }]);
+    expect(decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: c[1]!.data }).args).toEqual([NEW, 525000n]);
+    expect(d[0]!.args).toEqual([NEW, { name: "Robot Money Protocol", asset: getAddress(addr(0xc0de)), registeredAt: 0n }]);
     expect(d[1]!.args).toEqual([NEW, true, [USDC, OLD, NEW, AGENT, RWA], [8550n, 525n, 0n, 575n, 350n]]);
     expect(d[2]!.args).toEqual([OLD, false, [USDC, NEW, AGENT, RWA], [8550n, 525n, 575n, 350n]]);
     expect(d[3]!.args).toEqual([OLD]);
-    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[4]!.data }).functionName).toBe("unpauseDeposits");
+    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[5]!.data }).functionName).toBe("unpauseDeposits");
   });
   test("the old vault is made ineligible before it is retired (the registry reverts RetireWhileRouterEligible otherwise)", () => {
     const names = calls().map((x) => x.label);
@@ -169,7 +170,7 @@ const SCRIPT = "RedeployProtocolAssetVault.s.sol";
 const TL = A.timelock, REG = A.registry, ROUTER = A.router;
 
 /** A read-only chain that answers the deployment's state, and the new vault's, on top of the healthy pool chain the config-check reads. */
-function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean } = {}): ChainReader {
+function chainOf(o: { listed?: readonly Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean } = {}): ChainReader {
   const listed = o.listed ?? [USDC, OLD, AGENT, RWA];
   const base = healthyPoolReader();
   return {
@@ -194,9 +195,10 @@ function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: bool
 
 function verbWorld(o: { chainId?: number; sheet?: Record<string, string | null>; manifest?: Partial<RunManifest> | null } = {}) {
   const chainId = o.chainId ?? 918453;
-  const w = world({ chainId, sheet: { ...ALL, ...(o.sheet ?? {}) } });
+  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" } : {}), ...(o.sheet ?? {}) } });
   const dir = join(w.coreDir, "deployments", String(chainId));
   writeGovernManifests(dir);
+  writeFileSync(join(dir, "libs.json"), JSON.stringify({ tick_math: addr(0x7001) }));
   w.cfg.counts[SCRIPT] = 3;
   w.cfg.vaultOut = { [SCRIPT]: NEW };
   if (o.manifest !== null) saveRunManifest(w.evidence, { version: 1, chainId, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "2026-10-13T00:00:00Z", stages: { timelock: { status: "done", startedAt: "x" } }, ...(o.manifest ?? {}) } as RunManifest);
@@ -215,7 +217,8 @@ describe("the redeploy-vault verb", () => {
     expect(rec.deploy_tx_hashes).toHaveLength(3);
     expect(rec.deploy_receipt_statuses).toEqual([1, 1, 1]);
     // the vault manifest names the new vault, the retired one is kept, no temporary file is left
-    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(NEW);
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.replacement-1.json"), "utf8")).vault).toBe(NEW);
     expect(rec.retired_manifest).toBe("protocol-asset-vault.retired-1.json");
     expect(JSON.parse(readFileSync(join(t.dir, rec.retired_manifest!), "utf8")).vault).toBe(OLD);
     expect(existsSync(join(t.dir, "protocol-asset-vault.redeploy.json"))).toBe(false);
@@ -242,7 +245,7 @@ describe("the redeploy-vault verb", () => {
   });
   test("--dry-run simulates only: nothing is broadcast, no record, the vault manifest is unchanged", async () => {
     const t = verbWorld();
-    expect(await t.run(["--dry-run"], { makeSigner: undefined })).toBe(0);
+    expect(await t.run(["--dry-run"])).toBe(0);
     expect(t.forge().filter((c) => c.args.includes("--broadcast"))).toHaveLength(0);
     expect(redeploysOf(t.manifest())).toEqual([]);
     expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
@@ -292,7 +295,7 @@ describe("the redeploy-vault verb", () => {
       const t = verbWorld();
       // the before-state check runs with the listing as given: only the AFTER reads differ, so the chain answers the first reads cleanly
       let n = 0;
-      const reader = () => { const clean = chainOf(); const dirty = chainOf(bad); return { ...clean, read: async (...a: Parameters<ChainReader["read"]>) => ((++n <= 11 && !("listed" in bad)) || (n <= 4 && "listed" in bad) ? clean : dirty).read(...a) } as ChainReader; };
+      const reader = () => { const clean = chainOf(); const dirty = chainOf(bad); return { ...clean, read: async (...a: Parameters<ChainReader["read"]>) => (++n <= 7 ? clean : dirty).read(...a) } as ChainReader; };
       const code = await t.run([], { chainReader: reader });
       expect([EXIT_CODES.VERIFY, EXIT_CODES.REFUSED]).toContain(code);
       expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
@@ -322,6 +325,7 @@ describe("the redeploy-vault verb", () => {
 function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {}) {
   const d = setup({ ...ALL, ...(chainId === 8453 ? REHEARSAL : {}), ...sheetOver }, chainId);
   const tl = fakeTimelock(d.sheet, 900n);
+  tl.s.vaultCaps.set(OLD, 525000n);
   tl.s.weights = { vaults: [...DEF_VAULTS], bps: DEF_BPS.map(BigInt) };
   tl.s.paused = new Set([NEW]); // the old vault was unpaused by stage 13; the new one deploys closed
   tl.s.linked.add(NEW); tl.s.governed.add(NEW);
@@ -334,21 +338,21 @@ function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {
     retired_manifest: "protocol-asset-vault.retired-1.json", started_at: "x", deployed_at: "y",
   };
   manifest.vault_redeploys = [rec];
-  const opts = (extra: object = {}) => ({ ownerSigners: signers(d.sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: false as const, maxWaitSeconds: 10_000_000, emit: () => {}, row: REDEPLOY_ROW, ...extra });
+  const opts = (extra: object = {}) => ({ ownerSigners: signers(d.sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: false as const, maxWaitSeconds: chainId === 8453 ? 0 : 10_000_000, emit: () => {}, row: REDEPLOY_ROW, ...extra });
   const warpTo = async (sec: bigint) => { tl.s.clock += sec; };
   const go = (extra: object = {}) => runGovern(d.ctx, stageByName("govern"), manifest, opts({ warp: warpTo, ...extra }));
   return { ...d, tl, manifest, rec, opts, go, warpTo };
 }
 
 describe("the govern row", () => {
-  test("it schedules ONE batch of five calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
+  test("it schedules ONE batch of six calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
     const w = rowWorld();
     await w.go();
     expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
     const sched = w.tl.s.scheduled.get("redeploy-vault")!;
     expect(sched.form).toBe("batch");
-    expect(sched.calls).toHaveLength(5);
-    expect(sched.calls.map((c) => c.target)).toEqual([A.registry, A.registry, A.registry, A.registry, NEW]);
+    expect(sched.calls).toHaveLength(6);
+    expect(sched.calls.map((c) => c.target)).toEqual([A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
     // the chain: the new vault is listed, eligible and open, the old one retired and ineligible, the split unchanged across the new vault
     expect(w.tl.s.listed).toEqual([USDC, OLD, AGENT, RWA, NEW]);
     expect(w.tl.s.ineligible.has(OLD)).toBe(true);
@@ -462,7 +466,7 @@ const EV = parseAbi([
 const T0 = 5000;
 const entry = () => ({
   step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: TL, deployer: addr(0xa001), core_sha: SHA,
-  deploy_start_nonce: 40, deploy_end_nonce: 43, deploy_count: 3, deploy_tx_hashes: [h(1), h(2), h(3)], deploy_receipt_statuses: [1, 1, 1], registry_name: "Robot Money Protocol", asset: addr(0xc0de),
+  deploy_start_nonce: 40, deploy_end_nonce: 43, deploy_count: 3, deploy_tx_hashes: [h(1), h(2), h(3)], deploy_receipt_statuses: [1, 1, 1], router_vault_cap: "525000", registry_name: "Robot Money Protocol", asset: addr(0xc0de),
   vaults: [USDC, NEW, AGENT, RWA], bps: DEF_BPS, voted_weights_active: false, effective_vaults: [USDC, NEW, AGENT, RWA], effective_bps: DEF_BPS, old_vault_status: "Retired", new_vault_status: "Active",
   operation_id: h(77), schedule_tx: h(10), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(11), execute_status: 1, execute_block_timestamp: T0 + 900,
 });
@@ -470,14 +474,14 @@ const ev = (over: object = {}) => ({ deployment_kind: "rehearsal", registry: { a
 const offline = (f: (e: ReturnType<typeof entry>) => void, floor = 900): string => { const e = entry(); f(e); return checkVaultRedeploys(ev({ vault_redeploys: [e] }), floor).join("\n"); };
 
 function chainFor(e: ReturnType<typeof entry>, o: { calls?: number; delay?: bigint; gap?: number; data?: Hex; target?: Address; failedDeploy?: boolean } = {}): Parameters<typeof checkVaultRedeploysOnChain>[1] {
-  const want = buildRedeployCalls({ registry: e.registry as Address, oldVault: e.old_vault as Address, newVault: e.new_vault as Address, registryName: e.registry_name, asset: e.asset as Address, finalVaults: e.vaults as Address[], finalBps: e.bps });
+  const want = buildRedeployCalls({ router: e.router as Address, routerVaultCap: BigInt(e.router_vault_cap), registry: e.registry as Address, oldVault: e.old_vault as Address, newVault: e.new_vault as Address, registryName: e.registry_name, asset: e.asset as Address, finalVaults: e.vaults as Address[], finalBps: e.bps });
   const receipts = new Map<string, { status: "success" | "reverted"; blockNumber: bigint; logs: { address: string; topics: readonly Hex[]; data: Hex }[] }>();
   const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: { address: string; topics: readonly Hex[]; data: Hex }[], ts: number, status: "success" | "reverted" = "success") => { receipts.set(hash, { status, blockNumber: bn, logs }); blocks.set(bn++, ts); };
-  const sched = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallScheduled", args: { id: h(77) as Hex, index: BigInt(i) } }), data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [(i === 0 && o.target ? o.target : c.target) as Address, 0n, i === 0 && o.data ? o.data : c.data, h(0) as Hex, o.delay ?? 900n]) });
-  const exec = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallExecuted", args: { id: h(77) as Hex, index: BigInt(i) } }), data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [c.target as Address, 0n, c.data]) });
+  const sched = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallScheduled", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [(i === 0 && o.target ? o.target : c.target) as Address, 0n, i === 0 && o.data ? o.data : c.data, h(0) as Hex, o.delay ?? 900n]) });
+  const exec = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallExecuted", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [c.target as Address, 0n, c.data]) });
   e.deploy_tx_hashes.forEach((x, i) => add(x, [], 1, o.failedDeploy && i === 0 ? "reverted" : "success"));
-  add(e.schedule_tx, want.slice(0, o.calls ?? 5).map((c, i) => sched(i, c)), T0);
+  add(e.schedule_tx, want.slice(0, o.calls ?? 6).map((c, i) => sched(i, c)), T0);
   add(e.execute_tx, want.map((c, i) => exec(i, c)), T0 + (o.gap ?? 900));
   return {
     getChainId: async () => 8453, getTransactionCount: async () => 0,
@@ -513,7 +517,7 @@ describe("the evidence entry", () => {
   test("the chain check rejects a batch of the wrong size, the wrong call, the wrong target, a short delay, a short gap and a failed deploy transaction", async () => {
     const e = entry();
     const on = async (o: Parameters<typeof chainFor>[1]) => (await checkVaultRedeploysOnChain(ev(), chainFor(e, o), 900)).join("\n");
-    expect(await on({ calls: 4 })).toContain("exactly 5 calls");
+    expect(await on({ calls: 4 })).toContain("exactly 6 calls");
     expect(await on({ data: "0x12345678" })).toContain("calldata is not");
     expect(await on({ target: addr(0x31) })).toContain("target");
     expect(await on({ delay: 60n })).toContain("delay");

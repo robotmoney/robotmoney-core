@@ -100,6 +100,7 @@ function operationProblems(operations: any[], bad: (m: string) => void, floor: n
     if (!TX.test(g.schedule_tx ?? "")) bad(`govern ${g.step}: schedule_tx is missing`);
     if (g.schedule_status !== 1) bad(`govern ${g.step}: schedule receipt status is ${g.schedule_status}`);
     if (!TX.test(g.execute_tx ?? "")) bad(`govern ${g.step}: execute_tx is missing`);
+    if (typeof g.schedule_tx === "string" && typeof g.execute_tx === "string" && lc(g.schedule_tx) === lc(g.execute_tx)) bad(`govern ${g.step}: execute_tx is also the schedule_tx`);
     if (g.execute_status !== 1) bad(`govern ${g.step}: execute receipt status is ${g.execute_status}`);
     if (INTERNAL_CANCELS.has(g)) continue; // only the rehearsal cancel row, built by rowOperations below, never executes. Nothing read from the evidence JSON can set this.
     const gap = Number(g.execute_block_timestamp) - Number(g.schedule_block_timestamp);
@@ -207,6 +208,7 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     if (ADDR.test(r?.new_vault ?? "") && lc(r.new_vault) !== lc(ev?.vaults?.[r?.vault]?.address ?? "")) bad(`${w}: new_vault ${r.new_vault} is not the address ${ev?.vaults?.[r?.vault]?.address} the evidence names for ${r?.vault}`);
     if (ADDR.test(r?.registry ?? "") && lc(r.registry) !== lc(ev?.registry?.address ?? "")) bad(`${w}: registry ${r.registry} is not the run's registry ${ev?.registry?.address}`);
     if (ADDR.test(r?.timelock ?? "") && lc(r.timelock) !== lc(ev?.timelock?.address ?? "")) bad(`${w}: timelock ${r.timelock} is not the run's timelock ${ev?.timelock?.address}`);
+    if (typeof r?.router_vault_cap !== "string" || !/^[0-9]+$/.test(r.router_vault_cap)) bad(`${w}: router_vault_cap must record the approved old cap as a decimal string`);
     if (typeof r?.registry_name !== "string" || r.registry_name === "") bad(`${w}: registry_name is missing`);
     // the deploy half: every transaction the deployer sent for the vault, each with status 1
     const hashes: unknown[] = Array.isArray(r?.deploy_tx_hashes) ? r.deploy_tx_hashes : [];
@@ -782,7 +784,7 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
     if (!ADDR.test(r?.old_vault ?? "") || !ADDR.test(r?.new_vault ?? "") || !ADDR.test(r?.registry ?? "") || !ADDR.test(r?.asset ?? "") || !Array.isArray(r?.vaults) || !Array.isArray(r?.bps) || typeof r?.registry_name !== "string" || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
     for (const [i, h] of (Array.isArray(r.deploy_tx_hashes) ? r.deploy_tx_hashes : []).entries()) await status(`${w} deploy tx ${i}`, h);
     let want: ReturnType<typeof buildRedeployCalls>;
-    try { want = buildRedeployCalls({ registry: r.registry, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
+    try { want = buildRedeployCalls({ router: r.router, routerVaultCap: BigInt(r.router_vault_cap), registry: r.registry, oldVault: r.old_vault, newVault: r.new_vault, registryName: r.registry_name, asset: r.asset, finalVaults: r.vaults, finalBps: r.bps }); } catch { continue; } // the offline check already named it
     const sc = await status(`${w} schedule`, r.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));

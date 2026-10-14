@@ -63,10 +63,12 @@ contracts/script/contract.DeployTimelock.mdx
 contracts/script/contract.DeployUniswapV4PriceRecorder.mdx
 contracts/script/contract.DeployVault.mdx
 contracts/script/contract.DeployVaultRegistry.mdx
+contracts/script/contract.RedeployProtocolAssetVault.mdx
 contracts/script/interface.IGatewayAgentOwnership.mdx
 contracts/script/interface.IRetirableVaultLink.mdx
 contracts/script/interface.IRouterGovernanceQuorum.mdx
 contracts/script/interface.ISafeFull.mdx
+contracts/script/interface.IVaultRegistryLink.mdx
 contracts/script/library.AdapterBytecodeGuard.mdx
 contracts/test/abstract.DeployTimelockKindBase.mdx
 contracts/test/abstract.DeployTimelockRunEntrypointBase.mdx
@@ -234,6 +236,8 @@ contracts/test/contract.RecheckVault.mdx
 contracts/test/contract.RecorderDeployHarness.mdx
 contracts/test/contract.RecordingSwapRouter.mdx
 contracts/test/contract.RedeemGasGuardsTest.mdx
+contracts/test/contract.RedeployLegVault.mdx
+contracts/test/contract.RedeployProtocolAssetVaultTest.mdx
 contracts/test/contract.ReentrantHookToken.mdx
 contracts/test/contract.ReentrantToken.mdx
 contracts/test/contract.ReentrantVault.mdx

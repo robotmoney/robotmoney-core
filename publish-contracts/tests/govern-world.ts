@@ -14,7 +14,7 @@ import { RECEIPT_ABI, SAFE_ADMIN_ABI, VAULT_ABI, type GovernApi } from "../src/g
 import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
-import { REGISTRY_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
+import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -62,6 +62,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
     listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),
+    vaultCaps: new Map<string, bigint>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
     /** Issue 1743: a VOTED vector on the router. While set, votedWeightsActive reads true and getEffectiveWeights reads it instead of the default; an executed clearVotedWeights removes it. */
     voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
@@ -103,6 +104,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "registry": return s.linked.has(address) ? A.registry : addr(0);
           case "listVaults": return s.listed;
           case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
+          case "vaultCap": return s.vaultCaps.get(String(args?.[0])) ?? 0n;
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
           case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
           case "votedWeightsActive": return s.voted !== undefined;
@@ -176,6 +178,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
             s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
+            continue;
+          }
+          if (c.target === A.router) {
+            const d = decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: c.data });
+            if (d.functionName === "setVaultCap") s.vaultCaps.set(String(d.args[0]), d.args[1]);
             continue;
           }
           if (c.target === A.registry) {

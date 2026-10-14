@@ -11,6 +11,7 @@ import { join, relative, resolve } from "node:path";
 
 // Reasoned allowlist, matched on the repo-relative path.
 export const SET_REGISTRY_ALLOWLIST: { file: string; reason: string }[] = [
+  { file: "contracts/script/RedeployProtocolAssetVault.s.sol", reason: "issue 1796: bootstrap admin binds only the unopened replacement before handover; no live registry or router role" },
   { file: "contracts/script/DeployTimelock.s.sol", reason: "the one script that links the registry, in the timelock stage" },
   { file: "scripts/ci/check-set-registry-owner.ts", reason: "this gate names the call it bans" },
   { file: "scripts/ci/check-set-registry-owner.test.ts", reason: "this gate's self-test plants the call to prove the gate fails" },

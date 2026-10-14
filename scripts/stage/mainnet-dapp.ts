@@ -1,3 +1,4 @@
+import { currentGeneration, type MigrationOverlay } from "../../publish-contracts/src/migration-overlay.ts";
 // Read-only dapp stack on Base mainnet (8453), core issue 1725. Bun TypeScript, pure functions.
 //
 // `core-stack dapp up --chain 8453 --rpc URL --manifests DIR --start-block N` starts docker-compose.dapp.yaml plus
@@ -184,7 +185,7 @@ const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCas
  * addresses the dapp stack is configured with. Every manifest must say chain_id 8453, and the manifests must agree
  * with one another on the shared addresses.
  */
-export function readMainnetManifests(dir: string, read: (p: string) => string = (p) => readFileSync(p, "utf8")): MainnetAddresses {
+export function readMainnetManifests(dir: string, read: (p: string) => string = (p) => readFileSync(p, "utf8"), overlay?: MigrationOverlay): MainnetAddresses {
   const files = {
     gateway: manifestOf("gateway"),
     registry: manifestOf("registry"),
@@ -233,7 +234,7 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
     if (!same(a, addr(files.timelock, `addresses.vaults[${i}]`, timelockVaults[i]))) {
       throw new MainnetDappError("manifest-mismatch", `${file} vault differs from ${files.timelock} addresses.vaults[${i}] (${key})`);
     }
-    vaults[key] = a;
+    vaults[key] = overlay ? currentGeneration(overlay, MAINNET_CHAIN_ID, key, a) : a;
   });
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
@@ -296,7 +297,9 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
   if (input.publicDappUrl) checkRpcUrl("--public-dapp-url", input.publicDappUrl);
   if (input.publicExplorerUrl) checkRpcUrl("--public-explorer-url", input.publicExplorerUrl);
   const origin = (u: string): string => u.replace(/\/+$/, "");
-  const a = readMainnetManifests(input.manifestsDir, read);
+  const overlayPath = join(input.manifestsDir, "current-vaults.json");
+  const overlay = existsSync(overlayPath) ? JSON.parse(read(overlayPath)) as MigrationOverlay : undefined;
+  const a = readMainnetManifests(input.manifestsDir, read, overlay);
   const env: Record<string, string> = {
     COMPOSE_PROFILES: "",
     DAPP_PORT: String(dappPort),
