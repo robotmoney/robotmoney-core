@@ -45,17 +45,19 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         gateway.revealAuthorization(agent, salt, _selfPolicy(owner));
     }
 
-    // ── Q5: spoof supersedes the real member's latest vote ─────────────────
+    // ── Q5: spoof cannot supersede the real member's latest vote ───────────
 
-    function test_spoofedVoteSupersedesMembersLatestVote() public {
+    /// Remediated by core 1790 (PR 1818): the gateway reverts `CommitteeAgentNotCaller`
+    /// when `p.agent != msg.sender`, so the member's `latestVoteByAgent` stays theirs.
+    function test_spoofedVoteCannotSupersedeMembersLatestVote() public {
         // Real member votes Overweight 6000 bps.
         IInvestmentCommitteePolicy.VoteParams memory real = _defaultVoteParams();
         vm.prank(committeeAgent);
         uint256 realId = gateway.committeeVoteSubmit(real);
         assertEq(ic.latestVoteByAgent(committeeAgent), realId);
 
-        // Attacker self-registers and back-runs with an opposite vote under
-        // the member's address.
+        // Attacker self-registers and tries to back-run with an opposite vote
+        // under the member's address.
         _selfReveal(attacker, attacker, keccak256("f3-spoof"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.stance = IInvestmentCommitteePolicy.Stance.Underweight;
@@ -63,37 +65,35 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         spoof.voteJsonHash = keccak256("attacker-memo");
         spoof.rationaleUri = "https://attacker.example/memo.json";
         vm.prank(attacker);
-        uint256 spoofId = gateway.committeeVoteSubmit(spoof);
+        vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
+        gateway.committeeVoteSubmit(spoof);
 
-        // "Latest wins" readers (architecture.md L581, latestVoteByAgent) now
-        // see the attacker's vote as the member's live position.
-        assertEq(ic.latestVoteByAgent(committeeAgent), spoofId);
-        InvestmentCommitteePolicy.Vote memory v = ic.getVote(spoofId);
+        // "Latest wins" readers (architecture.md, latestVoteByAgent) still see
+        // the member's own vote as the live position.
+        assertEq(ic.latestVoteByAgent(committeeAgent), realId);
+        InvestmentCommitteePolicy.Vote memory v = ic.getVote(realId);
         assertEq(v.agent, committeeAgent);
-        assertEq(uint8(v.stance), uint8(InvestmentCommitteePolicy.Stance.Underweight));
-        assertEq(v.targetWeightBps, 0);
-        // The real vote is not reverted or deleted: append-only, no DoS.
-        assertEq(ic.voteCount(), 2);
+        assertEq(uint8(v.stance), uint8(InvestmentCommitteePolicy.Stance.Overweight));
+        assertEq(ic.voteCount(), 1);
     }
 
-    // ── Q4: unbounded flood under a member's name (aggregate dominance) ─────
+    // ── Q4: flood under a member's name is refused on-chain ─────────────────
 
-    function test_spoofedVotesFloodUnderMemberName() public {
+    /// Remediated by core 1790 (PR 1818): every spoofed submission reverts, so no
+    /// row naming the member is appended. The aggregate side (latest signal per
+    /// member and vault) is covered end to end by
+    /// `vote_flood_from_one_member_counts_once_end_to_end` in explorer-indexer.
+    function test_spoofedVoteFloodUnderMemberNameReverts() public {
         _selfReveal(attacker, attacker, keccak256("f3-flood"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.targetWeightBps = 0;
         for (uint256 i = 0; i < 25; i++) {
             spoof.voteJsonHash = keccak256(abi.encode("attacker-memo", i));
             vm.prank(attacker);
+            vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
             gateway.committeeVoteSubmit(spoof);
         }
-        // Every on-chain row names the member. This test does not serve matching
-        // rationale bodies or run the indexer: verification and aggregation are
-        // source-inspected concerns, not end-to-end assertions of this fixture.
-        assertEq(ic.voteCount(), 25);
-        for (uint256 i = 0; i < 25; i++) {
-            assertEq(ic.getVote(i).agent, committeeAgent);
-        }
+        assertEq(ic.voteCount(), 0, "no spoofed row may be recorded");
     }
 
     // ── Q3: receipt anchoring is NOT spoofable (confirms report) ────────────

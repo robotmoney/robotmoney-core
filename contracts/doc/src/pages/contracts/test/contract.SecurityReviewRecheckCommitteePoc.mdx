@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5a6fafb14bd33670a6cf9ca58ab1deac7f3fea44/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/263a23d1290368f7c94a6f9e3ccc267b1cb4f7e7/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -58,20 +58,28 @@ function _selfReveal(address owner, address agent, bytes32 salt) internal;
 | agent | `address` |  |
 | salt | `bytes32` |  |
 
-<a id="test_spoofedvotesupersedesmemberslatestvote"></a>
+<a id="test_spoofedvotecannotsupersedememberslatestvote"></a>
 
-### test_spoofedVoteSupersedesMembersLatestVote
+### test_spoofedVoteCannotSupersedeMembersLatestVote
+
+Remediated by core 1790 (PR 1818): the gateway reverts `CommitteeAgentNotCaller`
+when `p.agent != msg.sender`, so the member's `latestVoteByAgent` stays theirs.
 
 ```solidity
-function test_spoofedVoteSupersedesMembersLatestVote() public;
+function test_spoofedVoteCannotSupersedeMembersLatestVote() public;
 ```
 
-<a id="test_spoofedvotesfloodundermembername"></a>
+<a id="test_spoofedvotefloodundermembernamereverts"></a>
 
-### test_spoofedVotesFloodUnderMemberName
+### test_spoofedVoteFloodUnderMemberNameReverts
+
+Remediated by core 1790 (PR 1818): every spoofed submission reverts, so no
+row naming the member is appended. The aggregate side (latest signal per
+member and vault) is covered end to end by
+`vote_flood_from_one_member_counts_once_end_to_end` in explorer-indexer.
 
 ```solidity
-function test_spoofedVotesFloodUnderMemberName() public;
+function test_spoofedVoteFloodUnderMemberNameReverts() public;
 ```
 
 <a id="test_selfregisteredagentcannotanchorreceipt"></a>
