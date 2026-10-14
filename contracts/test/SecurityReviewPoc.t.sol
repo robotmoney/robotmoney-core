@@ -5,22 +5,19 @@ import {RobotMoneyVaultTest, MockAdapter} from "./RobotMoneyVault.t.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 
 contract SecurityReviewPoc is RobotMoneyVaultTest {
-    function test_duplicateAdapterDoubleCountsNavAndBlocksFullRedemption() public {
+    /// Remediated by core 1789: a duplicate add reverts, so NAV is never double counted.
+    function test_duplicateAdapterAddReverts() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
+        );
         vault.addAdapter(address(adapter), 10_000);
 
-        assertEq(vault.totalAssets(), 2_000 * ONE_USDC, "single balance counted twice");
+        assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "single balance counted once");
         uint256 aliceShares = vault.balanceOf(alice);
         vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.InsufficientAdapterLiquidity.selector,
-                2_000 * ONE_USDC - 1,
-                1_000 * ONE_USDC
-            )
-        );
         vault.redeem(aliceShares, alice, alice);
     }
 

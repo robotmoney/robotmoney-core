@@ -284,6 +284,8 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     error MaxAdaptersReached();
     /// @notice Provided adapter index is out of range or refers to an inactive entry.
     error AdapterNotFound();
+    /// @notice The adapter is already an active registry entry; a second entry would count its balance twice in NAV.
+    error AdapterAlreadyActive(address adapter);
     /// @notice Cannot remove an adapter while it still custodies assets — withdraw first.
     error AdapterNotEmpty();
     /// @notice Deposit/rebalance attempted while no adapter is active.
@@ -951,10 +953,19 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     /// @notice Register a new strategy adapter. Restricted to `ADMIN_ROLE`.
     /// @param adapter_ Address of the `IStrategyAdapter`-compatible contract.
     /// @param capBps_  Maximum allocation cap in basis points (1–10 000).
+    /// @dev Reverts `AdapterAlreadyActive` for an address that is already an active adapter.
     function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE) {
         if (adapter_ == address(0)) revert ZeroAddress();
         if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
         if (_activeAdapterCount() >= MAX_ADAPTERS) revert MaxAdaptersReached();
+        // An active duplicate would make totalAssets() read the same balance twice (core 1789).
+        // An inactive entry does not count, so deliberate re-registration still works.
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (adapters[i].active && address(adapters[i].adapter) == adapter_) {
+                revert AdapterAlreadyActive(adapter_);
+            }
+        }
         _requireAdapterEligible(adapter_);
         adapters.push(
             AdapterInfo({adapter: IStrategyAdapter(adapter_), capBps: capBps_, active: true})
