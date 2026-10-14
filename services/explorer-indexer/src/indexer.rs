@@ -1077,20 +1077,45 @@ async fn run_inner(
     };
 
     // Static watched set (gateway, pinned vault, registry, router) plus every
-    // registry-discovered active vault. Without the latter, ERC-4626
+    // registry-discovered vault, including paused and retired generations. Without the latter, ERC-4626
     // `Deposit`/`Withdraw` logs emitted by vaults learned from `VaultRegistered`
     // are never fetched, so their burn volume is invisible to the watchdog
     // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
     // a registered vault that emits a withdrawal in a block where the gateway is
     // idle would otherwise be dropped entirely.
     let mut watched = cfg.watched_addresses();
-    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
+    let mut registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT vault_address FROM vaults WHERE chain_id = $1 ORDER BY vault_address",
     )
     .bind(cfg.chain_id)
     .fetch_all(db.pool())
     .await
     .map_err(DbError::from)?;
+    // Discover registrations in this very interval before requesting vault logs.
+    // This includes standalone exits in the registration/cutover block and the
+    // interval before the next tick discovers the new generation.
+    if let Some(registry) = cfg.registry {
+        let discovery = rpc
+            .get_logs(
+                from_block as u64,
+                target,
+                &[registry],
+                &[topics.vault_registered],
+            )
+            .await?;
+        for log in discovery {
+            if log.address != registry || log.topics.first() != Some(&topics.vault_registered) {
+                continue;
+            }
+            let event =
+                IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(&log), true)
+                    .map_err(|e| IndexerError::Decode(format!("VaultRegistered discovery: {e}")))?;
+            let address = event.vault.as_slice().to_vec();
+            if !registered_vaults.contains(&address) {
+                registered_vaults.push(address);
+            }
+        }
+    }
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
             let address = Address::from(bytes);
@@ -1204,9 +1229,9 @@ async fn run_inner(
         None => BTreeSet::new(),
     };
     for (bn, contract) in &event_blocks_per_contract {
-        if *contract == cfg.vault {
+        if heartbeat_vaults.contains(contract) {
             rows_inserted +=
-                snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn, None).await;
+                snapshot_vault_or_skip(db, rpc, cfg.chain_id, *contract, *bn, None).await;
         }
     }
     // A DepositsPaused or DepositsUnpaused log from a vault changes what `/v1/vaults` reports as
@@ -1231,7 +1256,7 @@ async fn run_inner(
     }
 
     // Heartbeat snapshots — cover the legacy configured vault and every
-    // active vault learned from VaultRegistry events. The PK on
+    // vault learned from VaultRegistry events, including retired holder exits. The PK on
     // (chain_id, contract, block_number) deduplicates against event-driven
     // snapshots.
 

@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -377,6 +377,37 @@ broadcast (or prank) context: every call below is made as `p.admin`.
 
 ```solidity
 function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| cfg | `Cfg` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_deployconfigured-params-cfg"></a>
+
+### _deployConfigured
+
+<i>
+
+The part of `_deployAll` before registration: validates inputs, deploys the vault, adds the assets, sets the guards
+and pauses deposits. The vault is not registered. A redeploy into a live deployment (issue 1796) stops here: the registry
+is governed by the timelock after the handover, so the registration is a govern row, not a deployer call.
+
+</i>
+
+```solidity
+function _deployConfigured(Params memory p, Cfg memory cfg)
+        internal
+        returns (Deployed memory d);
 ```
 
 **Parameters**

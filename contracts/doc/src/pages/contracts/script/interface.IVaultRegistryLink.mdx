@@ -1,0 +1,44 @@
+---
+title: "IVaultRegistryLink"
+---
+
+# IVaultRegistryLink
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/script/RedeployProtocolAssetVault.s.sol)
+
+<i>
+
+Registry link surface of a vault: set once, ADMIN_ROLE only.
+
+</i>
+
+## Functions
+
+<a id="setregistry-address"></a>
+
+### setRegistry
+
+```solidity
+function setRegistry(address newRegistry) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newRegistry | `address` |  |
+
+<a id="registry"></a>
+
+### registry
+
+```solidity
+function registry() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

@@ -28,12 +28,28 @@ export interface TableVault { key: TableVaultKey; stage: string; artifact: strin
 export interface TableLibrary { name: string; artifact: string; manifestKey: string; path: string }
 /** A library forge deploys through the CREATE2 factory inside a stage (not linked with `--libraries`, no manifest key). It may link other `create2Libraries`. */
 export interface TableCreate2Library { name: string; artifact: string; path: string }
+/**
+ * A single-vault redeploy into a live deployment (issue 1796): the forge script that deploys ONE vault after the timelock handover, with the env it reads.
+ * It is NOT a stage: it has no frozen count and it runs only through the `redeploy-vault` verb. `manifest` is the vault stage's own manifest: the redeploy writes the new
+ * vault there, after it has kept the old file as the retired vault's record.
+ */
+export interface TableRedeploy {
+  vault: TableVaultKey;
+  script: string;
+  requiredEnv: string[];
+  optionalEnv: string[];
+  manifest: string;
+  libraries: string[];
+  create2Libraries?: string[];
+}
 export interface StageTable {
   version: 1;
   stages: TableStage[];
   vaults: TableVault[];
   libraries: TableLibrary[];
   create2Libraries?: TableCreate2Library[];
+  /** Single-vault redeploys into a live deployment (issue 1796). Absent: none. */
+  redeploys?: TableRedeploy[];
   artifacts: Record<string, string>;
 }
 
@@ -68,6 +84,22 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   const c2Names = new Set(c2.map((l) => l.name));
   for (const s of t.stages) if (s.create2Libraries !== undefined) { strList(s.create2Libraries, `stage ${s.name} create2Libraries`); for (const l of s.create2Libraries) if (!c2Names.has(l)) bad(`stage ${s.name} lists unknown create2 library '${l}'`); }
   for (const l of t.libraries) if (!l.name || !l.artifact || !l.manifestKey || !l.path) bad(`library ${String(l.name)} needs name, artifact, manifestKey and path`);
+  const redeploys: unknown = t.redeploys;
+  if (redeploys !== undefined) {
+    if (!Array.isArray(redeploys)) bad("redeploys must be a list");
+    const seen = new Set<string>();
+    for (const r of redeploys as TableRedeploy[]) {
+      const v = t.vaults.find((x) => x.key === r?.vault);
+      if (!v) bad(`a redeploy names unknown vault '${String(r?.vault)}'`);
+      if (seen.has(r.vault)) bad(`vault ${r.vault} has two redeploy rows`);
+      seen.add(r.vault);
+      if (typeof r.script !== "string" || !/^contracts\/script\/\w+\.s\.sol:\w+$/.test(r.script)) bad(`redeploy ${r.vault}: script must be contracts/script/<File>.s.sol:<Contract>`);
+      strList(r.requiredEnv, `redeploy ${r.vault} requiredEnv`); strList(r.optionalEnv, `redeploy ${r.vault} optionalEnv`); strList(r.libraries, `redeploy ${r.vault} libraries`);
+      if (r.manifest !== v!.manifest) bad(`redeploy ${r.vault}: manifest must be the vault stage's own manifest ${v!.manifest}`);
+      for (const l of r.libraries) if (!libNames.has(l)) bad(`redeploy ${r.vault} links unknown library '${l}'`);
+      if (r.create2Libraries !== undefined) { strList(r.create2Libraries, `redeploy ${r.vault} create2Libraries`); for (const l of r.create2Libraries) if (!c2Names.has(l)) bad(`redeploy ${r.vault} lists unknown create2 library '${l}'`); }
+    }
+  }
   for (const v of t.vaults) {
     if (!v.key || !v.artifact || !v.manifest) bad("a vault row needs key, stage, artifact and manifest");
     const st = t.stages.find((s) => s.name === v.stage);
@@ -75,6 +107,13 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
     else if (st.vault !== v.key || st.manifest !== v.manifest) bad(`vault ${v.key} disagrees with its stage ${v.stage}`);
   }
   return t as StageTable;
+}
+
+/** The redeploy row of a vault, or INPUT_MISSING naming the checkout that lacks it. */
+export function redeployRow(t: StageTable, vault: TableVaultKey): TableRedeploy {
+  const r = t.redeploys?.find((x) => x.vault === vault);
+  if (!r) throw new PublishError("INPUT_MISSING", `the core stage table has no redeploys row for vault ${vault}: use a core DEPLOY_SHA that carries the redeploy script (issue 1796)`);
+  return r;
 }
 
 export function loadStageTable(coreDir: string): StageTable {

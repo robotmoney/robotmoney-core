@@ -1267,6 +1267,22 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(named.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
   });
 
+  test("issue 1796: a receipt operation scheduled before a vault cutover is re-planned from the chain on the next run and refused (nothing is sent), as is a receipt released meanwhile", async () => {
+    const w = world(8453);
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    // the cutover retires rmPROTO while the operation waits: the eligible set the receipt names is stale
+    w.tl.s.ineligible.add(A.vaults.PROTO);
+    w.tl.s.clock += DELAY;
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("differs from the registry's router-eligible vaults") });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.released.has(RID)).toBe(false);
+    // the vault set is right again but the receipt was released meanwhile
+    w.tl.s.ineligible.delete(A.vaults.PROTO);
+    w.tl.s.released.add(RID);
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("was released after operation") });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+  });
+
   test("apply-receipt pending and cancelled rounds: a pending round exits GOVERN_PENDING with the resume command and a cancelled operation schedules again with a newer seq", async () => {
     const w = world(8453);
     const out: string[] = [];

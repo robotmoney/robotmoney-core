@@ -150,6 +150,7 @@ export const sidebar = [
             { text: "DeployUniswapV4PriceRecorder", link: "/contracts/script/contract.DeployUniswapV4PriceRecorder" },
             { text: "DeployVault", link: "/contracts/script/contract.DeployVault" },
             { text: "DeployVaultRegistry", link: "/contracts/script/contract.DeployVaultRegistry" },
+            { text: "RedeployProtocolAssetVault", link: "/contracts/script/contract.RedeployProtocolAssetVault" },
           ],
         },
         {
@@ -168,6 +169,7 @@ export const sidebar = [
             { text: "IRetirableVaultLink", link: "/contracts/script/interface.IRetirableVaultLink" },
             { text: "IRouterGovernanceQuorum", link: "/contracts/script/interface.IRouterGovernanceQuorum" },
             { text: "ISafeFull", link: "/contracts/script/interface.ISafeFull" },
+            { text: "IVaultRegistryLink", link: "/contracts/script/interface.IVaultRegistryLink" },
           ],
         },
         {
@@ -291,6 +293,7 @@ export const sidebar = [
             { text: "GuardHarness", link: "/contracts/test/contract.GuardHarness" },
             { text: "ICGatewayIntegration", link: "/contracts/test/contract.ICGatewayIntegration" },
             { text: "InterlockMockVault", link: "/contracts/test/contract.InterlockMockVault" },
+            { text: "InterruptedRedeploy", link: "/contracts/test/contract.InterruptedRedeploy" },
             { text: "InvForeignToken", link: "/contracts/test/contract.InvForeignToken" },
             { text: "InvUSDC", link: "/contracts/test/contract.InvUSDC" },
             { text: "InvestmentCommitteePolicyTest", link: "/contracts/test/contract.InvestmentCommitteePolicyTest" },
@@ -347,6 +350,8 @@ export const sidebar = [
             { text: "RecorderDeployHarness", link: "/contracts/test/contract.RecorderDeployHarness" },
             { text: "RecordingSwapRouter", link: "/contracts/test/contract.RecordingSwapRouter" },
             { text: "RedeemGasGuardsTest", link: "/contracts/test/contract.RedeemGasGuardsTest" },
+            { text: "RedeployLegVault", link: "/contracts/test/contract.RedeployLegVault" },
+            { text: "RedeployProtocolAssetVaultTest", link: "/contracts/test/contract.RedeployProtocolAssetVaultTest" },
             { text: "ReentrantHookToken", link: "/contracts/test/contract.ReentrantHookToken" },
             { text: "ReentrantToken", link: "/contracts/test/contract.ReentrantToken" },
             { text: "ReentrantVault", link: "/contracts/test/contract.ReentrantVault" },

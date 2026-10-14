@@ -23,6 +23,7 @@ import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { manifestBase, manifestPathFor } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
+import type { RedeployRecord } from "./redeploy-vault.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
@@ -109,6 +110,8 @@ export interface RunManifest {
   receipt_applications?: unknown[];
   /** One entry per executed `govern --row clear-voted-weights` round (issue 1743). */
   voted_weights_clears?: unknown[];
+  /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
+  vault_redeploys?: RedeployRecord[];
   /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
   committee_registrations?: unknown[];
   /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */
@@ -291,6 +294,8 @@ export interface RunContext {
   /** Set by runStages in a dry run: the RPC forge simulates on (a local anvil) and the record of manifest files to restore. */
   simRpc?: string;
   dryFiles?: DryRunFiles;
+  /** Issue 1796, verify after a redeploy: the forge out/ of a checkout at the ORIGINAL deployment sha, for the code hashes of the vaults the redeploy did not replace and of the retired one. */
+  priorArtifactsDir?: string;
   /** Absolute manifest directory chosen by the caller (env PUBLISH_MANIFEST_DIR). Undefined: deployments/<chainId>/ in the core checkout. */
   manifestOut?: string;
 }
@@ -532,7 +537,7 @@ export function libraryArgs(ctx: ManifestCtx, row: StageRow): string[] {
 
 const scriptFile = (script: string): string => basename(script.split(":")[0]!);
 
-function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; firstBlock?: number; lastBlock?: number } | undefined {
+export function readTxCount(path: string): { count: number; hashes: string[]; creates: string[]; firstBlock?: number; lastBlock?: number } | undefined {
   if (!existsSync(path)) return undefined;
   const j = JSON.parse(readFileSync(path, "utf8"));
   const txs: unknown[] = Array.isArray(j.transactions) ? j.transactions : [];
