@@ -5133,6 +5133,17 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "AdapterAlreadyActive",
+    inputs: [
+      {
+        name: "adapter",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "AdapterAssetMismatch",
     inputs: [
       {

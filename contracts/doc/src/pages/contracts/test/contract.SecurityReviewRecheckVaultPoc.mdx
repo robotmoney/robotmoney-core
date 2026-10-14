@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckVaultPoc"
 
 # SecurityReviewRecheckVaultPoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3947c43df9ec474f93f6d8b7d737de51425029c7/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a98efe2f1ff3a45c9c71e4fb73232795b566e34a/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
 
 **Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
 
@@ -57,6 +57,8 @@ function _secondAdapter() internal returns (MockAdapter second);
 <a id="_addduplicate"></a>
 
 ### _addDuplicate
+
+Core 1789: a second registry entry for an already-active adapter reverts.
 
 ```solidity
 function _addDuplicate() internal;
@@ -111,8 +113,7 @@ function test_f1_pauseBeforeRevokeClosesWindow() public;
 
 ### test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault
 
-A PARTIAL redemption succeeds and is paid at the doubled share price: half the
-shares take the entire deposit and the vault is left empty.
+The duplicate add that doubled NAV now reverts, so a partial redeem pays par.
 
 ```solidity
 function test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault() public;
@@ -122,8 +123,7 @@ function test_f2_partialRedeemPaysDoubledPriceAndEmptiesVault() public;
 
 ### test_f2_firstRedeemerTakesSecondHoldersBacking
 
-With two holders the FIRST full redeemer takes the second holder's backing.
-The second holder's full redemption reverts on the double-counted dust remainder.
+The first redeemer can no longer take the second holder's backing.
 
 ```solidity
 function test_f2_firstRedeemerTakesSecondHoldersBacking() public;
@@ -133,8 +133,7 @@ function test_f2_firstRedeemerTakesSecondHoldersBacking() public;
 
 ### test_f2_laterFullRedemptionRevertsAfterPartialExtraction
 
-The revert face: after a partial extraction a later holder's FULL redemption reverts
-because the share-implied gross exceeds what the single real adapter holds.
+A later holder's full redemption succeeds because no duplicate inflates the claim.
 
 ```solidity
 function test_f2_laterFullRedemptionRevertsAfterPartialExtraction() public;
@@ -144,43 +143,20 @@ function test_f2_laterFullRedemptionRevertsAfterPartialExtraction() public;
 
 ### test_f2_depositAfterDuplicateMintsAtInflatedPrice
 
-A deposit AFTER the duplicate is minted at the inflated price: same amount, about half
-the shares. Routing still places the full deposit.
+A deposit after the rejected duplicate mints at the true price.
 
 ```solidity
 function test_f2_depositAfterDuplicateMintsAtInflatedPrice() public;
 ```
 
-<a id="test_f2_removeadapterblockedonbothentries"></a>
+<a id="test_f2_reactivatinginactiveadapterstillworks"></a>
 
-### test_f2_removeAdapterBlockedOnBothEntries
+### test_f2_reactivatingInactiveAdapterStillWorks
 
-`removeAdapter` cannot undo the duplicate directly: both entries read the same balance.
-
-```solidity
-function test_f2_removeAdapterBlockedOnBothEntries() public;
-```
-
-<a id="test_f2_adminonlyrecoveryrestoresaccounting"></a>
-
-### test_f2_adminOnlyRecoveryRestoresAccounting
-
-ADMIN-only clean recovery with no deposit pause:
-adminRebalance([0,0]) -> removeAdapter(1) -> adminRebalance([X,0]).
+Reactivating a deliberately removed (inactive) adapter still works.
 
 ```solidity
-function test_f2_adminOnlyRecoveryRestoresAccounting() public;
-```
-
-<a id="test_f2_forceremoveduplicatefixesnavbutpausesandmisreportsloss"></a>
-
-### test_f2_forceRemoveDuplicateFixesNavButPausesAndMisreportsLoss
-
-EMERGENCY recovery: `forceRemoveAdapter(1)` fixes NAV in one call but pauses deposits
-and emits `AdapterForceRemoved` with lossAmount equal to the full (not lost) balance.
-
-```solidity
-function test_f2_forceRemoveDuplicateFixesNavButPausesAndMisreportsLoss() public;
+function test_f2_reactivatingInactiveAdapterStillWorks() public;
 ```
 
 <a id="test_o1a_forceremoveallfunded_redeemburnssharesforzero"></a>

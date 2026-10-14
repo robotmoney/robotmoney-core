@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/565372849346ef905691dda58e5b85471470138a/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2ef5ba2af2a8cccf4d80308dbf2be5d9c553c25e/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
 
@@ -1016,6 +1016,12 @@ function _pullProportional(uint256 assetsNeeded) internal returns (uint256);
 ### addAdapter
 
 Register a new strategy adapter. Restricted to `ADMIN_ROLE`.
+
+<i>
+
+Reverts `AdapterAlreadyActive` for an address that is already an active adapter.
+
+</i>
 
 ```solidity
 function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE);
@@ -2322,6 +2328,20 @@ Provided adapter index is out of range or refers to an inactive entry.
 ```solidity
 error AdapterNotFound();
 ```
+
+### AdapterAlreadyActive
+
+The adapter is already an active registry entry; a second entry would count its balance twice in NAV.
+
+```solidity
+error AdapterAlreadyActive(address adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` | The adapter address that is already active. |
 
 ### AdapterNotEmpty
 
