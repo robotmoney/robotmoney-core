@@ -179,6 +179,54 @@ contract ICGatewayIntegration is Test {
         assertEq(v.voteJsonHash, VOTE_JSON_HASH);
     }
 
+    // ─── Issue #1790: a gateway agent cannot sign as another member ──────────
+
+    /// @dev Issue #1790: a self-registered gateway agent (AGENT_ROLE, no
+    ///      COMMITTEE_AGENT_ROLE) that sets `p.agent` to a registered member is
+    ///      refused by the gateway before the IC contract sees the vote.
+    function test_permissionlessAgentCannotImpersonateCommitteeMember() public {
+        address impostor = address(0xE1);
+        address[] memory noList = new address[](0);
+        IGateway.AgentPolicy memory pol = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 30 days),
+            maxPerPayment: 1e6,
+            maxPerWindow: 10e6,
+            shareReceiver: shareReceiver,
+            allowedDestinations: noList,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noList
+        });
+        vm.prank(admin);
+        gateway.authorizeAgent(impostor, pol);
+
+        IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
+        assertEq(p.agent, committeeAgent);
+
+        vm.prank(impostor);
+        vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
+        gateway.committeeVoteSubmit(p);
+        assertEq(ic.voteCount(), 0, "spoofed vote must not be recorded");
+    }
+
+    /// @dev Issue #1790: a registered member cannot file a signal under a
+    ///      second member's address either.
+    function test_committeeMemberCannotSubmitForAnotherMember() public {
+        address otherMember = address(0xB2);
+        vm.prank(admin);
+        gateway.committeeRegister(otherMember, "hermes-v1");
+
+        IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
+        p.agent = otherMember;
+
+        vm.prank(committeeAgent);
+        vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
+        gateway.committeeVoteSubmit(p);
+        assertEq(ic.voteCount(), 0, "spoofed vote must not be recorded");
+    }
+
     // ─── AC-3: direct (non-gateway) call to IC register() reverts ────────────
 
     /// @dev AC-3 (issue #1049): direct call to IC `registerAgent` by an address

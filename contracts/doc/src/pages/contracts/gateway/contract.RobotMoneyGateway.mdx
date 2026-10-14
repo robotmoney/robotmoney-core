@@ -5,7 +5,7 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e7a511cdfa72db50d9966938a824287f2a66cea9/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
 
@@ -1390,9 +1390,15 @@ function committeeRegister(address agent, string calldata agentId_)
 ### committeeVoteSubmit
 
 Forward a signed committee vote to the IC policy contract.
-Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set,
+if `p.agent` is not the caller (`CommitteeAgentNotCaller`), or
 if the IC contract's own guards fail (agent not allowlisted,
 invalid vote fields, etc.).
+
+`p.agent` must equal `msg.sender` (issue #1790): the IC contract
+checks `COMMITTEE_AGENT_ROLE` on `p.agent`, so without this bind
+any `AGENT_ROLE` holder could file a signal under a registered
+member's address.
 
 The gateway is the sole permitted caller of `IC.submitVote`
 (enforced by the IC contract's `onlyGateway` modifier). This
@@ -1849,6 +1855,17 @@ policy contract is configured (`icPolicy == address(0)`).
 
 ```solidity
 error ICPolicyNotSet();
+```
+
+### CommitteeAgentNotCaller
+
+`committeeVoteSubmit()` called with `p.agent != msg.sender`. A
+committee signal is the caller's own (architecture §4.8 identity
+model), so one gateway agent cannot file it under another
+member's address (issue #1790).
+
+```solidity
+error CommitteeAgentNotCaller();
 ```
 
 ### ConsensusReceiptNotSet

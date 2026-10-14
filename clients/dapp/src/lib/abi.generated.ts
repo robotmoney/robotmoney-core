@@ -1795,6 +1795,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "CommitteeAgentNotCaller",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "ConsensusReceiptNotSet",
     inputs: [],
   },
