@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f6eb411b56ad36fcaf8bf714e311cacc116b7aaf/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -148,6 +148,25 @@ bytes32 internal constant ROTATION_EXECUTOR = keccak256("WEIGHT_SETTER_ROTATION_
 
 ```solidity
 bytes32 internal constant WEIGHT_SETTER = keccak256("WEIGHT_SETTER_ROLE");
+```
+
+### SENTINEL
+
+```solidity
+address internal constant SENTINEL = address(1);
+```
+
+### GUARD_STORAGE_SLOT
+
+<i>
+
+GuardManager's slot: keccak256("guard_manager.guard.address").
+
+</i>
+
+```solidity
+bytes32 internal constant GUARD_STORAGE_SLOT =
+        0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8;
 ```
 
 ## State Variables
@@ -1100,5 +1119,244 @@ The Safe cancels an in-flight rotation, and the scheduled timelock call then fai
 
 ```solidity
 function test_rotation_safeCancels_scheduledExecuteThenFails() public withSnap;
+```
+
+<a id="_prevowner-address"></a>
+
+### _prevOwner
+
+<i>
+
+The owner that precedes `o` in the Safe's linked list (the sentinel for the head).
+
+</i>
+
+```solidity
+function _prevOwner(address o) internal view returns (address prev);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prev | `address` |  |
+
+<a id="_safeself-bytes"></a>
+
+### _safeSelf
+
+```solidity
+function _safeSelf(bytes memory data) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_safeselfreverts-bytes"></a>
+
+### _safeSelfReverts
+
+```solidity
+function _safeSelfReverts(bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+<a id="_guard"></a>
+
+### _guard
+
+```solidity
+function _guard() internal view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="test_selfadmin_addownerwiththreshold"></a>
+
+### test_selfAdmin_addOwnerWithThreshold
+
+```solidity
+function test_selfAdmin_addOwnerWithThreshold() public withSnap;
+```
+
+<a id="test_selfadmin_addowner_refuseszerosentinelduplicateandself"></a>
+
+### test_selfAdmin_addOwner_refusesZeroSentinelDuplicateAndSelf
+
+```solidity
+function test_selfAdmin_addOwner_refusesZeroSentinelDuplicateAndSelf() public withSnap;
+```
+
+<a id="test_selfadmin_removeowner"></a>
+
+### test_selfAdmin_removeOwner
+
+```solidity
+function test_selfAdmin_removeOwner() public withSnap;
+```
+
+<a id="test_selfadmin_removeowner_cannotleavefewerownersthanthethreshold"></a>
+
+### test_selfAdmin_removeOwner_cannotLeaveFewerOwnersThanTheThreshold
+
+```solidity
+function test_selfAdmin_removeOwner_cannotLeaveFewerOwnersThanTheThreshold() public withSnap;
+```
+
+<a id="test_selfadmin_swapowner_oldownersignaturestopsworking"></a>
+
+### test_selfAdmin_swapOwner_oldOwnerSignatureStopsWorking
+
+```solidity
+function test_selfAdmin_swapOwner_oldOwnerSignatureStopsWorking() public withSnap;
+```
+
+<a id="test_selfadmin_swapowner_refusesanexistingownerandanunknownold"></a>
+
+### test_selfAdmin_swapOwner_refusesAnExistingOwnerAndAnUnknownOld
+
+```solidity
+function test_selfAdmin_swapOwner_refusesAnExistingOwnerAndAnUnknownOld() public withSnap;
+```
+
+<a id="test_selfadmin_changethreshold_takeseffect"></a>
+
+### test_selfAdmin_changeThreshold_takesEffect
+
+```solidity
+function test_selfAdmin_changeThreshold_takesEffect() public withSnap;
+```
+
+<a id="test_selfadmin_changethreshold_refuseszeroandmorethanowners"></a>
+
+### test_selfAdmin_changeThreshold_refusesZeroAndMoreThanOwners
+
+```solidity
+function test_selfAdmin_changeThreshold_refusesZeroAndMoreThanOwners() public withSnap;
+```
+
+<a id="test_selfadmin_saferejectsmalformedmoduleguardandhandlerchanges"></a>
+
+### test_selfAdmin_safeRejectsMalformedModuleGuardAndHandlerChanges
+
+Module, guard and fallback-handler changes: the Safe contract rejects the malformed ones.
+
+```solidity
+function test_selfAdmin_safeRejectsMalformedModuleGuardAndHandlerChanges() public withSnap;
+```
+
+<a id="test_selfadmin_wellformedmoduleandhandlerchangeisdetectablenotprevented"></a>
+
+### test_selfAdmin_wellFormedModuleAndHandlerChangeIsDetectableNotPrevented
+
+A well-formed module or handler change is NOT blocked by the Safe contract: two owners can
+make it at once, outside the timelock. The refusal lives in the govern tool (no row builds
+it) and in the verifier (it reads no module, no guard and the canonical handler).
+This test pins that fact so nobody mistakes the contract for the control.
+
+```solidity
+function test_selfAdmin_wellFormedModuleAndHandlerChangeIsDetectableNotPrevented()
+        public
+        withSnap;
+```
+
+<a id="_timelockselfcall-bytes-bytes32"></a>
+
+### _timelockSelfCall
+
+<i>
+
+The Safe schedules `data` on the timelock itself, the delay passes, the Safe executes it.
+
+</i>
+
+```solidity
+function _timelockSelfCall(bytes memory data, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+
+<a id="test_selfadmin_timelockupdatedelay_viasafeselfcall"></a>
+
+### test_selfAdmin_timelockUpdateDelay_viaSafeSelfCall
+
+```solidity
+function test_selfAdmin_timelockUpdateDelay_viaSafeSelfCall() public withSnap;
+```
+
+<a id="test_selfadmin_timelockupdatedelay_directcallsrevert"></a>
+
+### test_selfAdmin_timelockUpdateDelay_directCallsRevert
+
+```solidity
+function test_selfAdmin_timelockUpdateDelay_directCallsRevert() public withSnap;
+```
+
+<a id="test_selfadmin_timelockgrantandrevokerole_viasafeselfcall"></a>
+
+### test_selfAdmin_timelockGrantAndRevokeRole_viaSafeSelfCall
+
+```solidity
+function test_selfAdmin_timelockGrantAndRevokeRole_viaSafeSelfCall() public withSnap;
+```
+
+<a id="test_selfadmin_timelockrolechange_directcallsrevert"></a>
+
+### test_selfAdmin_timelockRoleChange_directCallsRevert
+
+```solidity
+function test_selfAdmin_timelockRoleChange_directCallsRevert() public withSnap;
+```
+
+<a id="test_selfadmin_safeproposerrolerevoked_throughthedelay"></a>
+
+### test_selfAdmin_safeProposerRoleRevoked_throughTheDelay
+
+Owner decision 1, default (b): the Safe gives up its timelock role through the delay.
+The route is revokeRole as a timelock self-call. After it the Safe cannot schedule.
+
+```solidity
+function test_selfAdmin_safeProposerRoleRevoked_throughTheDelay() public withSnap;
+```
+
+<a id="test_selfadmin_directrenounceisinstant_sothetoolmustnotbuildit"></a>
+
+### test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt
+
+The contract cannot force the delay on a renounce: the timelock's renounceRole only
+accepts the role holder as caller, and a Safe transaction is instant. The tool never
+builds a renounce (default (b)), and this test pins that the contract would allow it.
+
+```solidity
+function test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt() public withSnap;
 ```
 

@@ -29,7 +29,7 @@ import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
-import { RECEIPT_ROW, assertReceiptId, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { signerFromSpec, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
 import { runProveControl, type ProveOpts } from "./prove-control.ts";
@@ -80,6 +80,8 @@ export const USAGE = `publish contracts
                      --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,
                      gateway.authorizeAgent (AGENT_ROLE, a 1-unit signalling-only policy owned by the timelock) plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). Not part of stage 13.
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
+                      --row safe-add-owner|safe-remove-owner|safe-swap-owner|safe-change-threshold|timelock-grant-role|timelock-revoke-role --admin-arg K=V (Twin chain 918453 only, refused on 8453) runs a Safe or timelock self-administration row (issue 1645):
+                      the four safe-* rows are one Safe transaction to the Safe, the two timelock-* rows are a Safe -> Timelock round. Keys: owner, old-owner, new-owner, threshold, role, account.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
@@ -164,6 +166,8 @@ export interface Parsed {
   /** record-receipt only. */
   payloadDigest?: string;
   payloadUri?: string;
+  /** With a self-administration row only: the key=value pairs of --admin-arg. */
+  adminArgs?: Record<string, string>;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -176,7 +180,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -197,7 +201,8 @@ export function parseCli(argv: string[]): Parsed {
     const stageNames = verb === undefined ? stage : undefined;
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
-    if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW) resolveGovernRow(row);
+    if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW) resolveGovernRow(row);
   }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
@@ -219,6 +224,17 @@ export function parseCli(argv: string[]): Parsed {
   const payload = v.payload as string | undefined;
   if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
   if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
+  let adminArgs: Record<string, string> | undefined;
+  const adminRaw = v["admin-arg"] as string[] | undefined;
+  if (adminRaw !== undefined) {
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row only (${SELF_ADMIN_ROWS.join(", ")})\n${USAGE}`);
+    adminArgs = {};
+    for (const kv of adminRaw) {
+      const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
+      if (!m) throw new PublishError("USAGE", `--admin-arg takes key=value with key owner, old-owner, new-owner, threshold, role or account, got '${kv}'`);
+      adminArgs[m[1]!] = m[2]!;
+    }
+  }
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -235,7 +251,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs,
   };
 }
 
@@ -456,7 +472,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }
