@@ -16,7 +16,7 @@ Three CI/cron jobs monitor upstream contract liveness and governance:
 | Governance proposals | `scripts/monitor-governance-proposals.sh` | On-chain proposal targeting adapter contracts |
 | Circle USDC upgrade | `scripts/monitor-usdc-upgrade.sh` | `Upgraded` or `AdminChanged` event on USDC proxy |
 
-All three jobs run on a nightly schedule (GitHub Actions: `.github/workflows/suite-18-upstream-monitoring.yml`)
+All three jobs run on a nightly schedule (GitHub Actions: `.github/workflows/suite-18-live-monitoring.yml`)
 and on every push to `main` and `dev`. Each job emits structured JSON to stdout and
 exits non-zero when an alert condition is detected.
 
@@ -227,7 +227,7 @@ a live RPC. The test suite verifies:
 
 ## §5 CI wiring {#ci}
 
-CI workflow: `.github/workflows/suite-18-upstream-monitoring.yml`
+CI workflow: `.github/workflows/suite-18-live-monitoring.yml`
 
 The workflow runs:
 
