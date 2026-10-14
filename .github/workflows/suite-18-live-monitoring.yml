@@ -27,6 +27,14 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Require BASE_RPC_URL on the nightly schedule
+        # Fails the scheduled run loudly when the secret is missing so the
+        # nightly can never report success while running no monitors. On
+        # workflow_dispatch it only warns and the steps below skip as before.
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: bash scripts/monitor-require-rpc.sh
+
       - name: Venue liveness (Compound v3 / Aave v3)
         env:
           RPC_URL: ${{ secrets.BASE_RPC_URL }}
