@@ -1,0 +1,83 @@
+---
+title: "IAavePoolConfigurable"
+---
+
+# IAavePoolConfigurable
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/VaultForkRegressions.t.sol)
+
+<i>
+
+The parts of the real Aave V3 Pool and its addresses provider that pause a reserve the way
+`PoolConfigurator.setReservePause` does: rewrite its configuration bitmap.
+
+</i>
+
+## Functions
+
+<a id="addresses_provider"></a>
+
+### ADDRESSES_PROVIDER
+
+```solidity
+function ADDRESSES_PROVIDER() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="getconfiguration-address"></a>
+
+### getConfiguration
+
+```solidity
+function getConfiguration(address asset) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="setconfiguration-address-reserveconfigurationmap"></a>
+
+### setConfiguration
+
+```solidity
+function setConfiguration(address asset, ReserveConfigurationMap calldata configuration)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| configuration | `ReserveConfigurationMap` |  |
+
+## Structs
+
+### ReserveConfigurationMap
+
+```solidity
+struct ReserveConfigurationMap {
+        uint256 data;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `uint256` |  |
+

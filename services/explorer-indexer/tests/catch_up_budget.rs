@@ -32,6 +32,10 @@ const TICK_REQUEST_BUDGET: usize = 10;
 /// exitFeeBps, tvlCap, perDepositCap, depositsPaused.
 const READS_PER_VAULT: usize = 7;
 
+/// The one `exclusionLedger()` read of a vault the indexer has not seen before (security round 1). The
+/// answer is stored in `vault_exclusion_ledgers`, so no later tick repeats it.
+const LEDGER_READS_PER_VAULT: usize = 1;
+
 const CHAIN: i64 = 8453;
 const GATEWAY: Address = Address::new([0x11u8; 20]);
 const CONFIGURED_VAULT: Address = Address::new([0x22u8; 20]);
@@ -122,7 +126,8 @@ async fn a_1000_block_tick_with_no_events_stays_within_the_request_budget() {
     let stub = stub(header_only_block()).await;
     let rpc = JsonRpc::new(&stub.url);
 
-    // First sight: every vault takes its first row, seven reads each, once.
+    // First sight: every vault takes its first row, seven reads each, once, and names its
+    // ExclusionLedger, one read each, once.
     let outcome = run_once(&fx.db, &rpc, &cfg()).await.unwrap();
     assert!(outcome.error.is_none(), "{:?}", outcome.error);
     assert_eq!(outcome.to_block, Some(1999), "one tick reads 1000 blocks");
@@ -132,10 +137,10 @@ async fn a_1000_block_tick_with_no_events_stays_within_the_request_budget() {
     assert_eq!(first.get("eth_getLogs"), Some(&1), "one logs call per tick");
     assert_eq!(
         first.get("eth_call").copied().unwrap_or(0),
-        READS_PER_VAULT * vaults,
-        "the first tick reads each of the {vaults} vaults once"
+        (READS_PER_VAULT + LEDGER_READS_PER_VAULT) * vaults,
+        "the first tick reads each of the {vaults} vaults once and asks each for its ledger once"
     );
-    let rest = total - READS_PER_VAULT * vaults;
+    let rest = total - (READS_PER_VAULT + LEDGER_READS_PER_VAULT) * vaults;
     assert!(rest <= TICK_REQUEST_BUDGET, "{rest} > budget: {first:?}");
 
     // The next tick adds the cursor reorg check and reads none of the four vaults: each holds value,

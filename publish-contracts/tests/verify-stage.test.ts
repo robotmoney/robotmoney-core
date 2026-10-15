@@ -2,17 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { RM_TOKEN } from "../src/verify/constants.ts";
 import { join } from "node:path";
-import { PublishError } from "../src/errors.ts";
+import { EXIT_CODES, PublishError } from "../src/errors.ts";
+import { parseCli } from "../src/cli.ts";
 import { publishLogger } from "../src/log.ts";
 import { newManifest, type RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
-import { buildVerifySheet, handoverBlock, loadExpectedAssets, mainnetGovernMode, runVerifyStage } from "../src/verify-stage.ts";
+import { buildVerifySheet, handoverBlock, layoutHashOf, loadExpectedAssets, mainnetGovernMode, runVerifyStage, upgradeBuildRefusal, withUpgradeBuilds } from "../src/verify-stage.ts";
 import { ADMIN, world } from "./harness.ts";
 import { COUNTS, SHA, sheetText, tmp } from "./fixtures.ts";
 
 import { getStageTable } from "../src/stages.ts";
-import { manifestBase } from "../src/stage-table.ts";
+import { manifestBase, tableProxies } from "../src/stage-table.ts";
 import { CONFIG_ASSET, MANIFEST_ADAPTER, writeCoreAssetConfig } from "./fixtures.ts";
 
 /** One distinct address per vault, so a test can say which vault reads paused. */
@@ -269,23 +270,36 @@ describe("stage 12 on 8453: verify runs before govern and after it, and refuses 
   const ALL_EXEC = { "unpause-USDC": exec, "unpause-PROTO": exec, "unpause-AGENT": exec, "unpause-RWA": exec };
   /** depositsPaused per vault: all four vaults paused (the launch state, core 1710) unless a test says otherwise. */
   const launch = (over: Partial<Record<string, boolean>> = {}): Record<string, boolean> => ({ USDC: true, PROTO: true, AGENT: true, RWA: true, ...over } as Record<string, boolean>);
-  async function run(govern: Record<string, unknown>, paused: Record<string, boolean>) {
+  async function run(govern: Record<string, unknown>, paused: Record<string, boolean>, extra: Record<string, unknown> = {}) {
     const { ctx, lines } = setup({}, { chain: 8453 });
     const mctx = { ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext;
-    const manifest = { ...newManifest(mctx, "0xa"), firstBlock: 5, govern };
+    const manifest = { ...newManifest(mctx, "0xa"), firstBlock: 5, govern, ...extra };
     const byAddr = Object.fromEntries(Object.entries(paused).map(([k, v]) => [vaultAddr(k).toLowerCase(), v]));
     const calls = { verifier: 0, sources: 0 };
     let seen: any;
+    let sources: Record<string, string> | undefined;
     const deps = {
       verifyDeployment: async (o: any) => { calls.verifier++; seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }] }; },
-      verifySources: async () => { calls.sources++; return { ok: true, checks: [] }; }, emit: () => {},
+      verifySources: async (o: { contracts: Record<string, string> }) => { calls.sources++; sources = o.contracts; return { ok: true, checks: [] }; }, emit: () => {},
       depositsPaused: async (_rpc: string, vault: string) => byAddr[vault.toLowerCase()]!,
       recorderSpawn: (() => ({ status: 0, stdout: "", stderr: "" })) as never,
     };
     let err: any;
     try { await runVerifyStage(mctx, stageByName("verify"), manifest as never, deps as never); } catch (e) { err = e; }
-    return { err, seen, manifest, calls, lines };
+    return { err, seen, manifest, calls, lines, sources };
   }
+
+  test("security round 2: a proxy an executed upgrade-proxy round moved has the round's implementation source-verified, not only the deploy-time one", async () => {
+    const NEW = "0x00000000000000000000000000000000000c0de1";
+    const up = { step: "upgrade-proxy", proxy: "gateway", implementation: NEW, build_dir: "/b", execute_tx: "0x9" };
+    const done = await run({}, launch(), { proxy_upgrades: [up] });
+    expect(done.err).toBeUndefined();
+    expect(done.sources!["implementation[gateway]"]).toBe(NEW);
+    expect(done.seen.upgrades).toEqual([{ proxy: "gateway", implementation: NEW, buildDir: "/b" }]);
+    // mutation: a round scheduled and never executed changes nothing
+    const pending = await run({}, launch(), { proxy_upgrades: [{ ...up, execute_tx: undefined }] });
+    expect(pending.sources!["implementation[gateway]"]).not.toBe(NEW);
+  });
 
   test("pre-govern: no unpause row scheduled passes when all four vaults read paused", async () => {
     const { err, seen, manifest } = await run({}, launch());
@@ -385,5 +399,127 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     expect(code).toBe(13);
     expect(v.n).toBe(1);
     expect(p.calls).toEqual(["verify"]);
+  });
+});
+
+// Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE, RELIABILITY_FAIL_CLOSED_OUTAGE): the build an executed upgrade-proxy round recorded is a path on the
+// machine that ran govern. Before, a verify where it was gone, relative to another directory or at another HEAD failed the proxy's code label, threw VERIFY and paused
+// all four vaults. Now the stage checks every upgraded proxy's build before the verifier and refuses (USAGE, refused_before_verify), so nothing is paused.
+describe("security round 3: an upgrade round's build is checked before the verifier, and a build that moved never pauses the four vaults", () => {
+  const BUILD_SHA = "b".repeat(40);
+  const NEW = "0x00000000000000000000000000000000000c0de1";
+  const round = (o: Record<string, unknown> = {}) => ({ step: "upgrade-proxy", proxy: "gateway", implementation: NEW, build_sha: BUILD_SHA, execute_tx: "0x9", ...o });
+  /** A checkout whose HEAD is `sha` (a detached HEAD file, as readGitHead reads it), with an empty `sub` directory. */
+  function checkoutAt(sha: string, sub = "out"): { root: string; dir: string } {
+    const root = tmp("pc-r3-build-");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(join(root, ".git", "HEAD"), `${sha}\n`);
+    mkdirSync(join(root, sub), { recursive: true });
+    return { root, dir: join(root, sub) };
+  }
+  async function verifyWith(chain: number, extra: Record<string, unknown>, over: Partial<RunContext> = {}) {
+    const { ctx } = setup({}, { chain });
+    const mctx = { ...ctx, evidenceDir: join(ctx.coreDir, "ev"), ...over } as RunContext;
+    const manifest = { ...newManifest(mctx, "0xa"), firstBlock: 5, ...extra };
+    const calls = { verifier: 0 };
+    let seen: any;
+    const deps = {
+      verifyDeployment: async (o: any) => { calls.verifier++; seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }] }; },
+      verifySources: async () => ({ ok: true, checks: [] }), emit: () => {}, depositsPaused: async () => true, recorderSpawn: (() => ({ status: 0, stdout: "", stderr: "" })) as never,
+    };
+    let err: any;
+    try { await runVerifyStage(mctx, stageByName("verify"), manifest as never, deps as never); } catch (e) { err = e; }
+    return { err, calls, seen, manifest: manifest as any };
+  }
+  const refusedBeforeVerify = (r: { err: any; calls: { verifier: number }; manifest: any }, text: string) => {
+    expect(r.err).toMatchObject({ kind: "USAGE", details: { refused_before_verify: true } });
+    expect(r.err.message).toContain(text);
+    expect(r.err.message).toContain("--upgrade-build");
+    expect(r.calls.verifier).toBe(0);
+    expect(r.manifest.stages.verify).toBeUndefined();
+  };
+
+  test("a round whose build_dir is missing, or relative, is refused before the verifier with USAGE refused_before_verify", async () => {
+    refusedBeforeVerify(await verifyWith(8453, { proxy_upgrades: [round({ build_dir: "/nonexistent-rm-r2/out" })] }), "/nonexistent-rm-r2/out does not exist");
+    refusedBeforeVerify(await verifyWith(8453, { proxy_upgrades: [round({ build_dir: "../rm-r2/out" })] }), "relative");
+    refusedBeforeVerify(await verifyWith(918453, { proxy_upgrades: [round({ build_dir: "/nonexistent-rm-r2/out" })] }), "does not exist");
+  });
+
+  test("a build_dir that is a checkout at another sha (the next release checked out in the same place), or not its checkout's out/ on 8453, is refused", async () => {
+    const moved = checkoutAt("c".repeat(40));
+    refusedBeforeVerify(await verifyWith(8453, { proxy_upgrades: [round({ build_dir: moved.dir })] }), `a checkout at ${"c".repeat(40)}, but the upgrade round recorded build_sha ${BUILD_SHA}`);
+    const notOut = checkoutAt(BUILD_SHA, "build");
+    refusedBeforeVerify(await verifyWith(8453, { proxy_upgrades: [round({ build_dir: notOut.dir })] }), "is not the forge out/ of its checkout");
+    // mutation: off 8453 the same checkout at build_sha is the build, and the verifier runs
+    const ok = await verifyWith(918453, { proxy_upgrades: [round({ build_dir: notOut.dir })] });
+    expect(ok.err).toBeUndefined();
+    expect(ok.calls.verifier).toBe(1);
+  });
+
+  test("a build checkout at build_sha whose storage-layout snapshot no longer hashes to the round's build_layout_hash is refused, not a failed layout label", async () => {
+    const b = checkoutAt(BUILD_SHA);
+    const artifact = tableProxies(getStageTable()).find((p) => p.name === "gateway")!.artifact;
+    mkdirSync(join(b.root, "contracts", "test", "fixtures", "storage-layout"), { recursive: true });
+    writeFileSync(join(b.root, "contracts", "test", "fixtures", "storage-layout", `${artifact}.json`), JSON.stringify({ storage: [] }));
+    const recorded = layoutHashOf(b.root, artifact)!;
+    const same = await verifyWith(918453, { proxy_upgrades: [round({ build_dir: b.dir, build_layout_hash: recorded })] });
+    expect(same.err).toBeUndefined();
+    refusedBeforeVerify(await verifyWith(918453, { proxy_upgrades: [round({ build_dir: b.dir, build_layout_hash: `0x${"ab".repeat(32)}` })] }), "the checkout is modified");
+  });
+
+  test("--upgrade-build stands for a missing build_dir, is held to build_sha, and is never written into the run manifest", async () => {
+    const b = checkoutAt(BUILD_SHA);
+    const gone = round({ build_dir: "/nonexistent-rm-r2/out" });
+    const r = await verifyWith(918453, { proxy_upgrades: [gone] }, { upgradeBuilds: { gateway: b.dir } });
+    expect(r.err).toBeUndefined();
+    expect(r.seen.upgrades).toEqual([{ proxy: "gateway", implementation: NEW, buildDir: b.dir, buildSha: BUILD_SHA }]);
+    expect(r.manifest.proxy_upgrades).toEqual([gone]);
+    expect(r.manifest.stages.verify.status).toBe("done");
+    // an override at another sha is refused like the recorded build; one naming a proxy no round moved is refused too
+    refusedBeforeVerify(await verifyWith(918453, { proxy_upgrades: [gone] }, { upgradeBuilds: { gateway: checkoutAt("c".repeat(40)).dir } }), "a checkout at");
+    refusedBeforeVerify(await verifyWith(918453, { proxy_upgrades: [gone] }, { upgradeBuilds: { gateway: b.dir, router: b.dir } }), "--upgrade-build names router");
+    // withUpgradeBuilds copies: the manifest it was given keeps its build_dir
+    const m = { proxy_upgrades: [gone] };
+    expect((withUpgradeBuilds(m, { gateway: b.dir }).proxy_upgrades![0] as any).build_dir).toBe(b.dir);
+    expect((m.proxy_upgrades[0] as any).build_dir).toBe("/nonexistent-rm-r2/out");
+  });
+
+  test("a round with no build_sha (a Twin build outside a checkout, as before) and a round not executed are not held to a build", () => {
+    const { ctx } = setup({}, { chain: 918453 });
+    expect(upgradeBuildRefusal({ proxy_upgrades: [round({ build_sha: undefined, build_dir: "/nonexistent-rm-r2/out" })] }, ctx)).toBeUndefined();
+    expect(upgradeBuildRefusal({ proxy_upgrades: [round({ execute_tx: undefined, build_dir: "/nonexistent-rm-r2/out" })] }, ctx)).toBeUndefined();
+    expect(upgradeBuildRefusal({ proxy_upgrades: [round({ build_dir: "/nonexistent-rm-r2/out" })] }, ctx)).toBeInstanceOf(PublishError);
+  });
+});
+
+describe("security round 3, the CLI on 8453: a verify whose upgrade build moved exits USAGE and never calls pauseAll", () => {
+  const BUILD_SHA = "b".repeat(40);
+  function seed(buildDir: string) {
+    const w = world({ chainId: 8453, writeSafeManifest: true, writeFrozen: true });
+    const m = join(w.coreDir, "deployments", "8453");
+    for (const v of getStageTable().vaults) writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 8453, vault: vaultAddr(v.key), adapter: MANIFEST_ADAPTER }));
+    mkdirSync(w.evidence, { recursive: true });
+    const up = { step: "upgrade-proxy", proxy: "gateway", implementation: "0x00000000000000000000000000000000000c0de1", build_dir: buildDir, build_sha: BUILD_SHA, execute_tx: "0x9" };
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 8453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages: { safe: { status: "done", startedAt: "t" }, "prove-control": { status: "done", startedAt: "t" }, timelock: { status: "done", startedAt: "t" } }, govern: {}, proxy_upgrades: [up] }));
+    return w;
+  }
+  const spy = () => { const calls: string[] = []; return { calls, pauseAll: (async (_c: unknown, _m: unknown, o: { trigger: string }) => { calls.push(o.trigger); return { allPaused: true, vaults: [] }; }) as never }; };
+  const verifier = (calls: { n: number }) => ({ verifyDeployment: (async () => { calls.n++; return { ok: false, checks: [{ label: "gateway: runtime code equals build artifact (masked)", ok: false, detail: "x" }] }; }) as never, verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true });
+
+  test("the round's build_dir is gone: exit USAGE, the verifier did not run, pauseAll was never called", async () => {
+    const w = seed("/nonexistent-rm-r2/out");
+    const p = spy(), v = { n: 0 };
+    expect(await w.run(["verify"], { pauseAll: p.pauseAll, verify: verifier(v) })).toBe(EXIT_CODES.USAGE);
+    expect(v.n).toBe(0);
+    expect(p.calls).toEqual([]);
+    expect(w.logs().filter((l) => l.event === "run.failed").pop().message).toContain("verify refused before the verifier ran");
+  });
+
+  test("--upgrade-build goes with a run that reaches verify only, and is resolved against the working directory", () => {
+    const base = ["--chain", "8453", "--core-sha", "a".repeat(40), "--rpc", "http://x", "--sheet", "s", "--signer", "ledger"];
+    expect(parseCli(["verify", ...base, "--upgrade-build", "gateway=../rel/out", "--upgrade-build", "router=/r/out"]).upgradeBuilds).toEqual({ gateway: "../rel/out", router: "/r/out" });
+    expect(() => parseCli(["govern", ...base, "--upgrade-build", "gateway=/o"])).toThrow("--upgrade-build goes with the verify verb");
+    expect(() => parseCli(["verify", ...base, "--upgrade-build", "gateway"])).toThrow("--upgrade-build takes <proxy>=");
+    expect(() => parseCli(["verify", ...base, "--upgrade-build", "gateway=/a", "--upgrade-build", "gateway=/b"])).toThrow("is given twice");
   });
 });

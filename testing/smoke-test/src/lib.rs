@@ -3100,6 +3100,12 @@ fn dapp_compose_env(
         kv("INDEXER_ROUTER_GOVERNANCE", &d.governance),
         // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
         kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
+        // Security round 2: the IC policy proxy (committee events, and its Upgraded / UpgradesFrozen
+        // that the watchdog pages on), the timelock and the Safe (governance admin events), as the
+        // 8453 stack watches them. docker-compose.dapp.yaml maps each; an unset one was never watched.
+        kv("INDEXER_INVESTMENT_COMMITTEE", &d.ic_policy),
+        kv("INDEXER_TIMELOCK", &d.timelock),
+        kv("INDEXER_SAFE", &d.safe),
         // Issue #1294: fixed port for the receipt-fixtures compose service.
         kv("RECEIPT_FIXTURES_PORT", &RECEIPT_FIXTURES_PORT.to_string()),
         kv("INDEXER_RPC_URL", indexer_rpc_url),
@@ -3132,6 +3138,8 @@ struct DappDeployed {
     governance: String,
     timelock: String,
     safe: String,
+    /// The InvestmentCommitteePolicy proxy.
+    ic_policy: String,
     consensus_receipt: String,
     vault_addresses_json: String,
 }
@@ -3151,6 +3159,7 @@ impl DappDeployed {
             governance: fixture.governance_hex().to_string(),
             timelock: fixture.timelock_hex().to_string(),
             safe: fixture.safe_hex().to_string(),
+            ic_policy: fixture.ic_policy_hex().to_string(),
             consensus_receipt: fixture.consensus_receipt_hex().to_string(),
             vault_addresses_json: fixture.vault_address_map_json(),
         }
@@ -4267,6 +4276,7 @@ ccc333\t\teth-beacon
             governance: a(6),
             timelock: a(7),
             safe: a(8),
+            ic_policy: a(11),
             consensus_receipt: a(9),
             vault_addresses_json: "{\"rmUSDC\":\"0x01\"}".to_string(),
         }
@@ -4337,6 +4347,39 @@ ccc333\t\teth-beacon
         assert_eq!(get("INDEXER_RPC_URL"), Some("http://twin-chain:8545"));
         assert_eq!(get("DAPP_PORT"), Some("5173"));
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
+    }
+
+    /// Security round 2: the stage stack's indexer watches the InvestmentCommitteePolicy proxy, the
+    /// timelock and the Safe, as the 8453 stack does. Without them an `Upgraded` of the IC policy
+    /// proxy never reached `proxy_upgrade_events`, the watchdog's upgrade page stayed silent for it,
+    /// and `/v1/committee/*` and `/v1/governance/admin-events` stayed empty on the rehearsal chain.
+    #[test]
+    fn dapp_compose_env_watches_the_ic_policy_timelock_and_safe() {
+        let env = sample_env();
+        let deployed = sample_deployed();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("INDEXER_INVESTMENT_COMMITTEE"),
+            Some(deployed.ic_policy.as_str())
+        );
+        assert_eq!(get("INDEXER_TIMELOCK"), Some(deployed.timelock.as_str()));
+        assert_eq!(get("INDEXER_SAFE"), Some(deployed.safe.as_str()));
+        // Each is a variable the compose file hands the indexer container.
+        let root = locate_repo_root().expect("repo root");
+        let compose = std::fs::read_to_string(
+            root.join("testing/ethereum-testnet/config/docker-compose.dapp.yaml"),
+        )
+        .expect("compose file");
+        for name in [
+            "INDEXER_INVESTMENT_COMMITTEE",
+            "INDEXER_TIMELOCK",
+            "INDEXER_SAFE",
+        ] {
+            assert!(
+                compose.contains(&format!("{name}: ${{{name}")),
+                "docker-compose.dapp.yaml must map {name} into the indexer"
+            );
+        }
     }
 
     /// The JSON the stage deploy job writes: a flat string object that carries `COMPOSE_PROFILES`, which

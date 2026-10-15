@@ -1,5 +1,12 @@
 {
   "contract": "InvestmentCommitteePolicy",
+  "enums": {
+    "enum InvestmentCommitteePolicy.Stance": [
+      "Overweight",
+      "Neutral",
+      "Underweight"
+    ]
+  },
   "libraries": {},
   "linearization": [
     "contracts/gateway/InvestmentCommitteePolicy.sol:InvestmentCommitteePolicy",

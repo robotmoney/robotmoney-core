@@ -298,8 +298,24 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     .fetch_optional(&state.pool)
     .await?
     .flatten();
+    // Security round 1: a stopped indexer writes no run at all, so the newest run keeps its old
+    // verdict and the head keeps its old lag, and both read healthy forever. The age of the last
+    // good run is what shows it. Measured on the database clock, like the watchdog's
+    // `[indexer_lag].max_silence_secs`, and with the same row: the newest successful run with a
+    // cursor.
+    let since_success_secs: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT GREATEST(EXTRACT(EPOCH FROM now() - COALESCE(finished_at, started_at))::BIGINT, 0) \
+         FROM indexer_runs \
+         WHERE chain_id = $1 AND error IS NULL AND last_indexed_block IS NOT NULL \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    let silent = since_success_secs.is_some_and(|s| s > HEALTH_MAX_SILENCE_SECS);
     Ok(Json(Health {
-        status: if last_run_error.is_some() {
+        status: if last_run_error.is_some() || silent {
             "degraded"
         } else {
             "ok"
@@ -310,9 +326,16 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
             .zip(last_indexed_block)
             .map(|(head, cursor)| head - cursor),
         last_run_error,
+        since_success_secs,
         reorg_count: reorg_count.unwrap_or(0),
     }))
 }
+
+/// Seconds since the last good indexer run after which `/health` says `degraded` (security round
+/// 1). The watchdog's default `[indexer_lag].max_silence_secs` (`DEFAULT_MAX_INDEXER_SILENCE_SECS`
+/// in `services/watchdog/src/liveness.rs`), so the two surfaces call the same indexer stopped. A
+/// healthy indexer finishes a run every poll, a few seconds apart.
+pub const HEALTH_MAX_SILENCE_SECS: i64 = 300;
 
 /// GET /v1/chains/:chain_id/contracts
 ///
@@ -419,10 +442,19 @@ pub struct SnapshotsQuery {
     pub contract: Option<String>,
 }
 
+/// GET /v1/vault/snapshots?from_block=&to_block=&contract=&chain_id=
+///
+/// Snapshots of the served chain only (`state.chain_id`, security round 1). The query's `chain_id`
+/// used to be the only chain filter, so without it the route returned every chain's rows from a
+/// shared database, mixed, and took its freshness from whichever row came last. A `chain_id` that
+/// is not the served chain is 404, as on `/v1/chains/:chain_id/contracts`.
 async fn list_vault_snapshots(
     State(state): State<AppState>,
     Query(q): Query<SnapshotsQuery>,
 ) -> ApiResult<Json<VaultSnapshotsResponse>> {
+    if q.chain_id.is_some_and(|c| c != state.chain_id) {
+        return Err(ApiError::NotFound);
+    }
     let from_block = q.from_block.unwrap_or(0);
     let to_block = q.to_block.unwrap_or(i64::MAX);
     if to_block < from_block {
@@ -440,14 +472,14 @@ async fn list_vault_snapshots(
         "SELECT chain_id, contract, block_number, total_assets, total_supply, indexed_at \
          FROM vault_snapshots \
          WHERE block_number BETWEEN $1 AND $2 \
-           AND ($3::BIGINT IS NULL OR chain_id = $3) \
+           AND chain_id = $3 \
            AND ($4::BYTEA  IS NULL OR contract = $4) \
          ORDER BY block_number ASC \
          LIMIT 500",
     )
     .bind(from_block)
     .bind(to_block)
-    .bind(q.chain_id)
+    .bind(state.chain_id)
     .bind(contract_bytes.as_deref())
     .fetch_all(&state.pool)
     .await?;
@@ -1444,11 +1476,14 @@ type ExclusionClaimRow = (
 /// - `claimed` is the sum of this holder's `ExclusionClaimed` amounts.
 ///
 /// Records with no stored balance for this address are left out. The indexer
-/// reads the balance of every address with a deposit or withdrawal in the vault
-/// at or before the snapshot, and of any other address once it claims; a holder
-/// who only received shares by transfer and never claimed is not listed here,
-/// and the ledger's `claimable(id, holder)` is the authority. Chain-scoped to
-/// `state.chain_id`, freshness is the index cursor.
+/// reads the balance of every address whose latest deposit-or-withdrawal
+/// position in the vault before the snapshot's block holds shares, of every
+/// address with a deposit or withdrawal in that block, and of any other address
+/// once it claims. A holder whose followed position is zero while it still
+/// holds shares (shares received by transfer, then partly withdrawn) and who
+/// never claimed is not listed here, nor is one that only received shares by
+/// transfer. The ledger's `claimable(id, holder)` is the authority.
+/// Chain-scoped to `state.chain_id`, freshness is the index cursor.
 async fn get_account_exclusion_claims(
     State(state): State<AppState>,
     Path(address): Path<String>,
@@ -2079,7 +2114,10 @@ fn receipt_from_row(row: ConsensusReceiptRow) -> ConsensusReceipt {
         block_number,
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         verified,
-        payload_bytes,
+        // Security round 1: the size of what an unverified URI answered is not served. The URI is
+        // chosen on chain and the indexer fetches it from its own network, so the size of an
+        // unverified body would publish what an internal host returned.
+        payload_bytes: if verified { payload_bytes } else { None },
         released,
         released_at,
     }

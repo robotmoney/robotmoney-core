@@ -12,6 +12,7 @@ import { getStageTable } from "../../src/stages.ts";
 import { stageManifestFile } from "../../src/verify/constants.ts";
 import { tableProxies } from "../../src/stage-table.ts";
 import { IMPLEMENTATIONS, PROXIES, TIMELOCK, addr, buildWorld, failed, type World } from "./world.ts";
+import { commitAll, sourceCheckout, sourceMetadata } from "../source-checkout.ts";
 
 const table = getStageTable();
 const NAMES = tableProxies(table).map((p) => p.name);
@@ -130,6 +131,39 @@ describe("issue 1809: the verifier reads every governed proxy", () => {
     expect(failed(await verifyDeployment(w.opts)).sort()).toEqual(["gateway: runtime code equals build artifact (masked)", "proxy[gateway]: implementation slot equals the deployed or last upgraded implementation"].sort());
     const r = await verifyDeployment({ ...w.opts, upgrades: [{ proxy: "gateway", implementation: NEW, buildDir: v2Dir }] });
     expect(failed(r)).toEqual([]);
+    // security round 1: a round that recorded the commit its build was proven at holds the directory to it. v2Dir is in no git checkout: the code label fails,
+    // though the code matches; the same build in a checkout at that commit passes.
+    const CODE_LABEL = "gateway: runtime code equals build artifact (masked)";
+    const pinned = await verifyDeployment({ ...w.opts, upgrades: [{ proxy: "gateway", implementation: NEW, buildDir: v2Dir, buildSha: "c".repeat(40) }] });
+    expect(failed(pinned)).toEqual([CODE_LABEL]);
+    expect(pinned.checks.find((c) => c.label === CODE_LABEL)!.detail).toContain(`recorded build_sha ${"c".repeat(40)}`);
+    // Security round 2: on 8453 the out/ is git-ignored, so the checkout's HEAD alone proves nothing about it. The build is a REAL checkout whose ignored out/ holds
+    // the v2 build with forge's metadata of the committed source; the artifact must be compiled from the sources committed at build_sha.
+    const GW_SOL = "contracts/gateway/RobotMoneyGateway.sol";
+    const GW_V2 = "// SPDX-License-Identifier: MIT\ncontract RobotMoneyGateway { uint256 v2; }\n";
+    const checkout = sourceCheckout({ [GW_SOL]: GW_V2 }, "pc-v2-checkout-");
+    const v2 = JSON.parse(readFileSync(join(v2Dir, "RobotMoneyGateway.sol", "RobotMoneyGateway.json"), "utf8"));
+    const writeV2 = (out: string, sourceText: string) => {
+      mkdirSync(join(out, "RobotMoneyGateway.sol"), { recursive: true });
+      writeFileSync(join(out, "RobotMoneyGateway.sol", "RobotMoneyGateway.json"), JSON.stringify({ ...v2, ...sourceMetadata("RobotMoneyGateway", GW_SOL, { [GW_SOL]: sourceText }) }));
+      return out;
+    };
+    const inCheckout = writeV2(checkout.out, GW_V2);
+    const upAt = (buildDir: string, buildSha = checkout.sha) => verifyDeployment({ ...w.opts, upgrades: [{ proxy: "gateway", implementation: NEW, buildDir, buildSha }] });
+    expect(failed(await upAt(inCheckout))).toEqual([]);
+    // the same code, compiled (says its metadata) from a source that is not the one committed at build_sha: a stale or planted out/
+    writeV2(inCheckout, "contract RobotMoneyGateway { uint256 featureBranch; }\n");
+    const stale = await upAt(inCheckout);
+    expect(failed(stale)).toEqual([CODE_LABEL]);
+    expect(stale.checks.find((c) => c.label === CODE_LABEL)!.detail).toContain(`is not the build of the sources committed at build_sha ${checkout.sha}`);
+    writeV2(inCheckout, GW_V2);
+    // the right artifact in an ignored directory that is not the checkout's own out/
+    const deeper = writeV2(join(checkout.root, "build", "out"), GW_V2);
+    expect(failed(await upAt(deeper))).toEqual([CODE_LABEL]);
+    // the checkout moved to another commit since the round: refused again
+    writeFileSync(join(checkout.root, "NOTES.md"), "later\n");
+    commitAll(checkout.root, "a later commit");
+    expect(failed(await upAt(inCheckout))).toEqual([CODE_LABEL]);
     expect(r.checks.find((c) => c.label === "gateway: runtime code equals build artifact (masked)")!.detail).toContain("installed by govern upgrade-proxy");
     expect(r.checks.find((c) => c.label === "proxy[gateway]: implementation slot equals the deployed or last upgraded implementation")!.detail).toContain("installed by govern upgrade-proxy");
     // the round's record names another target: the slot label fails
@@ -175,7 +209,7 @@ describe("issue 1809: the evidence records the proxies", () => {
   test("a frozen proxy needs frozen-at-deploy or a proxy_freezes entry; a frozen-at-deploy record must read frozen", () => {
     const frozen = ev(); (frozen.proxies as Record<string, any>).gateway = proxyEntry("gateway", { frozen: true });
     expect(proxyProblems(frozen).join()).toContain("no proxy_freezes entry froze it");
-    const withRow = { ...frozen, proxy_freezes: [{ step: "freeze-proxy", proxies: [{ name: "gateway", proxy: PROXIES.gateway, implementation: IMPLEMENTATIONS.gateway, code_hash: `0x${"cd".repeat(32)}` }], timelock: T, operation_id: `0x${"01".repeat(32)}`, schedule_tx: `0x${"02".repeat(32)}`, schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: `0x${"03".repeat(32)}`, execute_status: 1, execute_block_timestamp: 1000 + 172800 }] };
+    const withRow = { ...frozen, proxy_freezes: [{ step: "freeze-proxy", proxies: [{ name: "gateway", proxy: PROXIES.gateway, implementation: IMPLEMENTATIONS.gateway, code_hash: `0x${"cd".repeat(32)}` }], build_shas: { gateway: "c".repeat(40) }, timelock: T, operation_id: `0x${"01".repeat(32)}`, schedule_tx: `0x${"02".repeat(32)}`, schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: `0x${"03".repeat(32)}`, execute_status: 1, execute_block_timestamp: 1000 + 172800 }] };
     expect(proxyProblems(withRow)).toEqual([]);
     const atDeploy = ev({ upgrade_mode: "frozen-at-deploy", proxies: Object.fromEntries(NAMES.map((n) => [n, proxyEntry(n, { mode: "frozen-at-deploy", frozen: true })])) });
     expect(proxyProblems(atDeploy)).toEqual([]);
@@ -185,7 +219,8 @@ describe("issue 1809: the evidence records the proxies", () => {
 
   test("an upgrade-proxy entry is one operation one delay apart with both implementations; a bad one is named", () => {
     const op = { operation_id: `0x${"11".repeat(32)}`, schedule_tx: `0x${"12".repeat(32)}`, schedule_status: 1, schedule_block_timestamp: 2000, execute_tx: `0x${"13".repeat(32)}`, execute_status: 1, execute_block_timestamp: 2000 + 172800 };
-    const up = { step: "upgrade-proxy", proxy: "gateway", proxy_address: PROXIES.gateway, from_implementation: IMPLEMENTATIONS.gateway, implementation: addr(0xc6a7f), implementation_code_hash: `0x${"ef".repeat(32)}`, timelock: T, round: 1, ...op };
+    // security round 1: an 8453 round names its build's commit and the two layouts it compared
+    const up = { step: "upgrade-proxy", proxy: "gateway", proxy_address: PROXIES.gateway, from_implementation: IMPLEMENTATIONS.gateway, implementation: addr(0xc6a7f), implementation_code_hash: `0x${"ef".repeat(32)}`, timelock: T, round: 1, build_sha: "c".repeat(40), live_layout_hash: `0x${"a1".repeat(32)}`, build_layout_hash: `0x${"b1".repeat(32)}`, ...op };
     expect(proxyProblems(ev({ proxy_upgrades: [up] }))).toEqual([]);
     expect(proxyProblems(ev({ proxy_upgrades: [{ ...up, implementation: IMPLEMENTATIONS.gateway }] })).join()).toContain("nothing was upgraded");
     expect(proxyProblems(ev({ proxy_upgrades: [{ ...up, execute_block_timestamp: 2000 + 3600 }] })).join()).toContain("schedule-to-execute gap 3600 s is under 172800 s");

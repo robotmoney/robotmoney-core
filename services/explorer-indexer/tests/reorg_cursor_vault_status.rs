@@ -764,6 +764,17 @@ async fn rollback_set_equals_live_block_scoped_schema() {
         rollback.iter().any(|t| t == "proxy_upgrade_events"),
         "proxy_upgrade_events (QA plan P3) must be rolled back by a reorg"
     );
+    // Security round 1: each vault's ExclusionLedger as read from the chain (0025). A read above
+    // the root is dropped, and the next tick reads the vault again.
+    assert!(
+        rollback.iter().any(|t| t == "vault_exclusion_ledgers"),
+        "vault_exclusion_ledgers (security round 1) must be rolled back by a reorg"
+    );
+    // Security round 2: how far the snapshot pass read each record (0027) goes with the record.
+    assert!(
+        rollback.iter().any(|t| t == "exclusion_snapshot_progress"),
+        "exclusion_snapshot_progress (security round 2) must be rolled back by a reorg"
+    );
     // Every table the pre-#1283 literal named must still be covered.
     for required in [
         "wallet_positions",

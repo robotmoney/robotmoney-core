@@ -70,6 +70,20 @@ rewritten to satisfy them (immutable point-in-time record) — if one someday
 needs an exemption, it is added to the checker script as an explicit, dated
 allowlist entry with a comment, never by weakening a rule.
 
+## Review-skill artifacts
+
+Reviews written by the shared `review-*` skills use the review contract's
+name form instead of the pattern above: `YYYYMMDD-<review-skill>-<reviewer>.md`
+plus a `.json` summary with the same stem, for example
+`20261015-review-security-claude.{md,json}`. The `.json` follows the
+contract's schema (`schema_version`, finding ids `review-<skill>-NNN`,
+`clean_areas`, `unresolved_decisions`, `limitations`, `unreviewed_surfaces`).
+Because it is a `.json` companion, `check_code_review_artifacts.py` also holds
+its `.md` to the Severity Summary, `#### SEC-<S>-NNN` and `L-NNN` rules above.
+Like every review dated 2026-10-12 or later, it is keyed in
+`scripts/check-audit-ledger.sh`, and each `### N.` finding heading needs a
+register row in [`../audits.md`](../audits.md).
+
 ## Conventions
 
 - **Internal vs external:** "internal" means a review *we* commissioned/ran with

@@ -179,8 +179,8 @@ fn hex_bytes(s: &str) -> Vec<u8> {
 /// Three receipts:
 ///   receipt_1 — submitter A, block 300, verified, released at block 305.
 ///   receipt_2 — submitter A, block 310, verified, NOT released.
-///   receipt_3 — submitter B, block 200, NOT verified (payload unfetchable),
-///               NOT released.
+///   receipt_3 — submitter B, block 200, NOT verified (the fetched body did not
+///               hash to the digest; 4096 bytes stored), NOT released.
 async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
     let rows: &[FixtureRow] = &[
         (
@@ -194,7 +194,17 @@ async fn seed_receipt_fixture(pool: &sqlx::PgPool) {
             Some(1_700_000_305),
         ),
         (RECEIPT_2, 1, SUBMITTER_A, 310, true, Some(600), false, None),
-        (RECEIPT_3, 2, SUBMITTER_B, 200, false, None, false, None),
+        // The indexer fetched 4096 bytes that did not hash to the digest.
+        (
+            RECEIPT_3,
+            2,
+            SUBMITTER_B,
+            200,
+            false,
+            Some(4096),
+            false,
+            None,
+        ),
     ];
 
     for (receipt_id, index, submitter, block, verified, payload_bytes, released, released_at) in
@@ -376,6 +386,19 @@ async fn unverified_and_unreleased_receipts_are_still_listed() {
     );
     assert_eq!(unverified[0]["receipt_id"], RECEIPT_3);
     assert_eq!(unverified[0]["released"], false);
+    // Security round 1: the size of an unverified body is not served (the URI is chosen on
+    // chain and fetched from the indexer's network), while a verified one's is.
+    assert!(
+        unverified[0]["payload_bytes"].is_null(),
+        "an unverified receipt serves no payload size: {}",
+        unverified[0]
+    );
+    let verified_sizes: Vec<i64> = receipts
+        .iter()
+        .filter(|r| r["verified"].as_bool() == Some(true))
+        .filter_map(|r| r["payload_bytes"].as_i64())
+        .collect();
+    assert_eq!(verified_sizes.len(), 2, "verified receipts keep their size");
     assert!(
         unverified[0]["released_at"].is_null(),
         "released_at must be null on an unreleased receipt"

@@ -3,7 +3,7 @@
 /**
  * AdminFlow — orchestrates the wallet-scoped My Account tabs.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount, useChainId, useDisconnect, useReadContract } from "wagmi";
 import type { Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
@@ -12,9 +12,11 @@ import { Tabs } from "./Tabs";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
-import { useVerifiedCodeTargets } from "../lib/useVerifiedCodeTargets";
+import { useCodeTargetVerification } from "../lib/useVerifiedCodeTargets";
 import { describeVerificationCause } from "../lib/gatewayVerifier";
 import { useUpgradeState } from "../lib/useUpgradeState";
+import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
+import { parseImplementationPinMap } from "../lib/codePins";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -57,14 +59,16 @@ export function AdminFlow(props: Props) {
   const [shareReceiver, setShareReceiver] = useState("");
 
   const { gatewayVerificationState } = props;
-  // Vaults and the router whose code matched their build-time pin (QA plan U5). Their
-  // previews badge the target "[bytecode verified]" only when they are in this set.
-  const verifiedTargets = useVerifiedCodeTargets();
+  // Vaults and the router whose code and implementation matched their build-time pins (QA plan
+  // U5, ADR-0014). Their previews badge the target "[bytecode verified]" only when they are in
+  // `verified`; a router in `refused` is not offered a share approval.
+  const { verified: verifiedTargets, refused: refusedTargets } = useCodeTargetVerification();
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,
     gatewayCodeHashVerified: gatewayVerificationState.status === "verified",
     envClass: props.envClass,
     verifiedTargets,
+    refusedTargets,
     // A vault or router preview refused on the gateway names the gateway's actual cause.
     gatewayRefusalDetail:
       gatewayVerificationState.status === "refused"
@@ -82,10 +86,19 @@ export function AdminFlow(props: Props) {
     gatewayVerificationState.status === "verified"
       ? gatewayVerificationState.implementationHash
       : undefined;
-  // The vault is a proxy too: rmpc then needs `proxy_implementation_hashes`. The dapp holds no
-  // reviewed pin for the vault's logic, so the export names the key and leaves it to the release
-  // record instead of copying the live hash.
+  // The vaults and the router are proxies too: rmpc then needs `proxy_implementation_hashes`. The
+  // export takes the reviewed implementation hashes this build pins for them (ADR-0014), never the
+  // live ones. Without such pins it names the key and the release-record fields to copy.
   const vaultUpgrade = useUpgradeState(props.vaultAddress);
+  const runtimeEnv = useRuntimeConfig();
+  const proxyImplementationHashes = useMemo(() => {
+    const gateway = props.gatewayAddress.toLowerCase();
+    const hashes = new Set<string>();
+    for (const [address, list] of parseImplementationPinMap(runtimeEnv)) {
+      if (address !== gateway) list.forEach((h) => hashes.add(h));
+    }
+    return [...hashes];
+  }, [runtimeEnv, props.gatewayAddress]);
 
   const tabs = buildAdminTabs({
     gatewayAddress: props.gatewayAddress,
@@ -117,6 +130,7 @@ export function AdminFlow(props: Props) {
         : undefined,
     gatewayImplementationHash,
     vaultIsProxy: vaultUpgrade.kind === "proxy" || vaultUpgrade.kind === "indexed",
+    proxyImplementationHashes,
   });
 
   return (

@@ -43,9 +43,15 @@
  * `previewRedeem(shares)` less 0.50% (`routerRedeem.ts`). The router spends
  * the holder's shares, so the holder first approves it for exactly `shares`;
  * an allowance the redeem will not spend is shown with a revoke button. The
+ * router's allowance is read whenever a router is configured, so a direct
+ * redeem (a router that failed its pins included) still shows and revokes an
+ * allowance left from an earlier approval (security round 2). The
  * tab falls back to `vault.redeem`, saying why and that it has no floor, only
  * where the router cannot take the exit (no router, an unregistered vault, a
- * mainnet build with no router pin), so an exit never depends on the router.
+ * mainnet build with no router pin, or a router whose code or implementation
+ * does not match its pins), so an exit never depends on the router. Nor does
+ * it depend on the gateway: an unverified gateway leaves both redeems built,
+ * with a warning (core 1494).
  *
  * Both flows follow the same "simulate before write" gate used by
  * AuthorizeTab and RotationTab — `useSimulateContract` must return a
@@ -88,6 +94,7 @@ import {
   deriveMinAssets,
   directRedeemReasonText,
   leftoverRouterAllowance,
+  leftoverRouterAllowanceText,
   needsShareApproval,
   routerRedeemCall,
   routerRedeemDeadline,
@@ -129,6 +136,8 @@ type Props = Readonly<{
 
 // formatUsdcPreview is an alias for the centralized formatUsdc.
 const formatUsdcPreview = formatUsdc;
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 /** Same address, any case. A simulation built for another target must not be sent. */
 const sameAddress = (a: unknown, b: string | undefined): boolean =>
@@ -224,21 +233,29 @@ export function DepositWithdrawTab(props: Props) {
 
   // Which contract the redeem is signed against (QA plan D9): the router when it can take the exit,
   // else the vault directly. On the mainnet class the write guard refuses an approval to a router
-  // the build has no code-hash pin for, so such a build redeems directly rather than offer an
-  // approval that can never be sent.
+  // the build has no code-hash pin for, or whose code or implementation the chain showed does not
+  // match its pins (ADR-0014: an upgrade the build does not pin), so such a router is not offered
+  // an approval that can never be sent: the redeem goes straight to the vault.
   const runtimeEnv = useRuntimeConfig();
   const codePins = useMemo(() => parseCodePins(runtimeEnv), [runtimeEnv]);
+  const routerKey = isMainnetClass(runtimeEnv) ? props.routerAddress?.toLowerCase() : undefined;
   const route = chooseRedeemRoute({
     router: props.routerAddress,
     vault: redeemVault,
     registered: registeredVaults,
     registryLoading,
-    routerUnpinned:
-      isMainnetClass(runtimeEnv) &&
-      props.routerAddress !== undefined &&
-      !codePins.has(props.routerAddress.toLowerCase()),
+    routerUnpinned: routerKey !== undefined && !codePins.has(routerKey),
+    routerUnverified: routerKey !== undefined && props.ctx.refusedTargets?.has(routerKey) === true,
   });
   const redeemRouter = route.kind === "router" ? route.router : undefined;
+  // The router that may hold a share allowance from an earlier approval: the configured one, on
+  // every route. A router that failed its pins sends the redeem direct, yet an allowance the holder
+  // gave it before stays spendable by it, so it is still read and offered for revoke (security
+  // round 2). An approve of zero grants nothing, so the write guard needs no pin for it.
+  const allowanceRouter =
+    props.routerAddress !== undefined && props.routerAddress.toLowerCase() !== ZERO_ADDRESS
+      ? props.routerAddress
+      : undefined;
 
   const depositAssets = parseUsdcAmount(depositInput);
 
@@ -286,23 +303,31 @@ export function DepositWithdrawTab(props: Props) {
 
   // -------- router share allowance (QA plan D9) --------
   // The router spends the holder's shares in `redeemFor`, so it needs an
-  // allowance on the vault's share token covering exactly the shares.
+  // allowance on the vault's share token covering exactly the shares. Read on
+  // every route a router is configured for, so a leftover can be revoked.
   const { data: routerShareAllowance, refetch: refetchRouterShareAllowance } = useReadContract({
     address: redeemVault,
     abi: erc20Abi,
     functionName: "allowance",
-    args: address && redeemRouter ? [address, redeemRouter] : undefined,
+    args: address && allowanceRouter ? [address, allowanceRouter] : undefined,
     query: {
       enabled:
-        isConnected && Boolean(address) && redeemVault !== undefined && redeemRouter !== undefined,
+        isConnected &&
+        Boolean(address) &&
+        redeemVault !== undefined &&
+        allowanceRouter !== undefined,
     },
   });
   const shareApprovalNeeded =
     redeemRouter !== undefined &&
     withdrawShares !== null &&
     needsShareApproval(routerShareAllowance, withdrawShares);
+  // A router redeem of `shares` spends exactly that much of the allowance. A direct redeem spends
+  // none of it, so all of it is left over.
   const routerAllowanceLeftover =
-    redeemRouter !== undefined && leftoverRouterAllowance(routerShareAllowance, withdrawShares);
+    allowanceRouter !== undefined &&
+    route.kind !== "pending" &&
+    leftoverRouterAllowance(routerShareAllowance, route.kind === "router" ? withdrawShares : null);
 
   // The floor is the live previewRedeem less the router tolerance. The deadline moves in 5-minute
   // steps, so the simulation's arguments stay stable between renders.
@@ -450,7 +475,7 @@ export function DepositWithdrawTab(props: Props) {
     address: redeemVault,
     abi: erc20Abi,
     functionName: "approve",
-    args: redeemRouter ? [redeemRouter, 0n] : undefined,
+    args: allowanceRouter ? [allowanceRouter, 0n] : undefined,
     query: { enabled: isConnected && routerAllowanceLeftover, retry: 5 },
   });
 
@@ -509,7 +534,7 @@ export function DepositWithdrawTab(props: Props) {
   const onRevokeShares = () => {
     if (!shareRevokeSim || !routerAllowanceLeftover || redeemVault === undefined) return;
     if (!sameAddress(shareRevokeSim.request.address, redeemVault)) return;
-    if (!sameAddress(shareRevokeSim.request.args?.[0], redeemRouter)) return;
+    if (!sameAddress(shareRevokeSim.request.args?.[0], allowanceRouter)) return;
     if (shareRevokeSim.request.args?.[1] !== 0n) return;
     shareApproveWrite.writeContract(shareRevokeSim.request);
   };
@@ -556,14 +581,19 @@ export function DepositWithdrawTab(props: Props) {
   useEffect(() => {
     if (withdrawReceipt.isSuccess) {
       void refetchShareBalance();
-      if (redeemRouter) void refetchRouterShareAllowance();
+      if (allowanceRouter) void refetchRouterShareAllowance();
     }
-  }, [withdrawReceipt.isSuccess, refetchShareBalance, redeemRouter, refetchRouterShareAllowance]);
+  }, [
+    withdrawReceipt.isSuccess,
+    refetchShareBalance,
+    allowanceRouter,
+    refetchRouterShareAllowance,
+  ]);
   useEffect(() => {
-    if (shareApproveReceipt.isSuccess && redeemRouter) {
+    if (shareApproveReceipt.isSuccess && allowanceRouter) {
       void refetchRouterShareAllowance();
     }
-  }, [shareApproveReceipt.isSuccess, redeemRouter, refetchRouterShareAllowance]);
+  }, [shareApproveReceipt.isSuccess, allowanceRouter, refetchRouterShareAllowance]);
 
   const routerCtx: RouterPreviewContext | null =
     hasSelector && props.routerAddress ? { ...props.ctx, router: props.routerAddress } : null;
@@ -776,9 +806,7 @@ export function DepositWithdrawTab(props: Props) {
         {routerAllowanceLeftover && typeof routerShareAllowance === "bigint" && (
           <>
             <p className="hint" data-testid="withdraw-router-allowance-leftover">
-              The router holds an allowance of {formatShares(routerShareAllowance, redeemSymbol)} on
-              your shares that the redeem entered here will not spend. Revoke it unless you redeem
-              that much now.
+              {leftoverRouterAllowanceText(route, formatShares(routerShareAllowance, redeemSymbol))}
             </p>
             <button
               type="button"

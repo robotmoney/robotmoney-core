@@ -106,6 +106,22 @@ WEIGHT_SETTER_ROLE, so a scheduled router.setWeights fails.
 function test_timelockCannotCallSetWeightsDirectly() public;
 ```
 
+<a id="test_applyreceipt_revertsafterstandalonetimelockrelease"></a>
+
+### test_applyReceipt_revertsAfterStandaloneTimelockRelease
+
+Security round 1 (governance-decisions.md §3.2, §3.7): the timelock's own
+`ADMIN_ROLE` on the register (stage 11 grants it, `DeployTimelock.s.sol`) lets the
+standalone `release-receipt` govern row release a receipt with no weights. That
+receipt can never be applied: a later `applyReceipt` for it, scheduled and waited
+out like any other, reverts `ReceiptAlreadyReleased` at execute and no weight
+lands. Pins that "released" does not mean "applied"; the committee records a new
+receipt instead.
+
+```solidity
+function test_applyReceipt_revertsAfterStandaloneTimelockRelease() public;
+```
+
 <a id="test_submitterandweightsetteraredisjoint"></a>
 
 ### test_submitterAndWeightSetterAreDisjoint

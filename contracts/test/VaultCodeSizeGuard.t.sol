@@ -184,21 +184,29 @@ contract VaultCodeSizeGuard is Test {
     ///         that out. The floors below are the measured margins (`forge build --sizes`) after the
     ///         P1 follow-up that made `__GovernedUpgrade_init` write-once (about 42 bytes each):
     ///         AgentTokenVault 1,254 bytes, ProtocolAssetVault 1,325, RwaBasketVault 1,332,
-    ///         RobotMoneyVault 1,556 (after P1 alone: 1,296, 1,367, 1,374, 1,598). A change that
-    ///         eats them fails here before it fails an EIP-170 deploy.
+    ///         RobotMoneyVault 1,556 (after P1 alone: 1,296, 1,367, 1,374, 1,598). Security round 1
+    ///         spent some of it on purpose, still above the 1,024-byte ADR-0014 §9 floor: the
+    ///         `emergencyExcludeAdapter` lever, the record-keeping `forceRemoveAdapter` and the
+    ///         `nonReentrant` re-add cost RobotMoneyVault 169 bytes (now 1,387), and the ORA-4
+    ///         check in `BasketVault.previewDeposit` cost each basket kind 15 (AgentTokenVault
+    ///         1,239, ProtocolAssetVault 1,310, RwaBasketVault 1,317). Security round 2 spent 174
+    ///         more RobotMoneyVault bytes on the `recoverRemovedAdapter` lever (now 1,213, still
+    ///         above the floor). Security round 3 spent 36 more on the venue-health deposit gate
+    ///         (`VaultAdapterOps.anyActiveBlocked`, now 1,177). A change that eats them fails here
+    ///         before it fails an EIP-170 deploy.
     function test_vaultFamily_keepsItsMeasuredHeadroom() public {
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 1_254
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 1_239
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            1_325
+            1_310
         );
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 1_332
+            EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 1_317
         );
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 1_556
+            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 1_177
         );
     }
 }

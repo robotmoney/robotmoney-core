@@ -165,6 +165,19 @@ export interface RedeployRecord {
 
 export const redeploysOf = (m: Pick<RunManifest, "vault_redeploys">): RedeployRecord[] => (Array.isArray(m.vault_redeploys) ? (m.vault_redeploys as RedeployRecord[]) : []);
 
+/**
+ * Security round 1 (review: SECURITY_LIFECYCLE_GAP): the vaults a redeploy replaced, still proxies of this deployment. Once the round is deployed the vault's own
+ * manifest names the NEW vault, so the stage table's proxy name (rmPROTO) reaches the new one only, while holders keep withdraw-only shares in the old proxy, whose
+ * upgrade authority is still the timelock. Each old vault is named `<vault>.retired-<ordinal>` (rmPROTO.retired-1): `freeze-proxy proxy=all` freezes it with the
+ * table's proxies, it can be named on its own, and the verify record and evidence-check count it before any claim that core logic is immutable.
+ */
+export const retiredProxyName = (key: RedeployKey, ordinal: number): string => `${VAULT_NAME[key]}.retired-${ordinal}`;
+export function retiredProxiesOf(m: Pick<RunManifest, "vault_redeploys">): { name: string; key: RedeployKey; ordinal: number; address: Address }[] {
+  return redeploysOf(m)
+    .filter((r) => (r.status === "deployed" || r.status === "governed") && typeof r.old_vault === "string" && ADDR.test(r.old_vault))
+    .map((r) => ({ name: retiredProxyName(r.key, r.ordinal), key: r.key, ordinal: r.ordinal, address: r.old_vault }));
+}
+
 // ---- the sha model (QA plan v1 E1, review DT-2 and QD-6) --------------------------------------------------------------------
 // The deployment ran at the ORIGINAL sha: the run manifest names it, its frozen counts belong to it, and every contract it created runs its build. The verb runs at the
 // REDEPLOY sha (the fix the round exists for) and records it as the round's `core_sha`. Two later runs may name that sha although the run manifest names the original

@@ -122,8 +122,9 @@ function setMaxExposure(uint256 cap) external onlyVault;
 
 <i>
 
-Shared deposit choreography for the v1 and v2 `deploy` entry points.
-Enforces the exposure cap, then does the exact-allowance deposit.
+Deposit choreography of the min-out `deploy`, which reverts when the venue refuses:
+the exposure cap, then the exact-allowance deposit. `deploy(uint256)` runs the same
+steps but hands a refused deposit back to `VAULT`.
 
 </i>
 
@@ -137,11 +138,43 @@ function _deposit(uint256 amount) private;
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
 
+<a id="_checkexposure-uint256"></a>
+
+### _checkExposure
+
+<i>
+
+FS-VLT-10: enforce the governance-configurable exposure cap when non-zero.
+
+</i>
+
+```solidity
+function _checkExposure(uint256 amount) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
 <a id="deploy-uint256"></a>
 
 ### deploy
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+Security round 2: a deposit `MORPHO_VAULT` refuses (`AllCapsReached`, a paused or
+broken market in the supply queue) does not revert. The adapter sends `amount` back
+to `VAULT` and emits `DeployRefused`, and the vault leaves that USDC idle
+(`UnroutedDeposit`). Before this a full MetaMorpho reverted every rmUSDC deposit,
+every router deposit with an rmUSDC leg and keeper `rebalance`. The adapter's own
+exposure cap still reverts (the vault's allocator never asks past it), and so does
+the min-out overload below.
+
+</i>
 
 ```solidity
 function deploy(uint256 amount) external onlyVault;
@@ -306,6 +339,25 @@ on this venue. This function is a no-op and always succeeds.
 ```solidity
 function harvestRewards() external override;
 ```
+
+## Events
+
+### DeployRefused
+
+`MORPHO_VAULT` refused a `deploy(uint256)` deposit, and the USDC went straight
+back to `VAULT`, which keeps it idle (security round 2). MetaMorpho refuses with
+`AllCapsReached` once every market cap in its supply queue is full.
+
+```solidity
+event DeployRefused(uint256 amount, bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | USDC handed back to `VAULT`. |
+| reason | `bytes` | The venue's revert data. |
 
 ## Errors
 

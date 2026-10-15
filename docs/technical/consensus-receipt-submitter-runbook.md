@@ -192,7 +192,7 @@ integrity of the public record.
 
    | Column | Reading |
    | --- | --- |
-   | `last_verify_error` | `GET … returned 5xx`, a timeout, or a connection error → a HOST problem, not a forgery signal. A `digest mismatch …` message is the one that matters here. |
+   | `last_verify_error` | `GET … returned 5xx`, a timeout, a connection error, `payload fetch cut by the sweep's 30s per-tick budget`, `payload fetch cut by the tick's 30s inline fetch budget`, or `not fetched at index time: …` (the tick that indexed the receipt spent its fetch budget, and the sweep fetches it later) → a HOST problem, not a forgery signal. `refused …` → the URI names a scheme other than http/https or a link-local, unspecified, broadcast or multicast address (the cloud metadata endpoint among them), which the indexer never fetches: treat the URI itself as hostile. A `digest mismatch …` message is the one that matters here. |
    | `verify_attempts` | How many times the indexer has tried. A row at the ceiling with a transport error has simply been unreachable throughout. |
    | `verified_at` | When verification last SUCCEEDED. `NULL` means it never has. |
 

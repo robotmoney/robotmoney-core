@@ -29,6 +29,10 @@
 //!    `previewRedeem(shares)` less [`DEFAULT_FLOOR_TOLERANCE_BPS`] when the
 //!    flag is omitted; `--min-assets 0` sends no floor. That path pulls the
 //!    shares from the policy's `shareReceiver`, as `withdraw-router` does.
+//!    The router is a proxy (ADR-0014): before it signs, the command reads
+//!    the router's ERC-1967 implementation and refuses with
+//!    `ErrImplementationNotApproved` unless its code hash is in
+//!    `proxy_implementation_hashes` (`upgrade::verify_reached_proxy`).
 //!    A gateway deployed without a router (single-vault mode) has only
 //!    `gateway.withdraw`, which pulls the shares from the agent. rmpc uses it
 //!    only for an explicit `--min-assets 0` and refuses otherwise, so a
@@ -417,6 +421,26 @@ pub fn run(args: Args) -> i32 {
         }
     };
     let via_router = router != Address::ZERO;
+    // The router the gateway redeems through is a proxy too (ADR-0014). Its
+    // `redeemFor` receives the share allowance the gateway grants it, so
+    // refuse unless its implementation is pinned in
+    // `proxy_implementation_hashes`, as `withdraw-router` and a router
+    // deposit do. `run_withdraw_vault` below checks the source vault.
+    if via_router {
+        if let Err(err) = session.rt.block_on(crate::upgrade::verify_reached_proxy(
+            &session.rpc,
+            &cfg,
+            "router",
+            router,
+        )) {
+            session.record(AuditDecision::Refused, Some(err.name().to_string()));
+            return session
+                .refusal(err.name())
+                .message(format!("{err}"))
+                .checks(ChecksOutput::from_report(&report))
+                .emit(args.pretty);
+        }
+    }
     if !via_router && !single_vault_mode_allows(min_assets_arg) {
         let err = RmpcError::ErrConfig(
             "gateway.router() is the zero address (single-vault mode), so the only redemption \

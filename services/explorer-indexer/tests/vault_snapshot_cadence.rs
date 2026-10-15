@@ -12,7 +12,7 @@ use alloy_primitives::{Address, LogData, U256};
 use alloy_sol_types::SolEvent;
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{IGatewayEvents, IVaultEvents, IVaultReads},
+    abi::{IGatewayEvents, IRobotMoneyVaultReads, IVaultEvents, IVaultReads},
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
     SNAPSHOT_HEARTBEAT_BLOCKS,
@@ -186,15 +186,21 @@ impl Harness {
         })
     }
 
-    /// `eth_call`s sent to the vault under test so far.
+    /// Snapshot `eth_call`s sent to the vault under test so far. The `exclusionLedger()` read (security
+    /// round 1) is not a snapshot read: the vault answers zero here, so the indexer asks again every
+    /// tick, and it is left out of the count.
     fn reads_of_vault(&self) -> usize {
         let want = format!("{:#x}", self.vault);
+        let ledger_getter = format!("0x{}", sel::<IRobotMoneyVaultReads::exclusionLedgerCall>());
         self.stub
             .captured_requests()
             .iter()
             .filter(|r| {
                 r["method"] == "eth_call"
                     && r["params"][0]["to"].as_str().map(str::to_lowercase) == Some(want.clone())
+                    && !r["params"][0]["data"]
+                        .as_str()
+                        .is_some_and(|d| d.starts_with(&ledger_getter))
             })
             .count()
     }

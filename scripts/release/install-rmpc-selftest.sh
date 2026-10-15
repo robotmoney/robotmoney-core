@@ -105,6 +105,9 @@ trap 'rm -rf "$WORKDIR"' EXIT
 #
 # So the stub shadows the real `gh` on PATH, records the argv it was called with
 # so the pinning can be asserted, and takes its exit status from GH_STUB_EXIT.
+# On success it prints what `--format json --jq` would: the number of verified
+# attestations whose certificate says the `push` trigger (GH_STUB_PUSH_COUNT,
+# default 1). The installer refuses anything but a positive count.
 # It is placed on PATH for the WHOLE file on purpose: every positive-path
 # assertion above and below now runs through the attest step, so deleting that
 # step does not quietly leave them green — it empties the argv log and reds the
@@ -120,15 +123,20 @@ cat > "$GH_STUB_BIN/gh" <<'GH_STUB'
 # variable degrades to a silent success rather than an unexplained failure in
 # code that is not what the surrounding assertion is about.
 printf '%s\n' "$*" >> "${GH_ARGV_LOG:-/dev/null}"
+if [ "${GH_STUB_EXIT:-0}" -eq 0 ]; then
+  printf '%s\n' "${GH_STUB_PUSH_COUNT-1}"
+fi
 exit "${GH_STUB_EXIT:-0}"
 GH_STUB
 chmod +x "$GH_STUB_BIN/gh"
 export GH_ARGV_LOG
 export PATH="$GH_STUB_BIN:$PATH"
 
-TAG="v0.0.0-selftest"
+# The installer accepts only the rmpc-vX.Y.Z namespace, and names the archive
+# with one `rmpc-` (release-rmpc.yml's packaging strips the tag's prefix).
+TAG="rmpc-v0.0.0-selftest"
 PLATFORM="linux-amd64"
-ARCHIVE="rmpc-${TAG}-${PLATFORM}.tar.gz"
+ARCHIVE="rmpc-${TAG#rmpc-}-${PLATFORM}.tar.gz"
 RELEASES="$WORKDIR/releases/$TAG"
 mkdir -p "$RELEASES" "$WORKDIR/stage"
 
@@ -438,7 +446,7 @@ meta = []
 errors = []
 
 SUBS = {
-    "needs.resolve.outputs.version": "v0.0.0-selftest",
+    "needs.resolve.outputs.version": "rmpc-v0.0.0-selftest",
     "matrix.os_label": "macos-arm64",
     "matrix.target": "aarch64-apple-darwin",
 }
@@ -452,8 +460,8 @@ SUBS = {
 # so they have to resolve there and nowhere else.
 ENV_ONLY_SUBS = {
     "github.event_name": "workflow_dispatch",
+    "github.ref_name": "rmpc-v0.0.0",
     "inputs.dry_run": "false",
-    "inputs.tag": "rmpc-v0.0.0",
 }
 
 # THE NAMES AN EXTRACTED STEP MAY DECLARE. AN ALLOW-LIST, NOT A DENY-LIST.
@@ -494,10 +502,12 @@ ENV_ONLY_SUBS = {
 #
 # WHY SIX AND NOT THREE. `Package tar.gz` needs OS_LABEL / TARGET / VERSION;
 # `Validate inputs` — extracted and EXECUTED by #1237 so the tag refusal is run
-# rather than argued for — needs EVENT_NAME / DRY_RUN / INPUT_TAG, which is the
-# `env:` indirection that keeps `${{ inputs.tag }}` out of the shell SOURCE and
-# is therefore the very shape under test. #1292 was written before #1237 landed
-# and listed only the first three; the two changes are orthogonal, so the set is
+# rather than argued for — needs EVENT_NAME / DRY_RUN / REF_NAME, which is the
+# `env:` indirection that keeps `${{ github.ref_name }}` out of the shell SOURCE
+# and is therefore the very shape under test. (It read INPUT_TAG until the
+# release path became tag-push only and the `tag` input was removed.) #1292 was
+# written before #1237 landed and listed only the first three; the two changes
+# are orthogonal, so the set is
 # their UNION, not either one of them. None of the three added names is read by
 # bash or by the glibc loader before a step body's first line, so admitting them
 # gives the file under test no purchase on the sandbox that judges it — and the
@@ -507,8 +517,8 @@ ENV_ONLY_SUBS = {
 ALLOWED_ENV_NAMES = {
     "DRY_RUN",
     "EVENT_NAME",
-    "INPUT_TAG",
     "OS_LABEL",
+    "REF_NAME",
     "TARGET",
     "VERSION",
 }
@@ -806,6 +816,7 @@ def build_job_facts():
     body = job_body("build")
     perms = []
     attest_subject = ""
+    attest_if = ""
     for i, line in enumerate(body):
         if re.match(r"^    permissions:\s*$", line):
             for nxt in body[i + 1:]:
@@ -816,8 +827,22 @@ def build_job_facts():
                 m = re.match(r"\s*([A-Za-z-]+):\s*(\S+)\s*$", nxt)
                 if m:
                     perms.append("%s:%s" % (m.group(1), m.group(2)))
-        m = re.match(r"\s*-?\s*uses:\s*(actions/attest-build-provenance\S*)\s*$", line)
+        # A pinned `uses:` carries its version in a trailing comment.
+        m = re.match(r"\s*-?\s*uses:\s*(actions/attest-build-provenance\S*)\s*(#.*)?$", line)
         if m:
+            # The step's own `if:`, wherever it sits among the step's keys: back to
+            # the step's `- ` line, forward to the first line at or above it.
+            k = i
+            while k > 0 and not body[k].lstrip().startswith("- "):
+                k -= 1
+            step_indent = indent(body[k])
+            for j in range(k, len(body)):
+                cur = body[j]
+                if j > k and cur.strip() and indent(cur) <= step_indent:
+                    break
+                cond = re.match(r"\s*(?:-\s+)?if:\s*(\S.*?)\s*$", cur)
+                if cond and (indent(cur) == step_indent + 2 or j == k):
+                    attest_if = cond.group(1).strip("\"'")
             for nxt in body[i + 1:]:
                 if nxt.strip() and (
                     indent(nxt) < indent(line) or nxt.lstrip().startswith("- ")
@@ -827,20 +852,86 @@ def build_job_facts():
                 if sub:
                     attest_subject = sub.group(1)
                     break
-    return perms, attest_subject
+    return perms, attest_subject, attest_if
 
 
-build_perms, attest_subject = build_job_facts()
+build_perms, attest_subject, attest_if = build_job_facts()
 meta.append("build_permissions=%s" % ",".join(sorted(build_perms)))
 meta.append("attest_subject=%s" % attest_subject)
+meta.append("attest_if=%s" % attest_if)
+
+# The attesting job's caches and cross builds, read out of jobs.build like the
+# facts above. A cache step, whatever its `if:`, restores bytes some other run
+# saved under a key with no ref in it, and the tag push would link and attest
+# them. A `cross` build links inside a Docker image, which Cross.toml must pin by
+# digest or an upstream tag move chooses the linker of the attested binary.
+CACHE_USES = re.compile(
+    r"^(?:Swatinem/rust-cache|actions/cache(?:/restore|/save)?"
+    r"|mozilla-actions/sccache-action|actions/setup-go)@"
+)
+CROSS_CMD = re.compile(
+    r"(?:^|[\s;&|(`])cross\s+(?:\+\S+\s+)?(?:build|b|rustc|check|c|test|t|run|r)\b"
+)
+
+
+def build_job_cache_and_cross():
+    """(cache steps, cross targets) of jobs.build. A cross build whose target
+    cannot be resolved is reported as an `<unresolved: ...>` target, which no
+    Cross.toml section pins, so it fails closed."""
+    caches, joined, entries = [], [], []
+    cur, buf = None, ""
+    for line in job_body("build"):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        m = re.match(r"-?\s*uses:\s*(\S+)", text)
+        if m and CACHE_USES.match(m.group(1)):
+            caches.append(m.group(1))
+        elif re.match(r"cache-(?:from|to):.*\btype=gha\b", text) or (
+            re.match(r"cache:\s*\S", text) and not re.match(r"cache:\s*['\"]?false\b", text)
+        ):
+            caches.append(text)
+        m = re.match(r"-\s+target:\s*(\S+)", text)
+        if m:
+            cur = {"target": m.group(1).strip("'\"")}
+            entries.append(cur)
+        elif cur is not None and re.match(r"cross:\s*\S", text):
+            cur["cross"] = re.match(r"cross:\s*['\"]?true\b", text) is not None
+        if text.endswith("\\"):
+            buf += text[:-1] + " "
+            continue
+        joined.append(buf + text)
+        buf = ""
+    if any("cross" in e for e in entries):
+        marked = [e["target"] for e in entries if e.get("cross")]
+    else:
+        marked = [e["target"] for e in entries]
+    targets = []
+    for cmd in joined:
+        if not CROSS_CMD.search(cmd):
+            continue
+        m = re.search(r"--target(?:=|\s+)(\$\{\{.*?\}\}|\S+)", cmd)
+        arg = m.group(1) if m else ""
+        if re.fullmatch(r"\$\{\{\s*matrix\.target\s*\}\}", arg):
+            targets += marked or ["<unresolved: no matrix entry to read>"]
+        elif arg and "${{" not in arg:
+            targets.append(arg)
+        else:
+            targets.append("<unresolved: %s>" % (arg or "no --target"))
+    return caches, sorted(set(targets))
+
+
+build_caches, build_cross_targets = build_job_cache_and_cross()
+meta.append("build_cache_steps=%s" % "|".join(build_caches))
+meta.append("build_cross_targets=%s" % ",".join(build_cross_targets))
 
 for step_name, filename in (
     ("Package tar.gz", "package.sh"),
     ("Assert every archive ships its checksum", "pairing.sh"),
-    # Issue #1237. The step that decides whether a caller-supplied `inputs.tag`
-    # is allowed to reach `git tag`, the archive filenames and $GITHUB_OUTPUT.
-    # Extracted so the refusal can be EXECUTED against a `$(...)` payload rather
-    # than argued for in a comment.
+    # Issue #1237. The step that refuses a dispatch that is not a dry run (a
+    # release is a tag push only) and decides whether a pushed tag may reach the
+    # archive filenames and $GITHUB_OUTPUT. Extracted so the refusals can be
+    # EXECUTED against payloads rather than argued for in a comment.
     ("Validate inputs", "validate.sh"),
 ):
     block, step_env = step_run_block(step_name)
@@ -901,7 +992,7 @@ for tool in tar gzip shasum cut sed cat rm mkdir ls; do
 done
 
 MAC_TARGET="aarch64-apple-darwin"
-MAC_ARCHIVE="rmpc-${TAG}-macos-arm64.tar.gz"
+MAC_ARCHIVE="rmpc-${TAG#rmpc-}-macos-arm64.tar.gz"
 PKG_DIR="$WORKDIR/pkg-macos"
 mkdir -p "$PKG_DIR/target/$MAC_TARGET/release"
 cp "$WORKDIR/stage/rmpc" "$PKG_DIR/target/$MAC_TARGET/release/rmpc"
@@ -1227,6 +1318,38 @@ elif mutation == "zero-macos-builds":
 elif mutation == "duplicate-step":
     i = step_start()
     lines[i:i] = ["      %s\n" % STEP, "        run: |\n", "          echo decoy\n", "\n"]
+elif mutation in ("build-cache", "build-cross"):
+    # The two pre-fix shapes of the attesting build job: Swatinem/rust-cache on
+    # every trigger, and a `cross: true` aarch64 entry built with `cross build`.
+    at = None
+    for i, line in enumerate(lines):
+        if line.rstrip("\n") == "  build:":
+            for j in range(i + 1, len(lines)):
+                if lines[j].rstrip("\n") == "    steps:":
+                    at = j + 1
+                    break
+            break
+    if at is None:
+        sys.exit("no jobs.build.steps in %s — this fixture's anchor moved" % src)
+    if mutation == "build-cache":
+        lines[at:at] = [
+            "      - name: Cargo cache\n",
+            "        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2\n",
+        ]
+    else:
+        lines[at:at] = [
+            "      - name: Build (cross)\n",
+            "        if: matrix.cross\n",
+            "        run: |\n",
+            "          cross build --release --target ${{ matrix.target }} \\\n",
+            "            --package rust-payment-client --bin rmpc\n",
+        ]
+        for j, line in enumerate(lines):
+            if line.strip() == "- target: aarch64-unknown-linux-gnu":
+                lines.insert(j + 1, " " * (len(line) - len(line.lstrip()) + 2) + "cross: true\n")
+                break
+        else:
+            sys.exit("no aarch64-unknown-linux-gnu matrix entry in %s — this fixture's anchor moved" % src)
 elif mutation == "env-moved-up":
     # The variable did not disappear — it moved to the job's or the workflow's
     # `env:`, which the extractor does not read. The body still reads ${VERSION}.
@@ -1833,17 +1956,18 @@ fi
 echo ""
 echo "--- selftest: the release's own input validation, executed against payloads ---"
 
-# run_validate — run the extracted Validate inputs body with INPUT_TAG=$1.
-# The extracted env: is loaded first and the payload appended, so `env -i`'s
-# last-wins ordering puts the payload in place of the fixture tag without the
+# run_validate — run the extracted Validate inputs body as one trigger.
+#   $1 event name, $2 dry_run, $3 the pushed tag (github.ref_name), $4 a slug.
+# The extracted env: is loaded first and the case's values appended, so `env -i`'s
+# last-wins ordering puts them in place of the fixture values without the
 # harness's own sandbox assignments (spliced later still) losing.
 VALIDATE_ROOT="$WORKDIR/validate"
 run_validate() {
-  local payload="$1" root="$VALIDATE_ROOT/$2"
+  local event="$1" dry_run="$2" ref_name="$3" root="$VALIDATE_ROOT/$4"
   rm -rf "$root"
   mkdir -p "$root"
   read_step_env "$WF_DIR/validate.env"
-  STEP_ENV+=("EVENT_NAME=workflow_dispatch" "DRY_RUN=false" "INPUT_TAG=$payload")
+  STEP_ENV+=("EVENT_NAME=$event" "DRY_RUN=$dry_run" "REF_NAME=$ref_name")
   VALIDATE_OUT=$(run_extracted_step "$WF_DIR/validate.sh" "$root")
   VALIDATE_EXIT=$?
   STEP_ENV=()
@@ -1855,31 +1979,50 @@ if [[ ! -f "$WF_DIR/validate.sh" || -n "$WF_ERRORS" ]]; then
   fail "the Validate inputs step could not be extracted, so the input-refusal assertions did not execute: ${WF_ERRORS:-step not found}"
   fail "the Validate inputs step could not be extracted, so the newline-tag assertion did not execute: ${WF_ERRORS:-step not found}"
   fail "the Validate inputs step could not be extracted, so the accept-a-real-tag assertion did not execute: ${WF_ERRORS:-step not found}"
+  fail "the Validate inputs step could not be extracted, so the dispatch-is-a-dry-run assertions did not execute: ${WF_ERRORS:-step not found}"
+  fail "the Validate inputs step could not be extracted, so the dry-run-accepted assertion did not execute: ${WF_ERRORS:-step not found}"
 else
   # shellcheck disable=SC2016  # $(mkdir pwned) must reach the step as literal
   # text; expanding it here would run it in THIS shell and assert nothing.
-  run_validate 'rmpc-v1.0.0$(mkdir pwned)' cmdsub
+  run_validate push false 'rmpc-v1.0.0$(mkdir pwned)' cmdsub
   if [[ $VALIDATE_EXIT -ne 0 && ! -e "$VALIDATE_ROOT_USED/pwned" ]]; then
-    pass "a dispatched tag carrying \$(...) is refused by the release's own validation, and the payload never ran"
+    pass "a pushed tag carrying \$(...) is refused by the release's own validation, and the payload never ran"
   elif [[ -e "$VALIDATE_ROOT_USED/pwned" ]]; then
-    fail "a dispatched tag carrying \$(...) EXECUTED its payload — the value is reaching the shell as source, not as data (output: $VALIDATE_OUT)"
+    fail "a pushed tag carrying \$(...) EXECUTED its payload — the value is reaching the shell as source, not as data (output: $VALIDATE_OUT)"
   else
-    fail "a dispatched tag carrying \$(...) was accepted (exit $VALIDATE_EXIT) — it would go on to name the tag, the archives and the Release (output: $VALIDATE_OUT)"
+    fail "a pushed tag carrying \$(...) was accepted (exit $VALIDATE_EXIT) — it would go on to name the archives and the Release (output: $VALIDATE_OUT)"
   fi
 
-  run_validate 'rmpc-v1.0.0
+  run_validate push false 'rmpc-v1.0.0
 version=rmpc-v9.9.9' newline
   if [[ $VALIDATE_EXIT -ne 0 ]]; then
-    pass "a dispatched tag carrying a newline is refused — it would otherwise write a second version= line into \$GITHUB_OUTPUT and release something the version check never saw"
+    pass "a pushed tag carrying a newline is refused — it would otherwise write a second version= line into \$GITHUB_OUTPUT and release something the version check never saw"
   else
-    fail "a dispatched tag carrying a newline was accepted (exit $VALIDATE_EXIT) — \$GITHUB_OUTPUT is a key=value file with no delimiter, so the second line silently wins (output: $VALIDATE_OUT)"
+    fail "a pushed tag carrying a newline was accepted (exit $VALIDATE_EXIT) — \$GITHUB_OUTPUT is a key=value file with no delimiter, so the second line silently wins (output: $VALIDATE_OUT)"
   fi
 
-  run_validate 'rmpc-v1.2.3' good
+  run_validate push false 'rmpc-v1.2.3' good
   if [[ $VALIDATE_EXIT -eq 0 ]]; then
-    pass "a well-formed rmpc-vX.Y.Z tag is still accepted — the two refusals above are not a step that rejects everything"
+    pass "a well-formed pushed rmpc-vX.Y.Z tag is still accepted — the two refusals above are not a step that rejects everything"
   else
-    fail "a well-formed 'rmpc-v1.2.3' was refused (exit $VALIDATE_EXIT) — releases cannot be dispatched at all (output: $VALIDATE_OUT)"
+    fail "a well-formed pushed 'rmpc-v1.2.3' was refused (exit $VALIDATE_EXIT) — releases cannot be cut at all (output: $VALIDATE_OUT)"
+  fi
+
+  # A release is a tag push only: a dispatched run never attests, so one that
+  # published would ship archives install-rmpc.sh refuses, and one that attested
+  # would hand any writer a genuine attestation for a branch's trojan.
+  run_validate workflow_dispatch false '' dispatch-release
+  if [[ $VALIDATE_EXIT -ne 0 ]] && grep -q 'dry run only' <<<"$VALIDATE_OUT"; then
+    pass "a dispatch with dry_run=false is refused — a release is the push of an admin-created rmpc-v* tag, the only run that attests"
+  else
+    fail "a dispatch with dry_run=false was not refused as a release attempt (exit $VALIDATE_EXIT, output: $VALIDATE_OUT)"
+  fi
+
+  run_validate workflow_dispatch true '' dispatch-dry-run
+  if [[ $VALIDATE_EXIT -eq 0 ]]; then
+    pass "a dry-run dispatch is still accepted — rehearsing the build from any branch keeps working"
+  else
+    fail "a dry-run dispatch was refused (exit $VALIDATE_EXIT) — the workflow can no longer be rehearsed (output: $VALIDATE_OUT)"
   fi
 fi
 
@@ -1974,6 +2117,11 @@ fi
 #   - the identity is PINNED when it is (`--repo` plus `--signer-workflow`; with
 #     only `--repo`, any workflow in this repository could vouch for an archive,
 #     which readmits the malicious-workflow-run case #1236 names);
+#   - the RUN is pinned too: `--source-ref refs/tags/<TAG>` and a `push`
+#     trigger. Without them any writer could dispatch release-rmpc.yml on a
+#     branch, get a genuine attestation for a trojan and swap it into a release;
+#     an attestation that verifies but was not minted by a push is refused;
+#   - a tag outside the admin-only `rmpc-v*` namespace is refused up front;
 #   - a non-zero verdict is FATAL, with the documented exit 6, before extract;
 #   - a missing `gh` is a refusal, not a downgrade to "install it unattested".
 # Delete the attest block from install-rmpc.sh and the first seven of these go
@@ -2010,6 +2158,26 @@ if grep -q -- "--signer-workflow robotmoney/robotmoney-core/.github/workflows/re
   pass "provenance: the signer identity is pinned to release-rmpc.yml on a GitHub-hosted runner"
 else
   fail "provenance: the gh call does not pin --signer-workflow to .github/workflows/release-rmpc.yml (and --deny-self-hosted-runners) — any workflow in the repository could then vouch for an archive (gh calls: '${GH_CALL:-<none>}')"
+fi
+
+# --source-ref is the difference between "the release workflow built it on some
+# run" and "the release workflow built it for the push of THIS admin-only tag".
+# Any writer can dispatch release-rmpc.yml on a branch; that run's certificate
+# names refs/heads/<branch>.
+if grep -q -- "--source-ref refs/tags/${TAG}" <<<"$GH_CALL"; then
+  pass "provenance: the gh call pins --source-ref refs/tags/${TAG}, so an attestation minted by a branch dispatch is refused"
+else
+  fail "provenance: the gh call does not pin --source-ref refs/tags/${TAG} — any writer could dispatch release-rmpc.yml on a branch and mint an attestation the installer accepts (gh calls: '${GH_CALL:-<none>}')"
+fi
+
+# gh has no trigger flag, so the installer counts the verified attestations whose
+# certificate says `push`. A dispatch on an existing tag's ref names that tag as
+# its source ref; only the trigger tells it apart from the admin's push.
+if grep -q -- "--format json" <<<"$GH_CALL" \
+  && grep -qF 'select(.verificationResult.signature.certificate.buildTrigger == "push")' <<<"$GH_CALL"; then
+  pass "provenance: the gh call keeps only attestations whose certificate buildTrigger is push"
+else
+  fail "provenance: the gh call does not filter the verified attestations on buildTrigger == \"push\" — a dispatch on the tag's own ref would be accepted (gh calls: '${GH_CALL:-<none>}')"
 fi
 
 # Ordering is load-bearing exactly as it is for the checksum: an archive that
@@ -2052,6 +2220,36 @@ if grep -q 'STEP extract' <<<"$OUT_ATT_BAD" || grep -q 'STEP install' <<<"$OUT_A
   fail "provenance: extract or install was reached despite a failed attestation (output: $OUT_ATT_BAD)"
 else
   pass "provenance: neither extract nor install was reached for the unattested archive"
+fi
+
+# --- the refusal path: it verifies, but no tag push minted it ---
+# gh exits 0 (the repository, workflow and source ref all match) and reports zero
+# push-triggered attestations: the shape of a run dispatched on the tag's ref.
+DEST_ATT_DISPATCH="$WORKDIR/bin-attest-dispatch"
+OUT_ATT_DISPATCH=$(GH_STUB_PUSH_COUNT=0 "$INSTALLER" --tag "$TAG" --platform "$PLATFORM" \
+  --dest "$DEST_ATT_DISPATCH" --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_ATT_DISPATCH=$?
+if [[ $EXIT_ATT_DISPATCH -eq 6 && ! -e "$DEST_ATT_DISPATCH/rmpc" ]] \
+  && ! grep -q 'STEP extract' <<<"$OUT_ATT_DISPATCH"; then
+  pass "provenance: an attestation that verifies but was not minted by the push of the tag is refused with exit 6, before extract"
+else
+  fail "provenance: installer exited $EXIT_ATT_DISPATCH on an attestation with no push trigger, expected 6 with nothing extracted (output: $OUT_ATT_DISPATCH)"
+fi
+
+# --- the refusal path: a tag outside the admin-only namespace ---
+# A legacy bare vX.Y.Z tag is release-dapp.yml's namespace, which the admin-only
+# ruleset does not cover, so a writer could point it at a branch whose workflow
+# attests on push. Refused before any download or gh call.
+: > "$GH_ARGV_LOG"
+DEST_LEGACY="$WORKDIR/bin-legacy"
+OUT_LEGACY=$("$INSTALLER" --tag "v0.3.3" --platform "$PLATFORM" --dest "$DEST_LEGACY" \
+  --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_LEGACY=$?
+if [[ $EXIT_LEGACY -eq 2 && ! -e "$DEST_LEGACY/rmpc" && ! -s "$GH_ARGV_LOG" ]] \
+  && ! grep -q 'STEP download' <<<"$OUT_LEGACY"; then
+  pass "provenance: a bare vX.Y.Z tag is refused with exit 2 before any download or attestation lookup"
+else
+  fail "provenance: --tag v0.3.3 exited $EXIT_LEGACY (expected 2 before download, gh calls: '$(cat "$GH_ARGV_LOG")', output: $OUT_LEGACY)"
 fi
 
 # --- the refusal path: no verifier available ---
@@ -2100,6 +2298,7 @@ fi
 # does not satisfy them. The install-side gating above is what is executed.
 BUILD_PERMS=$(sed -n 's/^build_permissions=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
 ATTEST_SUBJECT=$(sed -n 's/^attest_subject=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
+ATTEST_IF=$(sed -n 's/^attest_if=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
 
 if grep -q 'id-token:write' <<<"$BUILD_PERMS" && grep -q 'attestations:write' <<<"$BUILD_PERMS"; then
   pass "release-rmpc.yml's build job grants id-token: write and attestations: write — without both, no attestation is ever minted"
@@ -2116,6 +2315,115 @@ if [[ "$ATTEST_SUBJECT" == '${{ env.ARCHIVE }}' ]] \
   pass "release-rmpc.yml attests \${{ env.ARCHIVE }} — the exact archive name the packaging step exports"
 else
   fail "release-rmpc.yml's attest step covers '${ATTEST_SUBJECT:-<no attest step>}' rather than the \${{ env.ARCHIVE }} the packaging step exports — the attested bytes and the published bytes could drift apart"
+fi
+
+# The other half of the source-ref pin: the workflow attests only on the push of
+# an rmpc-v* tag. Read out of the attest step itself, not grepped from the file.
+if [[ "$ATTEST_IF" == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rmpc-v')" ]]; then
+  pass "release-rmpc.yml attests only on the push of an rmpc-v* tag — never on a dry run or a branch dispatch"
+else
+  fail "release-rmpc.yml's attest step runs under '${ATTEST_IF:-<no if:, so on every run>}' rather than only on the push of an rmpc-v* tag — a writer's dispatch would mint a genuine attestation"
+fi
+
+# --- what the attested bytes are built from: no shared cache, no unpinned image ---
+# A cache key holds no ref or trigger, and a tag-push run restores from dev's
+# scope, so a writer's dry run on dev could save a target/ whose rlib the
+# admin's tag push links and attests. And `cross` links inside
+# ghcr.io/cross-rs/<target>:<version>, a tag an upstream compromise can move.
+# Both are read structurally out of jobs.build, and each is proved readable on a
+# hostile copy that puts the pre-fix shape back.
+BUILD_CACHES=$(sed -n 's/^build_cache_steps=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
+BUILD_CROSS=$(sed -n 's/^build_cross_targets=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
+
+if grep -q '^build_cache_steps=' "$WF_DIR/meta.txt" 2>/dev/null && [[ -z "$BUILD_CACHES" ]]; then
+  pass "release-rmpc.yml's attesting build job restores and saves no Actions cache, on any trigger"
+else
+  fail "release-rmpc.yml's attesting build job has a cache step ('${BUILD_CACHES:-<extractor recorded nothing>}') — a run on dev can save bytes the tag push then links and attests"
+fi
+
+if hostile_prepare build-cache build-cache; then
+  HOSTILE_CACHES=$(sed -n 's/^build_cache_steps=//p' "$HOSTILE_DIR/out/meta.txt" 2>/dev/null || true)
+else
+  HOSTILE_CACHES="fixture did not build: $HOSTILE_BUILD_ERR"
+fi
+if [[ "$HOSTILE_CACHES" == Swatinem/rust-cache@* ]]; then
+  pass "a hostile copy with Swatinem/rust-cache back in the build job is read as a cache step — the assertion above is not vacuous"
+else
+  fail "a hostile copy with Swatinem/rust-cache in the build job was not read as a cache step (read: '${HOSTILE_CACHES:-<none>}')"
+fi
+
+# cross_unpinned <Cross.toml> <target>... -- prints each target whose Cross.toml
+# image is not `...@sha256:<64 hex>`. Empty output means every target is pinned.
+# An unreadable file pins nothing.
+CROSS_PINS_PY="$WORKDIR/cross-pins.py"
+cat > "$CROSS_PINS_PY" <<'PY'
+import pathlib
+import re
+import sys
+
+path, targets = pathlib.Path(sys.argv[1]), sys.argv[2:]
+data = {}
+if path.is_file():
+    try:
+        import tomllib
+
+        data = tomllib.loads(path.read_text())
+    except Exception as e:  # noqa: BLE001
+        data = {}
+        print("Cross.toml %s cannot be read: %s" % (path, e))
+pin = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
+for t in targets:
+    cfg = (data.get("target") or {}).get(t) or {}
+    image = cfg.get("image") if isinstance(cfg, dict) else None
+    if isinstance(image, dict):
+        image = image.get("name")
+    if not isinstance(image, str) or not pin.match(image):
+        print("%s: %s" % (t, image or "<no image>"))
+PY
+cross_unpinned() { python3 "$CROSS_PINS_PY" "$@" 2>&1; }
+
+if ! grep -q '^build_cross_targets=' "$WF_DIR/meta.txt" 2>/dev/null; then
+  fail "the extractor recorded no build_cross_targets line, so the cross-image assertion would be vacuous"
+elif [[ -z "$BUILD_CROSS" ]]; then
+  pass "release-rmpc.yml's attesting build job runs no cross: every leg, linux-arm64 included, builds natively with no container image"
+else
+  IFS=',' read -r -a CROSS_TARGETS <<<"$BUILD_CROSS"
+  UNPINNED="$(cross_unpinned "$REPO_ROOT/Cross.toml" "${CROSS_TARGETS[@]}")"
+  if [[ -z "$UNPINNED" ]]; then
+    pass "every cross target of the attesting build job (${BUILD_CROSS}) has a Cross.toml image pinned by @sha256 digest"
+  else
+    fail "the attesting build job builds with cross for a target whose image is not pinned by @sha256 digest in Cross.toml: $UNPINNED"
+  fi
+fi
+
+if hostile_prepare build-cross build-cross; then
+  HOSTILE_CROSS=$(sed -n 's/^build_cross_targets=//p' "$HOSTILE_DIR/out/meta.txt" 2>/dev/null || true)
+else
+  HOSTILE_CROSS="fixture did not build: $HOSTILE_BUILD_ERR"
+fi
+if [[ "$HOSTILE_CROSS" == "aarch64-unknown-linux-gnu" ]]; then
+  pass "a hostile copy with the pre-fix 'cross build --target \${{ matrix.target }}' leg is read as a cross build of exactly aarch64-unknown-linux-gnu"
+else
+  fail "a hostile copy with a cross build of the cross: true matrix entry read as '${HOSTILE_CROSS:-<none>}', expected aarch64-unknown-linux-gnu"
+fi
+
+CROSS_FIXTURES="$WORKDIR/cross-toml"
+mkdir -p "$CROSS_FIXTURES"
+printf '[target.aarch64-unknown-linux-gnu]\nimage = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"\n' \
+  > "$CROSS_FIXTURES/tag.toml"
+printf '[target.aarch64-unknown-linux-gnu]\nimage = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:%s"\n' \
+  "$(printf '%064d' 0)" > "$CROSS_FIXTURES/digest.toml"
+if [[ -n "$(cross_unpinned "$CROSS_FIXTURES/tag.toml" aarch64-unknown-linux-gnu)" ]] \
+  && [[ -n "$(cross_unpinned "$CROSS_FIXTURES/missing.toml" aarch64-unknown-linux-gnu)" ]]; then
+  pass "a Cross.toml image pinned by tag, or no Cross.toml at all, is reported unpinned"
+else
+  fail "the cross pin check accepted a tag-pinned or missing Cross.toml image"
+fi
+DIGEST_OUT="$(cross_unpinned "$CROSS_FIXTURES/digest.toml" aarch64-unknown-linux-gnu)"
+if [[ -z "$DIGEST_OUT" ]]; then
+  pass "a Cross.toml image pinned by @sha256 digest is accepted — the pin check is not refusing everything"
+else
+  fail "the cross pin check refused a digest-pinned Cross.toml image: $DIGEST_OUT"
 fi
 
 echo ""

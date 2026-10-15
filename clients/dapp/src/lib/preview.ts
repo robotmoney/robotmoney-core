@@ -99,6 +99,12 @@ interface PreviewSuccess {
   effect: string;
   risk: RiskClass;
   calldata: Hex;
+  /**
+   * A caution the preview shows above the effect without refusing. A redeem built while the
+   * gateway is unverified carries the gateway's cause here: the redeem never touches the
+   * gateway, so the exit stays open (codePins.ts: an exit never depends on a build setting).
+   */
+  warning?: string;
 }
 
 interface PreviewFailure {
@@ -137,6 +143,12 @@ export interface PreviewContext {
    * Keyed by address, so a context spread onto another vault stays correct.
    */
   verifiedTargets?: ReadonlySet<string>;
+  /**
+   * Lower-cased vault and router addresses the chain showed do NOT match their pins: other code,
+   * no code, or an implementation behind the proxy the build does not pin (ADR-0014). The
+   * Withdraw tab redeems from the vault directly rather than approve shares to such a router.
+   */
+  refusedTargets?: ReadonlySet<string>;
   /**
    * Why `gatewayCodeHashVerified` is false, in one sentence (gatewayVerifier.ts
    * `describeVerificationCause`). Vault and router previews refused on it carry

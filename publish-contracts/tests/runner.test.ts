@@ -5,8 +5,9 @@ import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
 import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
-import { COUNTS, exampleText } from "./fixtures.ts";
-import { LOCAL_RPC, SCRIPT, world } from "./harness.ts";
+import { COUNTS, SHA, exampleText, tmp } from "./fixtures.ts";
+import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
+import { realGovernApi, resumeCommand } from "../src/govern.ts";
 
 const sheetValue = (name: string): string => new RegExp(`^${name}=(\\S+)`, "m").exec(exampleText())![1]!;
 const DEPLOY = STAGE_NAMES.slice(0, STAGE_NAMES.indexOf("timelock") + 1);
@@ -209,6 +210,24 @@ describe("the stage runner on stub forge and cast", () => {
     expect(JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", "safe.json"), "utf8")).adopted).toBe(true);
   });
 
+  // Security round 1 (as QA plan v1 E2 for the redeploy): the predicted Safe address was saved BEFORE the typed confirmation, so a refused confirmation left a `started`
+  // record of a Safe that was never created, and every --resume went into the adoption of it (NOT_A_SAFE against a real chain).
+  test("a refused confirmation at the safe stage leaves no record: the --resume creates the Safe normally instead of adopting one that was never created", async () => {
+    const w = world({ startNonce: 0 });
+    expect(await w.run(["--stage", "safe"], { prompt: async () => "nope" })).toBe(EXIT_CODES.REFUSED);
+    expect(w.safeCalls).toEqual(["createSafe"]);
+    expect(existsSync(join(w.evidence, "publish-run.json")) ? manifest(w).stages.safe : undefined).toBeUndefined();
+    expect(await w.run(["--stage", "safe", "--resume"])).toBe(0);
+    expect(w.safeCalls).toEqual(["createSafe", "createSafe"]);
+    expect(w.safeCalls).not.toContain("connectSafe");
+    expect(manifest(w).stages.safe).toMatchObject({ status: "done", safe: "0x00000000000000000000000000000000000050fe" });
+    expect(JSON.parse(readFileSync(join(w.coreDir, "deployments", "918453", "safe.json"), "utf8")).adopted).toBeUndefined();
+    // a rerun without --resume after a refusal is not refused either: there is no earlier stage
+    const fresh = world({ startNonce: 0 });
+    expect(await fresh.run(["--stage", "safe"], { prompt: async () => "nope" })).toBe(EXIT_CODES.REFUSED);
+    expect(await fresh.run(["--stage", "safe"])).toBe(0);
+  });
+
   test("--measure writes the frozen counts file for the SHA and refuses to run without a file otherwise", async () => {
     const w = world({ startNonce: 0, writeFrozen: false });
     expect(await w.run(["--stage", "deploy", "--measure"])).toBe(0);
@@ -350,5 +369,46 @@ describe("a failed broadcast says why (core 1505)", () => {
     expect(lastError(w).message).toContain("forge: Error: RPC connection dropped");
     expect(lastError(w).message).not.toContain("NOT resent");
     expect(w.state().calls.some((c: any) => c.tool === "cast" && (c.args[0] === "receipt" || c.args[0] === "call"))).toBe(false);
+  });
+});
+
+// Security round 1 (the issue 1686 interlock): a govern run against a fresh run manifest knew no pause-all entry, adopted the scheduled unpause from the chain and executed it.
+describe("security round 1: follow-on runs continue the deployment's own run manifest", () => {
+  /** A govern api whose connectSafe records that it ran: a refusal before it leaves `connected` false. */
+  const spy = () => { const s = { connected: false }; return { s, api: { ...realGovernApi, connectSafe: (async () => { s.connected = true; throw new Error("stop: the Safe was read"); }) as never } }; };
+  const seed = (w: ReturnType<typeof world>, stages: Record<string, unknown>) => {
+    mkdirSync(w.evidence, { recursive: true });
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", stages }));
+  };
+  test("govern with an --evidence dir that holds no publish-run.json exits RESUME before the Safe is read", async () => {
+    const w = world({ writeSafeManifest: true });
+    const g = spy();
+    expect(await w.run(["govern", "--evidence", tmp("pc-other-evidence-")], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(g.s.connected).toBe(false);
+    expect(lastError(w).message).toContain("no run manifest in");
+    expect(lastError(w).message).toContain("--evidence");
+    // the same for --stage verify,govern and for verify alone
+    expect(await w.run(["--stage", "verify,govern", "--evidence", tmp("pc-other-evidence-")], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(await w.run(["verify", "--evidence", tmp("pc-other-evidence-")])).toBe(EXIT_CODES.RESUME);
+    expect(g.s.connected).toBe(false);
+  });
+  test("govern on a run manifest with no finished timelock stage exits RESUME; with it, the run goes on to the Safe", async () => {
+    const before = world({ writeSafeManifest: true });
+    seed(before, { safe: { status: "done", startedAt: "t" } });
+    const g = spy();
+    expect(await before.run(["govern"], { govern: { api: g.api } })).toBe(EXIT_CODES.RESUME);
+    expect(lastError(before).message).toContain("no finished timelock stage");
+    expect(g.s.connected).toBe(false);
+    // mutation: the handover is done, so the RESUME refusal is not what stops the run
+    const after = world({ writeSafeManifest: true });
+    seed(after, { safe: { status: "done", startedAt: "t" }, timelock: { status: "done", startedAt: "t" } });
+    expect(await after.run(["govern"], { govern: { api: g.api } })).not.toBe(EXIT_CODES.RESUME);
+  });
+  test("the printed resume command names the run's absolute --evidence dir and its counts flags", () => {
+    const next = resumeCommand({ chainId: 8453, coreSha: SHA, evidenceDir: join("evidence", "publish-8453-x"), countsDir: "/c/deployments/frozen-counts", countsRequireOriginDev: true }, "unpause-PROTO");
+    expect(next).toContain(`--evidence ${join(process.cwd(), "evidence", "publish-8453-x")}`);
+    expect(next).toContain("--counts-dir /c/deployments/frozen-counts --counts-require-origin-dev");
+    // a caller with no evidence dir in its context still tells the operator to pass one
+    expect(resumeCommand({ chainId: 8453, coreSha: SHA })).toContain("--evidence DIR");
   });
 });

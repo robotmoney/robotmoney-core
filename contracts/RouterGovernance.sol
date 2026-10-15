@@ -23,9 +23,15 @@ import {BpsMath} from "./lib/BpsMath.sol";
 ///         receipt on `ConsensusRecommendationReceipt`; when the Safe decides
 ///         to act on it, it schedules ONE call, `applyReceipt`, which releases
 ///         the receipt and writes its weight vector to the router in the same
-///         transaction. A released receipt whose weights were not applied, or
-///         applied weights whose receipt is unreleased, cannot exist
-///         (governance-decisions.md §3.2). The propose/vote/execute path, the
+///         transaction. So `applyReceipt` never leaves applied weights whose
+///         receipt is unreleased, nor a receipt it released without weights.
+///         The timelock ALSO holds the register's `ADMIN_ROLE` and can release a
+///         receipt directly (the standalone `release-receipt` govern row, issue
+///         1611). A receipt released that way carries no weights, and
+///         `applyReceipt` refuses it forever (`ReceiptAlreadyReleased`): the
+///         committee must record a new receipt (governance-decisions.md §3.2,
+///         §3.7). "Released" therefore does not mean "applied"; read
+///         `ReceiptApplied` for that. The propose/vote/execute path, the
 ///         voter set, voting power, quorum, voting period and execution delay
 ///         were deleted by issue #1698: nobody held the voter keys, and one
 ///         voter met the example quorum (security review 2026-10-12 finding 4).
@@ -93,7 +99,9 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     error ReceiptContractNotContract(address receipt);
     /// @notice The receipt id was never recorded on the register.
     error ReceiptNotRecorded(bytes32 receiptId);
-    /// @notice The receipt was already released: one operation per receipt.
+    /// @notice The receipt was already released: one operation per receipt. Raised both for an
+    ///         earlier `applyReceipt` and for a standalone timelock `releaseReceipt`; a receipt
+    ///         released either way can never be applied.
     error ReceiptAlreadyReleased(bytes32 receiptId);
     /// @notice The digest the call named is not the digest the receipt stored.
     /// @param receiptId The receipt.

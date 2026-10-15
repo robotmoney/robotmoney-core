@@ -935,10 +935,35 @@ describe("immutability claim and layout identifier (ADR-0014 §5, §8)", () => {
     expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
   });
 
+  // Security round 1: after a redeploy the old vault is still a proxy of the deployment with holders inside, and its authority is still the timelock.
+  test("a claim is refused while a vault a redeploy replaced is not frozen by an executed proxy_freezes entry", () => {
+    const OLD = `0x${"3f".repeat(20)}`;
+    const e = withTableProxies(good());
+    frozenAll(e);
+    e.immutability_claim = "core-logic-immutable";
+    e.immutability = { still_mutable: still };
+    e.vault_redeploys = [{ vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD }];
+    const claim = () => checkEvidence(e, undefined, undefined, opts).filter((m) => m.includes("immutability_claim"));
+    expect(claim().join()).toContain(`a redeploy replaced (rmPROTO ${OLD})`);
+    e.proxy_freezes = [{ step: "freeze-proxy", proxies: [{ name: "rmPROTO.retired-1", proxy: OLD, implementation: `0x${"9f".repeat(20)}`, code_hash: `0x${"cd".repeat(32)}` }] }];
+    expect(claim().join()).toContain("a redeploy replaced"); // scheduled, never executed
+    e.proxy_freezes[0].execute_tx = `0x${"13".repeat(32)}`;
+    expect(claim()).toEqual([]);
+  });
+
   test("a deploy-recorded layout identifier that differs from the checkout's snapshot is refused", () => {
     const e = withTableProxies(good());
     Object.assign(e.proxies.gateway, { layout_hash: `0x${"11".repeat(32)}`, layout_source: "deploy-manifest", checkout_layout_hash: `0x${"22".repeat(32)}` });
     expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("proxies.gateway.layout_hash");
+    Object.assign(e.proxies.gateway, { checkout_layout_hash: `0x${"11".repeat(32)}` });
+    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
+  });
+
+  // Security round 1: an upgraded proxy's layout is the one its upgrade round recorded, held to the snapshot of that round's build checkout.
+  test("an upgrade-round layout identifier that differs from its build checkout's snapshot is refused", () => {
+    const e = withTableProxies(good());
+    Object.assign(e.proxies.gateway, { layout_hash: `0x${"11".repeat(32)}`, layout_source: "upgrade-round", checkout_layout_hash: `0x${"22".repeat(32)}` });
+    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("recorded by the upgrade round that installed it");
     Object.assign(e.proxies.gateway, { checkout_layout_hash: `0x${"11".repeat(32)}` });
     expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
   });

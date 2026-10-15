@@ -1157,3 +1157,184 @@ async fn votes_from_two_policy_deployments_both_persist() {
         "the track record names the policy behind each vote 0, newest first"
     );
 }
+
+// ─── Security round 3: vote memo fetches under the tick's budget ─────────────
+
+/// Security round 3: memo hosts that never answer cannot hold the tick that indexes their votes,
+/// and a vote stored past the budget is verified by a later tick's sweep.
+///
+/// The `VoteSubmitted` branch fetched each vote's `rationaleUri` inline with no deadline (up to 10 s
+/// of DNS plus 10 s of request per vote), and round 2's budget reached only the receipts. Any
+/// committee agent key can submit unlimited votes with any URI, so 1,000 votes at a blackholed host
+/// held the tick for hours, and the watchdog's evaluation behind it. A vote whose memo did not
+/// verify then stayed unverified for ever, and a tilt counts only verified votes.
+///
+/// Five votes from one member, each at a host that accepts and never answers. The tick returns
+/// within the inline budget with all five stored, and the last ones unfetched. Then the newest
+/// vote's host starts answering, and the next tick's sweep verifies it, so the member counts.
+#[tokio::test]
+async fn tarpit_memo_hosts_cannot_hold_the_tick_and_the_sweep_verifies_a_skipped_vote() {
+    use explorer_indexer::indexer::{INLINE_FETCH_TIME_BUDGET, SWEEP_TIME_BUDGET};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = pg_fixture().await;
+
+    // Votes 1 to 4: a host that accepts every connection and never answers.
+    let tarpit = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tarpit_addr: SocketAddr = tarpit.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = tarpit.accept().await {
+            held.push(sock);
+        }
+    });
+    // Vote 5: the same until `answering` is set, then it serves the memo.
+    let memo_body = br#"{"agent_id":"athena-v1","vault":"0x2222","stance":"Overweight"}"#.to_vec();
+    let memo_hash = alloy_primitives::keccak256(&memo_body);
+    let answering = Arc::new(AtomicBool::new(false));
+    let late = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let late_addr: SocketAddr = late.local_addr().unwrap();
+    let (answering_srv, body_srv) = (answering.clone(), memo_body.clone());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((mut sock, _)) = late.accept().await {
+            if !answering_srv.load(Ordering::SeqCst) {
+                held.push(sock);
+                continue;
+            }
+            let body = body_srv.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+            });
+        }
+    });
+
+    let ic = ic_addr();
+    let agent = agent_addr();
+    let vault = vault_addr();
+    let mut logs = vec![encode_agent_registered_log(
+        ic,
+        agent,
+        "athena-v1",
+        9,
+        [0x01; 32],
+        0,
+    )];
+    for i in 1..=5u64 {
+        let host = if i == 5 { late_addr } else { tarpit_addr };
+        logs.push(encode_vote_submitted_log(
+            ic,
+            i,
+            agent,
+            vault,
+            0,
+            6000,
+            80,
+            &format!("http://{host}/memo-{i}.json"),
+            memo_hash.0,
+            1_000_000 + i,
+            10,
+            [0x10 + i as u8; 32],
+            i as u32,
+        ));
+    }
+
+    let stub = StubRpcServer::start().await;
+    program_stub_block10(&stub);
+    stub.honour_log_filter(true);
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    let rpc = JsonRpc::new(&stub.url);
+    let mut cfg = base_cfg(&stub);
+    cfg.start_block = Some(0);
+
+    // The tick that indexes the votes.
+    let started = std::time::Instant::now();
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    let elapsed = started.elapsed();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < INLINE_FETCH_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "five tarpit memo hosts held the indexing tick for {elapsed:?}; the inline budget is \
+         {INLINE_FETCH_TIME_BUDGET:?}"
+    );
+    let votes = || async {
+        sqlx::query_as::<_, (i64, bool, i32)>(
+            "SELECT vote_id, verified, verify_attempts FROM committee_votes \
+             WHERE chain_id = $1 ORDER BY vote_id",
+        )
+        .bind(8453i64)
+        .fetch_all(fx.db.pool())
+        .await
+        .unwrap()
+    };
+    let stored = votes().await;
+    assert_eq!(stored.len(), 5, "every vote is stored, fetched or not");
+    assert!(
+        stored.iter().all(|&(_, verified, _)| !verified),
+        "no tarpit memo verifies"
+    );
+    assert_eq!(
+        stored[4],
+        (5, false, 0),
+        "three 10 s fetches spend the budget, so vote 5 is stored unfetched"
+    );
+    let counted = || async {
+        sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT vote_count FROM regime_snapshots WHERE chain_id = $1 AND vault_address = $2 \
+             ORDER BY block_number DESC LIMIT 1",
+        )
+        .bind(8453i64)
+        .bind(vault.as_slice())
+        .fetch_optional(fx.db.pool())
+        .await
+        .unwrap()
+        .flatten()
+        .unwrap_or(0)
+    };
+    assert_eq!(
+        counted().await,
+        0,
+        "an unverified vote counts toward no tilt"
+    );
+
+    // Vote 5's host answers now. The next tick's sweep (newest first) verifies it, and the tick's
+    // regime refresh counts the member.
+    answering.store(true, Ordering::SeqCst);
+    cfg.end_block = Some(11);
+    let started = std::time::Instant::now();
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    let elapsed = started.elapsed();
+    stub.shutdown();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert!(
+        elapsed < SWEEP_TIME_BUDGET + std::time::Duration::from_secs(15),
+        "the sweep held the tick for {elapsed:?}; its budget is {SWEEP_TIME_BUDGET:?}"
+    );
+    let stored = votes().await;
+    assert_eq!(
+        stored[4],
+        (5, true, 1),
+        "the sweep fetched the skipped vote and it verifies"
+    );
+    assert!(
+        stored[..4].iter().all(|&(_, verified, _)| !verified),
+        "the tarpit votes stay unverified"
+    );
+    assert!(
+        stored[..4].iter().any(|&(_, _, attempts)| attempts >= 2),
+        "the sweep's attempts on the tarpit votes count toward its ceiling"
+    );
+    assert_eq!(
+        counted().await,
+        1,
+        "the verified vote counts toward the vault's tilt"
+    );
+}

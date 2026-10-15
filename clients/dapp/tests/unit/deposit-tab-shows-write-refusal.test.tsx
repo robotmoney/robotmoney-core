@@ -49,6 +49,9 @@ const provider = {
       getCodeCalls.push(String(params?.[0]));
       return CODE;
     }
+    // The pin check reads at one block, and a zero ERC-1967 slot is a direct contract.
+    if (method === "eth_blockNumber") return "0x10";
+    if (method === "eth_getStorageAt") return `0x${"0".repeat(64)}`;
     throw new Error(`unexpected wallet call ${method}`);
   },
 };

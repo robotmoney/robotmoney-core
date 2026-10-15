@@ -766,6 +766,47 @@ contract RouterGovernanceSafeTimelockTest is RouterGovernanceFixture {
         assertFalse(router.votedWeightsActive());
     }
 
+    /// @notice Security round 1 (governance-decisions.md §3.2, §3.7): the timelock's own
+    ///         `ADMIN_ROLE` on the register (stage 11 grants it, `DeployTimelock.s.sol`) lets the
+    ///         standalone `release-receipt` govern row release a receipt with no weights. That
+    ///         receipt can never be applied: a later `applyReceipt` for it, scheduled and waited
+    ///         out like any other, reverts `ReceiptAlreadyReleased` at execute and no weight
+    ///         lands. Pins that "released" does not mean "applied"; the committee records a new
+    ///         receipt instead.
+    function test_applyReceipt_revertsAfterStandaloneTimelockRelease() public {
+        _record(RECEIPT_ID, DIGEST);
+        vm.prank(receiptAdmin);
+        register.grantRole(ADMIN_ROLE, address(timelock));
+
+        // The standalone row: one Safe -> timelock round on `releaseReceipt`.
+        bytes memory release = abi.encodeCall(register.releaseReceipt, (RECEIPT_ID));
+        _govRun(safe, timelock, address(register), release, keccak256("release-receipt-1"), DELAY);
+        assertTrue(register.isReleased(RECEIPT_ID), "released by the standalone row");
+        assertFalse(router.votedWeightsActive(), "released with no weights");
+
+        // The apply-receipt row for the same receipt waits its own delay, then reverts.
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
+        bytes memory data =
+            abi.encodeCall(RouterGovernance.applyReceipt, (RECEIPT_ID, DIGEST, vaults, bps));
+        bytes32 salt = keccak256("apply-receipt-after-release");
+        _govSchedule(safe, timelock, address(gov), data, salt, DELAY);
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(
+            abi.encodeWithSelector(RouterGovernance.ReceiptAlreadyReleased.selector, RECEIPT_ID)
+        );
+        timelock.execute(address(gov), 0, data, bytes32(0), salt);
+        bytes memory exec =
+            abi.encodeCall(timelock.execute, (address(gov), 0, data, bytes32(0), salt));
+        vm.expectRevert(bytes(GS013));
+        _safeExecWith(
+            safe,
+            address(timelock),
+            exec,
+            _twoOwnerSignatures(_safeDigest(safe, address(timelock), exec))
+        );
+        assertFalse(router.votedWeightsActive(), "no weight ever lands for that receipt");
+    }
+
     /// @notice The committee submitter that recorded the receipt holds no weight
     ///         authority, and the weight setter is no committee member (§3.4).
     function test_submitterAndWeightSetterAreDisjoint() public view {

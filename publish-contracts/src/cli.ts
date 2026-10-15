@@ -15,7 +15,7 @@ import { kindLabel } from "./chains.ts";
 import { REGISTER_ROW, assertAgentLabel, assertSubmitter } from "./committee-register.ts";
 import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-receipt.ts";
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
-import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
+import { claimedOwnerOf, siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
@@ -103,6 +103,10 @@ export const USAGE = `publish contracts
                      ONE timelock operation, proxy.upgradeToAndCall(implementation, call). Refused (GOVERN, nothing scheduled) when the proxy is frozen, its upgradeAuthority() is not the
                      timelock, an ERC-1967 admin or beacon slot is set, or the implementation has no code, is no UUPS implementation, has unlocked initializers or differs from the build
                      artifact of the proxy's contract in DIR (default: the checkout's out/). Every chain and kind, never part of stage 13; the same command executes it after the delay.
+                     DIR must sit in a git checkout (recorded as build_sha); on 8453 that checkout must be clean at a release-tagged, CI-green sha of the sheet's kind (its origin
+                     robotmoney/robotmoney-core), DIR must be its own out/, and each compared artifact must be compiled from the sources committed there, or the row refuses
+                     before the Safe is read. A build whose storage-layout snapshot moves a live variable or changes a stored enum's members is refused. The same build= rules
+                     hold for freeze-proxy. DIR is resolved against the working directory and recorded as an absolute build_dir; a later verify needs it there (or --upgrade-build).
                      --row freeze-proxy --admin-arg proxy=<name>|all [--admin-arg build=DIR] (issue 1809, ADR-0014 §5) freezes governed proxies FOREVER: ONE timelock operation,
                      freezeUpgrades(liveImplementation, liveCodeHash) per proxy not yet frozen (all: one batch). Refused when the live implementation is not the reviewed build, the
                      authority is not the timelock, an admin or beacon slot is set, or an upgrade-proxy round of the proxy is scheduled and not executed. A frozen proxy is skipped.
@@ -130,6 +134,11 @@ export const USAGE = `publish contracts
                      verify stage (the default set, --resume included, --stage all, a --stage list naming verify and another stage) at the original or the redeploy sha, and a --prior-out
                      that is not a checkout of the original sha on any of them. The verify stage refuses a wrong build once more itself, and pauses nothing. The counts are the original sha's (its frozen file in the
                      counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha. A passing verify records prior_out_sha and verified_at_sha on each governed round.
+  --upgrade-build PROXY=DIR
+                     verify, after an executed govern --row upgrade-proxy round: the forge out/ of a checkout at the round's build_sha, standing for the build_dir the round recorded
+                     (deleted, moved, checked out at another release, or on another machine). Repeat it per proxy. The verify stage checks every upgraded proxy's build BEFORE the
+                     verifier (the checkout's HEAD is build_sha; on 8453 DIR is that checkout's own out/ compiled from the committed sources, and its layout snapshot is the round's):
+                     a build that fails is refused (USAGE) and nothing is paused. It is never written into the run manifest.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
@@ -237,6 +246,8 @@ export interface Parsed {
   vault?: string;
   /** verify only (issue 1796): forge out/ of a checkout at the original deployment sha. */
   priorOut?: string;
+  /** verify only (security round 3): `--upgrade-build <proxy>=<dir>`, the forge out/ that stands for the build_dir of that proxy's last executed upgrade round. */
+  upgradeBuilds?: Record<string, string>;
   /** QA plan v1 E7 (issue 1724): a run that reaches prove-control only: the RPC for the adoption's eth_getLogs. */
   logsRpc?: string;
 }
@@ -251,7 +262,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, "admin-arg": { type: "string", multiple: true }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, "admin-arg": { type: "string", multiple: true }, vault: { type: "string" }, "prior-out": { type: "string" }, "upgrade-build": { type: "string", multiple: true }, "logs-rpc": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -284,6 +295,16 @@ export function parseCli(argv: string[]): Parsed {
   // --prior-out is read by the verify stage only: a run whose stages include verify (the verify verb, the default set, all, or a --stage list naming verify).
   const reachesVerify = verb === "verify" || (verb === undefined && (stage === undefined || stage === "all" || stage.split(",").map((x) => x.trim()).includes("verify")));
   if (priorOut !== undefined && !reachesVerify) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
+  // Security round 3 (review: RELIABILITY_FAIL_CLOSED_OUTAGE): --upgrade-build is read by the verify stage only, like --prior-out. The stage holds each to the round's build_sha.
+  let upgradeBuilds: Record<string, string> | undefined;
+  for (const kv of (v["upgrade-build"] as string[] | undefined) ?? []) {
+    if (!reachesVerify) throw new PublishError("USAGE", `--upgrade-build goes with the verify verb (or --stage verify) only\n${USAGE}`);
+    const m = /^([A-Za-z0-9_.-]+)=(.+)$/.exec(kv);
+    if (!m) throw new PublishError("USAGE", `--upgrade-build takes <proxy>=<forge out/ of a checkout at the round's build_sha>, got '${kv}'`);
+    upgradeBuilds ??= {};
+    if (Object.prototype.hasOwnProperty.call(upgradeBuilds, m[1]!)) throw new PublishError("USAGE", `--upgrade-build ${m[1]} is given twice`);
+    upgradeBuilds[m[1]!] = m[2]!;
+  }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
@@ -363,7 +384,7 @@ export function parseCli(argv: string[]): Parsed {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, vault: vaultArg, priorOut, adminArgs, logsRpc,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, vault: vaultArg, priorOut, upgradeBuilds, adminArgs, logsRpc,
   };
 }
 
@@ -380,15 +401,32 @@ export function selectVerbStages(verb: Verb): string[] {
  * with the same kind, when fewer specs than sheet owners are given. Not checked: the Twin chain (its owners default from the rehearsal keys,
  * owner-signers.ts), a dry run (it skips prove-control, runner.ts), the plan (no signer) and the verbs that have no proof stage. A govern run
  * keeps its own in-run refusal (GOVERN, before any send): it broadcasts nothing before the Safe's signature count is checked.
+ * Security round 1: counting was not enough. The same spec twice, two specs that claim the same owner, or a spec that claims an address outside SAFE_OWNERS passed here
+ * and failed at prove-control after stages 1-10. Every claim that can be read before stage 1 (owner-signers.ts claimedOwnerOf: a device's @0xOWNER, a keystore's
+ * unencrypted address; `claimOf` is the test seam) must be a sheet owner, and no owner may be claimed twice. A claim that cannot be read yet is left to prove-control.
  */
-export function ownerSignerShortfall(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; specs: string[]; sheet: Pick<Sheet, "safeOwners"> }): PublishError | undefined {
+export function ownerSignerShortfall(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; specs: string[]; sheet: Pick<Sheet, "safeOwners">; claimOf?: (spec: string) => string | undefined }): PublishError | undefined {
   if (i.chainId !== MAINNET_CHAIN_ID || i.dryRun || i.stage === "plan") return undefined;
   if (i.verb === "pause-all" || i.verb === "record-receipt" || i.verb === REDEPLOY_VERB) return undefined;
   const names = i.verb ? selectVerbStages(i.verb) : selectStages(i.stage);
   if (!names.includes(PROOF_STAGE)) return undefined;
   const have = i.specs.length, need = i.sheet.safeOwners.length;
-  if (have >= need) return undefined;
-  return new PublishError("CONTROL_NOT_PROVEN", `${have} --owner-signer spec${have === 1 ? "" : "s"} for a Safe of ${need} owners: ${PROOF_STAGE} needs a signer for EVERY owner, so the run is refused before stage 1 and nothing was sent. Pass --owner-signer for each owner of the sheet (keystore:PATH, ledger:PATH@0xOWNER or trezor:PATH@0xOWNER).`, { have, need, stage: PROOF_STAGE });
+  const pass = "Pass --owner-signer for each owner of the sheet (keystore:PATH, ledger:PATH@0xOWNER or trezor:PATH@0xOWNER).";
+  if (have < need) return new PublishError("CONTROL_NOT_PROVEN", `${have} --owner-signer spec${have === 1 ? "" : "s"} for a Safe of ${need} owners: ${PROOF_STAGE} needs a signer for EVERY owner, so the run is refused before stage 1 and nothing was sent. ${pass}`, { have, need, stage: PROOF_STAGE });
+  const refuse = (why: string, details: Record<string, unknown>) => new PublishError("CONTROL_NOT_PROVEN", `${why}: ${PROOF_STAGE} needs a signer for EVERY owner of the sheet exactly once, so the run is refused before stage 1 and nothing was sent. ${pass}`, { ...details, stage: PROOF_STAGE });
+  const twice = i.specs.find((x, k) => i.specs.indexOf(x) !== k);
+  if (twice !== undefined) return refuse(`--owner-signer ${twice} is given twice`, { spec: twice });
+  const owners = new Set(i.sheet.safeOwners.map((x) => x.toLowerCase()));
+  const byOwner = new Map<string, string>();
+  for (const spec of i.specs) {
+    const owner = (i.claimOf ?? claimedOwnerOf)(spec);
+    if (owner === undefined) continue;
+    if (!owners.has(owner)) return refuse(`--owner-signer ${spec} names ${owner}, which is not one of the sheet's SAFE_OWNERS`, { spec, owner });
+    const other = byOwner.get(owner);
+    if (other !== undefined) return refuse(`--owner-signer ${other} and ${spec} both name the owner ${owner}`, { spec, other, owner });
+    byOwner.set(owner, spec);
+  }
+  return undefined;
 }
 
 /**
@@ -435,6 +473,12 @@ export function defaultCoreDir(cwd: string): string {
   }
   return resolve(import.meta.dir, "..", "..");
 }
+
+/**
+ * Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE): the `build=` of an upgrade-proxy or freeze-proxy row, resolved against the working directory. The round
+ * records it as `build_dir` and a later verify compares with it, maybe from another directory: a relative path would name another place there.
+ */
+export const absoluteBuild = (args: Record<string, string>, cwd: string): Record<string, string> => (args.build ? { ...args, build: resolve(cwd, args.build) } : args);
 
 /** QA plan v1 E1: the HEAD sha of the git checkout that holds `dir` (the build --prior-out names), found by walking up from it. Undefined outside a git checkout. */
 export function checkoutShaOf(dir: string): string | undefined {
@@ -507,7 +551,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
     // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1): the
     // proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
-    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet });
+    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
     if (shortfall !== undefined) throw shortfall;
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
@@ -538,6 +582,10 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
         prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, proxyReader: deps.proxyReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, logsRpc: a.logsRpc, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
+        // security round 3: --upgrade-build directories, absolute (verify-stage.ts upgradeBuildRefusal holds each to its round's build_sha before the verifier runs)
+        ...(a.upgradeBuilds ? { upgradeBuilds: Object.fromEntries(Object.entries(a.upgradeBuilds).map(([k, d]) => [k, resolve(cwd, d)])) } : {}),
+        // security round 1: a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
+        countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
       };
     };
     // The EMERGENCY key (core 1619): --emergency-signer, else on the Twin chain the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
@@ -688,7 +736,10 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === UPGRADE_ROW ? { proxyUpgrade: a.adminArgs } : a.adminArgs && a.row === FREEZE_ROW ? { proxyFreeze: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          // security round 1: the release gate of a build checkout an upgrade or a freeze compares with (8453), with this run's seams (build-provenance.ts).
+          // Security round 2: check-sha-green and required-checks.json come from the deployment checkout this run gated (ciDir), never from the build checkout under test.
+          const buildGate: GovernOpts["buildGate"] = (i) => assertReleaseGate({ sha: i.sha, coreDir: i.checkout, ciDir: coreDir, countsDir: "", env, kind: sheet.kind, requireCounts: false, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
+          await runGovern(c, row, m, { buildGate, ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === UPGRADE_ROW ? { proxyUpgrade: absoluteBuild(a.adminArgs, cwd) } : a.adminArgs && a.row === FREEZE_ROW ? { proxyFreeze: absoluteBuild(a.adminArgs, cwd) } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

@@ -5,7 +5,7 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/RobotMoneyVault.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
 
@@ -46,8 +46,12 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 Role that can pause deposits and perform emergency withdrawals.
 Asymmetric with `unpauseDeposits` by design: a compromised emergency
-key can only halt new deposits (DoS). It can never block an exit and
-cannot restart deposits. `unpauseDeposits` is restricted to
+key can only halt new deposits (DoS), drain adapters into the vault or
+into their exclusion records, and exclude an adapter from NAV
+(`emergencyExcludeAdapter`, `forceRemoveAdapter`). An exclusion moves no
+value: what the adapter holds stays owed pro rata to the holders of the
+moment (security round 1). It can never block an exit, and cannot
+restart deposits or restore an excluded adapter. `unpauseDeposits` is restricted to
 `ADMIN_ROLE` so that resuming deposits is deliberate and requires
 the higher-trust role — mirroring the gateway's `DEPOSIT_PAUSER_ROLE` /
 `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
@@ -667,7 +671,9 @@ the leftover into absolute `capBps` headroom), in the linked
 Adapters whose eligibility was revoked while still active are skipped, not reverted on,
 so depositing never bricks when governance quarantines one adapter (audit 2026-06-09,
 L-4); `addAdapter` and `adminRebalance` keep the hard eligibility revert. USDC that no
-adapter can take stays idle (still in NAV) and is reported by `UnroutedDeposit`.
+adapter can take stays idle (still in NAV) and is reported by `UnroutedDeposit`, and so
+does a slice a lending venue refuses (supply cap, frozen reserve, `AllCapsReached`):
+the adapter hands it back instead of reverting the deposit (security round 2).
 
 </i>
 
@@ -760,7 +766,8 @@ function maxWithdraw(address owner) public view override returns (uint256);
 Maximum assets that can be deposited for `receiver` given current vault state.
 Returns 0 when deposits are paused, the vault is shutdown, retired,
 no adapters are active, any active adapter is ineligible (excluded
-from NAV, core 1788), or the TVL cap has been reached.
+from NAV, core 1788), any active adapter's venue refuses withdrawals
+(security round 3), or the TVL cap has been reached.
 
 ```solidity
 function maxDeposit(address) public view override returns (uint256);
@@ -792,9 +799,9 @@ function _depositsClosed() internal view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
-<a id="_anyactiveadapterineligible"></a>
+<a id="_anyactiveadapterblocked-bool"></a>
 
-### _anyActiveAdapterIneligible
+### _anyActiveAdapterBlocked
 
 <i>
 
@@ -802,13 +809,25 @@ core 1788: an active adapter that fails `_isAdapterEligible` is excluded from
 `totalAssets()`. Minting against that reduced NAV would hand the new depositor a
 slice of the excluded balance once eligibility is restored, so deposits stay
 closed for as long as any active adapter is ineligible or under an open exclusion
-record (core 1820). Withdrawals are unaffected. True means "an exclusion is open".
+record (core 1820). Withdrawals are unaffected. Without `venues`, true means "an
+exclusion is open". With `venues` (the deposit gate), also true while an active
+adapter's venue refuses withdrawals (Aave reserve paused or inactive, Comet
+`isWithdrawPaused` set; security round 3): NAV still counts that balance at face, so
+minting against it would let early exits take full NAV from the new USDC while a
+haircut falls on the holders who stay. Body in the linked
+`VaultAdapterOps.anyActiveBlocked`.
 
 </i>
 
 ```solidity
-function _anyActiveAdapterIneligible() internal view returns (bool);
+function _anyActiveAdapterBlocked(bool venues) internal view returns (bool);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| venues | `bool` |  |
 
 **Returns**
 
@@ -1091,11 +1110,17 @@ two active entries for one contract count its balance twice in `totalAssets()`
 family never reactivates an inactive entry in place (unlike the basket family's
 `BasketAssetConfigGuard.reuseOrRejectDuplicate`). Inactive entries are never
 counted, so the stale entry cannot double count.
+A force-removed entry of the same address that still holds an open exclusion record
+is settled first: the adapter's balance goes into that record, never into NAV, and
+the add reverts `AdapterNotEmpty` if the adapter cannot pay out (security round 1).
 
 </i>
 
 ```solidity
-function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE);
+function addAdapter(address adapter_, uint16 capBps_)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant;
 ```
 
 **Parameters**
@@ -1124,8 +1149,9 @@ are paid from eligible adapters and idle USDC only.
 Exclusion record (core 1820, owner decision 2026-10-13): in the same call the vault
 opens a record in `exclusionLedger` with a snapshot of every holder's shares (skipped
 when no shares exist). Every USDC later recovered from the adapter is credited to
-that record, never to idle, by all three recovery paths: `emergencyWithdrawAdapter`
-(and `emergencyWithdraw`), `adminRebalance`, and restoration here. It is paid pro
+that record, never to idle, by every recovery path: `emergencyWithdrawAdapter`
+(and `emergencyWithdraw`), `adminRebalance`, restoration here, and, after a
+force-remove, `recoverRemovedAdapter` and the re-add. It is paid pro
 rata to the holders at the snapshot through `ExclusionLedger.claim`. A holder who
 exits during the exclusion is paid at the reduced NAV AND keeps the claim; a holder
 who stays gets the same per-share recovery; shares minted or bought later get none.
@@ -1136,9 +1162,13 @@ Setting `allowed_ = true` while the entry has an open record restores it: the
 vault first withdraws the adapter's whole balance into the record, then closes the
 record (`Restored`), and only then does the empty entry count in NAV again. If the
 adapter cannot pay out, the call reverts; drain it with `emergencyWithdrawAdapter` /
-`adminRebalance` first. `removeAdapter` (drained) and `forceRemoveAdapter` (loss
-borne by snapshot holders only) also close the record. A closed record stays
-claimable forever.
+`adminRebalance` first. `removeAdapter` (drained) closes the record too.
+`forceRemoveAdapter` closes it only when the adapter reports an empty balance;
+otherwise the record stays open on the inactive index (security round 1).
+`recoverRemovedAdapter` then credits it tranche by tranche, and a re-add of the
+address realises whatever is left into it (security round 2). A closed record stays
+claimable forever. `EMERGENCY_ROLE` can make the `false` change alone, through
+`emergencyExcludeAdapter`; only this function makes the `true` change.
 
 ```solidity
 function setAdapterAllowed(address adapter_, bool allowed_)
@@ -1390,14 +1420,50 @@ function emergencyWithdrawAdapter(uint256 index)
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index of the adapter to drain. |
 
+<a id="emergencyexcludeadapter-uint256"></a>
+
+### emergencyExcludeAdapter
+
+Exclude an active adapter from NAV now, without the timelock: revoke its address
+allowance and open its exclusion record with a snapshot of the share supply, in
+one call. Restricted to `EMERGENCY_ROLE`. Exclude-only: restoring it is
+`setAdapterAllowed(adapter, true)` (`ADMIN_ROLE`), which drains the adapter into the
+record first. Deposits close while the entry stays excluded (core 1788).
+
+<i>
+
+Security round 1 (FS-VLT-8 follow-up). Runbook order for an illiquid adapter: exclude
+first, then `emergencyWithdraw`. Draining the healthy adapters to idle while the
+illiquid one still counts in NAV let early redeemers take full NAV from idle and left
+the haircut on the holders who stayed. Excluded first, every holder at the snapshot
+owns the same per-share claim on what the adapter later returns. Moves no value:
+a holder who exits is paid the reduced NAV and keeps the claim.
+
+</i>
+
+```solidity
+function emergencyExcludeAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | Registry index of the active adapter to exclude. |
+
 <a id="forceremoveadapter-uint256"></a>
 
 ### forceRemoveAdapter
 
 Force-remove an adapter without withdrawing its assets (last-resort action).
-Assets in the adapter are treated as lost. Restricted to `EMERGENCY_ROLE`.
-An open exclusion record on the entry closes (`ForceRemoved`, core 1820): it
-keeps what was recovered, and the rest is a loss for the snapshot holders only.
+Its balance leaves NAV. Restricted to `EMERGENCY_ROLE`.
+The balance is not written off to anyone's gain (security round 1, SR-1012-5): a
+funded entry with no record gets one (snapshot of the share supply now), so a
+holder who exits at the reduced NAV keeps a pro-rata claim on whatever the adapter
+returns. The record closes (`ForceRemoved`) only when the adapter reports an empty
+balance. Otherwise it stays open: `recoverRemovedAdapter` credits it as the venue
+can pay, and `addAdapter` of the same address later realises the rest into it
+instead of into NAV.
 
 ```solidity
 function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE);
@@ -1408,6 +1474,40 @@ function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index of the adapter to force-remove. |
+
+<a id="recoverremovedadapter-uint256-uint256"></a>
+
+### recoverRemovedAdapter
+
+Withdraw up to `amount` USDC from a force-removed adapter whose exclusion record
+is still open, straight into that record. Restricted to `EMERGENCY_ROLE`.
+
+<i>
+
+Security round 2. `addAdapter` settles such a record only all at once, and reverts
+while the venue cannot repay the whole position, so a partly liquid venue stranded
+even its liquid part. This takes one tranche: `amount` is clamped to the adapter's
+balance (`type(uint256).max` asks for all of it), and the plain `withdraw` reverts on
+a shortfall, so ask for at most what the venue can pay now. The USDC goes to the
+snapshot holders' record, never to NAV, and the record closes (`ForceRemoved`) once
+the adapter reports an empty balance. Does not pause deposits: the inactive entry is
+outside NAV already.
+
+</i>
+
+```solidity
+function recoverRemovedAdapter(uint256 index, uint256 amount)
+        external
+        onlyRole(EMERGENCY_ROLE)
+        nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | Registry index of the inactive entry. |
+| amount | `uint256` | USDC to withdraw (clamped to the adapter's balance). |
 
 <a id="setregistry-address"></a>
 
@@ -2703,4 +2803,18 @@ error InsufficientGas(uint256 available, uint256 required);
 | ---- | ---- | ----------- |
 | available | `uint256` | `gasleft()` at the check. |
 | required | `uint256` | The floor that was not met. |
+
+### NoOpenExclusion
+
+`recoverRemovedAdapter` named an inactive entry with no open exclusion record.
+
+```solidity
+error NoOpenExclusion(uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | Registry index that was named. |
 

@@ -91,7 +91,8 @@ export interface StageRecord {
   /** Issue 1809: a stage that deploys proxies records each one as the chain read it right after the broadcast (proxy, implementation, code hashes, authority, mode, frozen). */
   proxies?: ProxyRecord[];
   /** Issue 1809: the outcome of that read-back. `ok: false` stops the run: no later forge stage starts while any earlier stage carries it. */
-  proxy_gate?: { ok: boolean; problems: string[] };
+  /** `read_error`: the read-back threw (an RPC outage, an unreadable manifest), so nothing was judged. A --resume reads the proxies again before any later stage starts. */
+  proxy_gate?: { ok: boolean; problems: string[]; read_error?: boolean };
   [k: string]: unknown;
 }
 
@@ -325,12 +326,20 @@ export interface RunContext {
   /** QA plan v1 E1: the HEAD sha of the git checkout that holds `priorArtifactsDir`. The verify stage records it (the stage record and each governed redeploy entry). */
   priorArtifactsSha?: string;
   /**
+   * Security round 3 (review: RELIABILITY_FAIL_CLOSED_OUTAGE), verify only: `--upgrade-build <proxy>=<dir>`, absolute. The forge out/ of a checkout at the build_sha of
+   * that proxy's last executed upgrade-proxy round, standing for the round's recorded `build_dir` (gone, moved, or on another machine). Held to the same rules.
+   */
+  upgradeBuilds?: Record<string, string>;
+  /**
    * QA plan v1 E1 (DT-2, issue 1796): set only for a run at a single-vault redeploy's sha (`govern --row redeploy-vault`, `verify --prior-out`; redeploy-vault.ts
    * redeployShaRun). It is the sha of the ORIGINAL deployment: the run manifest names it, `coreSha` names the redeploy sha, and runStages accepts that manifest.
    */
   originalSha?: string;
   /** Absolute manifest directory chosen by the caller (env PUBLISH_MANIFEST_DIR). Undefined: deployments/<chainId>/ in the core checkout. */
   manifestOut?: string;
+  /** Security round 1: the absolute counts dir and --counts-require-origin-dev of this run, so a printed resume command names them (govern.ts resumeCommand). */
+  countsDir?: string;
+  countsRequireOriginDev?: boolean;
 }
 
 export interface SafeApi {
@@ -809,14 +818,53 @@ export async function proxyStageGate(ctx: RunContext, row: StageRow): Promise<{ 
   return { records, problems };
 }
 
-/** Refuses to start a forge stage while an earlier stage of this run carries a failed proxy read-back (issue 1809): the run never builds on a proxy nobody declared. */
-function refuseAfterFailedProxyGate(row: StageRow, manifest: RunManifest): void {
+/**
+ * Issue 1809, security round 1: the proxy read-back of a stage that is done, RECORDED whatever happens. Problems are a failed gate (ok false). A read that throws (readUntil
+ * rethrows the last RPC error, an unreadable stage manifest is MANIFEST) is a failed gate too, marked `read_error`, never a missing record: before, the stage was saved done
+ * first and the throw left no proxy_gate, so --resume skipped the stage and the later stages built on a proxy the tool never read. Throws VERIFY on either.
+ */
+async function recordProxyGate(ctx: RunContext, row: StageRow, rec: StageRecord, manifest: RunManifest): Promise<void> {
+  let gate: Awaited<ReturnType<typeof proxyStageGate>>;
+  try { gate = await proxyStageGate(ctx, row); } catch (e) {
+    const why = (e as Error).message;
+    rec.proxy_gate = { ok: false, problems: [`the proxy read-back did not complete: ${why}`], read_error: true };
+    manifest.stages[row.name] = rec;
+    saveRunManifest(ctx.evidenceDir, manifest);
+    ctx.log.log("error", "stage.proxy_unread", { stage: row.name, error: why });
+    throw new PublishError("VERIFY", `stage ${row.name} broadcast, but its proxies could not be read back (${why}). No later stage starts until they are: run again with --resume, which reads them again first.`, { stage: row.name, read_error: why });
+  }
+  if (!gate.records.length && !gate.problems.length) return;
+  rec.proxies = gate.records;
+  rec.proxy_gate = { ok: gate.problems.length === 0, problems: gate.problems };
+  manifest.stages[row.name] = rec;
+  saveRunManifest(ctx.evidenceDir, manifest);
+  if (gate.problems.length) {
+    ctx.log.log("error", "stage.proxy_refused", { stage: row.name, problems: gate.problems });
+    throw new PublishError("VERIFY", `stage ${row.name} broadcast, but its proxies are not what the deploy declared: ${gate.problems.join("; ")}. The run stops here and no later stage will start.`, { stage: row.name, problems: gate.problems });
+  }
+  ctx.log.log("info", "stage.proxy_ok", { stage: row.name, proxies: gate.records });
+}
+
+/**
+ * Refuses to start a forge stage while an earlier stage of this run carries a failed proxy read-back (issue 1809): the run never builds on a proxy nobody declared.
+ * Security round 1: every DONE stage that deploys proxies must carry a passing read-back (proxy_gate ok true). One whose read-back never completed (`read_error`) or
+ * left no record is read again here, first; it stays refused until that read passes. A read-back that found problems is final.
+ */
+async function refuseAfterFailedProxyGate(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  const t = getStageTable();
+  for (const [name, r] of Object.entries(manifest.stages)) {
+    if (r?.status !== "done" || r.proxy_gate?.ok === true || (r.proxy_gate?.ok === false && !r.proxy_gate.read_error)) continue;
+    const done = STAGES.find((x) => x.name === name);
+    if (!done?.manifest || proxiesOfStage(t, name).length === 0) continue;
+    ctx.log.log("info", "stage.proxy_reread", { stage: name, before: row.name, reason: r.proxy_gate ? "the last read-back did not complete" : "no read-back recorded" });
+    await recordProxyGate(ctx, done, r, manifest);
+  }
   const bad = Object.entries(manifest.stages).find(([, r]) => r?.proxy_gate?.ok === false);
   if (bad) throw new PublishError("VERIFY", `stage ${row.name} will not start: stage ${bad[0]} deployed a proxy that is not what the deploy declared (${bad[1].proxy_gate!.problems.slice(0, 3).join("; ")}). Nothing was sent. Read the chain and the stage manifest; a deployment with such a proxy is not continued.`, { stage: row.name, failed_stage: bad[0], problems: bad[1].proxy_gate!.problems });
 }
 
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
-  refuseAfterFailedProxyGate(row, manifest);
+  await refuseAfterFailedProxyGate(ctx, row, manifest);
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
   const script = row.script!;
@@ -942,19 +990,9 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
   manifest.stages[row.name] = rec;
   saveRunManifest(ctx.evidenceDir, manifest);
-  // issue 1809: the stage's transactions are real and counted (done), and its proxies are read back. A proxy that is not what the deploy declared is recorded
-  // on the stage (proxy_gate) and stops the run here; no later forge stage starts while the record says so (refuseAfterFailedProxyGate).
-  const gate = await proxyStageGate(ctx, row);
-  if (gate.records.length || gate.problems.length) {
-    rec.proxies = gate.records;
-    rec.proxy_gate = { ok: gate.problems.length === 0, problems: gate.problems };
-    saveRunManifest(ctx.evidenceDir, manifest);
-    if (gate.problems.length) {
-      ctx.log.log("error", "stage.proxy_refused", { stage: row.name, problems: gate.problems });
-      throw new PublishError("VERIFY", `stage ${row.name} broadcast, but its proxies are not what the deploy declared: ${gate.problems.join("; ")}. The run stops here and no later stage will start.`, { stage: row.name, problems: gate.problems });
-    }
-    ctx.log.log("info", "stage.proxy_ok", { stage: row.name, proxies: gate.records });
-  }
+  // issue 1809: the stage's transactions are real and counted (done), and its proxies are read back. A proxy that is not what the deploy declared, or a read-back that
+  // could not complete, is recorded on the stage (proxy_gate) and stops the run here; no later forge stage starts until a read-back passes (refuseAfterFailedProxyGate).
+  await recordProxyGate(ctx, row, rec, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: startNonce, end_nonce: nonce1, count: rec.count });
 }
 
@@ -1068,11 +1106,13 @@ async function runSafeStage(ctx: RunContext, row: StageRow, manifest: RunManifes
     expectDeployerNonce: nonce0, logger: ctx.log, dryRun: ctx.dryRun, readRetry: ctx.readRetry,
     confirm: async (plan: CreateSafePlan) => {
       await assertFreshSafeAddress(ctx, prior, plan.predictedAddress);
-      // record the predicted address BEFORE anything is sent: a resume adopts it
+      // Security round 1 (as QA plan v1 E2 did for the redeploy): confirm FIRST. A refused confirmation sends nothing, so it must leave no `started` record: a saved
+      // predicted address sent every --resume into the adoption of a Safe that was never created (NOT_A_SAFE). Once confirmed, the predicted address is recorded
+      // BEFORE anything is sent, so a creation that dies after the send is adopted by --resume.
+      await confirmStage(ctx, "safe", `a ${plan.threshold}-of-${plan.owners.length} Safe v${plan.version} at ${plan.predictedAddress}`);
       rec.safe = plan.predictedAddress;
       manifest.stages.safe = rec;
       saveRunManifest(ctx.evidenceDir, manifest);
-      await confirmStage(ctx, "safe", `a ${plan.threshold}-of-${plan.owners.length} Safe v${plan.version} at ${plan.predictedAddress}`);
       return true;
     },
   });
@@ -1160,7 +1200,20 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
     }
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
     if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
-  } else manifest = newManifest(ctx, deployer);
+  }
+  // Security round 1 (the issue 1686 interlock): a run of follow-on stages only (verify, govern) continues a deployment's run manifest, never a fresh one. The
+  // pause-all entries that stop a scheduled unpause from executing live in that manifest: a govern run from another working directory (the default evidence dir is
+  // relative to it) or with another --evidence used to start an empty manifest, adopt the scheduled operation from the chain and execute it past a recorded pause.
+  // govern also needs the finished handover stage: before it the Safe governs nothing.
+  if (!ctx.dryRun) {
+    const kinds = names.map((n) => stageByName(n).kind);
+    if (kinds.length > 0 && kinds.every((k) => k === "verify" || k === "govern")) {
+      const handover = DEPLOYER_STAGES[DEPLOYER_STAGES.length - 1]!.name;
+      if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${names.join(", ")} continue${names.length === 1 ? "s" : ""} the run that deployed the contracts, and its pause-all entries live in that run manifest (issue 1686). Pass that run's own --evidence directory as an absolute path (the default is relative to the working directory). Nothing was read or sent.`, { evidence: ctx.evidenceDir });
+      if (kinds.includes("govern") && manifest.stages[handover]?.status !== "done") throw new PublishError("RESUME", `the run manifest in ${ctx.evidenceDir} has no finished ${handover} stage: govern runs only after the handover, on the run manifest of the run that made it. Pass that run's own --evidence directory. Nothing was sent.`, { evidence: ctx.evidenceDir, stage: handover });
+    }
+  }
+  if (!manifest) manifest = newManifest(ctx, deployer);
   const ran: string[] = [], skipped: string[] = [];
   let stop = async () => {};
   if (ctx.dryRun) {

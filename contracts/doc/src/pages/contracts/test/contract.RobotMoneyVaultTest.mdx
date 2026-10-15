@@ -197,9 +197,12 @@ function test_addAdapter_revertsWhenAdapterAlreadyActive() public;
 
 core 1789: re-adding an adapter after `forceRemoveAdapter` stays legal. It
 appends a NEW entry (this family never reactivates the inactive one in
-place), the inactive entry is never counted, so the balance re-enters NAV
-once. A further add of the same address is then refused against the new
-active entry.
+place), and the inactive entry is never counted. Security round 1: the
+force-remove opened an exclusion record for the funded entry, so the re-add
+first realises the stranded balance into that record. The new entry starts
+empty: the balance does not re-enter NAV, and the holder of the moment is paid
+through the record. A further add of the same address is then refused against
+the new active entry.
 
 ```solidity
 function test_addAdapter_afterForceRemoveSucceeds() public;
@@ -470,11 +473,94 @@ function test_redeemDuringExclusionRevertsOnZeroPayout() public;
 ### test_restoreRevertsWhenExcludedAdapterCannotPayOut
 
 core 1820: restoring eligibility realises the residual into the record first. An
-adapter that cannot pay out keeps its record open (the restore reverts), and
-`forceRemoveAdapter` then closes the record with the loss on snapshot holders.
+adapter that cannot pay out keeps its record open (the restore reverts). Security
+round 1: `forceRemoveAdapter` no longer closes that record while the adapter cannot
+report an empty balance. The record stays open on the inactive index and deposits
+can reopen, so the force-remove is no longer a write-off for the snapshot holders.
 
 ```solidity
 function test_restoreRevertsWhenExcludedAdapterCannotPayOut() public;
+```
+
+<a id="test_forceremovedexcludedadapter_readdcreditssnapshotrecord"></a>
+
+### test_forceRemovedExcludedAdapter_reAddCreditsSnapshotRecord
+
+Security round 1 (SR-1012-5 follow-up): a force-removed EXCLUDED adapter that is
+re-added later pays its balance into the exclusion record, never into NAV for the
+holders of the day. Alice and Bob hold half each. ADMIN excludes adapter A (record
+1), A cannot pay out, so EMERGENCY force-removes it to reopen deposits. Alice
+redeems at the reduced NAV. The venue recovers, ADMIN re-allows and re-adds A, and
+A's whole balance lands in record 1: Alice's claim is half of it and NAV does not rise.
+Before the fix the force-remove closed record 1 with 0 recovered, and the re-add put
+A's 1 000 back into NAV, all of it for Bob.
+
+```solidity
+function test_forceRemovedExcludedAdapter_reAddCreditsSnapshotRecord() public;
+```
+
+<a id="test_forceremovedpartlyliquidadapter_recoverstranchebytranche"></a>
+
+### test_forceRemovedPartlyLiquidAdapter_recoversTrancheByTranche
+
+Security round 2. A force-removed adapter whose venue can pay only part of the
+position: Alice and Bob hold half each, and adapter A holds half of NAV. EMERGENCY
+excludes A (record 1), then force-removes it to reopen deposits. A's venue can pay
+40 percent. The re-add, until now the only way to credit an inactive record, asks
+for the whole balance and reverts `AdapterNotEmpty`, so even the liquid 40 percent
+was stranded. `recoverRemovedAdapter` credits that 40 percent to record 1 now, a
+later call credits the rest once the venue can pay it, and the empty adapter's
+record closes (`ForceRemoved`). Alice exits in between and keeps her half of each
+tranche; the share price never moves.
+
+```solidity
+function test_forceRemovedPartlyLiquidAdapter_recoversTrancheByTranche() public;
+```
+
+<a id="test_illiquidadapteremergencydrainkeepsexitersandstayersatparity"></a>
+
+### test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity
+
+Security round 1 (FS-VLT-8 follow-up): an illiquid adapter is excluded by the
+EMERGENCY key before the drain, so early and late exiters bear the haircut alike.
+Three adapters hold equal shares of NAV. Moonwell goes illiquid: its `withdraw`
+reverts while `totalAssets` still reports full value, so an adapter-funded redeem
+reverts. EMERGENCY runs `emergencyExcludeAdapter` (record 1, full supply), then
+`emergencyWithdraw` (the healthy two go idle). Alice redeems half the supply from
+idle. The venue later returns half its value into record 1. Alice's payout plus
+claim equals Bob's, share for share, within 1 wei. Without the lever the record
+could only open through the 48 h timelock, after Alice had taken full NAV from idle.
+
+```solidity
+function test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity() public;
+```
+
+<a id="test_emergencyexcludeadapter_excludeonlyandadminrestores"></a>
+
+### test_emergencyExcludeAdapter_excludeOnlyAndAdminRestores
+
+Security round 1: `emergencyExcludeAdapter` is EMERGENCY-only and exclude-only.
+It opens the record in the same call, keeps deposits closed while the entry stays
+excluded, and neither the hot key nor the permissionless `syncExclusions` can
+restore the entry: only ADMIN `setAdapterAllowed(adapter, true)` can, and it
+drains the adapter into the record first, so the exclusion moves no value.
+
+```solidity
+function test_emergencyExcludeAdapter_excludeOnlyAndAdminRestores() public;
+```
+
+<a id="test_deposit_routesaroundmorphoexposurecap"></a>
+
+### test_deposit_routesAroundMorphoExposureCap
+
+Security round 1 (D8 follow-up): a Morpho exposure cap below the adapter's
+equal-weight target no longer reverts the deposit. Routing stops Morpho at its cap
+and places the rest in the other adapter. Before the fix pass 1 handed Morpho its
+full slice and `MorphoAdapter._deposit` reverted `ExposureCapExceeded`, so every
+deposit (and every router deposit with an rmUSDC leg) reverted.
+
+```solidity
+function test_deposit_routesAroundMorphoExposureCap() public;
 ```
 
 <a id="test_decimalsoffset_is18"></a>

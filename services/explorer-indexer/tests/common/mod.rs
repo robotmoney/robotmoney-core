@@ -176,13 +176,18 @@ pub struct StubRpcServer {
     requests: Arc<Mutex<Vec<serde_json::Value>>>,
     /// Optional per-calldata answer for `eth_call` (issue 1731): `Ok(result hex)` or `Err(message)` for a
     /// JSON-RPC error. When unset, `eth_call` answers from the fixed `handlers` table like every other method.
-    call_hook: Arc<Mutex<Option<CallHook>>>,
+    call_hook: Arc<Mutex<Option<CallHookAt>>>,
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Answers one `eth_call` from its target (`0x...` lower-case address) and calldata (`0x...`): the result hex,
 /// or an error message.
 pub type CallHook = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+/// A [`CallHook`] that also sees the block the call reads at (security round 3: a vault's
+/// `exclusionLedger()` names a different ledger before and after a reinitializer). `u64::MAX`
+/// stands for a block tag such as `latest`.
+pub type CallHookAt = Arc<dyn Fn(&str, &str, u64) -> Result<String, String> + Send + Sync>;
 
 impl StubRpcServer {
     pub async fn start() -> Self {
@@ -193,7 +198,7 @@ impl StubRpcServer {
         let fail = Arc::new(AtomicBool::new(false));
         let log_filter = Arc::new(AtomicBool::new(false));
         let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
-        let call_hook: Arc<Mutex<Option<CallHook>>> = Arc::default();
+        let call_hook: Arc<Mutex<Option<CallHookAt>>> = Arc::default();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let h2 = handlers.clone();
@@ -230,8 +235,12 @@ impl StubRpcServer {
                             let hooked = if method == "eth_call" {
                                 let data = req["params"][0]["data"].as_str().unwrap_or("").to_string();
                                 let to = req["params"][0]["to"].as_str().unwrap_or("").to_lowercase();
+                                let block = req["params"][1]
+                                    .as_str()
+                                    .and_then(|b| u64::from_str_radix(b.trim_start_matches("0x"), 16).ok())
+                                    .unwrap_or(u64::MAX);
                                 let hook = ch.lock().unwrap().clone();
-                                hook.map(|h| h(&to, &data))
+                                hook.map(|h| h(&to, &data, block))
                             } else {
                                 None
                             };
@@ -317,6 +326,14 @@ impl StubRpcServer {
 
     /// Answer every `eth_call` from its target and calldata (see [`CallHook`]).
     pub fn set_call_hook(&self, hook: CallHook) {
+        *self.call_hook.lock().unwrap() =
+            Some(Arc::new(move |to: &str, data: &str, _block: u64| {
+                hook(to, data)
+            }));
+    }
+
+    /// Answer every `eth_call` from its target, calldata and block (see [`CallHookAt`]).
+    pub fn set_call_hook_at(&self, hook: CallHookAt) {
         *self.call_hook.lock().unwrap() = Some(hook);
     }
 

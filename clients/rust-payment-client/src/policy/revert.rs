@@ -165,6 +165,16 @@ pub fn refusal_from_revert(data: &[u8]) -> Option<(&'static str, RmpcError)> {
         // The router deposit reverts this when no leg is depositable.
         return Some(("NoWeightsSet", RmpcError::ErrLegUnavailable));
     }
+    if is::<PortfolioRouter::LegSkippedWithFloor>(data) {
+        // Security round 2: the call carries a non-zero `minSharesPerLeg`
+        // floor on a leg the router would skip (it turned unavailable after
+        // the preview: a full TVL cap, a pause, a basket out of its band).
+        return Some(("LegSkippedWithFloor", RmpcError::ErrLegUnavailable));
+    }
+    if is::<PortfolioRouter::NoFundedLeg>(data) {
+        // Every available leg's amount is 0: only 0 bps legs are available.
+        return Some(("NoFundedLeg", RmpcError::ErrLegUnavailable));
+    }
     if is::<PortfolioRouter::SlippageExceeded>(data) {
         return Some(("SlippageExceeded", RmpcError::ErrSlippageBoundExceeded));
     }
@@ -228,6 +238,11 @@ mod tests {
                 "SlippageExceeded()",
                 PortfolioRouter::SlippageExceeded::SELECTOR,
             ),
+            (
+                "LegSkippedWithFloor(address)",
+                PortfolioRouter::LegSkippedWithFloor::SELECTOR,
+            ),
+            ("NoFundedLeg()", PortfolioRouter::NoFundedLeg::SELECTOR),
             ("VaultRetired()", vault_errors::VaultRetired::SELECTOR),
         ] {
             assert_eq!(got.to_vec(), sel(sig), "{sig}");
@@ -238,7 +253,7 @@ mod tests {
     /// (rmpc-read-output-contract.md §5).
     #[test]
     fn documented_reverts_map_to_their_reason_codes() {
-        let cases: [(&str, &str); 12] = [
+        let cases: [(&str, &str); 13] = [
             ("AgentPolicyExpired()", "ErrPolicyExpired"),
             ("AgentNotAuthorized()", "ErrAgentNotAuthorized"),
             ("AmountExceedsPerPaymentCap()", "ErrDepositCapExceeded"),
@@ -252,6 +267,7 @@ mod tests {
             ("VaultNotRegistered()", "ErrVaultDisabled"),
             ("VaultCapExceeded()", "ErrLegUnavailable"),
             ("NoWeightsSet()", "ErrLegUnavailable"),
+            ("NoFundedLeg()", "ErrLegUnavailable"),
             ("SlippageExceeded()", "ErrSlippageBoundExceeded"),
             ("VaultShutdown()", "ErrVaultDisabled"),
         ];
@@ -288,6 +304,20 @@ mod tests {
             refusal_from_revert(&encode(1)).unwrap().1.name(),
             "ErrLegUnavailable"
         );
+    }
+
+    /// Security round 3: a non-zero floor on a leg the router would skip
+    /// reverts `LegSkippedWithFloor(vault)` (security round 2). Unnamed, the
+    /// simulation was inconclusive and rmpc signed a deposit certain to
+    /// revert on chain.
+    #[test]
+    fn leg_skipped_with_floor_maps_to_leg_unavailable() {
+        let mut data = sel("LegSkippedWithFloor(address)");
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(address!("00000000000000000000000000000000000000d0").as_slice());
+        let (revert, err) = refusal_from_revert(&data).expect("named");
+        assert_eq!(revert, "LegSkippedWithFloor");
+        assert_eq!(err.name(), "ErrLegUnavailable");
     }
 
     #[test]

@@ -11,7 +11,7 @@ import { publishLogger } from "../src/log.ts";
 import { confirmStage, type RunContext } from "../src/runner.ts";
 import { callerInputs, parseSheet } from "../src/sheet.ts";
 import { sheetText } from "./fixtures.ts";
-import { PROVE_SIGNERS, world } from "./harness.ts";
+import { PROVE_OWNERS, PROVE_SIGNERS, world } from "./harness.ts";
 
 const GOOD = { TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
 const sheetFor = (chain: number, extra: Record<string, string | null> = {}) => parseSheet(sheetText({ CHAIN_ID: String(chain), EXPECTED_CHAIN_ID: String(chain), ...extra }));
@@ -165,6 +165,38 @@ describe("8453 refuses a short --owner-signer list before stage 1 (qa-plan B1)",
     expect(code).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
     expect(forgeCalls(w)).toBe(0);
     expect(lastFailure(w)).toContain("0 --owner-signer specs for a Safe of 3 owners");
+  });
+  // Security round 1: the count alone let the same owner twice, or a stale non-owner device, through to stage 11 after stages 1-10 had broadcast.
+  test("ownerSignerShortfall: the same spec twice, two specs that claim one owner, or a claim outside SAFE_OWNERS is refused; an unreadable claim is left to prove-control", () => {
+    const [o0, , o2] = sheet.safeOwners;
+    const hw = (i: number, owner: string) => `ledger:m/44'/60'/0'/0/${i}@${owner}`;
+    const refused = (specs: string[], claimOf?: (s: string) => string | undefined) => ownerSignerShortfall({ chainId: 8453, verb: "publish", dryRun: false, specs, sheet, claimOf });
+    expect(refused(["keystore:/k/A", "keystore:/k/A", "keystore:/k/C"])?.message).toContain("is given twice");
+    expect(refused([hw(0, o0!), hw(1, o0!), hw(2, o2!)])?.message).toContain(`both name the owner ${o0}`);
+    expect(refused([hw(0, o0!), hw(1, `0x${"bb".repeat(20)}`), hw(2, o2!)])?.message).toContain("is not one of the sheet's SAFE_OWNERS");
+    for (const e of [refused(["keystore:/k/A", "keystore:/k/A", "keystore:/k/C"]), refused([hw(0, o0!), hw(1, o0!), hw(2, o2!)])]) {
+      expect(e?.kind).toBe("CONTROL_NOT_PROVEN");
+      expect(e?.message).toContain("before stage 1");
+    }
+    // a keystore's unencrypted address is a claim too
+    const ks: Record<string, string> = { "keystore:/k/A": o0!, "keystore:/k/B": o0!, "keystore:/k/C": o2! };
+    expect(refused(Object.keys(ks), (s) => ks[s])?.message).toContain("both name the owner");
+    // mutation: three distinct owners pass, and so does a spec whose claim cannot be read before the passphrase
+    expect(refused([hw(0, sheet.safeOwners[0]!), hw(1, sheet.safeOwners[1]!), hw(2, o2!)])).toBeUndefined();
+    expect(refused(["keystore:/k/A", hw(1, sheet.safeOwners[1]!), hw(2, o2!)], () => undefined)).toBeUndefined();
+  });
+  test("main(): an 8453 publish whose specs name one owner twice, or a non-owner, exits CONTROL_NOT_PROVEN before any signer or forge call", async () => {
+    for (const second of [PROVE_OWNERS[0]!, `0x${"bb".repeat(20)}`]) {
+      const w = world({ chainId: 8453 });
+      let signerMade = false;
+      const specs = [PROVE_OWNERS[0]!, second, PROVE_OWNERS[2]!].flatMap((o, i) => ["--owner-signer", `ledger:m/44'/60'/0'/0/${i}@${o}`]);
+      const code = await quiet(() => w.run(["publish", "--environment", "base-mainnet", ...specs], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } }));
+      expect([second, code]).toEqual([second, EXIT_CODES.CONTROL_NOT_PROVEN]);
+      expect(signerMade).toBe(false);
+      expect(forgeCalls(w)).toBe(0);
+      expect(w.safeCalls).toEqual([]);
+      expect(lastFailure(w)).toContain("before stage 1");
+    }
   });
   test("main(): three owner specs pass the pre-stage-1 check (the run reaches run.checks_ok and no refusal names stage 1)", async () => {
     const w = world({ chainId: 8453 });

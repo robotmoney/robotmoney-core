@@ -155,13 +155,25 @@ describe("a vault or router preview refused on the gateway names the cause", () 
     gatewayRefusalDetail: describeVerificationCause("wrong-chain"),
   };
 
-  it("vault redeem", () => {
+  it("vault deposit", () => {
     const p = buildVaultPreview(
-      { kind: "vaultRedeem", shares: 1n, receiver: user, owner: user },
+      { kind: "vaultDeposit", assets: 1n, receiver: user },
       { ...ctx, vault },
     );
     expect(p.ok).toBe(false);
     expect(!p.ok && p.detail).toBe(describeVerificationCause("wrong-chain"));
+  });
+
+  // An exit never depends on the gateway (core 1494): the redeem is built, UNVERIFIED, and the
+  // gateway's cause rides along as a warning instead of a refusal.
+  it("vault redeem is built, not refused, and carries the cause as a warning", () => {
+    const p = buildVaultPreview(
+      { kind: "vaultRedeem", shares: 1n, receiver: user, owner: user },
+      { ...ctx, vault },
+    );
+    expect(p.ok).toBe(true);
+    expect(p.ok && p.targetCodeHashKnown).toBe(false);
+    expect(p.ok && p.warning).toContain(describeVerificationCause("wrong-chain"));
   });
 
   it("router deposit", () => {

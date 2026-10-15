@@ -111,14 +111,14 @@ pass "verification companion needs no ledger key"
 
 # --- Source line cites (#1792, QA plan v1 W2) ----------------------------------
 mk_tree
-sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1104-1107/RobotMoneyVault.sol:9104-9107/' "${TMP}/t/docs/audits.md"
-grep -q 'RobotMoneyVault.sol:9104-9107' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
+sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1150-1155/RobotMoneyVault.sol:9150-9155/' "${TMP}/t/docs/audits.md"
+grep -q 'RobotMoneyVault.sol:9150-9155' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "a source cite past the end of its file must exit non-zero"; fi
-grep -q 'RobotMoneyVault.sol:9104-9107' <<<"${out}" || bad "failure must name the cite"
+grep -q 'RobotMoneyVault.sol:9150-9155' <<<"${out}" || bad "failure must name the cite"
 pass "source cite past the end of its file fails and is named"
 
 mk_tree
-sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1104-1107/RobotMoneyVault.sol:1-2/' "${TMP}/t/docs/audits.md"
+sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1150-1155/RobotMoneyVault.sol:1-2/' "${TMP}/t/docs/audits.md"
 grep -q 'RobotMoneyVault.sol:1-2' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "an anchored cite outside its symbol must exit non-zero"; fi
 grep -q 'RobotMoneyVault.forceRemoveAdapter' <<<"${out}" || bad "failure must name the anchor symbol"

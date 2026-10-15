@@ -5,7 +5,7 @@ description: "Fork-level regression suite for vault accounting attack paths."
 
 # VaultForkRegressions
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/VaultForkRegressions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/VaultForkRegressions.t.sol)
 
 **Inherits:** Test
 
@@ -33,6 +33,8 @@ AC3  Compound adapter donation cannot make a victim deposit mint zero/unfair sha
 AC4  Direct USDC transfer to vault is included in totalAssets / TVL-cap path.
 AC5  Unrouted deposit emits UnroutedDeposit and the idle balance is observable.
 AC6  MorphoAdapter.withdraw returns actual delivered USDC under fork conditions.
+SR3  Security round 3: the venue-health reads decode real Base state, and a paused Aave
+reserve closes deposits.
 
 ## Constants
 
@@ -427,6 +429,21 @@ into the Morpho vault, then triggers a withdrawal and verifies:
 
 ```solidity
 function test_fork_morphoAdapter_withdrawReturnsActualDelivered() public;
+```
+
+<a id="test_fork_venuehealth_pausedaavereserveclosesdeposits"></a>
+
+### test_fork_venueHealth_pausedAaveReserveClosesDeposits
+
+SR3: `venueWithdrawable` decodes the real venues. The Base Aave USDC reserve reads
+active and not paused and Comet's withdrawals read open, so a vault over both takes
+deposits. Paused the way its guardian pauses it (bit 60 of the reserve bitmap,
+written through the pool's configurator), the real pool refuses the supply, the
+adapter reads the reserve shut, the vault's `maxDeposit` reads 0, and the adapter's
+`deploy` reverts `VenueWithdrawalsClosed` rather than handing the USDC back.
+
+```solidity
+function test_fork_venueHealth_pausedAaveReserveClosesDeposits() public;
 ```
 
 <a id="test_fork_vaultinvariants_decimalsoffsetandshareminting"></a>

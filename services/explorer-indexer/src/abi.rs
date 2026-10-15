@@ -432,14 +432,15 @@ sol! {
         event MinDelayChange(uint256 oldDuration, uint256 newDuration);
     }
 
-    /// Event surface of `ExclusionLedger`, the exclusion record a
-    /// `RobotMoneyVault` deploys in its constructor (core issue 1820, QA plan
-    /// D3 / X7).
+    /// Event surface of `ExclusionLedger`, the exclusion record of a
+    /// `RobotMoneyVault` (core issue 1820, QA plan D3 / X7). The vault's
+    /// initializer has `ExclusionLedgerFactory` create it (ADR-0014 §9).
     ///
     /// Signatures match `contracts/ExclusionLedger.sol` exactly. The two enum
     /// parameters (`RecoverySource`, `FinalizeReason`) ABI-encode as `uint8`.
-    /// The ledger's address is not configured: the indexer derives it from the
-    /// vault (`crate::indexer::exclusion_ledger_of`).
+    /// The ledger's address is not configured: the indexer reads it from the
+    /// vault's `exclusionLedger()` ([`IRobotMoneyVaultReads`]) and stores it in
+    /// `vault_exclusion_ledgers` (`crate::indexer::exclusion_ledgers_of`).
     #[sol(abi)]
     #[allow(missing_docs)]
     interface IExclusionLedgerEvents {
@@ -474,12 +475,26 @@ sol! {
     /// QA plan P3, core issue 1810). `Upgraded` is OpenZeppelin's
     /// (`ERC1967Utils`, emitted by the proxy's constructor and by each
     /// `upgradeToAndCall`); `UpgradesFrozen` is `contracts/lib/GovernedUpgrade.sol`'s
-    /// one-way freeze. Both come from the proxy's own address.
+    /// one-way freeze. `Initialized` is OpenZeppelin's (`Initializable`, emitted by
+    /// each `initializer` and `reinitializer(n)` run): an upgrade installed without a
+    /// call leaves its reinitializer to a later timelock operation, which emits only
+    /// this event (security round 3). All three come from the proxy's own address.
     #[sol(abi)]
     #[allow(missing_docs)]
     interface IUpgradeEvents {
         event Upgraded(address indexed implementation);
         event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+        event Initialized(uint64 version);
+    }
+
+    /// The `RobotMoneyVault` getter that names its `ExclusionLedger`. The ledger sits at
+    /// the CREATE address of `ExclusionLedgerFactory`, never at an address derived from
+    /// the vault, so the indexer reads it once per vault, and again at the block of each
+    /// `Upgraded` or `Initialized` of the vault (security rounds 2 and 3). A `BasketVault`
+    /// has no such getter: the call reverts, and that vault has no ledger.
+    #[allow(missing_docs)]
+    interface IRobotMoneyVaultReads {
+        function exclusionLedger() external view returns (address);
     }
 
     /// The one `ExclusionLedger` read the indexer makes: a holder's vault
@@ -575,6 +590,9 @@ pub struct Topics {
     // proxied contract the indexer watches (gateway, vaults, registry, router, IC policy, receipt).
     pub proxy_upgraded: B256,
     pub proxy_upgrades_frozen: B256,
+    /// OpenZeppelin `Initialized(uint64)`: an initializer or reinitializer ran. Only read to
+    /// trigger a vault's `exclusionLedger()` re-read (security round 3); never stored.
+    pub proxy_initialized: B256,
 }
 
 impl Topics {
@@ -656,6 +674,7 @@ impl Topics {
             // ADR-0014 — QA plan P3.
             proxy_upgraded: keccak256(b"Upgraded(address)"),
             proxy_upgrades_frozen: keccak256(b"UpgradesFrozen(address,address,bytes32)"),
+            proxy_initialized: keccak256(b"Initialized(uint64)"),
         }
     }
 
@@ -716,6 +735,9 @@ impl Topics {
             // Proxy upgrade and freeze — ADR-0014, QA plan P3.
             self.proxy_upgraded,
             self.proxy_upgrades_frozen,
+            // A (re)initializer run — security round 3: a reinitializer that moves a vault's
+            // ExclusionLedger can run in a later timelock operation than its upgrade.
+            self.proxy_initialized,
         ]
     }
 }
@@ -1253,6 +1275,13 @@ mod tests {
                 "UpgradesFrozen",
                 t.proxy_upgrades_frozen,
             ),
+            // OpenZeppelin `Initializable` — security round 3.
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "Initialized",
+                t.proxy_initialized,
+            ),
         ];
 
         // The `sol!` declarations' own view of themselves, keyed by topic-0.
@@ -1472,10 +1501,16 @@ mod tests {
             t.proxy_upgrades_frozen,
             IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH
         );
+        assert_eq!(
+            t.proxy_initialized,
+            IUpgradeEvents::Initialized::SIGNATURE_HASH
+        );
         let all = t.all_topic0();
         assert!(
-            all.contains(&t.proxy_upgraded) && all.contains(&t.proxy_upgrades_frozen),
-            "the upgrade and freeze topics must be in the eth_getLogs filter"
+            all.contains(&t.proxy_upgraded)
+                && all.contains(&t.proxy_upgrades_frozen)
+                && all.contains(&t.proxy_initialized),
+            "the upgrade, freeze and initializer topics must be in the eth_getLogs filter"
         );
     }
 
@@ -1708,6 +1743,12 @@ mod tests {
                 "UpgradesFrozen",
                 b"UpgradesFrozen(address,address,bytes32)",
                 IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH,
+            ),
+            // OpenZeppelin Initializable (v5) — security round 3.
+            (
+                "Initialized",
+                b"Initialized(uint64)",
+                IUpgradeEvents::Initialized::SIGNATURE_HASH,
             ),
         ];
 

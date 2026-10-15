@@ -20,6 +20,20 @@
  * refusal, wallet error and receipt status (`WriteStatus`, finding DR-9). Leg
  * share estimates print each leg vault's own symbol (issue 1773).
  *
+ * Unavailable legs (QA plan D4): the router skips a leg `previewDeposit` reports
+ * unavailable and renormalizes the rest, so an unavailable leg no longer
+ * disables the deposit. The simulation is the revert gate, and the tab says the
+ * legs are skipped and shows each leg's renormalized USDC. A 0 bps leg is never
+ * funded, so its deposit state (paused, retired, stale price) does not close
+ * the router deposit either.
+ *
+ * Leg pins (security round 2, ADR-0014): the router forwards each leg's USDC
+ * into that vault, so a leg the chain showed does not match its pins
+ * (`ctx.refusedTargets`) disables the approve and the deposit, and the tab
+ * names it. Every leg of the effective weight vector counts, as in the write
+ * guard and rmpc. The preview badges "[bytecode verified]" only when the
+ * router and every leg are verified (`routerPreview.ts`).
+ *
  * docs/architecture.md §5.3 — action layer: router deposit.
  * docs/technical/portfolio-router-decisions.md §3.1–3.2.
  */
@@ -39,6 +53,8 @@ import {
   computeVaultListChanged,
   deriveMinSharesPerLeg,
   normaliseAddress,
+  refusedRouterLegs,
+  refusedRouterLegsText,
   type RouterPreviewContext,
   type LegPreview,
 } from "../lib/routerPreview";
@@ -150,23 +166,34 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   });
 
   // -------- deposits closed on a leg vault (issue 1731) --------
-  // The router deposit is all-or-revert across its legs, so it is enabled ONLY when every leg vault is in the
-  // known-open state. A leg that is paused, retired or unknown closes the whole router deposit. Withdraw and
-  // redeem are not touched.
+  // The router deposit is enabled ONLY when every leg vault that carries weight is in the known-open
+  // state. A weighted leg that is paused, retired or unknown closes the whole router deposit. A 0 bps leg
+  // never receives USDC (the router skips it, issue 1746), so its state does not close the deposit.
+  // Withdraw and redeem are not touched.
   // The leg vaults come from the preview once an amount is typed. Before that they come from the router's
   // effective weights, so the closed notice shows on page load, before any amount is entered.
   const weightVaults = Array.isArray(effectiveWeights)
     ? ((effectiveWeights[0] as Address[] | undefined) ?? [])
     : [];
-  const previewVaults = legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string");
-  const legVaults = previewVaults.length > 0 ? previewVaults : weightVaults;
+  const weightBpsList = Array.isArray(effectiveWeights)
+    ? ((effectiveWeights[1] as readonly bigint[] | undefined) ?? [])
+    : [];
+  const weightedLeg = (bps: unknown): boolean => typeof bps !== "bigint" || bps > 0n;
+  const previewVaults = legs
+    .filter((l) => weightedLeg(l.weightBps))
+    .map((l) => l.vault)
+    .filter((v): v is Address => typeof v === "string");
+  const previewKnown = legs.some((l) => typeof l.vault === "string");
+  const legVaults = previewKnown
+    ? previewVaults
+    : weightVaults.filter((_, i) => weightedLeg(weightBpsList[i]));
   const legStates = useDepositStates(legVaults);
   const closedLegs = legVaults.filter((v) => {
     const st = legStates.get(v.toLowerCase());
     return !st || depositsBlocked(st);
   });
   const pausedLegCount = closedLegs.length;
-  // No known leg vaults (weights not read yet) cannot be confirmed open: closed.
+  // No known weighted leg vaults (weights not read yet) cannot be confirmed open: closed.
   const routerDepositsClosed = pausedLegCount > 0 || legVaults.length === 0;
   const firstClosed = closedLegs[0] && legStates.get(closedLegs[0].toLowerCase());
   const closedState: DepositState = routerDepositsClosed
@@ -183,6 +210,14 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   // (submit disabled).
   const vaultListChanged = computeVaultListChanged(legs, currentActiveVaults);
 
+  // -------- leg vaults that failed their pins (security round 2, ADR-0014) --------
+  // The write guard refuses a router deposit unless the router and every vault of its effective
+  // weight vector match their pins. A leg the chain showed does not match closes the deposit here
+  // too, before any approval, whether it carries weight or not. The live weights and the preview
+  // legs both count.
+  const refusedLegs = refusedRouterLegs([...weightVaults, ...legs.map((l) => l.vault)], ctx);
+  const legsRefused = refusedLegs.length > 0;
+
   const allowanceOk =
     depositAssets !== null && typeof allowance === "bigint" && allowance >= depositAssets;
 
@@ -197,17 +232,19 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     abi: erc20Abi,
     functionName: "approve",
     args: depositAssets !== null ? [routerAddress, depositAssets] : undefined,
-    query: { enabled: isConnected && approveNeeded === true, retry: 5 },
+    query: { enabled: isConnected && approveNeeded === true && !legsRefused, retry: 5 },
   });
 
   // -------- router.deposit simulation --------
+  // An unavailable leg does not gate the deposit: the router skips it and renormalizes (QA plan D4).
+  // The simulation is the revert gate.
   const hasUnavailable = routerPreview?.ok === true && routerPreview.hasUnavailable;
   const canSimDeposit =
     isConnected &&
     routerPreview?.ok === true &&
-    !hasUnavailable &&
     allowanceOk &&
     !routerDepositsClosed &&
+    !legsRefused &&
     !vaultListChanged;
 
   // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
@@ -249,7 +286,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     typeof a === "string" && a.toLowerCase() === routerAddress.toLowerCase();
 
   const onApprove = () => {
-    if (!approveSim || routerDepositsClosed) return;
+    if (!approveSim || routerDepositsClosed || legsRefused) return;
     if (!sameAddress(approveSim.request.args?.[0])) return;
     approveWrite.writeContract(approveSim.request);
   };
@@ -271,8 +308,9 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     <section data-testid="router-deposit-tab">
       <h2>Deposit via Portfolio Router</h2>
       <p>
-        USDC is split across all active vaults by their governance-set weights. All legs must
-        succeed (all-or-revert).
+        USDC is split across all active vaults by their governance-set weights. A leg that cannot
+        take a deposit is skipped and the rest renormalized. Every leg the router funds must succeed
+        (all-or-revert).
       </p>
       <label>
         Amount (USDC)
@@ -296,6 +334,13 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
         testId="router-deposits-closed"
       />
 
+      {/* A leg vault failed its pins: the router would forward USDC into unreviewed code. */}
+      {legsRefused && (
+        <p className="error" data-testid="router-leg-unverified">
+          {refusedRouterLegsText(refusedLegs)}
+        </p>
+      )}
+
       {/* Per-leg breakdown table (AC §6) */}
       {legs.length > 0 && <ProportionPreview legs={legs} legStates={legStates} />}
 
@@ -307,12 +352,12 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
         </p>
       )}
 
-      {/* All-or-revert warning when any leg is unavailable (AC §6) */}
+      {/* Unavailable legs are skipped and the rest renormalized (AC §6, QA plan D4) */}
       {hasUnavailable && (
-        <p className="hint" data-testid="router-unavailable-warning" style={{ color: "red" }}>
-          One or more vault legs have deposits paused or are retired. The router deposit will revert
-          if you sign. Withdrawals from those vaults stay open. Wait for governance to update the
-          weights or remove the unavailable vaults.
+        <p className="hint" data-testid="router-unavailable-warning" style={{ color: "orange" }}>
+          Unavailable legs are skipped. The USDC leg amounts below are renormalized across the legs
+          that can take the deposit, so the split differs from the governance weights. Withdrawals
+          from the skipped vaults stay open.
         </p>
       )}
 
@@ -323,7 +368,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           type="button"
           data-testid="router-deposit-tab-approve"
           onClick={onApprove}
-          disabled={!isConnected || !approveSim || isPending || routerDepositsClosed}
+          disabled={!isConnected || !approveSim || isPending || routerDepositsClosed || legsRefused}
         >
           Approve USDC for router
         </button>
@@ -339,8 +384,8 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
           !allowanceOk ||
           isPending ||
           routerPreview?.ok !== true ||
-          hasUnavailable === true ||
           routerDepositsClosed ||
+          legsRefused ||
           vaultListChanged === true
         }
       >

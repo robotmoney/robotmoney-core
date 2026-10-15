@@ -36,6 +36,21 @@ describe("storage-layout identifier (ADR-0014 §8)", () => {
     const [u] = proxyEvidence({ coreDir: CORE }, [rec("registry")], () => `0x${"11".repeat(32)}`, new Set(["registry"]));
     expect(u).toMatchObject({ layout_hash: checkout, layout_source: "checkout" });
   });
+
+  // Security round 1: before, an upgraded proxy fell back to this checkout's snapshot, so no label ever compared the layout an upgrade installed.
+  test("an upgraded proxy carries the layout its round recorded, held to the snapshot of the round's build checkout", () => {
+    const recorded = layoutHashOf(CORE, "VaultRegistry")!;
+    // the round's build dir is out/ of this repository's checkout: its snapshot is the same file, so the two agree
+    const rounds = new Map([["registry", { layoutHash: recorded, buildDir: join(CORE, "out") }]]);
+    const [u] = proxyEvidence({ coreDir: "/nowhere" }, [rec("registry")], () => `0x${"11".repeat(32)}`, new Set(["registry"]), rounds);
+    expect(u).toMatchObject({ layout_hash: recorded, layout_source: "upgrade-round", checkout_layout_hash: recorded });
+    // a recorded layout the build checkout does not hold: the two differ, so the verify label and evidence-check fail it
+    const [m] = proxyEvidence({ coreDir: CORE }, [rec("registry")], undefined, new Set(["registry"]), new Map([["registry", { layoutHash: `0x${"33".repeat(32)}`, buildDir: join(CORE, "out") }]]));
+    expect(m).toMatchObject({ layout_source: "upgrade-round", layout_hash: `0x${"33".repeat(32)}`, checkout_layout_hash: recorded });
+    // a round that recorded no layout keeps the old reading
+    const [o] = proxyEvidence({ coreDir: CORE }, [rec("registry")], undefined, new Set(["registry"]), new Map([["registry", { buildDir: join(CORE, "out") }]]));
+    expect(o).toMatchObject({ layout_source: "checkout" });
+  });
 });
 
 describe("immutability statement (ADR-0014 §5)", () => {

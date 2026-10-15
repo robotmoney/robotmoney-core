@@ -5,9 +5,9 @@ description: "Strategy adapter that supplies USDC to Compound V3 (Comet) on Base
 
 # CompoundV3Adapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/adapters/CompoundV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/adapters/CompoundV3Adapter.sol)
 
-**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter), [IVenueHealthAdapter](/contracts/interfaces/interface.IVenueHealthAdapter)
 
 **Title:** CompoundV3Adapter
 
@@ -95,7 +95,8 @@ constructor(address comet_, address usdc_, address vault_);
 
 <i>
 
-Shared supply choreography for the v1 and v2 `deploy` entry points.
+Supply choreography of the min-out `deploy`, which reverts when Comet refuses.
+`deploy(uint256)` runs the same steps but hands a refused supply back to `VAULT`.
 
 </i>
 
@@ -109,11 +110,39 @@ function _supply(uint256 amount) private;
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
 
+<a id="_clearallowance"></a>
+
+### _clearAllowance
+
+<i>
+
+Zero any allowance a supply left on `COMET`.
+
+</i>
+
+```solidity
+function _clearAllowance() private;
+```
+
 <a id="deploy-uint256"></a>
 
 ### deploy
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+
+<i>
+
+Security round 2: a supply Comet refuses while only its supply is paused does not
+revert. The adapter sends `amount` back to `VAULT` and emits `DeployRefused`, and the
+vault leaves that USDC idle (`UnroutedDeposit`). Before this a paused Comet reverted
+every rmUSDC deposit, every router deposit with an rmUSDC leg and keeper `rebalance`.
+Security round 3: a refusal while `isWithdrawPaused` is set too reverts
+`VenueWithdrawalsClosed`. The vault still counts the Comet balance at face, and idle
+USDC made from this slice (or pulled from the other venues by a `rebalance`) would
+pay early exits at that NAV while any haircut falls on the holders who stay. The
+min-out overload below still reverts.
+
+</i>
 
 ```solidity
 function deploy(uint256 amount) external onlyVault;
@@ -124,6 +153,29 @@ function deploy(uint256 amount) external onlyVault;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` | Amount of USDC (6-decimal units) to deploy into the protocol. |
+
+<a id="venuewithdrawable"></a>
+
+### venueWithdrawable
+
+False while the venue refuses withdrawals: an Aave reserve that is paused or
+inactive, a Comet whose withdrawals are paused.
+
+<i>
+
+Comet's pause guardian pauses supply and withdraw separately (`isWithdrawPaused`).
+
+</i>
+
+```solidity
+function venueWithdrawable() public view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="deploy-uint256-uint256"></a>
 
@@ -279,6 +331,26 @@ supply market. This function is a no-op and always succeeds.
 function harvestRewards() external override;
 ```
 
+## Events
+
+### DeployRefused
+
+Comet refused a `deploy(uint256)` supply, and the USDC went straight back to
+`VAULT`, which keeps it idle (security round 2). Comet refuses while its supply
+is paused (`isSupplyPaused`); a pause that also covers withdrawals reverts instead
+(security round 3).
+
+```solidity
+event DeployRefused(uint256 amount, bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | USDC handed back to `VAULT`. |
+| reason | `bytes` | Comet's revert data. |
+
 ## Errors
 
 ### OnlyVault
@@ -319,4 +391,19 @@ error WithdrawShortfall(uint256 requested, uint256 actual);
 | ---- | ---- | ----------- |
 | requested | `uint256` | Amount of USDC requested for withdrawal. |
 | actual | `uint256` | Amount of USDC actually received from Compound. |
+
+### VenueWithdrawalsClosed
+
+Comet refused a `deploy(uint256)` supply with `isWithdrawPaused` also set, so
+the adapter did not hand the USDC back (security round 3).
+
+```solidity
+error VenueWithdrawalsClosed(bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reason | `bytes` | Comet's revert data. |
 

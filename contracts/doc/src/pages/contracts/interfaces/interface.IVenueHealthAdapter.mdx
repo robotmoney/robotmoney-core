@@ -1,0 +1,40 @@
+---
+title: "IVenueHealthAdapter"
+description: "Strategy adapter that can report whether its venue still pays withdrawals (`AaveV3Adapter`, `CompoundV3Adapter`)."
+---
+
+# IVenueHealthAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/interfaces/IVenueHealthAdapter.sol)
+
+Strategy adapter that can report whether its venue still pays withdrawals
+(`AaveV3Adapter`, `CompoundV3Adapter`).
+
+<i>
+
+`RobotMoneyVault` closes deposits (`maxDeposit` 0) while an active adapter reports false,
+through `VaultAdapterOps.anyVenueBlocked`, a `staticcall` that reads a missing or reverting
+view as true. Minting while a venue cannot pay would count its stuck balance at face, and
+the new USDC would fund early exits at that NAV (security round 3).
+
+</i>
+
+## Functions
+
+<a id="venuewithdrawable"></a>
+
+### venueWithdrawable
+
+False while the venue refuses withdrawals: an Aave reserve that is paused or
+inactive, a Comet whose withdrawals are paused.
+
+```solidity
+function venueWithdrawable() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

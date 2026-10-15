@@ -519,6 +519,19 @@ pub struct ReceiptVerification {
     pub last_error: Option<String>,
 }
 
+/// Security round 2: one exclusion record whose snapshot balances are not all read yet
+/// ([`Db::exclusion_snapshots_pending`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSnapshot {
+    pub ledger_address: [u8; 20],
+    pub exclusion_id: i64,
+    pub vault_address: [u8; 20],
+    /// The record's block: candidates are read as of it, and the balances roll back with it.
+    pub opened_block: i64,
+    /// The last owner read so far, in byte order; `None` before the first.
+    pub read_through: Option<[u8; 20]>,
+}
+
 /// T12: one row of the re-verification sweep's working set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnverifiedReceipt {
@@ -526,6 +539,17 @@ pub struct UnverifiedReceipt {
     pub receipt_id: Vec<u8>,
     pub payload_uri: String,
     pub payload_digest: Vec<u8>,
+}
+
+/// Security round 3: one row of the vote re-verification sweep's working set
+/// ([`Db::list_unverified_votes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnverifiedVote {
+    /// The policy deployment that emitted the vote (part of the key, DI-10).
+    pub contract_address: Vec<u8>,
+    pub vote_id: i64,
+    pub rationale_uri: String,
+    pub vote_json_hash: Vec<u8>,
 }
 
 /// Marker column that makes a table **block-scoped**: every row belongs to one
@@ -1541,6 +1565,98 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Apply one ERC-4626 share change of `owner` in `contract` (the log at
+    /// `block_number`, `log_index`) to `wallet_positions`, and return the rows
+    /// written (0 for a log already applied).
+    ///
+    /// The row of a block is the owner's balance after every applied log of that
+    /// block, and `last_log_index` (migration 0026) is the newest of them:
+    ///
+    /// - No row at the block: the balance before it is the newest row below the
+    ///   block (zero without one), and the new row starts at this log.
+    /// - A row whose `last_log_index` is below this log: that row is the balance
+    ///   just before this log, and it is updated in place.
+    /// - A row at or past this log, or a row written before migration 0026
+    ///   (`last_log_index` NULL): the log is already in it, so nothing changes. A
+    ///   replayed tick is a no-op.
+    ///
+    /// Before this the writer read the newest row at or below the block, which
+    /// for a second log of the same block was the row the first log had just
+    /// written, and its insert hit `ON CONFLICT DO NOTHING`: two deposits of one
+    /// owner in one block left the position at the first (security round 1).
+    ///
+    /// `add` is true for a mint (`Deposit`), false for a burn (`Withdraw`); a
+    /// burn saturates at zero. The indexer applies the logs of a tick in
+    /// (block, log index) order, which this relies on within a block.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_wallet_position_delta(
+        &self,
+        chain_id: i64,
+        contract: [u8; 20],
+        owner: [u8; 20],
+        block_number: i64,
+        log_index: i32,
+        shares: U256,
+        add: bool,
+    ) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let same_block: Option<(BigDecimal, Option<i32>)> = sqlx::query_as(
+            "SELECT shares, last_log_index FROM wallet_positions \
+             WHERE chain_id = $1 AND contract = $2 AND owner = $3 AND block_number = $4 \
+             FOR UPDATE",
+        )
+        .bind(chain_id)
+        .bind(&contract[..])
+        .bind(&owner[..])
+        .bind(block_number)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let prior = match same_block {
+            Some((_, None)) => return Ok(0),
+            Some((_, Some(last))) if last >= log_index => return Ok(0),
+            Some((shares, Some(_))) => decimal_to_u256(&shares),
+            None => {
+                let below: Option<(BigDecimal,)> = sqlx::query_as(
+                    "SELECT shares FROM wallet_positions \
+                     WHERE chain_id = $1 AND contract = $2 AND owner = $3 AND block_number < $4 \
+                     ORDER BY block_number DESC LIMIT 1",
+                )
+                .bind(chain_id)
+                .bind(&contract[..])
+                .bind(&owner[..])
+                .bind(block_number)
+                .fetch_optional(&mut *tx)
+                .await?;
+                below.map(|(d,)| decimal_to_u256(&d)).unwrap_or(U256::ZERO)
+            }
+        };
+        let balance = if add {
+            prior.saturating_add(shares)
+        } else {
+            prior.saturating_sub(shares)
+        };
+        let r = sqlx::query(
+            "INSERT INTO wallet_positions \
+               (chain_id, contract, owner, block_number, shares, last_log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (chain_id, contract, owner, block_number) DO UPDATE \
+               SET shares = EXCLUDED.shares, \
+                   last_log_index = EXCLUDED.last_log_index, \
+                   indexed_at = now() \
+               WHERE wallet_positions.last_log_index < EXCLUDED.last_log_index",
+        )
+        .bind(chain_id)
+        .bind(&contract[..])
+        .bind(&owner[..])
+        .bind(block_number)
+        .bind(u256_to_decimal(balance))
+        .bind(log_index)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(r.rows_affected())
+    }
+
     /// Most-recent `wallet_positions.shares` for an `(chain_id, contract, owner)`
     /// trio at or below `as_of_block`, i.e. the owner's running share balance
     /// just before a new event at `as_of_block` is applied.  Returns `None`
@@ -2192,6 +2308,103 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Security round 3: record how the index-time memo fetch of a vote that did not verify went
+    /// (migration 0028): `attempts` fetches (0 when the tick's inline fetch budget was spent and
+    /// nothing was fetched) and the reason. Call it only for a vote this tick inserted, so a
+    /// re-index of a stored vote does not reset its attempt count. Never touches a verified vote.
+    pub async fn note_vote_verification(
+        &self,
+        chain_id: i64,
+        contract_address: [u8; 20],
+        vote_id: i64,
+        attempts: i32,
+        last_error: Option<&str>,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE committee_votes SET verify_attempts = $4, last_verify_error = $5 \
+             WHERE chain_id = $1 AND contract_address = $2 AND vote_id = $3 \
+               AND verified = FALSE",
+        )
+        .bind(chain_id)
+        .bind(&contract_address[..])
+        .bind(vote_id)
+        .bind(attempts)
+        .bind(last_error)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Security round 3: the vote re-verification sweep's working set, newest first: votes still
+    /// unverified, with a memo URI, and fewer than `max_attempts` fetches. Newest first because
+    /// only a member's newest vote, and only a fresh one, counts toward a tilt.
+    pub async fn list_unverified_votes(
+        &self,
+        chain_id: i64,
+        max_attempts: i32,
+        limit: i64,
+    ) -> Result<Vec<UnverifiedVote>, DbError> {
+        /// `(contract_address, vote_id, rationale_uri, vote_json_hash)`.
+        type SweepRow = (Vec<u8>, i64, String, Vec<u8>);
+        let rows: Vec<SweepRow> = sqlx::query_as(
+            "SELECT contract_address, vote_id, rationale_uri, vote_json_hash \
+             FROM committee_votes \
+             WHERE chain_id = $1 \
+               AND verified = FALSE \
+               AND rationale_uri <> '' \
+               AND verify_attempts < $2 \
+             ORDER BY block_number DESC, log_index DESC \
+             LIMIT $3",
+        )
+        .bind(chain_id)
+        .bind(max_attempts)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(contract_address, vote_id, rationale_uri, vote_json_hash)| UnverifiedVote {
+                    contract_address,
+                    vote_id,
+                    rationale_uri,
+                    vote_json_hash,
+                },
+            )
+            .collect())
+    }
+
+    /// Security round 3: record one re-verification attempt of a vote's memo. Like
+    /// [`Db::repair_receipt_verification`] it never downgrades (`verified = FALSE` guard) and
+    /// counts every attempt, so the sweep stops at its ceiling. A vote it marks verified counts
+    /// toward the tilt from the next regime refresh on (the tick's DI-3 refresh at its target).
+    pub async fn repair_vote_verification(
+        &self,
+        chain_id: i64,
+        contract_address: &[u8],
+        vote_id: i64,
+        verified: bool,
+        last_error: Option<&str>,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE committee_votes SET \
+                 verified          = $4, \
+                 verify_attempts   = verify_attempts + 1, \
+                 last_verify_error = $5, \
+                 indexed_at        = now() \
+             WHERE chain_id = $1 AND contract_address = $2 AND vote_id = $3 \
+               AND verified = FALSE",
+        )
+        .bind(chain_id)
+        .bind(contract_address)
+        .bind(vote_id)
+        .bind(verified)
+        .bind(last_error)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Upsert a regime snapshot for (chain_id, vault_address, block_number).
     ///
     /// Writes the aggregate (avg_weight_bps, vote_count) as given. The indexer
@@ -2725,13 +2938,58 @@ impl Db {
         Ok(row.and_then(|v| v.try_into().ok()))
     }
 
-    /// The addresses that may hold shares of `vault` at a record opened in
-    /// `opened_block` and have no stored balance for it yet: every owner with a
-    /// `wallet_positions` row for the vault at or below that block.
+    /// Every exclusion record on `chain_id` whose snapshot balances the indexer has not finished
+    /// reading (security round 2, migration 0027), oldest first.
+    pub async fn exclusion_snapshots_pending(
+        &self,
+        chain_id: i64,
+    ) -> Result<Vec<PendingSnapshot>, DbError> {
+        type Row = (Vec<u8>, i64, Vec<u8>, i64, Option<Vec<u8>>);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT r.ledger_address, r.exclusion_id, r.vault_address, r.block_number, \
+                    p.read_through \
+             FROM exclusion_records r \
+             LEFT JOIN exclusion_snapshot_progress p \
+               ON p.chain_id = r.chain_id AND p.ledger_address = r.ledger_address \
+              AND p.exclusion_id = r.exclusion_id \
+             WHERE r.chain_id = $1 AND COALESCE(p.done, FALSE) = FALSE \
+             ORDER BY r.block_number, r.log_index",
+        )
+        .bind(chain_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(ledger, id, vault, block, through)| {
+                Some(PendingSnapshot {
+                    ledger_address: ledger.try_into().ok()?,
+                    exclusion_id: id,
+                    vault_address: vault.try_into().ok()?,
+                    opened_block: block,
+                    read_through: through.and_then(|t| t.try_into().ok()),
+                })
+            })
+            .collect())
+    }
+
+    /// The next `limit` owners after `after` (byte order) that may hold shares of `vault` at a
+    /// record opened in `opened_block` and have no stored balance for it (security rounds 2 and
+    /// 3): an owner whose latest `wallet_positions` row strictly below that block holds shares, and
+    /// every owner with a row in that block. An owner who exited before the snapshot's block is not
+    /// read.
     ///
-    /// `wallet_positions` follows vault `Deposit` and `Withdraw` only, so a
-    /// holder who received shares by a plain transfer is not a candidate. That
-    /// holder is picked up when it first claims ([`Db::has_exclusion_holder_balance`]).
+    /// A block's row is the owner's balance after every log of the block, while the ledger's
+    /// `balanceAt` is the balance when the record opened. A holder who redeemed everything later in
+    /// the record's own block has a zero row there and a full claim on chain, so the row of that
+    /// block cannot rule an owner out (security round 3). An owner who first deposited after the
+    /// record in that block reads `balanceAt` zero, and a zero is not stored.
+    ///
+    /// `wallet_positions` follows vault `Deposit` and `Withdraw` only, and a `Withdraw` past the
+    /// followed balance saturates at zero. So a holder who received shares by a plain transfer is
+    /// not a candidate, nor is one whose withdrawals of transferred shares brought its row to zero
+    /// while it still holds some. That holder is picked up when it first claims
+    /// ([`Db::has_exclusion_holder_balance`]), and `ExclusionLedger.claimable` is the authority.
+    #[allow(clippy::too_many_arguments)]
     pub async fn exclusion_snapshot_candidates(
         &self,
         chain_id: i64,
@@ -2739,24 +2997,70 @@ impl Db {
         ledger_address: [u8; 20],
         exclusion_id: i64,
         opened_block: i64,
+        after: Option<[u8; 20]>,
+        limit: i64,
     ) -> Result<Vec<[u8; 20]>, DbError> {
         let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-            "SELECT DISTINCT wp.owner FROM wallet_positions wp \
-             WHERE wp.chain_id = $1 AND wp.contract = $2 AND wp.block_number <= $5 \
-               AND NOT EXISTS ( \
+            "SELECT c.owner FROM ( \
+               SELECT latest.owner FROM ( \
+                 SELECT DISTINCT ON (wp.owner) wp.owner, wp.shares \
+                   FROM wallet_positions wp \
+                  WHERE wp.chain_id = $1 AND wp.contract = $2 AND wp.block_number < $5 \
+                    AND ($6::bytea IS NULL OR wp.owner > $6) \
+                  ORDER BY wp.owner, wp.block_number DESC \
+               ) latest \
+               WHERE latest.shares > 0 \
+               UNION \
+               SELECT wp.owner FROM wallet_positions wp \
+                WHERE wp.chain_id = $1 AND wp.contract = $2 AND wp.block_number = $5 \
+                  AND ($6::bytea IS NULL OR wp.owner > $6) \
+             ) c \
+             WHERE NOT EXISTS ( \
                  SELECT 1 FROM exclusion_holder_balances b \
                  WHERE b.chain_id = $1 AND b.ledger_address = $3 \
-                   AND b.exclusion_id = $4 AND b.holder = wp.owner) \
-             ORDER BY wp.owner",
+                   AND b.exclusion_id = $4 AND b.holder = c.owner) \
+             ORDER BY c.owner \
+             LIMIT $7",
         )
         .bind(chain_id)
         .bind(&vault_address[..])
         .bind(&ledger_address[..])
         .bind(exclusion_id)
         .bind(opened_block)
+        .bind(after.as_ref().map(|a| &a[..]))
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(|v| v.try_into().ok()).collect())
+    }
+
+    /// Record how far the snapshot pass read record `exclusion_id`: through `read_through`, and
+    /// whether every candidate is read (`done`). Rolls back with the record's `opened_block`.
+    pub async fn set_exclusion_snapshot_progress(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+        exclusion_id: i64,
+        read_through: Option<[u8; 20]>,
+        done: bool,
+        opened_block: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO exclusion_snapshot_progress \
+               (chain_id, ledger_address, exclusion_id, read_through, done, block_number) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (chain_id, ledger_address, exclusion_id) DO UPDATE SET \
+               read_through = EXCLUDED.read_through, done = EXCLUDED.done, indexed_at = now()",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .bind(exclusion_id)
+        .bind(read_through.as_ref().map(|t| &t[..]))
+        .bind(done)
+        .bind(opened_block)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
     }
 
     /// Whether `holder`'s snapshot balance for record `exclusion_id` is stored.
@@ -2778,6 +3082,79 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         Ok(found.is_some())
+    }
+
+    /// Every stored `exclusionLedger()` answer on `chain_id` (migration 0025): the vault and its
+    /// ledger, `None` for a vault with no ledger. A vault has one row per answer (its first read,
+    /// then one per upgrade that named a new ledger), oldest first. A vault missing from the list
+    /// was never read.
+    pub async fn vault_exclusion_ledgers(
+        &self,
+        chain_id: i64,
+    ) -> Result<Vec<([u8; 20], Option<[u8; 20]>)>, DbError> {
+        let rows: Vec<(Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as(
+            "SELECT vault_address, ledger_address FROM vault_exclusion_ledgers \
+             WHERE chain_id = $1 ORDER BY vault_address, block_number",
+        )
+        .bind(chain_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(vault, ledger)| {
+                let vault: [u8; 20] = vault.try_into().ok()?;
+                Some((vault, ledger.and_then(|l| l.try_into().ok())))
+            })
+            .collect())
+    }
+
+    /// Store what `vault`'s `exclusionLedger()` answered, as of `block_number`: its ledger, or
+    /// `None` when the vault has no such getter. One answer per vault and block
+    /// (`ON CONFLICT DO NOTHING`): the first read, as of the block it was read at, and one per
+    /// `Upgraded` or `Initialized` event that named a new ledger, as of the event's block
+    /// (security rounds 2 and 3). The state at one block names one ledger, so two reads at the
+    /// same block agree. Earlier rows stay, so an old ledger is still watched.
+    pub async fn insert_vault_exclusion_ledger(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        ledger_address: Option<[u8; 20]>,
+        block_number: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO vault_exclusion_ledgers \
+               (chain_id, vault_address, ledger_address, block_number) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (chain_id, vault_address, block_number) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(ledger_address.as_ref().map(|l| &l[..]))
+        .bind(block_number)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// The vault whose stored `exclusionLedger()` is `ledger_address`, or `None` when no watched
+    /// vault named it. This is the emitter gate for exclusion-record events: a ledger-shaped event
+    /// from any other address is not a record of a Robot Money vault. A ledger a vault has moved
+    /// away from by an upgrade still passes, so a late claim against it indexes.
+    pub async fn vault_of_exclusion_ledger(
+        &self,
+        chain_id: i64,
+        ledger_address: [u8; 20],
+    ) -> Result<Option<[u8; 20]>, DbError> {
+        let row: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT vault_address FROM vault_exclusion_ledgers \
+             WHERE chain_id = $1 AND ledger_address = $2 \
+             ORDER BY vault_address LIMIT 1",
+        )
+        .bind(chain_id)
+        .bind(&ledger_address[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|v| v.try_into().ok()))
     }
 
     // ─── End ExclusionLedger writers ─────────────────────────────────────────────

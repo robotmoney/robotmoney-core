@@ -1,7 +1,8 @@
 {
   "contract": "RobotMoneyVault",
+  "enums": {},
   "libraries": {
-    "contracts/lib/VaultAdapterOps.sol:VaultAdapterOps": "0xa32812c34888ac6e584fb08fa45be34e691bdf273193746fefc04ad6e6febb33"
+    "contracts/lib/VaultAdapterOps.sol:VaultAdapterOps": "0x3f2d0bd611cfbcbc22a1e124025cc0e28de053232f1cea7eb37dfc671f6fbfa4"
   },
   "linearization": [
     "contracts/RobotMoneyVault.sol:RobotMoneyVault",

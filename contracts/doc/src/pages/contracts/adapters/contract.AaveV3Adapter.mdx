@@ -5,9 +5,9 @@ description: "Strategy adapter that supplies USDC to Aave V3 Pool on Base."
 
 # AaveV3Adapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/adapters/AaveV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/adapters/AaveV3Adapter.sol)
 
-**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter), [IVenueHealthAdapter](/contracts/interfaces/interface.IVenueHealthAdapter)
 
 **Title:** AaveV3Adapter
 
@@ -29,6 +29,24 @@ exact (1:1), so the floors are trivially satisfied but still enforced
 (revert `SlippageExceeded` below the floor). `isExact()` returns true.
 
 ## Constants
+
+### RESERVE_ACTIVE_BIT
+
+<i>
+
+Aave V3 `ReserveConfigurationMap`: bit 56 is "active", bit 60 is "paused".
+
+</i>
+
+```solidity
+uint256 private constant RESERVE_ACTIVE_BIT = 56;
+```
+
+### RESERVE_PAUSED_BIT
+
+```solidity
+uint256 private constant RESERVE_PAUSED_BIT = 60;
+```
 
 ### USDC
 
@@ -102,7 +120,8 @@ constructor(address pool_, address usdc_, address aToken_, address vault_);
 
 <i>
 
-Shared supply choreography for the v1 and v2 `deploy` entry points.
+Supply choreography of the min-out `deploy`, which reverts when the pool refuses.
+`deploy(uint256)` runs the same steps but hands a refused supply back to `VAULT`.
 
 </i>
 
@@ -122,6 +141,20 @@ function _supply(uint256 amount) private;
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
 
+<i>
+
+Security round 2: a supply the pool refuses for capacity (supply cap reached, reserve
+frozen) does not revert. The adapter sends `amount` back to `VAULT` and emits
+`DeployRefused`, and the vault leaves that USDC idle (`UnroutedDeposit`). Before this a
+full reserve reverted every rmUSDC deposit, every router deposit with an rmUSDC leg and
+keeper `rebalance`. Security round 3: a refusal while the reserve is paused or inactive
+reverts `VenueWithdrawalsClosed`. Aave then refuses withdrawals too, the vault still
+counts the aToken balance at face, and idle USDC made from this slice (or pulled from
+the other venues by a `rebalance`) would pay early exits at that NAV while any
+haircut falls on the holders who stay. The min-out overload below still reverts.
+
+</i>
+
 ```solidity
 function deploy(uint256 amount) external onlyVault;
 ```
@@ -131,6 +164,30 @@ function deploy(uint256 amount) external onlyVault;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` | Amount of USDC (6-decimal units) to deploy into the protocol. |
+
+<a id="venuewithdrawable"></a>
+
+### venueWithdrawable
+
+False while the venue refuses withdrawals: an Aave reserve that is paused or
+inactive, a Comet whose withdrawals are paused.
+
+<i>
+
+Aave's `withdraw` reverts on a reserve that is inactive or paused (`RESERVE_INACTIVE`,
+`RESERVE_PAUSED`). A frozen reserve, or one at its supply cap, still pays withdrawals.
+
+</i>
+
+```solidity
+function venueWithdrawable() public view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="deploy-uint256-uint256"></a>
 
@@ -286,6 +343,26 @@ This function is a no-op and always succeeds.
 function harvestRewards() external override;
 ```
 
+## Events
+
+### DeployRefused
+
+The pool refused a `deploy(uint256)` supply, and the USDC went straight back to
+`VAULT`, which keeps it idle (security round 2). Aave refuses at the reserve's
+supply cap and while the reserve is frozen; a reserve that also refuses
+withdrawals (paused or inactive) reverts instead (security round 3).
+
+```solidity
+event DeployRefused(uint256 amount, bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` | USDC handed back to `VAULT`. |
+| reason | `bytes` | The pool's revert data (an Aave error code). |
+
 ## Errors
 
 ### OnlyVault
@@ -326,4 +403,20 @@ error WithdrawShortfall(uint256 requested, uint256 actual);
 | ---- | ---- | ----------- |
 | requested | `uint256` | Amount of USDC requested for withdrawal. |
 | actual | `uint256` | Amount of USDC actually received from the pool. |
+
+### VenueWithdrawalsClosed
+
+The pool refused a `deploy(uint256)` supply while the reserve also refuses
+withdrawals (paused or inactive), so the adapter did not hand the USDC back
+(security round 3).
+
+```solidity
+error VenueWithdrawalsClosed(bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reason | `bytes` | The pool's revert data (an Aave error code). |
 

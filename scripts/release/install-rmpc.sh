@@ -42,18 +42,30 @@
 #      assets, which is the whole point.
 #
 # WHAT PROVENANCE DOES AND DOES NOT PROVE — read this before quoting it
+# The attestation must name `.github/workflows/release-rmpc.yml` in this
+# repository, AND carry the source ref `refs/tags/<TAG>` of the tag being
+# installed, AND have been minted by a `push` trigger. Only an org admin can
+# create an `rmpc-v*` ref (the `protect-rmpc-release-tags` ruleset), and
+# release-rmpc.yml attests only on the push of such a tag.
+#
 # It DOES defeat: a leaked release-write token, a stolen `GITHUB_TOKEN`, a
-# compromised maintainer account used only to edit release assets, and a
-# tampering mirror/proxy/CDN. None of those can produce a Sigstore certificate
-# naming `.github/workflows/release-rmpc.yml` in this repository.
+# compromised maintainer or writer account that edits release assets, and a
+# tampering mirror/proxy/CDN. Repository WRITE is not enough: a writer can
+# dispatch release-rmpc.yml on a branch (even with that branch's own edited copy
+# of the workflow, or with `commit_hash` pointing at a trojan) and, before this
+# pin, receive a genuine attestation over whatever it built. That attestation
+# names `refs/heads/<branch>` and the `workflow_dispatch` trigger, so it fails
+# both pins. A dispatch on an existing tag's ref (an old copy of the workflow
+# that still attests on dispatch) names the tag but not the `push` trigger.
 #
 # It does NOT prove the code was reviewed. Provenance answers "this archive came
-# out of THAT workflow in THIS repository", not "the commit it was built from was
-# any good". An attacker who can push a ref to this repository can push a tag,
-# trigger the release workflow, and receive a perfectly genuine attestation for
-# whatever that ref contains. Closing that requires branch/tag protection and
-# review on `.github/workflows/release-rmpc.yml` — repository settings, not
-# anything this script can assert. Do not read `attested` as `reviewed`.
+# out of THAT workflow, for THAT admin-pushed tag", not "the commit it was built
+# from was any good". The admin who pushes the tag vouches for the commit. Do
+# not read `attested` as `reviewed`.
+#
+# Only `rmpc-vX.Y.Z` tags are accepted. The legacy bare `vX.Y.Z` tags predate
+# attestation (#1236), so none of them could ever install, and `v*` is
+# release-dapp.yml's namespace, which the admin-only ruleset does not cover.
 #
 # WHY --base-url IS A FLAG
 # It is the offline seam. scripts/release/install-rmpc-selftest.sh points it at a
@@ -75,7 +87,8 @@
 #
 # EXIT CODES
 #   0  installed: checksum verified AND build provenance attested
-#   2  usage error / missing prerequisite / non-https --base-url without the opt-out.
+#   2  usage error / a --tag outside the rmpc-vX.Y.Z namespace / missing
+#      prerequisite / non-https --base-url without the opt-out.
 #      A missing `gh` lands here, alongside a missing sha256sum: both are hard
 #      refusals, never a downgrade to "install it unverified".
 #   3  download failed
@@ -84,9 +97,10 @@
 #      Nothing extracted, nothing installed.
 #   5  extraction produced no rmpc binary
 #   6  NOT ATTESTED — no Sigstore build-provenance attestation for this archive
-#      that verifies against this repository and its release workflow. The bytes
-#      match a checksum published beside them, and that is exactly the property
-#      an attacker with release-write can forge, so this is a refusal.
+#      that verifies against this repository, its release workflow, the source
+#      ref refs/tags/<TAG> and the `push` trigger. The bytes match a checksum
+#      published beside them, and that is exactly the property an attacker with
+#      release-write can forge, so this is a refusal.
 #      Nothing extracted, nothing installed.
 
 set -euo pipefail
@@ -102,6 +116,9 @@ DEFAULT_BASE_URL="https://github.com/robotmoney/robotmoney-core/releases/downloa
 # a trust anchor a caller can retarget is not a trust anchor.
 ATTEST_REPO="robotmoney/robotmoney-core"
 ATTEST_SIGNER_WORKFLOW="robotmoney/robotmoney-core/.github/workflows/release-rmpc.yml"
+# The run that minted the attestation must be the push of the installed tag. The
+# source ref is derived from --tag below; the trigger is fixed here.
+ATTEST_TRIGGER="push"
 
 TAG=""
 DEST=""
@@ -130,8 +147,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$TAG"  ]] || { usage; die 2 "--tag is required (e.g. --tag rmpc-v0.4.0; releases up to v0.3.3 used the bare vX.Y.Z form)"; }
+[[ -n "$TAG"  ]] || { usage; die 2 "--tag is required (e.g. --tag rmpc-v0.4.0)"; }
 [[ -n "$DEST" ]] || { usage; die 2 "--dest is required (a directory on PATH)"; }
+
+# The tag names the ref the attestation must come from (refs/tags/$TAG), so it is
+# shape-checked before it is used anywhere. Only the admin-only `rmpc-v*`
+# namespace can vouch for an archive: a bare `vX.Y.Z` tag is release-dapp.yml's,
+# and every rmpc release in it predates attestation. bash's `[[ =~ ]]` anchors on
+# the whole string, so an embedded newline fails too.
+if [[ ! "$TAG" =~ ^rmpc-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  usage
+  die 2 "--tag '$(printf '%s' "$TAG" | tr -c "[:print:]" "?")' is not an rmpc release tag. Expected rmpc-vX.Y.Z or rmpc-vX.Y.Z-prerelease; the legacy bare vX.Y.Z releases carry no attestation and cannot be installed by this script."
+fi
+ATTEST_SOURCE_REF="refs/tags/${TAG}"
 
 # Default-reject any base URL that is not https://. Printing "verified" over a
 # plaintext fetch is the thing being prevented; the opt-out exists for the
@@ -266,6 +294,16 @@ echo "[install-rmpc] verified       ${ARCHIVE} matches its published sha256"
 # rejects an attestation minted on a runner this project does not use — every
 # entry in release-rmpc.yml's build matrix is GitHub-hosted.
 #
+# --source-ref pins the run to the tag being installed. Without it any WRITER
+# could dispatch release-rmpc.yml on a branch, receive a genuine attestation for
+# a trojan, and swap that archive into a release (the tag ruleset guards refs,
+# not release assets). The certificate's `buildTrigger` must also be `push`: a
+# dispatch on an existing tag's ref carries that tag as its source ref, and an
+# old copy of the workflow at that tag attested on every dispatch. gh has no flag
+# for the trigger, so `--format json --jq` counts the verified attestations
+# whose certificate says `push`, and anything but a positive count is a refusal.
+# The certificate fields are set by GitHub's OIDC token, not by the workflow.
+#
 # This runs AFTER the checksum, not instead of it: the checksum is what turns a
 # truncated download into a one-line local failure, and it is the control that
 # still works when GitHub's attestation API is unreachable. It runs BEFORE
@@ -273,17 +311,24 @@ echo "[install-rmpc] verified       ${ARCHIVE} matches its published sha256"
 # never been unpacked, so nothing it contains has touched the disk outside the
 # temporary directory this script removes on exit.
 echo "[install-rmpc] STEP attest    ${ARCHIVE}"
-if ! ATTEST_OUT=$(gh attestation verify "$WORKDIR/$ARCHIVE" \
+if ! ATTEST_PUSH_COUNT=$(gh attestation verify "$WORKDIR/$ARCHIVE" \
       --repo "$ATTEST_REPO" \
       --signer-workflow "$ATTEST_SIGNER_WORKFLOW" \
-      --deny-self-hosted-runners 2>&1); then
+      --source-ref "$ATTEST_SOURCE_REF" \
+      --deny-self-hosted-runners \
+      --format json \
+      --jq "[.[] | select(.verificationResult.signature.certificate.buildTrigger == \"${ATTEST_TRIGGER}\")] | length" \
+      2>"$WORKDIR/attest.err"); then
   # gh's diagnostic quotes attacker-influenced material (certificate fields from
   # whatever bundle it found), so scrub non-printables the same way the rejected
   # checksum file is scrubbed before it reaches an operator's terminal.
-  printf '%s\n' "$ATTEST_OUT" | tr -c "[:print:]\n" "?" >&2
-  die 6 "NotAttested: ${ARCHIVE} has no build-provenance attestation that verifies against ${ATTEST_REPO} and ${ATTEST_SIGNER_WORKFLOW}. A matching sha256 proves only that the archive matches a checksum published beside it, which anyone who can write the release can also do — so this is a refusal, not a warning. If gh reported an auth or rate-limit problem, run 'gh auth login' and retry; if this release predates #1236 it has no attestation at all and cannot be installed by this script. Nothing was extracted and nothing was installed."
+  tr -c "[:print:]\n" "?" < "$WORKDIR/attest.err" >&2
+  die 6 "NotAttested: ${ARCHIVE} has no build-provenance attestation that verifies against ${ATTEST_REPO}, ${ATTEST_SIGNER_WORKFLOW} and the source ref ${ATTEST_SOURCE_REF}. A matching sha256 proves only that the archive matches a checksum published beside it, which anyone who can write the release can also do — so this is a refusal, not a warning. If gh reported an auth or rate-limit problem, run 'gh auth login' and retry; if this release was not cut by pushing ${TAG} (every release before the tag-push-only rule, rmpc-v0.3.4 included, was dispatched from a branch), it cannot be installed by this script. Nothing was extracted and nothing was installed."
 fi
-echo "[install-rmpc] attested      ${ARCHIVE} was built by ${ATTEST_SIGNER_WORKFLOW}"
+if [[ ! "$ATTEST_PUSH_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+  die 6 "NotAttested: ${ARCHIVE} has an attestation from ${ATTEST_SIGNER_WORKFLOW} for ${ATTEST_SOURCE_REF}, but none was minted by a '${ATTEST_TRIGGER}' of that tag (verified push-triggered attestations: '$(printf '%s' "$ATTEST_PUSH_COUNT" | head -c 40 | tr -c "[:print:]" "?")'). A run dispatched on the tag's ref can build any commit, so only the tag push vouches for the archive. Nothing was extracted and nothing was installed."
+fi
+echo "[install-rmpc] attested      ${ARCHIVE} was built by ${ATTEST_SIGNER_WORKFLOW} on the push of ${TAG}"
 
 echo "[install-rmpc] STEP extract   ${ARCHIVE}"
 tar xzf "$WORKDIR/$ARCHIVE" -C "$WORKDIR"

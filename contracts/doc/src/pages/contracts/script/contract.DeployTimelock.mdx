@@ -1087,6 +1087,36 @@ function _serializeCodeHashSection(Deployed memory d) internal returns (string m
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
+<a id="_implementationcodehash-address"></a>
+
+### _implementationCodeHash
+
+<i>
+
+ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation, or zero when the
+slot is empty (a direct contract). Behind a proxy `proxy.codehash` is the generic
+ERC1967Proxy, the same for every proxy and unchanged by an upgrade, so this is the hash
+that names the reviewed logic: the dapp's implementation pin (scripts/stage/mainnet-dapp.ts)
+and rmpc's `proxy_implementation_hashes`.
+
+</i>
+
+```solidity
+function _implementationCodeHash(address proxy) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
 <a id="_serializevaulthandovers-deployed"></a>
 
 ### _serializeVaultHandovers

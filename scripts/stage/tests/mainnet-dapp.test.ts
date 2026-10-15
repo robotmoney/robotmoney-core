@@ -24,6 +24,7 @@ import {
   mainnetComposeTexts,
   readMainnetManifests,
   redactRpc,
+  upgradedImplementationHashes,
 } from "../mainnet-dapp.ts";
 import { manifestOf, vaultManifests } from "../stage-manifests.ts";
 
@@ -45,6 +46,7 @@ const REGISTRY = A(0x1002);
 const ROUTER = A(0x1003);
 const GOVERNANCE = A(0x1004);
 const RECEIPT = A(0x1005);
+const IC_POLICY = A(0x1007);
 const TIMELOCK = A(0x1006);
 const HASH = `0x${"ab".repeat(32)}`;
 // QA plan U5: the router's and each vault's runtime code hash, as DeployTimelock records them.
@@ -69,7 +71,7 @@ function fixture(name: string, tweak?: (docs: Record<string, Json>) => void): st
     [manifestOf("governance")]: { chain_id: 8453, governance: GOVERNANCE },
     [manifestOf("timelock")]: {
       chain_id: 8453,
-      addresses: { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOVERNANCE, consensus_receipt: RECEIPT, timelock: TIMELOCK, safe: SAFE, vaults: Object.values(VAULTS) },
+      addresses: { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOVERNANCE, consensus_receipt: RECEIPT, ic_policy: IC_POLICY, timelock: TIMELOCK, safe: SAFE, vaults: Object.values(VAULTS) },
       code_hashes: { gateway: HASH, router: ROUTER_HASH },
       vault_handover: Object.fromEntries(
         Object.entries(VAULTS).map(([key, address], i) => [`vault_${i}`, { address, code_hash: VAULT_HASHES[key] }]),
@@ -111,6 +113,9 @@ describe("the env builder from the manifests", () => {
     expect(env.INDEXER_PORTFOLIO_ROUTER).toBe(ROUTER);
     expect(env.INDEXER_ROUTER_GOVERNANCE).toBe(GOVERNANCE);
     expect(env.INDEXER_CONSENSUS_RECEIPT).toBe(RECEIPT);
+    // Security round 1: the IC policy proxy is watched (its Upgraded / UpgradesFrozen events page the watchdog)
+    expect(env.INDEXER_INVESTMENT_COMMITTEE).toBe(IC_POLICY);
+    expect(readMainnetManifests(dir).icPolicy).toBe(IC_POLICY);
     // Issue 1731: the Safe and the timelock are in the indexer's watched set.
     expect(env.INDEXER_SAFE).toBe(SAFE);
     expect(env.INDEXER_TIMELOCK).toBe(TIMELOCK);
@@ -126,6 +131,13 @@ describe("the env builder from the manifests", () => {
     for (const [key, address] of Object.entries(VAULTS)) expect(pins[address]).toBe(VAULT_HASHES[key]);
     expect(readMainnetManifests(dir).vaultCodeHashes).toEqual(VAULT_HASHES);
     expect(readMainnetManifests(dir).routerCodeHash).toBe(ROUTER_HASH);
+  });
+
+  // ADR-0014: the stage manifests name no implementation here (direct contracts, like Deploy 2), so the
+  // build carries no implementation pin: one for a direct contract would refuse every write to it.
+  test("emits no implementation pins for direct vaults and a direct router", () => {
+    expect(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH).toBe("{}");
+    expect(env.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe("");
   });
 
   test("is chain 8453, mainnet class, with an EMPTY faucet key and no devnet RPC", () => {
@@ -196,6 +208,11 @@ describe("refusals on the manifests and the options", () => {
     writeFileSync(join(dir, manifestOf("router")), "[]");
     expect(refusal(() => buildMainnetDappEnv(input(dir)))).toBe("manifest-unreadable");
   });
+  test("security round 1: a timelock manifest with no IC policy address, or a zero one, is refused (the indexer would never watch that proxy)", () => {
+    const tl = (d: Record<string, Json>) => (d[manifestOf("timelock")]!.addresses as Json);
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("ic-none", (d) => void delete tl(d).ic_policy))))).toBe("manifest-field");
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("ic-zero", (d) => void (tl(d).ic_policy = A(0))))))).toBe("manifest-field");
+  });
   test("a zero or malformed address, a bad gateway hash", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("zero", (d) => void (d[manifestOf("registry")]!.registry = A(0))))))).toBe("manifest-field");
     expect(refusal(() => buildMainnetDappEnv(input(fixture("short", (d) => void (d[manifestOf("router")]!.router = "0x1234")))))).toBe("manifest-field");
@@ -215,6 +232,44 @@ describe("refusals on the manifests and the options", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("rh-none", (d) => void delete (tl(d).code_hashes as Json).router))))).toBe("manifest-field");
     expect(refusal(() => buildMainnetDappEnv(input(fixture("rh-short", (d) => void ((tl(d).code_hashes as Json).router = "0x12")))))).toBe("manifest-field");
   });
+  // ADR-0014 (security round 1): behind a proxy the code-hash pins are the generic ERC1967Proxy, so the build
+  // must carry the reviewed implementation of every proxied vault and the router, or refuse to start.
+  test("emits the implementation pins of proxied vaults and the router, and refuses a proxy without one", () => {
+    const IMPL = A(0x2001);
+    const ROUTER_IMPL_HASH = `0x${"e1".repeat(32)}`;
+    const VAULT_IMPL_HASH = `0x${"e2".repeat(32)}`;
+    const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
+    const handover = (d: Record<string, Json>) => tl(d).vault_handover as Record<string, Json>;
+    const proxied = (d: Record<string, Json>) => {
+      d[manifestOf("router")]!.router_implementation = IMPL;
+      d[vaultManifests().rmPROTO!]!.vault_implementation = IMPL;
+      (tl(d).code_hashes as Json).router_implementation = ROUTER_IMPL_HASH;
+      handover(d).vault_1!.implementation_code_hash = VAULT_IMPL_HASH;
+    };
+    const env = buildMainnetDappEnv(input(fixture("impl-good", proxied)));
+    expect(env.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe(ROUTER_IMPL_HASH);
+    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmPROTO]: VAULT_IMPL_HASH });
+    // A proxy whose implementation hash was not recorded: the dapp would refuse every deposit into it.
+    expect(
+      refusal(() => buildMainnetDappEnv(input(fixture("impl-router-none", (d) => {
+        proxied(d);
+        delete (tl(d).code_hashes as Json).router_implementation;
+      })))),
+    ).toBe("manifest-field");
+    expect(
+      refusal(() => buildMainnetDappEnv(input(fixture("impl-vault-zero", (d) => {
+        proxied(d);
+        handover(d).vault_1!.implementation_code_hash = `0x${"0".repeat(64)}`;
+      })))),
+    ).toBe("manifest-field");
+    // A recorded implementation for a contract its stage manifest says is direct.
+    expect(
+      refusal(() => buildMainnetDappEnv(input(fixture("impl-direct", (d) => {
+        handover(d).vault_2!.implementation_code_hash = VAULT_IMPL_HASH;
+      })))),
+    ).toBe("manifest-mismatch");
+  });
+
   test("manifests that disagree: router, vault order, rmUSDC, timelock addresses", () => {
     expect(refusal(() => buildMainnetDappEnv(input(fixture("rt", (d) => void (d[manifestOf("gateway")]!.gateway_router = A(0x9999))))))).toBe("manifest-mismatch");
     expect(
@@ -318,6 +373,19 @@ describe("the loopback guard on the compose files", () => {
     const ports = real.flatMap((f) => composePortEntries(f.text));
     expect(ports.length).toBeGreaterThanOrEqual(4);
     for (const p of ports) expect(p.startsWith("127.0.0.1:")).toBe(true);
+  });
+  // Security round 1: an env value the container never receives watches nothing. Every setting the indexer reads from its environment (services/explorer-indexer
+  // src/main.rs `env = "INDEXER_..."`) must reach the explorer-indexer container from the dapp compose file or the mainnet overlay. The two left out are tuning and
+  // backfill knobs with safe defaults, never a contract the indexer must watch.
+  test("security round 1: every INDEXER_* setting of the indexer reaches its container (INDEXER_INVESTMENT_COMMITTEE among them)", () => {
+    const UNMAPPED_ON_PURPOSE = new Set(["INDEXER_TICK_SECONDS", "INDEXER_END_BLOCK"]);
+    const mainRs = readFileSync(join(CORE_ROOT, "services", "explorer-indexer", "src", "main.rs"), "utf8");
+    const names = [...new Set([...mainRs.matchAll(/env\s*=\s*"(INDEXER_[A-Z0-9_]+)"/g)].map((m) => m[1]!))];
+    expect(names).toContain("INDEXER_INVESTMENT_COMMITTEE");
+    const blockOf = (text: string) => noComments(text).split(/\n  explorer-indexer:/)[1]?.split(/\n  [a-z][a-z0-9-]*:\s*\n/)[0] ?? "";
+    const mapped = blockOf(base.text) + blockOf(overlay.text);
+    for (const n of names) if (!UNMAPPED_ON_PURPOSE.has(n)) expect([n, new RegExp(`\\b${n}:`).test(mapped)]).toEqual([n, true]);
+    expect(blockOf(base.text)).toContain("INDEXER_INVESTMENT_COMMITTEE: ${INDEXER_INVESTMENT_COMMITTEE:-}");
   });
   test("issue 1731: the compose file hands INDEXER_TIMELOCK and INDEXER_SAFE to the indexer container", () => {
     // An env value the container never receives watches nothing. The indexer service block must pass both.
@@ -425,6 +493,79 @@ const MANI = fixture("cli");
 const UP = ["dapp", "up", "--chain", "8453", "--rpc", RPC, "--manifests", MANI, "--start-block", "52401633"];
 const filesOf = (argv: string[]) => argv.filter((_, i) => argv[i - 1] === "-f").map((f) => f.replace(CORE_ROOT + "/", ""));
 
+// Security round 2 (review: SECURITY_OPERATIONAL_PIN_ROTATION_GAP): after upgrade-proxy executes, the timelock manifest still names the deploy-time implementation hash
+// (DeployTimelock writes it once). The govern evidence's executed proxy_upgrades rounds pin the installed implementation's hash, so the runbook's rotation
+// step has a supported path that never edits the release record. Security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): the latest executed round's hash
+// replaces the deploy-time one; a superseded implementation is never pinned.
+describe("security round 2: an executed upgrade's implementation is pinned in place of the deploy-time one", () => {
+  const IMPL = A(0x2001);
+  const USDC_IMPL_HASH = `0x${"e0".repeat(32)}`;
+  const ROUTER_IMPL_HASH = `0x${"e1".repeat(32)}`;
+  const NEW_VAULT_HASH = `0x${"f0".repeat(32)}`;
+  const NEW_ROUTER_HASH = `0x${"f1".repeat(32)}`;
+  const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
+  /** rmUSDC (vault_0) and the router are proxies, their deploy-time implementation hashes in the timelock manifest. */
+  const dir = fixture("upgrade-pins", (d) => {
+    d[manifestOf("router")]!.router_implementation = IMPL;
+    d[vaultManifests().rmUSDC!]!.vault_implementation = IMPL;
+    (tl(d).code_hashes as Json).router_implementation = ROUTER_IMPL_HASH;
+    (tl(d).vault_handover as Record<string, Json>).vault_0!.implementation_code_hash = USDC_IMPL_HASH;
+  });
+  const row = (proxy: string, address: string, hash: string, over: Json = {}) => ({
+    step: "upgrade-proxy", proxy, proxy_address: address, implementation: A(0x3001), implementation_code_hash: hash,
+    schedule_tx: `0x${"12".repeat(32)}`, schedule_status: 1, execute_tx: `0x${"13".repeat(32)}`, execute_status: 1, ...over,
+  });
+  const evidence = (name: string, doc: Json): string => {
+    const p = join(WORK, `${name}.json`);
+    writeFileSync(p, JSON.stringify(doc));
+    return p;
+  };
+
+  test("security round 3: an evidence file with one executed rmUSDC round v1->v2 pins v2 only for vault_0 (the deploy-time v1 retires); the router's row replaces the router pin", () => {
+    const ev = evidence("ev-good", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH), row("router", ROUTER.toUpperCase().replace("0X", "0x"), NEW_ROUTER_HASH)] });
+    const env = buildMainnetDappEnv(input(dir, { upgradeEvidence: ev }));
+    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: NEW_VAULT_HASH });
+    expect(env.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe(NEW_ROUTER_HASH);
+    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)[VAULTS.rmUSDC]).not.toContain(USDC_IMPL_HASH);
+    // mutation: without the evidence only the deploy-time hashes are pinned, and every write to the upgraded contracts would refuse
+    const before = buildMainnetDappEnv(input(dir));
+    expect(JSON.parse(before.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: USDC_IMPL_HASH });
+    expect(before.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe(ROUTER_IMPL_HASH);
+    // a row for a proxy the dapp pins nothing for (the registry) changes nothing
+    expect(upgradedImplementationHashes(evidence("ev-registry", { chain_id: 8453, proxy_upgrades: [row("registry", REGISTRY, NEW_VAULT_HASH)] })).get(REGISTRY.toLowerCase())).toEqual([NEW_VAULT_HASH]);
+  });
+
+  test("security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): only the latest executed round is pinned, by execute time, so a rollback is pinned only once a round records it", () => {
+    const V3 = `0x${"f3".repeat(32)}`;
+    // v1 -> v2 -> v3: v3 only, never v1 or v2
+    const chainOf = evidence("ev-v3", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 }), row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: 200 })] });
+    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: chainOf })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: V3 });
+    // a rollback the Safe meant (v2 -> v1) is a round of its own: v1 is pinned again because that round executed last, and v2 retires
+    const rollback = evidence("ev-rollback", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 }), row("rmUSDC", VAULTS.rmUSDC, USDC_IMPL_HASH, { execute_block_timestamp: 200 })] });
+    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: rollback })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: USDC_IMPL_HASH });
+    // recorded out of execution order (the timelock's executor is open): the execute time decides, not the file order
+    const swapped = evidence("ev-swapped", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: 200 }), row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 })] });
+    expect(upgradedImplementationHashes(swapped).get(VAULTS.rmUSDC.toLowerCase())).toEqual([NEW_VAULT_HASH, V3]);
+    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: swapped })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: V3 });
+    // a malformed execute time is refused, never guessed
+    const bad = evidence("ev-bad-time", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: "soon" })] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: bad })))).toBe("upgrade-evidence");
+  });
+
+  test("a scheduled-only row, a failed execute, a row of another chain's evidence, or an upgrade of a contract the manifests say is direct is refused", () => {
+    const scheduled = evidence("ev-scheduled", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_tx: undefined, execute_status: undefined })] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: scheduled })))).toBe("upgrade-not-executed");
+    const reverted = evidence("ev-reverted", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_status: 0 })] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: reverted })))).toBe("upgrade-not-executed");
+    const twin = evidence("ev-twin", { chain_id: 918453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH)] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: twin })))).toBe("wrong-chain");
+    const direct = evidence("ev-direct", { chain_id: 8453, proxy_upgrades: [row("rmPROTO", VAULTS.rmPROTO, NEW_VAULT_HASH)] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: direct })))).toBe("manifest-mismatch");
+    const zero = evidence("ev-zero", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, `0x${"0".repeat(64)}`)] });
+    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: zero })))).toBe("manifest-field");
+  });
+});
+
 describe("the overlay must be in the compose file list", () => {
   test("the real list passes; a list without the overlay, with an extra file or reordered is refused", () => {
     assertOverlayInFileList(mainnetComposeFiles());
@@ -460,6 +601,16 @@ describe("core-stack dapp --chain 8453", () => {
     expect(h.err).toContain("https://rpc.example");
     expect(h.err).not.toContain("SECRET-API-KEY");
     expect(h.out).not.toContain("SECRET-API-KEY");
+  });
+  test("up: --upgrade-evidence reaches the env builder (security round 2); a scheduled-only row refuses the build before compose runs", async () => {
+    const ev = join(WORK, "cli-ev.json");
+    writeFileSync(ev, JSON.stringify({ chain_id: 8453, proxy_upgrades: [{ proxy: "rmUSDC", proxy_address: A(0x9999), implementation_code_hash: `0x${"f0".repeat(32)}`, execute_tx: `0x${"13".repeat(32)}`, execute_status: 1 }] }));
+    const h = harness();
+    expect(await runCli([...UP, "--upgrade-evidence", ev], h.deps)).toBe(0);
+    writeFileSync(ev, JSON.stringify({ chain_id: 8453, proxy_upgrades: [{ proxy: "rmUSDC", proxy_address: A(0x9999), implementation_code_hash: `0x${"f0".repeat(32)}` }] }));
+    const refused = harness();
+    expect(await runCli([...UP, "--upgrade-evidence", ev], refused.deps)).not.toBe(0);
+    expect(refused.calls).toEqual([]);
   });
   test("up: flags reach the environment (logs RPC, range, ports)", async () => {
     const h = harness();

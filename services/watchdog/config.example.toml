@@ -63,6 +63,10 @@ grace_secs = 21600
 max_lag_blocks = 150     # chain head minus indexed head (150 Base blocks = 300 s)
 max_silence_secs = 300   # since the newest indexer run without an error
 repage_secs = 3600
+# Security round 2: the watchdog's own lag. While its cursor trails the indexed
+# head by more than this, it keeps evaluating but stops refreshing the heartbeat,
+# so watchdog-liveness reports `stale` for a watchdog slower than the chain.
+max_cursor_lag_blocks = 150
 
 # Missed freeze-deadline alert (issue 1809, ADR-0014 §5). A release deployed
 # `upgradeable` with a proving period names a freeze deadline in its release

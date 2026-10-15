@@ -88,6 +88,29 @@ the user signs.
   pin, so an exit never depends on a build setting. The 8453 stack
   builder takes both pins from the timelock manifest and refuses to start
   when a vault or the router has none.
+- Behind an ERC-1967 proxy (ADR-0014) those code hashes are the generic
+  `ERC1967Proxy`, the same for every proxy and unchanged by an upgrade.
+  So a proxied vault or router also carries a build-time implementation
+  pin (`VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`,
+  `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH`): at send time the guard reads
+  the code, the implementation slot and the implementation's code at one
+  block and refuses unless that implementation's hash is pinned. Nothing
+  is cached between sends. Every write to the gateway is re-checked the
+  same way against `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`. The badge
+  "[bytecode verified]" needs both pins. The 8453 builder takes the
+  implementation pins from the timelock manifest
+  (`vault_handover.vault_<i>.implementation_code_hash`,
+  `code_hashes.router_implementation`) and refuses a proxy with none. A
+  router deposit also checks every vault of `getEffectiveWeights()`, read
+  at the same block, against its vault pins, as rmpc does: the router
+  forwards the USDC into each leg and takes the leg's own `deposit()`
+  return as the shares. A leg that fails names itself in the refusal,
+  closes the router deposit form, and keeps the badge UNVERIFIED. A
+  router that fails its pins is not offered a share approval: the
+  Withdraw tab redeems from the vault directly, and still shows any share
+  allowance left on that router with a revoke. No redeem preview waits
+  on gateway verification either (core 1494): it is built UNVERIFIED with
+  the gateway's cause as a warning.
 
 #### Decision — the code-hash pin is build-time-only (issue #1375)
 

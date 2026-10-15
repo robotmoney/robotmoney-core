@@ -63,7 +63,8 @@ async fn get(s: &Srv, path: &str) -> serde_json::Value {
         .unwrap()
 }
 
-/// (finished, error, last_indexed_block, chain_head_block)
+/// (finished, error, last_indexed_block, chain_head_block), started and finished now: a live
+/// indexer. `/health` reads a last good run older than 300 s as a stopped indexer.
 async fn run(
     pool: &PgPool,
     finished: bool,
@@ -71,7 +72,18 @@ async fn run(
     last: Option<i64>,
     head: Option<i64>,
 ) {
-    let t = Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 0).unwrap();
+    run_at(pool, Utc::now(), finished, error, last, head).await;
+}
+
+/// [`run`] started and finished at `t`.
+async fn run_at(
+    pool: &PgPool,
+    t: chrono::DateTime<Utc>,
+    finished: bool,
+    error: Option<&str>,
+    last: Option<i64>,
+    head: Option<i64>,
+) {
     sqlx::query(
         "INSERT INTO indexer_runs (chain_id, started_at, finished_at, from_block, last_indexed_block, \
                                    chain_head_block, error) \
@@ -158,6 +170,38 @@ async fn health_exposes_the_newest_run_error_and_the_head_lag() {
     assert_eq!(recovered["lag_blocks"], 5, "{recovered}");
 }
 
+/// Security round 1: a stopped indexer must not read as `ok`. It writes no run at all, so the newest
+/// run keeps its clean verdict and the head its lag of 5 for ever; only the age of the last good run
+/// shows it. Past 300 s (the watchdog's default `max_silence_secs`) `/health` says `degraded`, and a
+/// fresh good run makes it `ok` again.
+#[tokio::test]
+async fn health_degrades_when_the_last_good_run_is_older_than_the_silence_budget() {
+    let s = boot().await;
+    let ten_minutes_ago = Utc::now() - chrono::Duration::seconds(600);
+    run_at(&s.pool, ten_minutes_ago, true, None, Some(1000), Some(1005)).await;
+
+    let stopped = get(&s, "/health").await;
+    assert_eq!(stopped["status"], "degraded", "{stopped}");
+    assert!(
+        stopped["since_success_secs"].as_i64().unwrap() > 300,
+        "{stopped}"
+    );
+    assert!(
+        stopped["last_run_error"].is_null(),
+        "no run failed: {stopped}"
+    );
+    assert_eq!(
+        stopped["lag_blocks"], 5,
+        "the lag froze at its healthy value: {stopped}"
+    );
+
+    // The indexer is back: a good run that just finished.
+    run(&s.pool, true, None, Some(1010), Some(1015)).await;
+    let live = get(&s, "/health").await;
+    assert_eq!(live["status"], "ok", "{live}");
+    assert!(live["since_success_secs"].as_i64().unwrap() < 300, "{live}");
+}
+
 #[tokio::test]
 async fn before_anything_is_indexed_the_cursor_and_head_are_null_not_invented() {
     let s = boot().await;
@@ -166,6 +210,14 @@ async fn before_anything_is_indexed_the_cursor_and_head_are_null_not_invented() 
     assert!(h["last_indexed_block"].is_null(), "{h}");
     assert!(h["chain_head_block"].is_null(), "{h}");
     assert!(h["lag_blocks"].is_null(), "no lag is invented either: {h}");
+    assert!(
+        h["since_success_secs"].is_null(),
+        "no age without a good run: {h}"
+    );
+    assert_eq!(
+        h["status"], "ok",
+        "nothing has failed or gone silent yet: {h}"
+    );
 }
 
 #[tokio::test]

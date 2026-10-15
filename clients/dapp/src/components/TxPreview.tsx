@@ -47,6 +47,13 @@ export function TxPreview({ preview }: { preview: Preview }) {
         </span>
       </header>
 
+      {/* A caution that does not refuse, such as an exit built while the gateway is unverified. */}
+      {preview.warning && (
+        <p className="hint" data-testid="tx-preview-warning" style={{ color: "#ed6c02" }}>
+          {preview.warning}
+        </p>
+      )}
+
       <dl>
         <dt>Target</dt>
         <dd data-testid="tx-preview-target">

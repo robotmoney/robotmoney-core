@@ -9,7 +9,7 @@
 //! which is byte-identical to its output when it is dead. To make the two
 //! distinguishable, the daemon refreshes `watchdog_cursor.updated_at` after every
 //! successful poll — when it advances the cursor past an evaluated block
-//! ([`crate::watchdog::store_cursor`]) and also when a poll finds no newly
+//! ([`crate::watchdog::advance_cursor`]) and also when a poll finds no newly
 //! indexed block ([`crate::watchdog::touch_cursor`]). A stopped, hung, or
 //! crash-looping daemon stops refreshing it.
 //!
@@ -23,6 +23,17 @@
 //! the heartbeat only when the indexer is within its [`IndexerLagBudget`]. When
 //! it is not, the daemon pages (`indexer_behind:<chain>`) and lets the heartbeat
 //! age, so this checker reports `stale` too.
+//!
+//! # Advancing is only proof of watching while the watchdog keeps up
+//!
+//! The same holds for the watchdog itself (security round 2). It evaluates
+//! every block from its cursor to the indexed head and advanced the heartbeat
+//! with each one, so a watchdog whose queries ran slower than Base makes blocks
+//! fell hours behind while `watchdog-liveness` reported healthy. The cursor
+//! write now refreshes the heartbeat only while the cursor is within
+//! [`IndexerLagBudget::max_cursor_lag_blocks`] of the indexed head
+//! ([`crate::watchdog::advance_cursor`]). Beyond it the cursor still advances
+//! and the heartbeat ages, so this checker reports `stale`.
 //!
 //! This module reads that heartbeat. The `watchdog-liveness` binary wraps it
 //! for an external monitor (the stage supervisor in
@@ -132,6 +143,11 @@ pub const DEFAULT_MAX_INDEXER_SILENCE_SECS: i64 = 300;
 /// Default [`IndexerLagBudget::repage_secs`].
 pub const DEFAULT_INDEXER_BEHIND_REPAGE_SECS: u64 = 3_600;
 
+/// Default [`IndexerLagBudget::max_cursor_lag_blocks`]: 150 blocks is 300 s of Base blocks, the
+/// default `sla.max_response_secs`. A healthy watchdog evaluates the few blocks of one indexer
+/// tick within one poll.
+pub const DEFAULT_MAX_CURSOR_LAG_BLOCKS: i64 = 150;
+
 /// How far the explorer indexer may fall behind before a quiet poll stops
 /// counting as watching (`[indexer_lag]` in the watchdog config, DI-5).
 ///
@@ -151,6 +167,14 @@ pub struct IndexerLagBudget {
     /// Floor between two `indexer_behind` pages for the same standing fault.
     #[serde(default = "default_indexer_behind_repage_secs")]
     pub repage_secs: u64,
+    /// Most blocks the watchdog's own cursor may trail the indexed head while
+    /// it still refreshes the heartbeat (security round 2). Catches a watchdog
+    /// that evaluates blocks slower than the chain makes them: it advances its
+    /// cursor every block, so the heartbeat used to stay fresh while it fell
+    /// hours behind. Beyond this the cursor still advances, the heartbeat ages,
+    /// and `watchdog-liveness` reports `stale`.
+    #[serde(default = "default_max_cursor_lag_blocks")]
+    pub max_cursor_lag_blocks: i64,
 }
 
 fn default_max_lag_blocks() -> i64 {
@@ -165,12 +189,17 @@ fn default_indexer_behind_repage_secs() -> u64 {
     DEFAULT_INDEXER_BEHIND_REPAGE_SECS
 }
 
+fn default_max_cursor_lag_blocks() -> i64 {
+    DEFAULT_MAX_CURSOR_LAG_BLOCKS
+}
+
 impl Default for IndexerLagBudget {
     fn default() -> Self {
         Self {
             max_lag_blocks: DEFAULT_MAX_INDEXER_LAG_BLOCKS,
             max_silence_secs: DEFAULT_MAX_INDEXER_SILENCE_SECS,
             repage_secs: DEFAULT_INDEXER_BEHIND_REPAGE_SECS,
+            max_cursor_lag_blocks: DEFAULT_MAX_CURSOR_LAG_BLOCKS,
         }
     }
 }
@@ -192,6 +221,11 @@ impl IndexerLagBudget {
         if self.repage_secs == 0 {
             return Err(WatchdogError::Config(
                 "indexer_lag.repage_secs must be non-zero — 0 would page on every poll".into(),
+            ));
+        }
+        if self.max_cursor_lag_blocks <= 0 {
+            return Err(WatchdogError::Config(
+                "indexer_lag.max_cursor_lag_blocks must be greater than zero".into(),
             ));
         }
         Ok(())
@@ -318,6 +352,11 @@ mod tests {
             ..Default::default()
         };
         assert!(zero_repage.validate().is_err());
+        let zero_cursor_lag = IndexerLagBudget {
+            max_cursor_lag_blocks: 0,
+            ..Default::default()
+        };
+        assert!(zero_cursor_lag.validate().is_err());
         assert!(IndexerLagBudget::default().validate().is_ok());
     }
 

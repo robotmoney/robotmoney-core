@@ -373,3 +373,112 @@ impl HangingServer {
         let _ = self.shutdown.send(());
     }
 }
+
+/// A JSON-RPC endpoint for the pause path: it accepts every
+/// `eth_sendRawTransaction` (the node took the transaction, which says nothing
+/// about whether it was mined), answers `eth_getTransactionCount` and
+/// `eth_gasPrice`, and answers `eth_call` (the gateway's `depositsPaused()`)
+/// from a flag the test sets. Every request's method is recorded.
+///
+/// Security round 1: a pause stuck in the mempool looks exactly like this to
+/// the watchdog, so it is what the retry path must not trust.
+pub struct PauseRpcStub {
+    /// Full URL (e.g. `http://127.0.0.1:12345`).
+    pub url: String,
+    paused: Arc<std::sync::atomic::AtomicBool>,
+    methods: Arc<Mutex<Vec<String>>>,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl PauseRpcStub {
+    /// Start the stub with `depositsPaused()` reading false.
+    pub async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let methods: Arc<Mutex<Vec<String>>> = Arc::default();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let paused2 = paused.clone();
+        let methods2 = methods.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accept = listener.accept() => {
+                        let Ok((mut sock, _)) = accept else { break };
+                        let paused = paused2.clone();
+                        let methods = methods2.clone();
+                        tokio::spawn(async move {
+                            let mut buf = vec![0u8; 32 * 1024];
+                            let n = match sock.read(&mut buf).await { Ok(n) => n, Err(_) => return };
+                            if n == 0 { return; }
+                            let body_start = buf[..n].windows(4)
+                                .position(|w| w == b"\r\n\r\n")
+                                .map(|i| i + 4)
+                                .unwrap_or(0);
+                            let req: serde_json::Value =
+                                serde_json::from_slice(&buf[body_start..n]).unwrap_or_default();
+                            let method = req["method"].as_str().unwrap_or("").to_owned();
+                            methods.lock().unwrap().push(method.clone());
+                            let result = match method.as_str() {
+                                "eth_getTransactionCount" => serde_json::json!("0x7"),
+                                "eth_gasPrice" => serde_json::json!("0x3b9aca00"),
+                                "eth_sendRawTransaction" => {
+                                    serde_json::json!(format!("0x{}", "ab".repeat(32)))
+                                }
+                                "eth_call" => {
+                                    let flag = u8::from(paused.load(std::sync::atomic::Ordering::SeqCst));
+                                    serde_json::json!(format!("0x{}{:02x}", "00".repeat(31), flag))
+                                }
+                                _ => serde_json::Value::Null,
+                            };
+                            let body = serde_json::to_vec(&serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": req.get("id").cloned().unwrap_or(serde_json::json!(1)),
+                                "result": result,
+                            }))
+                            .unwrap();
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = sock.write_all(header.as_bytes()).await;
+                            let _ = sock.write_all(&body).await;
+                            let _ = sock.shutdown().await;
+                        });
+                    }
+                }
+            }
+        });
+
+        Self {
+            url,
+            paused,
+            methods,
+            shutdown: shutdown_tx,
+        }
+    }
+
+    /// What the gateway's `depositsPaused()` answers from now on.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused
+            .store(paused, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many requests of `method` the stub answered so far.
+    pub fn count(&self, method: &str) -> usize {
+        self.methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| *m == method)
+            .count()
+    }
+
+    /// Shut down the stub.
+    pub fn shutdown(self) {
+        let _ = self.shutdown.send(());
+    }
+}

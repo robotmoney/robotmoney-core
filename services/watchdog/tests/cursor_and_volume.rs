@@ -17,7 +17,7 @@
 mod common;
 
 use bigdecimal::BigDecimal;
-use common::{pg_fixture, HangingServer, MockWebhookServer};
+use common::{pg_fixture, HangingServer, MockWebhookServer, PauseRpcStub};
 use reqwest::Client;
 use std::collections::HashMap;
 use watchdog::{
@@ -28,7 +28,8 @@ use watchdog::{
     },
     receipt_liveness::ReceiptLivenessConfig,
     volume::{
-        burn_volume_per_block, mint_volume_per_block, mint_volume_per_block_for_vault,
+        burn_volume_per_block, burn_volume_per_hour, burn_volume_per_hour_for_vault,
+        mint_volume_per_block, mint_volume_per_block_for_vault, mint_volume_per_hour,
         mint_volume_per_hour_for_vault,
     },
     watchdog::{run_cycle, run_cycles_since_cursor, CycleResult},
@@ -342,7 +343,7 @@ async fn per_vault_volume_is_accounted_per_vault() {
 
     // Per-hour scoping is likewise per vault.
     let vault_a_hour =
-        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 1_700_000_000, 3600, &VAULT_A[..])
+        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 600, 1_700_000_000, 3600, &VAULT_A[..])
             .await
             .unwrap();
     assert_eq!(
@@ -494,6 +495,425 @@ async fn gateway_deposit_not_double_counted_via_vault_transfer() {
         mint, 400_000,
         "gateway deposit's vault Deposit log must not double-count"
     );
+}
+
+/// Security round 1: a direct `PortfolioRouter.deposit` (public, no gateway, so
+/// no `agent_deposits` row) writes one `router_deposit_legs` row per leg AND each
+/// leg vault's ERC-4626 `Deposit`. Mint volume must count the router total once,
+/// globally and per vault, per block and per hour.
+///
+/// Before the fix the legs and the vault `Deposit` rows were both counted, so a
+/// 501 USDC router deposit read as 1002 and tripped a 1000 USDC per-block pause
+/// that only a timelocked ADMIN can undo.
+#[tokio::test]
+async fn direct_router_deposit_counted_once_in_mint_volume() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    seed_block(&fx.pool, 320, 1_700_000_000).await;
+
+    let tx = tx_hash(60);
+    // Two legs of one direct router deposit, and the two vault Deposit events
+    // the legs caused, all in one transaction with no agent_deposits row.
+    insert_router_leg(&fx.pool, 320, 1, &tx, &VAULT_A, 300_000).await;
+    insert_router_leg(&fx.pool, 320, 3, &tx, &VAULT_B, 201_000).await;
+    insert_vault_transfer(&fx.pool, 320, 0, &tx, &VAULT_A, "deposit", 300_000).await;
+    insert_vault_transfer(&fx.pool, 320, 2, &tx, &VAULT_B, "deposit", 201_000).await;
+
+    assert_eq!(
+        mint_volume_per_block(&fx.pool, CHAIN_ID, 320)
+            .await
+            .unwrap(),
+        501_000,
+        "a direct router deposit counts its legs once, not legs + vault Deposit events"
+    );
+    assert_eq!(
+        mint_volume_per_hour(&fx.pool, CHAIN_ID, 320, 1_700_000_000, 3600)
+            .await
+            .unwrap(),
+        501_000
+    );
+    assert_eq!(
+        mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, 320, &VAULT_A)
+            .await
+            .unwrap(),
+        300_000
+    );
+    assert_eq!(
+        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 320, 1_700_000_000, 3600, &VAULT_B)
+            .await
+            .unwrap(),
+        201_000
+    );
+
+    // A direct vault deposit batched into the same transaction (a multicall)
+    // is still counted: only the router's own share of the vault's Deposit
+    // events is netted out.
+    insert_vault_transfer(&fx.pool, 320, 4, &tx, &VAULT_A, "deposit", 2_000_000).await;
+    assert_eq!(
+        mint_volume_per_block(&fx.pool, CHAIN_ID, 320)
+            .await
+            .unwrap(),
+        2_501_000,
+        "a direct deposit cannot hide behind a router leg in its transaction"
+    );
+    assert_eq!(
+        mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, 320, &VAULT_A)
+            .await
+            .unwrap(),
+        2_300_000
+    );
+}
+
+/// Security round 2: a direct vault deposit batched with a small gateway deposit in one
+/// transaction is still mint volume, globally and per vault, per block and per hour.
+///
+/// An agent that is a contract, or an EOA with an EIP-7702 delegation, calls
+/// `gateway.deposit(1 USDC)` and `vault.deposit(1,000,000 USDC)` in one transaction. The indexer
+/// writes an `agent_deposits` row for the gateway's deposit and a vault `Deposit` row for each.
+/// The direct source used to drop every vault `Deposit` of a transaction holding any
+/// `agent_deposits` row, so mint volume read 1 USDC and no breach could fire. It now nets only the
+/// gateway's own deposit to that vault.
+#[tokio::test]
+async fn a_direct_deposit_batched_with_a_gateway_deposit_is_counted() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+    seed_block(&fx.pool, 330, 1_700_000_000).await;
+
+    let tx = tx_hash(80);
+    // The gateway's 1 USDC deposit into its pinned vault A ...
+    insert_agent_deposit(&fx.pool, 330, 2, &tx, 1_000_000, Some(&VAULT_A)).await;
+    insert_vault_transfer(&fx.pool, 330, 1, &tx, &VAULT_A, "deposit", 1_000_000).await;
+    // ... and a direct 1,000,000 USDC vault A deposit in the same transaction.
+    insert_vault_transfer(
+        &fx.pool,
+        330,
+        3,
+        &tx,
+        &VAULT_A,
+        "deposit",
+        1_000_000_000_000,
+    )
+    .await;
+
+    let expected = 1_000_001_000_000u128;
+    assert_eq!(
+        mint_volume_per_block(&fx.pool, CHAIN_ID, 330)
+            .await
+            .unwrap(),
+        expected,
+        "the direct deposit cannot hide behind a gateway deposit in its transaction"
+    );
+    assert_eq!(
+        mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, 330, &VAULT_A)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        mint_volume_per_hour(&fx.pool, CHAIN_ID, 330, 1_700_000_000, 3600)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 330, 1_700_000_000, 3600, &VAULT_A)
+            .await
+            .unwrap(),
+        expected
+    );
+
+    // The gateway's own vault Deposit is still netted: a gateway-only transaction counts once.
+    let gw_only = tx_hash(81);
+    insert_agent_deposit(&fx.pool, 330, 5, &gw_only, 7_000_000, Some(&VAULT_A)).await;
+    insert_vault_transfer(&fx.pool, 330, 4, &gw_only, &VAULT_A, "deposit", 7_000_000).await;
+    assert_eq!(
+        mint_volume_per_block(&fx.pool, CHAIN_ID, 330)
+            .await
+            .unwrap(),
+        expected + 7_000_000
+    );
+}
+
+/// Security round 2: the mint queries cost what the evaluated block or hour holds, not what the
+/// chain's history holds.
+///
+/// The round-1 netting ran a correlated subquery once per (transaction, vault) of the whole
+/// history, each run scanning every leg of that vault. With 20,000 two-leg router deposits the
+/// per-hour query took 37.8 s (20 ms before), and the watchdog runs it for every Base block (2 s),
+/// so it fell further behind with every block while its heartbeat stayed fresh. Anyone can add
+/// such deposits: `PortfolioRouter.deposit` is public with no minimum.
+///
+/// 20,000 router deposits, one per block, two legs each, 2 s apart. Only the last hour (1,800
+/// blocks) is in the window. Each mint query must answer within a second, and the router-only
+/// history nets to exactly its legs.
+#[tokio::test]
+async fn mint_volume_queries_cost_the_window_not_the_history() {
+    let fx = pg_fixture().await;
+    seed_chain(&fx.pool).await;
+
+    const DEPOSITS: i64 = 20_000;
+    const FIRST: i64 = 1_000;
+    const T0: i64 = 1_700_000_000;
+    const LEG: i64 = 1_000_000;
+    let last = FIRST + DEPOSITS - 1;
+    let now = T0 + 2 * (DEPOSITS - 1);
+
+    sqlx::query(
+        "INSERT INTO blocks (chain_id, block_number, hash, parent_hash, timestamp) \
+         SELECT $1, n, int8send(n) || '\\x00'::bytea, '\\x00'::bytea, $3 + 2 * (n - $2) \
+           FROM generate_series($2::bigint, $4::bigint) n",
+    )
+    .bind(CHAIN_ID)
+    .bind(FIRST)
+    .bind(T0)
+    .bind(last)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    // Two legs per deposit (vault A at log 1, vault B at log 3) and the vault Deposit each leg
+    // caused (logs 0 and 2), all in the block's one transaction.
+    for (vault, leg_log, deposit_log) in [(&VAULT_A, 1i32, 0i32), (&VAULT_B, 3, 2)] {
+        sqlx::query(
+            "INSERT INTO router_deposit_legs \
+               (chain_id, block_number, log_index, tx_hash, payment_id, depositor, vault, \
+                amount, shares, weight_bps) \
+             SELECT $1, n, $3, int8send(n), int8send(n), '\\xbb'::bytea, $4, $5, 0, 5000 \
+               FROM generate_series($2::bigint, $6::bigint) n",
+        )
+        .bind(CHAIN_ID)
+        .bind(FIRST)
+        .bind(leg_log)
+        .bind(&vault[..])
+        .bind(BigDecimal::from(LEG))
+        .bind(last)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO vault_transfer_events \
+               (chain_id, block_number, log_index, tx_hash, vault, direction, caller, \
+                owner_or_receiver, assets, shares) \
+             SELECT $1, n, $3, int8send(n), $4, 'deposit', '\\xdd'::bytea, '\\xee'::bytea, $5, 0 \
+               FROM generate_series($2::bigint, $6::bigint) n",
+        )
+        .bind(CHAIN_ID)
+        .bind(FIRST)
+        .bind(deposit_log)
+        .bind(&vault[..])
+        .bind(BigDecimal::from(LEG))
+        .bind(last)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("ANALYZE").execute(&fx.pool).await.unwrap();
+
+    // Blocks with timestamp >= now - 3600: the last 1,801 blocks (2 s apart, both ends in).
+    let in_window = 3600 / 2 + 1;
+    let budget = std::time::Duration::from_secs(1);
+
+    let started = std::time::Instant::now();
+    let hour = mint_volume_per_hour(&fx.pool, CHAIN_ID, last, now, 3600)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(
+        hour,
+        (2 * LEG * in_window) as u128,
+        "router legs, counted once"
+    );
+    assert!(
+        elapsed < budget,
+        "mint_volume_per_hour took {elapsed:?} over {DEPOSITS} router deposits"
+    );
+
+    let started = std::time::Instant::now();
+    let hour_a = mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, last, now, 3600, &VAULT_A)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(hour_a, (LEG * in_window) as u128);
+    assert!(
+        elapsed < budget,
+        "mint_volume_per_hour_for_vault took {elapsed:?} over {DEPOSITS} router deposits"
+    );
+
+    let started = std::time::Instant::now();
+    let block = mint_volume_per_block(&fx.pool, CHAIN_ID, last)
+        .await
+        .unwrap();
+    let block_a = mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, last, &VAULT_A)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(block, 2 * LEG as u128);
+    assert_eq!(block_a, LEG as u128);
+    assert!(
+        elapsed < budget,
+        "the per-block mint queries took {elapsed:?} over {DEPOSITS} router deposits"
+    );
+}
+
+/// Security round 3: the per-hour window of block X is `[ts(X) - 1h, X]`. A block after X is never
+/// in X's hour, even when it is already indexed because the watchdog is catching up.
+///
+/// The window used to be open at the top. After a 2 hour backlog (an indexer RPC outage, a DI-7
+/// held cursor, a restart), each backlog block's per-hour sum held every block up to the indexed
+/// head. A deposit at the head above `per_hour_mint_limit` made every backlog block breach
+/// `PerHourMint`, page its own incident and send `pauseDeposits`, which only a 48 h timelock
+/// operation undoes.
+///
+/// Blocks 100..=700 are 12 s apart, so the head (700) is 2 hours after block 100. Block 101 holds
+/// 1 USDC. The head holds 1,500 USDC against a 1,000 USDC per-hour limit and a withdrawal under
+/// the burn limit. Catching up from cursor 99 to 700 must breach, page and pause for block 700
+/// only.
+#[tokio::test]
+async fn per_hour_window_ends_at_the_evaluated_block_during_catch_up() {
+    const T: i64 = 1_700_000_000;
+    const FIRST: i64 = 100;
+    const HEAD: i64 = 700;
+    const SPIKE: u64 = 1_500_000_000;
+    const HEAD_BURN: u64 = 400_000_000;
+
+    let fx = pg_fixture().await;
+    watchdog::pager_state::ensure_pager_state_table(&fx.pool)
+        .await
+        .unwrap();
+    let webhook = MockWebhookServer::start().await;
+    let rpc = PauseRpcStub::start().await;
+    let mut config = alert_only_config(999_999_999_999, 999_999_999_999, &webhook.url);
+    config.global.per_hour_mint_limit_usdc = "1000000000".to_owned();
+    config.global.per_hour_burn_limit_usdc = "1000000000".to_owned();
+    config.action.mode = ActionMode::PauseAndAlert;
+    config.action.gateway_rpc_url = Some(rpc.url.clone());
+    config.action.gateway_address = Some("0x000000000000000000000000000000000000dEaD".to_owned());
+    config.action.pauser_private_key_hex = Some(PauserKeyHex::new(
+        "1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+    ));
+    config.sla.max_response_secs = 5;
+    let pauser = config
+        .take_pauser_signing_key()
+        .expect("configured pauser key must derive")
+        .expect("a pauser key was configured");
+    let config = config;
+    let client = Client::new();
+
+    seed_chain(&fx.pool).await;
+    sqlx::query(
+        "INSERT INTO blocks (chain_id, block_number, hash, parent_hash, timestamp) \
+         SELECT $1, n, int8send(n) || '\\x00'::bytea, '\\x00'::bytea, $3 + 12 * (n - $2) \
+           FROM generate_series($2::bigint, $4::bigint) n",
+    )
+    .bind(CHAIN_ID)
+    .bind(FIRST)
+    .bind(T)
+    .bind(HEAD)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        watchdog::watchdog::block_timestamp(&fx.pool, CHAIN_ID, HEAD)
+            .await
+            .unwrap(),
+        Some(T + 7200),
+        "the head is 2 hours after block 100"
+    );
+    insert_agent_deposit(&fx.pool, 101, 0, &tx_hash(90), 1_000_000, Some(&VAULT_A)).await;
+    insert_agent_deposit(&fx.pool, HEAD, 0, &tx_hash(91), SPIKE, Some(&VAULT_A)).await;
+    insert_vault_transfer(
+        &fx.pool,
+        HEAD,
+        1,
+        &tx_hash(92),
+        &VAULT_A,
+        "withdrawal",
+        HEAD_BURN,
+    )
+    .await;
+
+    // Block 101's hour excludes the head, globally and per vault, mint and burn.
+    assert_eq!(
+        mint_volume_per_hour(&fx.pool, CHAIN_ID, 101, T + 12, 3600)
+            .await
+            .unwrap(),
+        1_000_000,
+        "block 101's hour must not count the head's deposit"
+    );
+    assert_eq!(
+        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 101, T + 12, 3600, &VAULT_A)
+            .await
+            .unwrap(),
+        1_000_000
+    );
+    assert_eq!(
+        burn_volume_per_hour(&fx.pool, CHAIN_ID, 101, T + 12, 3600)
+            .await
+            .unwrap(),
+        0,
+        "block 101's hour must not count the head's withdrawal"
+    );
+    assert_eq!(
+        burn_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 101, T + 12, 3600, &VAULT_A)
+            .await
+            .unwrap(),
+        0
+    );
+    // The head's own hour still holds it.
+    assert_eq!(
+        mint_volume_per_hour(&fx.pool, CHAIN_ID, HEAD, T + 7200, 3600)
+            .await
+            .unwrap(),
+        u128::from(SPIKE)
+    );
+    assert_eq!(
+        burn_volume_per_hour(&fx.pool, CHAIN_ID, HEAD, T + 7200, 3600)
+            .await
+            .unwrap(),
+        u128::from(HEAD_BURN)
+    );
+
+    watchdog::watchdog::store_cursor(&fx.pool, CHAIN_ID, FIRST - 1)
+        .await
+        .unwrap();
+    let result = run_cycles_since_cursor(&fx.pool, &config, &client, CHAIN_ID, HEAD, Some(&pauser))
+        .await
+        .expect("catch-up must not error");
+    assert_eq!(
+        result,
+        CycleResult::Breached(vec![ThresholdKind::PerHourMint]),
+        "only the head breaches, and only its per-hour mint"
+    );
+    assert_eq!(
+        watchdog::watchdog::load_cursor(&fx.pool, CHAIN_ID)
+            .await
+            .unwrap(),
+        Some(HEAD)
+    );
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    let paged: Vec<i64> = webhook
+        .drain_captures()
+        .iter()
+        .map(|c| {
+            let v: serde_json::Value = serde_json::from_slice(&c.body).unwrap();
+            v["payload"]["custom_details"]["block_number"]
+                .as_i64()
+                .expect("a breach alert names its block")
+        })
+        .collect();
+    assert_eq!(
+        paged,
+        vec![HEAD],
+        "one incident, for the head; no backlog block is paged"
+    );
+    assert_eq!(
+        rpc.count("eth_sendRawTransaction"),
+        1,
+        "one pause, for the head; no backlog block pauses deposits"
+    );
+
+    rpc.shutdown();
+    webhook.shutdown();
 }
 
 // ---- AC-4 / WD-1 -----------------------------------------------------------

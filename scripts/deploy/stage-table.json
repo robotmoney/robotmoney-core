@@ -363,7 +363,9 @@
         "pauseDeposits",
         "emergencyWithdraw",
         "emergencyWithdrawAdapter",
+        "emergencyExcludeAdapter",
         "forceRemoveAdapter",
+        "recoverRemovedAdapter",
         "shutdownVault"
       ],
       "registryNameSource": "sheet:VAULT_NAME"

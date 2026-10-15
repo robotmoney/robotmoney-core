@@ -244,8 +244,9 @@ function test_deploy_revertsWhenCumulative_exceedsCap() public;
 QA plan D8 (CS-8): `setMaxExposure` is `onlyVault`, and no vault function called
 it, so the FS-VLT-10 cap could never be set. Governance now sets it through
 `RobotMoneyVault.setAdapterMaxExposure` (`ADMIN_ROLE`). The cap set that way is
-stored on the adapter, binds a routed vault deposit, and clears with 0. A
-non-admin caller, an unknown index and a removed entry are refused.
+stored on the adapter, bounds what a routed vault deposit places in Morpho (the
+rest stays idle, security round 1), and clears with 0. A non-admin caller, an
+unknown index and a removed entry are refused.
 
 ```solidity
 function test_maxExposure_settableThroughVault() public;

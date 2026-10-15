@@ -308,15 +308,31 @@ it.
     OZ parents' namespaced layout is fixed by those commits.
 - **Snapshots:** one normalized file per contract in
   `contracts/test/fixtures/storage-layout/<Contract>.json`, next to today's
-  gateway snapshot. A snapshot is the layout of the implementation live on the
-  release chain. `--write` rewrites it when a release deploys a new
-  implementation. P2 records the sha256 of the normalized snapshot in the
-  manifest as the proxy's storage-layout identifier.
+  gateway snapshot. A snapshot is exactly the layout of the code in the same
+  tree. `--write` rewrites it in the change that appends to the layout, and the
+  same-tree compare fails a snapshot that differs from the code in any way, an
+  append included (security round 3). P2 records the sha256 of the normalized
+  snapshot in the manifest as the proxy's storage-layout identifier, and the
+  upgrade-proxy row passes equal identifiers with no compare. An append that
+  skipped `--write` would keep the old identifier on a build that holds the new
+  variable, and a later insert before it would pass every compare. The release
+  tags hold the layouts releases put live (`--release-anchor` below).
 - **Rules, all of which fail the job:**
   - an existing variable moves, changes type or offset, or disappears;
   - a new variable sits anywhere but after the last existing one;
   - any storage struct changes at all (a new field needs a new struct in a new
     mapping);
+  - a storage enum's existing members change in any way: insert, remove,
+    reorder or rename. A stored enum is its member's index, so members may only
+    be appended. `forge inspect` gives an enum type no member list, so the
+    snapshot records each storage enum's members from its definition in the
+    contract's compiled sources;
+  - the newer record stores a struct or an enum (in a variable, a mapping, an
+    array or a struct member) whose members it does not record. The struct and
+    enum rules skip what the newer record leaves out, so a snapshot with a
+    struct and its enum deleted by hand would hide a change to either;
+  - in the same-tree compare only, the committed snapshot differs from the
+    code's layout record at all;
   - the linearization list differs in any way, including order;
   - `GovernedUpgrade` is missing from a proxied contract's linearization;
   - a production function uses `reinitializer(n)` without `onlyUpgradeAuthority` (§3);
@@ -343,7 +359,22 @@ it.
   `scripts/ci/check-storage-layout.sh --selftest` first, which proves each
   rule fires on a mutated snapshot. Then it runs `scripts/ci/check-storage-layout.sh`
   over every listed contract. `forge-unit-tests` is already a required check
-  (`scripts/ci/required-checks.json`).
+  (`scripts/ci/required-checks.json`). Last it runs
+  `scripts/ci/check-storage-layout.sh --base <ref>`, with `<ref>` the PR base
+  (the previous tip on a push, `dev` on a dispatch). The same-tree compare
+  reads its snapshot from the change under test, so a change that reruns
+  `--write` would pass it whatever it did to the layout. `--base` holds the
+  committed snapshots to the storage rules above against the base's snapshots,
+  so a rewritten snapshot must itself be append-only. The linearization,
+  library and OZ pins are printed, not failed, in that mode, because a release
+  rewrites them on purpose. The parent alone is not an anchor: a red commit
+  that rewrote a snapshot becomes the next commit's parent, which then passes.
+  So the step fetches the `release/*` tags and runs
+  `scripts/ci/check-storage-layout.sh --release-anchor`, the same compare
+  against every annotated production `release/<version>` tag (a `-rehearsal`
+  or lightweight tag never anchors). In both modes a contract proxied at the
+  anchor must still be listed in `proxied.txt` (a rename or delisting fails),
+  and a contract listed there with no snapshot is not treated as new.
 - The gateway snapshot is re-baselined once in P1. The proxy implementation
   moves immutables into storage and changes parents, so it starts a new layout
   series. From then on the rules above hold.
@@ -648,7 +679,12 @@ Where the code differs from the text above, the code and this record win.
 - **Govern rows.** `upgrade-proxy` (one `upgradeToAndCall`) and `freeze-proxy` (one
   `freezeUpgrades(liveImplementation, liveCodeHash)`, or a batch for `all`) both go through the Safe and
   the timelock, on every chain and kind, never in stage 13. Both bind to a reviewed build by masked code
-  comparison.
+  comparison. On 8453 the build must sit in a clean checkout at a release-tagged, CI-green sha, recorded as
+  `build_sha`. The build must be that checkout's own `out/`, and every compared artifact and each library
+  it links must be compiled from the sources committed at that sha (forge's metadata source hashes). The
+  tag is checked on `robotmoney/robotmoney-core`, and CI is read with the deployment checkout's
+  `check-sha-green`. `upgrade-proxy` also refuses a build whose layout snapshot moves a live variable or
+  changes a stored enum's existing members.
 - **Evidence.** `evidence.json` carries `upgrade_mode`, `proxies`, `proxy_upgrades` and `proxy_freezes`.
   `evidence-check` refuses an undeclared mode and a proxy record whose admin or beacon slot is not empty.
 - **Runbook.** `docs/operations/contract-release-runbooks.md` §4.12 names the freeze owners, the deadline
@@ -728,8 +764,10 @@ code and this record win.
     submit` run checks 1, 2 and 2b before they sign (`upgrade::verify_gateway_before_signing`); they had
     run none. A mismatch exits 2 and a failed read exits 3, never a signature.
   - *The vaults and the router are pinned too.* A deposit checks the gateway's vault (check 5c), a
-    withdraw every vault it redeems from, a router deposit the router and every leg of its effective
-    weight vector, and `withdraw-router` the router, each against the new config key
+    withdraw every vault it redeems from and, on a gateway with a router, the router it redeems
+    through (security round 1: `withdraw` signed `withdrawFromRouter` without it), a router deposit the
+    router and every leg of its effective weight vector, and `withdraw-router` the router, each against
+    the new config key
     `proxy_implementation_hashes` with the rules of check 2b. `ErrImplementationNotApproved` gained a
     `proxy` field naming the refused contract.
   - *The JSON `checks` block no longer claims 2b passed* when the refusal could have come from 2b itself
@@ -741,6 +779,22 @@ code and this record win.
     a proxied vault it names `proxy_implementation_hashes` with how to fill it from the release record.
     `scripts/stage/mainnet-dapp.ts`, the Docker build, the compose files and the smoke-test dapp env carry
     the value.
+  - *The dapp pins the vault and router implementations too (security round 1).* Their code-hash pins
+    were the generic `ERC1967Proxy`, so deposits, approvals and the "[bytecode verified]" badge passed
+    for any implementation the timelock installed. `VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH` and
+    `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH` (from `timelock.json`, which `DeployTimelock` now records:
+    `vault_handover.vault_<i>.implementation_code_hash`, `code_hashes.router_implementation`) are checked
+    by the write guard at send time, with the code and the slot read at one block and no session cache,
+    and by the badge. Every gateway write re-checks the gateway implementation the same way, so a tab
+    left open across an upgrade no longer signs against it. Redeems are never gated on any of it, nor on
+    gateway verification (core 1494). The rmpc export writes the reviewed vault and router hashes the
+    build pins as `proxy_implementation_hashes`, and never a live-read command.
+  - *A dapp router deposit checks every leg (security round 2).* The guard checked only the router, so a
+    leg upgraded to unreviewed logic took USDC through the router while a direct deposit into it was
+    refused. A router deposit now reads `getEffectiveWeights()` at the guard's block and checks every
+    leg vault's code and implementation pins, as rmpc does; the refusal names the leg. The router form
+    closes and the badge stays UNVERIFIED while a leg is refused. The Withdraw tab still shows and
+    revokes a share allowance left on a router that fails its pins.
   - *Disclosure beyond the vault pages.* `ProtocolUpgradesPanel` (Router Governance tab) shows the
     implementation and freeze state of the gateway, router, registry, IC policy and receipt. Without a
     chain read (no wallet on the mainnet class) every panel shows the explorer index's answer, labelled as

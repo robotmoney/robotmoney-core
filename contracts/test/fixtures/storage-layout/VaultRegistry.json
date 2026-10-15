@@ -1,5 +1,12 @@
 {
   "contract": "VaultRegistry",
+  "enums": {
+    "enum VaultRegistry.VaultStatus": [
+      "Active",
+      "DepositsPaused",
+      "Retired"
+    ]
+  },
   "libraries": {},
   "linearization": [
     "contracts/VaultRegistry.sol:VaultRegistry",

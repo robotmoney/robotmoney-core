@@ -40,6 +40,7 @@
 //! max_lag_blocks = 150      # chain head minus indexed head
 //! max_silence_secs = 300    # since the newest indexer run without an error
 //! repage_secs = 3600
+//! max_cursor_lag_blocks = 150  # indexed head minus the watchdog's own cursor
 //!
 //! # Optional per-vault overrides (keyed by lowercase hex address without 0x prefix).
 //! # Vaults not listed here inherit the global limits.

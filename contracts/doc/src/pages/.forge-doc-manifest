@@ -41,6 +41,7 @@ contracts/interfaces/interface.IUniswapV4PriceRecorder.mdx
 contracts/interfaces/interface.IUnlockCallbackV4.mdx
 contracts/interfaces/interface.IUpstreamMonitor.mdx
 contracts/interfaces/interface.IVault.mdx
+contracts/interfaces/interface.IVenueHealthAdapter.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/abstract.GovernedUpgrade.mdx
@@ -208,6 +209,7 @@ contracts/test/contract.GovernedUpgradeLifecycleVaultRegistryTest.mdx
 contracts/test/contract.GovernedVaultSafeTimelockTest.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.ICGatewayIntegration.mdx
+contracts/test/contract.IlliquidMockAdapter.mdx
 contracts/test/contract.InterlockMockVault.mdx
 contracts/test/contract.InvForeignToken.mdx
 contracts/test/contract.InvUSDC.mdx
@@ -246,6 +248,7 @@ contracts/test/contract.MorphoAdapterTest.mdx
 contracts/test/contract.NaiveAgentGateway.mdx
 contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
+contracts/test/contract.PartlyLiquidMockAdapter.mdx
 contracts/test/contract.PortfolioRouterLegAvailabilityTest.mdx
 contracts/test/contract.PortfolioRouterRedeemFloorTest.mdx
 contracts/test/contract.PortfolioRouterRuntimeEligibilityTest.mdx
@@ -363,6 +366,8 @@ contracts/test/fv/library.InvariantRegistry.mdx
 contracts/test/helpers/abstract.BasketDeployFixture.mdx
 contracts/test/helpers/abstract.SafeFixture.mdx
 contracts/test/helpers/abstract.SafeGovernance.mdx
+contracts/test/helpers/contract.CappedAavePool.mdx
+contracts/test/helpers/contract.CappedMetaMorpho.mdx
 contracts/test/helpers/contract.ConstPool.mdx
 contracts/test/helpers/contract.CoreStages.mdx
 contracts/test/helpers/contract.EtchAavePool.mdx
@@ -371,6 +376,7 @@ contracts/test/helpers/contract.EtchErc4626Venue.mdx
 contracts/test/helpers/contract.MockV4PoolManager.mdx
 contracts/test/helpers/contract.MockVault.mdx
 contracts/test/helpers/contract.NoYieldTestAdapter.mdx
+contracts/test/helpers/contract.PausableComet.mdx
 contracts/test/helpers/contract.SafeCallRelay.mdx
 contracts/test/helpers/contract.TestERC20.mdx
 contracts/test/helpers/function.claimTmpPath.mdx
@@ -386,6 +392,8 @@ contracts/test/helpers/library.Proxied.mdx
 contracts/test/helpers/library.RoleHolders.mdx
 contracts/test/helpers/library.VaultTestParams.mdx
 contracts/test/helpers/library.VenueEtcher.mdx
+contracts/test/interface.IAaveAddressesProvider.mdx
+contracts/test/interface.IAavePoolConfigurable.mdx
 contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IRetireVaultLinks.mdx
 contracts/test/interface.ISafe.mdx

@@ -22,7 +22,9 @@ pub struct Freshness {
 /// gate on that. Whether the indexer is keeping up is in the body (DI-5).
 #[derive(Debug, Serialize)]
 pub struct Health {
-    /// `"ok"`, or `"degraded"` when the newest finished indexer run failed (`last_run_error` is set).
+    /// `"ok"`, or `"degraded"` when the newest finished indexer run failed (`last_run_error` is set)
+    /// or the last good run is older than 300 s (`since_success_secs`): a stopped indexer writes no
+    /// run, so only its age shows it.
     pub status: &'static str,
     /// Highest block a successful indexer run committed for this chain; null until one has.
     pub last_indexed_block: Option<i64>,
@@ -36,6 +38,10 @@ pub struct Health {
     /// `indexer_runs.error` of the newest finished run for this chain; null when that run succeeded or no
     /// run has finished. A wedged indexer repeats the same error here every tick.
     pub last_run_error: Option<String>,
+    /// Seconds since the newest successful indexer run with a cursor finished, on the database
+    /// clock; null until there is one. A healthy indexer keeps it at a few seconds. Over 300 makes
+    /// `status` `"degraded"` (security round 1).
+    pub since_success_secs: Option<i64>,
     pub reorg_count: i32,
 }
 
@@ -794,7 +800,8 @@ pub struct ConsensusReceipt {
     /// Digest verification state recomputed by the indexer — NOT a claim
     /// about the payload's embedded analyst signatures.
     pub verified: bool,
-    /// Byte length of the fetched payload; null when the fetch failed.
+    /// Byte length of the verified payload; null while `verified` is false
+    /// (a failed fetch, or a body that did not hash to the digest).
     pub payload_bytes: Option<i64>,
     /// Whether an admin (the timelock) has released the receipt. An
     /// unreleased receipt is still an immutable public record.

@@ -78,6 +78,39 @@ chains are distinguishable only by bytecode.
 function test_manifestRecordsCodeHashes() public view;
 ```
 
+<a id="test_manifestrecordsimplementationcodehashes"></a>
+
+### test_manifestRecordsImplementationCodeHashes
+
+ADR-0014 (security round 1): behind a proxy `.codehash` is the generic ERC1967Proxy, the
+same for every proxy, so the dapp's code-hash pins prove nothing about the logic. The
+manifest also records keccak256 of the code of each proxy's live implementation (zero
+for a direct contract): the dapp's implementation pins (scripts/stage/mainnet-dapp.ts).
+
+```solidity
+function test_manifestRecordsImplementationCodeHashes() public view;
+```
+
+<a id="_implementationcodehashof-address"></a>
+
+### _implementationCodeHashOf
+
+```solidity
+function _implementationCodeHashOf(address proxy) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
 <a id="test_manifestrecordsther7roleconditions"></a>
 
 ### test_manifestRecordsTheR7RoleConditions

@@ -249,7 +249,8 @@ SHIPPED_COUNT="$(printf '%s\n' "${SHIPPED}" | wc -l | tr -d ' ')"
 # grouped or per-ID rows and are not keyed.
 REVIEW_DIR="${REPO_ROOT}/docs/code-review"
 REVIEW_KEY_FROM=20261012
-REVIEW_KEYS='20261012-security-review.md SR-1012'
+REVIEW_KEYS='20261012-security-review.md SR-1012
+20261015-review-security-claude.md SR-1015'
 [ -d "${REVIEW_DIR}" ] || fail "docs/code-review/ is missing; the ledger keys its reviews (issue #1792)"
 
 REGISTER_IDS="$(

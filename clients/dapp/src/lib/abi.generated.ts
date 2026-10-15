@@ -3779,6 +3779,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "emergencyExcludeAdapter",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "emergencyWithdraw",
     inputs: [],
     outputs: [],
@@ -4384,6 +4397,24 @@ export const robotMoneyVaultAbiGenerated = [
     type: "function",
     name: "rebalance",
     inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "recoverRemovedAdapter",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
     outputs: [],
     stateMutability: "nonpayable",
   },
@@ -6160,6 +6191,17 @@ export const robotMoneyVaultAbiGenerated = [
     type: "error",
     name: "NoActiveAdapters",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "NoOpenExclusion",
+    inputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
   },
   {
     type: "error",
@@ -8616,6 +8658,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "LastAdminFloor",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "LegSkippedWithFloor",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

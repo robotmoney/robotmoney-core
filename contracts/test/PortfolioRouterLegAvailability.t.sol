@@ -2,7 +2,11 @@
 // Canonical: docs/technical/smart-contract-invariants.md (RTR-5, ORA-4)
 //            docs/architecture.md §4.2.1 — router deposit availability
 // Covers QA plan v1 task D4 (findings CS-4 and E6): the router skips a leg the vault itself cannot take, and the rmAGENT
-// guard sits above the RM pool fee band.
+// guard sits above the RM pool fee band. Security round 1: a basket outside its ORA-4 band is skipped (its `previewDeposit`
+// runs the guard), and an rmUSDC leg with a capped Morpho adapter still deposits. Security round 2: an rmUSDC leg whose lending
+// venues refuse a supply still deposits, and a leg that turns unavailable after the caller set a floor on it reverts. Security
+// round 3: an rmUSDC leg whose lending venue shuts withdrawals (Aave reserve paused) is skipped, not minted at a NAV that counts
+// the stuck balance.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -24,6 +28,12 @@ import {MockVault} from "./helpers/MockVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {Proxied} from "./helpers/Proxied.sol";
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
+import {MockMorphoVault} from "./MorphoAdapter.t.sol";
+import {CappedAavePool, CappedMetaMorpho} from "./helpers/RefusingVenues.sol";
 
 /// @dev 1:1 router leg whose `previewDeposit` and `deposit` revert above `ceiling` while `maxDeposit` stays open, so only the
 ///      router's quote check can drop it. Counts `deposit` calls so a test can prove a dropped leg was never called.
@@ -308,48 +318,328 @@ contract PortfolioRouterLegAvailabilityTest is Test {
         assertEq(usdc.balanceOf(address(r)), 0, "router holds no USDC");
     }
 
-    // ─── ORA-4: the rmAGENT guard sits above the pool fee band ─────────────────
+    // ─── ORA-4: an out-of-band basket is skipped, and the rmAGENT guard sits above the fee band ──
 
-    /// @notice E6. Spot drifts about 2.5 percent from the recorded TWAP and nobody trades it back, because the drift is
-    ///         inside the 2.91 percent fee band. At the old 100 bps sheet value the rmAGENT deposit reverts on ORA-4 and the
-    ///         whole routed deposit reverts with it: ORA-4 is not an availability signal, since `previewDeposit` does not run
-    ///         it. At the D10 value (400 bps) the same routed deposit funds both legs. The drift is on the side where RM is
-    ///         cheaper at spot. On the other side the 500 bps swap bound (291 bps fee plus the drift) binds before the guard.
-    function test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit() public {
+    /// @dev Drift the RM pool's spot `DRIFT_TICKS` from the recorded TWAP on the side where RM is cheaper at spot, and
+    ///      return the deviation the ORA-4 guard measures. The recorder stays fresh: this is not a staleness case.
+    function _driftSpot() internal returns (uint256 dev) {
         int24 drift = address(rm) == c0 ? -DRIFT_TICKS : DRIFT_TICKS;
         pm.setTick(poolId, drift);
         assertTrue(rec.isFresh(), "recorder fresh: the drift is not a staleness case");
-        uint256 dev = TwapTickMath.deviationBps(
+        dev = TwapTickMath.deviationBps(
             address(rec),
             address(rm),
             address(usdc),
             agent.effectiveTwapWindow(address(rm)),
             agent.assetTokenValue(0, 1e6)
         );
+    }
+
+    /// @notice Security round 1 (ORA-4 liveness). Spot sits about 2.5 percent from the TWAP and the guard is 100 bps, so
+    ///         the basket's own deposit would revert `NavMarketDeviationExceeded`. `BasketVault.previewDeposit` now runs
+    ///         the same guard, so the router's quote pass drops the leg: `previewDeposit` reports it unavailable and the
+    ///         routed deposit renormalises the whole amount onto the live leg. Before the fix the views passed, the leg
+    ///         stayed in the set, and the whole routed deposit reverted `UsdcLegTransferFailed(rmAGENT)`, the 1:1 part
+    ///         included. `maxMint` still never reverts (ERC-4626).
+    function test_ORA4_outsideBandBasketLegIsSkippedNotReverted() public {
+        vm.prank(admin);
+        agent.setNavDeviationGuardBps(OLD_SHEET_NAV_DEVIATION_BPS);
+        uint256 dev = _driftSpot();
+        assertGt(dev, OLD_SHEET_NAV_DEVIATION_BPS, "spot is outside the 100 bps band");
+        assertGt(agent.maxDeposit(address(router)), 0, "the vault's own gate is open");
+        vm.expectPartialRevert(TwapTickMath.NavMarketDeviationExceeded.selector);
+        agent.previewDeposit(LEG);
+        assertGt(agent.maxMint(address(router)), 0, "maxMint does not run the guard");
+
+        uint256 amount = 2 * LEG;
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "the out-of-band basket previews unavailable");
+        assertEq(legs[0].legAmount, 0, "it gets no USDC");
+        assertFalse(legs[1].unavailable, "the 1:1 leg stays");
+        assertEq(legs[1].legAmount, amount, "the 1:1 leg absorbs the whole amount");
+
+        uint256 agentSupply = agent.totalSupply();
+        uint256 otherBefore = other.balanceOf(depositor);
+        uint256 swaps = pm.swapCount();
+        uint256[] memory shares = _routerDeposit(amount);
+        assertEq(shares[0], 0, "out-of-band leg skipped, not reverted");
+        assertEq(shares[1], amount, "the 1:1 leg funded with the renormalised amount");
+        assertEq(other.balanceOf(depositor) - otherBefore, amount, "executed as previewed");
+        assertEq(agent.totalSupply(), agentSupply, "no rmAGENT shares minted");
+        assertEq(pm.swapCount(), swaps, "no swap on the skipped leg");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no USDC");
+    }
+
+    /// @notice E6. Spot drifts about 2.5 percent from the recorded TWAP and nobody trades it back, because the drift is
+    ///         inside the 2.91 percent fee band. At the old 100 bps sheet value that drift takes rmAGENT out of every
+    ///         routed deposit (`test_ORA4_outsideBandBasketLegIsSkippedNotReverted`; before security round 1 it reverted
+    ///         the whole routed deposit). At the D10 value (400 bps) the same routed deposit funds both legs. The drift is
+    ///         on the side where RM is cheaper at spot. On the other side the 500 bps swap bound (291 bps fee plus the drift)
+    ///         binds before the guard.
+    function test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit() public {
+        uint256 dev = _driftSpot();
         assertGt(dev, OLD_SHEET_NAV_DEVIATION_BPS, "drift is above the old 100 bps guard");
         assertLt(dev, uint256(FEE) / 100, "drift is inside the pool fee band");
 
         uint256 amount = 2 * LEG;
         vm.prank(admin);
-        agent.setNavDeviationGuardBps(OLD_SHEET_NAV_DEVIATION_BPS);
-        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
-        assertFalse(legs[0].unavailable, "ORA-4 is not an availability signal");
-        usdc.mint(depositor, amount);
-        vm.startPrank(depositor);
-        usdc.approve(address(router), amount);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(agent))
-        );
-        router.deposit(amount, new uint256[](0));
-        vm.stopPrank();
-        usdc.burn(depositor, amount);
-
-        vm.prank(admin);
         agent.setNavDeviationGuardBps(SHEET_NAV_DEVIATION_BPS);
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertFalse(legs[0].unavailable, "inside the 400 bps band the leg stays");
         uint256[] memory shares = _routerDeposit(amount);
         assertGt(shares[0], 0, "rmAGENT leg funded under the drift");
         assertEq(shares[1], LEG, "the 1:1 leg is funded");
         assertGt(rm.balanceOf(address(agent)), 0, "the vault bought RM");
         assertEq(usdc.balanceOf(address(router)), 0, "router holds no USDC");
+    }
+
+    // ─── rmUSDC leg with a capped Morpho adapter (security round 1, D8 follow-up) ──────
+
+    /// @notice The production weight vector (rmUSDC 9500, a second leg 500) with a Morpho `maxExposure` below Morpho's
+    ///         equal-weight slice of the rmUSDC leg. The routed deposit succeeds: the vault stops Morpho at its cap and
+    ///         places the rest in the other adapter. Before the fix rmUSDC's `maxDeposit` and `previewDeposit` passed,
+    ///         its deposit reverted inside `MorphoAdapter._deposit` (`ExposureCapExceeded`), and the whole routed deposit
+    ///         reverted `UsdcLegTransferFailed(rmUSDC)`.
+    function test_RTR5_rmUsdcLegWithCappedMorphoStillDeposits() public {
+        VaultRegistry reg = Proxied.vaultRegistry(admin);
+        PortfolioRouter r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
+        RobotMoneyVault rmUsdc = Proxied.robotMoneyVault(
+            IERC20(address(usdc)), 1_000_000e6, 1_000_000e6, 0, makeAddr("fees"), admin, admin
+        );
+        NoYieldTestAdapter lending = new NoYieldTestAdapter(address(usdc), address(rmUsdc));
+        MorphoAdapter morpho = new MorphoAdapter(
+            address(new MockMorphoVault(address(usdc))), address(usdc), address(rmUsdc)
+        );
+        MockVault second = new MockVault(address(usdc));
+        uint256 cap = 10e6;
+
+        vm.startPrank(admin);
+        rmUsdc.setAdapterAllowed(address(lending), true);
+        rmUsdc.setAdapterCodeHashAllowed(address(lending).codehash, true);
+        rmUsdc.addAdapter(address(lending), 10_000);
+        rmUsdc.setAdapterAllowed(address(morpho), true);
+        rmUsdc.setAdapterCodeHashAllowed(address(morpho).codehash, true);
+        rmUsdc.addAdapter(address(morpho), 10_000);
+        rmUsdc.setAdapterMaxExposure(1, cap);
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(rmUsdc);
+        vaults[1] = address(second);
+        for (uint256 i = 0; i < 2; i++) {
+            reg.registerVault(
+                vaults[i],
+                VaultRegistry.VaultMetadata({name: "leg", asset: address(usdc), registeredAt: 0})
+            );
+            reg.setRouterEligible(vaults[i], true);
+        }
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 9_500;
+        bps[1] = 500;
+        r.setWeights(vaults, bps);
+        vm.stopPrank();
+
+        uint256 amount = 1_000e6;
+        PortfolioRouter.LegPreview[] memory legs = r.previewDeposit(amount);
+        assertFalse(legs[0].unavailable, "rmUSDC previews available");
+        assertEq(legs[0].legAmount, 950e6, "rmUSDC takes 95 percent");
+
+        usdc.mint(depositor, amount);
+        vm.startPrank(depositor);
+        usdc.approve(address(r), amount);
+        uint256[] memory shares = r.deposit(amount, new uint256[](0));
+        vm.stopPrank();
+        assertGt(shares[0], 0, "the rmUSDC leg deposits");
+        assertEq(shares[1], 50e6, "the second leg deposits");
+        assertEq(morpho.totalAssets(), cap, "Morpho stops at its exposure cap");
+        assertEq(lending.totalAssets(), 950e6 - cap, "the other adapter takes the rest");
+        assertEq(rmUsdc.totalAssets(), 950e6, "the whole leg is in rmUSDC NAV");
+        assertEq(usdc.balanceOf(address(r)), 0, "router holds no USDC");
+    }
+
+    // ─── Security round 2: venue refusal and floors on skipped legs ────────────────────
+
+    /// @dev A two-leg router over `rmUsdc` (9500 bps) and a 1:1 vault (500 bps), the production vector's shape.
+    function _rmUsdcLegRouter(RobotMoneyVault rmUsdc)
+        internal
+        returns (PortfolioRouter r, MockVault second)
+    {
+        VaultRegistry reg = Proxied.vaultRegistry(admin);
+        r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
+        second = new MockVault(address(usdc));
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(rmUsdc);
+        vaults[1] = address(second);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 9_500;
+        bps[1] = 500;
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < 2; i++) {
+            reg.registerVault(
+                vaults[i],
+                VaultRegistry.VaultMetadata({name: "leg", asset: address(usdc), registeredAt: 0})
+            );
+            reg.setRouterEligible(vaults[i], true);
+        }
+        r.setWeights(vaults, bps);
+        vm.stopPrank();
+    }
+
+    /// @dev Allow and add `set` to `rmUsdc`, each at a 100 percent `capBps`.
+    function _addAdapters(RobotMoneyVault rmUsdc, address[3] memory set) internal {
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < set.length; i++) {
+            rmUsdc.setAdapterAllowed(set[i], true);
+            rmUsdc.setAdapterCodeHashAllowed(set[i].codehash, true);
+            rmUsdc.addAdapter(set[i], 10_000);
+        }
+        vm.stopPrank();
+    }
+
+    function _rmUsdc(uint256 tvlCap) internal returns (RobotMoneyVault) {
+        return Proxied.robotMoneyVault(
+            IERC20(address(usdc)), tvlCap, tvlCap, 0, makeAddr("fees"), admin, admin
+        );
+    }
+
+    /// @notice Security round 2. rmUSDC's Aave reserve sits at its supply cap and every MetaMorpho market cap is full, so
+    ///         both venues refuse a supply while rmUSDC's `maxDeposit` and `previewDeposit` stay open. The routed deposit
+    ///         succeeds: the Aave and Morpho adapters hand their slices back, and the vault places them in the third adapter.
+    ///         Before the fix the Aave adapter's `deploy` reverted "51" (`SUPPLY_CAP_EXCEEDED`), rmUSDC's deposit reverted,
+    ///         and the whole routed deposit reverted `UsdcLegTransferFailed(rmUSDC)`, the 500 bps leg included.
+    function test_RTR5_rmUsdcLegWithFullLendingVenuesStillDeposits() public {
+        RobotMoneyVault rmUsdc = _rmUsdc(1_000_000e6);
+        TestERC20 aToken = new TestERC20();
+        AaveV3Adapter aave = new AaveV3Adapter(
+            address(new CappedAavePool(address(usdc), address(aToken), 0)),
+            address(usdc),
+            address(aToken),
+            address(rmUsdc)
+        );
+        NoYieldTestAdapter lending = new NoYieldTestAdapter(address(usdc), address(rmUsdc));
+        MorphoAdapter morpho = new MorphoAdapter(
+            address(new CappedMetaMorpho(address(usdc), 0)), address(usdc), address(rmUsdc)
+        );
+        _addAdapters(rmUsdc, [address(aave), address(lending), address(morpho)]);
+        (PortfolioRouter r,) = _rmUsdcLegRouter(rmUsdc);
+
+        uint256 amount = 1_000e6;
+        PortfolioRouter.LegPreview[] memory legs = r.previewDeposit(amount);
+        assertFalse(legs[0].unavailable, "rmUSDC previews available");
+        assertEq(legs[0].legAmount, 950e6, "rmUSDC takes 95 percent");
+
+        usdc.mint(depositor, amount);
+        vm.startPrank(depositor);
+        usdc.approve(address(r), amount);
+        uint256[] memory shares = r.deposit(amount, new uint256[](0));
+        vm.stopPrank();
+        assertGt(shares[0], 0, "the rmUSDC leg deposits");
+        assertEq(shares[1], 50e6, "the second leg deposits");
+        assertEq(aave.totalAssets(), 0, "the full Aave reserve took nothing");
+        assertEq(morpho.totalAssets(), 0, "the full MetaMorpho took nothing");
+        assertEq(lending.totalAssets(), 950e6, "the open venue takes the whole leg");
+        assertEq(rmUsdc.totalAssets(), 950e6, "the whole leg is in rmUSDC NAV");
+        assertEq(usdc.balanceOf(address(r)), 0, "router holds no USDC");
+    }
+
+    /// @notice Security round 3. rmUSDC's Aave reserve is paused: supply and withdraw both revert while the aToken balance
+    ///         still counts in rmUSDC NAV. rmUSDC's `maxDeposit` reads 0, so the router previews the leg unavailable and the
+    ///         routed deposit puts the whole amount on the live leg. No rmUSDC share is minted at a NAV that counts the stuck
+    ///         balance and no USDC lands idle in rmUSDC to pay an exit at par. Before the fix the Aave adapter handed its slice
+    ///         back, and rmUSDC minted at that NAV and kept the slice idle.
+    function test_RTR5_rmUsdcLegWithPausedLendingVenueIsSkipped() public {
+        RobotMoneyVault rmUsdc = _rmUsdc(1_000_000e6);
+        TestERC20 aToken = new TestERC20();
+        CappedAavePool pool = new CappedAavePool(address(usdc), address(aToken), type(uint128).max);
+        AaveV3Adapter aave =
+            new AaveV3Adapter(address(pool), address(usdc), address(aToken), address(rmUsdc));
+        NoYieldTestAdapter lending = new NoYieldTestAdapter(address(usdc), address(rmUsdc));
+        MorphoAdapter morpho = new MorphoAdapter(
+            address(new CappedMetaMorpho(address(usdc), type(uint128).max)),
+            address(usdc),
+            address(rmUsdc)
+        );
+        _addAdapters(rmUsdc, [address(aave), address(lending), address(morpho)]);
+        (PortfolioRouter r,) = _rmUsdcLegRouter(rmUsdc);
+
+        usdc.mint(depositor, 900e6);
+        vm.startPrank(depositor);
+        usdc.approve(address(rmUsdc), 900e6);
+        rmUsdc.deposit(900e6, depositor);
+        vm.stopPrank();
+        assertGt(aave.totalAssets(), 0, "Aave holds its slice");
+        uint256 rmSupply = rmUsdc.totalSupply();
+
+        pool.setPaused(true);
+        assertEq(rmUsdc.maxDeposit(address(r)), 0, "rmUSDC closes deposits");
+        uint256 amount = 1_000e6;
+        PortfolioRouter.LegPreview[] memory legs = r.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "rmUSDC previews unavailable");
+        assertEq(legs[1].legAmount, amount, "the live leg takes the whole amount");
+
+        usdc.mint(depositor, amount);
+        vm.startPrank(depositor);
+        usdc.approve(address(r), amount);
+        uint256[] memory shares = r.deposit(amount, new uint256[](0));
+        vm.stopPrank();
+        assertEq(shares[0], 0, "no rmUSDC share is minted");
+        assertEq(shares[1], amount, "the live leg is funded with the whole amount");
+        assertEq(rmUsdc.totalSupply(), rmSupply, "rmUSDC supply is unchanged");
+        assertEq(usdc.balanceOf(address(rmUsdc)), 0, "no USDC lands idle in rmUSDC");
+        assertEq(rmUsdc.totalAssets(), 900e6, "rmUSDC NAV is unchanged");
+        assertEq(usdc.balanceOf(address(r)), 0, "router holds no USDC");
+    }
+
+    /// @notice Security round 2. A depositor previews a 50 USDC routed deposit with both legs available and signs a floor on
+    ///         each. Before it lands, another deposit fills rmUSDC to its TVL cap, so rmUSDC's `maxDeposit` reads 0 and the
+    ///         router would skip the leg. The deposit reverts `LegSkippedWithFloor(rmUSDC)`: a non-zero floor means "fund
+    ///         this leg". Before the fix the router skipped it silently, waived its floor and put all 50 USDC into the 500 bps
+    ///         leg, whose floor was sized for 2.5 USDC. A caller who previews again sees the leg unavailable, passes 0 for it,
+    ///         and the deposit renormalises onto the live leg.
+    function test_RTR5_flooredLegThatTurnsUnavailableReverts() public {
+        RobotMoneyVault rmUsdc = _rmUsdc(1_000e6);
+        NoYieldTestAdapter lending = new NoYieldTestAdapter(address(usdc), address(rmUsdc));
+        vm.startPrank(admin);
+        rmUsdc.setAdapterAllowed(address(lending), true);
+        rmUsdc.setAdapterCodeHashAllowed(address(lending).codehash, true);
+        rmUsdc.addAdapter(address(lending), 10_000);
+        vm.stopPrank();
+        (PortfolioRouter r,) = _rmUsdcLegRouter(rmUsdc);
+
+        uint256 amount = 50e6;
+        PortfolioRouter.LegPreview[] memory legs = r.previewDeposit(amount);
+        uint256[] memory floors = new uint256[](2);
+        for (uint256 i = 0; i < 2; i++) {
+            assertFalse(legs[i].unavailable, "both legs preview available");
+            floors[i] = legs[i].estShares;
+        }
+        assertEq(legs[1].legAmount, 2.5e6, "the second leg is sized for 2.5 USDC");
+
+        // Another deposit fills rmUSDC to its TVL cap before the routed deposit lands.
+        address filler = makeAddr("filler");
+        usdc.mint(filler, 1_000e6);
+        vm.startPrank(filler);
+        usdc.approve(address(rmUsdc), 1_000e6);
+        rmUsdc.deposit(rmUsdc.maxDeposit(filler), filler);
+        vm.stopPrank();
+        assertEq(rmUsdc.maxDeposit(address(r)), 0, "rmUSDC is at its TVL cap");
+
+        usdc.mint(depositor, amount);
+        vm.startPrank(depositor);
+        usdc.approve(address(r), amount);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.LegSkippedWithFloor.selector, address(rmUsdc))
+        );
+        r.deposit(amount, floors);
+        vm.stopPrank();
+
+        legs = r.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "a fresh preview shows rmUSDC unavailable");
+        assertEq(legs[1].legAmount, amount, "and the live leg taking the whole amount");
+        floors[0] = 0;
+        floors[1] = legs[1].estShares;
+        vm.prank(depositor);
+        uint256[] memory shares = r.deposit(amount, floors);
+        assertEq(shares[0], 0, "a 0 floor lets the router skip the unavailable leg");
+        assertEq(shares[1], amount, "the live leg is funded with the renormalised amount");
+        assertEq(usdc.balanceOf(address(r)), 0, "router holds no USDC");
     }
 }

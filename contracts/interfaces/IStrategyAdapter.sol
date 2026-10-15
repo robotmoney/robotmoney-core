@@ -6,6 +6,14 @@ pragma solidity ^0.8.24;
 /// @dev All mutating functions are restricted to onlyVault inside implementations.
 interface IStrategyAdapter {
     /// @notice Receive `amount` USDC from the vault and deploy it into the underlying protocol.
+    /// @dev The in-tree lending adapters (Aave, Morpho, Compound) hand `amount` straight back to
+    ///      the vault, without reverting, when their venue refuses the supply (security round 2):
+    ///      a reserve at its supply cap, a frozen reserve, MetaMorpho `AllCapsReached`, a Comet
+    ///      supply-only pause. A venue that refuses withdrawals too (Aave reserve paused or
+    ///      inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
+    ///      round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
+    ///      USDC balance, never by a return value, and leaves the rest idle
+    ///      (`VaultAdapterOps._allocate`).
     /// @param amount Amount of USDC (6-decimal units) to deploy into the protocol.
     function deploy(uint256 amount) external;
 

@@ -61,7 +61,9 @@ vi.mock("wagmi", () => ({
       return { data: [VAULT_A, VAULT_B] as Address[], refetch: vi.fn() };
     }
     if (opts.functionName === "allowance") {
-      rec.allowanceSpender = opts.args?.[1] as Address | undefined;
+      // Only the USDC deposit allowance: the Withdraw form also reads the router's allowance on
+      // the vault's share token (QA plan D9, security round 2).
+      if (opts.address === USDC) rec.allowanceSpender = opts.args?.[1] as Address | undefined;
       // Below the entered amount so the Approve button is rendered too.
       return { data: 0n, refetch: vi.fn() };
     }
@@ -79,7 +81,8 @@ vi.mock("wagmi", () => ({
       return { data: { request: {} }, error: null };
     }
     if (opts.functionName === "approve") {
-      rec.approveSpender = opts.args?.[0] as Address | undefined;
+      // Only the USDC approval: the Withdraw form also simulates share approvals to the router.
+      if (opts.address === USDC) rec.approveSpender = opts.args?.[0] as Address | undefined;
       return { data: { request: {} }, error: null };
     }
     return { data: undefined, error: null };

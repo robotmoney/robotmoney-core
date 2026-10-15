@@ -143,11 +143,21 @@ rmpc get-tx --config <CONFIG> --tx-hash <HASH> [--pretty]
 
 Sign and broadcast a USDC deposit through the gateway.
 
+`--destination <ROUTER>` routes it through the Portfolio Router
+(`gateway.depositTo`). rmpc then reads `router.previewDeposit(amount)`. A leg
+with weight above 0 that the router would skip is refused with
+`ErrLegUnavailable` unless `--allow-unavailable-legs` is passed. With
+`--min-shares-per-leg` omitted, each funded leg's floor is its quoted shares
+less 0.50%, so a leg that turns unavailable before inclusion reverts
+`LegSkippedWithFloor` instead of moving its share onto the other legs. A
+single `--min-shares-per-leg 0` sends no floor.
+
 ```
 rmpc deposit --config <CONFIG> --amount <UNITS> --order-id <HEX>
   [--idempotency-key <HEX>] [--deadline-secs <N>]
   [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
-  [--pretty]
+  [--destination <ADDR>] [--min-shares-per-leg <N>]
+  [--allow-unavailable-legs] [--pretty]
 ```
 
 ### `rmpc withdraw`

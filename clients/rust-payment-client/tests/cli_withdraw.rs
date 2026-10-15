@@ -580,6 +580,105 @@ async fn withdraw_gas_limit_below_the_router_floor_refuses() {
     assert_eq!(v["error"], "ErrGasLimitBelowFloor");
 }
 
+/// ADR-0014 (security round 1): `withdrawFromRouter` makes the gateway approve
+/// the router for the share receiver's shares and call its `redeemFor`. The
+/// router is a proxy, so a plain `rmpc withdraw` must check its implementation
+/// as `withdraw-router` does: an implementation whose code hash is not in
+/// `proxy_implementation_hashes` refuses before anything is simulated, signed
+/// or broadcast, even though the router proxy's own code is unchanged.
+#[tokio::test]
+async fn withdraw_refuses_a_router_whose_implementation_is_not_pinned() {
+    let implementation = address!("00000000000000000000000000000000000001a2");
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    // gateway.router() is ROUTER (install_route_mocks). Its ERC-1967 slot
+    // names `implementation`, whose code nobody pinned.
+    let slot = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getStorageAt"})),
+            Matcher::Regex(format!(r#"(?i)"params":\["{ROUTER:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!(
+            "0x{}",
+            common::abi_addr_hex(implementation)
+        )))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let _impl_code = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#"(?i)"params":\["{implementation:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result("0x6001fe"))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let simulated = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::withdrawFromRouterCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect(0)
+        .create_async()
+        .await;
+    let broadcast = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    // Pin some other reviewed implementation: the live one is not it.
+    let config = std::fs::read_to_string(&fix.config_path).unwrap().replacen(
+        "[signer]",
+        &format!(
+            "proxy_implementation_hashes = [\"{:#x}\"]\n\n[signer]",
+            keccak256(b"a reviewed router implementation")
+        ),
+        1,
+    );
+    std::fs::write(&fix.config_path, config).unwrap();
+
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &unique_state_dir())
+        .args(["--receipt-timeout-secs", "5"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["status"], "refused");
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    let message = v["message"].as_str().unwrap().to_lowercase();
+    assert!(message.contains(&format!("router {ROUTER:#x}")), "{v}");
+    assert!(message.contains(&format!("{implementation:#x}")), "{v}");
+    assert!(
+        message.contains("not in proxy_implementation_hashes"),
+        "{v}"
+    );
+    slot.assert_async().await;
+    simulated.assert_async().await;
+    broadcast.assert_async().await;
+}
+
 /// Owner decision 2026-10-06: the software keystore is allowed on Base
 /// mainnet; the production warning prints before the keystore is loaded.
 #[test]

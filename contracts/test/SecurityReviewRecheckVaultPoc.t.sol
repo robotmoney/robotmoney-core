@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {RobotMoneyVaultTest, MockAdapter} from "./RobotMoneyVault.t.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {ExclusionLedger} from "../ExclusionLedger.sol";
 
@@ -330,69 +331,98 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         assertFalse(vault.depositsPaused(), "no pause side effect");
     }
 
-    // ─── Omitted: EMERGENCY write-off reprices exits ─────────────────────
+    // ─── SR-1012-5 (issue 1705 finding 5): EMERGENCY force-remove keeps exit claims ──
 
-    /// EMERGENCY force-removes the only funded adapter. NAV -> 0. `maxRedeem` still promises
-    /// the full balance while `redeem` burns every share for 0 USDC. The USDC stays in the
-    /// adapter; only ADMIN `addAdapter` brings it back, and with zero supply the ERC4626
-    /// virtual shares then own it.
-    function test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero() public {
+    /// Was: EMERGENCY force-removed the only funded adapter, NAV went to 0, `redeem` burned every
+    /// share for 0 USDC, and the ADMIN re-add later handed the stranded USDC to whoever held
+    /// shares then (with zero supply, to the ERC4626 virtual shares). Remediated in security
+    /// round 1: the force-remove opens an exclusion record for the funded entry, the exiter
+    /// keeps a pro-rata claim, and the re-add realises the adapter's balance into that record,
+    /// never into NAV.
+    function test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim() public {
         _grantHotKeys();
         vm.prank(alice);
         uint256 shares = vault.deposit(1_000 * ONE_USDC, alice);
+        ExclusionLedger ledger = vault.exclusionLedger();
 
         vm.prank(emergency);
         vault.forceRemoveAdapter(0);
+        assertEq(vault.totalAssets(), 0, "the balance left NAV");
+        assertEq(vault.openExclusionOf(0), 1, "but it is owed to the holders of the moment");
 
-        assertEq(vault.totalAssets(), 0, "NAV written off");
-        assertEq(vault.maxRedeem(alice), shares, "view promises the full balance");
-        assertEq(vault.previewRedeem(shares), 0, "but it is worth 0");
-
+        // Alice exits at the written-down NAV and keeps her claim.
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         uint256 out = vault.redeem(shares, alice, alice);
-        assertEq(out, 0, "redeem pays nothing");
+        assertEq(out, 0, "nothing left in NAV to pay");
         assertEq(usdc.balanceOf(alice) - before, 0);
-        assertEq(vault.balanceOf(alice), 0, "shares are gone");
+        assertEq(ledger.balanceAt(alice, 1), shares, "the exiter keeps her snapshot");
         assertEq(adapter.totalAssets(), 1_000 * ONE_USDC, "the USDC is still in the adapter");
 
+        // ADMIN re-adds the adapter: the balance goes to the record, not to NAV.
         vm.prank(admin);
         vault.addAdapter(address(adapter), 10_000);
+        assertEq(vault.totalAssets(), 0, "the re-add does not lift NAV");
+        assertEq(
+            ledger.claimable(1, alice), 1_000 * ONE_USDC, "the exiter's claim is the whole recovery"
+        );
+        ledger.claim(1, alice);
+        assertEq(usdc.balanceOf(alice) - before, 1_000 * ONE_USDC, "alice is made whole");
+
+        // A later depositor buys at par and has no claim.
         vm.prank(admin);
         vault.unpauseDeposits();
-        assertEq(vault.totalAssets(), 1_000 * ONE_USDC);
         vm.prank(bob);
         uint256 bobShares = vault.deposit(1 * ONE_USDC, bob);
-        assertApproxEqAbs(
-            vault.previewRedeem(bobShares), 1 * ONE_USDC, 2, "orphan stays behind virtual shares"
-        );
+        assertApproxEqAbs(vault.previewRedeem(bobShares), 1 * ONE_USDC, 2, "nothing orphaned");
+        assertEq(ledger.claimable(1, bob), 0, "no claim for a later depositor");
     }
 
-    /// Partial force-remove: exits during the exclusion are under-paid; stayers are over-paid
-    /// after ADMIN re-adds. Mirror image of finding 1, triggerable by the EMERGENCY key alone
-    /// and NOT closed by the deposit pause.
-    function test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid() public {
+    /// Was: a partial force-remove underpaid the holders who exited during the write-off and
+    /// overpaid the ones who stayed once ADMIN re-added the adapter (the mirror image of finding
+    /// 1, triggerable by the EMERGENCY key alone). Now the exiter's record claim equals its
+    /// pro-rata share of the recovered balance, and exiter and stayer end level.
+    function test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata() public {
         _grantHotKeys();
         MockAdapter second = _secondAdapter();
+        ExclusionLedger ledger = vault.exclusionLedger();
 
         vm.prank(alice);
         uint256 aliceShares = vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(bob);
-        vault.deposit(1_000 * ONE_USDC, bob);
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
         assertEq(second.totalAssets(), 1_000 * ONE_USDC);
+        uint256 supply = vault.totalSupply();
 
         vm.prank(emergency);
         vault.forceRemoveAdapter(1);
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "half of NAV excluded");
+        assertEq(vault.openExclusionOf(1), 1, "record 1 holds the excluded half");
 
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(aliceShares, alice, alice);
-        assertLe(usdc.balanceOf(alice) - before, 500 * ONE_USDC, "alice exits at half value");
+        uint256 alicePaid = usdc.balanceOf(alice) - before;
+        assertApproxEqAbs(alicePaid, 500 * ONE_USDC, 1, "alice exits at half value");
 
         vm.prank(admin);
         vault.addAdapter(address(second), 10_000);
-        assertGe(vault.maxWithdraw(bob), 1_499 * ONE_USDC, "bob now owns alice's 500");
+        assertEq(usdc.balanceOf(address(ledger)), 1_000 * ONE_USDC, "the recovery is in record 1");
+        assertApproxEqAbs(vault.maxWithdraw(bob), 500 * ONE_USDC, 1, "bob gains nothing in NAV");
+
+        uint256 recovered = 1_000 * ONE_USDC;
+        assertEq(
+            ledger.claimable(1, alice),
+            Math.mulDiv(recovered, aliceShares, supply),
+            "the exiter's claim is her pro-rata share of the recovery"
+        );
+        assertEq(ledger.claimable(1, bob), Math.mulDiv(recovered, bobShares, supply));
+        assertApproxEqAbs(
+            alicePaid + ledger.claimable(1, alice),
+            vault.maxWithdraw(bob) + ledger.claimable(1, bob),
+            2,
+            "exiter and stayer end level"
+        );
     }
 
     /// SR-M10, remediated by core 1788 (PR 1814): KEEPER `rebalance()` reverts while
@@ -426,7 +456,8 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
     }
 
     /// Force-removed funded adapter plus some idle: redeem does not revert but pays out only
-    /// the idle share.
+    /// the idle share. Since security round 1 the holder also keeps the record claim on the
+    /// adapter's balance.
     function test_O4_forceRemoveWithIdle_payoutIsIdleOnly() public {
         _grantHotKeys();
         vm.prank(alice);
@@ -441,5 +472,10 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
         vm.prank(alice);
         vault.redeem(shares, alice, alice);
         assertApproxEqAbs(usdc.balanceOf(alice) - before, 100 * ONE_USDC, 1, "1,000 in, 100 out");
+        assertEq(
+            vault.exclusionLedger().balanceAt(alice, 1),
+            shares,
+            "the rest is owed through the record"
+        );
     }
 }

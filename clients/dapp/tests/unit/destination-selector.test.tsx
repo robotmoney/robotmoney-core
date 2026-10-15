@@ -9,7 +9,7 @@
  *   - buildRouterPreview — structured preview for a router deposit including
  *     per-vault leg breakdown.
  *   - buildRouterPreview — unavailable leg produces hasUnavailable=true and
- *     high-risk classification.
+ *     high-risk classification when it carries weight (it is skipped, QA plan D4).
  *   - buildRouterPreview — unverified bytecode refusal path.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -113,10 +113,27 @@ describe("buildRouterPreview — unavailable leg", () => {
     expect(preview.risk).toBe("high");
   });
 
-  it("effect text warns about revert", () => {
+  // QA plan D4: the router skips an unavailable leg and renormalizes the rest; it does not revert.
+  it("effect text says the unavailable leg is skipped, not that the deposit reverts", () => {
     const preview = buildRouterPreview(10_000_000n, legsWithUnavailable, ctxOk);
     if (!preview.ok) return;
-    expect(preview.effect).toMatch(/revert/i);
+    expect(preview.effect).toMatch(/Unavailable legs are skipped/);
+    expect(preview.effect).toMatch(/UNAVAILABLE, skipped/);
+    expect(preview.effect).not.toMatch(/revert/i);
+  });
+
+  it("an unavailable 0 bps leg changes nothing, so it is not high risk", () => {
+    const preview = buildRouterPreview(
+      10_000_000n,
+      [
+        { ...legsActive[0], weightBps: 10_000n },
+        { ...legsActive[1], weightBps: 0n, unavailable: true },
+      ],
+      ctxOk,
+    );
+    if (!preview.ok) return;
+    expect(preview.hasUnavailable).toBe(true);
+    expect(preview.risk).toBe("low");
   });
 
   it("marks the unavailable leg in legs array", () => {

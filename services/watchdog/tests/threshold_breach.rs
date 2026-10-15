@@ -20,7 +20,10 @@ use reqwest::Client;
 use std::collections::HashMap;
 use watchdog::{
     alert::ThresholdKind,
-    config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig, VaultThresholds},
+    config::{
+        ActionConfig, ActionMode, Config, GlobalThresholds, PauserKeyHex, SlaConfig,
+        VaultThresholds,
+    },
     pager_state::ensure_pager_state_table,
     receipt_liveness::ReceiptLivenessConfig,
     watchdog::{load_cursor, run_cycle, run_cycles_since_cursor, store_cursor, CycleResult},
@@ -414,4 +417,109 @@ async fn failed_webhook_is_retried_next_cycle() {
     assert!(server.drain_captures().is_empty(), "nothing re-sent");
 
     server.shutdown();
+}
+
+/// Security round 1: while the receiver refuses a breach alert, every retry of
+/// the held block re-sends `gateway.pauseDeposits()` until the gateway reports
+/// deposits paused.
+///
+/// `trigger_pause` returns once the node accepted the transaction, never once
+/// it was mined. Before the fix the first attempt recorded the pause as
+/// submitted and every retry of the held block skipped it, while the held
+/// cursor kept every later block (and its fee-bumped replacement at the
+/// confirmed nonce, WD-5) from running. An under-priced pause stuck in the
+/// mempool then left gateway deposits open for as long as the webhook failed.
+#[tokio::test]
+async fn unconfirmed_pause_is_resent_while_the_alert_is_undelivered() {
+    use common::{FailingWebhookServer, PauseRpcStub};
+
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+
+    let webhook = FailingWebhookServer::start(500).await;
+    let rpc = PauseRpcStub::start().await;
+    let mut config = make_alert_config(500_000, &webhook.url);
+    config.action.mode = ActionMode::PauseAndAlert;
+    config.action.gateway_rpc_url = Some(rpc.url.clone());
+    config.action.gateway_address = Some("0x000000000000000000000000000000000000dEaD".to_owned());
+    config.action.pauser_private_key_hex = Some(PauserKeyHex::new(
+        "1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+    ));
+    config.sla.max_response_secs = 5;
+    let pauser = config
+        .take_pauser_signing_key()
+        .expect("configured pauser key must derive")
+        .expect("a pauser key was configured");
+    let config = config;
+    let client = Client::new();
+
+    let chain_id = 8453i64;
+    let block_number = 4100i64;
+    seed_deposits(&fx.pool, chain_id, block_number, &[300_000, 300_000]).await;
+    store_cursor(&fx.pool, chain_id, block_number - 1)
+        .await
+        .unwrap();
+
+    // Three cycles with the webhook down and the pause accepted but never
+    // mined: each one sends the pause again.
+    for cycle in 1..=3usize {
+        let result = run_cycles_since_cursor(
+            &fx.pool,
+            &config,
+            &client,
+            chain_id,
+            block_number,
+            Some(&pauser),
+        )
+        .await
+        .expect("an undelivered alert is a result, not a cycle error");
+        assert_eq!(
+            result,
+            CycleResult::BreachUndelivered(vec![ThresholdKind::PerBlockMint]),
+            "cycle {cycle}"
+        );
+        assert_eq!(
+            load_cursor(&fx.pool, chain_id).await.unwrap(),
+            Some(block_number - 1),
+            "cycle {cycle}: the cursor holds on the undelivered block"
+        );
+        assert_eq!(
+            rpc.count("eth_sendRawTransaction"),
+            cycle,
+            "cycle {cycle}: the unconfirmed pause is sent again on every retry"
+        );
+    }
+    assert!(
+        rpc.count("eth_call") >= 2,
+        "each retry asked the gateway whether deposits are paused"
+    );
+
+    // The pause lands. The next retry reads it from the chain and sends nothing.
+    rpc.set_paused(true);
+    let result = run_cycles_since_cursor(
+        &fx.pool,
+        &config,
+        &client,
+        chain_id,
+        block_number,
+        Some(&pauser),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result,
+        CycleResult::BreachUndelivered(vec![ThresholdKind::PerBlockMint])
+    );
+    assert_eq!(
+        rpc.count("eth_sendRawTransaction"),
+        3,
+        "a pause the gateway reports is not sent again"
+    );
+    assert!(
+        webhook.request_count() >= 4,
+        "the alert was retried on every cycle"
+    );
+
+    rpc.shutdown();
+    webhook.shutdown();
 }

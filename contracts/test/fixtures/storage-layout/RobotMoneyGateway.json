@@ -1,5 +1,6 @@
 {
   "contract": "RobotMoneyGateway",
+  "enums": {},
   "libraries": {
     "contracts/lib/GatewayAuth.sol:GatewayAuth": "0xb106ed0e43a041cac36d4ff7ee9fb0996b6136b1f38ee1078bde247d5d8ac6aa",
     "contracts/lib/GatewayWindows.sol:GatewayWindows": "0x453c3c2868273058430618e4db4c293977f4c695615c36d1810eb38070bc3800",

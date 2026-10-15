@@ -546,9 +546,12 @@ abstract contract BasketVault is
         return _lastMintedShares;
     }
 
-    /// @notice Mint `shares`. Reverts `DepositsArePaused` while deposits are paused.
+    /// @notice Mint `shares`. Reverts `DepositsArePaused` while deposits are paused, and
+    ///         `NavMarketDeviationExceeded` outside the ORA-4 band (as `deposit` does through
+    ///         `previewDeposit`).
     function mint(uint256 shares, address receiver) public override returns (uint256) {
         if (depositsPaused) revert DepositsArePaused();
+        _checkMarket(false);
         return super.mint(shares, receiver);
     }
 
@@ -596,12 +599,14 @@ abstract contract BasketVault is
         if (usdcAmount > perDepositCap) revert PerDepositCapExceeded();
         if (_activeAssetCount() == 0) revert NoActiveAssets();
 
-        // ORA-4 / F-10: halt deposits when the executable market price has
+        // ORA-4 / F-10: deposits halt when the executable market price has
         // diverged from the NAV-pricing TWAP beyond the configured threshold —
         // a mint at a stale/manipulated mark is the entry leg of the F-16 leak.
-        // The per-asset divergence loop lives in the linked `BasketViews`
-        // library to keep this EIP-170-tight vault under the bytecode limit.
-        _checkMarket(false);
+        // The check already ran on the way here, once per entrypoint: OZ
+        // `deposit` reads `previewDeposit`, which runs it, and `mint` runs it
+        // before `super.mint` (security round 1: the view runs it so the router's
+        // quote pass sees it). The per-asset divergence loop lives in the linked
+        // `BasketViews` library to keep this EIP-170-tight vault under the limit.
 
         // Snapshot pre-deposit state so shares are minted against the value the
         // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
@@ -768,7 +773,21 @@ abstract contract BasketVault is
     ///
     ///         Documented as a floor, not an exact quote.
     ///         See docs/technical/basket-vault-gap-report.md §3.
+    ///
+    ///         Reverts `NavMarketDeviationExceeded` while a basket asset's spot price sits
+    ///         outside the ORA-4 band around its TWAP, because `deposit` would revert on the same
+    ///         check (ERC-4626 allows a preview to revert for a condition that reverts the
+    ///         deposit). `PortfolioRouter` drops a leg whose quote reverts and renormalises the
+    ///         amount onto the other legs, so an out-of-band basket no longer reverts the whole
+    ///         routed deposit (security round 1). `maxMint` does not run the check.
     function previewDeposit(uint256 assets_) public view override returns (uint256) {
+        _checkMarket(false);
+        return _previewDepositFloor(assets_);
+    }
+
+    /// @dev The `previewDeposit` share floor without the ORA-4 check, for `maxMint`, which
+    ///      ERC-4626 forbids to revert.
+    function _previewDepositFloor(uint256 assets_) internal view returns (uint256) {
         // Discount the effective deposit by the worst-case slippage so the
         // share conversion reflects the actual token value the vault captures.
         uint256 effectiveAssets = assets_.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
@@ -809,13 +828,14 @@ abstract contract BasketVault is
 
     /// @notice Maximum shares that can be minted given current vault state.
     ///         Derived from `maxDeposit` through the slippage-discounted share
-    ///         conversion (`previewDeposit`) so the implied asset charge of
+    ///         conversion (`previewDeposit`'s floor, without its ORA-4 check, so
+    ///         this view never reverts) so the implied asset charge of
     ///         `mint(maxMint(receiver))` stays within the deposit caps
     ///         (audit 2026-06-09, L-16).
     function maxMint(address receiver) public view override returns (uint256) {
         uint256 assets_ = maxDeposit(receiver);
         if (assets_ == type(uint256).max) return type(uint256).max;
-        return previewDeposit(assets_);
+        return _previewDepositFloor(assets_);
     }
 
     /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because

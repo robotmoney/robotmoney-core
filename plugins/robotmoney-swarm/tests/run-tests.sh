@@ -692,11 +692,18 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # started counting build-matrix entries instead of `runner:` text anywhere in the
 # file (one assertion, on a zero-macOS fixture).
 #
+# 66 -> 73 with the tag-push-only release path: the installer must pin
+# --source-ref refs/tags/<TAG> and keep only push-triggered attestations (two
+# argv assertions), refuse an attestation that verifies but has no push trigger,
+# refuse a bare vX.Y.Z tag before downloading, and release-rmpc.yml must attest
+# only on the push of an rmpc-v* tag; its Validate inputs must refuse a
+# non-dry-run dispatch and still accept a dry run.
+#
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=66
+MIN_INSTALL_SELFTEST_ASSERTIONS=73
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.

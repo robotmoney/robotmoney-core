@@ -41,6 +41,29 @@ describe("secret scan over the evidence folder", () => {
     const r = scanEvidenceFolder(d).join("\n");
     expect(r).toContain("keystore json"); expect(r).toContain("secret assignment"); expect(r).toContain("mnemonic");
   });
+  // Security round 1: a prefixed secret name hid behind the leading \b (the `_` before PASSWORD is a word character), and `passphrase` was not a name at all.
+  test("a prefixed password, passphrase or API key assignment is found, each on its own line", () => {
+    const lines = [
+      "CHAIN_SIGNER_PASSWORD=hunter2hunter2",
+      "ETH_KEYSTORE_PASSWORD=hunter2hunter2",
+      "ALCHEMY_API_KEY=abcdefghijk12345",
+      '{"passphrase": "hunter2hunter2"}',
+      "SAFE_OWNER_A_PASSWORD=hunter2hunter2",
+      "DEPLOYER_PRIVATE_KEY=abcdefghijk12345",
+      "export RELAYER_MNEMONIC=abcdefghijk12345",
+      "WEBHOOK_SECRET=abcdefghijk12345",
+    ];
+    for (const line of lines) {
+      const d = scratch();
+      writeFileSync(join(d, "log.txt"), `${line}\n`);
+      expect([line, scanEvidenceFolder(d).join()]).toEqual([line, expect.stringContaining("secret assignment")]);
+    }
+  });
+  test("mutation: the redacted forms and names that only contain a secret word scan clean", () => {
+    const d = scratch();
+    writeFileSync(join(d, "log.txt"), ['{"passphrase": "[redacted]"}', "CHAIN_SIGNER_PASSWORD=[redacted]", '{"passphrase_source": "prompt"}', '{"secret_scan": "clean"}', "token_out=0x" + "ab".repeat(20)].join("\n") + "\n");
+    expect(scanEvidenceFolder(d)).toEqual([]);
+  });
   test("every committed evidence folder is clean", () => {
     const root = resolve(import.meta.dir, "..", "..");
     for (const dir of [join(root, "evidence"), join(root, "deployments")]) if (existsSync(dir)) expect(scanEvidenceFolder(dir)).toEqual([]);

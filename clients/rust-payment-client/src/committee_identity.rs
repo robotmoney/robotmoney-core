@@ -202,7 +202,10 @@ impl std::fmt::Debug for CommitteeIdentity {
 impl CommitteeIdentity {
     /// Generate a fresh Ed25519 identity and write an encrypted keystore
     /// to `path`, encrypted under `passphrase`. Refuses to overwrite an
-    /// existing file at `path`.
+    /// existing file at `path`. The file is owner-only (0600 on Unix),
+    /// whatever the process umask: a world-readable identity could be copied
+    /// and its passphrase brute-forced offline (security round 1, the same
+    /// defect QA plan U7 fixed for the EVM keystore).
     pub fn create<P: AsRef<Path>>(
         path: P,
         passphrase: &[u8],
@@ -221,8 +224,13 @@ impl CommitteeIdentity {
 
         let json = serde_json::to_string_pretty(&keystore)
             .map_err(|e| CommitteeIdentityError::ErrKeystoreFormat(e.to_string()))?;
-        std::fs::write(path, json)
-            .map_err(|e| CommitteeIdentityError::ErrKeystoreIo(e.to_string()))?;
+        write_new_owner_only(path, json.as_bytes()).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                CommitteeIdentityError::ErrIdentityExists(path.display().to_string())
+            } else {
+                CommitteeIdentityError::ErrKeystoreIo(e.to_string())
+            }
+        })?;
 
         Ok(keystore)
     }
@@ -696,6 +704,31 @@ fn derive_key(
     Ok(out)
 }
 
+/// Create `path` (it must not exist) readable and writable by its owner
+/// only, write `bytes` and flush them to disk. On Unix the file is created
+/// 0600 and narrowed to 0600 again before any byte lands, so the umask never
+/// widens it. `create_new` also closes the race between the caller's
+/// existence check and the write: an identity is never overwritten.
+fn write_new_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +764,28 @@ mod tests {
             CommitteeIdentityError::ErrIdentityExists(_) => {}
             other => panic!("expected ErrIdentityExists, got {other:?}"),
         }
+    }
+
+    /// Security round 1: under the common umask 022 `std::fs::write` left the
+    /// encrypted identity 0644, readable by every local user. It is 0600.
+    #[cfg(unix)]
+    #[test]
+    fn create_writes_owner_only_file_under_umask_022() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.json");
+        // SAFETY: umask only swaps the process file-mode mask; it is restored
+        // right after the call. 022 is the usual default, so a test creating
+        // files in parallel sees nothing unusual.
+        let previous = unsafe { libc::umask(0o022) };
+        let created = CommitteeIdentity::create(&path, TEST_PASSPHRASE);
+        // SAFETY: restores the mask saved above.
+        unsafe { libc::umask(previous) };
+        created.unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "identity mode {mode:o}");
+        CommitteeIdentity::load(&path, TEST_PASSPHRASE).expect("the identity loads");
     }
 
     #[test]

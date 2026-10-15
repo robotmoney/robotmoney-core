@@ -32,6 +32,12 @@
    names Guardrails, then `### Invariants` and `### Negative Invariants`
    under it, each with at least one bullet. The audit-guardrails review reads
    that section and stops when it is missing (QA plan v1 W4, finding F12).
+7. The model docs agree on whether a receipt can be released without weights
+   (security round 1). The timelock's standalone `release-receipt` govern row
+   releases one with none, and `applyReceipt` then refuses it forever. So no
+   model doc may claim a released receipt always carries its weights, and when
+   architecture.md documents the `release-receipt` row, governance-decisions.md
+   must say such a receipt "can never be applied".
 
 `--self-test` builds a throwaway tree, plants each banned phrase in prd.md,
 architecture.md and a non-model doc, drops each required phrase, cites an
@@ -120,6 +126,16 @@ REQUIRED = (
     ("apply-receipt", "the apply-receipt weight path"),
     ("applyReceipt", "the one-call applyReceipt weight setter"),
 )
+
+# Rule 7 (security round 1): the claim RouterGovernance's NatSpec and
+# governance-decisions.md §3.2/§3.7 made before the standalone release was
+# documented as leaving an unappliable receipt. Matched folded in every model doc.
+RELEASE_CLAIM_BANNED = (
+    "a released receipt whose weights were not applied",
+    "a released receipt always carries its weights",
+)
+STANDALONE_RELEASE_ROW = "release-receipt"
+STANDALONE_RELEASE_CONSEQUENCE = "can never be applied"
 
 VOTING_POWER = re.compile(
     r"voting power (is|are) (derived|weighted|assigned) (from|by) (RM|token|`?ADMIN_ROLE)"
@@ -244,6 +260,12 @@ def check_model_doc(root: Path, rel: Path, errors: list[str]) -> None:
     for needle, what in REQUIRED:
         if needle not in text:
             errors.append(f"{rel.name} lost {what}")
+    for banned in RELEASE_CLAIM_BANNED:
+        if fold(banned) in folded:
+            errors.append(
+                f"{rel.name} claims every released receipt carries its weights; the standalone "
+                f"release-receipt row releases one without them (security round 1): {banned}"
+            )
     if VOTING_POWER.search(text):
         errors.append(f"{rel.name} describes a voting-power model")
 
@@ -251,6 +273,13 @@ def check_model_doc(root: Path, rel: Path, errors: list[str]) -> None:
 def check_governance(root: Path, errors: list[str]) -> None:
     for rel in MODEL_DOCS:
         check_model_doc(root, rel, errors)
+    arch, gov = root / ARCHITECTURE, root / GOVERNANCE
+    if arch.is_file() and gov.is_file() and STANDALONE_RELEASE_ROW in arch.read_text():
+        if fold(STANDALONE_RELEASE_CONSEQUENCE) not in fold(gov.read_text()):
+            errors.append(
+                f"{ARCHITECTURE.name} documents the standalone {STANDALONE_RELEASE_ROW} row but "
+                f"{GOVERNANCE.name} does not say such a receipt {STANDALONE_RELEASE_CONSEQUENCE}"
+            )
 
 
 def is_record(rel: Path) -> bool:
@@ -399,6 +428,17 @@ def self_test() -> int:
         _write_tree(root)
         (root / GOVERNANCE).write_text(COMPLIANT_MODEL + "\ncreateProposal\n")
         expect("governance-decisions.md removed call-path text fails", root, want_fail=True)
+
+        # Rule 7: the release model (security round 1).
+        for banned in RELEASE_CLAIM_BANNED:
+            _write_tree(root)
+            (root / GOVERNANCE).write_text(COMPLIANT_MODEL + f"\nSo {banned}.\n")
+            expect(f"governance-decisions.md planted '{banned}' fails", root, want_fail=True, needle="released receipt")
+        _write_tree(root)
+        (root / ARCHITECTURE).write_text(COMPLIANT_ARCHITECTURE + "\nThe `release-receipt` row releases a receipt.\n")
+        expect("standalone release-receipt row without its consequence fails", root, want_fail=True, needle="release-receipt")
+        (root / GOVERNANCE).write_text(COMPLIANT_MODEL + "\nA receipt it releases can never\nbe applied.\n")
+        expect("standalone release-receipt row with its consequence passes", root, want_fail=False)
 
         # Architecture section references resolve (QA plan v1 W4, finding F7).
         sm = root / SECURITY

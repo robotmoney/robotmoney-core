@@ -83,10 +83,21 @@ pub enum Command {
         #[arg(long)]
         destination: Option<String>,
         /// Per-leg minimum shares for the router deposit (repeatable or
-        /// comma-separated decimal U256 values). Only meaningful together
-        /// with `--destination`; defaults to an empty slice when omitted.
+        /// comma-separated decimal U256 values, one per router leg). Only
+        /// meaningful together with `--destination`. When omitted, rmpc reads
+        /// `router.previewDeposit(amount)` and uses each funded leg's
+        /// `estShares` less 0.50%, so a leg that turns unavailable before
+        /// inclusion reverts `LegSkippedWithFloor` instead of moving its
+        /// share onto the other legs. A single `0` sends no floor.
         #[arg(long = "min-shares-per-leg", value_delimiter = ',', num_args = 0..)]
         min_shares_per_leg: Vec<String>,
+        /// Router deposit only: sign even when `router.previewDeposit` marks
+        /// a leg with weight above 0 unavailable (paused, at its TVL cap,
+        /// outside its price band). The router then skips that leg and
+        /// deposits its share into the other legs. Without this flag that
+        /// is refused with `ErrLegUnavailable` before signing.
+        #[arg(long = "allow-unavailable-legs")]
+        allow_unavailable_legs: bool,
         /// Pretty-print the JSON output (multi-line, indented).
         #[arg(long)]
         pretty: bool,

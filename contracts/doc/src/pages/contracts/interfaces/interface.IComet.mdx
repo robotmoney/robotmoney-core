@@ -5,7 +5,7 @@ description: "Minimal Compound V3 Comet interface used by CompoundV3Adapter."
 
 # IComet
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/interfaces/IComet.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/interfaces/IComet.sol)
 
 Minimal Compound V3 Comet interface used by CompoundV3Adapter.
 
@@ -73,4 +73,20 @@ function balanceOf(address account) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="iswithdrawpaused"></a>
+
+### isWithdrawPaused
+
+True while the pause guardian has paused `withdraw` (it reverts `Paused`).
+
+```solidity
+function isWithdrawPaused() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 

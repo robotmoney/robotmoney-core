@@ -200,29 +200,32 @@ so no pause and no misreported loss.
 function test_f2_noDuplicateToForceRemoveAfterRefusal() public;
 ```
 
-<a id="test_o1a_forceremoveallfunded_redeemburnssharesforzero"></a>
+<a id="test_o1a_forceremoveallfunded_exiterkeepsfullrecoveryclaim"></a>
 
-### test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero
+### test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim
 
-EMERGENCY force-removes the only funded adapter. NAV -> 0. `maxRedeem` still promises
-the full balance while `redeem` burns every share for 0 USDC. The USDC stays in the
-adapter; only ADMIN `addAdapter` brings it back, and with zero supply the ERC4626
-virtual shares then own it.
+Was: EMERGENCY force-removed the only funded adapter, NAV went to 0, `redeem` burned every
+share for 0 USDC, and the ADMIN re-add later handed the stranded USDC to whoever held
+shares then (with zero supply, to the ERC4626 virtual shares). Remediated in security
+round 1: the force-remove opens an exclusion record for the funded entry, the exiter
+keeps a pro-rata claim, and the re-add realises the adapter's balance into that record,
+never into NAV.
 
 ```solidity
-function test_O1a_forceRemoveAllFunded_redeemBurnsSharesForZero() public;
+function test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim() public;
 ```
 
-<a id="test_o1b_forceremovepartial_exitsunderpaidstayersoverpaid"></a>
+<a id="test_o1b_forceremovepartial_exiterandstayersharerecoveryprorata"></a>
 
-### test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid
+### test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata
 
-Partial force-remove: exits during the exclusion are under-paid; stayers are over-paid
-after ADMIN re-adds. Mirror image of finding 1, triggerable by the EMERGENCY key alone
-and NOT closed by the deposit pause.
+Was: a partial force-remove underpaid the holders who exited during the write-off and
+overpaid the ones who stayed once ADMIN re-added the adapter (the mirror image of finding
+1, triggerable by the EMERGENCY key alone). Now the exiter's record claim equals its
+pro-rata share of the recovered balance, and exiter and stayer end level.
 
 ```solidity
-function test_O1b_forceRemovePartial_exitsUnderpaidStayersOverpaid() public;
+function test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata() public;
 ```
 
 <a id="test_o2_keeperrebalanceblockedafteremergencywithdraw"></a>
@@ -252,7 +255,8 @@ function test_O3_dustDonationBlocksRemoveAdapter() public;
 ### test_O4_forceRemoveWithIdle_payoutIsIdleOnly
 
 Force-removed funded adapter plus some idle: redeem does not revert but pays out only
-the idle share.
+the idle share. Since security round 1 the holder also keeps the record claim on the
+adapter's balance.
 
 ```solidity
 function test_O4_forceRemoveWithIdle_payoutIsIdleOnly() public;

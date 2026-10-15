@@ -17,7 +17,8 @@
  * exactly `shares` on the vault's share token, and the redeem spends that allowance to zero. The
  * router's NatSpec forbids a STANDING share approval to it: a party the holder has approved on that
  * token could spend it through `redeemFor`. So the tab approves the exact amount, and it offers a
- * revoke for any allowance a redeem will not spend (`leftoverRouterAllowance`).
+ * revoke for any allowance a redeem will not spend (`leftoverRouterAllowance`). On the direct route
+ * that is all of it, a router that failed its pins included (`leftoverRouterAllowanceText`).
  *
  * An exit never depends on the router (core 1494). `chooseRedeemRoute` falls back to a direct
  * `vault.redeem`, with no floor and a visible reason, where the router cannot take the exit: no router
@@ -27,11 +28,17 @@
  *
  * The preview encodes the same `{ functionName, args }` the tab simulates and signs
  * (`routerRedeemCall`), so the preview and the signed calldata cannot differ.
+ *
+ * Nor does an exit depend on the gateway: `redeemFor` never calls it. While the gateway is
+ * unverified the preview is still built, with an UNVERIFIED badge and the gateway's cause as its
+ * `warning`. A router whose code or implementation the chain showed does not match its pins
+ * (`ctx.refusedTargets`, ADR-0014) is treated like an unpinned one: the tab redeems directly.
  */
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
 import { routerAbi } from "./abi";
 import { targetCodeHashPinned, type Preview, type PreviewContext } from "./preview";
+import { unverifiedGatewayExitWarning } from "./vaultPreview";
 import { ROUTER_SLIPPAGE_TOLERANCE_BPS } from "./routerPreview";
 import { formatPercent, formatShares, formatUsdc, shareSymbolOrNeutral } from "./format";
 
@@ -96,14 +103,7 @@ export function buildRouterRedeemPreview(
   i: RouterRedeemInputs,
   ctx: RouterRedeemPreviewContext,
 ): Preview {
-  if (!ctx.gatewayCodeHashVerified) {
-    return {
-      ok: false,
-      reason: "unknown_revert" as const,
-      ...(ctx.gatewayRefusalDetail ? { detail: ctx.gatewayRefusalDetail } : {}),
-    };
-  }
-
+  // An exit never depends on the gateway (core 1494): no refusal on `gatewayCodeHashVerified`.
   const call = routerRedeemCall(i);
   let calldata: Hex;
   try {
@@ -135,8 +135,10 @@ export function buildRouterRedeemPreview(
   return {
     ok: true,
     target: ctx.router,
-    // The router's own pin, never the gateway's (QA plan U4).
-    targetCodeHashKnown: targetCodeHashPinned(ctx, ctx.router),
+    // The router's own pin, never the gateway's (QA plan U4). An exit built while the gateway is
+    // unverified reads UNVERIFIED.
+    targetCodeHashKnown: ctx.gatewayCodeHashVerified && targetCodeHashPinned(ctx, ctx.router),
+    ...(ctx.gatewayCodeHashVerified ? {} : { warning: unverifiedGatewayExitWarning(ctx) }),
     functionName: call.functionName,
     selector,
     args: [
@@ -166,7 +168,11 @@ export function buildRouterRedeemPreview(
 }
 
 /** Why a redeem calls the vault directly instead of the router. */
-export type DirectRedeemReason = "no-router" | "unregistered" | "router-unpinned";
+export type DirectRedeemReason =
+  | "no-router"
+  | "unregistered"
+  | "router-unpinned"
+  | "router-unverified";
 
 /** Which contract the Withdraw tab signs the redeem against. */
 export type RedeemRoute =
@@ -185,6 +191,12 @@ export interface RedeemRouteInputs {
   registryLoading: boolean;
   /** True on the mainnet class when the build carries no code-hash pin for the router. */
   routerUnpinned: boolean;
+  /**
+   * True on the mainnet class when the chain showed the router does not match its pins: other
+   * code, or an implementation behind the proxy the build does not pin (ADR-0014). The write
+   * guard would refuse the share approval, so the exit goes straight to the vault.
+   */
+  routerUnverified?: boolean;
 }
 
 /** Route the redeem through the router when it can take it, else straight to the vault. */
@@ -193,6 +205,7 @@ export function chooseRedeemRoute(i: RedeemRouteInputs): RedeemRoute {
     return { kind: "direct", reason: "no-router" };
   }
   if (i.routerUnpinned) return { kind: "direct", reason: "router-unpinned" };
+  if (i.routerUnverified === true) return { kind: "direct", reason: "router-unverified" };
   if (i.vault === undefined) return { kind: "router", router: i.router };
   const vault = i.vault.toLowerCase();
   if (i.registered.some((r) => r.vault.toLowerCase() === vault)) {
@@ -211,6 +224,8 @@ export function directRedeemReasonText(reason: DirectRedeemReason): string {
       return "the on-chain VaultRegistry does not list this vault, so the router cannot redeem it";
     case "router-unpinned":
       return "this build carries no code-hash pin for the router, so the dapp will not approve shares to it";
+    case "router-unverified":
+      return "the router's code or the implementation behind it does not match this build's pins (it may have been upgraded), so the dapp will not approve shares to it";
   }
 }
 
@@ -227,6 +242,21 @@ export function needsShareApproval(allowance: unknown, shares: bigint): boolean 
 export function leftoverRouterAllowance(allowance: unknown, shares: bigint | null): boolean {
   if (typeof allowance !== "bigint" || allowance === 0n) return false;
   return shares === null || allowance > shares;
+}
+
+/**
+ * Why the router's share allowance is shown with a revoke, in one or two sentences. `allowance` is
+ * the formatted amount. On the direct route the redeem spends none of it, and a router that failed
+ * its pins is said to have failed verification: it can still spend that allowance.
+ */
+export function leftoverRouterAllowanceText(route: RedeemRoute, allowance: string): string {
+  if (route.kind === "router") {
+    return `The router holds an allowance of ${allowance} on your shares that the redeem entered here will not spend. Revoke it unless you redeem that much now.`;
+  }
+  if (route.kind === "direct" && route.reason === "router-unverified") {
+    return `The Portfolio Router failed verification: its code or the implementation behind it does not match this build's pins, so it may have been upgraded. It still holds an allowance of ${allowance} on your shares, which it can spend. This redeem calls the vault directly and will not spend it. Revoke it.`;
+  }
+  return `The Portfolio Router holds an allowance of ${allowance} on your shares. This redeem calls the vault directly and will not spend it. Revoke it.`;
 }
 
 function shorten(addr: string): string {

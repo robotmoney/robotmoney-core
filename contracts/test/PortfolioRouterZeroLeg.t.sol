@@ -286,17 +286,28 @@ contract PortfolioRouterZeroLegTest is Test {
         router.deposit(1000, new uint256[](0));
     }
 
-    function test_minSharesOnSkippedLeg_isNotEnforced() public {
+    /// @notice Security round 2: a non-zero floor on a skipped leg (here a 0-bps leg, which is
+    ///         never funded) reverts `LegSkippedWithFloor` instead of being waived. A 0 floor on
+    ///         the skipped leg, which is what a client derives from `previewDeposit`, still works.
+    function test_minSharesOnSkippedLeg_revertsUnlessZero() public {
         _setWeights(9500, 500, 0, 0);
         _fund(1000);
         uint256[] memory mins = new uint256[](4);
         mins[0] = 950;
         mins[1] = 50;
-        mins[2] = 1; // skipped leg: same as an unavailable leg, no floor applies
+        mins[2] = 1; // a floor on a leg the router skips
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.LegSkippedWithFloor.selector, address(v[2]))
+        );
+        router.deposit(1000, mins);
+
+        mins[2] = 0;
         vm.prank(depositor);
         uint256[] memory shares = router.deposit(1000, mins);
         assertEq(shares[0], 950);
         assertEq(shares[1], 50);
+        assertEq(v[2].depositCalls(), 0, "the skipped leg is never called");
     }
 
     // ─── Fuzz: sum invariant, skipped legs get no calls, preview == actual ───

@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {IVenueHealthAdapter} from "../interfaces/IVenueHealthAdapter.sol";
 import {IComet} from "../interfaces/IComet.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
@@ -23,7 +24,7 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      floors and a realized-value return; Comet USDC supply/redemption is
 ///      exact (1:1), so the floors are trivially satisfied but still enforced
 ///      (revert `SlippageExceeded` below the floor). `isExact()` returns true.
-contract CompoundV3Adapter is IStrategyAdapter {
+contract CompoundV3Adapter is IStrategyAdapter, IVenueHealthAdapter {
     using SafeERC20 for IERC20;
 
     /// @notice USDC token address used for deposits and withdrawals.
@@ -45,6 +46,18 @@ contract CompoundV3Adapter is IStrategyAdapter {
     /// @param requested Amount of USDC requested for withdrawal.
     /// @param actual    Amount of USDC actually received from Compound.
     error WithdrawShortfall(uint256 requested, uint256 actual);
+    /// @notice Comet refused a `deploy(uint256)` supply with `isWithdrawPaused` also set, so
+    ///         the adapter did not hand the USDC back (security round 3).
+    /// @param reason Comet's revert data.
+    error VenueWithdrawalsClosed(bytes reason);
+
+    /// @notice Comet refused a `deploy(uint256)` supply, and the USDC went straight back to
+    ///         `VAULT`, which keeps it idle (security round 2). Comet refuses while its supply
+    ///         is paused (`isSupplyPaused`); a pause that also covers withdrawals reverts instead
+    ///         (security round 3).
+    /// @param amount USDC handed back to `VAULT`.
+    /// @param reason Comet's revert data.
+    event DeployRefused(uint256 amount, bytes reason);
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -60,10 +73,16 @@ contract CompoundV3Adapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
-    /// @dev Shared supply choreography for the v1 and v2 `deploy` entry points.
+    /// @dev Supply choreography of the min-out `deploy`, which reverts when Comet refuses.
+    ///      `deploy(uint256)` runs the same steps but hands a refused supply back to `VAULT`.
     function _supply(uint256 amount) private {
         IERC20(USDC).safeIncreaseAllowance(address(COMET), amount);
         COMET.supply(USDC, amount);
+        _clearAllowance();
+    }
+
+    /// @dev Zero any allowance a supply left on `COMET`.
+    function _clearAllowance() private {
         uint256 remaining = IERC20(USDC).allowance(address(this), address(COMET));
         if (remaining > 0) {
             IERC20(USDC).forceApprove(address(COMET), 0);
@@ -71,8 +90,30 @@ contract CompoundV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
+    /// @dev Security round 2: a supply Comet refuses while only its supply is paused does not
+    ///      revert. The adapter sends `amount` back to `VAULT` and emits `DeployRefused`, and the
+    ///      vault leaves that USDC idle (`UnroutedDeposit`). Before this a paused Comet reverted
+    ///      every rmUSDC deposit, every router deposit with an rmUSDC leg and keeper `rebalance`.
+    ///      Security round 3: a refusal while `isWithdrawPaused` is set too reverts
+    ///      `VenueWithdrawalsClosed`. The vault still counts the Comet balance at face, and idle
+    ///      USDC made from this slice (or pulled from the other venues by a `rebalance`) would
+    ///      pay early exits at that NAV while any haircut falls on the holders who stay. The
+    ///      min-out overload below still reverts.
     function deploy(uint256 amount) external onlyVault {
-        _supply(amount);
+        IERC20(USDC).safeIncreaseAllowance(address(COMET), amount);
+        try COMET.supply(USDC, amount) {}
+        catch (bytes memory reason) {
+            if (!venueWithdrawable()) revert VenueWithdrawalsClosed(reason);
+            IERC20(USDC).safeTransfer(VAULT, amount);
+            emit DeployRefused(amount, reason);
+        }
+        _clearAllowance();
+    }
+
+    /// @inheritdoc IVenueHealthAdapter
+    /// @dev Comet's pause guardian pauses supply and withdraw separately (`isWithdrawPaused`).
+    function venueWithdrawable() public view returns (bool) {
+        return !COMET.isWithdrawPaused();
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.

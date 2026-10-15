@@ -5,7 +5,7 @@ description: "A two-leg router: rmAGENT on the RM/USDC Uniswap V4 pool (50 perce
 
 # PortfolioRouterLegAvailabilityTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/PortfolioRouterLegAvailability.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/PortfolioRouterLegAvailability.t.sol)
 
 **Inherits:** Test
 
@@ -263,17 +263,181 @@ Preview and execute agree on each round's result, and neither dropped leg is eve
 function test_RTR5_quoteRevertDropsLegAndResplitsUntilStable() public;
 ```
 
+<a id="_driftspot"></a>
+
+### _driftSpot
+
+<i>
+
+Drift the RM pool's spot `DRIFT_TICKS` from the recorded TWAP on the side where RM is cheaper at spot, and
+return the deviation the ORA-4 guard measures. The recorder stays fresh: this is not a staleness case.
+
+</i>
+
+```solidity
+function _driftSpot() internal returns (uint256 dev);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dev | `uint256` |  |
+
+<a id="test_ora4_outsidebandbasketlegisskippednotreverted"></a>
+
+### test_ORA4_outsideBandBasketLegIsSkippedNotReverted
+
+Security round 1 (ORA-4 liveness). Spot sits about 2.5 percent from the TWAP and the guard is 100 bps, so
+the basket's own deposit would revert `NavMarketDeviationExceeded`. `BasketVault.previewDeposit` now runs
+the same guard, so the router's quote pass drops the leg: `previewDeposit` reports it unavailable and the
+routed deposit renormalises the whole amount onto the live leg. Before the fix the views passed, the leg
+stayed in the set, and the whole routed deposit reverted `UsdcLegTransferFailed(rmAGENT)`, the 1:1 part
+included. `maxMint` still never reverts (ERC-4626).
+
+```solidity
+function test_ORA4_outsideBandBasketLegIsSkippedNotReverted() public;
+```
+
 <a id="test_ora4_idlepooldriftinsidefeebanddoesnotrevertrouteddeposit"></a>
 
 ### test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit
 
 E6. Spot drifts about 2.5 percent from the recorded TWAP and nobody trades it back, because the drift is
-inside the 2.91 percent fee band. At the old 100 bps sheet value the rmAGENT deposit reverts on ORA-4 and the
-whole routed deposit reverts with it: ORA-4 is not an availability signal, since `previewDeposit` does not run
-it. At the D10 value (400 bps) the same routed deposit funds both legs. The drift is on the side where RM is
-cheaper at spot. On the other side the 500 bps swap bound (291 bps fee plus the drift) binds before the guard.
+inside the 2.91 percent fee band. At the old 100 bps sheet value that drift takes rmAGENT out of every
+routed deposit (`test_ORA4_outsideBandBasketLegIsSkippedNotReverted`; before security round 1 it reverted
+the whole routed deposit). At the D10 value (400 bps) the same routed deposit funds both legs. The drift is
+on the side where RM is cheaper at spot. On the other side the 500 bps swap bound (291 bps fee plus the drift)
+binds before the guard.
 
 ```solidity
 function test_ORA4_idlePoolDriftInsideFeeBandDoesNotRevertRoutedDeposit() public;
+```
+
+<a id="test_rtr5_rmusdclegwithcappedmorphostilldeposits"></a>
+
+### test_RTR5_rmUsdcLegWithCappedMorphoStillDeposits
+
+The production weight vector (rmUSDC 9500, a second leg 500) with a Morpho `maxExposure` below Morpho's
+equal-weight slice of the rmUSDC leg. The routed deposit succeeds: the vault stops Morpho at its cap and
+places the rest in the other adapter. Before the fix rmUSDC's `maxDeposit` and `previewDeposit` passed,
+its deposit reverted inside `MorphoAdapter._deposit` (`ExposureCapExceeded`), and the whole routed deposit
+reverted `UsdcLegTransferFailed(rmUSDC)`.
+
+```solidity
+function test_RTR5_rmUsdcLegWithCappedMorphoStillDeposits() public;
+```
+
+<a id="_rmusdclegrouter-robotmoneyvault"></a>
+
+### _rmUsdcLegRouter
+
+<i>
+
+A two-leg router over `rmUsdc` (9500 bps) and a 1:1 vault (500 bps), the production vector's shape.
+
+</i>
+
+```solidity
+function _rmUsdcLegRouter(RobotMoneyVault rmUsdc)
+        internal
+        returns (PortfolioRouter r, MockVault second);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rmUsdc | `RobotMoneyVault` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `PortfolioRouter` |  |
+| second | `MockVault` |  |
+
+<a id="_addadapters-robotmoneyvault-address-3"></a>
+
+### _addAdapters
+
+<i>
+
+Allow and add `set` to `rmUsdc`, each at a 100 percent `capBps`.
+
+</i>
+
+```solidity
+function _addAdapters(RobotMoneyVault rmUsdc, address[3] memory set) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rmUsdc | `RobotMoneyVault` |  |
+| set | `address[3]` |  |
+
+<a id="_rmusdc-uint256"></a>
+
+### _rmUsdc
+
+```solidity
+function _rmUsdc(uint256 tvlCap) internal returns (RobotMoneyVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tvlCap | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RobotMoneyVault` |  |
+
+<a id="test_rtr5_rmusdclegwithfulllendingvenuesstilldeposits"></a>
+
+### test_RTR5_rmUsdcLegWithFullLendingVenuesStillDeposits
+
+Security round 2. rmUSDC's Aave reserve sits at its supply cap and every MetaMorpho market cap is full, so
+both venues refuse a supply while rmUSDC's `maxDeposit` and `previewDeposit` stay open. The routed deposit
+succeeds: the Aave and Morpho adapters hand their slices back, and the vault places them in the third adapter.
+Before the fix the Aave adapter's `deploy` reverted "51" (`SUPPLY_CAP_EXCEEDED`), rmUSDC's deposit reverted,
+and the whole routed deposit reverted `UsdcLegTransferFailed(rmUSDC)`, the 500 bps leg included.
+
+```solidity
+function test_RTR5_rmUsdcLegWithFullLendingVenuesStillDeposits() public;
+```
+
+<a id="test_rtr5_rmusdclegwithpausedlendingvenueisskipped"></a>
+
+### test_RTR5_rmUsdcLegWithPausedLendingVenueIsSkipped
+
+Security round 3. rmUSDC's Aave reserve is paused: supply and withdraw both revert while the aToken balance
+still counts in rmUSDC NAV. rmUSDC's `maxDeposit` reads 0, so the router previews the leg unavailable and the
+routed deposit puts the whole amount on the live leg. No rmUSDC share is minted at a NAV that counts the stuck
+balance and no USDC lands idle in rmUSDC to pay an exit at par. Before the fix the Aave adapter handed its slice
+back, and rmUSDC minted at that NAV and kept the slice idle.
+
+```solidity
+function test_RTR5_rmUsdcLegWithPausedLendingVenueIsSkipped() public;
+```
+
+<a id="test_rtr5_flooredlegthatturnsunavailablereverts"></a>
+
+### test_RTR5_flooredLegThatTurnsUnavailableReverts
+
+Security round 2. A depositor previews a 50 USDC routed deposit with both legs available and signs a floor on
+each. Before it lands, another deposit fills rmUSDC to its TVL cap, so rmUSDC's `maxDeposit` reads 0 and the
+router would skip the leg. The deposit reverts `LegSkippedWithFloor(rmUSDC)`: a non-zero floor means "fund
+this leg". Before the fix the router skipped it silently, waived its floor and put all 50 USDC into the 500 bps
+leg, whose floor was sized for 2.5 USDC. A caller who previews again sees the leg unavailable, passes 0 for it,
+and the deposit renormalises onto the live leg.
+
+```solidity
+function test_RTR5_flooredLegThatTurnsUnavailableReverts() public;
 ```
 

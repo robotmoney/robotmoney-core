@@ -8,6 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
@@ -1230,9 +1231,20 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeBytes32(hashes, "gateway", d.gateway.codehash);
         vm.serializeBytes32(hashes, "registry", d.registry.codehash);
         vm.serializeBytes32(hashes, "router", d.router.codehash);
+        vm.serializeBytes32(hashes, "router_implementation", _implementationCodeHash(d.router));
         vm.serializeBytes32(hashes, "ic_policy", d.icPolicy.codehash);
         vm.serializeBytes32(hashes, "consensus_receipt", d.consensusReceipt.codehash);
         return vm.serializeBytes32(hashes, "governance", d.governance.codehash);
+    }
+
+    /// @dev ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation, or zero when the
+    ///      slot is empty (a direct contract). Behind a proxy `proxy.codehash` is the generic
+    ///      ERC1967Proxy, the same for every proxy and unchanged by an upgrade, so this is the hash
+    ///      that names the reviewed logic: the dapp's implementation pin (scripts/stage/mainnet-dapp.ts)
+    ///      and rmpc's `proxy_implementation_hashes`.
+    function _implementationCodeHash(address proxy) internal view returns (bytes32) {
+        address impl = address(uint160(uint256(vm.load(proxy, ERC1967Utils.IMPLEMENTATION_SLOT))));
+        return impl == address(0) ? bytes32(0) : keccak256(impl.code);
     }
 
     /// @dev The per-vault handover record: one object per vault in VAULT_ADDRESSES,
@@ -1246,6 +1258,7 @@ contract DeployTimelock is ExpectedChainGuard {
             string memory k = string.concat("manifest_vault_handover_", vm.toString(i));
             vm.serializeAddress(k, "address", vault_);
             vm.serializeBytes32(k, "code_hash", vault_.codehash);
+            vm.serializeBytes32(k, "implementation_code_hash", _implementationCodeHash(vault_));
             vm.serializeAddress(k, "registry", IRetirableVaultLink(vault_).registry());
             vm.serializeBool(
                 k, "registry_linked", IRetirableVaultLink(vault_).registry() == d.registry

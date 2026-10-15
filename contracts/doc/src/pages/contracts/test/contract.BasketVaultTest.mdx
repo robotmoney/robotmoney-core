@@ -1058,6 +1058,19 @@ deposit succeeds — proving the guard, not some other check, blocks.
 function test_ORA4_deviationGuardBlocksSettlement() public;
 ```
 
+<a id="test_ora4_previewdepositrunstheguard_maxviewsdonot"></a>
+
+### test_ORA4_previewDepositRunsTheGuard_maxViewsDoNot
+
+Security round 1 (ORA-4 liveness): `previewDeposit` runs the same guard as `deposit`, so a quote outside
+the band reverts `NavMarketDeviationExceeded` and `PortfolioRouter` drops the leg instead of reverting the
+whole routed deposit. `mint` runs it too. `maxMint` and `maxDeposit` never revert (ERC-4626), and the
+quote returns once spot is back inside the band.
+
+```solidity
+function test_ORA4_previewDepositRunsTheGuard_maxViewsDoNot() public;
+```
+
 <a id="test_ora4_guardneverblocksredeem"></a>
 
 ### test_ORA4_guardNeverBlocksRedeem

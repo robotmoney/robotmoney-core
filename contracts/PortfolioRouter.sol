@@ -233,6 +233,13 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///         caller-supplied per-leg minimum.
     error SlippageExceeded();
 
+    /// @notice The caller set a non-zero `minSharesPerLeg` floor on a leg the router would skip:
+    ///         the leg is unavailable now, or its renormalised amount is 0. A non-zero floor means
+    ///         "this leg must be funded" (security round 2), so a leg that turned unavailable after
+    ///         the caller previewed never silently moves its share onto the other legs.
+    /// @param vault The skipped leg's vault.
+    error LegSkippedWithFloor(address vault);
+
     /// @notice The supplied `deadline` has passed (`block.timestamp > deadline`).
     error DeadlineExpired();
 
@@ -684,7 +691,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///         executing any state changes. Non-depositable legs (paused/retired,
     ///         unregistered, router-ineligible, a vault whose own `maxDeposit` is 0,
     ///         or a vault whose `previewDeposit` reverts, such as a basket on a
-    ///         stale price recorder) are marked `unavailable = true` and return
+    ///         stale price recorder or with a spot price outside its ORA-4 band)
+    ///         are marked `unavailable = true` and return
     ///         `estShares = 0`; the deposit path skips exactly these legs and
     ///         renormalises `amount` across the remaining available legs. A
     ///         per-vault cap is not an availability signal (see
@@ -751,9 +759,20 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///      cap therefore still reverts `VaultCapExceeded` at execute time rather
     ///      than being skipped. The same holds for a vault's own non-zero
     ///      `maxDeposit` below the leg amount, and for a vault whose views pass but
-    ///      whose `deposit` reverts (for example the ORA-4 spot-versus-TWAP guard,
-    ///      which `previewDeposit` does not run): execute reverts
-    ///      `UsdcLegTransferFailed` for that leg.
+    ///      whose `deposit` reverts: execute reverts `UsdcLegTransferFailed` for
+    ///      that leg. The ORA-4 spot-versus-TWAP guard is no longer such a case:
+    ///      `BasketVault.previewDeposit` runs it (security round 1), so an
+    ///      out-of-band basket leg fails check (4) and is skipped. What remains is
+    ///      the basket's realised-swap slippage floor (`DepositBelowSlippageFloor`),
+    ///      which no view can predict without running the swap. The `RobotMoneyVault`
+    ///      allocator stops at an adapter's exposure cap, so a capped Morpho adapter
+    ///      is not such a case either, and a lending venue that refuses a supply
+    ///      (Aave supply cap or frozen reserve, MetaMorpho `AllCapsReached`, Comet
+    ///      supply pause) hands the slice back to rmUSDC, which keeps it idle
+    ///      instead of reverting (security round 2). A leg that turns unavailable
+    ///      between a caller's preview and the deposit is skipped only when the
+    ///      caller's floor for it is 0; a non-zero floor reverts
+    ///      `LegSkippedWithFloor`.
     function _availabilityAndAmounts(
         address[] memory vaultList,
         uint256[] memory bpsList,
@@ -865,9 +884,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
-    ///                          The floor is NOT enforced on a skipped leg (an
-    ///                          unavailable leg or a leg whose computed amount is
-    ///                          0): it is never called and returns 0 shares.
+    ///                          A skipped leg (an unavailable leg or a leg whose
+    ///                          computed amount is 0) is never called and returns 0
+    ///                          shares. Its floor must be 0: a non-zero floor on a
+    ///                          skipped leg reverts `LegSkippedWithFloor(vault)`
+    ///                          (security round 2). Pass 0 for the legs
+    ///                          `previewDeposit` reports unavailable or unfunded.
     function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -888,9 +910,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///                          Length must equal the number of active legs (non-
     ///                          paused, non-retired). Pass an empty array to skip
     ///                          slippage protection.
-    ///                          The floor is NOT enforced on a skipped leg (an
-    ///                          unavailable leg or a leg whose computed amount is
-    ///                          0): it is never called and returns 0 shares.
+    ///                          A skipped leg (an unavailable leg or a leg whose
+    ///                          computed amount is 0) is never called and returns 0
+    ///                          shares. Its floor must be 0: a non-zero floor on a
+    ///                          skipped leg reverts `LegSkippedWithFloor(vault)`
+    ///                          (security round 2). Pass 0 for the legs
+    ///                          `previewDeposit` reports unavailable or unfunded.
     function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -1156,12 +1181,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @dev Execute one available vault leg per entry: approve and deposit, then
     ///      check the slippage floor. Unavailable legs (per the shared
     ///      `_availabilityAndAmounts` pass) are skipped — matching
-    ///      `previewDeposit` (RTR-5). Available legs passed that pass's status,
-    ///      eligibility, `maxDeposit` and `previewDeposit` checks; `_executeLeg`
+    ///      `previewDeposit` (RTR-5) — unless the caller set a non-zero floor on
+    ///      one, which reverts `LegSkippedWithFloor`. Available legs passed that
+    ///      pass's status, eligibility, `maxDeposit` and `previewDeposit` checks; `_executeLeg`
     ///      re-asserts status and eligibility as defence in depth. All available
     ///      legs must succeed (all-or-revert across the surviving set): a vault
-    ///      whose views pass but whose `deposit` reverts still reverts the whole
-    ///      deposit. Writes minted shares into `sharesPerLeg`.
+    ///      whose views pass but whose `deposit` reverts (a basket's realised-swap
+    ///      slippage floor) still reverts the whole deposit. Writes minted shares
+    ///      into `sharesPerLeg`.
     function _executeLegs(
         address receiver,
         address[] memory vaultList,
@@ -1173,11 +1200,20 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         uint256 usdcBalanceBefore
     ) internal {
         for (uint256 i = 0; i < vaultList.length; i++) {
-            if (!available[i]) continue; // skip non-depositable legs (RTR-5)
-            // Skip zero-amount legs (issue 1746): an Active, eligible 0-bps leg
-            // (or a weight that rounds to 0) gets no approval, no vault call and
-            // no event. Vaults such as rmAGENT revert on deposit(0).
-            if (legAmounts[i] == 0) continue;
+            // Skip non-depositable legs (RTR-5) and zero-amount legs (issue 1746):
+            // an Active, eligible 0-bps leg (or a weight that rounds to 0) gets no
+            // approval, no vault call and no event. Vaults such as rmAGENT revert
+            // on deposit(0). Security round 2: a skipped leg delivers 0 shares, so
+            // a non-zero floor on it is a floor the deposit cannot meet. Before
+            // this check a leg that turned unavailable after the caller previewed
+            // (rmUSDC reaching its TVL cap) was skipped silently, its floor was
+            // waived, and its whole share went to the other legs.
+            if (!available[i] || legAmounts[i] == 0) {
+                if (minSharesPerLeg.length != 0 && minSharesPerLeg[i] != 0) {
+                    revert LegSkippedWithFloor(vaultList[i]);
+                }
+                continue;
+            }
 
             uint256 sharesReceived = _executeLeg(receiver, vaultList[i], legAmounts[i], bpsList[i]);
             sharesPerLeg[i] = sharesReceived;

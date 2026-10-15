@@ -1,11 +1,16 @@
 // The govern rows `upgrade-proxy` and `freeze-proxy` (issue 1809, ADR-0014 §4-§5): the only two ways this tool changes what a governed proxy runs, both ONE timelock
 // operation scheduled by the Safe, executed after the real delay, never part of stage 13. The deployer, an EOA and every role are refused by the contract itself
 // (GovernedUpgrade: the authority is the timelock, set once); this module keeps the tool from scheduling an operation the contract would revert one delay later, and
-// binds every operation to a reviewed build.
+// binds every operation to a build whose commit is named. A build is "reviewed" only through build-provenance.ts: DIR must sit in a git checkout (its HEAD is the
+// round's `build_sha`), and on 8453 that checkout must be clean at a release-tagged sha of the sheet's kind with green CI (security round 1). Before, DIR was taken as given.
 //   upgrade-proxy  `--admin-arg proxy=<name> implementation=0x.. [call=0x..] [build=DIR]`: proxy.upgradeToAndCall(implementation, call) on one proxy. Refused before
 //                  anything is sent when the proxy is frozen, its authority is not the timelock, an ERC-1967 admin or beacon slot is set, the target has no code, is
 //                  not a UUPS implementation (proxiableUUID), has unlocked initializers, or its runtime code (immutables and links masked) differs from the build
-//                  artifact of the proxy's contract in DIR (default: the checkout's out/). An implementation the proxy already names is recorded as skipped.
+//                  artifact of the proxy's contract in DIR (default: the checkout's out/), or when the build's storage-layout snapshot moves a live variable or
+//                  changes a stored enum's existing members (upgradeLayoutRefusals, layout-compare.ts; on 8453 also when either layout cannot be read, or records
+//                  no enum members while storage holds an enum). An implementation the proxy already names is
+//                  recorded as skipped. Rounds are numbered (the salt carries the round): a target already executed or skipped earlier gets a NEW round once the
+//                  proxy runs another implementation (an upgrade back to it, a rollback after a skipped no-op).
 //   freeze-proxy   `--admin-arg proxy=<name>|all [build=DIR]`: proxy.freezeUpgrades(liveImplementation, liveCodeHash) on one proxy, or on every proxy not yet frozen
 //                  as one batch. The arguments are read from the chain when the round is planned, so the operation names the implementation the reviewers saw, and
 //                  GovernedUpgrade reverts it (FreezeTargetMismatch) if an upgrade executes first. Refused when the live implementation's code differs from the
@@ -17,6 +22,7 @@ import { encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, type Addr
 import { PublishError } from "./errors.ts";
 import { ERC1967_IMPLEMENTATION_SLOT, INITIALIZERS_LOCKED, codeHashOf, wordAddress, type ProxyState } from "./proxies.ts";
 import type { CodeHashResult } from "./verify/codehash.ts";
+import { asLayoutSnapshot, layoutAppendOnlyProblems } from "./layout-compare.ts";
 
 export const UPGRADE_ROW = "upgrade-proxy";
 export const FREEZE_ROW = "freeze-proxy";
@@ -85,7 +91,10 @@ export function buildFreezeCall(name: string, proxy: Address, implementation: Ad
   return { label: `${name}.freezeUpgrades(${implementation}, codehash ${codeHash})`, target: proxy, data: encodeFunctionData({ abi: PROXY_GOVERN_ABI, functionName: "freezeUpgrades", args: [implementation, codeHash] }) };
 }
 
-/** The run-manifest key and salt input of one upgrade: the proxy and a hash of the target and the reinitializer. The same target is one record; another is another. */
+/**
+ * The run-manifest key and salt input of one upgrade: the proxy and a hash of the target and the reinitializer. The same target is one record; another is another. The
+ * salt also carries the record's round (govern.ts labelOf): a completed record whose target the proxy no longer runs opens round n+1, a new operation (security round 1).
+ */
 export const upgradeRecordKey = (w: UpgradeWant): string => `${UPGRADE_ROW}-${w.proxy}-${keccak256(toBytes(`${w.implementation.toLowerCase()}:${w.call}`)).slice(2, 10)}`;
 /** The run-manifest key of one freeze: the proxy (or `all`) and a hash of the calls, so a freeze planned on another implementation is another record. */
 export const freezeRecordKey = (proxy: string, calls: readonly { data: Hex }[]): string => `${FREEZE_ROW}-${proxy}-${keccak256(toBytes(calls.map((c) => c.data).join(""))).slice(2, 10)}`;
@@ -119,6 +128,28 @@ export function upgradeRefusals(o: { name: string; live: ProxyState; target: Imp
     if (!o.build.ok) out.push(`the target ${o.target.address} is not the reviewed build: ${o.build.detail}`);
   }
   return out;
+}
+
+/**
+ * Security round 1 (ADR-0014 §8): the layout half of an upgrade's refusals. `liveId` is the storage-layout identifier of the implementation the proxy runs now (the last
+ * executed upgrade's `build_layout_hash`, else the deploy manifest's `<field>_layout_id`), `live` the snapshot that hashes to it (from the deployment checkout or the last
+ * upgrade's build checkout); `buildId`/`build` are the build checkout's. Equal identifiers pass: since security round 3 the CI layout gate fails a commit whose snapshot
+ * is not exactly its code's layout (storage_layout_gate.py snapshot_drift), and on 8453 both checkouts are green release shas, so an equal identifier is an equal layout
+ * (before, an append that skipped `--write` kept the old identifier). Different ones are compared under the append-only storage rules
+ * (layout-compare.ts, the enum rule included since security round 2) on every chain. On 8453 an identifier or a snapshot that cannot be read is a refusal too, and so
+ * is a snapshot with no `enums` map while storage holds an enum; elsewhere it is not (a Twin build may have no checkout).
+ */
+export function upgradeLayoutRefusals(o: { name: string; artifact: string; liveField: string; mainnet: boolean; liveId?: string; live?: unknown; buildId?: string; build?: unknown }): string[] {
+  const snapshotPath = `contracts/test/fixtures/storage-layout/${o.artifact}.json`;
+  if (o.buildId === undefined) return o.mainnet ? [`the build checkout holds no storage-layout snapshot ${snapshotPath}: the new implementation's layout cannot be compared with the live one (ADR-0014 §8)`] : [];
+  if (o.liveId === undefined) return o.mainnet ? [`no storage-layout identifier is recorded for ${o.name}'s live implementation (the deploy manifest's ${o.liveField}, or the build_layout_hash of the upgrade round that installed it): the live layout cannot be compared with the build's`] : [];
+  if (lc(o.liveId) === lc(o.buildId)) return [];
+  if (o.live === undefined) return o.mainnet ? [`the live layout ${o.liveId} of ${o.name} has no snapshot to compare with: neither the deployment checkout nor the last upgrade's build checkout holds a ${snapshotPath} that hashes to it`] : [];
+  const live = asLayoutSnapshot(o.live), build = asLayoutSnapshot(o.build);
+  if (typeof live === "string") return [`the live layout snapshot of ${o.name} is malformed (${live})`];
+  if (typeof build === "string") return [`the build's layout snapshot ${snapshotPath} is malformed (${build})`];
+  // security round 2: on 8453 a snapshot that records no enum members while storage holds an enum is unreadable (layout-compare.ts)
+  return layoutAppendOnlyProblems(live, build, { requireEnums: o.mainnet }).map((x) => `the build's storage layout breaks the live one (${o.liveId} -> ${o.buildId}): ${x}`);
 }
 
 /** Why a freeze of one proxy must not be scheduled (empty: it may). `build`: the LIVE implementation's code against the build. `pendingUpgrade`: an upgrade round of this proxy that is scheduled and not executed. */

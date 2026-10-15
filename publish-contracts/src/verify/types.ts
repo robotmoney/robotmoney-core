@@ -191,8 +191,10 @@ export interface VerifyOptions {
    * Issue 1809: per proxy (the stage table's proxy name), the implementation the last EXECUTED `govern --row upgrade-proxy` round installed, from the run manifest's
    * `proxy_upgrades`, and the forge out/ that round compared it with (`build_dir`). The proxy's implementation slot must then name it and its code is compared with that
    * build (absent or missing on disk: `artifactsDir`). A record only picks WHICH implementation and build: the slot and the code are read from the chain.
+   * Security round 1: `buildSha` is the commit the round proved its build was made from (`build_sha`). When it is recorded, the directory compared with must sit in a
+   * git checkout at that commit, or the code label fails: an edited `build_dir` cannot point the verifier at another build. (evidence-check refuses an 8453 round without it.)
    */
-  upgrades?: { proxy: string; implementation: Address; buildDir?: string }[];
+  upgrades?: { proxy: string; implementation: Address; buildDir?: string; buildSha?: string }[];
   /** Issue 1809: the proxies an executed `govern --row freeze-proxy` round froze (the run manifest's `proxy_freezes`): upgradesFrozen() must read true on each. */
   freezes?: string[];
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */

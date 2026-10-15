@@ -1,0 +1,198 @@
+---
+title: "CappedAavePool"
+---
+
+# CappedAavePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/helpers/RefusingVenues.sol)
+
+<i>
+
+1:1 Aave V3 Pool with a reserve supply cap. `supply` reverts "27" (`RESERVE_INACTIVE`)
+while inactive, "29" (`RESERVE_PAUSED`) while paused, "28" (`RESERVE_FROZEN`) while frozen
+and "51" (`SUPPLY_CAP_EXCEEDED`) for an amount above `headroom`, in the order of Aave's
+`ValidationLogic.validateSupply`. `withdraw` reverts "27" / "29" as `validateWithdraw`
+does, and a frozen reserve still pays. A withdrawal frees headroom again.
+`getConfiguration` reports the active (56), frozen (57) and paused (60) bits.
+
+</i>
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+### aToken
+
+```solidity
+TestERC20 public immutable aToken;
+```
+
+## State Variables
+
+### headroom
+
+```solidity
+uint256 public headroom;
+```
+
+### frozen
+
+```solidity
+bool public frozen;
+```
+
+### paused
+
+```solidity
+bool public paused;
+```
+
+### inactive
+
+```solidity
+bool public inactive;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_, address aToken_, uint256 headroom_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+| aToken_ | `address` |  |
+| headroom_ | `uint256` |  |
+
+<a id="setheadroom-uint256"></a>
+
+### setHeadroom
+
+```solidity
+function setHeadroom(uint256 headroom_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| headroom_ | `uint256` |  |
+
+<a id="setfrozen-bool"></a>
+
+### setFrozen
+
+```solidity
+function setFrozen(bool frozen_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| frozen_ | `bool` |  |
+
+<a id="setpaused-bool"></a>
+
+### setPaused
+
+<i>
+
+Aave's guardian `setReservePause`: supply and withdraw both revert "29".
+
+</i>
+
+```solidity
+function setPaused(bool paused_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paused_ | `bool` |  |
+
+<a id="setinactive-bool"></a>
+
+### setInactive
+
+```solidity
+function setInactive(bool inactive_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| inactive_ | `bool` |  |
+
+<a id="getconfiguration-address"></a>
+
+### getConfiguration
+
+```solidity
+function getConfiguration(address asset) external view returns (uint256 data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `uint256` |  |
+
+<a id="supply-address-uint256-address-uint16"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount, address onBehalfOf, uint16) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| onBehalfOf | `address` |  |
+| _ | `uint16` |  |
+
+<a id="withdraw-address-uint256-address"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

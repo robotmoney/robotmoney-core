@@ -3,7 +3,7 @@
 // slot or another implementation stops the run before the next stage. Runner tests run on the stub forge and cast (tests/harness.ts) with a fake chain for the read-back
 // (tests/fixtures.ts healthyProxyReader). The real proxies are deployed by the forge scripts (contracts/script/GovernedProxyDeploy.sol) on the Twin rehearsal.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Hex } from "viem";
 import { EXIT_CODES } from "../src/errors.ts";
@@ -109,6 +109,32 @@ describe("issue 1809: the runner deploys each proxy with the timelock and the mo
     expect(await w.run(["--stage", "deploy", "--resume"])).toBe(EXIT_CODES.VERIFY);
     expect(lastError(w).message).toContain("stage registry will not start: stage vault deployed a proxy that is not what the deploy declared");
     expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.authority, SCRIPT.vault]);
+  });
+
+  // Security round 1: the stage was saved done BEFORE its read-back, and a read-back that threw left no proxy_gate record, so --resume skipped the stage and the later
+  // stages (registry, router, gateway, the handover) built on a proxy the tool never read.
+  test("a proxy read-back that throws on every retry is a failed gate: --resume reads it again first and refuses the next stage until the read-back passes", async () => {
+    const w = world({ startNonce: 0 });
+    const down = () => ({ ...healthyProxyReader(), getStorageAt: async () => { throw new Error("rpc down: 503 Service Unavailable"); } }) as unknown as ReturnType<typeof healthyProxyReader>;
+    expect(await w.run(["--stage", "deploy"], { proxyReader: down })).toBe(EXIT_CODES.VERIFY);
+    expect(lastError(w).message).toContain("could not be read back");
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.authority, SCRIPT.vault]);
+    expect(manifest(w).stages.vault.status).toBe("done"); // its transactions are real and counted
+    expect(manifest(w).stages.vault.proxy_gate).toMatchObject({ ok: false, read_error: true });
+    // the RPC is still down: the resume reads the vault's proxy again, fails again, and the registry stage never starts
+    expect(await w.run(["--stage", "deploy", "--resume"], { proxyReader: down })).toBe(EXIT_CODES.VERIFY);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.authority, SCRIPT.vault]);
+    // mutation: a done proxy stage with NO proxy_gate record at all (the old fail-open shape) is read again too, and refused while the read fails
+    const m = manifest(w);
+    delete m.stages.vault.proxy_gate;
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify(m));
+    expect(await w.run(["--stage", "deploy", "--resume"], { proxyReader: down })).toBe(EXIT_CODES.VERIFY);
+    expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.authority, SCRIPT.vault]);
+    // the RPC is back: the resume reads the vault's proxy, records the passing read-back, and the deploy continues
+    expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
+    expect(manifest(w).stages.vault.proxy_gate).toEqual({ ok: true, problems: [] });
+    expect(w.logs().some((l) => l.event === "stage.proxy_reread" && l.stage === "vault")).toBe(true);
+    expect(broadcasts(w).slice(0, 5)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.authority, SCRIPT.vault, SCRIPT.registry]);
   });
 
   test("an undeclared mode in a stage manifest, a proxy on another implementation, another authority, a frozen proxy in upgradeable mode: each is refused", async () => {

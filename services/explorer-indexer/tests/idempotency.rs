@@ -176,3 +176,63 @@ async fn agent_policy_insert_roundtrip_with_owner() {
 
     assert_eq!(fx.db.count(CountTable::AgentPolicies).await.unwrap(), 1);
 }
+
+/// Security round 1: `apply_wallet_position_delta` keeps every share change of one owner in one
+/// block (the block's row is updated for a later log) and applies no log twice.
+#[tokio::test]
+async fn wallet_position_delta_counts_each_log_of_a_block_once() {
+    let fx = pg_fixture().await;
+    fx.db.upsert_chain(8453, "base", "test").await.unwrap();
+    let vault = [0xbbu8; 20];
+    let owner = [0x44u8; 20];
+    fx.db
+        .upsert_contract(8453, vault, "vault", None)
+        .await
+        .unwrap();
+    let apply = |block: i64, log_index: i32, shares: u64, add: bool| {
+        let db = &fx.db;
+        async move {
+            db.apply_wallet_position_delta(
+                8453,
+                vault,
+                owner,
+                block,
+                log_index,
+                U256::from(shares),
+                add,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let latest = || async {
+        fx.db
+            .latest_wallet_position(8453, vault, owner, i64::MAX)
+            .await
+            .unwrap()
+    };
+
+    assert_eq!(apply(10, 0, 600, true).await, 1);
+    assert_eq!(
+        apply(10, 4, 400, true).await,
+        1,
+        "the second log of the block updates its row"
+    );
+    assert_eq!(apply(10, 9, 150, false).await, 1);
+    assert_eq!(latest().await, Some(U256::from(850u64)));
+
+    // Replay: every log is already in the row.
+    for (log_index, shares, add) in [(0, 600, true), (4, 400, true), (9, 150, false)] {
+        assert_eq!(
+            apply(10, log_index, shares, add).await,
+            0,
+            "log {log_index} replayed"
+        );
+    }
+    assert_eq!(latest().await, Some(U256::from(850u64)));
+
+    // The next block starts from the block before it.
+    assert_eq!(apply(11, 2, 50, true).await, 1);
+    assert_eq!(latest().await, Some(U256::from(900u64)));
+    assert_eq!(fx.db.count(CountTable::WalletPositions).await.unwrap(), 2);
+}

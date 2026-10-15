@@ -142,7 +142,7 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
 | `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` initializer arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
-| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_emergencyResponder` initializer arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
+| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_emergencyResponder` initializer arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `emergencyExcludeAdapter` (exclude-only), `forceRemoveAdapter`, `recoverRemovedAdapter` (into the exclusion record only), `shutdownVault`. `unpauseDeposits` and restoring an excluded adapter (`setAdapterAllowed(adapter, true)`) are `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
 `ADMIN_ROLE` is its own admin (can grant/revoke itself). For the retired v1 vault, the constructor arg is the Safe multisig `0x88bA…75A0`. For the launch vaults, stage 11 moves `ADMIN_ROLE` to the timelock and `EMERGENCY_ROLE` to the independent emergency key.
@@ -179,7 +179,11 @@ approves both the exact adapter address and its runtime `codehash`, then calls
 asset through `USDC()` and this vault address through `VAULT()`. It refuses an
 address that an active entry already holds (`AdapterAlreadyActive`, core 1789),
 so one adapter balance is never counted twice in NAV. A re-add after
-`removeAdapter` or `forceRemoveAdapter` is legal and appends a new entry. Deposit,
+`removeAdapter` or `forceRemoveAdapter` is legal and appends a new entry. When the
+force-removed entry still holds an open exclusion record, the re-add first moves
+the adapter's whole balance into that record (`Restoration`, then `Restored`) and
+reverts `AdapterNotEmpty` if the adapter cannot pay out, so the new entry starts
+empty and NAV does not rise (security round 1). Deposit,
 keeper rebalance, and admin rebalance allocation paths re-check eligibility
 before USDC leaves the vault.
 
@@ -196,14 +200,30 @@ Revoking approval also opens a record in the vault's `ExclusionLedger`
 Every USDC later recovered from that adapter goes to the record, never to idle
 NAV. The recovery paths are `emergencyWithdrawAdapter` and `emergencyWithdraw`
 (EMERGENCY), `adminRebalance` (ADMIN), and restored eligibility, which first
-drains the adapter into the record. The holders at the snapshot claim it pro
+drains the adapter into the record. These three need an ACTIVE entry. After a
+force-remove the entry is inactive, and two paths remain:
+`recoverRemovedAdapter(i, amount)` (EMERGENCY, security round 2) withdraws one
+tranche of up to `amount` into the record, and a re-add drains the whole
+remaining balance into it. The holders at the snapshot claim it pro
 rata through `ExclusionLedger.claim`, which anyone may call for a holder. A
 holder who exits during the exclusion is paid at the reduced NAV and keeps that
 claim. Shares minted or bought later carry none, and the share price never
 rises from a recovery. A redeem that would pay 0 USDC during the exclusion
-reverts `ZeroPayoutDuringExclusion`. `removeAdapter` or `forceRemoveAdapter`
-deactivates the entry and closes its record, and a closed record stays
-claimable.
+reverts `ZeroPayoutDuringExclusion`. `removeAdapter` deactivates the drained entry
+and closes its record. `forceRemoveAdapter` deactivates the entry without a
+withdrawal: a funded entry with no record gets one (a snapshot of the supply at
+that moment), and its record closes (`ForceRemoved`) only when the adapter
+reports an empty balance. Otherwise the record stays open on the inactive index.
+`recoverRemovedAdapter` credits it as the venue can pay, and closes it
+(`ForceRemoved`) once the adapter reports an empty balance. A re-add of the same
+address realises whatever is left into it, and reverts `AdapterNotEmpty` while
+the venue cannot repay that remainder in one call. So the write-off moves no
+value from exiters to the holders of the day (security round 1, SR-1012-5), and a
+partly liquid venue no longer strands its liquid part (security round 2). `EMERGENCY_ROLE` can also open a record without the timelock:
+`emergencyExcludeAdapter(i)` revokes the entry's allowance and opens its record in
+one call. Run it before `emergencyWithdraw` when an adapter is illiquid, so the
+drain of the healthy adapters does not let early redeemers take full NAV from idle.
+Only `ADMIN_ROLE` restores the entry. A closed record stays claimable.
 
 ### 3.5 Adapter routing — deposit
 
@@ -214,6 +234,10 @@ For each active adapter, compute `effectiveTarget = min(capBps, equalWeightBps)`
 
 **Pass 2 — spread leftover into cap headroom:**  
 Any funds not allocated in Pass 1 (e.g. when an adapter hits its `capBps`) are spread across adapters that still have cap headroom.
+
+**A venue that refuses a supply (security round 2):** the lending adapters' `deploy(amount)` hands the USDC straight back to the vault when the venue refuses it for capacity (Aave supply cap reached or reserve frozen; MetaMorpho `AllCapsReached`; Comet supply paused) and emits `DeployRefused(amount, reason)`. The vault measures what each adapter kept by its own USDC balance, emits `Allocated` only for that, and pass 2 does not ask a refusing adapter again in the same call. What no adapter takes stays idle in NAV with `UnroutedDeposit`. So a full venue never reverts a deposit, a keeper `rebalance` or a router deposit with an rmUSDC leg.
+
+**A venue that shuts withdrawals too (security round 3):** an Aave reserve that is paused or inactive, or a Comet with withdrawals paused, cannot pay out while NAV still counts the position at face. `AaveV3Adapter` and `CompoundV3Adapter` report it through `venueWithdrawable()` (`IVenueHealthAdapter`). While any active adapter reports false, `maxDeposit` and `maxMint` read 0, so a deposit reverts and the router skips the rmUSDC leg. The adapter's `deploy` reverts `VenueWithdrawalsClosed(reason)` instead of handing the slice back, so a keeper `rebalance` cannot turn a healthy venue's excess into idle either. Before this, a deposit minted at a NAV that counted the stuck balance, and its idle slice paid an informed holder's redeem at par while a later haircut fell on the holders who stayed. Tested by `RobotMoneyVaultRouteDeposit.t.sol::test_venueShutsWithdrawals_depositsCloseAndNoIdleFundsParExit`, `::test_venueShutsWithdrawals_adapterRevertsSoRebalanceIdlesNothing`, `PortfolioRouterLegAvailability.t.sol::test_RTR5_rmUsdcLegWithPausedLendingVenueIsSkipped` and, on the Twin chain, `VaultForkRegressions.t.sol::test_fork_venueHealth_pausedAaveReserveClosesDeposits`.
 
 `targetBps` is `MAX_BPS / activeAdapterCount` — pure equal weight, recomputed each call. With 3 adapters: 3333 each.
 
@@ -240,10 +264,12 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 | Function | Role | Effect |
 |---|---|---|
 | `pauseDeposits()` | EMERGENCY | Sets `depositsPaused`. `deposit` and `mint` revert `DepositsArePaused()`. Emits `DepositsPaused(account)`. Withdrawals are never frozen, by anyone: the vault has no withdrawal-pause flag, and `maxRedeem`/`maxWithdraw` are never lowered by a pause (core 1494). |
-| `unpauseDeposits()` | ADMIN (timelock) | Clears `depositsPaused` and emits `DepositsUnpaused(account)`. Also clears the deposit halt the three functions below set. |
+| `unpauseDeposits()` | ADMIN (timelock) | Clears `depositsPaused` and emits `DepositsUnpaused(account)`. Also clears the deposit halt that `emergencyWithdraw`, `emergencyWithdrawAdapter` and `forceRemoveAdapter` set. |
 | `emergencyWithdraw()` | EMERGENCY | Pauses deposits, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index. Withdrawals stay open. |
-| `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
+| `emergencyExcludeAdapter(i)` | EMERGENCY | Revokes the active entry's allowance and opens its exclusion record (snapshot of the supply) in one call. Exclude-only: `setAdapterAllowed(adapter, true)` (ADMIN) restores it. Does not pause deposits; the exclusion itself closes them. |
+| `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance and emits `AdapterForceRemoved(i, addr, lossAmount)`. A funded entry keeps an open exclusion record, so the balance stays owed to the holders of the moment; `recoverRemovedAdapter` or a later re-add pays it into that record. |
+| `recoverRemovedAdapter(i, amount)` | EMERGENCY | Security round 2. For an inactive entry with an open exclusion record: withdraws up to `amount` (clamped to the adapter's balance) straight into the record (`EmergencyWithdrawAdapter` source) and closes it (`ForceRemoved`) once the adapter reports an empty balance. Reverts `AdapterNotFound` for an active entry and `NoOpenExclusion(i)` without a record. Ask for at most what the venue can pay: the adapter's `withdraw` reverts on a shortfall. Does not pause deposits. |
 | `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
 
 `shutdownVault()` is not permanent. It is reversed by `restoreVault(uint256 newTvlCap)`,
@@ -414,7 +440,9 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `setMinRebalanceInterval(uint256)` | ADMIN | Adjust rebalance cooldown |
 | `emergencyWithdraw()` | EMERGENCY | Pull all adapters |
 | `emergencyWithdrawAdapter(uint256)` | EMERGENCY | Pull one adapter |
-| `forceRemoveAdapter(uint256)` | EMERGENCY | Write off a broken adapter |
+| `emergencyExcludeAdapter(uint256)` | EMERGENCY | Exclude one adapter from NAV and open its exclusion record (exclude-only) |
+| `forceRemoveAdapter(uint256)` | EMERGENCY | Deactivate a broken adapter; its balance stays owed through an exclusion record |
+| `recoverRemovedAdapter(uint256, uint256)` | EMERGENCY | Withdraw one tranche from a force-removed adapter into its open exclusion record |
 | `shutdownVault()` | EMERGENCY | Halt deposits, zero `tvlCap` (recoverable by ADMIN via `restoreVault`) |
 | `restoreVault(uint256)` | ADMIN | Reverse a shutdown and re-open deposits under a fresh TVL cap |
 | `sweepForeignToken(address)` | permissionless | Quarantine a NON-protected foreign token to the fixed `QUARANTINE` address (INV-1/INV-2). Reverts for `asset()` / share token |
@@ -554,7 +582,11 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 - Per-vault caps do not renormalise: `_executeLeg` reverts `VaultCapExceeded` for an over-cap leg, and the whole deposit reverts.
 - `_executeLeg` re-checks registry status (`VaultNotActive`) and router eligibility (`_requireRouterEligible`) before each deposited leg, as defence in depth.
 - A vault's own deposit gate counts too (QA plan D4). `_isDepositable` reads the vault's `maxDeposit`: a deposit pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`), `shutdown`, retirement, a full TVL cap or an open rmUSDC exclusion reads 0, and a reverting `maxDeposit` counts as 0. Each funded leg is then quoted with `previewDeposit` at its split amount. A reverting quote (rmAGENT on a stale price recorder) drops the leg, and the split reruns over the survivors. `previewDeposit` reports the same legs unavailable.
-- A leg whose views pass but whose `deposit` reverts still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`. The ORA-4 spot-versus-TWAP guard is the main case, since `previewDeposit` does not run it. The basket deploy script refuses a `NAV_DEVIATION_BPS` at or below any configured pool fee in bps, and rmAGENT's sheet value is 400 against the RM pool's 291 bps fee.
+- A basket outside its ORA-4 band is skipped, not reverted: `BasketVault.previewDeposit` runs the same spot-versus-TWAP guard as `deposit` (security round 1), so the quote pass drops the leg. `maxDeposit` and `maxMint` do not run it and never revert.
+- The rmUSDC allocator stops at a Morpho adapter's `maxExposure` and leaves what no adapter can take idle (`UnroutedDeposit`), so the exposure cap never reverts the rmUSDC leg (security round 1).
+- A lending venue that refuses a supply (Aave supply cap or frozen reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not revert the rmUSDC leg either: the lending adapter hands the slice back and rmUSDC keeps it idle with `UnroutedDeposit` (security round 2, §3.5). A venue that shuts withdrawals too (Aave reserve paused or inactive, Comet withdraw pause) sets rmUSDC's `maxDeposit` to 0, so the router skips the leg (security round 3).
+- A non-zero `minSharesPerLeg[i]` means "fund this leg". A leg the router would skip (unavailable, or computed amount 0) with a non-zero floor reverts the whole deposit `LegSkippedWithFloor(vault)` (security round 2). So a leg that turns unavailable after the caller previewed (rmUSDC reaching its TVL cap, a pause, an open exclusion, a basket leaving its ORA-4 band) never moves its share onto the other legs behind the caller's back. Clients pass 0 for the legs `previewDeposit` reports unavailable or unfunded.
+- A leg whose views pass but whose `deposit` reverts still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`. The case left is a basket's realised-swap slippage floor (`DepositBelowSlippageFloor`). The basket deploy script refuses a `NAV_DEVIATION_BPS` at or below any configured pool fee in bps, and rmAGENT's sheet value is 400 against the RM pool's 291 bps fee.
 
 ### 9.1.3 Caps and guards
 
@@ -562,7 +594,7 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 |---|---|---|
 | Global cap | `setRouterCap(uint256)` | Hard ceiling on total USDC per deposit. 0 = uncapped. |
 | Per-vault cap | `setVaultCap(address vault, uint256)` | Per-leg ceiling for a single vault. 0 = uncapped. |
-| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. The floor is NOT enforced on a skipped leg (unavailable, or computed amount 0): it is never called and returns 0 shares. Before issue 1746 a 0 bps eligible leg was called with `deposit(0)` and a non-zero floor on it tripped. |
+| Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any deposited leg returns fewer shares than specified. A skipped leg (unavailable, or computed amount 0) is never called and returns 0 shares, so its floor must be 0: a non-zero floor on it reverts `LegSkippedWithFloor(vault)` (security round 2). Before issue 1746 a 0 bps eligible leg was called with `deposit(0)`; before security round 2 a non-zero floor on a skipped leg was silently waived. |
 | Redeem floor (QA plan D9, SR-M16) | `minAssetsPerLeg[]` parameter to `redeemFor()` | Revert `SlippageExceeded` if a leg pays less USDC than its floor; a floor of 0 sends none. A direct `vault.redeem` has no minimum-out, and a BasketVault's own sale floor follows a dragged TWAP (core 1793), so it pays under the holder's quote without reverting. A single-vault exit with a floor is the one-leg `redeemFor(holder, holder, [vault], [shares], [floor], deadline)`, after an approval of exactly `shares` to the router that the redeem spends to zero (the dapp Withdraw tab). rmpc sends the same one leg through `gateway.withdrawFromRouter` (QA plan U9). Test: `PortfolioRouterRedeemFloor.t.sol::test_redeemFor_singleLegFloorBindsOnBasketVault`. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `_isDepositable`; `VaultNotActive` error | A leg that is not `Active` in the registry (or not router-eligible) is skipped and its share renormalised. `_executeLeg` reverts `VaultNotActive` only if the status changed between the availability pass and the leg. |

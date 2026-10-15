@@ -36,10 +36,16 @@
  * the operator approves the new code. A direct gateway gets no such line
  * (rmpc refuses a pin for one).
  *
- * A proxied vault needs `proxy_implementation_hashes` in rmpc too. The dapp
- * holds no reviewed pin for the vault's logic, so the export writes the key
- * commented out with how to fill it from the release record, instead of
- * copying the live hash.
+ * The vaults and the router are proxies too, and rmpc checks every one a write
+ * reaches against `proxy_implementation_hashes` (a deposit the vault, a
+ * withdraw the router and the vault, a router deposit the router and every
+ * leg). The panel passes the reviewed vault and router implementation hashes
+ * this build pins (`VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`,
+ * `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH`, from the release manifests), and
+ * the export writes them as values. A build without those pins writes the key
+ * commented out with the release-record fields to copy, never a command that
+ * hashes whatever implementation is live (that would approve the very code
+ * the check exists to refuse).
  *
  * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
  * and `withdraw-router` sign with the software keystore on Base mainnet too,
@@ -96,8 +102,16 @@ interface RmpcExportInputs {
    * Only for a proxied gateway; omitted or empty for a direct one.
    */
   gateway_implementation_hashes?: readonly string[];
-  /** The vault is an ERC-1967 proxy: write the commented `proxy_implementation_hashes` line. */
+  /**
+   * The vault is an ERC-1967 proxy: rmpc needs `proxy_implementation_hashes`. Without reviewed
+   * hashes below, the export writes the key commented out with where to copy them from.
+   */
   vault_is_proxy?: boolean;
+  /**
+   * Reviewed implementation code hashes of the vaults and the router, from this build's pins
+   * (never read live). Non-empty: written as `proxy_implementation_hashes`.
+   */
+  proxy_implementation_hashes?: readonly string[];
   /** The share receiver the depositor authorized: rmpc refuses a binding with another (QA plan D2). */
   share_receiver?: string;
   /** The wallet that revealed the authorization: rmpc refuses a binding owned by another. */
@@ -131,14 +145,25 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
             .join(", ")}]`,
         ]
       : []),
-    ...(inputs.vault_is_proxy === true
+    ...(inputs.proxy_implementation_hashes !== undefined &&
+    inputs.proxy_implementation_hashes.length > 0
       ? [
-          `# The vault is an upgradeable proxy. rmpc refuses to deposit or withdraw until the`,
-          `# reviewed vault implementation's code hash (from the release record) is listed here:`,
-          `#   cast keccak $(cast code $(cast implementation ${inputs.vault_address}))`,
-          `# proxy_implementation_hashes = ["0x<reviewed vault implementation code hash>"]`,
+          `# The reviewed vault and router implementations this dapp build pins (release manifests).`,
+          `# rmpc refuses to sign when a vault or the router runs any other: approve a reviewed`,
+          `# upgrade by adding its hash from the release record.`,
+          `proxy_implementation_hashes = [${inputs.proxy_implementation_hashes
+            .map(tomlStr)
+            .join(", ")}]`,
         ]
-      : []),
+      : inputs.vault_is_proxy === true
+        ? [
+            `# The vault and the router are upgradeable proxies. rmpc refuses to deposit or withdraw`,
+            `# until the reviewed implementation code hash of each is listed here. Copy them from the`,
+            `# release record (timelock.json vault_handover.vault_<i>.implementation_code_hash and`,
+            `# code_hashes.router_implementation), never from the live chain.`,
+            `# proxy_implementation_hashes = ["0x<reviewed vault implementation code hash>", "0x<reviewed router implementation code hash>"]`,
+          ]
+        : []),
     ...(inputs.share_receiver !== undefined
       ? [`share_receiver       = ${tomlStr(inputs.share_receiver)}`]
       : []),

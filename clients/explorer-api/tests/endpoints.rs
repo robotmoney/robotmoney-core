@@ -419,6 +419,57 @@ async fn list_vault_snapshots_rejects_inverted_range() {
     assert_eq!(resp.status(), 400);
 }
 
+/// Security round 1: `/v1/vault/snapshots` serves the served chain only. The query's `chain_id`
+/// used to be its only chain filter, so without one it returned the shadow chain's rows from the
+/// shared database mixed in, and took its freshness from whichever came last.
+#[tokio::test]
+async fn vault_snapshots_are_scoped_to_the_served_chain() {
+    let s = start_with_seed().await;
+    // A shadow-chain snapshot of the same contract in the same block range.
+    sqlx::query(
+        "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                       exit_fee_bps, tvl_cap, paused) \
+         VALUES ($1, $2, 1001, 77777777::NUMERIC, 77777777::NUMERIC, 0, 0::NUMERIC, FALSE)",
+    )
+    .bind(common::SHADOW_CHAIN_ID)
+    .bind(vec![0x11u8; 20])
+    .execute(&s._pool)
+    .await
+    .unwrap();
+
+    let get = |query: &'static str| {
+        let url = format!("http://{}/v1/vault/snapshots{query}", s.addr);
+        async move { http().get(url).send().await.unwrap() }
+    };
+
+    let body: serde_json::Value = get("?from_block=999&to_block=1001")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let snaps = body["snapshots"].as_array().unwrap();
+    assert_eq!(snaps.len(), 1, "only the served chain's row: {body}");
+    assert_eq!(snaps[0]["chain_id"], common::PRIMARY_CHAIN_ID);
+    assert_eq!(snaps[0]["block_number"], 1000);
+    assert_eq!(
+        body["block_number"], 1000,
+        "freshness comes from the served chain's row, not the shadow row at 1001"
+    );
+
+    // Naming the served chain is fine; naming another chain is not served here.
+    let resp = get("?from_block=999&to_block=1001&chain_id=8453").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["snapshots"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        get("?from_block=999&to_block=1001&chain_id=1")
+            .await
+            .status(),
+        404,
+        "another chain's snapshots are not served"
+    );
+}
+
 #[tokio::test]
 async fn get_agent_returns_latest_policy() {
     let s = start_with_seed().await;

@@ -29,10 +29,24 @@ once per `repage_secs` (default 3600). It resolves that page once the indexer
 is back within budget. A long indexer catch-up pages too: until it ends, the
 watchdog evaluates blocks older than its response SLA.
 
+The watchdog evaluates every indexed block in order and advances its cursor
+after each one. That write refreshes the heartbeat only while the cursor is
+within `max_cursor_lag_blocks` (default 150, also an `[indexer_lag]` key) of the
+indexed head (security round 2). A watchdog that evaluates blocks slower than
+the chain makes them keeps going, but its heartbeat ages and
+`watchdog-liveness` reports `stale` until it catches up.
+
 A breach alert that the webhook does not accept (non-2xx or timeout) holds the
 watchdog cursor on that block. The next poll sends the undelivered alert again
-under the same `dedup_key` and does not send the pause again. Later blocks wait
-until it is delivered, so a held cursor also lets the heartbeat age.
+under the same `dedup_key`. It sends the pause again too, unless the gateway's
+`depositsPaused()` reads true (security round 1). An operator who unpauses
+deposits while the cursor is held sees the watchdog pause them again on the
+next poll, until the alert is delivered. Later blocks wait until it is
+delivered, so a held cursor also lets the heartbeat age.
+
+A catch-up does not trip the per-hour limits on the backlog. The per-hour
+volume of a block counts the hour that ends at that block, never a later block
+that is already indexed (security round 3).
 
 Check it by hand from any host that can reach the explorer database:
 
@@ -48,7 +62,7 @@ echo $?
 | Exit | Output starts with | Meaning |
 |------|--------------------|---------|
 | `0` | `watchdog liveness healthy` | Last successful poll is within the limit. |
-| `1` | `watchdog liveness stale` | The watchdog stopped polling, the indexer it reads is behind, or a breach alert is undelivered. The line ends with `indexer_lag_blocks`, `indexer_since_success_secs` and `indexer_last_run_failed`. |
+| `1` | `watchdog liveness stale` | The watchdog stopped polling, the indexer it reads is behind, the watchdog is more than `max_cursor_lag_blocks` behind the indexed head, or a breach alert is undelivered. The line ends with `indexer_lag_blocks`, `indexer_since_success_secs` and `indexer_last_run_failed`. |
 | `1` | `watchdog liveness missing` | The watchdog never polled this chain, or the chain id is wrong. |
 | `2` | `watchdog liveness unknown` | The check itself failed (database down, bad arguments). Treat as down. |
 

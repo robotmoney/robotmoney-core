@@ -91,8 +91,18 @@ releases the receipt and applies its weight vector:
   `isReleased(receiptId)` and the router's weights back, failing on any
   difference.
 
-Release and weights are one transaction, so a released receipt whose weights
-were not applied, or applied weights whose receipt is unreleased, cannot exist.
+Inside `applyReceipt`, release and weights are one transaction: applied
+weights whose receipt is unreleased cannot exist, and `applyReceipt` never
+releases a receipt without its weights. A receipt can still be released
+WITHOUT weights. The timelock holds `ADMIN_ROLE` on the receipt contract
+directly (stage 11 grants it), and the standalone `release-receipt` govern row
+(docs/architecture.md, issue 1611) calls `releaseReceipt` alone. A receipt
+released that way can never be applied: a later `applyReceipt` for it reverts
+`ReceiptAlreadyReleased` at execute, after its own delay, and the committee
+records a new receipt instead
+(`RouterGovernance.t.sol::test_applyReceipt_revertsAfterStandaloneTimelockRelease`).
+So "released" does not mean "applied"; a reader checks `ReceiptApplied` (or the
+router's weights) for that.
 Admin discretion (D5 in the product proposal) is the Safe's choice of which
 receipt to apply and when. Most receipts are recorded and never applied: the
 Safe applies a receipt by scheduling the call, and declines one by doing
@@ -206,7 +216,9 @@ vector *is* the payload's allocation. What the chain can prove, it does:
   router's, not the digest's.
 - Release and weights are one transaction: the weight setter calls
   `releaseReceipt` and `setWeights` in `applyReceipt`, so a refused vector
-  releases nothing and a released receipt always carries its weights.
+  releases nothing and a receipt `applyReceipt` releases always carries its
+  weights. A receipt the standalone `release-receipt` row releases carries
+  none and can never be applied afterwards (`ReceiptAlreadyReleased`, §3.2).
 
 The `apply-receipt` govern row derives the vector from the payload file,
 checks `receiptPayloadDigest(file) == stored digest` before scheduling (§3.2),

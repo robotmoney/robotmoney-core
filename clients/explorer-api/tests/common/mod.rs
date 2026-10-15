@@ -312,13 +312,16 @@ async fn seed_fixture(pool: &PgPool) {
     }
 
     // --- indexer_runs ---
+    // Finished now: the fixture's indexer is live. `/health` reads a last good run older than
+    // 300 s as a stopped indexer (security round 1).
+    let run_finished_at = Utc::now();
     for cid in [PRIMARY_CHAIN_ID, SHADOW_CHAIN_ID] {
         sqlx::query(
             "INSERT INTO indexer_runs (chain_id, started_at, finished_at, from_block, to_block, last_indexed_block, reorg_count, rows_inserted) \
              VALUES ($1, $2, $2, $3, $4, $4, 0, 0)",
         )
         .bind(cid)
-        .bind(indexed_at)
+        .bind(run_finished_at)
         .bind(900_i64)
         .bind(1000_i64)
         .execute(pool)

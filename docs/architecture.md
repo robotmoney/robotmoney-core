@@ -296,7 +296,10 @@ Router requirements:
 - a leg that is not eligible for routing at deposit time is skipped and
   its share is renormalised across the remaining legs (§4.2.1); the
   preview surfaces the skipped legs before signing so the user can decide
-  whether to proceed or wait;
+  whether to proceed or wait. A leg that turns unavailable after signing
+  is skipped only when the signed `minSharesPerLeg` floor for it is 0: a
+  non-zero floor reverts the deposit `LegSkippedWithFloor(vault)`, so the
+  user's decision is never overridden (security round 2);
 - receipt tokens remain visible as underlying vault receipts;
 - router caps and vault caps both apply;
 - router state, weights, governance execution, and history are publicly
@@ -367,12 +370,24 @@ over its cap, and the whole deposit reverts.
 pause (`BasketVault.depositsPaused`, the `EMERGENCY_ROLE` `pauseDeposits()`),
 `shutdown`, retirement, a full TVL cap or an open `RobotMoneyVault` exclusion
 makes its `maxDeposit` 0, so the router skips that leg even while the
-registry says `Active`. A leg whose views pass but whose `deposit` reverts
-still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`. The
-ORA-4 spot-versus-TWAP guard is the main such case, because `previewDeposit`
-does not run it. The basket deploy script therefore refuses a
-`NAV_DEVIATION_BPS` at or below any configured pool fee in bps, and the
-rmAGENT sheet value is 400 against the RM pool's 291 bps fee.
+registry says `Active`. A basket whose spot price sits outside its ORA-4
+band around the TWAP is skipped too: `BasketVault.previewDeposit` runs the
+same spot-versus-TWAP guard as its `deposit` (security round 1), so the
+quote pass drops the leg. A leg whose views pass but whose `deposit` reverts
+still reverts the whole routed deposit `UsdcLegTransferFailed(vault)`; the
+case left is a basket's realised-swap slippage floor. The rmUSDC allocator
+stops at a Morpho adapter's exposure cap, so that cap never reverts the
+rmUSDC leg. A lending venue that refuses a supply (Aave supply cap or
+frozen reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not
+revert it either: the lending adapter hands the slice back and rmUSDC keeps
+it idle with `UnroutedDeposit` (security round 2). A venue that shuts
+withdrawals too (Aave reserve paused or inactive, Comet withdraw pause) is
+not handed back: rmUSDC's `maxDeposit` reads 0, so the router skips the
+leg, and the adapter's `deploy` reverts `VenueWithdrawalsClosed` (security
+round 3). The basket deploy script refuses a `NAV_DEVIATION_BPS` at or
+below any configured pool fee in bps, and the rmAGENT sheet value is 400
+against the RM pool's 291 bps fee, so ordinary drift inside the fee band
+does not take rmAGENT out of routing.
 
 ### 4.3 Vault Adapters
 
@@ -605,8 +620,8 @@ depositor principal is the depositor's own signed action alone.
 | Action | Tier |
 |---|---|
 | sweep foreign token, trigger harvest | permissionless |
-| `pauseDeposits`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
-| `unpauseDeposits`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
+| `pauseDeposits`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `emergencyExcludeAdapter` (exclude-only), `forceRemoveAdapter`, `recoverRemovedAdapter` (→ exclusion record only) | emergency (hot key, `EMERGENCY_ROLE`) |
+| `unpauseDeposits`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, restoring an excluded adapter, quarantine set + recover | governance (multisig + timelock) |
 | `redeem` / move depositor principal | depositor only |
 
 **No assisted migration.** At no point does the protocol move a
@@ -799,7 +814,11 @@ back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence
 check (`evidence-check.ts`) accepts a release only under `receipt_releases`:
 one schedule and one execute at least 172800 s apart, target the receipt
 contract, calldata `releaseReceipt(receiptId)`. No EOA can release a
-receipt after handover.
+receipt after handover. A receipt this row releases carries no weights and
+can never be applied afterwards: `RouterGovernance.applyReceipt` refuses it
+with `ReceiptAlreadyReleased` (governance-decisions.md §3.2). Apply a receipt
+with the `apply-receipt` row instead, which releases and applies it in one
+call.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
@@ -1263,7 +1282,11 @@ same reorg-rewrite handling. Because the structured tilt is off-chain
 the memo at `rationale_uri`, verifies `keccak256(memo) == vote_digest`, and
 stores the per-vault tilts only when the hash matches — a memo that is
 missing or fails the digest check is recorded as an unverified commitment,
-never as tilt data. The per-vault tilt aggregate counts one signal per
+never as tilt data. The memo fetch shares the tick's 30 s inline fetch budget
+with the receipt payload fetches; a vote past it is stored unfetched. A
+budgeted sweep re-fetches unverified votes, newest first and at most 12 times
+each, and a vote counts from the tick it verifies (security round 3,
+migration 0028). The per-vault tilt aggregate counts one signal per
 member: each active member's latest vote on the vault in chain order, only if
 that vote verified, only if it was cast after the member's latest
 registration, and only if it sits within the freshness window (7 days of
@@ -1434,9 +1457,16 @@ moves the cursor). A stopped, hung, crash-looping, or startup-failed watchdog
 stops refreshing it. A poll with no new block refreshes it only while the
 explorer indexer is within its `[indexer_lag]` budget (head-minus-cursor lag and
 time since its last good run); behind a wedged or stopped indexer the watchdog
-pages `indexer_behind:<chain>` and lets the heartbeat age (QA plan X5, DI-5). A
+pages `indexer_behind:<chain>` and lets the heartbeat age (QA plan X5, DI-5).
+Advancing the cursor refreshes it only while the cursor is within
+`[indexer_lag] max_cursor_lag_blocks` (default 150) of the indexed head, so a
+watchdog that evaluates blocks slower than the chain makes them reads `stale`
+instead of live (security round 2). A
 breach alert the webhook does not accept holds the cursor on its block until a
-later poll delivers it (DI-7).
+later poll delivers it (DI-7). Each such poll also sends the block's pause
+again unless the gateway's `depositsPaused()` already reads true: a submitted
+pause can sit under-priced in the mempool, and while the cursor is held no later
+block sends its fee-bumped replacement (security round 1).
 
 `watchdog-liveness` is the read-only checker, built by the same
 `cargo build -p watchdog` as the daemon (`src/bin/watchdog-liveness.rs`). It

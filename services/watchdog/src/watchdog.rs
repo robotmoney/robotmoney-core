@@ -17,9 +17,14 @@
 //!    threshold and the scope, and is committed only once the receiver
 //!    confirmed it (DI-7).
 //! 5. Advance the cursor past each block that was evaluated AND whose breach
-//!    alerts were all delivered. A block with an undelivered alert holds the
-//!    cursor; the next cycle re-evaluates it, re-sends only the undelivered
-//!    alerts and does not re-send a pause that already went out (DI-7).
+//!    alerts were all delivered. The heartbeat moves with it only while the
+//!    cursor is within `indexer_lag.max_cursor_lag_blocks` of the indexed head,
+//!    so a watchdog slower than the chain lets it age (security round 2). A block with an undelivered alert holds the
+//!    cursor; the next cycle re-evaluates it and re-sends only the undelivered
+//!    alerts (DI-7). It re-sends the pause too, unless the gateway's
+//!    `depositsPaused()` already reads true: a submitted pause can be stuck
+//!    under-priced, and while the cursor is held no later block sends the
+//!    fee-bumped replacement WD-5 relies on (security round 1).
 //! 6. With no new block, refresh the liveness heartbeat only while the
 //!    explorer indexer is within its lag budget; otherwise report
 //!    [`CycleResult::IndexerBehind`] and let the heartbeat age (DI-5).
@@ -46,7 +51,7 @@ use crate::{
     pager_state::{
         clear_pager_states_with_prefix, commit_page, load_pager_state, save_pager_state,
     },
-    pause::{trigger_pause, PauseParams, PauserSigningKey},
+    pause::{gateway_deposits_paused, trigger_pause, PauseParams, PauserSigningKey},
     receipt_liveness::{AlertPager, PageAction, PagerState},
     volume::{
         burn_volume_per_block, burn_volume_per_block_for_vault, burn_volume_per_hour,
@@ -112,11 +117,15 @@ pub async fn run_cycle(
     pauser: Option<&PauserSigningKey>,
 ) -> Result<CycleResult, WatchdogError> {
     // Anchor the rolling per-hour window to indexed *chain* time, not wall-clock
-    // (scan finding WD-2). Using the evaluated block's on-chain timestamp keeps
-    // the window consistent whether the watchdog is at tip or catching up, and
-    // makes the breach decision deterministic for a given indexed state. Fall
-    // back to the block's persisted timestamp; if the header row is somehow
-    // missing the per-hour window is empty rather than wall-clock-skewed.
+    // (scan finding WD-2). The window is [ts(block) - 1h, block]: the evaluated
+    // block's on-chain timestamp opens it and the evaluated block closes it, so
+    // the sum is the same whether the watchdog is at tip or catching up, and the
+    // breach decision is deterministic for a given indexed state. The upper end
+    // is the block number, not "now": during catch-up every block after this one
+    // is already indexed, and an open top end counted the whole backlog into
+    // each backlog block's hour, so each one breached and paused (security
+    // round 3). Fall back to the latest persisted timestamp when the header row
+    // is missing; the block bound still keeps later blocks out.
     let now_unix = match block_timestamp(pool, chain_id, block_number).await? {
         Some(ts) => ts,
         None => match latest_block_timestamp(pool, chain_id).await? {
@@ -141,9 +150,11 @@ pub async fn run_cycle(
 
     // --- Compute volumes ---
     let mint_block = mint_volume_per_block(pool, chain_id, block_number).await?;
-    let mint_hour = mint_volume_per_hour(pool, chain_id, now_unix, HOUR_WINDOW_SECS).await?;
+    let mint_hour =
+        mint_volume_per_hour(pool, chain_id, block_number, now_unix, HOUR_WINDOW_SECS).await?;
     let burn_block = burn_volume_per_block(pool, chain_id, block_number).await?;
-    let burn_hour = burn_volume_per_hour(pool, chain_id, now_unix, HOUR_WINDOW_SECS).await?;
+    let burn_hour =
+        burn_volume_per_hour(pool, chain_id, block_number, now_unix, HOUR_WINDOW_SECS).await?;
 
     // --- Compare against thresholds ---
     let mut breaches: Vec<BreachEvent> = Vec::new();
@@ -328,33 +339,55 @@ pub async fn run_cycle(
     }
 
     if mode.includes_pause() {
-        // A retry of this block (held for an undelivered alert) must not send
-        // the pause again: it went out on the first attempt.
+        // A retry of this block (held for an undelivered alert) re-sends the
+        // pause unless the chain shows it landed. `trigger_pause` returns once
+        // the node accepted the transaction, not once it was mined, so the
+        // record below means "submitted", never "paused". Skipping on the
+        // record alone left an under-priced pause stuck for as long as the
+        // receiver refused the alert: the held cursor stops every later block,
+        // and with it the fee-bumped replacement at the confirmed nonce that
+        // WD-5 relies on (security round 1). The re-send is that replacement.
         let pause_key = volume_breach_pause_key(chain_id, block_number);
-        let already_submitted = matches!(
+        let submitted_before = matches!(
             load_pager_state(pool, chain_id, &pause_key).await,
             Ok(Some(PagerState { firing: true, .. }))
         );
-        if already_submitted {
+        let landed = submitted_before && pause_confirmed_on_chain(config, client, sla).await;
+        if landed {
             info!(
                 chain_id,
                 block_number,
-                "gateway.pauseDeposits() already submitted for this block on an earlier attempt; not re-sent"
+                "gateway.depositsPaused() reads true: the pause submitted on an earlier attempt \
+                 at this block landed; not re-sent"
             );
-        } else if trigger_pause_once(config, client, chain_id, pauser, sla).await && undelivered > 0
-        {
-            // Only a block that will be retried needs the record; a delivered
-            // block moves on and never looks at it.
-            let submitted = PagerState {
-                firing: true,
-                last_paged_at: Some(now),
-            };
-            if let Err(e) = save_pager_state(pool, chain_id, &pause_key, submitted).await {
-                error!(
+        } else {
+            if submitted_before {
+                warn!(
                     chain_id,
                     block_number,
-                    "pause record persist failed; the retry may send the pause again: {e}"
+                    "the pause submitted on an earlier attempt at this block is not confirmed on \
+                     chain (depositsPaused() is false or unreadable); re-sending it at the \
+                     confirmed nonce with the fee bump"
                 );
+            }
+            let sent = trigger_pause_once(config, client, chain_id, pauser, sla).await;
+            if sent && undelivered > 0 && !submitted_before {
+                // Only a block that will be retried needs the record; a delivered
+                // block moves on and never looks at it. The record makes the
+                // retry ask the chain first, so a pause that landed is not sent
+                // again.
+                let submitted = PagerState {
+                    firing: true,
+                    last_paged_at: Some(now),
+                };
+                if let Err(e) = save_pager_state(pool, chain_id, &pause_key, submitted).await {
+                    error!(
+                        chain_id,
+                        block_number,
+                        "pause record persist failed; the retry sends the pause again without \
+                         asking the chain first: {e}"
+                    );
+                }
             }
         }
     }
@@ -370,6 +403,37 @@ pub async fn run_cycle(
         return Ok(CycleResult::BreachUndelivered(kinds));
     }
     Ok(CycleResult::Breached(kinds))
+}
+
+/// Whether `gateway.depositsPaused()` reads true on the pause RPC, under the
+/// SLA budget. Every failure (no RPC or gateway configured, an RPC error, a
+/// timeout) is `false`: an unknown state is treated as not paused, so the
+/// caller sends the pause again rather than trusting an unconfirmed one.
+async fn pause_confirmed_on_chain(config: &Config, client: &Client, sla: Duration) -> bool {
+    use alloy_primitives::Address;
+    use std::str::FromStr;
+
+    let Some(rpc_url) = config.action.gateway_rpc_url.as_deref() else {
+        return false;
+    };
+    let Ok(gateway) = Address::from_str(config.action.gateway_address.as_deref().unwrap_or(""))
+    else {
+        return false;
+    };
+    match timeout(sla, gateway_deposits_paused(client, rpc_url, gateway)).await {
+        Ok(Ok(paused)) => paused,
+        Ok(Err(e)) => {
+            warn!("gateway.depositsPaused() read failed; treating deposits as not paused: {e}");
+            false
+        }
+        Err(_) => {
+            warn!(
+                sla_secs = config.sla.max_response_secs,
+                "gateway.depositsPaused() read exceeded the SLA budget; treating deposits as not paused"
+            );
+            false
+        }
+    }
 }
 
 /// Submit `gateway.pauseDeposits()` once under the SLA budget. Returns `true`
@@ -523,6 +587,48 @@ pub async fn store_cursor(
     Ok(())
 }
 
+/// Advance the cursor past `last_processed_block` after the cursor loop evaluated it, refreshing
+/// the heartbeat only while the cursor is within `max_cursor_lag_blocks` of the indexed head
+/// (security round 2). Returns whether the heartbeat was refreshed.
+///
+/// [`store_cursor`] refreshes `updated_at` on every write. The cursor loop used it, so a watchdog
+/// whose per-block queries took longer than Base's 2 s block time fell ever further behind the
+/// indexed head while `watchdog-liveness` read a fresh heartbeat: a mint spike was evaluated hours
+/// late and nothing paged. The indexed head is read in the same statement, so a head that moved
+/// during a long range counts: the cursor of the newest indexer run without an error, found by
+/// walking `indexer_runs` down from its newest row rather than by a `MAX` over every run, since
+/// this runs once per evaluated block.
+///
+/// A first write for the chain (no row yet) always stamps `updated_at`: there is no older
+/// heartbeat to keep, and the first run starts at the head.
+pub async fn advance_cursor(
+    pool: &PgPool,
+    chain_id: i64,
+    last_processed_block: i64,
+    max_cursor_lag_blocks: i64,
+) -> Result<bool, WatchdogError> {
+    let (refreshed,): (bool,) = sqlx::query_as(
+        "INSERT INTO watchdog_cursor (chain_id, last_processed_block, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (chain_id) DO UPDATE \
+           SET last_processed_block = EXCLUDED.last_processed_block, \
+               updated_at = CASE \
+                 WHEN COALESCE((SELECT last_indexed_block FROM indexer_runs \
+                                WHERE chain_id = $1 AND error IS NULL \
+                                  AND last_indexed_block IS NOT NULL \
+                                ORDER BY run_id DESC LIMIT 1), $2) - $2 <= $3 \
+                 THEN now() ELSE watchdog_cursor.updated_at END \
+         RETURNING updated_at = now()",
+    )
+    .bind(chain_id)
+    .bind(last_processed_block)
+    .bind(max_cursor_lag_blocks)
+    .fetch_one(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+    Ok(refreshed)
+}
+
 /// Refresh the cursor heartbeat without changing its progress position.
 ///
 /// A no-new-block poll is still evidence that the watchdog is running and able
@@ -591,6 +697,7 @@ pub async fn run_cycles_since_cursor(
     }
 
     let mut all_kinds: Vec<ThresholdKind> = Vec::new();
+    let mut lag_reported = false;
     for block_number in from_block..=latest_indexed_block {
         let breached = match run_cycle(pool, config, client, chain_id, block_number, pauser).await {
             Ok(CycleResult::Breached(kinds)) => {
@@ -601,9 +708,9 @@ pub async fn run_cycles_since_cursor(
                 // DI-7: do NOT advance past a block whose breach alert the
                 // receiver has not confirmed. The next cycle re-evaluates it and
                 // re-sends only what is still undelivered. Later blocks wait:
-                // this block's pause went out on the first pass (and is not
-                // re-sent once submitted), and the held cursor ages the
-                // heartbeat, so `watchdog-liveness` pages as well.
+                // each retry of this block re-sends its pause until the gateway
+                // reports deposits paused (security round 1), and the held
+                // cursor ages the heartbeat, so `watchdog-liveness` pages as well.
                 merge_kinds(&mut all_kinds, kinds);
                 return Ok(CycleResult::BreachUndelivered(all_kinds));
             }
@@ -617,8 +724,25 @@ pub async fn run_cycles_since_cursor(
                 return Err(e);
             }
         };
-        // Advance the cursor only after a successful evaluation of this block.
-        store_cursor(pool, chain_id, block_number).await?;
+        // Advance the cursor only after a successful evaluation of this block. The heartbeat
+        // moves with it only while the cursor keeps up with the indexed head (security round 2).
+        let refreshed = advance_cursor(
+            pool,
+            chain_id,
+            block_number,
+            config.indexer_lag.max_cursor_lag_blocks,
+        )
+        .await?;
+        if !refreshed && !lag_reported {
+            lag_reported = true;
+            error!(
+                chain_id,
+                block_number,
+                max_cursor_lag_blocks = config.indexer_lag.max_cursor_lag_blocks,
+                "the watchdog is evaluating blocks more than max_cursor_lag_blocks behind the \
+                 indexed head; the liveness heartbeat is NOT refreshed until it catches up"
+            );
+        }
         if breached {
             // The block is done: its per-breach delivery records only mattered
             // while it could be retried.
@@ -678,14 +802,26 @@ async fn evaluate_vault_breaches(
 ) -> Result<(), WatchdogError> {
     let mint_block =
         mint_volume_per_block_for_vault(pool, chain_id, block_number, vault_bytes).await?;
-    let mint_hour =
-        mint_volume_per_hour_for_vault(pool, chain_id, now_unix, HOUR_WINDOW_SECS, vault_bytes)
-            .await?;
+    let mint_hour = mint_volume_per_hour_for_vault(
+        pool,
+        chain_id,
+        block_number,
+        now_unix,
+        HOUR_WINDOW_SECS,
+        vault_bytes,
+    )
+    .await?;
     let burn_block =
         burn_volume_per_block_for_vault(pool, chain_id, block_number, vault_bytes).await?;
-    let burn_hour =
-        burn_volume_per_hour_for_vault(pool, chain_id, now_unix, HOUR_WINDOW_SECS, vault_bytes)
-            .await?;
+    let burn_hour = burn_volume_per_hour_for_vault(
+        pool,
+        chain_id,
+        block_number,
+        now_unix,
+        HOUR_WINDOW_SECS,
+        vault_bytes,
+    )
+    .await?;
 
     let checks = [
         (

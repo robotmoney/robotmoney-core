@@ -15,6 +15,13 @@
 //! broadcast envelope and check the refusal of a `--gas-limit` below the
 //! floor. The real-EVM twin is `deposit_router_default_gas_clears_gateway_floor`
 //! in `testing/fork-e2e-rust/tests/router.rs`.
+//!
+//! Security round 3: the router path also reads `router.previewDeposit`. A
+//! leg with weight above 0 that it marks unavailable is refused
+//! (`ErrLegUnavailable`) without `--allow-unavailable-legs`; with
+//! `--min-shares-per-leg` omitted the signed floors are each leg's
+//! `estShares` less 0.50%; a simulated `LegSkippedWithFloor` is refused by
+//! name before signing.
 
 mod common;
 
@@ -25,7 +32,7 @@ use crate::common::{
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
 use alloy_rlp::Decodable;
-use alloy_sol_types::{SolCall, SolEvent};
+use alloy_sol_types::{SolCall, SolError, SolEvent};
 use assert_cmd::Command;
 use mockito::Matcher;
 use rust_payment_client::commands::deposit::{router_deposit_gas_floor, DepositGas};
@@ -176,7 +183,42 @@ async fn install_post_preflight_mocks(server: &mut mockito::ServerGuard, receipt
 
 /// `gateway.router()` returns [`ROUTER`] and `router.getEffectiveWeights()`
 /// returns `legs` legs (equal weights; the gateway counts legs, not bps).
+/// `router.previewDeposit` reports every leg available, quoting
+/// [`PREVIEW_EST_SHARES`] each.
 async fn install_router_weight_mocks(server: &mut mockito::ServerGuard, legs: usize) {
+    let bps = 10_000u64 / legs.max(1) as u64;
+    let preview: Vec<PortfolioRouter::LegPreview> = (0..legs)
+        .map(|i| preview_leg(0x10 + i as u8, bps, PREVIEW_EST_SHARES, false))
+        .collect();
+    install_router_mocks_with_preview(server, &preview).await;
+}
+
+/// Shares every leg of [`install_router_weight_mocks`] quotes.
+const PREVIEW_EST_SHARES: u64 = 200_000;
+
+/// One `router.previewDeposit` leg on vault `0x…<last>`.
+fn preview_leg(
+    last: u8,
+    bps: u64,
+    est_shares: u64,
+    unavailable: bool,
+) -> PortfolioRouter::LegPreview {
+    PortfolioRouter::LegPreview {
+        vault: Address::with_last_byte(last),
+        weightBps: U256::from(bps),
+        legAmount: U256::ZERO,
+        estShares: U256::from(est_shares),
+        unavailable,
+    }
+}
+
+/// `gateway.router()` returns [`ROUTER`], `router.getEffectiveWeights()` the
+/// vaults and bps of `preview`, and `router.previewDeposit(amount)` returns
+/// `preview` itself.
+async fn install_router_mocks_with_preview(
+    server: &mut mockito::ServerGuard,
+    preview: &[PortfolioRouter::LegPreview],
+) {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
@@ -187,15 +229,24 @@ async fn install_router_weight_mocks(server: &mut mockito::ServerGuard, legs: us
         .expect_at_least(0)
         .create_async()
         .await;
-    let vaults: Vec<Address> = (0..legs)
-        .map(|i| Address::with_last_byte(0x10 + i as u8))
-        .collect();
-    let bps: Vec<U256> = vec![U256::from(10_000u64 / legs.max(1) as u64); legs];
+    let vaults: Vec<Address> = preview.iter().map(|l| l.vault).collect();
+    let bps: Vec<U256> = preview.iter().map(|l| l.weightBps).collect();
     let ret = PortfolioRouter::getEffectiveWeightsCall::abi_encode_returns(&(vaults, bps));
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
             PortfolioRouter::getEffectiveWeightsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(ret))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    let ret = PortfolioRouter::previewDepositCall::abi_encode_returns(&(preview.to_vec(),));
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            PortfolioRouter::previewDepositCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&format!("0x{}", ahex::encode(ret))))
@@ -233,6 +284,19 @@ fn envelope_gas_limit(raw_hex: &str) -> u64 {
         TxEnvelope::Eip1559(signed) => signed.tx().gas_limit,
         other => panic!("expected a type-2 envelope, got {other:?}"),
     }
+}
+
+/// The `minSharesPerLeg` of the `gateway.depositTo` call a broadcast
+/// EIP-1559 envelope signed.
+fn envelope_min_shares_per_leg(raw_hex: &str) -> Vec<U256> {
+    let raw = ahex::decode(raw_hex.trim_start_matches("0x")).expect("raw tx hex");
+    let input = match TxEnvelope::decode(&mut raw.as_slice()).expect("valid EIP-2718 envelope") {
+        TxEnvelope::Eip1559(signed) => signed.tx().input.clone(),
+        other => panic!("expected a type-2 envelope, got {other:?}"),
+    };
+    RobotMoneyGateway::depositToCall::abi_decode(&input, true)
+        .expect("signed calldata is gateway.depositTo")
+        .minSharesPerLeg
 }
 
 fn router_deposit_cmd(config: &str, state_dir: &std::path::Path, order_id: B256) -> Command {
@@ -330,6 +394,8 @@ async fn deposit_router_happy_path_exits_zero_with_payment_id() {
     assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
     assert_eq!(v["router"], format!("{ROUTER:#x}"));
     assert_eq!(v["shares_per_leg"], json!(["990000"]));
+    // `--min-shares-per-leg 0` is the explicit opt-out: no floor.
+    assert_eq!(v["min_shares_per_leg"], json!(["0"]));
     // One leg's shares are not a total across vaults: the router path has none.
     assert!(v["shares_minted"].is_null(), "{v}");
 }
@@ -435,6 +501,235 @@ async fn deposit_router_explicit_gas_limit_above_floor_is_used() {
 
     let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
     assert_eq!(envelope_gas_limit(&raw), 6_000_000);
+}
+
+/// The finding's scenario: rmUSDC (9_500 bps) sits at its TVL cap, so
+/// `router.previewDeposit` marks it unavailable.
+fn rmusdc_full_preview() -> Vec<PortfolioRouter::LegPreview> {
+    vec![
+        preview_leg(0x10, 9_500, 0, true),
+        preview_leg(0x11, 500, 49_000, false),
+    ]
+}
+
+/// A broadcast mock that must never be hit.
+async fn install_forbidden_broadcast(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await
+}
+
+/// Security round 3: a router leg with weight above 0 that
+/// `router.previewDeposit` marks unavailable is refused before signing. The
+/// router would skip it and deposit its whole share into the other legs:
+/// with rmUSDC full, 100% of the deposit would buy basket tokens.
+#[tokio::test]
+async fn deposit_router_refuses_weighted_unavailable_leg_without_opt_in() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_router_mocks_with_preview(&mut server, &rmusdc_full_preview()).await;
+    let simulation = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::depositToCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result("0x"))
+        .expect(0)
+        .create_async()
+        .await;
+    let broadcast = install_forbidden_broadcast(&mut server).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = router_deposit_cmd(fix.config_path.to_str().unwrap(), &state_dir, ORDER_ID)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
+        .expect("stdout is JSON");
+    assert_eq!(v["status"], "refused");
+    assert_eq!(v["error"], "ErrLegUnavailable");
+    let message = v["message"].as_str().expect("message");
+    assert!(
+        message.contains(&format!("{:#x}", Address::with_last_byte(0x10))),
+        "{message}"
+    );
+    assert!(message.contains("--allow-unavailable-legs"), "{message}");
+    simulation.assert_async().await;
+    broadcast.assert_async().await;
+}
+
+/// With `--allow-unavailable-legs` the agent accepts the renormalised split:
+/// the skipped leg's floor is 0 and the funded leg's floor is its
+/// `estShares` less 0.50%.
+#[tokio::test]
+async fn deposit_router_allow_unavailable_legs_signs_zero_floor_on_skipped_leg() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let amount = U256::from(1_000_000u64);
+
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_router_mocks_with_preview(&mut server, &rmusdc_full_preview()).await;
+    let sent = install_recording_broadcast(&mut server).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_routed_body(amount, vec![U256::ZERO, U256::from(49_000u64)]),
+    )
+    .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    router_deposit_cmd(fix.config_path.to_str().unwrap(), &state_dir, ORDER_ID)
+        .arg("--allow-unavailable-legs")
+        .assert()
+        .success();
+
+    let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
+    // 49_000 * 9_950 / 10_000 = 48_755.
+    assert_eq!(
+        envelope_min_shares_per_leg(&raw),
+        vec![U256::ZERO, U256::from(48_755u64)]
+    );
+}
+
+/// Security round 3: with `--min-shares-per-leg` omitted, the signed
+/// `depositTo` carries one floor per leg equal to the leg's
+/// `previewDeposit` `estShares` less 0.50% (the dapp's
+/// `deriveMinSharesPerLeg`), not the empty vector that let the router move
+/// a leg that turned unavailable onto the others.
+#[tokio::test]
+async fn deposit_router_signs_floors_derived_from_preview_deposit() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let amount = U256::from(1_000_000u64);
+    let preview = vec![
+        preview_leg(0x10, 9_500, 950_000, false),
+        preview_leg(0x11, 500, 49_000_000_000_000, false),
+    ];
+
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_router_mocks_with_preview(&mut server, &preview).await;
+    let sent = install_recording_broadcast(&mut server).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_routed_body(
+            amount,
+            vec![U256::from(950_000u64), U256::from(49_000_000_000_000u64)],
+        ),
+    )
+    .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = router_deposit_cmd(fix.config_path.to_str().unwrap(), &state_dir, ORDER_ID)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let want: Vec<U256> = preview
+        .iter()
+        .map(|l| l.estShares * U256::from(9_950u64) / U256::from(10_000u64))
+        .collect();
+    assert_eq!(
+        want,
+        vec![U256::from(945_250u64), U256::from(48_755_000_000_000u64)]
+    );
+    let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
+    assert_eq!(envelope_min_shares_per_leg(&raw), want);
+
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
+        .expect("stdout is JSON");
+    assert_eq!(v["min_shares_per_leg"], json!(["945250", "48755000000000"]));
+}
+
+/// Security round 3: the simulated `depositTo` reverts
+/// `LegSkippedWithFloor(vault)` (a floored leg turned unavailable after the
+/// preview). rmpc names it `ErrLegUnavailable` and signs nothing. Unnamed,
+/// the simulation was inconclusive and rmpc broadcast a deposit certain to
+/// revert on chain.
+#[tokio::test]
+async fn deposit_router_simulated_leg_skipped_with_floor_is_refused_before_signing() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_router_weight_mocks(&mut server, 2).await;
+    let revert = PortfolioRouter::LegSkippedWithFloor {
+        vault: Address::with_last_byte(0x10),
+    }
+    .abi_encode();
+    let simulation = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::depositToCall,
+        >()))
+        .with_status(200)
+        .with_body(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":3,"message":"execution reverted","data":"0x{}"}}}}"#,
+            ahex::encode(revert)
+        ))
+        .expect(1)
+        .create_async()
+        .await;
+    let broadcast = install_forbidden_broadcast(&mut server).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = router_deposit_cmd(fix.config_path.to_str().unwrap(), &state_dir, ORDER_ID)
+        .args(["--min-shares-per-leg", "1,1"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
+        .expect("stdout is JSON");
+    assert_eq!(v["status"], "refused");
+    assert_eq!(v["error"], "ErrLegUnavailable");
+    let message = v["message"].as_str().expect("message");
+    assert!(message.contains("LegSkippedWithFloor"), "{message}");
+    simulation.assert_async().await;
+    broadcast.assert_async().await;
+}
+
+/// `--min-shares-per-leg` must give one floor per router leg (or a single
+/// 0). A mismatch would revert `MinSharesLengthMismatch` on chain, so it is
+/// refused as a bad flag before signing.
+#[tokio::test]
+async fn deposit_router_min_shares_length_mismatch_exits_before_signing() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_router_weight_mocks(&mut server, 2).await;
+    let broadcast = install_forbidden_broadcast(&mut server).await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+    let out = router_deposit_cmd(fix.config_path.to_str().unwrap(), &state_dir, ORDER_ID)
+        .args(["--min-shares-per-leg", "1,2,3"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert_eq!(out.status.code(), Some(3));
+    broadcast.assert_async().await;
 }
 
 /// When `--destination` is omitted the existing single-vault path is used

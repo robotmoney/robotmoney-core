@@ -115,9 +115,15 @@ The agent must surface — not suppress — these refusals:
 - **Caps (gateway):** `--amount > maxPerPayment` or
   `windowGross + amount > maxPerWindow` (`ErrDepositCapExceeded`); the
   withdraw caps (`ErrWithdrawCapExceeded`).
+- **Router legs:** a router deposit reads `router.previewDeposit` first. A
+  leg with weight above 0 that the router would skip is refused as
+  `ErrLegUnavailable` unless the user approves `--allow-unavailable-legs`.
+  Without `--min-shares-per-leg`, each funded leg gets a floor of its
+  quoted shares less 0.50%.
 - **Simulation:** the exact call is simulated before signing; a router leg
-  that is disabled, unavailable or below its slippage floor is refused as
-  `ErrVaultDisabled`, `ErrLegUnavailable` or `ErrSlippageBoundExceeded`.
+  that is disabled, unavailable (including `LegSkippedWithFloor`) or below
+  its slippage floor is refused as `ErrVaultDisabled`, `ErrLegUnavailable`
+  or `ErrSlippageBoundExceeded`.
 - **withdraw-router:** `--min-assets-per-leg` is required
   (`ErrMinAssetsPerLegRequired`; `0` sends no floor), and without
   `--confirm` the command only prints its preview (`ErrConfirmNotProvided`).

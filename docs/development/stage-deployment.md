@@ -104,6 +104,8 @@ Deploy 2 is devops run 2 on Base 8453: release `release/v0.4.0-base.3-rehearsal`
   | `VITE_VAULT_EXPECTED_CODE_HASH` | `timelock.json` `vault_handover.vault_<i>.code_hash`, keyed by vault address | rmUSDC `0x37575f69ed37ca97ce4bd48a86161a31a01e6d4aa500521a0f607b16ab516ce5`; rmPROTO `0x6cf32003ce46eb8f8c69ccfa17d61d4b95b72fce22ae7b45b0058dfc25ff4fd8`; rmAGENT `0xd8e32680c955aefda70407d15e991ee5160ece35845bf75f69053417e724d530`; rmRWA `0x806af3ca8d1d1c4462f80e5e05cb1f397d8f3fe2f40258b1c23044cfac268214` |
   | `VITE_ROUTER_ADDRESS`, `INDEXER_PORTFOLIO_ROUTER` | `router.json` `router` (must equal `gateway.json` `gateway_router`) | `0xB3a8e66d9E2980B54aC0e70e0e236486D1DCb356` |
   | `VITE_ROUTER_EXPECTED_CODE_HASH` | `timelock.json` `code_hashes.router` | `0x48329ef938fb9a7bd2ce0d42b0718362f4ec736c5f05c4cfd76d757286302e26` |
+  | `VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH` | `timelock.json` `vault_handover.vault_<i>.implementation_code_hash`, keyed by vault address, for each vault whose stage manifest names a `vault_implementation` (ADR-0014) | `{}` (Deploy 2 is direct) |
+  | `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH` | `timelock.json` `code_hashes.router_implementation` when `router.json` names a `router_implementation` | empty (Deploy 2 is direct) |
   | `VITE_REGISTRY_ADDRESS`, `INDEXER_REGISTRY` | `registry.json` `registry` | `0x686EbEFda732DffA988253Ecf9c012946B8066A3` |
   | `VITE_GOVERNANCE_ADDRESS`, `INDEXER_ROUTER_GOVERNANCE` | `governance.json` `governance` | `0x59b593ab06bB5587534EfE255f6C614858b32754` |
   | `INDEXER_CONSENSUS_RECEIPT` | `timelock.json` `addresses.consensus_receipt` | `0xEfEe1c9881D1291460f72dA7000bA53e42eb36E2` |

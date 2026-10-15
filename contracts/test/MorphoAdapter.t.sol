@@ -400,8 +400,9 @@ contract MorphoAdapterTest is Test {
     /// @notice QA plan D8 (CS-8): `setMaxExposure` is `onlyVault`, and no vault function called
     ///         it, so the FS-VLT-10 cap could never be set. Governance now sets it through
     ///         `RobotMoneyVault.setAdapterMaxExposure` (`ADMIN_ROLE`). The cap set that way is
-    ///         stored on the adapter, binds a routed vault deposit, and clears with 0. A
-    ///         non-admin caller, an unknown index and a removed entry are refused.
+    ///         stored on the adapter, bounds what a routed vault deposit places in Morpho (the
+    ///         rest stays idle, security round 1), and clears with 0. A non-admin caller, an
+    ///         unknown index and a removed entry are refused.
     function test_maxExposure_settableThroughVault() public {
         address vaultAdmin = makeAddr("vaultAdmin");
         RobotMoneyVault rmVault = Proxied.robotMoneyVault(
@@ -439,18 +440,21 @@ contract MorphoAdapterTest is Test {
         rmVault.setAdapterMaxExposure(0, cap);
         assertEq(morpho.maxExposure(), cap, "cap stored on the adapter");
 
-        // The cap binds a routed deposit: up to the cap reaches Morpho, one unit more reverts.
+        // The cap binds a routed deposit: up to the cap reaches Morpho. One unit more no longer
+        // reverts (security round 1): routing stops at the cap and leaves the unit idle in NAV,
+        // reported by `UnroutedDeposit`, instead of asking Morpho for more than the cap.
         address depositor = makeAddr("depositor");
         usdc.mint(depositor, 2 * cap);
         vm.startPrank(depositor);
         usdc.approve(address(rmVault), type(uint256).max);
         rmVault.deposit(cap, depositor);
         assertEq(morpho.totalAssets(), cap, "deposit up to the cap reaches Morpho");
-        vm.expectRevert(
-            abi.encodeWithSelector(MorphoAdapter.ExposureCapExceeded.selector, cap, ONE_USDC, cap)
-        );
+        vm.expectEmit(false, false, false, true, address(rmVault));
+        emit RobotMoneyVault.UnroutedDeposit(ONE_USDC);
         rmVault.deposit(ONE_USDC, depositor);
         vm.stopPrank();
+        assertEq(morpho.totalAssets(), cap, "Morpho stays at the cap");
+        assertEq(usdc.balanceOf(address(rmVault)), ONE_USDC, "the unit past the cap stays idle");
 
         // 0 clears the cap, and the same deposit then lands.
         vm.prank(vaultAdmin);

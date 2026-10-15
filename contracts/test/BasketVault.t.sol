@@ -2190,6 +2190,33 @@ contract BasketVaultTest is Test {
         assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
     }
 
+    /// @notice Security round 1 (ORA-4 liveness): `previewDeposit` runs the same guard as `deposit`, so a quote outside
+    ///         the band reverts `NavMarketDeviationExceeded` and `PortfolioRouter` drops the leg instead of reverting the
+    ///         whole routed deposit. `mint` runs it too. `maxMint` and `maxDeposit` never revert (ERC-4626), and the
+    ///         quote returns once spot is back inside the band.
+    function test_ORA4_previewDepositRunsTheGuard_maxViewsDoNot() public {
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100);
+        uint256 inBand = vault.previewDeposit(1_000 * ONE_USDC);
+        assertGt(inBand, 0, "inside the band the quote returns");
+
+        pool.setSpotTick(200); // about +2%, beyond the 1% band
+        vm.expectPartialRevert(BasketVault.NavMarketDeviationExceeded.selector);
+        vault.previewDeposit(1_000 * ONE_USDC);
+        assertGt(vault.maxDeposit(stranger), 0, "maxDeposit does not run the guard");
+        assertGt(vault.maxMint(stranger), 0, "maxMint does not run the guard");
+
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), type(uint256).max);
+        vm.expectPartialRevert(BasketVault.NavMarketDeviationExceeded.selector);
+        vault.mint(inBand / 2, stranger);
+        vm.stopPrank();
+
+        pool.setSpotTick(0);
+        assertEq(vault.previewDeposit(1_000 * ONE_USDC), inBand, "back inside the band");
+    }
+
     /// @notice Issue 1666: the guard runs on deposit only. With the guard at 100 bps and spot moved past it, a deposit reverts
     ///         `NavMarketDeviationExceeded` and an existing holder still redeems. The sheet-set guard can never trap exits.
     function test_ORA4_guardNeverBlocksRedeem() public {

@@ -35,6 +35,7 @@ rmpc deposit --config <CONFIG> \
   [--gas-limit <N>] \
   [--destination <0x...>] \
   [--min-shares-per-leg <N>] \
+  [--allow-unavailable-legs] \
   [--pretty]
 ```
 
@@ -71,7 +72,22 @@ Optional flags:
   this address (`gateway.depositTo`). Without it the deposit goes to the
   gateway's single vault (`gateway.deposit`).
 - `--min-shares-per-leg <N>` — per-leg minimum shares for a router deposit,
-  repeatable or comma-separated. Empty skips the per-leg slippage floor.
+  repeatable or comma-separated, one per router leg. Omit it: rmpc reads
+  `router.previewDeposit(amount)` and uses each funded leg's `estShares`
+  less 0.50%. A non-zero floor means "this leg must be funded". If the leg
+  turns unavailable before the deposit lands (rmUSDC reaches its TVL cap, a
+  pause, a basket leaves its price band), the router reverts
+  `LegSkippedWithFloor` instead of moving that leg's share onto the other
+  legs. A single `0` sends no floor on any leg. Pass it only on purpose.
+  The on-chain `paymentId` of a router deposit also binds the destination
+  and these floors, so to retry and have the chain dedupe, pass the
+  `min_shares_per_leg` the first run printed.
+- `--allow-unavailable-legs` — router deposit only. Before signing, rmpc
+  refuses with `ErrLegUnavailable` when `router.previewDeposit` marks a leg
+  with weight above 0 unavailable: the router would skip that leg and put
+  its whole share into the other legs, so the split would not be the
+  governed weights. This flag accepts that split. Use it only with the
+  user's approval.
 
 ### Output (success)
 
@@ -83,7 +99,8 @@ JSON on stdout including:
 - `sharesMinted` — vault shares minted to the agent's pre-registered
   `shareReceiver` (the agent never receives `rmUSDC` directly). On a router
   deposit this is `null`, and `router` plus `shares_per_leg` (one entry per
-  router leg, from the `AgentDepositRouted` log) are set instead.
+  router leg, from the `AgentDepositRouted` log) are set instead, with
+  `min_shares_per_leg`, the floors the call carried.
 - `windowId` — `uint64(block.timestamp / 86400)`.
 - Standard envelope: `chain_id`, `block_number`, `source: "json_rpc"`.
 

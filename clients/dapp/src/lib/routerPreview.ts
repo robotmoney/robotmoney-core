@@ -19,6 +19,20 @@
  * Each leg's estimated shares print in that leg vault's own `symbol()` (issue
  * 1773, QA plan U5): the caller passes `ctx.shareSymbolOf` from
  * `useVaultShareSymbols`. Without it a leg says the neutral "shares".
+ *
+ * Unavailable legs (QA plan D4): `PortfolioRouter._depositTo` skips a leg that
+ * `previewDeposit` reports unavailable (not Active, not eligible, `maxDeposit`
+ * 0 or reverting, a reverting quote) and splits the amount across the rest by
+ * their weights. So an unavailable leg no longer means the deposit reverts. The
+ * effect says the legs are skipped and lists each leg's renormalized USDC, the
+ * `legAmount` the router itself computed. The simulation is the revert gate.
+ *
+ * Leg pins (security round 2, ADR-0014): the router forwards each leg's USDC into that vault and
+ * takes the vault's own `deposit()` return as the shares, so the router's pin alone says nothing
+ * about where the USDC ends up. "[bytecode verified]" needs the router AND every leg vault in
+ * `ctx.verifiedTargets`, and a leg in `ctx.refusedTargets` (the chain showed it does not match its
+ * pins) is named in the preview's `warning` (`refusedRouterLegs`). The write guard refuses that
+ * deposit at send time.
  */
 import { encodeFunctionData, decodeFunctionData, toFunctionSelector, getAddress } from "viem";
 import type { Address, Hex } from "viem";
@@ -52,10 +66,9 @@ const BPS_DENOMINATOR = 10_000n;
  * Derive a non-zero per-leg `minSharesPerLeg` floor array from the preview legs.
  *
  * Each available leg's floor is its `estShares` reduced by
- * `toleranceBps`; an unavailable leg gets a `0n` floor (the contract treats a
- * zero floor as "skip the check", and the deposit already reverts up-front when
- * any leg is unavailable). Floors are ordered identically to `legs`, which the
- * router requires to match `getEffectiveWeights()` order.
+ * `toleranceBps`; an unavailable leg gets a `0n` floor (the router skips that
+ * leg and never checks its floor). Floors are ordered identically to `legs`,
+ * which the router requires to match `getEffectiveWeights()` order.
  *
  * DAPP-2 (issue #1025): replaces the previous empty `[]` floor array that
  * disabled per-leg slippage protection.
@@ -98,6 +111,31 @@ export function computeVaultListChanged(
   });
 }
 
+/**
+ * The leg vaults the chain showed do NOT match their pins (`ctx.refusedTargets`), deduplicated, in
+ * the order given. The write guard refuses a router deposit while any leg is one of them.
+ */
+export function refusedRouterLegs(
+  vaults: readonly (string | undefined)[],
+  ctx: Pick<PreviewContext, "refusedTargets">,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of vaults) {
+    if (typeof v !== "string") continue;
+    const key = v.toLowerCase();
+    if (seen.has(key) || ctx.refusedTargets?.has(key) !== true) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+/** The sentence that names the refused legs of a router deposit. */
+export function refusedRouterLegsText(legs: readonly string[]): string {
+  return `Leg vault ${legs.join(", ")} does not match this build's pins: its code or the implementation behind it is not a reviewed one (it may have been upgraded). The router would deposit USDC into it, so the dapp will not send this deposit.`;
+}
+
 /** Context for a router deposit preview. */
 export interface RouterPreviewContext extends PreviewContext {
   router: Address;
@@ -110,14 +148,16 @@ export type RouterPreview =
   | (Extract<Preview, { ok: true }> & {
       /** Per-vault leg summary — parallel to the router's weight vector. */
       legs: LegPreview[];
-      /** True if any leg is unavailable (will cause tx to revert). */
+      /** True if any leg is unavailable: the router skips it and renormalizes the rest. */
       hasUnavailable: boolean;
     })
   | Extract<Preview, { ok: false }>;
 
 function classifyRouterRisk(legs: LegPreview[], ctx: RouterPreviewContext): RiskClass {
   if (!ctx.gatewayCodeHashVerified) return "unsafe";
-  if (legs.some((l) => l.unavailable)) return "high";
+  // A skipped leg that carries weight moves its share onto the other legs: the split is not
+  // the governance weights. A skipped 0 bps leg changes nothing.
+  if (legs.some((l) => l.unavailable && l.weightBps > 0n)) return "high";
   return "low";
 }
 
@@ -177,21 +217,32 @@ export function buildRouterPreview(
   const legSummary = legs
     .map((l) => {
       const pct = formatPercentFromBps(l.weightBps);
-      const tag = l.unavailable ? " [UNAVAILABLE — tx will revert]" : "";
+      if (l.unavailable) return `${shorten(l.vault)} ${pct} [UNAVAILABLE, skipped: 0 USDC]`;
       const unit = shareSymbolOrNeutral(l.vault ? ctx.shareSymbolOf?.(l.vault) : undefined);
-      return `${shorten(l.vault)} ${pct} → ~${formatShares(l.estShares, unit)}${tag}`;
+      return `${shorten(l.vault)} ${pct} → ${formatUsdc(l.legAmount)} → ~${formatShares(l.estShares, unit)}`;
     })
     .join("; ");
 
+  const skipped = legs.filter((l) => l.unavailable).length;
   const effect = hasUnavailable
-    ? `One or more vault legs are unavailable. The router will revert if you sign now. Review the unavailable legs below before proceeding.`
+    ? `Unavailable legs are skipped. The router splits ${formatUsdc(amount)} across the ${legs.length - skipped} available vault(s), renormalized by their weights, and skips ${skipped}: ${legSummary}.`
     : `Portfolio Router splits ${formatUsdc(amount)} across ${legs.length} vault(s): ${legSummary}.`;
+
+  // The router's own pin, never the gateway's (QA plan U4), and every leg's: the router passes the
+  // USDC on to each leg vault (security round 2).
+  const targetCodeHashKnown =
+    targetCodeHashPinned(ctx, ctx.router) &&
+    legs.every((l) => typeof l.vault === "string" && targetCodeHashPinned(ctx, l.vault));
+  const refusedLegs = refusedRouterLegs(
+    legs.map((l) => l.vault),
+    ctx,
+  );
 
   return {
     ok: true,
     target: ctx.router,
-    // The router's own pin, never the gateway's (QA plan U4).
-    targetCodeHashKnown: targetCodeHashPinned(ctx, ctx.router),
+    targetCodeHashKnown,
+    ...(refusedLegs.length > 0 ? { warning: refusedRouterLegsText(refusedLegs) } : {}),
     functionName: "deposit",
     selector,
     args: [
@@ -205,7 +256,7 @@ export function buildRouterPreview(
         raw: `[${minSharesPerLeg.map((s) => s.toString()).join(", ")}]`,
         gloss: `per-leg slippage floor at ${formatPercentFromBps(
           BPS_DENOMINATOR - ROUTER_SLIPPAGE_TOLERANCE_BPS,
-        )} of estimated shares (0 for unavailable legs)`,
+        )} of estimated shares (0 for skipped unavailable legs)`,
       },
     ],
     effect,

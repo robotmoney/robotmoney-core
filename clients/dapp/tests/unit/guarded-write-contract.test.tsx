@@ -7,10 +7,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider, createConfig, custom, useAccount, useConnect } from "wagmi";
 import { mock } from "wagmi/connectors";
 import { base as wagmiBase, mainnet as wagmiMainnet } from "wagmi/chains";
-import { defineChain, keccak256, type Address } from "viem";
+import {
+  defineChain,
+  encodeFunctionResult,
+  keccak256,
+  pad,
+  toFunctionSelector,
+  type Address,
+  type Hex,
+} from "viem";
 import { RuntimeConfigProvider } from "../../src/lib/RuntimeConfigContext";
 import { useGuardedWriteContract } from "../../src/lib/useGuardedWriteContract";
 import { WrongChainGate } from "../../src/components/WrongChainGate";
+import { routerAbi } from "../../src/lib/abi";
+import {
+  ROUTER_CODE_HASH_PIN_KEY,
+  ROUTER_IMPLEMENTATION_HASH_PIN_KEY,
+  VAULT_CODE_HASH_PIN_KEY,
+  VAULT_IMPLEMENTATION_HASH_PIN_KEY,
+  WriteTargetPinError,
+} from "../../src/lib/codePins";
 
 const devnet = defineChain({
   id: 918453,
@@ -43,11 +59,18 @@ const WRITE_METHODS = [
   "eth_signTypedData_v4",
 ];
 
+/**
+ * A per-call answer for the wallet's RPC (method, params), or undefined for the default one. Lets a
+ * test give each address its own code and ERC-1967 slot, and answer an `eth_call`.
+ */
+type RpcAnswer = (method: string, params: readonly unknown[]) => unknown;
+
 function setup(
   chainId: number,
   envClass: string,
   code: string | null = "0x6001",
   extraConfig: Readonly<Record<string, string>> = {},
+  rpc: RpcAnswer = () => undefined,
 ) {
   const requests: Array<{ chainId: number; method: string }> = [];
   const t = (id: number) =>
@@ -71,6 +94,7 @@ function setup(
   vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
     let method = "unparsed";
     let id: unknown = 1;
+    let params: unknown[] = [];
     try {
       const body = JSON.parse(String(init?.body)) as {
         method: string;
@@ -79,16 +103,26 @@ function setup(
       };
       method = body.method;
       id = body.id;
+      params = body.params ?? [];
       if (method === "eth_sendTransaction" && body.params?.[0]) sent.push(body.params[0]);
     } catch {
       /* not JSON-RPC */
     }
     fetched.push(method);
-    if (method === "eth_getCode") {
+    // The pin check (codePins.ts) reads the code, the ERC-1967 slot (zero: a direct contract) and
+    // the block they are read at.
+    const answer: Record<string, unknown> = {
+      eth_getCode: code,
+      eth_blockNumber: "0x10",
+      eth_getStorageAt: `0x${"0".repeat(64)}`,
+    };
+    const own = rpc(method, params);
+    if (own !== undefined || method in answer) {
       return Promise.resolve(
-        new Response(JSON.stringify({ jsonrpc: "2.0", id, result: code }), {
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ jsonrpc: "2.0", id, result: own !== undefined ? own : answer[method] }),
+          { headers: { "content-type": "application/json" } },
+        ),
       );
     }
     return Promise.reject(new TypeError("blocked by test"));
@@ -131,8 +165,9 @@ async function connected(
   envClass: string,
   code: string | null = "0x6001",
   extraConfig: Readonly<Record<string, string>> = {},
+  rpc?: RpcAnswer,
 ) {
-  const h = setup(chainId, envClass, code, extraConfig);
+  const h = setup(chainId, envClass, code, extraConfig, rpc);
   await act(async () => screen.getByTestId("go").click());
   await waitFor(() =>
     expect(screen.getByTestId("state")).toHaveTextContent(`connected:${chainId}`),
@@ -250,6 +285,118 @@ describe("useGuardedWriteContract target code check (issue 1729)", () => {
     expect(errors).toBe(1);
     expect(getWrite().error?.name).toBe("WriteTargetCodeError");
     expect(fetched.filter((m) => WRITE_METHODS.includes(m))).toEqual([]);
+  });
+});
+
+// Security round 2 (ADR-0014): `PortfolioRouter._executeLeg` forwards each leg's USDC into that
+// vault and takes the vault's own `deposit()` return as the shares minted, so the per-leg floors
+// cannot catch a leg that keeps the USDC. A pinned router is not enough: before a router deposit
+// the guard reads `getEffectiveWeights()` at the same block and checks every leg vault's code and
+// implementation, as rmpc `verify_router_and_legs` does. Removing `assertRouterLegsPinned` from
+// the guard makes this test fail.
+describe("useGuardedWriteContract checks every leg vault of a router deposit (security round 2)", () => {
+  /** The generic ERC1967Proxy runtime at the router and every leg. */
+  const PROXY_CODE = "0x6003" as Hex;
+  const ROUTER_IMPL_CODE = "0x6004" as Hex;
+  const LEG_IMPL_CODE = "0x6005" as Hex;
+  const UNREVIEWED_IMPL_CODE = "0x6006" as Hex;
+  const ZERO_SLOT = `0x${"0".repeat(64)}` as Hex;
+  const WEIGHTS = toFunctionSelector("getEffectiveWeights()");
+  const addr = (): Address => `0x${(nextTarget += 1).toString(16).padStart(40, "0")}` as Address;
+  const same = (a: unknown, b: string): boolean =>
+    typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+
+  it("refuses router.deposit naming the leg whose ERC-1967 slot points at an unpinned implementation, and nothing reaches the wallet", async () => {
+    const router = addr();
+    const routerImpl = addr();
+    const legA = addr();
+    const legB = addr();
+    const reviewedLegImpl = addr();
+    const unreviewedLegImpl = addr();
+    // The timelock upgraded leg B to logic this build does not pin.
+    let legBImpl = unreviewedLegImpl;
+    const config = {
+      VITE_ROUTER_ADDRESS: router,
+      [ROUTER_CODE_HASH_PIN_KEY]: keccak256(PROXY_CODE),
+      [ROUTER_IMPLEMENTATION_HASH_PIN_KEY]: keccak256(ROUTER_IMPL_CODE),
+      [VAULT_CODE_HASH_PIN_KEY]: JSON.stringify({
+        [legA]: keccak256(PROXY_CODE),
+        [legB]: keccak256(PROXY_CODE),
+      }),
+      [VAULT_IMPLEMENTATION_HASH_PIN_KEY]: JSON.stringify({
+        [legA]: keccak256(LEG_IMPL_CODE),
+        [legB]: keccak256(LEG_IMPL_CODE),
+      }),
+    };
+    const rpc: RpcAnswer = (method, params) => {
+      const at = params[0];
+      if (method === "eth_getCode") {
+        if (same(at, routerImpl)) return ROUTER_IMPL_CODE;
+        if (same(at, reviewedLegImpl)) return LEG_IMPL_CODE;
+        if (same(at, unreviewedLegImpl)) return UNREVIEWED_IMPL_CODE;
+        return PROXY_CODE;
+      }
+      if (method === "eth_getStorageAt") {
+        if (same(at, router)) return pad(routerImpl, { size: 32 });
+        if (same(at, legA)) return pad(reviewedLegImpl, { size: 32 });
+        if (same(at, legB)) return pad(legBImpl, { size: 32 });
+        return ZERO_SLOT;
+      }
+      const call = at as { to?: string; data?: string } | undefined;
+      if (method === "eth_call" && same(call?.to, router) && call?.data?.startsWith(WEIGHTS)) {
+        return encodeFunctionResult({
+          abi: routerAbi,
+          functionName: "getEffectiveWeights",
+          result: [
+            [legA, legB],
+            [6_000n, 4_000n],
+          ],
+        });
+      }
+      return undefined;
+    };
+    const { fetched, getWrite } = await connected(8453, "mainnet", PROXY_CODE, config, rpc);
+    const deposit = {
+      address: router,
+      abi: routerAbi,
+      functionName: "deposit",
+      args: [1_000_000n, [1n, 1n]],
+    };
+
+    let refused: Error | undefined;
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(deposit as never)
+        .catch((e: Error) => {
+          refused = e;
+        });
+    });
+    expect(refused).toBeInstanceOf(WriteTargetPinError);
+    const pinError = refused as WriteTargetPinError;
+    expect(pinError.pinCause).toBe("implementation-mismatch");
+    expect(pinError.target).toBe(legB);
+    expect(pinError.router).toBe(router);
+    expect(pinError.message).toContain(legB);
+    expect(pinError.message).toContain(
+      `a leg vault the Portfolio Router ${router} would deposit into`,
+    );
+    expect(fetched).toContain("eth_call");
+    expect(fetched.filter((m) => WRITE_METHODS.includes(m))).toEqual([]);
+    expect(getWrite().error?.name).toBe("WriteTargetPinError");
+
+    // Control: the same deposit reaches the wallet once leg B runs a reviewed implementation, so
+    // the refusal above was the leg's and nothing else's.
+    legBImpl = reviewedLegImpl;
+    let passed: Error | undefined;
+    await act(async () => {
+      await getWrite()
+        .writeContractAsync(deposit as never)
+        .catch((e: Error) => {
+          passed = e;
+        });
+    });
+    expect(passed).not.toBeInstanceOf(WriteTargetPinError);
+    expect(fetched.some((m) => WRITE_METHODS.includes(m))).toBe(true);
   });
 });
 

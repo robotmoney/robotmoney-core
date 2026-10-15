@@ -1,5 +1,6 @@
 {
   "contract": "PortfolioRouter",
+  "enums": {},
   "libraries": {},
   "linearization": [
     "contracts/PortfolioRouter.sol:PortfolioRouter",

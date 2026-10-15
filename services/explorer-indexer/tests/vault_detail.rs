@@ -709,20 +709,28 @@ async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
 /// opens, the transferee when it claims. An `ExclusionOpened` from an address that is not the
 /// ledger of a watched vault writes nothing.
 ///
+/// The ledger is where `ExclusionLedgerFactory` created it (ADR-0014 §9), and the indexer learns it
+/// from the vault's `exclusionLedger()` (security round 1). The vault's own CREATE address at
+/// nonce 1, which the indexer used to derive, is the impostor here: on a proxy vault it is no
+/// ledger at all.
+///
 /// A reorg to block 56 then drops the credit, the claim, the close and the transferee's balance,
 /// and keeps the record and the two balances read at its block.
 #[tokio::test]
 async fn exclusion_record_events_store_each_snapshot_holders_balance() {
     use alloy_sol_types::{SolCall as _, SolEvent as _};
-    use explorer_indexer::abi::{IExclusionLedgerEvents, IExclusionLedgerReads};
-    use explorer_indexer::indexer::exclusion_ledger_of;
+    use explorer_indexer::abi::{
+        IExclusionLedgerEvents, IExclusionLedgerReads, IRobotMoneyVaultReads,
+    };
     use std::sync::Arc;
 
     let fx = pg_fixture().await;
 
     let vault_addr = Address::from([0xAAu8; 20]);
-    let ledger = exclusion_ledger_of(vault_addr);
-    let impostor = Address::from([0x77u8; 20]);
+    let factory = Address::from([0xFAu8; 20]);
+    let ledger = factory.create(1);
+    let impostor = vault_addr.create(1);
+    assert_ne!(ledger, impostor);
     let adapter = Address::from([0xADu8; 20]);
     let holder_a = Address::from([0x0Au8; 20]);
     let holder_b = Address::from([0x0Bu8; 20]);
@@ -793,19 +801,29 @@ async fn exclusion_record_events_store_each_snapshot_holders_balance() {
         log_json(ledger, &finalized, 62, [0x62u8; 32], 0),
     ];
 
-    // `balanceAt(holder, 1)` on the ledger: a 600, b 300 (b moved 100 to c before the snapshot),
-    // c 100. Every other read (the vault's snapshot reads) answers zero.
+    // The vault's `exclusionLedger()` names the factory-created ledger. `balanceAt(holder, 1)` on
+    // the ledger: a 600, b 300 (b moved 100 to c before the snapshot), c 100. Every other read (the
+    // vault's snapshot reads) answers zero.
     let ledger_hex = format!("{:#x}", ledger);
+    let vault_hex = format!("{:#x}", vault_addr);
     let selector = format!(
         "0x{}",
         hex::encode(IExclusionLedgerReads::balanceAtCall::SELECTOR)
     );
+    let ledger_getter = format!(
+        "0x{}",
+        hex::encode(IRobotMoneyVaultReads::exclusionLedgerCall::SELECTOR)
+    );
+    let ledger_word = format!("0x{:0>64}", hex::encode(ledger.as_slice()));
     let word = |v: u64| format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()));
     let stub = StubRpcServer::start().await;
     stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
     stub.set("eth_getLogs", serde_json::Value::Array(logs));
     stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if to == vault_hex && data.starts_with(&ledger_getter) {
+            return Ok(ledger_word.clone());
+        }
         if to != ledger_hex || !data.starts_with(&selector) {
             return Ok(word(0));
         }
@@ -864,6 +882,18 @@ async fn exclusion_record_events_store_each_snapshot_holders_balance() {
         )],
         "one record, from the vault's ledger; the impostor's event is ignored"
     );
+    let mapping: Vec<(Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT vault_address, ledger_address FROM vault_exclusion_ledgers WHERE chain_id = $1",
+    )
+    .bind(8453i64)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        mapping,
+        vec![(vault_addr.to_vec(), Some(ledger.to_vec()))],
+        "the ledger is stored as the vault's exclusionLedger() named it"
+    );
 
     let pool = fx.db.pool();
     assert_eq!(
@@ -895,15 +925,394 @@ async fn exclusion_record_events_store_each_snapshot_holders_balance() {
     );
 }
 
-/// `exclusion_ledger_of` derives the ledger as the vault's first CREATE (nonce 1). That holds only
-/// while `new ExclusionLedger(...)` is the only contract `RobotMoneyVault` ever creates: a creation
-/// before it in the constructor (or in a state-variable initializer, which runs first) moves the
-/// ledger to nonce 2, and the indexer would watch an empty address and miss every exclusion record
-/// with no error. This reads the Solidity source and fails on any other `new <Contract>(`. Its bases
-/// (OpenZeppelin's ERC4626 and ReentrancyGuard, and `AdminFloorAccessControlCounter` over
-/// OpenZeppelin's AccessControl) create nothing. Runs without a DB.
+/// Security round 2: an exclusion record's snapshot balances are read by a budgeted pass, not all
+/// inside the tick that indexes the record.
+///
+/// Deposits have no minimum and take any receiver, so dust receivers can give a vault a huge
+/// depositor history. When a record opened, the tick read `balanceAt` for every owner in that
+/// history, one eth_call at a time, and one refused read failed the whole tick, so it started over
+/// on every retry. Here 3,000 dust holders hold shares at the snapshot and 500 more exited before
+/// it. The read of holder 1,500 is refused once. The tick still succeeds within the pass's budget,
+/// the pass goes on from that holder on the next tick, every holder's balance is stored, and no
+/// exited owner is ever read.
+#[tokio::test]
+async fn exclusion_snapshot_balances_are_read_by_a_budgeted_pass() {
+    use alloy_sol_types::{SolCall as _, SolEvent as _};
+    use explorer_indexer::abi::{IExclusionLedgerEvents, IExclusionLedgerReads};
+    use explorer_indexer::indexer::SNAPSHOT_READ_TIME_BUDGET;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const HOLDERS: i64 = 3_000;
+    const EXITED: i64 = 500;
+    const REFUSED: i64 = 1_500;
+
+    let fx = pg_fixture().await;
+    let chain = 8453i64;
+    let vault = Address::from([0xAAu8; 20]);
+    let ledger = Address::from([0x1Eu8; 20]);
+    fx.db.upsert_chain(chain, "base", "stub").await.unwrap();
+    fx.db
+        .upsert_contract(chain, vault.into_array(), "vault", None)
+        .await
+        .unwrap();
+    fx.db
+        .insert_vault_exclusion_ledger(chain, vault.into_array(), Some(ledger.into_array()), 1)
+        .await
+        .unwrap();
+    // Owner n is the 20-byte address n. Holders 1..=3000 deposited 1 share at block 10; owners
+    // 3001..=3500 deposited at block 10 and withdrew everything at block 20.
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares) \
+         SELECT $1, $2, decode(lpad(to_hex(n), 40, '0'), 'hex'), 10, 1 \
+           FROM generate_series(1, $3::bigint) n",
+    )
+    .bind(chain)
+    .bind(vault.as_slice())
+    .bind(HOLDERS + EXITED)
+    .execute(fx.db.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares) \
+         SELECT $1, $2, decode(lpad(to_hex(n), 40, '0'), 'hex'), 20, 0 \
+           FROM generate_series($3::bigint, $4::bigint) n",
+    )
+    .bind(chain)
+    .bind(vault.as_slice())
+    .bind(HOLDERS + 1)
+    .bind(HOLDERS + EXITED)
+    .execute(fx.db.pool())
+    .await
+    .unwrap();
+
+    let opened = IExclusionLedgerEvents::ExclusionOpened {
+        exclusionId: U256::from(1u64),
+        adapterIndex: U256::from(1u64),
+        adapter: Address::from([0xADu8; 20]),
+        snapshotSupply: U256::from(HOLDERS as u64),
+        adapterValue: U256::from(500u64),
+    }
+    .encode_log_data();
+
+    let ledger_hex = format!("{:#x}", ledger);
+    let selector = format!(
+        "0x{}",
+        hex::encode(IExclusionLedgerReads::balanceAtCall::SELECTOR)
+    );
+    let one = format!("0x{}", hex::encode(U256::from(1u64).to_be_bytes::<32>()));
+    let zero = format!("0x{}", "00".repeat(32));
+    let refused_holder = format!("{REFUSED:040x}");
+    let refused_once = Arc::new(AtomicBool::new(false));
+    let read: Arc<Mutex<Vec<i64>>> = Arc::default();
+    let (refused_once_hook, read_hook) = (refused_once.clone(), read.clone());
+    let stub = StubRpcServer::start().await;
+    stub.honour_log_filter(true);
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set(
+        "eth_getLogs",
+        serde_json::Value::Array(vec![log_json(ledger, &opened, 55, [0x55u8; 32], 0)]),
+    );
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if to != ledger_hex || !data.starts_with(&selector) {
+            return Ok(zero.clone());
+        }
+        // The holder is the low 20 bytes of the first argument word.
+        let holder = data.get(34..74).unwrap_or_default();
+        if holder == refused_holder && !refused_once_hook.swap(true, Ordering::SeqCst) {
+            return Err("upstream request timeout".to_string());
+        }
+        read_hook
+            .lock()
+            .unwrap()
+            .push(i64::from_str_radix(holder, 16).unwrap_or(-1));
+        Ok(one.clone())
+    }));
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = IndexerConfig {
+        end_block: None,
+        ..base_config(vault)
+    };
+    let stored = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM exclusion_holder_balances WHERE chain_id = $1",
+        )
+        .bind(chain)
+        .fetch_one(fx.db.pool())
+        .await
+        .unwrap()
+    };
+
+    // The tick that indexes the record: the refused read ends its pass, not the tick.
+    let started = std::time::Instant::now();
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        o.error.is_none(),
+        "a refused balance read must not fail the tick: {:?}",
+        o.error
+    );
+    assert!(
+        elapsed < SNAPSHOT_READ_TIME_BUDGET + std::time::Duration::from_secs(10),
+        "the tick took {elapsed:?}; the snapshot pass's budget is {SNAPSHOT_READ_TIME_BUDGET:?}"
+    );
+    assert!(
+        refused_once.load(Ordering::SeqCst),
+        "holder {REFUSED} was asked"
+    );
+    let first = stored().await;
+    assert!(
+        first < HOLDERS,
+        "the pass stopped at the refused read, {first} of {HOLDERS} stored"
+    );
+
+    // Later ticks (one new block each) go on from the refused holder.
+    let mut tip = 0x46u64;
+    for _ in 0..10 {
+        if stored().await == HOLDERS {
+            break;
+        }
+        tip += 1;
+        stub.set(
+            "eth_blockNumber",
+            serde_json::Value::String(format!("0x{tip:x}")),
+        );
+        let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+        assert!(o.error.is_none(), "{:?}", o.error);
+    }
+    stub.shutdown();
+    assert_eq!(
+        stored().await,
+        HOLDERS,
+        "every holder's snapshot balance is stored"
+    );
+
+    let read = read.lock().unwrap().clone();
+    assert!(
+        read.iter().all(|&n| (1..=HOLDERS).contains(&n)),
+        "an owner who exited before the snapshot is never read"
+    );
+    let mut distinct = read.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        read.len(),
+        "a holder whose read succeeded is not read again"
+    );
+    let done: bool = sqlx::query_scalar(
+        "SELECT done FROM exclusion_snapshot_progress WHERE chain_id = $1 AND exclusion_id = 1",
+    )
+    .bind(chain)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert!(done, "the snapshot is marked read through");
+}
+
+/// Security round 2: a governed upgrade that points a vault at a new ExclusionLedger.
+///
+/// Under ADR-0014 the way to fix a ledger bug is a vault upgrade whose reinitializer names a new
+/// ledger. The indexer read `exclusionLedger()` once and kept the answer for ever, so it went on
+/// watching the old ledger and dropped every record of the new one at the emitter gate. A basket
+/// vault (a stored "no ledger") that gained a ledger by an upgrade stayed unwatched the same way.
+///
+/// Vault A was stored with ledger L1, basket vault B with no ledger. In one tick A upgrades (block
+/// 55) and its new ledger L2 opens record 1 (block 56) in the same tick, a late record 2 still
+/// opens on L1 (block 57), and B upgrades (block 58) and its new ledger L3 opens record 1 (block
+/// 59). The node answers `eth_getLogs` by its filter, so L2's and L3's logs come back only if the
+/// indexer asks for them. All three records are stored, A keeps L1 and gains L2, B gains L3, and
+/// the getter is read once per upgrade, not every tick.
+#[tokio::test]
+async fn a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed() {
+    use alloy_sol_types::{SolCall as _, SolEvent as _};
+    use explorer_indexer::abi::{IExclusionLedgerEvents, IRobotMoneyVaultReads, IUpgradeEvents};
+    use std::sync::Arc;
+
+    let fx = pg_fixture().await;
+    let chain = 8453i64;
+    fx.db.upsert_chain(chain, "base", "stub").await.unwrap();
+
+    let vault_a = Address::from([0xA1u8; 20]);
+    let basket_b = Address::from([0xB2u8; 20]);
+    let l1 = Address::from([0x11u8; 20]);
+    let l2 = Address::from([0x12u8; 20]);
+    let l3 = Address::from([0x13u8; 20]);
+    let adapter = Address::from([0xADu8; 20]);
+
+    // B is a registered vault (it is read for a ledger like every watched vault).
+    fx.db
+        .upsert_contract(chain, basket_b.into_array(), "vault", None)
+        .await
+        .unwrap();
+    fx.db
+        .upsert_vault(
+            chain,
+            basket_b.into_array(),
+            "Robot Money Basket",
+            "SPECULATIVE",
+            U256::ZERO,
+            0,
+            1,
+            1,
+            [0x01; 32],
+        )
+        .await
+        .unwrap();
+    // What earlier ticks stored: A named L1, B reverted (no ledger).
+    fx.db
+        .insert_vault_exclusion_ledger(chain, vault_a.into_array(), Some(l1.into_array()), 1)
+        .await
+        .unwrap();
+    fx.db
+        .insert_vault_exclusion_ledger(chain, basket_b.into_array(), None, 1)
+        .await
+        .unwrap();
+
+    let upgraded = IUpgradeEvents::Upgraded {
+        implementation: Address::from([0x99u8; 20]),
+    }
+    .encode_log_data();
+    let opened = |id: u64| {
+        IExclusionLedgerEvents::ExclusionOpened {
+            exclusionId: U256::from(id),
+            adapterIndex: U256::from(1u64),
+            adapter,
+            snapshotSupply: U256::from(1_000u64),
+            adapterValue: U256::from(500u64),
+        }
+        .encode_log_data()
+    };
+    let logs = vec![
+        log_json(vault_a, &upgraded, 55, [0x55u8; 32], 0),
+        log_json(l2, &opened(1), 56, [0x56u8; 32], 0),
+        log_json(l1, &opened(2), 57, [0x57u8; 32], 0),
+        log_json(basket_b, &upgraded, 58, [0x58u8; 32], 0),
+        log_json(l3, &opened(1), 59, [0x59u8; 32], 0),
+    ];
+
+    // After the upgrades the getters name L2 (A) and L3 (B). Every other read answers zero.
+    let getter = format!(
+        "0x{}",
+        hex::encode(IRobotMoneyVaultReads::exclusionLedgerCall::SELECTOR)
+    );
+    let a_hex = format!("{:#x}", vault_a);
+    let b_hex = format!("{:#x}", basket_b);
+    let word_of = |a: Address| format!("0x{:0>64}", hex::encode(a.as_slice()));
+    let (l2_word, l3_word) = (word_of(l2), word_of(l3));
+    let getter_hook = getter.clone();
+    let stub = StubRpcServer::start().await;
+    stub.honour_log_filter(true);
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if data.starts_with(&getter_hook) && to == a_hex {
+            return Ok(l2_word.clone());
+        }
+        if data.starts_with(&getter_hook) && to == b_hex {
+            return Ok(l3_word.clone());
+        }
+        Ok(format!("0x{}", "00".repeat(32)))
+    }));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let o = run_once(&fx.db, &rpc, &base_config(vault_a)).await.unwrap();
+    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
+    let getter_reads = stub
+        .captured_requests()
+        .into_iter()
+        .filter(|r| {
+            r["method"] == "eth_call"
+                && r["params"][0]["data"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with(&getter))
+        })
+        .count();
+    stub.shutdown();
+    assert_eq!(
+        getter_reads, 2,
+        "each vault is read again for its upgrade, once; a stored vault is not read every tick"
+    );
+
+    let mapping: Vec<(Vec<u8>, Option<Vec<u8>>, i64)> = sqlx::query_as(
+        "SELECT vault_address, ledger_address, block_number FROM vault_exclusion_ledgers \
+         WHERE chain_id = $1 ORDER BY vault_address, block_number",
+    )
+    .bind(chain)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        mapping,
+        vec![
+            (vault_a.to_vec(), Some(l1.to_vec()), 1),
+            (vault_a.to_vec(), Some(l2.to_vec()), 55),
+            (basket_b.to_vec(), None, 1),
+            (basket_b.to_vec(), Some(l3.to_vec()), 58),
+        ],
+        "an upgrade adds the new ledger as of its block and keeps the old answer"
+    );
+
+    let records: Vec<(Vec<u8>, i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT ledger_address, exclusion_id, vault_address FROM exclusion_records \
+         WHERE chain_id = $1 ORDER BY ledger_address, exclusion_id",
+    )
+    .bind(chain)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        records,
+        vec![
+            (l1.to_vec(), 2, vault_a.to_vec()),
+            (l2.to_vec(), 1, vault_a.to_vec()),
+            (l3.to_vec(), 1, basket_b.to_vec()),
+        ],
+        "the new ledgers' records from the upgrade tick and the old ledger's late record are all indexed"
+    );
+
+    // A reorg below the upgrade drops the new answer with it, so a re-index reads the vault again.
+    fx.db.delete_above_block(chain, 54).await.unwrap();
+    let left: Vec<(Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT vault_address, ledger_address FROM vault_exclusion_ledgers \
+         WHERE chain_id = $1 ORDER BY vault_address, block_number",
+    )
+    .bind(chain)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        left,
+        vec![
+            (vault_a.to_vec(), Some(l1.to_vec())),
+            (basket_b.to_vec(), None),
+        ]
+    );
+}
+
+/// The indexer reads each vault's ledger from its `exclusionLedger()` once, stores the answer
+/// (`exclusion_ledgers_of`, `vault_exclusion_ledgers`), and reads it again only when the vault
+/// emits `Upgraded` or `Initialized` (security rounds 2 and 3). That holds only while (a)
+/// `RobotMoneyVault` keeps a public `ExclusionLedger exclusionLedger` (the getter
+/// `IRobotMoneyVaultReads` calls), and (b) the only write to it is `_initLedger`, which an
+/// initializer runs with the ledger `ExclusionLedgerFactory.create` returns. A reinitializer is
+/// seen through the `Upgraded` event of its upgrade
+/// (`a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed`) or, run later by its own
+/// timelock operation, through its `Initialized` event
+/// (`a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed`);
+/// a setter callable without an upgrade would move the ledger with no event the indexer follows,
+/// and the new ledger's records would be lost with no error. The vault creates no contract itself,
+/// so no address derived from the vault is a ledger.
+///
+/// This replaces the guard on the old derivation (the vault's CREATE address at nonce 1), which
+/// failed once ADR-0014 moved the ledger's creation into the factory. Runs without a DB.
 #[test]
-fn exclusion_ledger_is_the_vaults_only_contract_creation() {
+fn exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault() {
+    use alloy_sol_types::SolCall as _;
+    use explorer_indexer::abi::IRobotMoneyVaultReads;
+
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -912,7 +1321,7 @@ fn exclusion_ledger_is_the_vaults_only_contract_creation() {
     let src = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
 
-    // Drop comments, so NatSpec that mentions `new X(` is not code.
+    // Drop comments, so NatSpec that mentions the ledger is not code.
     let mut code = String::new();
     let mut in_block = false;
     for line in src.lines() {
@@ -955,10 +1364,54 @@ fn exclusion_ledger_is_the_vaults_only_contract_creation() {
         code.push_str(&kept);
         code.push('\n');
     }
+    let squashed: String = code.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    // Every `new <Name>(` whose name starts with a capital letter: a contract creation. Array
-    // allocations (`new uint256[](n)`, `new address[](n)`) start lower case.
-    let mut created: Vec<(usize, String)> = Vec::new();
+    // (a) The getter the indexer calls.
+    assert!(
+        squashed.contains("ExclusionLedger public exclusionLedger;"),
+        "RobotMoneyVault must keep `ExclusionLedger public exclusionLedger;`: the indexer reads \
+         the ledger through that getter"
+    );
+    assert_eq!(
+        IRobotMoneyVaultReads::exclusionLedgerCall::SIGNATURE,
+        "exclusionLedger()",
+        "the indexer's read must name the vault's getter"
+    );
+
+    // (b) One write, inside `_initLedger`, of what the factory created.
+    let writes: Vec<usize> = squashed
+        .match_indices("exclusionLedger = ")
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        writes.len(),
+        1,
+        "RobotMoneyVault must write `exclusionLedger` exactly once, or the ledger the indexer \
+         stored can move under it"
+    );
+    let init = squashed
+        .find("function _initLedger(")
+        .expect("RobotMoneyVault declares _initLedger");
+    let init_end = squashed[init..]
+        .find(" function ")
+        .map(|i| init + i)
+        .unwrap_or(squashed.len());
+    assert!(
+        (init..init_end).contains(&writes[0]),
+        "the one write to exclusionLedger must be in _initLedger"
+    );
+    assert!(
+        squashed[init..init_end].contains("factory.create("),
+        "_initLedger must take the ledger ExclusionLedgerFactory.create returns"
+    );
+    assert_eq!(
+        squashed.matches("_initLedger(").count(),
+        2,
+        "_initLedger is declared once and called once (from initialize)"
+    );
+
+    // The vault creates no contract, so no address derived from it is the ledger.
+    let mut created: Vec<String> = Vec::new();
     for (at, _) in code.match_indices("new ") {
         let name: String = code[at + 4..]
             .chars()
@@ -973,24 +1426,617 @@ fn exclusion_ledger_is_the_vaults_only_contract_creation() {
             && name.starts_with(|c: char| c.is_ascii_uppercase())
             && code[at + 4 + name.len()..].trim_start().starts_with('(')
         {
-            created.push((at, name));
+            created.push(name);
         }
     }
-    assert_eq!(
-        created.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(),
-        vec!["ExclusionLedger"],
-        "RobotMoneyVault must create exactly one contract, its ExclusionLedger, or \
-         `exclusion_ledger_of` (vault CREATE address at nonce 1) no longer finds the ledger"
-    );
-    let constructor = code
-        .find("constructor(")
-        .expect("RobotMoneyVault declares a constructor");
-    let after_constructor = code[constructor..]
-        .find("\n    function ")
-        .map(|i| constructor + i)
-        .unwrap_or(code.len());
     assert!(
-        (constructor..after_constructor).contains(&created[0].0),
-        "the ExclusionLedger must be created in the constructor"
+        created.is_empty(),
+        "RobotMoneyVault creates {created:?}; the ledger must come from ExclusionLedgerFactory"
     );
+}
+
+/// Security round 1 (core 1820): how the reply of a vault's `exclusionLedger()` is read. A ledger
+/// is stored and watched; a revert (a BasketVault) is a stored "no ledger"; no code or an
+/// uninitialized proxy is asked again next tick; a node that cannot answer fails the tick, so the
+/// cursor stays and no ledger event of the range is lost. Runs without a DB.
+#[test]
+fn ledger_read_classifies_each_reply() {
+    use alloy_primitives::Bytes;
+    use explorer_indexer::indexer::{classify_ledger_read, LedgerRead};
+    use explorer_indexer::rpc::RpcError;
+
+    let ledger = Address::from([0x1eu8; 20]);
+    let mut word = vec![0u8; 12];
+    word.extend_from_slice(ledger.as_slice());
+    assert_eq!(
+        classify_ledger_read(Ok(Bytes::from(word))).unwrap(),
+        LedgerRead::Ledger(ledger)
+    );
+    // A BasketVault has no getter: the call reverts. Final.
+    let revert = RpcError::Server {
+        method: "eth_call".into(),
+        message: r#"{"code":3,"message":"execution reverted"}"#.into(),
+    };
+    assert_eq!(
+        classify_ledger_read(Err(revert)).unwrap(),
+        LedgerRead::NoLedger
+    );
+    // A word that is not an address is not a RobotMoneyVault either.
+    assert_eq!(
+        classify_ledger_read(Ok(Bytes::from(vec![0xffu8; 32]))).unwrap(),
+        LedgerRead::NoLedger
+    );
+    // No code at the read block, or an uninitialized proxy: ask again next tick.
+    assert_eq!(
+        classify_ledger_read(Ok(Bytes::new())).unwrap(),
+        LedgerRead::Unknown
+    );
+    assert_eq!(
+        classify_ledger_read(Ok(Bytes::from(vec![0u8; 32]))).unwrap(),
+        LedgerRead::Unknown
+    );
+    // A node that cannot answer fails the tick, so the cursor stays and no ledger event of the
+    // range is lost.
+    let pruned = RpcError::Server {
+        method: "eth_call".into(),
+        message: r#"{"code":-32000,"message":"missing trie node"}"#.into(),
+    };
+    assert!(classify_ledger_read(Err(pruned)).is_err());
+    assert!(classify_ledger_read(Err(RpcError::Transport("eth_call: timeout".into()))).is_err());
+}
+
+// ── Security round 3: ledger moves and snapshot candidates ─────────────────────
+
+/// `(vault_address, ledger_address, block_number)` of every stored ledger answer, by vault and block.
+async fn ledger_rows(pool: &sqlx::PgPool) -> Vec<(Vec<u8>, Option<Vec<u8>>, i64)> {
+    sqlx::query_as(
+        "SELECT vault_address, ledger_address, block_number FROM vault_exclusion_ledgers \
+         WHERE chain_id = $1 ORDER BY vault_address, block_number",
+    )
+    .bind(8453i64)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// `(ledger_address, exclusion_id, vault_address)` of every stored exclusion record.
+async fn record_keys(pool: &sqlx::PgPool) -> Vec<(Vec<u8>, i64, Vec<u8>)> {
+    sqlx::query_as(
+        "SELECT ledger_address, exclusion_id, vault_address FROM exclusion_records \
+         WHERE chain_id = $1 ORDER BY ledger_address, exclusion_id",
+    )
+    .bind(8453i64)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// The blocks of the `exclusionLedger()` reads the stub answered, in order (`u64::MAX` for a tag).
+fn getter_read_blocks(stub: &StubRpcServer) -> Vec<u64> {
+    use alloy_sol_types::SolCall as _;
+    use explorer_indexer::abi::IRobotMoneyVaultReads;
+    let getter = format!(
+        "0x{}",
+        hex::encode(IRobotMoneyVaultReads::exclusionLedgerCall::SELECTOR)
+    );
+    stub.captured_requests()
+        .into_iter()
+        .filter(|r| {
+            r["method"] == "eth_call"
+                && r["params"][0]["data"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with(&getter))
+        })
+        .map(|r| {
+            r["params"][1]
+                .as_str()
+                .and_then(|b| u64::from_str_radix(b.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(u64::MAX)
+        })
+        .collect()
+}
+
+/// An `ExclusionOpened` of record `id`.
+fn opened_record(id: u64) -> alloy_primitives::LogData {
+    use alloy_sol_types::SolEvent as _;
+    explorer_indexer::abi::IExclusionLedgerEvents::ExclusionOpened {
+        exclusionId: U256::from(id),
+        adapterIndex: U256::from(1u64),
+        adapter: Address::from([0xADu8; 20]),
+        snapshotSupply: U256::from(1_000u64),
+        adapterValue: U256::from(500u64),
+    }
+    .encode_log_data()
+}
+
+/// Security round 3: a reinitializer that a later timelock operation runs moves the vault's
+/// ledger, and the indexer follows it.
+///
+/// `upgrade-proxy` with no `call=` installs an implementation and leaves its reinitializer pending
+/// (`GovernedUpgrade`, contract-release-runbooks.md §4.12). A later Safe-scheduled timelock
+/// operation runs it, and that transaction emits `Initialized(2)`, not `Upgraded`. The indexer
+/// re-read `exclusionLedger()` only on `Upgraded`, at the safe head: the upgrade's tick read the
+/// old ledger (already known), and the reinitializer's tick read nothing. It kept watching L1 and
+/// dropped every record of L2 at the emitter gate, with no error.
+///
+/// An indexer live before the move stored L1. Tick 1 (to block 58) holds the upgrade at 55, after
+/// which the getter still names L1. Tick 2 (to block 65) holds the reinitializer at 60, which
+/// moves the vault to L2, and L2 opens record 1 at 61. L2 is stored as of 60, read at that block,
+/// and its record is indexed.
+#[tokio::test]
+async fn a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed() {
+    use alloy_sol_types::SolEvent as _;
+    use explorer_indexer::abi::IUpgradeEvents;
+    use std::sync::Arc;
+
+    const UPGRADE: u64 = 55;
+    const REINIT: u64 = 60;
+
+    let fx = pg_fixture().await;
+    let chain = 8453i64;
+    fx.db.upsert_chain(chain, "base", "stub").await.unwrap();
+    let vault = Address::from([0xA1u8; 20]);
+    let l1 = Address::from([0x11u8; 20]);
+    let l2 = Address::from([0x12u8; 20]);
+    fx.db
+        .insert_vault_exclusion_ledger(chain, vault.into_array(), Some(l1.into_array()), 1)
+        .await
+        .unwrap();
+
+    let upgraded = IUpgradeEvents::Upgraded {
+        implementation: Address::from([0x99u8; 20]),
+    }
+    .encode_log_data();
+    let reinitialized = IUpgradeEvents::Initialized { version: 2 }.encode_log_data();
+    let logs = vec![
+        log_json(vault, &upgraded, UPGRADE, [0x55u8; 32], 0),
+        log_json(vault, &reinitialized, REINIT, [0x60u8; 32], 0),
+        log_json(l2, &opened_record(1), REINIT + 1, [0x61u8; 32], 0),
+    ];
+
+    let getter = format!(
+        "0x{}",
+        hex::encode(
+            <explorer_indexer::abi::IRobotMoneyVaultReads::exclusionLedgerCall as alloy_sol_types::SolCall>::SELECTOR
+        )
+    );
+    let vault_hex = format!("{:#x}", vault);
+    let word_of = |a: Address| format!("0x{:0>64}", hex::encode(a.as_slice()));
+    let (l1_word, l2_word) = (word_of(l1), word_of(l2));
+    let stub = StubRpcServer::start().await;
+    stub.honour_log_filter(true);
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook_at(Arc::new(move |to: &str, data: &str, block: u64| {
+        if to == vault_hex && data.starts_with(&getter) {
+            // The reinitializer moved the ledger, not the upgrade.
+            return Ok(if block < REINIT {
+                l1_word.clone()
+            } else {
+                l2_word.clone()
+            });
+        }
+        Ok(format!("0x{}", "00".repeat(32)))
+    }));
+    let rpc = JsonRpc::new(&stub.url);
+
+    // Tick 1: the upgrade alone moves nothing.
+    let cfg = IndexerConfig {
+        start_block: Some(0),
+        end_block: Some(58),
+        ..base_config(vault)
+    };
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick 1: {:?}", o.error);
+    assert_eq!(
+        getter_read_blocks(&stub),
+        vec![UPGRADE],
+        "the upgrade is read at its own block"
+    );
+    assert_eq!(
+        ledger_rows(fx.db.pool()).await,
+        vec![(vault.to_vec(), Some(l1.to_vec()), 1)],
+        "an upgrade installed without its reinitializer leaves the vault on L1"
+    );
+
+    // Tick 2: the reinitializer's `Initialized` moves the vault to L2.
+    let cfg = IndexerConfig {
+        start_block: Some(0),
+        end_block: Some(65),
+        ..base_config(vault)
+    };
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick 2: {:?}", o.error);
+    let reads = getter_read_blocks(&stub);
+    stub.shutdown();
+    assert_eq!(
+        reads,
+        vec![UPGRADE, REINIT],
+        "the reinitializer's Initialized is a re-read trigger, read at its own block"
+    );
+    assert_eq!(
+        ledger_rows(fx.db.pool()).await,
+        vec![
+            (vault.to_vec(), Some(l1.to_vec()), 1),
+            (vault.to_vec(), Some(l2.to_vec()), REINIT as i64),
+        ],
+        "L2 is stored as of the reinitializer's block, and L1 stays"
+    );
+    assert_eq!(
+        record_keys(fx.db.pool()).await,
+        vec![(l2.to_vec(), 1, vault.to_vec())],
+        "the new ledger's record is indexed, not dropped at the emitter gate"
+    );
+}
+
+/// Security round 3: an indexer rebuilt after a ledger move still indexes the old ledger.
+///
+/// Every `exclusionLedger()` read used to be made at the safe head, which names only the newest
+/// ledger. A rebuild from the deploy floor (or an indexer started after the move) stored only L2,
+/// the upgrade's re-read named L2 again, and L1's records, recoveries and claims were never
+/// fetched. The dapp reads only the vault's current ledger, so the explorer is the one surface for
+/// claims on the old one.
+///
+/// Fresh database. The getter names L1 below the upgrade block U and L2 from U. L1 opens record 1
+/// before U, the upgrade (with its reinitializer, one transaction) moves the vault at U, and L2
+/// opens record 1 after it. Both records are indexed in the first tick. In the next tick a late
+/// claim on L1 is indexed too: L1 stays watched.
+#[tokio::test]
+async fn a_rebuilt_index_learns_the_ledger_a_vault_moved_away_from() {
+    use alloy_sol_types::SolEvent as _;
+    use explorer_indexer::abi::{IExclusionLedgerEvents, IUpgradeEvents};
+    use std::sync::Arc;
+
+    const U: u64 = 55;
+
+    let fx = pg_fixture().await;
+    let vault = Address::from([0xA1u8; 20]);
+    let l1 = Address::from([0x11u8; 20]);
+    let l2 = Address::from([0x12u8; 20]);
+    let holder = Address::from([0x0Au8; 20]);
+
+    let upgraded = IUpgradeEvents::Upgraded {
+        implementation: Address::from([0x99u8; 20]),
+    }
+    .encode_log_data();
+    let reinitialized = IUpgradeEvents::Initialized { version: 2 }.encode_log_data();
+    let claimed = IExclusionLedgerEvents::ExclusionClaimed {
+        exclusionId: U256::from(1u64),
+        holder,
+        amount: U256::from(30u64),
+    }
+    .encode_log_data();
+    let logs = vec![
+        log_json(l1, &opened_record(1), 50, [0x50u8; 32], 0),
+        log_json(vault, &upgraded, U, [0x55u8; 32], 0),
+        log_json(vault, &reinitialized, U, [0x55u8; 32], 1),
+        log_json(l2, &opened_record(1), 56, [0x56u8; 32], 0),
+        log_json(l1, &claimed, 68, [0x68u8; 32], 0),
+    ];
+
+    let getter = format!(
+        "0x{}",
+        hex::encode(
+            <explorer_indexer::abi::IRobotMoneyVaultReads::exclusionLedgerCall as alloy_sol_types::SolCall>::SELECTOR
+        )
+    );
+    let vault_hex = format!("{:#x}", vault);
+    let word_of = |a: Address| format!("0x{:0>64}", hex::encode(a.as_slice()));
+    let (l1_word, l2_word) = (word_of(l1), word_of(l2));
+    let stub = StubRpcServer::start().await;
+    stub.honour_log_filter(true);
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook_at(Arc::new(move |to: &str, data: &str, block: u64| {
+        if to == vault_hex && data.starts_with(&getter) {
+            return Ok(if block < U {
+                l1_word.clone()
+            } else {
+                l2_word.clone()
+            });
+        }
+        Ok(format!("0x{}", "00".repeat(32)))
+    }));
+    let rpc = JsonRpc::new(&stub.url);
+
+    let cfg = IndexerConfig {
+        start_block: Some(0),
+        end_block: Some(65),
+        ..base_config(vault)
+    };
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick 1: {:?}", o.error);
+    assert_eq!(
+        ledger_rows(fx.db.pool()).await,
+        vec![
+            (vault.to_vec(), Some(l1.to_vec()), 0),
+            (vault.to_vec(), Some(l2.to_vec()), U as i64),
+        ],
+        "the first read, at the range's first block, names L1; the upgrade's names L2"
+    );
+    assert_eq!(
+        record_keys(fx.db.pool()).await,
+        vec![
+            (l1.to_vec(), 1, vault.to_vec()),
+            (l2.to_vec(), 1, vault.to_vec())
+        ],
+        "the old ledger's record from before the move is indexed, and the new one's"
+    );
+
+    // The next tick: a late claim on L1. L1 is still in the filter, and the claim is stored.
+    stub.set("eth_blockNumber", serde_json::Value::String("0x4b".into()));
+    let cfg = IndexerConfig {
+        start_block: Some(0),
+        end_block: Some(70),
+        ..base_config(vault)
+    };
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick 2: {:?}", o.error);
+    let last_filter = stub
+        .captured_requests()
+        .into_iter()
+        .rfind(|r| r["method"] == "eth_getLogs")
+        .expect("tick 2 asked for logs");
+    stub.shutdown();
+    let watched: Vec<String> = last_filter["params"][0]["address"]
+        .as_array()
+        .expect("address filter must be an array")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_lowercase())
+        .collect();
+    assert!(
+        watched.contains(&format!("{:#x}", l1)) && watched.contains(&format!("{:#x}", l2)),
+        "both ledgers stay watched: {watched:?}"
+    );
+    assert_eq!(
+        table_count(fx.db.pool(), "exclusion_claims").await,
+        1,
+        "a late claim on the old ledger is indexed"
+    );
+}
+
+/// Security round 3: on a node that keeps no old state, the ledger read falls back to the safe
+/// head, and the tick still succeeds.
+///
+/// Reading `exclusionLedger()` at the range's own block needs that block's state. A pruned,
+/// non-archive node answers `missing trie node` for it. Failing the tick there would wedge every
+/// deployment on such a node, so the read is made at the safe head instead, which every node holds.
+/// That answer names the newest ledger, as before round 3, and its records are indexed.
+#[tokio::test]
+async fn a_node_without_old_state_reads_the_ledger_at_the_safe_head() {
+    use alloy_sol_types::SolEvent as _;
+    use explorer_indexer::abi::IUpgradeEvents;
+    use std::sync::Arc;
+
+    const SAFE_HEAD: u64 = 65;
+
+    let fx = pg_fixture().await;
+    let vault = Address::from([0xA1u8; 20]);
+    let l2 = Address::from([0x12u8; 20]);
+    let upgraded = IUpgradeEvents::Upgraded {
+        implementation: Address::from([0x99u8; 20]),
+    }
+    .encode_log_data();
+    let logs = vec![
+        log_json(vault, &upgraded, 55, [0x55u8; 32], 0),
+        log_json(l2, &opened_record(1), 56, [0x56u8; 32], 0),
+    ];
+
+    let getter = format!(
+        "0x{}",
+        hex::encode(
+            <explorer_indexer::abi::IRobotMoneyVaultReads::exclusionLedgerCall as alloy_sol_types::SolCall>::SELECTOR
+        )
+    );
+    let vault_hex = format!("{:#x}", vault);
+    let l2_word = format!("0x{:0>64}", hex::encode(l2.as_slice()));
+    let stub = StubRpcServer::start().await;
+    stub.honour_log_filter(true);
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook_at(Arc::new(move |to: &str, data: &str, block: u64| {
+        if to == vault_hex && data.starts_with(&getter) {
+            return if block == SAFE_HEAD {
+                Ok(l2_word.clone())
+            } else {
+                Err(format!("missing trie node 0xabc (block {block})"))
+            };
+        }
+        Ok(format!("0x{}", "00".repeat(32)))
+    }));
+    let rpc = JsonRpc::new(&stub.url);
+
+    let cfg = IndexerConfig {
+        start_block: Some(0),
+        ..base_config(vault)
+    };
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(
+        o.error.is_none(),
+        "a node without old state must not fail the tick: {:?}",
+        o.error
+    );
+    let reads = getter_read_blocks(&stub);
+    stub.shutdown();
+    assert_eq!(
+        reads,
+        vec![0, SAFE_HEAD, 55, SAFE_HEAD],
+        "each read at an old block falls back to the safe head"
+    );
+    assert_eq!(
+        ledger_rows(fx.db.pool()).await,
+        vec![(vault.to_vec(), Some(l2.to_vec()), SAFE_HEAD as i64)],
+        "the safe head's answer is stored as of the block it was read at"
+    );
+    assert_eq!(
+        record_keys(fx.db.pool()).await,
+        vec![(l2.to_vec(), 1, vault.to_vec())]
+    );
+}
+
+/// Security round 3: a holder who redeems everything in the record's own block, after the record
+/// opens, keeps its snapshot balance in the explorer.
+///
+/// The snapshot pass took as candidates the owners whose latest `wallet_positions` row at or below
+/// the record's block held shares. A block's row is the balance after every log of the block, while
+/// `ExclusionLedger.checkpoint` keeps the pre-change balance, so `balanceAt` still holds the
+/// holder's shares. The holder's zero row ruled it out, the pass marked the record done, and
+/// `/v1/accounts/:address/exclusion-claims` showed nothing until the holder claimed on chain.
+///
+/// G and H deposit at block 45. At block 55 the record opens, then H redeems all its shares and D
+/// makes its first deposit. The pass must read G, H and D, store G's 50 and H's 100, store nothing
+/// for D (`balanceAt` zero: it deposited after the snapshot), and mark the record done.
+#[tokio::test]
+async fn a_holder_who_exits_in_the_records_own_block_keeps_its_snapshot_balance() {
+    use alloy_sol_types::SolCall as _;
+    use explorer_indexer::abi::{IExclusionLedgerReads, IRobotMoneyVaultReads};
+    use std::sync::Arc;
+
+    let fx = pg_fixture().await;
+    let vault = Address::from([0xAAu8; 20]);
+    let ledger = Address::from([0x1Eu8; 20]);
+    let holder_g = Address::from([0x06u8; 20]);
+    let holder_h = Address::from([0x08u8; 20]);
+    let holder_d = Address::from([0x0Du8; 20]);
+
+    let logs = vec![
+        encode_erc4626_deposit_log(
+            vault,
+            holder_g,
+            holder_g,
+            U256::from(50u64),
+            U256::from(50u64),
+            45,
+            [0x45u8; 32],
+            0,
+        ),
+        encode_erc4626_deposit_log(
+            vault,
+            holder_h,
+            holder_h,
+            U256::from(100u64),
+            U256::from(100u64),
+            45,
+            [0x46u8; 32],
+            1,
+        ),
+        // The record opens first in block 55 ...
+        log_json(ledger, &opened_record(1), 55, [0x55u8; 32], 0),
+        // ... then H redeems everything and D deposits for the first time, in the same block.
+        encode_erc4626_withdraw_log(
+            vault,
+            holder_h,
+            holder_h,
+            holder_h,
+            U256::from(100u64),
+            U256::from(100u64),
+            55,
+            [0x56u8; 32],
+            1,
+        ),
+        encode_erc4626_deposit_log(
+            vault,
+            holder_d,
+            holder_d,
+            U256::from(30u64),
+            U256::from(30u64),
+            55,
+            [0x57u8; 32],
+            2,
+        ),
+    ];
+
+    let ledger_hex = format!("{:#x}", ledger);
+    let vault_hex = format!("{:#x}", vault);
+    let getter = format!(
+        "0x{}",
+        hex::encode(IRobotMoneyVaultReads::exclusionLedgerCall::SELECTOR)
+    );
+    let balance_at = format!(
+        "0x{}",
+        hex::encode(IExclusionLedgerReads::balanceAtCall::SELECTOR)
+    );
+    let ledger_word = format!("0x{:0>64}", hex::encode(ledger.as_slice()));
+    let word = |v: u64| format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()));
+    let (g_hex, h_hex) = (
+        hex::encode(holder_g.as_slice()),
+        hex::encode(holder_h.as_slice()),
+    );
+    let read: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let read_hook = read.clone();
+    let stub = StubRpcServer::start().await;
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if to == vault_hex && data.starts_with(&getter) {
+            return Ok(ledger_word.clone());
+        }
+        if to != ledger_hex || !data.starts_with(&balance_at) {
+            return Ok(word(0));
+        }
+        // The holder is the low 20 bytes of the first argument word. The ledger's checkpoint keeps
+        // the balance at the record: G 50, H 100 (its exit came after), D 0 (it came after).
+        let holder = data.get(34..74).unwrap_or_default().to_string();
+        read_hook.lock().unwrap().push(holder.clone());
+        Ok(word(if holder == g_hex {
+            50
+        } else if holder == h_hex {
+            100
+        } else {
+            0
+        }))
+    }));
+    let rpc = JsonRpc::new(&stub.url);
+    let o = run_once(&fx.db, &rpc, &base_config(vault)).await.unwrap();
+    stub.shutdown();
+    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
+
+    let positions: Vec<(Vec<u8>, i64, String)> = sqlx::query_as(
+        "SELECT owner, block_number, CAST(shares AS text) FROM wallet_positions \
+         WHERE chain_id = $1 AND owner = $2 ORDER BY block_number",
+    )
+    .bind(8453i64)
+    .bind(holder_h.as_slice())
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        positions,
+        vec![
+            (holder_h.to_vec(), 45, "100".to_string()),
+            (holder_h.to_vec(), 55, "0".to_string()),
+        ],
+        "setup: H's row in the record's block is zero"
+    );
+
+    let mut asked = read.lock().unwrap().clone();
+    asked.sort();
+    let mut expected = vec![
+        hex::encode(holder_g.as_slice()),
+        hex::encode(holder_h.as_slice()),
+        hex::encode(holder_d.as_slice()),
+    ];
+    expected.sort();
+    assert_eq!(asked, expected, "G, H and D are each read once");
+
+    assert_eq!(
+        exclusion_balances(fx.db.pool()).await,
+        vec![
+            (holder_g.to_vec(), "50".to_string(), 55),
+            (holder_h.to_vec(), "100".to_string(), 55),
+        ],
+        "H keeps its pre-exit snapshot balance; D's zero is not stored"
+    );
+    let done: bool = sqlx::query_scalar(
+        "SELECT done FROM exclusion_snapshot_progress WHERE chain_id = $1 AND exclusion_id = 1",
+    )
+    .bind(8453i64)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert!(done, "the pass reports the record read through");
 }

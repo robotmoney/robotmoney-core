@@ -61,6 +61,11 @@
 // scheduled) when the proxy is frozen, its authority is not the timelock, an ERC-1967 admin or beacon slot is set, or the target has no code, is no UUPS implementation, has
 // unlocked initializers or differs from the build artifact (DIR, default the checkout's out/). An implementation the proxy already runs is recorded as skipped. It reads the
 // implementation slot back. Every chain and kind, never in stage 13; the 48 hour delay is the holders' window, withdrawals stay open the whole time (ADR-0014 §6).
+// Security round 1: DIR is proven (build-provenance.ts): it sits in a git checkout, recorded as `build_sha`, and on 8453 that checkout is clean at a release-tagged,
+// CI-green sha of the sheet's kind, refused before the Safe is read otherwise. The build's storage-layout snapshot must keep every live slot (upgradeLayoutRefusals).
+// Security round 2: on 8453 DIR must be the checkout's own out/, and the compared artifact and every library it links must be compiled from the sources committed at
+// that sha (the deployment checkout's out/ too); the layout compare also holds every stored enum's members append-only.
+// A round executed or skipped earlier opens a new numbered round when the proxy now runs another implementation (a rollback, an upgrade back).
 // Evidence: the run manifest's `proxy_upgrades`.
 //   freeze-proxy                 on demand (issue 1809, ADR-0014 §5), `--admin-arg proxy=<name>|all [build=DIR]`: ONE timelock operation, proxy.freezeUpgrades(liveImplementation,
 // liveCodeHash) on one proxy or (all) on every proxy not yet frozen, the arguments read from the chain when the round is planned. One-way: nothing unfreezes. Refused when the live
@@ -103,18 +108,20 @@ import {
 } from "./unwind-guard.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, ZERO, buildRedeployCalls, createdVaultProblems, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
-  redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type DeployReceipt, type RedeployRecord, type RedeployVectors,
+  redeployRecordKey, redeployRefusal, redeploysOf, retiredProxiesOf, vectorsFromFinal, type DeployReceipt, type RedeployRecord, type RedeployVectors,
 } from "./redeploy-vault.ts";
 import { PublishError } from "./errors.ts";
 import {
   FREEZE_KEYS, FREEZE_ROW, UPGRADE_KEYS, UPGRADE_ROW, buildFreezeCall, buildUpgradeCall, freezeArgsText, freezeReadBackProblems, freezeRecordKey, freezeRefusals, freezeTargetOf, parseFreezeArgs,
-  parseUpgradeArgs, upgradeArgsText, upgradeReadBackProblems, upgradeRecordKey, upgradeRefusals, type FreezeArgs, type FreezeWant, type ImplementationRead, type UpgradeArgs, type UpgradeWant,
+  parseUpgradeArgs, upgradeArgsText, upgradeLayoutRefusals, upgradeReadBackProblems, upgradeRecordKey, upgradeRefusals, type FreezeArgs, type FreezeWant, type ImplementationRead, type UpgradeArgs, type UpgradeWant,
 } from "./upgrade-rows.ts";
-import { INITIALIZABLE_SLOT, PROXIABLE_UUID_SIG, ZERO_WORD, initializableOf, readProxyState, type ProxyState } from "./proxies.ts";
+import { INITIALIZABLE_SLOT, PROXIABLE_UUID_SIG, ZERO_WORD, initializableOf, layoutIdFieldOf, readProxyState, type ProxyState } from "./proxies.ts";
+import { checkoutRootOf, layoutSnapshotOf, proveBuild, type BuildGate, type BuildProvenance } from "./build-provenance.ts";
+import { assertReleaseGate } from "./release-gate.ts";
 import { proxyByName, tableProxies, type TableProxy } from "./stage-table.ts";
 import { compareCodeAndLinks, loadArtifact, type CodeHashResult } from "./verify/codehash.ts";
 import type { ChainReader } from "./verify/types.ts";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   REGISTER_ROW, COMMIT_EXPIRY_BLOCKS, COMMIT_REVEAL_MARGIN_BLOCKS, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls,
   buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthCommitmentKey, selfAuthEvidence, selfAuthPolicyProblems, selfAuthStateOf,
@@ -580,6 +587,17 @@ export interface GovernOpts {
   proxyUpgrade?: UpgradeArgs;
   /** With `--row freeze-proxy` only (issue 1809): the proxy (or `all`) and the build, as `--admin-arg` gave them. */
   proxyFreeze?: FreezeArgs;
+  /**
+   * Security round 1: the release gate of a build checkout an upgrade or a freeze compares with (8453 only, build-provenance.ts). The CLI passes the real gate with its
+   * seams; the default is assertReleaseGate at the checkout's HEAD, of the sheet's kind, without counts. Security round 2: the default runs the deployment checkout's
+   * check-sha-green (`ciDir`), never the build checkout's own, and checks the tag on the canonical repository. It runs once per checkout and sha.
+   */
+  buildGate?: BuildGate;
+  /**
+   * Test seam: proves one build directory (default: build-provenance.ts proveBuild with `buildGate`, which on 8453 also proves `artifacts`, the contracts the round
+   * compares with the build, compiled from the sources at the build's sha). A fake stands for both proofs.
+   */
+  buildProvenance?: (dir: string, artifacts?: readonly string[]) => Promise<BuildProvenance>;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -592,9 +610,17 @@ export interface SelfAdminRecord { data?: Hex; nonce: number; want: string }
 /** `observed`: the read-back after the execute. `voted_weights_active` is recorded by the clear and redeploy rows (they prove the active vector is gone); an application records the effective vector only (issue 1698: its vector IS the active one). */
 /** `guard` (QA plan v1 D7): what a set-unwind-guard round sets, written before its schedule so a resume and the evidence entry name the same values. */
 export interface GuardRecord { vault: string; vault_address: string; tokens: string[]; min_usdc_out: string; override_allowed: boolean; max_loss_bps: number }
-/** Issue 1809: what an upgrade-proxy round sets and a freeze-proxy round fixes, written before its schedule so a resume and the evidence entry name the same values. */
-export interface UpgradeRecord { proxy: string; proxy_address: string; from_implementation: string; implementation: string; implementation_code_hash: string; call_data: string; build_dir: string; core_sha: string }
-export interface FreezeRecord { proxies: { name: string; proxy: string; implementation: string; code_hash: string }[]; build_dirs: Record<string, string>; core_sha: string }
+/**
+ * Issue 1809: what an upgrade-proxy round sets and a freeze-proxy round fixes, written before its schedule so a resume and the evidence entry name the same values.
+ * Security round 1: `core_sha` is the deployment's sha; the build's own commit is `build_sha` (HEAD of the checkout that holds `build_dir`), `build_tag` the release tag
+ * the 8453 gate found at it and `build_proof` how it was proven (build-provenance.ts). `live_layout_hash` and `build_layout_hash` are the storage-layout identifiers the
+ * round compared (ADR-0014 §8); the next upgrade of the proxy compares with `build_layout_hash`.
+ */
+export interface UpgradeRecord {
+  proxy: string; proxy_address: string; from_implementation: string; implementation: string; implementation_code_hash: string; call_data: string; build_dir: string; core_sha: string;
+  build_sha?: string; build_tag?: string; build_proof?: string; live_layout_hash?: string; build_layout_hash?: string;
+}
+export interface FreezeRecord { proxies: { name: string; proxy: string; implementation: string; code_hash: string }[]; build_dirs: Record<string, string>; core_sha: string; build_shas?: Record<string, string>; build_tags?: Record<string, string> }
 export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; upgrade?: UpgradeRecord; freeze?: FreezeRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 /** The `register` part of a register-committee record: what the batch was built from, and (QA plan v1 B6) the private self-authorization with its salt. */
@@ -639,7 +665,7 @@ const detected = new WeakMap<object, boolean>();
  * The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage.
  * `guard`: the arguments of a set-unwind-guard run (QA plan v1 D7), spelled out as its `--admin-arg` flags.
  */
-export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string, guard?: UnwindGuardWant, proxyRow?: { upgrade?: UpgradeWant; freeze?: FreezeWant }): string {
+export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha"> & Partial<Pick<RunContext, "evidenceDir" | "countsDir" | "countsRequireOriginDev">>, row?: string, payload?: string, guard?: UnwindGuardWant, proxyRow?: { upgrade?: UpgradeWant; freeze?: FreezeWant }): string {
   const selfAdmin = row === undefined ? undefined : SELF_ADMIN_ROWS.find((r) => row!.startsWith(`${r}-`));
   const same = "--admin-arg K=V (the same --admin-arg values as this run)";
   if (row?.startsWith(`${UNWIND_GUARD_ROW}-`)) row = `${UNWIND_GUARD_ROW} ${guard ? unwindGuardArgsText(guard) : same}`;
@@ -649,7 +675,12 @@ export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
   else if (selfAdmin !== undefined) row = `${selfAdmin} --admin-arg K=V (the same --admin-arg values as this run)`; // the record key carries the calldata hash and the Safe nonce, not the arguments
-  return `bun publish-contracts/src/cli.ts govern${row === undefined ? "" : ` --row ${row}`} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same --rpc, --sheet, --signer, --environment and --owner-signer arguments as this run)`;
+  // Security round 1: the evidence dir is spelled out as an absolute path. It holds the run manifest and its pause-all entries (issue 1686); the default is relative to
+  // the working directory, so a resume from another shell directory used to start a fresh manifest that knew no pause. The counts flags are named too: on 8453 the
+  // release gate of the resume needs them.
+  const evidence = ctx.evidenceDir ? ` --evidence ${resolve(ctx.evidenceDir)}` : " --evidence DIR (this run's own evidence directory)";
+  const counts = `${ctx.countsDir ? ` --counts-dir ${resolve(ctx.countsDir)}` : ""}${ctx.countsRequireOriginDev ? " --counts-require-origin-dev" : ""}`;
+  return `bun publish-contracts/src/cli.ts govern${row === undefined ? "" : ` --row ${row}`} --chain ${ctx.chainId} --core-sha ${ctx.coreSha}${evidence}${counts} (plus the same --rpc, --sheet, --signer, --environment${ctx.countsDir ? "" : ", --counts-dir"} and --owner-signer arguments as this run)`;
 }
 
 /**
@@ -680,8 +711,10 @@ async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle:
     if (remaining > maxWait) {
       const guard = resumeRow?.startsWith(`${UNWIND_GUARD_ROW}-`) && o.unwindGuard !== undefined ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
       const names = (): string[] => { try { return tableProxies(getStageTable()).map((x) => x.name); } catch { return []; } };
+      // a freeze of a retired vault (`<vault>.retired-<n>`, security round 1) is not a table name: its arguments were checked by runGovern, so they are spelled out as given
+      const freezeShown = (): FreezeWant | undefined => { try { return parseFreezeArgs(o.proxyFreeze, names()); } catch { return o.proxyFreeze?.proxy ? { proxy: o.proxyFreeze.proxy, ...(o.proxyFreeze.build ? { build: o.proxyFreeze.build } : {}) } : undefined; } };
       const proxyRow = resumeRow?.startsWith(`${UPGRADE_ROW}-`) && o.proxyUpgrade !== undefined ? { upgrade: parseUpgradeArgs(o.proxyUpgrade, names()) }
-        : resumeRow?.startsWith(`${FREEZE_ROW}-`) && o.proxyFreeze !== undefined ? { freeze: parseFreezeArgs(o.proxyFreeze, names()) } : undefined;
+        : resumeRow?.startsWith(`${FREEZE_ROW}-`) && o.proxyFreeze !== undefined ? { freeze: freezeShown() } : undefined;
       const next = resumeCommand(ctx, resumeRow, resumePayload, guard, proxyRow);
       const what = rows.length === 1 ? `govern row ${rows[0]} is scheduled` : `govern rows ${rows.join(", ")} are scheduled`;
       throw new PublishError("GOVERN_PENDING", `${what} and become${rows.length === 1 ? "s" : ""} ready at ${latest} (${new Date(Number(latest) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`,
@@ -759,9 +792,34 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   // issue 1809: so are the upgrade and freeze rows', against the stage table's proxies
   const proxyNames = upgrading || freezing ? tableProxies(getStageTable()).map((x) => x.name) : [];
   const upgradeWant = upgrading ? parseUpgradeArgs(o.proxyUpgrade, proxyNames) : undefined;
-  const freezeWant = freezing ? parseFreezeArgs(o.proxyFreeze, proxyNames) : undefined;
+  // security round 1: a vault a redeploy replaced is still a proxy of the deployment (redeploy-vault.ts retiredProxiesOf), so the freeze names it too
+  const retiredNames = freezing && proxyNames.length > 0 ? retiredProxiesOf(manifest).map((r) => r.name) : [];
+  const freezeWant = freezing ? parseFreezeArgs(o.proxyFreeze, [...proxyNames, ...retiredNames]) : undefined;
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
+  // Security round 1 (build-provenance.ts): every build an upgrade or a freeze compares with is proven, once per directory. A `build=DIR` the operator names is proven
+  // HERE, before the Safe is read: on 8453 a checkout that is not clean at a release-tagged, CI-green sha refuses before anything is read or sent.
+  // Security round 2 (review: SECURITY_TRUST_ROOT): the gate runs the DEPLOYMENT checkout's check-sha-green and required-checks.json (ciDir), which the CLI gated,
+  // never the build checkout's own, and release-gate.ts checks the tag on the canonical repository, never on whatever the build checkout's origin names.
+  const buildGate: BuildGate = o.buildGate ?? ((i) => assertReleaseGate({ sha: i.sha, coreDir: i.checkout, ciDir: ctx.coreDir, countsDir: "", env: ctx.baseEnv ?? process.env, kind: ctx.sheet.kind, requireCounts: false }));
+  const gates = new Map<string, Promise<string>>();
+  const gateOnce: BuildGate = (i) => {
+    const k = `${resolve(i.checkout)}@${i.sha}`;
+    let g = gates.get(k);
+    if (!g) { g = buildGate(i); gates.set(k, g); }
+    return g;
+  };
+  // Security round 2 (build-provenance.ts): on 8453 the proof also binds each compared artifact, and every library it links, to the sources committed at the build's sha.
+  const proveDir = o.buildProvenance ?? ((dir: string, artifacts?: readonly string[]) => proveBuild({ dir, chainId: ctx.chainId, coreDir: ctx.coreDir, coreSha: ctx.coreSha, gate: gateOnce, row: o.row ?? "", artifacts }));
+  const proven = new Map<string, BuildProvenance>();
+  const provenanceOf = async (dir: string, artifacts: readonly string[] = []): Promise<BuildProvenance> => {
+    const k = `${resolve(dir)}|${[...artifacts].sort().join(",")}`;
+    let p = proven.get(k);
+    if (!p) { p = await proveDir(dir, artifacts); proven.set(k, p); ctx.log.log("info", "govern.build_proven", { row: o.row, dir: p.dir, checkout: p.checkout, build_sha: p.sha, tag: p.tag, proof: p.proof, artifacts: p.sourcesProven }); }
+    return p;
+  };
+  if (upgradeWant?.build !== undefined) await provenanceOf(upgradeWant.build, [proxyByName(getStageTable(), upgradeWant.proxy).artifact]);
+  if (freezeWant?.build !== undefined) await provenanceOf(freezeWant.build);
   const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || guarding || upgrading || freezing || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
@@ -1373,12 +1431,43 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     getStorageAt: async (address, slot) => ((await handle.client.getStorageAt({ address, slot })) ?? ZERO_WORD) as Hex,
     read: async (address, signature, args = []) => { const item = parseAbiItem(signature) as AbiFunction; return handle.client.readContract({ address, abi: [item], functionName: item.name, args } as never); },
   };
+  const lc = (x: string): string => x.toLowerCase();
   const proxyAddressOf = (px: TableProxy): Address => readManifestField(ctx, manifestRef(px.stage, px.field)) as Address;
-  /** The build a proxy's implementation is compared with: the row's `build=`, else the build of the proxy's last executed upgrade round, else this checkout's out/. */
-  const buildDirFor = (px: TableProxy, given: string | undefined): string => {
-    if (given !== undefined) return given;
-    const last = [...((manifest as { proxy_upgrades?: { proxy?: string; build_dir?: string; execute_tx?: string }[] }).proxy_upgrades ?? [])].reverse().find((e) => e?.proxy === px.name && typeof e.execute_tx === "string");
-    return last?.build_dir ?? join(ctx.coreDir, "out");
+  /**
+   * The proxy's last EXECUTED upgrade round in this run manifest (`proxy_upgrades`), or undefined. Security round 2 (review: SECURITY_LIFECYCLE_GAP): only a round
+   * recorded at the address the name reaches now counts; after a redeploy-vault the table's name reaches the new vault, and the old vault's rounds stay its own.
+   */
+  type UpgradeEntry = Partial<UpgradeRecord> & { proxy?: string; execute_tx?: string };
+  const lastUpgradeOf = (px: TableProxy): UpgradeEntry | undefined => {
+    const at = lc(proxyAddressOf(px));
+    return [...((manifest as { proxy_upgrades?: UpgradeEntry[] }).proxy_upgrades ?? [])].reverse()
+      .find((e) => e?.proxy === px.name && typeof e.execute_tx === "string" && (typeof e.proxy_address !== "string" || lc(e.proxy_address) === at));
+  };
+  /**
+   * The build a proxy's implementation is compared with: the row's `build=`, else the build of the proxy's last executed upgrade round, else this checkout's out/.
+   * Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE): absolute, so the `build_dir` the round records names the same directory from any working directory
+   * a later verify runs in (cli.ts resolves `build=` against its own working directory first).
+   */
+  const buildDirFor = (px: TableProxy, given: string | undefined): string => resolve(given ?? lastUpgradeOf(px)?.build_dir ?? join(ctx.coreDir, "out"));
+  /** One field of a stage manifest, or undefined when the manifest or the field is absent. */
+  const manifestFieldOr = (stage: string, field: string): string | undefined => { try { return readManifestField(ctx, manifestRef(stage, field)); } catch { return undefined; } };
+  const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
+  const layoutId = (v: string | undefined): string | undefined => (v !== undefined && BYTES32.test(v) && !/^0x0{64}$/.test(v) ? v.toLowerCase() : undefined);
+  /**
+   * Security round 1 (ADR-0014 §8): the storage layouts an upgrade compares. The live identifier is the one the round that installed the live implementation recorded
+   * (`build_layout_hash`), else the deploy manifest's `<field>_layout_id` while the proxy still runs the deployed implementation; anything else is unknown. The live
+   * snapshot is the one that hashes to it in the deployment checkout or the last upgrade's build checkout; the build's is the build checkout's.
+   */
+  const upgradeLayouts = (px: TableProxy, live: ProxyState, prov: BuildProvenance) => {
+    const last = lastUpgradeOf(px);
+    const deployImpl = manifestFieldOr(px.stage, px.implementationField);
+    const liveId = last
+      ? (lc(String(last.implementation ?? "")) === lc(live.implementation) ? layoutId(last.build_layout_hash) : undefined)
+      : (deployImpl === undefined || lc(deployImpl) === lc(live.implementation) ? layoutId(manifestFieldOr(px.stage, layoutIdFieldOf(px))) : undefined);
+    const build = layoutSnapshotOf(prov.checkout, px.artifact);
+    const candidates = [ctx.coreDir, last?.build_dir ? checkoutRootOf(last.build_dir) : undefined, prov.checkout];
+    const liveSnap = liveId === undefined ? undefined : candidates.map((c) => layoutSnapshotOf(c, px.artifact)).find((x) => x !== undefined && x.id === liveId);
+    return { liveId, buildId: build?.id, live: liveSnap?.snapshot, build: build?.snapshot };
   };
   /**
    * The runtime code at `address` against the build artifact of `artifact` in `dir` (immutables and links masked), then every library it links against that
@@ -1416,6 +1505,15 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const call = buildUpgradeCall(px.name, proxy, want);
     const buildDir = buildDirFor(px, want.build);
     await reopenCancelled(name, UPGRADE_ROW);
+    // Security round 1: a round executed or skipped earlier never stands for the chain. When the proxy runs another implementation than this target now (an upgrade
+    // back to it, a rollback after an earlier no-op was recorded as skipped), the earlier round is kept under `:round-n` and round n+1 opens: a new salt, a new operation.
+    if (rowComplete(state[name]) && !state[name]!.cancelled && lc((await readProxyState(proxyChain, proxy)).implementation) !== lc(want.implementation)) {
+      const done = state[name]!.round ?? 1;
+      state[roundKey(name, done)] = state[name]!;
+      state[name] = { round: done + 1 };
+      save();
+      ctx.log.log("info", "govern.round_opened", { row: UPGRADE_ROW, key: name, round: done + 1 });
+    }
     if (!rowComplete(state[name])) {
       const p = { timelock: a.timelock, calls: [{ target: call.target, data: call.data }], salt: salt(labelOf(name)), form: "single" as const };
       const id = await api.operationId(handle, p);
@@ -1435,11 +1533,21 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         let uuid: Hex | null = null;
         try { uuid = (await proxyChain.read(want.implementation, PROXIABLE_UUID_SIG)) as Hex; } catch { uuid = null; }
         const target: ImplementationRead = { address: want.implementation, code, initializerVersion: initializableOf(await proxyChain.getStorageAt(want.implementation, INITIALIZABLE_SLOT)).version, proxiableUUID: uuid };
-        const refusals = upgradeRefusals({ name: px.name, live, target, build: await againstBuild(code, buildDir, px.artifact), timelock: a.timelock });
+        // security round 1: the build is proven (a checkout, and on 8453 a clean release-tagged green one), and its storage layout keeps every live slot
+        const prov = await provenanceOf(buildDir, [px.artifact]);
+        const layouts = upgradeLayouts(px, live, prov);
+        const refusals = [
+          ...upgradeRefusals({ name: px.name, live, target, build: await againstBuild(code, buildDir, px.artifact), timelock: a.timelock }),
+          ...upgradeLayoutRefusals({ name: px.name, artifact: px.artifact, liveField: layoutIdFieldOf(px), mainnet: ctx.chainId === BASE_CHAIN_ID, ...layouts }),
+        ];
         if (refusals.length) throw new PublishError("GOVERN", `govern row ${UPGRADE_ROW}: ${refusals.join("; ")}. Nothing was sent`, { row: UPGRADE_ROW, proxy: px.name, problems: refusals });
         state[name] = {
           ...(state[name] ?? { round: 1 }),
-          upgrade: { proxy: px.name, proxy_address: proxy, from_implementation: live.implementation, implementation: want.implementation, implementation_code_hash: keccak256(code), call_data: want.call, build_dir: buildDir, core_sha: ctx.coreSha },
+          upgrade: {
+            proxy: px.name, proxy_address: proxy, from_implementation: live.implementation, implementation: want.implementation, implementation_code_hash: keccak256(code), call_data: want.call, build_dir: buildDir, core_sha: ctx.coreSha,
+            ...(prov.sha ? { build_sha: prov.sha } : {}), ...(prov.tag ? { build_tag: prov.tag } : {}), build_proof: prov.proof,
+            ...(layouts.liveId ? { live_layout_hash: layouts.liveId } : {}), ...(layouts.buildId ? { build_layout_hash: layouts.buildId } : {}),
+          },
         };
         save();
       }
@@ -1476,9 +1584,16 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     // ONE timelock operation: freezeUpgrades(liveImplementation, liveCodeHash) per proxy not yet frozen. upgrade-rows.ts has every refusal and why.
     const want = freezeWant!;
     const t = getStageTable();
-    const pxs = want.proxy === "all" ? tableProxies(t) : [proxyByName(t, want.proxy)];
-    const reads: { px: TableProxy; proxy: Address; live: ProxyState }[] = [];
-    for (const px of pxs) { const proxy = proxyAddressOf(px); reads.push({ px, proxy, live: await readProxyState(proxyChain, proxy) }); }
+    // Security round 1: the table's proxies, then every vault a redeploy replaced (`<vault>.retired-<n>`): its holders keep withdraw-only shares there, and its
+    // authority is still the timelock, so `all` freezes it too. Its build is the deployment's own (it was never upgraded by name), unless build= names another.
+    type FreezeCandidate = { px: TableProxy; name: string; proxy: Address; retired: boolean };
+    const candidates: FreezeCandidate[] = [
+      ...tableProxies(t).map((px) => ({ px, name: px.name, proxy: proxyAddressOf(px), retired: false })),
+      ...retiredProxiesOf(manifest).map((r) => ({ px: proxyByName(t, VAULT_NAME[r.key]), name: r.name, proxy: r.address, retired: true })),
+    ];
+    const pxs = want.proxy === "all" ? candidates : candidates.filter((x) => x.name === want.proxy);
+    const reads: (FreezeCandidate & { live: ProxyState })[] = [];
+    for (const c of pxs) reads.push({ ...c, live: await readProxyState(proxyChain, c.proxy) });
     const prefix = `${FREEZE_ROW}-${want.proxy}-`;
     // A round planned earlier and not complete is resumed with ITS targets (the ones the Safe signed), never re-planned from the chain.
     const open = Object.entries(state).filter(([k, r]) => k.startsWith(prefix) && !k.includes(":") && r?.freeze && !rowComplete(r));
@@ -1513,14 +1628,20 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           Object.entries(state).find(([k, r]) => k.startsWith(`${UPGRADE_ROW}-${proxyName}-`) && !k.includes(":") && r?.scheduled && !rowComplete(r))?.[0];
         const refusals: string[] = [];
         const dirs: Record<string, string> = {};
+        const shas: Record<string, string> = {};
+        const tags: Record<string, string> = {};
         for (const r of toFreeze) {
-          dirs[r.px.name] = buildDirFor(r.px, want.build);
-          refusals.push(...freezeRefusals({ name: r.px.name, live: r.live, build: await againstBuild(r.live.implementationCode, dirs[r.px.name]!, r.px.artifact), timelock: a.timelock, pendingUpgrade: upgradesPending(r.px.name) }));
+          dirs[r.name] = r.retired ? resolve(want.build ?? join(ctx.coreDir, "out")) : buildDirFor(r.px, want.build);
+          // security round 1: the build the live implementation is held to is proven like an upgrade's (build-provenance.ts) before a freeze fixes it forever
+          const prov = await provenanceOf(dirs[r.name]!, [r.px.artifact]);
+          if (prov.sha) shas[r.name] = prov.sha;
+          if (prov.tag) tags[r.name] = prov.tag;
+          refusals.push(...freezeRefusals({ name: r.name, live: r.live, build: await againstBuild(r.live.implementationCode, dirs[r.name]!, r.px.artifact), timelock: a.timelock, pendingUpgrade: upgradesPending(r.name) }));
         }
         if (refusals.length) throw new PublishError("GOVERN", `govern row ${FREEZE_ROW}: ${refusals.join("; ")}. Nothing was sent`, { row: FREEZE_ROW, proxy: want.proxy, problems: refusals });
-        targets = toFreeze.map((r) => { const f = freezeTargetOf(r.live); return { name: r.px.name, proxy: r.proxy, implementation: f.implementation, code_hash: f.codeHash }; });
+        targets = toFreeze.map((r) => { const f = freezeTargetOf(r.live); return { name: r.name, proxy: r.proxy, implementation: f.implementation, code_hash: f.codeHash }; });
         name = freezeRecordKey(want.proxy, targets.map((x) => buildFreezeCall(x.name, x.proxy as Address, x.implementation as Address, x.code_hash as Hex)));
-        if (!state[name]?.freeze) { state[name] = { ...(state[name] ?? { round: 1 }), freeze: { proxies: targets, build_dirs: dirs, core_sha: ctx.coreSha } }; save(); }
+        if (!state[name]?.freeze) { state[name] = { ...(state[name] ?? { round: 1 }), freeze: { proxies: targets, build_dirs: dirs, core_sha: ctx.coreSha, build_shas: shas, ...(Object.keys(tags).length ? { build_tags: tags } : {}) } }; save(); }
       }
     }
     // a round the operator cancelled through the Safe is scheduled again with the targets it was planned with (the record survives the reopen)
@@ -1543,7 +1664,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const r = state[name];
     if (r?.executed?.tx_hash && r.scheduled?.tx_hash && r.freeze) {
       const entry = {
-        step: FREEZE_ROW, key: name, round: r.round ?? 1, proxies: r.freeze.proxies, build_dirs: r.freeze.build_dirs, core_sha: r.freeze.core_sha, timelock: a.timelock,
+        step: FREEZE_ROW, key: name, round: r.round ?? 1, proxies: r.freeze.proxies, build_dirs: r.freeze.build_dirs, core_sha: r.freeze.core_sha,
+        ...(r.freeze.build_shas ? { build_shas: r.freeze.build_shas } : {}), ...(r.freeze.build_tags ? { build_tags: r.freeze.build_tags } : {}), timelock: a.timelock,
         operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await txTime(r.scheduled.tx_hash),
         execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await txTime(r.executed.tx_hash),
       };

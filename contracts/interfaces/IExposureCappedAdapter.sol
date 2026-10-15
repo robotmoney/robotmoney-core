@@ -9,4 +9,9 @@ interface IExposureCappedAdapter {
     /// @notice Set the maximum USDC the adapter may hold in its venue. 0 removes the cap.
     /// @param cap Cap in 6-decimal USDC units.
     function setMaxExposure(uint256 cap) external;
+
+    /// @notice The current cap in 6-decimal USDC units; 0 means uncapped.
+    /// @dev `VaultAdapterOps` routing reads it (a `staticcall` that tolerates its absence) so a
+    ///      deposit never asks the adapter for more than the cap allows.
+    function maxExposure() external view returns (uint256);
 }

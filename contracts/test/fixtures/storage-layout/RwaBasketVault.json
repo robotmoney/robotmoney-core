@@ -1,5 +1,12 @@
 {
   "contract": "RwaBasketVault",
+  "enums": {
+    "enum BasketAssetConfigGuard.Venue": [
+      "V3",
+      "V4",
+      "Aerodrome"
+    ]
+  },
   "libraries": {
     "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard": "0xeefac2fabd6984d999e7d25a048b48b7e4d7cac18d745473c2502551c946c76e",
     "contracts/lib/BasketSwapOps.sol:BasketSwapOps": "0xf7c6d3a2b3b1ce301c6bc7db8f2a328a0fe65c825f960e8f32bdf5591a6967e2",

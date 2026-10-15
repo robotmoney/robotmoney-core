@@ -111,8 +111,10 @@ pub fn volume_breach_dedup_key(event: &BreachEvent) -> String {
     )
 }
 
-/// Key recording that the gateway pause for a breached block was submitted, so
-/// a retry of that block (held for an undelivered alert) does not send it again.
+/// Key recording that the gateway pause for a breached block was submitted. A
+/// retry of that block (held for an undelivered alert) then asks the gateway's
+/// `depositsPaused()` first, and sends the pause again unless it reads true:
+/// submitted is not mined (security round 1).
 pub fn volume_breach_pause_key(chain_id: i64, block_number: i64) -> String {
     format!(
         "{}pause",

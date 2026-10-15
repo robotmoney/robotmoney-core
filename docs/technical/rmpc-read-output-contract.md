@@ -107,7 +107,7 @@ variant is a breaking change; see `docs/architecture.md` §7.2.
 |---|---|---|---|
 | `ErrVaultDisabled` | `ErrVaultDisabled:` | `vault_disabled` | simulated `PortfolioRouter.VaultNotRegistered` / `RedeemVaultNotRegistered` / `VaultNotActive` with status Retired; `RobotMoneyVault.VaultRetired` / `VaultShutdown` |
 | `ErrPolicyExpired` | `ErrPolicyExpired:` | `expired_policy` | preflight `agents(self).validUntil < now`; simulated `RobotMoneyGateway.AgentPolicyExpired` |
-| `ErrLegUnavailable` | `ErrLegUnavailable:` | `unavailable_leg` | simulated `PortfolioRouter.VaultNotActive` (DepositsPaused) / `VaultNotRouterEligible` / `VaultCapExceeded` / `NoWeightsSet` |
+| `ErrLegUnavailable` | `ErrLegUnavailable:` | `unavailable_leg` | router deposit preflight: `router.previewDeposit` marks a leg with weight above 0 unavailable and `--allow-unavailable-legs` is absent (security round 3); simulated `PortfolioRouter.VaultNotActive` (DepositsPaused) / `VaultNotRouterEligible` / `VaultCapExceeded` / `NoWeightsSet` / `NoFundedLeg` / `LegSkippedWithFloor` |
 | `ErrSlippageBoundExceeded` | `ErrSlippageBoundExceeded:` | `slippage_bound_exceeded` | simulated `PortfolioRouter.SlippageExceeded` (deposit `minSharesPerLeg` or redeem `minAssetsPerLeg`) |
 | `ErrDepositCapExceeded` | `ErrDepositCapExceeded:` | `cap_exceeded` | preflight `maxPerPayment` / `maxPerWindow`; simulated `AmountExceedsPerPaymentCap` / `WindowCapExceeded` |
 | `ErrWithdrawCapExceeded` | `ErrWithdrawCapExceeded:` | `cap_exceeded` | preflight `maxWithdrawPerPayment` / `maxWithdrawPerWindow`; simulated `SharesExceedWithdrawPerPaymentCap` / `WithdrawWindowCapExceeded` |

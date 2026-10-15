@@ -34,3 +34,26 @@ function setMaxExposure(uint256 cap) external;
 | ---- | ---- | ----------- |
 | cap | `uint256` | Cap in 6-decimal USDC units. |
 
+<a id="maxexposure"></a>
+
+### maxExposure
+
+The current cap in 6-decimal USDC units; 0 means uncapped.
+
+<i>
+
+`VaultAdapterOps` routing reads it (a `staticcall` that tolerates its absence) so a
+deposit never asks the adapter for more than the cap allows.
+
+</i>
+
+```solidity
+function maxExposure() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

@@ -4,13 +4,15 @@
 import { decodeAbiParameters, encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toFunctionSelector, toHex } from "viem";
 import { Collector } from "./collector.ts";
 import { PROOF_TX_NONCES } from "../counts.ts";
-import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
+import { MAINNET_CHAIN_ID, kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { compareCode, compareCodeAndLinks, loadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   KEEPER_ROLE, RM_TOKEN, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, SIG_AGENT_OWNERSHIP, SIG_RECEIPT_APPLIED, SIG_ROLE_GRANTED, SIG_VOTED_WEIGHTS_CLEARED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { artifactSourceProblems, checkoutRootOf, checkoutShaOfDir } from "../build-provenance.ts";
 import { manifestBase, type StageTable } from "../stage-table.ts";
 import { AUTHORITY_STAGE, SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
 import { ERC1967_IMPLEMENTATION_SLOT, manifestProxies, proxyChecks, proxyRecordOf, readProxyState, wordAddress, type ManifestProxy, type ProxyRecord, type ProxyState } from "../proxies.ts";
@@ -24,6 +26,27 @@ export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, Chain
 export { viemReader } from "./reader.ts";
 export { loadFrozenCounts, sumFrozenCounts } from "./frozen.ts";
 export { verifySources } from "./sources.ts";
+
+/** The build an executed upgrade round is compared with: the round's recorded `build_dir` when it exists, else `fallback` (the checkout's out/). */
+export const upgradeBuildDir = (up: { buildDir?: string }, fallback: string): string => (up.buildDir && existsSync(up.buildDir) ? up.buildDir : fallback);
+
+/**
+ * Why the build `dir` cannot stand for an upgrade round that recorded `buildSha` (undefined: it can). The rules of the code label of an upgraded proxy:
+ *   - security round 1: `dir` sits in a git checkout whose HEAD is build_sha, never whatever the directory holds now;
+ *   - security round 2 (build-provenance.ts), on 8453: the out/ is git-ignored, so HEAD alone proves nothing about it. It must be the checkout's own out/, and the
+ *     artifact and every library it links must be compiled from the sources committed at build_sha, as the govern row proved before it scheduled the round.
+ * Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE): verify-stage.ts upgradeBuildRefusal runs the same rules before the verifier, so a build that moved,
+ * was deleted or is named relative to another directory refuses the run (nothing paused) instead of failing this label and pausing all four vaults.
+ */
+export function upgradeBuildProblem(o: { dir: string; buildSha: string; artifact: string; mainnet: boolean }): string | undefined {
+  const sha = checkoutShaOfDir(o.dir);
+  if (sha !== o.buildSha) return `the build ${o.dir} is ${sha ? `a checkout at ${sha}` : "in no git checkout"}, but the upgrade round recorded build_sha ${o.buildSha}: compare with the reviewed build's own checkout`;
+  if (!o.mainnet) return undefined;
+  const root = checkoutRootOf(o.dir)!;
+  if (resolve(o.dir) !== join(root, "out")) return `the build ${o.dir} is not the forge out/ of its checkout (${join(root, "out")})`;
+  const problems = artifactSourceProblems({ dir: resolve(o.dir), checkout: root, sha: o.buildSha, artifacts: [o.artifact] });
+  return problems.length > 0 ? `the build ${o.dir} is not the build of the sources committed at build_sha ${o.buildSha}: ${problems.slice(0, 3).join("; ")}` : undefined;
+}
 
 const HAS_ROLE = "function hasRole(bytes32 role, address account) view returns (bool)";
 const hasRole = async (ch: ChainReader, at: Address, r: Hex, who: Address): Promise<boolean> =>
@@ -242,10 +265,15 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
       const px = proxied.get(lc(t.address));
       const at = px ? wordAddress(await chain.getStorageAt(t.address, ERC1967_IMPLEMENTATION_SLOT)) : t.address;
       const up = px ? upgradeOf.get(px.name) : undefined;
-      const dir = up ? (up.buildDir && existsSync(up.buildDir) ? up.buildDir : opts.artifactsDir) : (t.dir ?? opts.artifactsDir);
+      const dir = up ? upgradeBuildDir(up, opts.artifactsDir) : (t.dir ?? opts.artifactsDir);
+      const where = px ? ` (the implementation ${at} behind the proxy${up ? ", installed by govern upgrade-proxy" : ""})` : "";
+      // Security round 1: the build an upgrade round recorded is held to the commit the round proved (build_sha), never to whatever the directory holds now.
+      if (up?.buildSha !== undefined) {
+        const why = upgradeBuildProblem({ dir, buildSha: up.buildSha, artifact: t.artifact, mainnet: sheet.chainId === MAINNET_CHAIN_ID });
+        if (why) return { ok: false, detail: `${t.artifact}${where}: ${why}` };
+      }
       // ADR-0014 §9: the masked compare blanks every library link, so the linked libraries are followed and compared with their builds too.
       const r = await compareCodeAndLinks((a) => chain.getCode(a), await chain.getCode(at), loadArtifact(dir, t.artifact), dir);
-      const where = px ? ` (the implementation ${at} behind the proxy${up ? ", installed by govern upgrade-proxy" : ""})` : "";
       return { ok: r.ok, detail: `${t.artifact}${where}: ${r.detail}${!r.ok && redeploys.length > 0 && t.original && originalDir === undefined ? " (after a redeploy at another sha the contracts it did not replace run the original build: pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
     });
   }

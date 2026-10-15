@@ -285,8 +285,8 @@ function test_rmUSDC_noLeverFreezesExit_fundsInAdapter() public;
 ### test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain
 
 Every emergency drain lever: `emergencyWithdrawAdapter`, `emergencyWithdraw`,
-`forceRemoveAdapter`, pauseDeposits and shutdown. Funds move back to the
-vault and the holders still exit in full.
+`emergencyExcludeAdapter` (security round 1), `forceRemoveAdapter`, pauseDeposits
+and shutdown. Funds move back to the vault and the holders still exit in full.
 
 ```solidity
 function test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain() public;

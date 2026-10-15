@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {IExposureCappedAdapter} from "../interfaces/IExposureCappedAdapter.sol";
+import {IVenueHealthAdapter} from "../interfaces/IVenueHealthAdapter.sol";
 import {ExclusionLedger} from "../ExclusionLedger.sol";
 import {BpsMath} from "./BpsMath.sol";
 
@@ -47,7 +48,10 @@ library VaultAdapterOps {
     /// @param adapters        Ordered registry of all strategy adapters (active and inactive).
     /// @param allowed         Exact adapter instances governance approved to receive the vault's USDC.
     /// @param codeHashAllowed Runtime code hashes governance approved for adapter onboarding.
-    /// @param openExclusionOf Open exclusion record id per registry index (0 = none, core 1820).
+    /// @param openExclusionOf Open exclusion record id per registry index (0 = none, core 1820). A
+    ///                        force-removed (inactive) index keeps its record open while the
+    ///                        adapter still holds a balance, until `recoverRemoved` drains it
+    ///                        empty or a re-add settles it.
     struct Book {
         AdapterInfo[] adapters;
         mapping(address adapter => bool allowed) allowed;
@@ -60,6 +64,7 @@ library VaultAdapterOps {
     // ─── Mirrored vault events ────────────────────────────────────────
 
     event AdapterAdded(uint256 indexed index, address indexed adapter, uint16 capBps);
+    event AdapterAllowedSet(address indexed adapter, bool allowed);
     event AdapterRemoved(uint256 indexed index, address indexed adapter);
     event AdapterCapUpdated(uint256 indexed index, uint16 oldBps, uint16 newBps);
     event AdapterMaxExposureSet(uint256 indexed index, address indexed adapter, uint256 cap);
@@ -88,6 +93,7 @@ library VaultAdapterOps {
     error AdapterVaultMismatch(address adapter, address expected, address actual);
     error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
     error InsufficientGas(uint256 available, uint256 required);
+    error NoOpenExclusion(uint256 index);
 
     // ─── Shared definitions (internal: compiled into the vault too) ───
 
@@ -127,6 +133,35 @@ library VaultAdapterOps {
         return b.adapters[i].active && isUsable(b, usdc, i);
     }
 
+    /// @notice Body of `RobotMoneyVault._anyActiveAdapterBlocked`: true when an active entry is
+    ///         not usable (ineligible, or under an open exclusion record: core 1788 / 1820). With
+    ///         `venues`, also true when a usable active entry reports that its venue refuses
+    ///         withdrawals (`IVenueHealthAdapter.venueWithdrawable` false: an Aave reserve paused
+    ///         or inactive, a Comet with `isWithdrawPaused` set; security round 3). NAV counts
+    ///         that venue's balance at face, so a deposit would mint against value nobody can
+    ///         withdraw, and a slice the venue hands back would sit idle to pay early exits at
+    ///         that NAV while a later haircut falls on the holders who stay. Deposits stay closed
+    ///         until the venue reopens or the adapter leaves the active set. A missing or reverting
+    ///         view reads as open, as `_ceiling` reads `maxExposure`; the lending adapter's own
+    ///         `deploy` still refuses to hand a slice back while its venue is shut
+    ///         (`VenueWithdrawalsClosed`). An unusable entry is never asked.
+    function anyActiveBlocked(Book storage b, address usdc, bool venues)
+        public
+        view
+        returns (bool)
+    {
+        uint256 len = b.adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (!b.adapters[i].active) continue;
+            if (!isUsable(b, usdc, i)) return true;
+            if (!venues) continue;
+            (bool ok, bytes memory data) = address(b.adapters[i].adapter)
+                .staticcall(abi.encodeCall(IVenueHealthAdapter.venueWithdrawable, ()));
+            if (ok && data.length == 32 && abi.decode(data, (uint256)) == 0) return true;
+        }
+        return false;
+    }
+
     /// @dev The `rank`-th active adapter's slice of `total` when `active` adapters split it
     ///      equally. `MAX_BPS / active` alone FLOORS (three adapters: 3333, summing to 9999), so the
     ///      `MAX_BPS % active` remainder bps go one each to the lowest ranks, and the slice is the
@@ -157,19 +192,26 @@ library VaultAdapterOps {
     // ─── Deposit routing (hot path; the vault holds `nonReentrant`) ───
 
     /// @dev Scalars one routing call threads through its passes (memory, to stay within the legacy
-    ///      code generator's stack reach).
+    ///      code generator's stack reach). `refused` has bit `i` set once entry `i`'s venue refused
+    ///      a supply in this call (security round 2), so pass 2 does not ask it again.
     struct Route {
         address usdc;
         uint256 totalAfter;
         uint256 gasFloor;
         uint256 remaining;
         uint256 capHeadroom;
+        uint256 refused;
     }
 
     /// @notice Route `amount` idle USDC into the adapters. Body of `RobotMoneyVault._routeDepositAt`.
     /// @dev Pass 1 fills each usable active adapter toward `min(equal-weight slice, capBps)`. Pass 2
     ///      spreads the leftover into adapters with absolute `capBps` headroom, and only runs when
-    ///      pass 1 saw headroom (see `_routePass2`). Anything still unrouted stays idle in the vault
+    ///      pass 1 saw headroom (see `_routePass2`). Both passes also stop at an adapter's own
+    ///      exposure cap (`_ceiling`, `MorphoAdapter.maxExposure`), so a capped adapter never
+    ///      reverts the deposit. A venue that refuses the supply (Aave supply cap or frozen
+    ///      reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not revert it either:
+    ///      the lending adapter hands the USDC back, `_allocate` counts only what stayed, and pass
+    ///      2 skips that entry (security round 2). Anything still unrouted stays idle in the vault
     ///      and is reported with `UnroutedDeposit`. A quarantined entry, or one under an open
     ///      exclusion record, is skipped rather than reverted on (audit 2026-06-09 L-4, core 1820).
     /// @param totalAfter          NAV including `amount`, which already sits idle in the vault.
@@ -188,22 +230,47 @@ library VaultAdapterOps {
             totalAfter: totalAfter,
             gasFloor: adapterCallGasFloor,
             remaining: amount,
-            capHeadroom: 0
+            capHeadroom: 0,
+            refused: 0
         });
         // Pass-1 `totalAssets()` reads, held as `balance + 1` so 0 means "not read" without
         // shadowing a genuine zero balance. Reused by pass 2 ONLY when pass 1 allocated nothing at
         // all: then nothing but staticcalls happened in between, so the cached reads are exact.
         // The moment pass 1 allocates, every later read is taken fresh — a cached value would be a
         // MODELLED balance, and pass 2's `capBps` headroom check must never be computed from one.
+        // A deploy the venue refused and handed back also counts as an allocation here: it was a
+        // real call, so the reads after it are taken fresh too (security round 2).
         uint256[] memory cachedBalance = new uint256[](b.adapters.length);
         _routePass1(b, r, cachedBalance);
         if (r.remaining > 0 && r.capHeadroom > 0) {
             // slither-disable-next-line incorrect-equality
-            _routePass2(b, r, cachedBalance, r.remaining == amount);
+            _routePass2(b, r, cachedBalance, r.remaining == amount && r.refused == 0);
         }
         // Any USDC still unrouted (e.g. all adapter caps exhausted) stays idle in the vault.
         // Emit an event so off-chain monitors can detect and react (e.g. trigger rebalance).
         if (r.remaining > 0) emit UnroutedDeposit(r.remaining);
+    }
+
+    /// @dev The highest balance routing may fill entry `i` to: its `capBps` slice of `totalAfter`,
+    ///      lowered to the adapter's own exposure cap when it reports one
+    ///      (`IExposureCappedAdapter.maxExposure`, `MorphoAdapter`, FS-VLT-10; 0 means uncapped). The
+    ///      adapter reverts a `deploy` that would cross its cap, and `_allocate` does not catch it, so
+    ///      a slice past the cap would revert the whole deposit, every router deposit with an rmUSDC
+    ///      leg, and keeper `rebalance` (security round 1, D8 follow-up). The read never reverts: an
+    ///      adapter without the view (Aave, Compound) is uncapped here. What the VENUE will accept
+    ///      is not read here: a refused supply comes back to the vault instead (`_allocate`).
+    function _ceiling(Book storage b, uint256 totalAfter, uint256 i)
+        private
+        view
+        returns (uint256 ceiling)
+    {
+        ceiling = (totalAfter * b.adapters[i].capBps) / MAX_BPS;
+        (bool ok, bytes memory data) = address(b.adapters[i].adapter)
+            .staticcall(abi.encodeCall(IExposureCappedAdapter.maxExposure, ()));
+        if (ok && data.length == 32) {
+            uint256 cap = abi.decode(data, (uint256));
+            if (cap != 0 && cap < ceiling) ceiling = cap;
+        }
     }
 
     /// @dev Pass 1: fill toward `min(equal target, capBps)`, taken on the balances the two bps
@@ -227,14 +294,16 @@ library VaultAdapterOps {
     }
 
     /// @dev One pass-1 leg: allocate the deficit to `min(shareBalance, capBalance)`, at most
-    ///      `r.remaining`. Returns the read balance + 1 when nothing was allocated, else 0.
+    ///      `r.remaining`. Returns the read balance + 1 when nothing was allocated, else 0. A leg
+    ///      whose venue refused part or all of the slice adds no headroom and is marked in
+    ///      `r.refused`: the venue is full for this call, whatever `capBps` says.
     function _pass1Leg(Book storage b, Route memory r, uint256 i, uint256 shareBalance)
         private
         returns (uint256 cachedPlusOne)
     {
-        // `capBalance` is the same expression pass 2 uses, so an adapter can never be filled past
-        // its cap here.
-        uint256 capBalance = (r.totalAfter * b.adapters[i].capBps) / MAX_BPS;
+        // `capBalance` is the same expression pass 2 uses (`_ceiling`: `capBps` and the adapter's
+        // own exposure cap), so an adapter can never be filled past either cap here.
+        uint256 capBalance = _ceiling(b, r.totalAfter, i);
         uint256 targetBalance = shareBalance < capBalance ? shareBalance : capBalance;
         uint256 currentBalance = b.adapters[i].adapter.totalAssets();
         if (currentBalance >= targetBalance) {
@@ -243,8 +312,12 @@ library VaultAdapterOps {
         }
         uint256 deficit = targetBalance - currentBalance;
         uint256 allocation = deficit < r.remaining ? deficit : r.remaining;
-        _allocate(b, r.usdc, i, allocation, r.gasFloor);
-        r.remaining -= allocation;
+        uint256 placed = _allocate(b, r.usdc, i, allocation, r.gasFloor);
+        r.remaining -= placed;
+        if (placed < allocation) {
+            r.refused |= uint256(1) << i;
+            return 0;
+        }
         uint256 filled = currentBalance + allocation;
         if (capBalance > filled) r.capHeadroom += capBalance - filled;
     }
@@ -257,7 +330,8 @@ library VaultAdapterOps {
     ///      trade: skipping may leave a few wei of share-rounding dust idle (on a fork pass 2's
     ///      whole contribution to a `capBps`-bound deposit was ONE wei,
     ///      `VaultForkRegressions.test_fork_unroutedDeposit_emitsEventAndStaysIdle`); it stays in
-    ///      NAV and the next deposit or `rebalance` routes it.
+    ///      NAV and the next deposit or `rebalance` routes it. An entry whose venue refused a supply
+    ///      earlier in this call (`r.refused`) is not asked again.
     function _routePass2(
         Book storage b,
         Route memory r,
@@ -267,15 +341,15 @@ library VaultAdapterOps {
         uint256 len = b.adapters.length;
         for (uint256 i = 0; i < len && r.remaining > 0; i++) {
             if (!b.adapters[i].active) continue;
+            if ((r.refused >> i) & 1 == 1) continue;
             if (!isUsable(b, r.usdc, i)) continue;
             uint256 cached = useCache ? cachedBalance[i] : 0;
             uint256 currentBalance = cached == 0 ? b.adapters[i].adapter.totalAssets() : cached - 1;
-            uint256 capBalance = (r.totalAfter * b.adapters[i].capBps) / MAX_BPS;
+            uint256 capBalance = _ceiling(b, r.totalAfter, i);
             if (currentBalance >= capBalance) continue;
             uint256 headroom = capBalance - currentBalance;
             uint256 allocation = headroom < r.remaining ? headroom : r.remaining;
-            _allocate(b, r.usdc, i, allocation, r.gasFloor);
-            r.remaining -= allocation;
+            r.remaining -= _allocate(b, r.usdc, i, allocation, r.gasFloor);
         }
     }
 
@@ -354,9 +428,18 @@ library VaultAdapterOps {
     /// @dev Reverts `AdapterAlreadyActive` when any ACTIVE entry holds `adapter_` (core 1789):
     ///      two active entries count one balance twice in NAV. Inactive entries are skipped, so a
     ///      re-add after removal appends a NEW entry. Then the count cap, then full eligibility.
+    ///
+    ///      Security round 1: an inactive entry of the same address can still hold an OPEN
+    ///      exclusion record, left by `forceRemoveAdapter` while the adapter held a balance. That
+    ///      balance belongs to the record's snapshot holders. So before the new entry is pushed,
+    ///      the adapter's whole balance is withdrawn into that record and the record closes
+    ///      (`Restored`), exactly as a restore through `syncExclusions` does. The new entry starts
+    ///      empty, so the re-add never lifts NAV for today's holders. If the adapter cannot pay
+    ///      out, the add reverts `AdapterNotEmpty`.
     function addAdapter(
         Book storage b,
         address usdc,
+        ExclusionLedger ledger,
         address adapter_,
         uint16 capBps_,
         uint256 maxAdapters
@@ -371,6 +454,11 @@ library VaultAdapterOps {
         }
         if (activeCount(b) >= maxAdapters) revert MaxAdaptersReached();
         requireEligible(b, usdc, adapter_);
+        for (uint256 i = 0; i < len; i++) {
+            if (address(b.adapters[i].adapter) == adapter_ && b.openExclusionOf[i] != 0) {
+                _restore(b, usdc, ledger, i);
+            }
+        }
         b.adapters
             .push(AdapterInfo({adapter: IStrategyAdapter(adapter_), capBps: capBps_, active: true}));
         emit AdapterAdded(len, adapter_, capBps_);
@@ -454,10 +542,7 @@ library VaultAdapterOps {
                 b.openExclusionOf[i] = ledger.open(i, address(adpt), supply);
                 opened = true;
             } else if (eligible && restore) {
-                (bool ok,,) =
-                    _drain(adpt, id, usdc, ledger, ExclusionLedger.RecoverySource.Restoration);
-                if (!ok) revert AdapterNotEmpty();
-                _finalize(b, ledger, i, ExclusionLedger.FinalizeReason.Restored);
+                _restore(b, usdc, ledger, i);
             }
         }
     }
@@ -496,19 +581,115 @@ library VaultAdapterOps {
         _emergencyPull(b, usdc, ledger, index, true);
     }
 
-    /// @notice Body of `RobotMoneyVault.forceRemoveAdapter` after the deposit halt. The entry's
-    ///         balance is treated as lost; an open record closes (`ForceRemoved`) and keeps what was
-    ///         recovered, so the rest is a loss for the snapshot holders only.
-    function forceRemoveAdapter(Book storage b, ExclusionLedger ledger, uint256 index) public {
+    /// @notice Body of `RobotMoneyVault.emergencyExcludeAdapter`: the exclude-only half of
+    ///         `setAdapterAllowed(adapter, false)`, for the hot key. Revokes the active entry's
+    ///         address allowance, then syncs (open only), so the entry leaves NAV and its record
+    ///         opens with a snapshot of `supply` in this call. Restoring stays `ADMIN_ROLE`'s:
+    ///         `setAdapterAllowed(adapter, true)` drains the adapter into the record first.
+    /// @dev Security round 1 (FS-VLT-8 follow-up): before this lever only the timelock could open a
+    ///      record, so in the 48 h before it ran an illiquid adapter stayed in NAV while
+    ///      `emergencyWithdraw` moved the healthy adapters to idle, and early redeemers took full
+    ///      NAV from idle. Exclude first, then drain: every holder bears the haircut pro rata.
+    /// @return opened True when the sync opened a record.
+    function emergencyExclude(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256 index
+    ) public returns (bool opened) {
+        _requireActive(b, index);
+        address adapter_ = address(b.adapters[index].adapter);
+        b.allowed[adapter_] = false;
+        emit AdapterAllowedSet(adapter_, false);
+        opened = syncExclusions(b, usdc, ledger, supply, false);
+    }
+
+    /// @notice Body of `RobotMoneyVault.forceRemoveAdapter` after the deposit halt. The entry
+    ///         leaves the registry without a withdrawal. Its balance leaves NAV, but it is not
+    ///         handed to anyone: it stays owed to the holders of the moment through an exclusion
+    ///         record (security round 1, SR-1012-5 / issue 1705 finding 5).
+    /// @dev    - A funded entry (or one whose `totalAssets` reverts) with no open record gets one,
+    ///           with a snapshot of `supply` (skipped at zero supply). So a holder who exits at the
+    ///           written-down NAV keeps a pro-rata claim on whatever the adapter later returns.
+    ///         - An open record is closed (`ForceRemoved`) only when the adapter reports an empty
+    ///           balance. Otherwise it stays open on the inactive index. `recoverRemoved`
+    ///           (EMERGENCY) credits it tranche by tranche as the venue can pay (security round
+    ///           2), and a later `addAdapter` of the same address realises the whole remaining
+    ///           balance into it before the new entry counts (see `addAdapter`). Before this, the
+    ///           record closed here and a re-add put the stranded balance back into NAV for
+    ///           whoever held shares then.
+    /// @return opened True when a record opened.
+    function forceRemoveAdapter(
+        Book storage b,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256 index
+    ) public returns (bool opened) {
         _requireActive(b, index);
         IStrategyAdapter adapter = b.adapters[index].adapter;
         b.adapters[index].active = false;
         uint256 lossAmount;
+        bool read;
         try adapter.totalAssets() returns (uint256 reported) {
             lossAmount = reported;
+            read = true;
         } catch {}
         emit AdapterForceRemoved(index, address(adapter), lossAmount);
-        _finalize(b, ledger, index, ExclusionLedger.FinalizeReason.ForceRemoved);
+        if (read && lossAmount == 0) {
+            _finalize(b, ledger, index, ExclusionLedger.FinalizeReason.ForceRemoved);
+        } else if (b.openExclusionOf[index] == 0 && supply != 0) {
+            b.openExclusionOf[index] = ledger.open(index, address(adapter), supply);
+            opened = true;
+        }
+    }
+
+    /// @notice Body of `RobotMoneyVault.recoverRemovedAdapter`: withdraw up to `amount` from the
+    ///         INACTIVE entry `index` straight into its open exclusion record.
+    /// @dev Security round 2. `forceRemoveAdapter` leaves a funded entry's record open, and before
+    ///      this the only path that could credit it was `addAdapter`, which withdraws the WHOLE
+    ///      balance in one call and reverts `AdapterNotEmpty` otherwise. A venue that can repay
+    ///      only part of the position (high utilization, bad debt in one market) therefore
+    ///      stranded even the liquid part. This lever takes any tranche the venue can pay now.
+    ///      - `amount` is clamped to the adapter's reported balance when that read works, so
+    ///        `type(uint256).max` asks for everything. The plain `withdraw(amount)` reverts on a
+    ///        shortfall, so ask for at most what the venue can pay.
+    ///      - The USDC that reaches the vault, measured by balance (`_credit`), goes to the
+    ///        record (`EmergencyWithdrawAdapter`), never to idle NAV.
+    ///      - When the adapter then reports an empty balance, the record closes (`ForceRemoved`),
+    ///        exactly as `forceRemoveAdapter` closes an empty one.
+    ///      Reverts `AdapterNotFound` unless `index` names an inactive entry, and `NoOpenExclusion`
+    ///      when that entry has no open record (nothing is owed to anyone through it).
+    function recoverRemoved(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 index,
+        uint256 amount
+    ) public {
+        if (index >= b.adapters.length || b.adapters[index].active) {
+            revert AdapterNotFound();
+        }
+        uint256 id = b.openExclusionOf[index];
+        if (id == 0) revert NoOpenExclusion(index);
+        IStrategyAdapter adpt = b.adapters[index].adapter;
+        try adpt.totalAssets() returns (uint256 reported) {
+            if (amount > reported) amount = reported;
+        } catch {}
+        uint256 actual;
+        if (amount != 0) {
+            uint256 before = IERC20(usdc).balanceOf(address(this));
+            actual = adpt.withdraw(amount);
+            _credit(
+                id, usdc, ledger, before, ExclusionLedger.RecoverySource.EmergencyWithdrawAdapter
+            );
+        }
+        emit EmergencyWithdrawAdapterCalled(index, address(adpt), actual, true);
+        try adpt.totalAssets() returns (uint256 left) {
+            if (left == 0) {
+                _finalize(b, ledger, index, ExclusionLedger.FinalizeReason.ForceRemoved);
+            }
+        } catch {}
     }
 
     // ─── Rebalance ────────────────────────────────────────────────────
@@ -588,6 +769,8 @@ library VaultAdapterOps {
 
     /// @notice Allocation leg of `RobotMoneyVault.adminRebalance`: move idle USDC into each active
     ///         entry below `targetBalances[i]`, in registry order, with the full eligibility revert.
+    ///         A slice the venue refuses comes back and stays idle (security round 2); the
+    ///         adapter's `DeployRefused` event and the missing `Allocated` show it.
     function adminRebalanceAllocate(
         Book storage b,
         address usdc,
@@ -602,8 +785,7 @@ library VaultAdapterOps {
             if (current < targetBalances[i]) {
                 uint256 deficit = targetBalances[i] - current;
                 uint256 allocation = deficit < idle ? deficit : idle;
-                _allocate(b, usdc, i, allocation, adapterCallGasFloor);
-                idle -= allocation;
+                idle -= _allocate(b, usdc, i, allocation, adapterCallGasFloor);
             }
         }
     }
@@ -673,16 +855,27 @@ library VaultAdapterOps {
     }
 
     /// @dev Move `amount` USDC into entry `i` and deploy it, with the full eligibility revert.
+    ///      Returns `placed`: what the adapter kept. Security round 2: a lending adapter whose
+    ///      venue refuses the supply (Aave supply cap or frozen reserve, MetaMorpho
+    ///      `AllCapsReached`, Comet supply pause) hands the USDC straight back instead of
+    ///      reverting the deposit. The vault measures that by its own balance, not by anything the
+    ///      adapter returns, and `Allocated` reports only what stayed. USDC an adapter sends back
+    ///      beyond `amount` simply stays idle in NAV.
     // slither-disable-next-line reentrancy-events
     function _allocate(Book storage b, address usdc, uint256 i, uint256 amount, uint256 floor)
         private
+        returns (uint256 placed)
     {
         IStrategyAdapter adpt = b.adapters[i].adapter;
         requireEligible(b, usdc, address(adpt));
+        uint256 before = IERC20(usdc).balanceOf(address(this));
         IERC20(usdc).safeTransfer(address(adpt), amount);
         _requireGas(floor);
         adpt.deploy(amount);
-        emit Allocated(i, address(adpt), amount);
+        uint256 handedBack = IERC20(usdc).balanceOf(address(this)) + amount - before;
+        if (handedBack >= amount) return 0;
+        placed = amount - handedBack;
+        emit Allocated(i, address(adpt), placed);
     }
 
     /// @dev Withdraw `pull` from entry `i` behind the adapter-call gas floor; returns what it paid.
@@ -758,6 +951,23 @@ library VaultAdapterOps {
         } catch {
             ok = false;
         }
+    }
+
+    /// @dev Restore entry `i` from its open record: withdraw the adapter's whole balance into the
+    ///      record (`Restoration`), then close it (`Restored`). Reverts `AdapterNotEmpty` when the
+    ///      adapter cannot pay out, so the record stays open. Shared by `syncExclusions` (an
+    ///      active entry whose eligibility came back) and `addAdapter` (a re-add of an address
+    ///      whose inactive entry was force-removed with a balance).
+    function _restore(Book storage b, address usdc, ExclusionLedger ledger, uint256 i) private {
+        (bool ok,,) = _drain(
+            b.adapters[i].adapter,
+            b.openExclusionOf[i],
+            usdc,
+            ledger,
+            ExclusionLedger.RecoverySource.Restoration
+        );
+        if (!ok) revert AdapterNotEmpty();
+        _finalize(b, ledger, i, ExclusionLedger.FinalizeReason.Restored);
     }
 
     /// @dev Move the USDC that arrived since `before` into record `id` (no-op for id 0). The

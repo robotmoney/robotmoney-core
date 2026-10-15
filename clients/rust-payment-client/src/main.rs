@@ -65,6 +65,7 @@ fn main() {
             fee_cap,
             destination,
             min_shares_per_leg,
+            allow_unavailable_legs,
             pretty,
         } => commands::deposit::run(commands::deposit::Args {
             config_path: config,
@@ -77,6 +78,7 @@ fn main() {
             fee_cap_wei: fee_cap,
             destination,
             min_shares_per_leg,
+            allow_unavailable_legs,
             pretty,
         }),
         Command::BuildInfo { pretty } => commands::build_info::run(pretty),

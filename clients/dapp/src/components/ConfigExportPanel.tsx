@@ -30,6 +30,11 @@ interface Props {
   gatewayImplementationHash?: string;
   /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes`. */
   vaultIsProxy?: boolean;
+  /**
+   * Reviewed vault and router implementation code hashes from the build's pins (ADR-0014),
+   * exported as `proxy_implementation_hashes`. Never read from the live chain.
+   */
+  proxyImplementationHashes?: readonly string[];
   chainId: number;
   agent: Address;
   /**
@@ -81,6 +86,7 @@ export function ConfigExportPanel(props: Props) {
     gateway_implementation_hashes:
       props.gatewayImplementationHash !== undefined ? [props.gatewayImplementationHash] : undefined,
     vault_is_proxy: props.vaultIsProxy === true,
+    proxy_implementation_hashes: props.proxyImplementationHashes,
     share_receiver: props.agentOwner ? shareReceiver : undefined,
     agent_owner: props.agentOwner,
     signer,

@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRouteDepositTest"
 
 # RobotMoneyVaultRouteDepositTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
 
 **Inherits:** Test
 
@@ -576,6 +576,117 @@ Pinned here so the trade does not depend on fork CI to stay honest.
 function test_routeDeposit_shareRoundingDustStaysIdleRatherThanCostingASecondRound() public;
 ```
 
+<a id="test_maxexposurebelowtargetroutesaroundmorpho"></a>
+
+### test_maxExposureBelowTargetRoutesAroundMorpho
+
+The production rmUSDC set (Aave 3334, Compound 3333, Morpho 3333 bps,
+`DeployVault.s.sol`) with a Morpho `maxExposure` below Morpho's equal-weight
+target. A deposit succeeds, Morpho stays at its cap, Aave and Compound take their
+full slices, and what no adapter can take stays idle in NAV with
+`UnroutedDeposit`. Raise another adapter's `capBps` and the next deposit routes
+around Morpho into it. Before the fix pass 1 handed Morpho its whole third,
+`MorphoAdapter._deposit` reverted `ExposureCapExceeded`, and so did every
+deposit, every keeper `rebalance` and every router deposit with an rmUSDC leg.
+
+```solidity
+function test_maxExposureBelowTargetRoutesAroundMorpho() public;
+```
+
+<a id="_venueset-uint256-uint256"></a>
+
+### _venueSet
+
+<i>
+
+Aave 3334, Compound 3333, Morpho 3333 bps (`DeployVault.s.sol`), with the Aave
+reserve's remaining supply-cap room and MetaMorpho's remaining cap room as given.
+
+</i>
+
+```solidity
+function _venueSet(uint256 aaveHeadroom, uint256 morphoHeadroom)
+        internal
+        returns (VenueSet memory s);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| aaveHeadroom | `uint256` |  |
+| morphoHeadroom | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `VenueSet` |  |
+
+<a id="test_venuerefusessupply_depositsucceedsandrefusedslicesstayidle"></a>
+
+### test_venueRefusesSupply_depositSucceedsAndRefusedSlicesStayIdle
+
+Security round 2. Aave's USDC reserve has 100 USDC of supply-cap room left and
+every MetaMorpho market cap is full. A 3 000 USDC deposit succeeds: Aave's slice
+(above the room) and Morpho's slice come straight back from the adapters
+(`DeployRefused`), Compound takes its slice, and the two refused slices stay idle
+in NAV with `UnroutedDeposit`. Raise Compound's `capBps` and the next deposit
+routes around both full venues into Compound. Before the fix `AaveV3Adapter.deploy`
+reverted "51" (`SUPPLY_CAP_EXCEEDED`), and so did every rmUSDC deposit, every
+router deposit with an rmUSDC leg and keeper `rebalance`.
+
+```solidity
+function test_venueRefusesSupply_depositSucceedsAndRefusedSlicesStayIdle() public;
+```
+
+<a id="test_venuerefusessupply_keeperrebalancedoesnotrevert"></a>
+
+### test_venueRefusesSupply_keeperRebalanceDoesNotRevert
+
+Security round 2. Every venue refuses at once: the Aave reserve is frozen, Comet's
+supply is paused and MetaMorpho is full. A deposit still succeeds with its whole
+amount idle, and keeper `rebalance` runs instead of reverting. Once the venues
+accept again, the next `rebalance` places the idle USDC.
+
+```solidity
+function test_venueRefusesSupply_keeperRebalanceDoesNotRevert() public;
+```
+
+<a id="test_venueshutswithdrawals_depositscloseandnoidlefundsparexit"></a>
+
+### test_venueShutsWithdrawals_depositsCloseAndNoIdleFundsParExit
+
+Security round 3. rmUSDC holds Aave, Compound and Morpho at equal weight, and
+Aave's guardian pauses the USDC reserve: supply and withdraw both revert "29"
+(`RESERVE_PAUSED`) while the aToken balance still counts at face in NAV. rmUSDC's
+`maxDeposit` and `maxMint` read 0, so a deposit reverts and no new USDC sits idle
+to pay a redeem at that NAV. Before the fix the Aave adapter handed its slice back,
+the deposit minted at a NAV counting the paused balance, and the idle slice paid an
+informed holder's redeem at par while a later haircut fell on the holders who
+stayed (FS-VLT-8). An inactive reserve and a Comet withdraw pause close deposits
+the same way. A frozen reserve and a Comet supply-only pause still pay withdrawals
+and keep deposits open (round 2 hand-back). Deposits reopen with the venue.
+
+```solidity
+function test_venueShutsWithdrawals_depositsCloseAndNoIdleFundsParExit() public;
+```
+
+<a id="test_venueshutswithdrawals_adapterrevertssorebalanceidlesnothing"></a>
+
+### test_venueShutsWithdrawals_adapterRevertsSoRebalanceIdlesNothing
+
+Security round 3. Compound is overweight and Aave underweight when Aave's reserve
+is paused. A keeper `rebalance` pulls Compound's excess into idle and offers it to
+the Aave adapter, which now reverts `VenueWithdrawalsClosed` instead of handing it
+back, so the rebalance reverts and no healthy-venue USDC turns into idle that pays
+exits at a NAV counting the paused balance. Before the fix the slice came back and
+stayed idle. A Comet whose supply and withdraw are both paused reverts the same way.
+
+```solidity
+function test_venueShutsWithdrawals_adapterRevertsSoRebalanceIdlesNothing() public;
+```
+
 <a id="test_gas_balancedvaultdeposit"></a>
 
 ### test_gas_balancedVaultDeposit
@@ -643,4 +754,38 @@ event UnroutedDeposit(uint256 amount);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amount | `uint256` |  |
+
+## Structs
+
+### VenueSet
+
+<i>
+
+The production rmUSDC set on the real lending adapters, over venues that can refuse.
+
+</i>
+
+```solidity
+struct VenueSet {
+        RouteHarness v;
+        AaveV3Adapter aave;
+        CompoundV3Adapter compound;
+        MorphoAdapter morpho;
+        CappedAavePool pool;
+        PausableComet comet;
+        CappedMetaMorpho metaMorpho;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `RouteHarness` |  |
+| aave | `AaveV3Adapter` |  |
+| compound | `CompoundV3Adapter` |  |
+| morpho | `MorphoAdapter` |  |
+| pool | `CappedAavePool` |  |
+| comet | `PausableComet` |  |
+| metaMorpho | `CappedMetaMorpho` |  |
 

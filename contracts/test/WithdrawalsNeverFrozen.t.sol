@@ -215,8 +215,8 @@ contract WithdrawalsNeverFrozenTest is Test {
     }
 
     /// @notice Every emergency drain lever: `emergencyWithdrawAdapter`, `emergencyWithdraw`,
-    ///         `forceRemoveAdapter`, pauseDeposits and shutdown. Funds move back to the
-    ///         vault and the holders still exit in full.
+    ///         `emergencyExcludeAdapter` (security round 1), `forceRemoveAdapter`, pauseDeposits
+    ///         and shutdown. Funds move back to the vault and the holders still exit in full.
     function test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain() public {
         uint256 aliceShares = _depositDirect(address(rmUsdc), alice, AMOUNT);
         uint256 bobShares = _depositDirect(address(rmUsdc), bob, AMOUNT);
@@ -224,6 +224,7 @@ contract WithdrawalsNeverFrozenTest is Test {
         vm.startPrank(emergency);
         rmUsdc.emergencyWithdrawAdapter(0);
         rmUsdc.emergencyWithdraw();
+        rmUsdc.emergencyExcludeAdapter(0);
         rmUsdc.forceRemoveAdapter(0);
         rmUsdc.pauseDeposits();
         rmUsdc.shutdownVault();

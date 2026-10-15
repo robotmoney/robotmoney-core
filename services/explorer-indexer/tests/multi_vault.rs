@@ -32,9 +32,12 @@ mod common;
 use alloy_primitives::{Address, U256};
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{IPortfolioRouterEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents},
+    abi::{
+        IPortfolioRouterEvents, IRobotMoneyVaultReads, IVaultEvents, IVaultReads,
+        IVaultRegistryEvents,
+    },
     db::CountTable,
-    indexer::{exclusion_ledger_of, run_once, IndexerConfig},
+    indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
 };
 use std::collections::HashMap;
@@ -433,13 +436,20 @@ async fn weights_set_event_populates_router_weight_snapshots() {
 /// position, and the vault's TVL history began after it. The indexer must ask again for the new
 /// vault alone (and its ExclusionLedger, X7), from its registration block (50) to the target (65),
 /// and apply what comes back before closing the run.
+///
+/// The ledger is the one the new vault's `exclusionLedger()` names (security round 1): the
+/// address `ExclusionLedgerFactory` created, read from the vault in the same tick, never an
+/// address derived from the vault.
 #[tokio::test]
 async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
+    use alloy_sol_types::SolCall as _;
+
     let fx = pg_fixture().await;
 
     let registry_addr = Address::from([0xEEu8; 20]);
     let pinned_vault = Address::from([0xAAu8; 20]);
     let new_vault = Address::from([0xB7u8; 20]);
+    let new_ledger = Address::from([0xFAu8; 20]).create(7);
     let asset_addr = Address::from([0xDDu8; 20]);
     let depositor = Address::from([0x5Au8; 20]);
     let assets = U256::from(1_000_000u64);
@@ -475,10 +485,21 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
         "eth_getLogs",
         serde_json::Value::Array(vec![reg_log, deposit_log]),
     );
-    stub.set(
-        "eth_call",
-        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    // The new vault's `exclusionLedger()` names its factory-created ledger; every other read
+    // answers zero (the pinned vault names no ledger yet).
+    let new_vault_hex = format!("{:#x}", new_vault);
+    let ledger_getter = format!(
+        "0x{}",
+        hex::encode(IRobotMoneyVaultReads::exclusionLedgerCall::SELECTOR)
     );
+    let ledger_word = format!("0x{:0>64}", hex::encode(new_ledger.as_slice()));
+    stub.set_call_hook(Arc::new(move |to: &str, data: &str| {
+        if to == new_vault_hex && data.starts_with(&ledger_getter) {
+            Ok(ledger_word.clone())
+        } else {
+            Ok(format!("0x{}", "00".repeat(32)))
+        }
+    }));
     stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
 
     let rpc = JsonRpc::new(&stub.url);
@@ -538,13 +559,14 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
         "the tick's first filter is read before the registration is applied"
     );
     // The new vault and its ExclusionLedger (QA plan X7), whose exclusion-record events come from
-    // the ledger's own address.
+    // the ledger's own address: the one the vault names, not its CREATE address at nonce 1.
     assert_eq!(
         addrs(&get_logs[1]),
-        vec![
-            want.clone(),
-            format!("{:#x}", exclusion_ledger_of(new_vault))
-        ]
+        vec![want.clone(), format!("{:#x}", new_ledger)]
+    );
+    assert!(
+        !addrs(&get_logs[1]).contains(&format!("{:#x}", new_vault.create(1))),
+        "no address derived from the vault is watched as its ledger"
     );
     assert_eq!(
         get_logs[1]["params"][0]["fromBlock"], "0x32",

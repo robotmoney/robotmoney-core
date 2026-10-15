@@ -176,9 +176,36 @@ jobs:
         # proxied.txt against the sources and the ADR-0014 §1 table. It replaces
         # the gateway-only gate of issue 1476. The self-test runs first and proves
         # every rule fires on a mutated record.
+        # The same-tree compare requires the committed snapshot to equal the
+        # code's layout exactly, so an append that skips --write fails: the
+        # layout identifier a release records is that snapshot's sha256, and the
+        # upgrade-proxy row trusts it (security round 3). It reads its snapshot
+        # from the change under test, so a change that reruns --write passes it
+        # whatever it did to the layout.
+        # `--base` then holds the committed snapshots to the same storage rules
+        # against the base branch's: the PR base on a pull request, the previous
+        # tip on a push, and dev on a manual dispatch.
+        # The parent alone launders a red commit: X1 rewrites a snapshot with
+        # --write and its run is red, X2 compares X1 with X2, finds them equal and
+        # goes green, and so does every commit after it. `--release-anchor` closes
+        # that: it runs the same compare against every annotated production
+        # release/<version> tag, the layout a release put live, which the change
+        # under test cannot rewrite. Those tags are fetched here because the
+        # checkout is shallow and tagless.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
+          set -euo pipefail
           scripts/ci/check-storage-layout.sh --selftest
           scripts/ci/check-storage-layout.sh
+          if [ -n "${BASE_SHA:-}" ] && [ "${BASE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin dev
+          fi
+          scripts/ci/check-storage-layout.sh --base FETCH_HEAD
+          git fetch --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
+          scripts/ci/check-storage-layout.sh --release-anchor
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for

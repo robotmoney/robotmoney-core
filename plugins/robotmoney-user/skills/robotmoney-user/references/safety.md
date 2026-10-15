@@ -25,6 +25,9 @@ Before signing any deposit transaction, the client RPC-reads:
   configured `gateway_implementation_hashes`
 - when the vault the write reaches (or the router and its legs) is a proxy:
   its implementation's code hash is listed in `proxy_implementation_hashes`
+- for a router deposit (`--destination <router>`): `router.previewDeposit(amount)`,
+  which marks each leg the router would skip and quotes the shares of the
+  rest. Without `--min-shares-per-leg` the floors are those quotes less 0.50%
 
 Every refusal prints one JSON document on stdout with `"status":"refused"`
 and the name in `error`, and exits 2. Match on `error`, never on `message`.
@@ -43,6 +46,7 @@ and the name in `error`, and exits 2. Match on `error`, never on `message`.
 | `keccak256(eth_getCode(gateway)) != gateway_runtime_hash` | `ErrCodeHashMismatch` | The deployed gateway bytecode does not match the pinned hash. |
 | The gateway is a proxy and its implementation's code hash is not in `gateway_implementation_hashes` (or the key is missing, or the implementation has no code) | `ErrImplementationNotApproved` | The timelock installed logic the operator has not approved. The proxy hash alone cannot show it. Do not retry. Tell the operator. The message names the implementation and its code hash. |
 | The vault the write reaches, the router or a router leg is a proxy and its implementation's code hash is not in `proxy_implementation_hashes` (or the key is missing) | `ErrImplementationNotApproved` | Same as above, for that contract: the message names it (`vault 0x…`, `router 0x…`). Do not retry. Tell the operator. |
+| Router deposit: `router.previewDeposit` marks a leg with weight above 0 unavailable (paused, at its TVL cap, an open exclusion, a basket outside its price band), and `--allow-unavailable-legs` was not passed | `ErrLegUnavailable` | The router would skip that leg and deposit its whole share into the other legs, so the split would not be the governed weights. The message names each leg and its bps. Wait and retry, or pass `--allow-unavailable-legs` only with the user's approval. |
 
 ## Withdraw refusals
 
@@ -67,7 +71,8 @@ anything is signed, so no gas is spent. The message names the contract error.
 |---|---|---|
 | `AgentPolicyExpired` | `ErrPolicyExpired` | Expired by chain time. |
 | `VaultNotRegistered`, `RedeemVaultNotRegistered`, `VaultNotActive` (Retired), `VaultRetired`, `VaultShutdown` | `ErrVaultDisabled` | The target vault is not registered or is disabled. A retired vault is withdraw-only through its own `redeem`. |
-| `VaultNotActive` (deposits paused), `VaultNotRouterEligible`, `VaultCapExceeded`, `NoWeightsSet` | `ErrLegUnavailable` | A router deposit leg cannot take deposits now. |
+| `VaultNotActive` (deposits paused), `VaultNotRouterEligible`, `VaultCapExceeded`, `NoWeightsSet`, `NoFundedLeg` | `ErrLegUnavailable` | A router deposit leg cannot take deposits now. |
+| `LegSkippedWithFloor` | `ErrLegUnavailable` | A leg with a non-zero `--min-shares-per-leg` floor turned unavailable after the preview, so the router would skip it. A non-zero floor means the leg must be funded, so the deposit is refused instead of moving that leg's share onto the others. |
 | `SlippageExceeded` | `ErrSlippageBoundExceeded` | A router leg would fall below its `--min-shares-per-leg` or `--min-assets-per-leg` floor. Do not lower the floor without the user. |
 | `AmountExceedsPerPaymentCap`, `WindowCapExceeded` | `ErrDepositCapExceeded` | As in the preflight table. |
 | `SharesExceedWithdrawPerPaymentCap`, `WithdrawWindowCapExceeded` | `ErrWithdrawCapExceeded` | As in the withdraw table. |

@@ -2,7 +2,7 @@
 // asset config from the core config file (never from the chain it is checking) and fails the run on any failed check.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
 import { effectiveCounts } from "./counts.ts";
@@ -16,12 +16,13 @@ import { ROUTER_STAGE_ELIGIBLE, STAGE13_UNPAUSE_VAULTS, expectPausedAfter, isSee
 import { PROOF_STAGE } from "./control-proof.ts";
 import { expectedMaxSlippageBps, loadConfigAssets } from "./asset-config.ts";
 import { manifestBase, tableProxies } from "./stage-table.ts";
+import { checkoutRootOf } from "./build-provenance.ts";
 import { immutabilityOf, layoutIdFieldOf, type ProxyRecord } from "./proxies.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
-import { verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
+import { upgradeBuildDir, upgradeBuildProblem, verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
-import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, verifyBuildRefusal } from "./redeploy-vault.ts";
+import { REDEPLOY_ROW, oldVaultBuild, redeploysOf, retiredProxiesOf, verifyBuildRefusal } from "./redeploy-vault.ts";
 
 /**
  * The expected asset config of one vault: core's config files (poolFee becomes swapFee) with the adapter this run deployed, read from the
@@ -126,24 +127,115 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
 }
 
 /**
+ * Security round 2 (review: SECURITY_LIFECYCLE_GAP): the address a table proxy name reaches NOW (its stage manifest), or undefined. Upgrade and freeze history is
+ * recorded by name AND address: after a redeploy-vault the vault's manifest names the NEW vault under the table's name, so an entry recorded at the old address is
+ * the retired proxy's (`<vault>.retired-<n>`), never the new one's. Without it the new vault inherited the old one's freeze (its frozen label failed and pause-all fired)
+ * or its upgrade (its slot was expected on the old upgrade's target).
+ */
+export type ProxyAddressOf = (proxy: string) => string | undefined;
+/** An entry recorded for `name` at `recorded` belongs to the proxy that name reaches now: always without `addressOf`, a recorded address, or a current one. */
+const sameProxy = (addressOf: ProxyAddressOf | undefined, name: string, recorded: unknown): boolean => {
+  if (!addressOf || typeof recorded !== "string") return true;
+  const now = addressOf(name);
+  return now === undefined || now.toLowerCase() === recorded.toLowerCase();
+};
+/** The address each table proxy names in this run's stage manifests (undefined when the manifest or the field is absent). */
+export function currentProxyAddresses(ctx: Parameters<typeof readManifestField>[0]): ProxyAddressOf {
+  const byName = new Map(tableProxies(getStageTable()).map((p) => [p.name, p]));
+  return (name) => {
+    const p = byName.get(name);
+    if (!p) return undefined;
+    try { return readManifestField(ctx, manifestRef(p.stage, p.field)); } catch { return undefined; }
+  };
+}
+
+/**
  * Issue 1809: the implementation each proxy names since the last EXECUTED `govern --row upgrade-proxy` round, from the run manifest's `proxy_upgrades` (later entries
  * win), with the forge out/ the round compared it with. A record only picks which implementation and build the verifier expects; the chain is read for both.
+ * Security round 1: with the commit the round proved that build was made from (`build_sha`), which the verifier holds the build directory to.
+ * Security round 2: with `addressOf`, only rounds recorded at the address the name reaches now (`proxy_address`) count.
  */
-export function upgradesOf(manifest: Pick<RunManifest, "proxy_upgrades">): NonNullable<VerifyOptions["upgrades"]> {
-  const last = new Map<string, { proxy: string; implementation: `0x${string}`; buildDir?: string }>();
-  for (const e of (Array.isArray(manifest.proxy_upgrades) ? manifest.proxy_upgrades : []) as { proxy?: unknown; implementation?: unknown; build_dir?: unknown; execute_tx?: unknown }[]) {
+export function upgradesOf(manifest: Pick<RunManifest, "proxy_upgrades">, addressOf?: ProxyAddressOf): NonNullable<VerifyOptions["upgrades"]> {
+  const last = new Map<string, { proxy: string; implementation: `0x${string}`; buildDir?: string; buildSha?: string }>();
+  for (const e of (Array.isArray(manifest.proxy_upgrades) ? manifest.proxy_upgrades : []) as { proxy?: unknown; proxy_address?: unknown; implementation?: unknown; build_dir?: unknown; build_sha?: unknown; execute_tx?: unknown }[]) {
     if (typeof e?.proxy !== "string" || typeof e.implementation !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(e.implementation) || typeof e.execute_tx !== "string") continue;
-    last.set(e.proxy, { proxy: e.proxy, implementation: e.implementation as `0x${string}`, ...(typeof e.build_dir === "string" ? { buildDir: e.build_dir } : {}) });
+    if (!sameProxy(addressOf, e.proxy, e.proxy_address)) continue;
+    last.set(e.proxy, { proxy: e.proxy, implementation: e.implementation as `0x${string}`, ...(typeof e.build_dir === "string" ? { buildDir: e.build_dir } : {}), ...(typeof e.build_sha === "string" ? { buildSha: e.build_sha } : {}) });
   }
   return [...last.values()];
 }
 
-/** Issue 1809: the proxies an EXECUTED `govern --row freeze-proxy` round froze, from the run manifest's `proxy_freezes`. */
-export function freezesOf(manifest: Pick<RunManifest, "proxy_freezes">): string[] {
+/**
+ * Security round 1: per proxy, the storage-layout identifier the last EXECUTED upgrade-proxy round recorded for the build it installed (`build_layout_hash`) and that
+ * build's directory. proxyEvidence records it as the proxy's layout and holds it to the snapshot of the build's own checkout. Security round 2: bound to the address
+ * like upgradesOf.
+ */
+export function upgradeLayoutsOf(manifest: Pick<RunManifest, "proxy_upgrades">, addressOf?: ProxyAddressOf): Map<string, { layoutHash?: string; buildDir?: string }> {
+  const out = new Map<string, { layoutHash?: string; buildDir?: string }>();
+  for (const e of (Array.isArray(manifest.proxy_upgrades) ? manifest.proxy_upgrades : []) as { proxy?: unknown; proxy_address?: unknown; build_layout_hash?: unknown; build_dir?: unknown; execute_tx?: unknown }[]) {
+    if (typeof e?.proxy !== "string" || typeof e.execute_tx !== "string") continue;
+    if (!sameProxy(addressOf, e.proxy, e.proxy_address)) continue;
+    out.set(e.proxy, { ...(typeof e.build_layout_hash === "string" ? { layoutHash: e.build_layout_hash } : {}), ...(typeof e.build_dir === "string" ? { buildDir: e.build_dir } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Security round 3 (review: RELIABILITY_FAIL_CLOSED_OUTAGE): the run manifest as this verify reads it, with `--upgrade-build <proxy>=<dir>` (`overrides`, absolute
+ * directories) standing for the `build_dir` of that proxy's upgrade rounds. A copy: the override is never written into the run manifest or the evidence.
+ */
+export function withUpgradeBuilds<M extends Pick<RunManifest, "proxy_upgrades">>(manifest: M, overrides: Readonly<Record<string, string>> | undefined): M {
+  if (!overrides || Object.keys(overrides).length === 0 || !Array.isArray(manifest.proxy_upgrades)) return manifest;
+  const at = (e: unknown): string | undefined => { const p = (e as { proxy?: unknown } | null)?.proxy; return typeof p === "string" && Object.prototype.hasOwnProperty.call(overrides, p) ? overrides[p] : undefined; };
+  return { ...manifest, proxy_upgrades: manifest.proxy_upgrades.map((e) => (at(e) !== undefined ? { ...(e as object), build_dir: at(e) } : e)) } as M;
+}
+
+/**
+ * Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE, RELIABILITY_FAIL_CLOSED_OUTAGE): the verify of a run with an executed upgrade-proxy round compares the
+ * upgraded proxy with the round's build (`build_dir`, held to `build_sha`). That directory is a path on the machine that ran govern: deleted, moved, checked out at the
+ * next release, written relative to govern's working directory, or simply absent on the machine that verifies. The code label then failed, verify threw VERIFY and
+ * cli.ts paused deposits on all four vaults, though nothing on chain was wrong. This runs the verifier's own build rules (verify/index.ts upgradeBuildProblem) and the
+ * layout label's (the build checkout's snapshot hashes to the round's build_layout_hash) BEFORE the verifier, for every upgrade it will compare, and returns a refusal
+ * (USAGE, `details.refused_before_verify`, so cli.ts pauses nothing) that names each build and the `--upgrade-build` that supplies it. Undefined: every build holds.
+ * Pass the manifest through withUpgradeBuilds first. `ctx.upgradeBuilds` names the overrides, which must each name an upgraded proxy.
+ */
+export function upgradeBuildRefusal(manifest: Pick<RunManifest, "proxy_upgrades">, ctx: Pick<RunContext, "chainId" | "coreDir" | "upgradeBuilds">, addressOf?: ProxyAddressOf): PublishError | undefined {
+  const ups = upgradesOf(manifest, addressOf);
+  const rounds = upgradeLayoutsOf(manifest, addressOf);
+  const byName = new Map(tableProxies(getStageTable()).map((p) => [p.name, p]));
+  const mainnet = ctx.chainId === MAINNET_CHAIN_ID;
+  const problems: string[] = [];
+  for (const name of Object.keys(ctx.upgradeBuilds ?? {})) {
+    if (!ups.some((u) => u.proxy === name)) problems.push(`--upgrade-build names ${name}, which no executed upgrade-proxy round of this run moved (upgraded: ${ups.map((u) => u.proxy).join(", ") || "none"})`);
+  }
+  for (const u of ups) {
+    const px = byName.get(u.proxy);
+    // the verifier holds a round to its build only when the round recorded build_sha (every 8453 round does; a Twin build outside a checkout does not)
+    if (u.buildSha === undefined || !px) continue;
+    if (u.buildDir !== undefined && !isAbsolute(u.buildDir)) { problems.push(`${u.proxy}: the round recorded build_dir ${u.buildDir}, a path relative to the directory govern ran in, which the record does not keep`); continue; }
+    if (u.buildDir !== undefined && !existsSync(u.buildDir)) { problems.push(`${u.proxy}: the round's build ${u.buildDir} does not exist on this machine (deleted, moved, or recorded on another host)`); continue; }
+    const dir = upgradeBuildDir(u, join(ctx.coreDir, "out"));
+    const why = upgradeBuildProblem({ dir, buildSha: u.buildSha, artifact: px.artifact, mainnet });
+    if (why) { problems.push(`${u.proxy}: ${why}`); continue; }
+    const recorded = rounds.get(u.proxy)?.layoutHash;
+    const checkout = u.buildDir !== undefined ? checkoutRootOf(u.buildDir) : undefined;
+    const built = checkout && recorded !== undefined && /^0x[0-9a-fA-F]{64}$/.test(recorded) && !/^0x0{64}$/.test(recorded) ? layoutHashOf(checkout, px.artifact) : undefined;
+    if (built !== undefined && built !== recorded!.toLowerCase()) problems.push(`${u.proxy}: the storage-layout snapshot of the build checkout ${checkout} hashes to ${built}, the round recorded build_layout_hash ${recorded}: the checkout is modified (restore it with git checkout)`);
+  }
+  if (problems.length === 0) return undefined;
+  const fix = `Each upgraded proxy is compared with the build its round proved: a checkout at the round's build_sha${mainnet ? ", whose own out/ was built there with forge build" : ""}. Restore it at the recorded path, or check it out anywhere and name its out/: bun publish-contracts/src/cli.ts verify --upgrade-build <proxy>=<out/ of that checkout> (one per proxy, plus the same --chain, --rpc, --sheet, --signer, --environment and --evidence arguments)`;
+  return new PublishError("USAGE", `verify refused before the verifier ran: ${problems.join("; ")}. ${fix}. Nothing was checked or paused.`, { refused_before_verify: true, upgrade_builds: problems });
+}
+
+/**
+ * Issue 1809: the proxies an EXECUTED `govern --row freeze-proxy` round froze, from the run manifest's `proxy_freezes`. Security round 2: with `addressOf`, a proxy
+ * counts only when the round froze the address its name reaches now (`proxies[].proxy`): a vault a redeploy replaced was frozen at its old address.
+ */
+export function freezesOf(manifest: Pick<RunManifest, "proxy_freezes">, addressOf?: ProxyAddressOf): string[] {
   const out = new Set<string>();
   for (const e of (Array.isArray(manifest.proxy_freezes) ? manifest.proxy_freezes : []) as { proxies?: unknown; execute_tx?: unknown }[]) {
     if (typeof e?.execute_tx !== "string" || !Array.isArray(e.proxies)) continue;
-    for (const p of e.proxies as { name?: unknown }[]) if (typeof p?.name === "string") out.add(p.name);
+    for (const p of e.proxies as { name?: unknown; proxy?: unknown }[]) if (typeof p?.name === "string" && sameProxy(addressOf, p.name, p.proxy)) out.add(p.name);
   }
   return [...out];
 }
@@ -159,16 +251,26 @@ export function layoutHashOf(coreDir: string, artifact: string): `0x${string}` |
  * `layout_hash` is the identifier the proxy's stage wrote into its deploy manifest (`<field>_layout_id`) when there is one and no executed upgrade replaced that
  * implementation since; else the checkout's snapshot. `checkout_layout_hash` is the checkout's snapshot either way. `layoutManifest` reads one stage manifest field
  * (undefined when absent); `upgraded` names the proxies an executed upgrade-proxy round moved.
+ * Security round 1: `rounds` (upgradeLayoutsOf) gives an upgraded proxy the layout its round recorded (`layout_source: "upgrade-round"`), held to the snapshot of the
+ * round's build checkout (`checkout_layout_hash`). Before, an upgraded proxy fell back to this checkout's snapshot, so no label ever compared an upgraded layout.
  */
 export function proxyEvidence(
   ctx: Pick<RunContext, "coreDir">,
   records: readonly ProxyRecord[],
   layoutManifest: (stage: string, field: string) => string | undefined = () => undefined,
   upgraded: ReadonlySet<string> = new Set(),
+  rounds: ReadonlyMap<string, { layoutHash?: string; buildDir?: string }> = new Map(),
 ): ProxyRecord[] {
   const byName = new Map(tableProxies(getStageTable()).map((p) => [p.name, p]));
+  const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
   return records.map((r) => {
     const p = byName.get(r.name);
+    const round = upgraded.has(r.name) ? rounds.get(r.name) : undefined;
+    if (p && round?.layoutHash !== undefined && BYTES32.test(round.layoutHash) && !/^0x0{64}$/.test(round.layoutHash)) {
+      const buildCheckout = round.buildDir ? checkoutRootOf(round.buildDir) : undefined;
+      const built = buildCheckout ? layoutHashOf(buildCheckout, p.artifact) : undefined;
+      return { ...r, layout_hash: round.layoutHash.toLowerCase() as `0x${string}`, layout_source: "upgrade-round", ...(built ? { checkout_layout_hash: built } : {}) };
+    }
     const checkout = p ? layoutHashOf(ctx.coreDir, p.artifact) : undefined;
     const recorded = p && !upgraded.has(r.name) ? layoutManifest(p.stage, layoutIdFieldOf(p)) : undefined;
     const deployId = recorded !== undefined && /^0x[0-9a-fA-F]{64}$/.test(recorded) && !/^0x0{64}$/.test(recorded) ? (recorded.toLowerCase() as `0x${string}`) : undefined;
@@ -178,6 +280,21 @@ export function proxyEvidence(
     if (checkout) out.checkout_layout_hash = checkout;
     return out;
   });
+}
+
+/**
+ * Security round 1 (review: SECURITY_LIFECYCLE_GAP): the immutability statement counts every vault a redeploy replaced (redeploy-vault.ts retiredProxiesOf). Each is
+ * still a proxy the timelock can upgrade until an EXECUTED freeze-proxy round froze its address, so until then core logic is not immutable and the retired name is
+ * listed as upgradeable. A record only: evidence-check refuses a claim on the same rule and reads the freeze from the chain.
+ */
+export function withRetiredProxies<T extends { core_logic_immutable: boolean; upgradeable: string[] }>(immutability: T, manifest: Pick<RunManifest, "vault_redeploys" | "proxy_freezes">): T {
+  const frozenAt = new Set<string>();
+  for (const e of (Array.isArray(manifest.proxy_freezes) ? manifest.proxy_freezes : []) as { proxies?: unknown; execute_tx?: unknown }[]) {
+    if (typeof e?.execute_tx !== "string" || !Array.isArray(e.proxies)) continue;
+    for (const p of e.proxies as { proxy?: unknown }[]) if (typeof p?.proxy === "string") frozenAt.add(p.proxy.toLowerCase());
+  }
+  const open = retiredProxiesOf(manifest).filter((r) => !frozenAt.has(r.address.toLowerCase())).map((r) => r.name);
+  return open.length === 0 ? immutability : { ...immutability, core_logic_immutable: false, upgradeable: [...immutability.upgradeable, ...open] };
 }
 
 /** The deployer nonce recorded at the end of the last deployer stage, only when govern has started (its gas moves the live nonce). */
@@ -259,6 +376,12 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const buildRefusal = verifyBuildRefusal(manifest, ctx);
   if (buildRefusal) throw buildRefusal;
   const unpaused = mode ? (mode === "post-govern" ? [...MAINNET_UNPAUSE_VAULTS] : []) : unpausedByGovern(manifest, ctx.sheet);
+  const proxyAt = currentProxyAddresses(ctx);
+  // Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE): every upgraded proxy's build is checked before the verifier, so a build that is gone, relative or at
+  // another sha refuses here (nothing paused) instead of failing a code label and pausing all four vaults. `rounds` is the manifest with --upgrade-build applied.
+  const rounds = withUpgradeBuilds(manifest, ctx.upgradeBuilds ? Object.fromEntries(Object.entries(ctx.upgradeBuilds).map(([k, d]) => [k, resolve(d)])) : undefined);
+  const upgradeRefusal = upgradeBuildRefusal(rounds, ctx, proxyAt);
+  if (upgradeRefusal) throw upgradeRefusal;
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
@@ -268,9 +391,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
-    // issue 1809: which implementation each upgraded proxy names and which proxies a freeze row froze; the verifier reads the slots and upgradesFrozen() from the chain
-    upgrades: upgradesOf(manifest),
-    freezes: freezesOf(manifest),
+    // issue 1809: which implementation each upgraded proxy names and which proxies a freeze row froze; the verifier reads the slots and upgradesFrozen() from the chain.
+    // Security round 2: only the rounds recorded at the address each name reaches now (a vault a redeploy replaced keeps its history under its retired name).
+    upgrades: upgradesOf(rounds, proxyAt),
+    freezes: freezesOf(manifest, proxyAt),
     // QA plan v1 E1 (DT-2): artifactsDir is the build of this checkout. After a round at another sha that is the redeploy sha (cli.ts accepts it with --prior-out only):
     // the replacing vault is compared with it, every contract the original deployment created with priorArtifactsDir (--prior-out, a build of the original sha).
     ...(governedRedeploys.length > 0 ? {
@@ -291,7 +415,11 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
       if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, vaultRule(v.key).unpauseRow)}` : ""}` });
     }
     report.ok = report.checks.every((c) => c.ok);
-    const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });
+    // Security round 2: a proxy an executed upgrade-proxy round moved runs that round's implementation, so its source is the one that must be verified on the
+    // explorers (contractsFromManifests names the deploy-time implementation only).
+    const contracts = contractsFromManifests(manifestDir(ctx), getStageTable());
+    for (const u of upgradesOf(manifest, proxyAt)) contracts[`implementation[${u.proxy}]`] = u.implementation;
+    const s = await deps.verifySources({ chainId: ctx.chainId, contracts });
     report.checks.push(...s.checks);
     report.ok = report.ok && s.ok;
   }
@@ -299,8 +427,8 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const layoutManifest = (stage: string, field: string): string | undefined => { try { return readManifestField(ctx, manifestRef(stage, field)); } catch { return undefined; } };
   // With --prior-out the checkout is not the build of the original contracts, so its snapshot hash is not recorded next to their deploy identifiers.
   const proxies = report.proxies
-    ? proxyEvidence(ctx, report.proxies, layoutManifest, new Set(upgradesOf(manifest).map((u) => u.proxy))).map((p): ProxyRecord => {
-      if (!ctx.priorArtifactsDir) return p;
+    ? proxyEvidence(ctx, report.proxies, layoutManifest, new Set(upgradesOf(rounds, proxyAt).map((u) => u.proxy)), upgradeLayoutsOf(rounds, proxyAt)).map((p): ProxyRecord => {
+      if (!ctx.priorArtifactsDir || p.layout_source === "upgrade-round") return p; // an upgrade round's build checkout is its own, not this checkout
       const { checkout_layout_hash: _skipped, ...rest } = p;
       return rest;
     })
@@ -309,8 +437,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   // ADR-0014 §8: the layout identifier the deployment recorded must be the layout of the checkout this verify compared its code with (the CI gate pins the
   // checkout's). Only a mismatch adds a label (failed), like the mainnet depositsPaused disagreements above, so a healthy run keeps the shared label set.
   // A run with --prior-out (a redeploy at another sha) compares the original contracts with the original build, not this checkout: no checkout hash, no label.
-  for (const p of (proxies ?? []).filter((x) => x.layout_source === "deploy-manifest" && x.checkout_layout_hash !== undefined && x.layout_hash !== x.checkout_layout_hash)) {
-    report.checks.push({ label: `proxy[${p.name}]: deploy layout identifier equals the checkout's layout snapshot`, ok: false, detail: `the ${p.name} stage recorded layout ${p.layout_hash}, the checkout's snapshot hashes to ${p.checkout_layout_hash}: verify from the release's own checkout, or record the upgrade that moved it` });
+  for (const p of (proxies ?? []).filter((x) => (x.layout_source === "deploy-manifest" || x.layout_source === "upgrade-round") && x.checkout_layout_hash !== undefined && x.layout_hash !== x.checkout_layout_hash)) {
+    report.checks.push({ label: `proxy[${p.name}]: deploy layout identifier equals the checkout's layout snapshot`, ok: false, detail: p.layout_source === "upgrade-round"
+      ? `the upgrade-proxy round that installed ${p.name}'s implementation recorded layout ${p.layout_hash}, the snapshot of that round's build checkout hashes to ${p.checkout_layout_hash}: the build directory no longer holds the reviewed build`
+      : `the ${p.name} stage recorded layout ${p.layout_hash}, the checkout's snapshot hashes to ${p.checkout_layout_hash}: verify from the release's own checkout, or record the upgrade that moved it` });
     report.ok = false;
   }
   // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
@@ -330,7 +460,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   // passed writes onto each governed redeploy entry the sha it ran at and that prior-out sha (evidence-check requires it to be the deployment's core_sha).
   const priorOut = ctx.priorArtifactsDir ? { prior_out: { dir: ctx.priorArtifactsDir, sha: ctx.priorArtifactsSha ?? null }, core_sha: ctx.coreSha } : {};
   // ADR-0014 §5: core logic is immutable only when every proxy reads frozen; governed parameters and upstream contracts stay mutable regardless. Recorded, never claimed here.
-  const immutability = proxies ? immutabilityOf(proxies, tableProxies(getStageTable()).map((p) => p.name)) : undefined;
+  const immutability = proxies ? withRetiredProxies(immutabilityOf(proxies, tableProxies(getStageTable()).map((p) => p.name)), manifest) : undefined;
   if (immutability) ctx.log.log("info", "verify.immutability", { core_logic_immutable: immutability.core_logic_immutable, upgradeable: immutability.upgradeable });
   manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length, ...(gating ? { weightSetterGating: gating } : {}), ...(proxies ? { proxies } : {}), ...(immutability ? { immutability } : {}), ...priorOut };
   if (report.ok && ctx.priorArtifactsSha) for (const r of governedRedeploys) Object.assign(r, { verified_at_sha: ctx.coreSha, prior_out_sha: ctx.priorArtifactsSha });

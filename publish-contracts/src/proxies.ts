@@ -181,7 +181,8 @@ export interface ProxyRecord {
    */
   layout_hash?: Hex;
   /** Where `layout_hash` came from. */
-  layout_source?: "deploy-manifest" | "checkout";
+  /** Security round 1: `"upgrade-round"` is the `build_layout_hash` the executed upgrade-proxy round that installed the implementation recorded. */
+  layout_source?: "deploy-manifest" | "checkout" | "upgrade-round";
   /** 0x + sha256 of the checkout's snapshot, the layout the build this verify compared with has. */
   checkout_layout_hash?: Hex;
 }

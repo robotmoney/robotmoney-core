@@ -23,6 +23,12 @@
  * The gateway hash says nothing about the vault, so without a pin the preview
  * shows "[bytecode UNVERIFIED]" (QA plan U4, finding DR-5).
  *
+ * A redeem is never refused on the gateway (core 1494): `vault.redeem` does
+ * not touch the gateway, so an unverified gateway (a missing pin, or an
+ * upgrade the build does not pin yet) must not freeze every exit. The redeem
+ * preview is built with an UNVERIFIED badge and the gateway's cause as its
+ * `warning`. A deposit is still refused.
+ *
  * Share counts print the vault's own `symbol()` (issue 1773, QA plan U5): the
  * caller reads it with `useVaultShareSymbols` and passes it as
  * `ctx.shareSymbol`. Without one the preview says the neutral "shares", never a
@@ -52,8 +58,14 @@ export function classifyVaultRisk(_action: VaultAction, ctx: VaultPreviewContext
   return "low";
 }
 
+/** The warning an exit carries while the gateway is unverified (core 1494: exits stay open). */
+export function unverifiedGatewayExitWarning(ctx: PreviewContext): string {
+  return `The gateway is not verified${ctx.gatewayRefusalDetail ? `: ${ctx.gatewayRefusalDetail}` : "."} This redeem does not call the gateway, so it stays available. Deposits and gateway writes stay refused.`;
+}
+
 export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext): Preview {
-  if (!ctx.gatewayCodeHashVerified) {
+  // Only a deposit depends on the gateway check. An exit never does (core 1494).
+  if (!ctx.gatewayCodeHashVerified && action.kind !== "vaultRedeem") {
     return {
       ok: false,
       reason: "unknown_revert" as const,
@@ -139,14 +151,16 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
   return {
     ok: true,
     target: ctx.vault,
-    // The vault's own pin, never the gateway's (QA plan U4).
-    targetCodeHashKnown: targetCodeHashPinned(ctx, ctx.vault),
+    // The vault's own pin, never the gateway's (QA plan U4). An exit built while the gateway is
+    // unverified reads UNVERIFIED.
+    targetCodeHashKnown: ctx.gatewayCodeHashVerified && targetCodeHashPinned(ctx, ctx.vault),
     functionName,
     selector,
     args,
     effect,
     risk: classifyVaultRisk(action, ctx),
     calldata,
+    ...(ctx.gatewayCodeHashVerified ? {} : { warning: unverifiedGatewayExitWarning(ctx) }),
   };
 }
 

@@ -1,0 +1,125 @@
+---
+title: "PausableComet"
+---
+
+# PausableComet
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/helpers/RefusingVenues.sol)
+
+<i>
+
+1:1 Compound V3 Comet whose pause guardian pauses supply (`isSupplyPaused`) and withdraw
+(`isWithdrawPaused`) separately: the paused call reverts `Paused`, as Comet does.
+
+</i>
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+## State Variables
+
+### balanceOf
+
+```solidity
+mapping(address => uint256) public balanceOf;
+```
+
+### isSupplyPaused
+
+```solidity
+bool public isSupplyPaused;
+```
+
+### isWithdrawPaused
+
+```solidity
+bool public isWithdrawPaused;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `address` |  |
+
+<a id="setsupplypaused-bool"></a>
+
+### setSupplyPaused
+
+```solidity
+function setSupplyPaused(bool paused_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paused_ | `bool` |  |
+
+<a id="setwithdrawpaused-bool"></a>
+
+### setWithdrawPaused
+
+```solidity
+function setWithdrawPaused(bool paused_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paused_ | `bool` |  |
+
+<a id="supply-address-uint256"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+
+<a id="withdraw-address-uint256"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+
+## Errors
+
+### Paused
+
+```solidity
+error Paused();
+```
+

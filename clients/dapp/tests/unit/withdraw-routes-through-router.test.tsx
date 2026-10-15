@@ -23,6 +23,7 @@ import {
   chooseRedeemRoute,
   deriveMinAssets,
   leftoverRouterAllowance,
+  leftoverRouterAllowanceText,
   needsShareApproval,
   routerRedeemCall,
   routerRedeemDeadline,
@@ -30,6 +31,8 @@ import {
 } from "../../src/lib/routerRedeem";
 import { withRedeemGasWorkaround } from "../../src/lib/redeemGas";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";
+import { describeVerificationCause } from "../../src/lib/gatewayVerifier";
+import { ROUTER_CODE_HASH_PIN_KEY } from "../../src/lib/codePins";
 
 const VAULT = "0x1111111111111111111111111111111111111111" as Address;
 const BASKET = "0x2222222222222222222222222222222222222222" as Address;
@@ -63,6 +66,12 @@ const mock = vi.hoisted(() => ({
   routerAllowance: 0n as bigint,
   sims: [] as Sim[],
   writes: [] as { address?: string; functionName?: string; args?: readonly unknown[] }[],
+  /**
+   * The wallet's chain and connector. Unset, a mainnet-class write is refused as not connected; a
+   * test that sends through the mainnet guard sets Base and a provider that answers its reads.
+   */
+  chainId: undefined as number | undefined,
+  connector: undefined as { getProvider: () => Promise<unknown> } | undefined,
 }));
 
 vi.mock("../../src/lib/VaultRegistryContext", () => ({
@@ -76,7 +85,12 @@ vi.mock("../../src/lib/VaultRegistryContext", () => ({
 
 vi.mock("wagmi", () => ({
   useReadContracts: () => ({ data: undefined }),
-  useAccount: () => ({ address: USER, isConnected: true }),
+  useAccount: () => ({
+    address: USER,
+    isConnected: true,
+    chainId: mock.chainId,
+    connector: mock.connector,
+  }),
   useReadContract: (opts: {
     functionName?: string;
     address?: string;
@@ -132,11 +146,26 @@ vi.mock("wagmi", () => ({
   useWaitForTransactionReceipt: () => ({ isFetching: false, isSuccess: false }),
 }));
 
-function tab() {
+function tab(context: VaultPreviewContext = ctx) {
   return (
-    <DepositWithdrawTab vaultAddress={VAULT} usdcAddress={USDC} ctx={ctx} routerAddress={ROUTER} />
+    <DepositWithdrawTab
+      vaultAddress={VAULT}
+      usdcAddress={USDC}
+      ctx={context}
+      routerAddress={ROUTER}
+    />
   );
 }
+
+/**
+ * The context AdminFlow builds when gateway verification is refused because the gateway was
+ * upgraded to an implementation this build does not pin (ADR-0014).
+ */
+const gatewayRefusedCtx: VaultPreviewContext = {
+  ...ctx,
+  gatewayCodeHashVerified: false,
+  gatewayRefusalDetail: describeVerificationCause("implementation-mismatch"),
+};
 
 function withdrawForm() {
   return within(screen.getByTestId("withdraw-form"));
@@ -147,6 +176,8 @@ beforeEach(() => {
   mock.routerAllowance = 0n;
   mock.sims = [];
   mock.writes = [];
+  mock.chainId = undefined;
+  mock.connector = undefined;
 });
 
 describe("Withdraw tab — a registered vault is redeemed through router.redeemFor (QA plan D9)", () => {
@@ -230,6 +261,121 @@ describe("Withdraw tab — a registered vault is redeemed through router.redeemF
     expect(mock.writes[0]).toMatchObject({ address: VAULT, functionName: "redeem" });
   });
 
+  // Core 1494: an exit never depends on the gateway. A routine gateway upgrade the build does not pin
+  // yet refuses gateway verification; the Withdraw button must stay enabled on both routes.
+  it("keeps withdraw-submit enabled on the router route while the gateway verification is refused", async () => {
+    mock.routerAllowance = SHARES;
+    render(tab(gatewayRefusedCtx));
+    fireEvent.change(screen.getByTestId("withdraw-amount"), { target: { value: "5" } });
+
+    expect(screen.getByTestId("withdraw-route").getAttribute("data-route")).toBe("router");
+    expect(withdrawForm().getByTestId("tx-preview-fn").textContent).toBe("redeemFor");
+    expect(withdrawForm().getByTestId("tx-preview-codehash").textContent).toBe(
+      "[bytecode UNVERIFIED]",
+    );
+    expect(withdrawForm().getByTestId("tx-preview-warning").textContent).toContain(
+      describeVerificationCause("implementation-mismatch"),
+    );
+    const submit = screen.getByTestId("withdraw-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    expect(mock.writes[0]).toMatchObject({ address: ROUTER, functionName: "redeemFor" });
+  });
+
+  it("keeps withdraw-submit enabled on the direct route for an unregistered runtime-config vault while the gateway verification is refused", async () => {
+    mock.registered = [];
+    render(tab(gatewayRefusedCtx));
+    fireEvent.change(screen.getByTestId("withdraw-amount"), { target: { value: "5" } });
+
+    expect(screen.getByTestId("withdraw-route").getAttribute("data-route")).toBe("direct");
+    expect(withdrawForm().getByTestId("tx-preview-fn").textContent).toBe("redeem");
+    expect(withdrawForm().getByTestId("tx-preview-warning").textContent).toContain(
+      describeVerificationCause("implementation-mismatch"),
+    );
+    const submit = screen.getByTestId("withdraw-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    expect(mock.writes[0]).toMatchObject({ address: VAULT, functionName: "redeem" });
+  });
+
+  // ADR-0014: a router whose implementation the build does not pin is refused by the write guard, so
+  // the tab must not offer it a share approval: the exit goes straight to the vault.
+  it("redeems directly on a mainnet build when the chain showed the router does not match its pins", () => {
+    render(
+      <RuntimeConfigProvider
+        config={{
+          VITE_ENV_CLASS: "mainnet",
+          VITE_ROUTER_ADDRESS: ROUTER,
+          [ROUTER_CODE_HASH_PIN_KEY]: `0x${"ab".repeat(32)}`,
+        }}
+      >
+        {tab({ ...ctx, refusedTargets: new Set([ROUTER.toLowerCase()]) })}
+      </RuntimeConfigProvider>,
+    );
+    fireEvent.change(screen.getByTestId("withdraw-amount"), { target: { value: "5" } });
+    const route = screen.getByTestId("withdraw-route");
+    expect(route.getAttribute("data-route")).toBe("direct");
+    expect(route.textContent).toContain("implementation behind it does not match");
+    expect(screen.queryByTestId("withdraw-approve")).toBeNull();
+  });
+
+  // Security round 2: a holder approved the router and the redeem never landed. The timelock then
+  // upgraded the router to logic this build does not pin, so the tab redeems directly. That router
+  // can still `transferFrom` the shares through the standing allowance, so the tab must keep
+  // showing it and revoke it. An approve of zero needs no pin, so the revoke passes the guard.
+  it("shows and revokes the share allowance to a router that failed its pins, on the direct route, through the guard", async () => {
+    mock.routerAllowance = SHARES;
+    mock.chainId = 8453;
+    const walletCalls: string[] = [];
+    mock.connector = {
+      getProvider: async () => ({
+        request: async ({ method }: { method: string }) => {
+          walletCalls.push(method);
+          if (method === "eth_getCode") return "0x6001";
+          if (method === "eth_blockNumber") return "0x10";
+          if (method === "eth_getStorageAt") return `0x${"0".repeat(64)}`;
+          throw new Error(`unexpected wallet call ${method}`);
+        },
+      }),
+    };
+    render(
+      <RuntimeConfigProvider
+        config={{
+          VITE_ENV_CLASS: "mainnet",
+          VITE_ROUTER_ADDRESS: ROUTER,
+          [ROUTER_CODE_HASH_PIN_KEY]: `0x${"ab".repeat(32)}`,
+        }}
+      >
+        {tab({ ...ctx, refusedTargets: new Set([ROUTER.toLowerCase()]) })}
+      </RuntimeConfigProvider>,
+    );
+    fireEvent.change(screen.getByTestId("withdraw-amount"), { target: { value: "5" } });
+
+    const route = screen.getByTestId("withdraw-route");
+    expect(route.getAttribute("data-route")).toBe("direct");
+    // The allowance equals the shares entered, yet the direct redeem spends none of it.
+    const leftover = screen.getByTestId("withdraw-router-allowance-leftover");
+    expect(leftover).toHaveTextContent("failed verification");
+    expect(leftover).toHaveTextContent("calls the vault directly and will not spend it");
+    // No approval to, and no redeem through, the refused router.
+    expect(screen.queryByTestId("withdraw-approve")).toBeNull();
+    expect(mock.sims.some((s) => s.functionName === "redeemFor" && s.enabled)).toBe(false);
+
+    const revoke = screen.getByTestId("withdraw-revoke");
+    await waitFor(() => expect(revoke).toBeEnabled());
+    fireEvent.click(revoke);
+    await waitFor(() => expect(mock.writes).toHaveLength(1));
+    // The guard ran (it read the share token's code through the wallet) and pinned the write to
+    // Base.
+    expect(walletCalls).toContain("eth_getCode");
+    expect(mock.writes[0]).toMatchObject({
+      address: VAULT,
+      functionName: "approve",
+      chainId: 8453,
+    });
+    expect(mock.writes[0].args).toEqual([ROUTER, 0n]);
+  });
+
   it("redeems directly on a mainnet build with no router pin, because the guard would refuse the approval", () => {
     render(
       <RuntimeConfigProvider config={{ VITE_ENV_CLASS: "mainnet" }}>{tab()}</RuntimeConfigProvider>,
@@ -272,13 +418,19 @@ describe("routerRedeem helpers (QA plan D9)", () => {
     expect(preview.args.find((a) => a.name === "minAssetsPerLeg")?.raw).toBe(`[${FLOOR}]`);
   });
 
-  it("refuses the preview when the gateway is unverified, as the vault preview does", () => {
+  // Core 1494: an exit never depends on the gateway. `redeemFor` never calls it, so an unverified
+  // gateway (an upgrade the build does not pin yet) leaves the redeem built, UNVERIFIED and warned.
+  it("builds the preview when the gateway is unverified, UNVERIFIED and with the cause as a warning", () => {
     const preview = buildRouterRedeemPreview(inputs, {
       ...ctx,
       gatewayCodeHashVerified: false,
+      gatewayRefusalDetail: describeVerificationCause("implementation-mismatch"),
       router: ROUTER,
     });
-    expect(preview.ok).toBe(false);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.targetCodeHashKnown).toBe(false);
+    expect(preview.warning).toContain(describeVerificationCause("implementation-mismatch"));
   });
 
   it("routes through the router only where the router can take the exit", () => {
@@ -307,6 +459,10 @@ describe("routerRedeem helpers (QA plan D9)", () => {
       kind: "direct",
       reason: "router-unpinned",
     });
+    expect(chooseRedeemRoute({ ...base, routerUnverified: true })).toEqual({
+      kind: "direct",
+      reason: "router-unverified",
+    });
     expect(chooseRedeemRoute({ ...base, registered: [] })).toEqual({
       kind: "direct",
       reason: "unregistered",
@@ -324,6 +480,21 @@ describe("routerRedeem helpers (QA plan D9)", () => {
     expect(d - nowSecs).toBeGreaterThan(ROUTER_REDEEM_DEADLINE_SECS - 300n);
     expect(d - nowSecs).toBeLessThanOrEqual(ROUTER_REDEEM_DEADLINE_SECS);
     expect(routerRedeemDeadline(now + 1_000)).toBe(d);
+  });
+
+  it("says why a leftover router allowance is shown, by route", () => {
+    expect(leftoverRouterAllowanceText({ kind: "router", router: ROUTER }, "5 rmUSDC")).toContain(
+      "will not spend. Revoke it unless you redeem that much now",
+    );
+    const unverified = leftoverRouterAllowanceText(
+      { kind: "direct", reason: "router-unverified" },
+      "5 rmUSDC",
+    );
+    expect(unverified).toContain("failed verification");
+    expect(unverified).toContain("5 rmUSDC");
+    expect(
+      leftoverRouterAllowanceText({ kind: "direct", reason: "unregistered" }, "5 rmUSDC"),
+    ).toContain("calls the vault directly and will not spend it");
   });
 
   it("asks for an approval until the allowance covers the shares, and flags an allowance left over", () => {

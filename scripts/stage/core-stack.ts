@@ -118,7 +118,7 @@ const USAGE_TEXT = `usage: core-stack <noun> <verb> [flags]
   governance preflight|ensure|verify|release [--receipt-id ID] [--out-dir DIR]
   parity labels --mainnet FILE [--stage-labels FILE] | parity sheet --production FILE
   dapp status
-  dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U]
+  dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U] [--upgrade-evidence FILE]
   dapp down|status --chain 8453 [--dapp-port P] [--explorer-port P]
   rmpc check
   record write|show [--record FILE] [--path] [--list-required-fields]`;
@@ -251,6 +251,8 @@ export interface Opts {
   explorerPort: string;
   publicDappUrl: string;
   publicExplorerUrl: string;
+  /** Security round 2: the govern evidence whose executed upgrade-proxy rounds add implementation pins (mainnet-dapp.ts upgradedImplementationHashes). */
+  upgradeEvidence: string;
 }
 export interface Parsed {
   noun: string;
@@ -286,6 +288,7 @@ export function parseCli(argv: string[]): Parsed {
         "explorer-port": { type: "string" },
         "public-dapp-url": { type: "string" },
         "public-explorer-url": { type: "string" },
+        "upgrade-evidence": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -299,7 +302,7 @@ export function parseCli(argv: string[]): Parsed {
   const timeoutSecs = v.timeout === undefined ? 3600 : Number(v.timeout);
   if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1) throw usageError("--timeout must be a positive integer");
   const str = (x: string | undefined): string => x ?? "";
-  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"] })) {
+  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"], "upgrade-evidence": v["upgrade-evidence"] })) {
     if (val !== undefined && val === "") throw usageError(`--${name} needs a value`);
   }
   return {
@@ -326,6 +329,7 @@ export function parseCli(argv: string[]): Parsed {
       explorerPort: str(v["explorer-port"]),
       publicDappUrl: str(v["public-dapp-url"]),
       publicExplorerUrl: str(v["public-explorer-url"]),
+      upgradeEvidence: str(v["upgrade-evidence"]),
     },
   };
 }
@@ -948,6 +952,7 @@ async function dappMainnetInner(s: Stack, verb: string): Promise<void> {
     explorerPort,
     publicDappUrl: o.publicDappUrl || undefined,
     publicExplorerUrl: o.publicExplorerUrl || undefined,
+    upgradeEvidence: o.upgradeEvidence ? resolve(o.upgradeEvidence) : undefined,
   });
   // The merged, interpolated config must publish loopback ports only and hold no deploy job.
   const cfg = await s.deps.run(mainnetCompose(s, ["config", "--format", "json"]), { env });

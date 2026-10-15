@@ -9,6 +9,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
@@ -1341,6 +1342,34 @@ contract DeployTimelockManifestTest is SafeGovernance {
         assertEq(routerHash, manifest.readAddress(".addresses.router").codehash);
         assertTrue(manifest.readBytes32(".code_hashes.governance") != bytes32(0));
         assertTrue(manifest.readBytes32(".code_hashes.timelock") != bytes32(0));
+    }
+
+    /// @notice ADR-0014 (security round 1): behind a proxy `.codehash` is the generic ERC1967Proxy, the
+    ///         same for every proxy, so the dapp's code-hash pins prove nothing about the logic. The
+    ///         manifest also records keccak256 of the code of each proxy's live implementation (zero
+    ///         for a direct contract): the dapp's implementation pins (scripts/stage/mainnet-dapp.ts).
+    function test_manifestRecordsImplementationCodeHashes() public view {
+        address router = manifest.readAddress(".addresses.router");
+        assertEq(
+            manifest.readBytes32(".code_hashes.router_implementation"),
+            _implementationCodeHashOf(router),
+            "router implementation code hash"
+        );
+        address[] memory vaults = manifest.readAddressArray(".addresses.vaults");
+        assertGt(vaults.length, 0, "no vault in the manifest");
+        for (uint256 i = 0; i < vaults.length; i++) {
+            string memory key = string.concat(
+                ".vault_handover.vault_", vm.toString(i), ".implementation_code_hash"
+            );
+            assertEq(manifest.readBytes32(key), _implementationCodeHashOf(vaults[i]), key);
+        }
+    }
+
+    function _implementationCodeHashOf(address proxy) internal view returns (bytes32) {
+        address impl = address(uint160(uint256(vm.load(proxy, ERC1967Utils.IMPLEMENTATION_SLOT))));
+        if (impl == address(0)) return bytes32(0);
+        assertTrue(impl.code.length > 0, "implementation has no code");
+        return keccak256(impl.code);
     }
 
     /// @notice The two R7 conditions, recorded as booleans an auditor can grep.

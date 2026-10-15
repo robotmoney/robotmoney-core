@@ -680,3 +680,105 @@ async fn agent_ownership_transferred_moves_owner_and_carries_policy() {
         "authorization and transfer each add a policy_change row"
     );
 }
+
+/// Security round 1: two share changes of one owner in one vault in one block both reach
+/// `wallet_positions`, and replaying the tick changes nothing.
+///
+/// The writer used to read the newest row at or below the block, which for the second log of a block
+/// was the row the first log had just written, and insert with `ON CONFLICT DO NOTHING`: the second
+/// change was dropped, and `/v1/accounts/:address/positions` kept the first until a later event.
+#[tokio::test]
+async fn two_share_changes_of_one_owner_in_one_block_both_count() {
+    let fx = pg_fixture().await;
+
+    let gateway = Address::from([0x11u8; 20]);
+    let vault = Address::from([0x22u8; 20]);
+    let caller = Address::from([0x33u8; 20]);
+    let owner = Address::from([0x44u8; 20]);
+
+    let deposit = |shares: u64, block: u64, tx: u8, log_index: u32| {
+        encode_log(
+            IVaultEvents::Deposit {
+                caller,
+                owner,
+                assets: U256::from(shares),
+                shares: U256::from(shares),
+            },
+            vault,
+            block,
+            [tx; 32],
+            log_index,
+        )
+    };
+    let logs = vec![
+        // The balance before block 10.
+        deposit(50_000, 8, 0x08, 0),
+        // Block 10: two deposits and a withdrawal of the same owner.
+        deposit(1_000_000, 10, 0x0a, 0),
+        deposit(250_000, 10, 0x0b, 3),
+        encode_log(
+            IVaultEvents::Withdraw {
+                caller: owner,
+                receiver: owner,
+                owner,
+                assets: U256::from(100_000u64),
+                shares: U256::from(100_000u64),
+            },
+            vault,
+            10,
+            [0x0c; 32],
+            5,
+        ),
+    ];
+
+    let stub = common::StubRpcServer::start().await;
+    stub.set("eth_blockNumber", serde_json::Value::String("0x0f".into())); // 15
+    stub.set("eth_getLogs", serde_json::Value::Array(logs));
+    stub.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub.set("eth_getBlockByNumber", stub_block(10));
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = history_cfg(gateway, vault, None);
+
+    let positions = || async {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT block_number, CAST(shares AS text) FROM wallet_positions \
+             WHERE chain_id = $1 AND contract = $2 AND owner = $3 ORDER BY block_number",
+        )
+        .bind(8453i64)
+        .bind(vault.as_slice())
+        .bind(owner.as_slice())
+        .fetch_all(fx.db.pool())
+        .await
+        .unwrap()
+    };
+    let expected = vec![
+        (8, "50000".to_string()),
+        (10, "1200000".to_string()), // 50_000 + 1_000_000 + 250_000 - 100_000
+    ];
+
+    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert_eq!(
+        positions().await,
+        expected,
+        "every share change of the block is in its row"
+    );
+
+    // Replay the same range: forget the cursor, so the next tick reads blocks 8 and 10 again.
+    sqlx::query("DELETE FROM indexer_runs WHERE chain_id = $1")
+        .bind(8453i64)
+        .execute(fx.db.pool())
+        .await
+        .unwrap();
+    let replay = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(replay.error.is_none(), "{:?}", replay.error);
+    assert_eq!(
+        positions().await,
+        expected,
+        "a replayed tick applies no log twice"
+    );
+    stub.shutdown();
+}

@@ -52,6 +52,9 @@ contract ExclusionLedger {
     using SafeERC20 for IERC20;
 
     /// @notice Which vault path moved recovered USDC into a record.
+    /// @dev `EmergencyWithdrawAdapter` also covers `RobotMoneyVault.recoverRemovedAdapter`, the
+    ///      EMERGENCY drain of a force-removed entry's open record (security round 2).
+    ///      `Restoration` also covers the drain `addAdapter` runs before a re-add.
     enum RecoverySource {
         EmergencyWithdrawAdapter,
         EmergencyWithdraw,
@@ -62,8 +65,9 @@ contract ExclusionLedger {
     /// @notice Why a record stopped accepting recovery.
     /// @dev `Restored`: eligibility came back and the residual balance was realised into the
     ///      record first. `Removed`: `removeAdapter` on the drained entry. `ForceRemoved`:
-    ///      `forceRemoveAdapter`; whatever was not recovered is a loss borne by the snapshot
-    ///      holders only.
+    ///      a force-removed adapter that reports an empty balance, at `forceRemoveAdapter` or
+    ///      after the last `recoverRemovedAdapter` tranche; whatever was not recovered is a
+    ///      loss borne by the snapshot holders only.
     enum FinalizeReason {
         Restored,
         Removed,

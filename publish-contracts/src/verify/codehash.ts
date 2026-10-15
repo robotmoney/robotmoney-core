@@ -10,15 +10,18 @@ export interface Ref { start: number; length: number }
 export interface Link { name: string; refs: Ref[] }
 export interface Artifact { object: string; refs: Ref[]; links?: Link[] }
 
+/** The file of `name` in a forge out/: `<out>/<Name>.sol/<Name>.json`, else the first directory holding `<Name>.json`. Throws when there is none. */
+export function artifactPathOf(outDir: string, name: string): string {
+  const path = join(outDir, `${name}.sol`, `${name}.json`);
+  if (existsSync(path)) return path;
+  const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
+  if (!hit) throw new Error(`no build artifact for ${name} under ${outDir}`);
+  return join(outDir, hit, `${name}.json`);
+}
+
 /** Load `<out>/<Name>.sol/<Name>.json` (forge layout). Falls back to any directory holding `<Name>.json`. */
 export function loadArtifact(outDir: string, name: string): Artifact {
-  let path = join(outDir, `${name}.sol`, `${name}.json`);
-  if (!existsSync(path)) {
-    const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
-    if (!hit) throw new Error(`no build artifact for ${name} under ${outDir}`);
-    path = join(outDir, hit, `${name}.json`);
-  }
-  const j = JSON.parse(readFileSync(path, "utf8"));
+  const j = JSON.parse(readFileSync(artifactPathOf(outDir, name), "utf8"));
   const d = j.deployedBytecode;
   if (!d?.object) throw new Error(`artifact ${name} has no deployedBytecode`);
   const refs: Ref[] = [];

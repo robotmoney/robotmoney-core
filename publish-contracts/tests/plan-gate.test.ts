@@ -8,6 +8,7 @@ import { releaseGated } from "../src/cli.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/chains.ts";
 import { spawnTool } from "../src/runner.ts";
+import { CORE_REPO, checkShaGreenArgv } from "../src/release-gate.ts";
 import { COUNTS, tmp, writeCounts } from "./fixtures.ts";
 import { world, type World } from "./harness.ts";
 
@@ -104,6 +105,22 @@ describe("plan gate", () => {
     expect(r.signerMade).toBe(false);
     expect(got?.sha).toBe("a".repeat(40));
     expect(got?.token).toBe("test-token");
+  });
+  // Security round 1: inside a caller repo's workflow (the devops repo's) GITHUB_REPOSITORY names that caller. check-sha-green must still ask about the core repository.
+  test("check-sha-green is asked about robotmoney/robotmoney-core, never the caller's GITHUB_REPOSITORY", async () => {
+    let got: { repo: string; env: Record<string, string> } | undefined;
+    const r = await plan(world({ chainId: 8453 }), {
+      env: { GITHUB_REPOSITORY: "robotmoney/release-caller" },
+      checkShaGreen: async (i: { repo: string; env: Record<string, string> }) => { got = { repo: i.repo, env: i.env }; return { code: 0, output: "GREEN" }; },
+    });
+    expect(r.code).toBe(0);
+    expect(got?.repo).toBe(CORE_REPO);
+    expect(CORE_REPO).toBe("robotmoney/robotmoney-core");
+    expect(got?.env.GITHUB_REPOSITORY).toBeUndefined();
+    // the spawned argv names the repository explicitly, so check-sha-green's own GITHUB_REPOSITORY fallback is never reached
+    const argv = checkShaGreenArgv("a".repeat(40), got!.repo);
+    expect(argv.slice(-2)).toEqual(["--repo", "robotmoney/robotmoney-core"]);
+    expect(argv).toContain("a".repeat(40));
   });
   test("8453 with no GITHUB_TOKEN is a refusal, not a skipped CI-green check", async () => {
     let ran = false;

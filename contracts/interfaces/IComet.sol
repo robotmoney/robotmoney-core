@@ -15,4 +15,7 @@ interface IComet {
 
     /// @notice Live USDC balance of `account` including accrued interest.
     function balanceOf(address account) external view returns (uint256);
+
+    /// @notice True while the pause guardian has paused `withdraw` (it reverts `Paused`).
+    function isWithdrawPaused() external view returns (bool);
 }

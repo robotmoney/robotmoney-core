@@ -224,8 +224,8 @@ function proxyEvidenceProblems(ev: any, names: readonly string[] | undefined, ba
   // ADR-0014 §8: the layout identifier the deploy manifest recorded must equal the checkout's snapshot the verify compared with.
   for (const n of names) {
     const e = px[n];
-    if (e?.layout_source === "deploy-manifest" && typeof e.checkout_layout_hash === "string" && lc(e.layout_hash ?? "") !== lc(e.checkout_layout_hash)) {
-      bad(`proxies.${n}.layout_hash ${e.layout_hash} (recorded at deploy) differs from checkout_layout_hash ${e.checkout_layout_hash}: the storage layout the verify checked is not the deployed one`);
+    if ((e?.layout_source === "deploy-manifest" || e?.layout_source === "upgrade-round") && typeof e.checkout_layout_hash === "string" && lc(e.layout_hash ?? "") !== lc(e.checkout_layout_hash)) {
+      bad(`proxies.${n}.layout_hash ${e.layout_hash} (recorded ${e.layout_source === "upgrade-round" ? "by the upgrade round that installed it" : "at deploy"}) differs from checkout_layout_hash ${e.checkout_layout_hash}: the storage layout the verify checked is not the ${e.layout_source === "upgrade-round" ? "installed" : "deployed"} one`);
     }
   }
   // ADR-0014 §5: a release may call its core logic immutable only when every proxy reads frozen. Governed parameters, adapter choice and upstream contracts stay
@@ -234,6 +234,11 @@ function proxyEvidenceProblems(ev: any, names: readonly string[] | undefined, ba
   if (claim !== undefined && claim !== null && claim !== false && claim !== "none") {
     const unfrozen = names.filter((n) => px[n]?.frozen !== true);
     if (unfrozen.length > 0) bad(`immutability_claim ${JSON.stringify(claim)} is refused: ${unfrozen.join(", ")} still read upgradeable, and core logic is immutable only when all ${names.length} proxies read frozen (ADR-0014 §5)`);
+    // Security round 1: a vault a redeploy replaced is still a proxy of the deployment (holders keep withdraw-only shares in it, its authority is the timelock). The
+    // claim needs an executed proxy_freezes entry that froze it too (checkEvidenceOnChain reads that freeze and the proxy's frozen state from the chain).
+    const frozenAt = new Set((Array.isArray(ev?.proxy_freezes) ? ev.proxy_freezes : []).filter((f: any) => TX.test(f?.execute_tx ?? "")).flatMap((f: any) => (Array.isArray(f?.proxies) ? f.proxies.map((x: any) => lc(String(x?.proxy ?? ""))) : [])));
+    const retiredOpen = (Array.isArray(ev?.vault_redeploys) ? ev.vault_redeploys : []).filter((r: any) => r?.status !== "started" && ADDR.test(r?.old_vault ?? "") && !frozenAt.has(lc(r.old_vault))).map((r: any) => `${r.vault ?? "vault"} ${r.old_vault}`);
+    if (retiredOpen.length > 0) bad(`immutability_claim ${JSON.stringify(claim)} is refused: the vault(s) a redeploy replaced (${retiredOpen.join(", ")}) are still proxies the timelock can upgrade, and no executed proxy_freezes entry froze them (govern --row freeze-proxy --admin-arg proxy=all)`);
     const sm = ev?.immutability?.still_mutable;
     if (!sm || !Array.isArray(sm.governed_parameters) || sm.governed_parameters.length === 0 || !Array.isArray(sm.upstream_dependencies) || sm.upstream_dependencies.length === 0) {
       bad(`immutability_claim ${JSON.stringify(claim)} is refused: the evidence carries no immutability.still_mutable list of the governed parameters and upstream dependencies that stay mutable after a freeze (ADR-0014 §5)`);
@@ -268,6 +273,27 @@ function proxyRowShapeProblems(ev: any, bad: (m: string) => void): any[] {
     if (lc(r?.timelock ?? "") !== lc(ev?.timelock?.address ?? "-")) bad(`${w}: timelock ${r?.timelock} is not the timelock ${ev?.timelock?.address}`);
   }
   return [...ups, ...frs];
+}
+
+/**
+ * Security round 1 (review: SECURITY_PROVENANCE_BYPASS, SECURITY_TRUST_ROOT): on 8453 every upgrade and freeze round names the commit of the build it was held to,
+ * which the govern row proved a clean, release-tagged, CI-green checkout (build-provenance.ts): `build_sha` on an upgrade, `build_shas.<proxy>` on a freeze. An upgrade
+ * also names the two storage layouts it compared (`live_layout_hash`, `build_layout_hash`, ADR-0014 §8). A round recorded without them was held to a directory nobody can
+ * name, and is refused. `core_sha` is the deployment's sha, never the build's.
+ */
+function proxyRowProvenanceProblems(ops: readonly any[], bad: (m: string) => void): void {
+  const SHA40 = /^[0-9a-f]{40}$/;
+  const LAYOUT = /^0x(?!0{64})[0-9a-fA-F]{64}$/;
+  for (const r of ops) {
+    const w = proxyRowLabel(r);
+    if (r?.step === UPGRADE_ROW) {
+      if (!SHA40.test(r?.build_sha ?? "")) bad(`${w}: build_sha ${JSON.stringify(r?.build_sha ?? null)} is not a 40-hex commit: an upgrade on 8453 names the release commit its build was proven at`);
+      for (const k of ["live_layout_hash", "build_layout_hash"]) if (!LAYOUT.test(r?.[k] ?? "")) bad(`${w}: ${k} is not a non-zero bytes32 storage-layout identifier: an upgrade on 8453 names the live layout and the build's layout it compared (ADR-0014 §8)`);
+    } else if (r?.step === FREEZE_ROW) {
+      const shas = r?.build_shas && typeof r.build_shas === "object" ? r.build_shas : {};
+      for (const x of Array.isArray(r?.proxies) ? r.proxies : []) if (typeof x?.name === "string" && !SHA40.test(shas[x.name] ?? "")) bad(`${w}: build_shas.${x.name} is not a 40-hex commit: a freeze on 8453 names the release commit of the build each frozen implementation was held to`);
+    }
+  }
 }
 
 /**
@@ -676,6 +702,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const redeploys = redeployShapeProblems(ev, kind, bad);
   proxyEvidenceProblems(ev, opts?.proxies, bad);
   const proxyOps = proxyRowShapeProblems(ev, bad);
+  proxyRowProvenanceProblems(proxyOps, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
   forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...proxyOps, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
@@ -859,6 +886,12 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   }
   // Issue 1809 (ADR-0014): the governed proxies, read from the chain, never taken from the record (QA plan v1 L1 closed this P2 "left for later" item).
   if (opts?.proxies && opts.proxies.length > 0) p.push(...(await checkProxyEvidenceOnChain(ev, chain, opts.proxies)));
+  // Security round 1: the upgrade and freeze rounds are chain-checked like every other operation. Before, only the Twin --proxy-lifecycle mode read them: each round's
+  // schedule and execute transactions, the calls rebuilt from the entry, the delay, the proxy's own Upgraded or UpgradesFrozen event, and each frozen proxy's state now.
+  const listed = (k: string): any[] => (Array.isArray(ev?.[k]) ? ev[k] : []);
+  if (listed("proxy_upgrades").length > 0 || listed("proxy_freezes").length > 0) {
+    p.push(...(await checkProxyLifecycleOnChain({ proxy_upgrades: listed("proxy_upgrades"), proxy_freezes: listed("proxy_freezes") }, chain, { timelock: String(ev?.timelock?.address ?? ""), floor: FLOOR })));
+  }
   return p;
 }
 
@@ -1449,7 +1482,9 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["mnemonic-like phrase", /\b(?:[a-z]{3,8} ){11,23}[a-z]{3,8}\b/],
   // QA plan v1 E8: the camelCase and quoted JSON key forms too (`privateKey: …`, `"private_key": "…"`, `"authToken": "…"`, `"token": "…"`), not only `PRIVATE_KEY=…`.
   // A value the logger redacted is not a secret. A bare `token` names an ERC-20 too (the asset configs, `--admin-arg token=0x…`): its 20-byte address value is public.
-  ["secret assignment", /\b(?:(?:PRIVATE[_-]?KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API[_-]?KEY|(?:AUTH|ACCESS|REFRESH|BEARER|SESSION)[_-]?TOKEN|BEARER|AUTHORIZATION|CREDENTIALS?)"?\s*[=:]\s*(?!"?\[redacted\])\S{6,}|TOKEN"?\s*[=:]\s*(?!"?\[redacted\])(?!"?0x[0-9a-fA-F]{40}(?![0-9a-fA-F]))\S{6,})/i],
+  // Security round 1: a secret name may carry a prefix (`CHAIN_SIGNER_PASSWORD=`, `ETH_KEYSTORE_PASSWORD=`, `ALCHEMY_API_KEY=`, `"passphrase":`). A leading \b never
+  // matched there, because `_` is a word character. The name now starts after any non-alphanumeric character and may follow `WORD_` or `WORD-` parts.
+  ["secret assignment", /(?<![A-Za-z0-9])(?:(?:[A-Za-z0-9]+[_-])*(?:PRIVATE[_-]?KEY|MNEMONIC|PASSWORD|PASSWD|PASSPHRASE|SECRET|API[_-]?KEY|(?:AUTH|ACCESS|REFRESH|BEARER|SESSION)[_-]?TOKEN)|BEARER|AUTHORIZATION|CREDENTIALS?)"?\s*[=:]\s*(?!"?\[redacted\])\S{6,}|\bTOKEN"?\s*[=:]\s*(?!"?\[redacted\])(?!"?0x[0-9a-fA-F]{40}(?![0-9a-fA-F]))\S{6,}/i],
 ];
 
 const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
