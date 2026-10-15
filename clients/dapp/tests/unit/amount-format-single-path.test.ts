@@ -24,14 +24,12 @@ const GENERATED = "lib/abi.generated.ts";
  * Files that may do their own number scaling, each for a reason that is NOT a token amount:
  *   - lib/uniswapV3.ts: pool price ratios (sqrtPriceX96 math), not a balance or an amount.
  *   - components/TestnetBanner.tsx: Date.toLocaleString.
- *   - components/GovernancePanel.tsx: voting power, an admin-assigned integer weight, not a token amount.
  */
 const SCALING_ALLOWED = new Set([
   FORMAT_MODULE,
   GENERATED,
   "lib/uniswapV3.ts",
   "components/TestnetBanner.tsx",
-  "components/GovernancePanel.tsx",
 ]);
 
 /**

@@ -12,7 +12,7 @@
  * (`VaultRegistryContext.tsx`'s batched `getVault` decode).
  *
  * Wagmi is mocked at the module boundary (same pattern as
- * governance-panel.test.tsx / vault-selector-deposit-tab.test.tsx) so the
+ * vault-selector-deposit-tab.test.tsx) so the
  * test exercises the provider's real decode logic without a live chain.
  */
 import { describe, it, expect, vi } from "vitest";

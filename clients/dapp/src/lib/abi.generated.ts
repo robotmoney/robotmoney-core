@@ -7433,6 +7433,17 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "DuplicateVault",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },

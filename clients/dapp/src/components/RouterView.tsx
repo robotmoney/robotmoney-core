@@ -1,11 +1,12 @@
 // Canonical: docs/architecture.md §4.2 — Portfolio Router
 
 /**
- * RouterView — reads GET /v1/router/weights, GET /v1/governance/proposals,
- * and GET /v1/vaults.
+ * RouterView — reads GET /v1/router/weights and GET /v1/vaults.
  *
- * Shows the Portfolio Router weights, the pending governance proposal (if
- * any), and the weight-change history. Works without a connected wallet.
+ * Shows the Portfolio Router weights and the weight-change history. Works
+ * without a connected wallet. There is no governance vote to show: the Safe
+ * applies recorded consensus receipts through the weight setter
+ * (docs/technical/governance-decisions.md).
  *
  * Weights come from the ROUTER ITSELF (issue 1741), read through wagmi (no
  * wallet needed), at the latest block, refetched every WEIGHTS_REFETCH_MS:
@@ -17,8 +18,8 @@
  * The explorer API is NOT the source of the effective weights: its
  * `current_weights` was the last WeightsSet OR DefaultWeightsSet event, so a
  * later default-vector change displayed as the effective vector while the
- * voted vector still overrode it. The explorer supplies the vault names, the
- * pending proposal and the weight-change history only. When the router cannot
+ * voted vector still overrode it. The explorer supplies the vault names and the
+ * weight-change history only. When the router cannot
  * be read the tab says "unknown" and shows no label.
  *
  * Enhancements (issue #615):
@@ -34,14 +35,8 @@ import type { Address } from "viem";
 import { routerAbi } from "../lib/abi";
 import { useWriteChainGuard } from "../lib/useGuardedWriteContract";
 import { depositsReadAllowed } from "../lib/useVaultsDepositsPaused";
-import type {
-  FetchLike,
-  RouterWeightsResponse,
-  ProposalSummary,
-  ProposalsResponse,
-  VaultsResponse,
-} from "../lib/explorerApi";
-import { fetchRouterWeights, fetchProposals, fetchVaults } from "../lib/explorerApi";
+import type { FetchLike, RouterWeightsResponse, VaultsResponse } from "../lib/explorerApi";
+import { fetchRouterWeights, fetchVaults } from "../lib/explorerApi";
 import { formatPercentFromNumber } from "../lib/format";
 
 /** How often the router weights are read again, in ms (the same cadence as the router deposit tab). */
@@ -72,7 +67,6 @@ type State =
   | {
       phase: "ok";
       weights: RouterWeightsResponse;
-      pendingProposal: ProposalSummary | null;
       vaultNames: Record<string, string>;
     };
 
@@ -102,26 +96,15 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
     const ac = new AbortController();
     const opts = { fetchImpl, signal: ac.signal };
 
-    Promise.all([
-      fetchRouterWeights(apiUrl, opts),
-      fetchProposals(apiUrl, opts),
-      fetchVaults(apiUrl, opts),
-    ])
-      .then(
-        ([weights, proposals, vaultsResp]: [
-          RouterWeightsResponse,
-          ProposalsResponse,
-          VaultsResponse,
-        ]) => {
-          const pendingProposal = proposals.proposals.find((p) => p.status === "open") ?? null;
-          // Build a map from lower-cased vault address → display name.
-          const vaultNames: Record<string, string> = {};
-          for (const v of vaultsResp.vaults) {
-            vaultNames[v.address.toLowerCase()] = v.name;
-          }
-          setState({ phase: "ok", weights, pendingProposal, vaultNames });
-        },
-      )
+    Promise.all([fetchRouterWeights(apiUrl, opts), fetchVaults(apiUrl, opts)])
+      .then(([weights, vaultsResp]: [RouterWeightsResponse, VaultsResponse]) => {
+        // Build a map from lower-cased vault address → display name.
+        const vaultNames: Record<string, string> = {};
+        for (const v of vaultsResp.vaults) {
+          vaultNames[v.address.toLowerCase()] = v.name;
+        }
+        setState({ phase: "ok", weights, vaultNames });
+      })
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
         setState({ phase: "error", message: String(err) });
@@ -200,7 +183,7 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
               testPrefix="router-view-voted-weight"
               tableTestId="router-view-voted-table"
               emptyTestId="router-view-voted-empty"
-              emptyText="No voted vector: no proposal has set weights."
+              emptyText="No voted vector: no consensus receipt has set weights."
               resolveVaultName={resolveVaultName}
             />
           )}
@@ -223,11 +206,7 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
       {state.phase === "loading" && <p data-testid="router-view-loading">Loading router state…</p>}
       {state.phase === "error" && <p data-testid="router-view-error">{state.message}</p>}
       {state.phase === "ok" && (
-        <ExplorerSections
-          weights={state.weights}
-          pendingProposal={state.pendingProposal}
-          resolveVaultName={resolveVaultName}
-        />
+        <ExplorerSections weights={state.weights} resolveVaultName={resolveVaultName} />
       )}
     </section>
   );
@@ -285,33 +264,14 @@ function WeightTable(props: {
   );
 }
 
-/** The pending proposal and the indexed weight-change history: what the explorer knows. */
+/** The indexed weight-change history: what the explorer knows. */
 function ExplorerSections(props: {
   readonly weights: RouterWeightsResponse;
-  readonly pendingProposal: ProposalSummary | null;
   readonly resolveVaultName: (address: string) => string;
 }) {
-  const { weights, pendingProposal, resolveVaultName } = props;
+  const { weights, resolveVaultName } = props;
   return (
     <>
-      <h3>Pending Proposal</h3>
-      {pendingProposal == null ? (
-        <p data-testid="router-view-no-proposal">No pending proposal.</p>
-      ) : (
-        <div data-testid="router-view-pending-proposal" className="stat-card">
-          <p>
-            <strong>#{pendingProposal.proposal_id}</strong>:{" "}
-            <span data-testid="router-view-proposal-description">
-              {pendingProposal.description}
-            </span>
-          </p>
-          <p>
-            Status: <span data-testid="router-view-proposal-status">{pendingProposal.status}</span>
-          </p>
-          <p>Deadline block: {pendingProposal.deadline_block}</p>
-        </div>
-      )}
-
       <h3>Weight History</h3>
       {weights.history.length === 0 ? (
         <p data-testid="router-view-history-empty">No weight history.</p>

@@ -13,7 +13,7 @@
  *   - No-pending-ops message when list is empty.
  *
  * wagmi hooks are mocked at the network boundary so tests run without a
- * live RPC. The pattern follows governance-panel.test.tsx.
+ * live RPC.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "./helpers/render";
