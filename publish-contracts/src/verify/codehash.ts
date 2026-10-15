@@ -62,3 +62,45 @@ export function compareCode(onchain: Hex, art: Artifact): CodeHashResult {
   const ha = keccak256(a), hb = keccak256(b);
   return { ok: ha === hb, detail: ha === hb ? `masked hash ${ha}` : `masked hash on chain ${hb}, build ${ha}`, maskedHash: hb };
 }
+
+/** ERC-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1. */
+export const ERC1967_IMPLEMENTATION_SLOT: Hex = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+/** The OpenZeppelin proxy every core contract runs behind since issue 1808. */
+export const ERC1967_PROXY_ARTIFACT = "ERC1967Proxy";
+
+/** `loadArtifact`, or undefined when the build has no artifact of that name. */
+export function tryLoadArtifact(outDir: string, name: string): Artifact | undefined {
+  try { return loadArtifact(outDir, name); } catch { return undefined; }
+}
+
+/**
+ * Issue 1808: the code check of a core contract that may run behind an ERC-1967 proxy. When the code at `address` is the build's ERC1967Proxy, the
+ * implementation its ERC-1967 slot names must equal the artifact (the proxy's own code is compared too, exactly). Otherwise the code at the address
+ * itself must equal the artifact (a direct deployment, as before). Which form a release must use, and its freeze state, is the release sheet's
+ * business (upgradeability stage 2); this check proves the logic at the address is the reviewed build either way.
+ */
+export async function compareDeployedCode(
+  chain: { getCode(a: Hex): Promise<Hex>; getStorageAt(a: Hex, slot: Hex): Promise<Hex> },
+  address: Hex,
+  art: Artifact,
+  proxyArt: Artifact | undefined,
+): Promise<CodeHashResult & { implementation?: Hex }> {
+  const code = await chain.getCode(address);
+  if (proxyArt === undefined || !compareCode(code, proxyArt).ok) return compareCode(code, art);
+  const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+  const implementation = (`0x${word.slice(24)}`).toLowerCase() as Hex;
+  const r = compareCode(await chain.getCode(implementation), art);
+  return { ...r, implementation, detail: `ERC-1967 proxy, implementation ${implementation}: ${r.detail}` };
+}
+
+/** The code that runs at `address`: the implementation's when it is the build's ERC1967Proxy (issue 1808), else the code at the address. */
+export async function logicCode(
+  chain: { getCode(a: Hex): Promise<Hex>; getStorageAt(a: Hex, slot: Hex): Promise<Hex> },
+  address: Hex,
+  proxyArt: Artifact | undefined,
+): Promise<Hex> {
+  const code = await chain.getCode(address);
+  if (proxyArt === undefined || !compareCode(code, proxyArt).ok) return code;
+  const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+  return chain.getCode(`0x${word.slice(24)}` as Hex);
+}

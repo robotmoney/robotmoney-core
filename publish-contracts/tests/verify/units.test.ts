@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compareCode, implicitRefs, maskHex } from "../../src/verify/codehash.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, compareCode, compareDeployedCode, implicitRefs, logicCode, maskHex } from "../../src/verify/codehash.ts";
 import { loadFrozenCounts, sumFrozenCounts } from "../../src/verify/frozen.ts";
 import { minDelayFloor } from "../../src/verify/constants.ts";
 import { scanLogs } from "../../src/verify/logs.ts";
@@ -46,6 +46,42 @@ describe("masked code hash", () => {
     expect(maskHex("0x11__$abc$__22", [{ start: 1, length: 3 }]).slice(0, 6)).toBe("0x1100");
   });
   test("empty code fails", () => expect(compareCode("0x", art).ok).toBe(false));
+});
+
+describe("ERC-1967 proxies (issue 1808)", () => {
+  const proxyArt = { object: "0x60806040" + "cc".repeat(8), refs: [] };
+  const implArt = { object: "0x" + "11".repeat(4) + "00".repeat(4) + "22".repeat(4), refs: [{ start: 4, length: 4 }] };
+  const proxy = "0x00000000000000000000000000000000000000aa" as `0x${string}`;
+  const impl = "0x00000000000000000000000000000000000000bb" as `0x${string}`;
+  const world = (implCode: string, proxyCode = proxyArt.object) => {
+    const codes = new Map<string, string>([[proxy, proxyCode], [impl, implCode]]);
+    return {
+      getCode: async (a: `0x${string}`) => (codes.get(a.toLowerCase()) ?? "0x") as `0x${string}`,
+      getStorageAt: async (a: `0x${string}`, slot: `0x${string}`) =>
+        (a === proxy && slot === ERC1967_IMPLEMENTATION_SLOT ? `0x${"0".repeat(24)}${impl.slice(2)}` : `0x${"0".repeat(64)}`) as `0x${string}`,
+    };
+  };
+  test("a proxy is checked through the implementation its slot names", async () => {
+    const ok = await compareDeployedCode(world("0x" + "11".repeat(4) + "ab".repeat(4) + "22".repeat(4)), proxy, implArt, proxyArt);
+    expect(ok.ok).toBe(true);
+    expect(ok.implementation).toBe(impl);
+    expect(ok.detail).toContain("ERC-1967 proxy, implementation");
+    expect((await compareDeployedCode(world("0x" + "11".repeat(4) + "ab".repeat(4) + "23".repeat(4)), proxy, implArt, proxyArt)).ok).toBe(false);
+  });
+  test("code that is not the build's proxy is compared directly, and fails against the logic artifact", async () => {
+    const r = await compareDeployedCode(world("0x", "0x60806040" + "dd".repeat(8)), proxy, implArt, proxyArt);
+    expect(r.ok).toBe(false);
+    expect(r.implementation).toBeUndefined();
+  });
+  test("with no proxy artifact the code at the address is compared directly", async () => {
+    expect((await compareDeployedCode(world("0x"), proxy, implArt, undefined)).ok).toBe(false);
+  });
+  test("logicCode reads the implementation's code behind a proxy", async () => {
+    const w = world("0xfeed");
+    expect(await logicCode(w, proxy, proxyArt)).toBe("0xfeed");
+    expect(await logicCode(w, impl, proxyArt)).toBe("0xfeed");
+    expect(await logicCode(w, proxy, undefined)).toBe(proxyArt.object as `0x${string}`);
+  });
 });
 
 describe("frozen counts", () => {

@@ -7,7 +7,7 @@ import { encodeAbiParameters, encodeFunctionData, hexToBytes, keccak256, parseAb
 import { Collector } from "./collector.ts";
 import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
-import { compareCode, loadArtifact } from "./codehash.ts";
+import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
@@ -167,7 +167,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("governance: receipts() equals the deployed receipt register", async () => lc((await chain.read(gov, "function receipts() view returns (address)")) as string), lc(byName.receipt!));
   await c.runEq("receipt: ADMIN_ROLE held by governance (applyReceipt releases)", () => hasRole(chain, byName.receipt!, ADMIN_ROLE, gov), true);
   await c.run("governance: runtime code has no voting function", async () => {
-    const found = votingSelectorsIn(await chain.getCode(gov));
+    // Issue 1808: RouterGovernance runs behind an ERC-1967 proxy, so the scan reads the implementation's code.
+    const found = votingSelectorsIn(await logicCode(chain, gov, tryLoadArtifact(opts.artifactsDir, ERC1967_PROXY_ARTIFACT)));
     return { ok: found.length === 0, detail: found.length ? `voting selectors in the runtime code: ${found.join(", ")}` : `none of the ${VOTING_SIGNATURES.length} deleted voting signatures is dispatched` };
   });
 
@@ -248,7 +249,8 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: runtime code equals build artifact (masked)`, async () => {
-      const r = compareCode(await chain.getCode(t.address), loadArtifact(t.dir ?? opts.artifactsDir, t.artifact));
+      // Issue 1808: a core contract behind an ERC-1967 proxy is checked through the implementation its slot names.
+      const r = await compareDeployedCode(chain, t.address, loadArtifact(t.dir ?? opts.artifactsDir, t.artifact), tryLoadArtifact(t.dir ?? opts.artifactsDir, ERC1967_PROXY_ARTIFACT));
       return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
     });
   }
@@ -780,12 +782,14 @@ async function redeployChecks(
   await c.runEq(`${p}: emergency key holds EMERGENCY_ROLE`, () => chain.read(r.oldVault, "function hasRole(bytes32 role, address account) view returns (bool)", [EMERGENCY_ROLE, ctx.emergency]), true);
   await c.run(`${p}: runtime code serves redeemInKind`, async () => {
     const sel = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
-    const code = (await chain.getCode(r.oldVault)).toLowerCase();
+    // Issue 1808: behind an ERC-1967 proxy the selector is in the implementation's code.
+    const code = (await logicCode(chain, r.oldVault, tryLoadArtifact(ctx.priorDir ?? ctx.artifactsDir, ERC1967_PROXY_ARTIFACT))).toLowerCase();
     return { ok: code.includes(sel), detail: `selector ${sel}` };
   });
   await c.run(`${p}: runtime code equals the original build artifact (masked)`, async () => {
     if (!ctx.artifact) return { ok: false, detail: "no artifact name for the vault" };
-    const res = compareCode(await chain.getCode(r.oldVault), loadArtifact(ctx.priorDir ?? ctx.artifactsDir, ctx.artifact));
+    const dir = ctx.priorDir ?? ctx.artifactsDir;
+    const res = await compareDeployedCode(chain, r.oldVault, loadArtifact(dir, ctx.artifact), tryLoadArtifact(dir, ERC1967_PROXY_ARTIFACT));
     return { ok: res.ok, detail: `${ctx.artifact}: ${res.detail}${!res.ok && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of the original sha>)" : ""}` };
   });
   const q = `redeploy[${r.vault}]`;
