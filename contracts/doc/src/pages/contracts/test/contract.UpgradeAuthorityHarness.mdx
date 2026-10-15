@@ -1,0 +1,39 @@
+---
+title: "UpgradeAuthorityHarness"
+---
+
+# UpgradeAuthorityHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/UpgradeAuthorityStages.t.sol)
+
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+
+<i>
+
+Exposes the env reader of the proxy stages with a test-only prefix (env vars are
+process-wide and forge runs tests in parallel).
+
+</i>
+
+## Functions
+
+<a id="read-string"></a>
+
+### read
+
+```solidity
+function read(string memory prefix) external view returns (UpgradeConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `UpgradeConfig` |  |
+

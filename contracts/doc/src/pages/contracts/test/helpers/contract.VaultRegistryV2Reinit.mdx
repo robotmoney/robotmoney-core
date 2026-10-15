@@ -1,0 +1,74 @@
+---
+title: "VaultRegistryV2Reinit"
+---
+
+# VaultRegistryV2Reinit
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/helpers/UpgradeV2.sol)
+
+**Inherits:** [VaultRegistry](/contracts/contract.VaultRegistry)
+
+<i>
+
+A v2 with an appended slot and a reinitializer, the shape a real v2 that adds state has.
+
+</i>
+
+## State Variables
+
+### v2Value
+
+```solidity
+uint256 public v2Value;
+```
+
+## Functions
+
+<a id="initializev2-uint256"></a>
+
+### initializeV2
+
+```solidity
+function initializeV2(uint256 value) external reinitializer(2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+
+<a id="reinitparents"></a>
+
+### reinitParents
+
+<i>
+
+A parent initializer outside any initializer must revert (`NotInitializing`).
+
+</i>
+
+```solidity
+function reinitParents() external;
+```
+
+<a id="initializev3renamesauthority-address"></a>
+
+### initializeV3RenamesAuthority
+
+<i>
+
+Re-running the upgrade-authority initializer in a reinitializer must revert.
+
+</i>
+
+```solidity
+function initializeV3RenamesAuthority(address timelock) external reinitializer(3);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+

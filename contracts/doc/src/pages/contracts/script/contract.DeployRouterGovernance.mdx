@@ -5,9 +5,9 @@ description: "Foundry deploy script for RouterGovernance, the router's weight se
 
 # DeployRouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployRouterGovernance.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployRouterGovernance
 
@@ -35,6 +35,11 @@ ROUTER_ADDRESS            — deployed PortfolioRouter
 CONSENSUS_RECEIPT_ADDRESS — deployed ConsensusRecommendationReceipt
 EXPECTED_CHAIN_ID         — mandatory and equal to 8453 on Base mainnet
 DEPLOYMENT_OUT            — path for the output JSON
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and release
+mode of the governance proxy (`UpgradeAuthority`,
+issue 1808). RouterGovernance's roles carry no upgrade
+power. The manifest `governance` is the ERC-1967 proxy;
+`governance_implementation` is its implementation.
 
 ## Constants
 
@@ -101,14 +106,18 @@ function runInProcessWith(address admin_, address router_, address receipts_)
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_deploy-address-address-address-address"></a>
+<a id="_deploy-address-address-address-address-upgradeconfig"></a>
 
 ### _deploy
 
 ```solidity
-function _deploy(address granter_, address admin_, address router_, address receipts_)
-        internal
-        returns (Deployed memory d);
+function _deploy(
+        address granter_,
+        address admin_,
+        address router_,
+        address receipts_,
+        UpgradeConfig memory u
+    ) internal returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -119,6 +128,7 @@ function _deploy(address granter_, address admin_, address router_, address rece
 | admin_ | `address` |  |
 | router_ | `address` |  |
 | receipts_ | `address` |  |
+| u | `UpgradeConfig` |  |
 
 **Returns**
 
@@ -232,6 +242,8 @@ struct Deployed {
         PortfolioRouter router;
         address receipts;
         address admin;
+        address governanceImplementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -243,4 +255,6 @@ struct Deployed {
 | router | `PortfolioRouter` |  |
 | receipts | `address` |  |
 | admin | `address` |  |
+| governanceImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

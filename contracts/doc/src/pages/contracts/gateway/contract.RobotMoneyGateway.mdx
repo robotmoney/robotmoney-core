@@ -5,9 +5,9 @@ description: "Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC fro
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/RobotMoneyGateway.sol)
 
-**Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/interface.IGateway)
+**Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuardUpgradeable, [IGateway](/contracts/gateway/interfaces/interface.IGateway), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** RobotMoneyGateway
 
@@ -23,6 +23,11 @@ OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 hash deliberately excludes `deadline`.
 
 </i>
+
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the
+constructor, the implementation is locked, and only `upgradeTimelock()` can upgrade
+or freeze it (`GovernedUUPS`). No gateway role carries upgrade power. `usdcToken`,
+`vaultContract` and `routerContract` are set once at initialization, no setter.
 
 ## Constants
 
@@ -154,31 +159,6 @@ uint8 internal constant OP_DEPOSIT_TO = 3;
 uint8 internal constant OP_WITHDRAW_ROUTER = 4;
 ```
 
-### usdcToken
-
-Pinned USDC token.
-
-```solidity
-IERC20 public immutable usdcToken;
-```
-
-### vaultContract
-
-Pinned ERC-4626 vault.
-
-```solidity
-IERC4626 public immutable vaultContract;
-```
-
-### routerContract
-
-Portfolio Router for multi-vault agent deposits. May be `address(0)`
-if the gateway was deployed without router support.
-
-```solidity
-IPortfolioRouter public immutable routerContract;
-```
-
 ### MAX_WINDOW_ENTRIES
 
 Hard cap on the number of distinct live ring-buffer entries per
@@ -194,6 +174,31 @@ uint256 public constant MAX_WINDOW_ENTRIES = WINDOW_SECONDS;
 ```
 
 ## State Variables
+
+### usdcToken
+
+Pinned USDC token.
+
+```solidity
+IERC20 public usdcToken;
+```
+
+### vaultContract
+
+Pinned ERC-4626 vault.
+
+```solidity
+IERC4626 public vaultContract;
+```
+
+### routerContract
+
+Portfolio Router for multi-vault agent deposits. May be `address(0)`
+if the gateway was deployed without router support.
+
+```solidity
+IPortfolioRouter public routerContract;
+```
 
 ### commitments
 
@@ -256,13 +261,13 @@ mapping(address => WithdrawWindow) public agentWithdrawWindow;
 ### _depositWindow
 
 ```solidity
-mapping(address => RollingWindow) private _depositWindow;
+mapping(address => GatewayWindows.RollingWindow) private _depositWindow;
 ```
 
 ### _withdrawWindow
 
 ```solidity
-mapping(address => RollingWindow) private _withdrawWindow;
+mapping(address => GatewayWindows.RollingWindow) private _withdrawWindow;
 ```
 
 ### usedPaymentIds
@@ -380,12 +385,22 @@ function _revokeRole(bytes32 role, address account) internal override returns (b
 | ---- | ---- | ----------- |
 | revoked | `bool` |  |
 
-<a id="constructor-ierc20-ierc4626-address-address-address"></a>
+<a id="initialize-ierc20-ierc4626-address-address-address-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_);
+function initialize(
+        IERC20 usdc_,
+        IERC4626 vault_,
+        address admin_,
+        address pauser_,
+        address router_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
 ```
 
 **Parameters**
@@ -397,6 +412,8 @@ constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, addr
 | admin_ | `address` | Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`. |
 | pauser_ | `address` | Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents. |
 | router_ | `address` | Portfolio Router address, or `address(0)` to deploy without<br/>router support (single-vault mode). |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="usdc"></a>
 
@@ -568,155 +585,6 @@ function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) inter
 | agent | `address` |  |
 | amount | `uint256` |  |
 | cap | `uint256` |  |
-
-<a id="_prunewindow-rollingwindow"></a>
-
-### _pruneWindow
-
-<i>
-
-Drop every live entry whose timestamp has aged past the rolling
-window `(t-WINDOW_SECONDS, t]`, reclaiming its ring slot and
-decrementing `total`. Strictly bounded: it scans at most `count`
-entries, which can never exceed `MAX_WINDOW_ENTRIES` (NC-7).
-
-</i>
-
-```solidity
-function _pruneWindow(RollingWindow storage w) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-
-<a id="_appendwindowentry-rollingwindow-uint256"></a>
-
-### _appendWindowEntry
-
-<i>
-
-Record `amount` at the current `block.timestamp` in the ring buffer.
-Operations within the same second COALESCE into the newest live entry
-(no new slot), which is what bounds the live entry count. Otherwise a
-freed slot is reused (ring wrap) or, only while the buffer has not yet
-reached its high-water mark, a new slot is `push`ed — capped at
-`MAX_WINDOW_ENTRIES`. `total` always tracks the live sum.
-
-</i>
-
-```solidity
-function _appendWindowEntry(RollingWindow storage w, uint256 amount) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-| amount | `uint256` |  |
-
-<a id="_relinearize-rollingwindow"></a>
-
-### _relinearize
-
-<i>
-
-Rotate the full ring buffer so the oldest live entry sits at index 0.
-Precondition: the buffer is completely full (`count == slots.length`),
-so every slot is live and a simple rotation by `head` re-linearizes
-the live region. Used only on the rare grow path. Implemented as a
-sequence of in-place reversals (reverse[0,head), reverse[head,len),
-reverse[0,len)) so it needs no scratch array.
-
-</i>
-
-```solidity
-function _relinearize(RollingWindow storage w) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-
-<a id="_reverserange-rollingwindow-uint256-uint256"></a>
-
-### _reverseRange
-
-<i>
-
-Reverse `slots[lo:hi)` in place.
-
-</i>
-
-```solidity
-function _reverseRange(RollingWindow storage w, uint256 lo, uint256 hi) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-| lo | `uint256` |  |
-| hi | `uint256` |  |
-
-<a id="_oldesttimestamp-rollingwindow"></a>
-
-### _oldestTimestamp
-
-<i>
-
-Timestamp of the oldest live entry, or 0 when the window is empty.
-
-</i>
-
-```solidity
-function _oldestTimestamp(RollingWindow storage w) internal view returns (uint64);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint64` |  |
-
-<a id="_effectivewindowtotal-rollingwindow"></a>
-
-### _effectiveWindowTotal
-
-<i>
-
-View-only effective live total after notionally pruning expired
-entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
-
-</i>
-
-```solidity
-function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256 total);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| w | `RollingWindow` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| total | `uint256` |  |
 
 <a id="_commitmentkey-bytes32-address"></a>
 
@@ -2026,64 +1894,6 @@ struct WithdrawWindow {
 | ---- | ---- | ----------- |
 | windowStart | `uint64` | Unix-seconds anchor of the agent's current rolling window.<br/>Zero when the agent has never withdrawn. |
 | gross | `uint256` | Cumulative shares redeemed since `windowStart`. |
-
-### WindowEntry
-
-```solidity
-struct WindowEntry {
-        uint64 timestamp;
-        uint256 amount;
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| timestamp | `uint64` |  |
-| amount | `uint256` |  |
-
-### RollingWindow
-
-Bounded ring buffer backing one agent's rolling-window accounting
-(NC-7 / GW-4). The previous design `.push`ed a fresh `WindowEntry`
-for every operation and only advanced a `head` cursor on prune, so
-the underlying dynamic array grew without bound for the life of the
-agent — eventually making every windowed op (and the linear prune
-scan) cost so much gas that the agent gas-bricks itself out of the
-gateway permanently.
-
-The ring buffer fixes this in two ways:
-1. SAME-SECOND COALESCING — operations sharing a `block.timestamp`
-merge into the single newest entry instead of appending. The
-count of distinct live entries can therefore never exceed the
-number of distinct seconds in the rolling window, which is
-hard-capped at `MAX_WINDOW_ENTRIES`.
-2. SLOT REUSE — pruned (expired) slots are reclaimed by wrapping
-`head`/`count` around the fixed-capacity `slots` array, so the
-array's storage footprint plateaus at the high-water mark of
-concurrently-live entries and never grows monotonically.
-
-Exact rolling-window semantics (strict `(t-WINDOW_SECONDS, t]`
-expiry) are preserved per-entry; only the storage shape changed.
-
-```solidity
-struct RollingWindow {
-        WindowEntry[] slots; // ring storage; length == live capacity (≤ MAX_WINDOW_ENTRIES)
-        uint256 head; // index of the oldest live entry
-        uint256 count; // number of live entries
-        uint256 total; // cumulative amount across the live entries
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| slots | `WindowEntry[]` |  |
-| head | `uint256` |  |
-| count | `uint256` |  |
-| total | `uint256` |  |
 
 ### DepositArgs
 

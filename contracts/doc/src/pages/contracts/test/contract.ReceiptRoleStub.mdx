@@ -4,14 +4,15 @@ title: "ReceiptRoleStub"
 
 # ReceiptRoleStub
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** AccessControl
 
 <i>
 
 Stands in for ConsensusRecommendationReceipt's role surface: the
-handover only needs `hasRole` / `grantRole` / `revokeRole`.
+handover only needs `hasRole` / `grantRole` / `revokeRole`, and (issue 1808)
+`upgradeTimelock`, which must name the timelock the handover deploys.
 
 </i>
 
@@ -21,6 +22,14 @@ handover only needs `hasRole` / `grantRole` / `revokeRole`.
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## State Variables
+
+### upgradeTimelock
+
+```solidity
+address public upgradeTimelock;
 ```
 
 ## Functions
@@ -38,4 +47,18 @@ constructor(address admin);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | admin | `address` |  |
+
+<a id="setupgradetimelock-address"></a>
+
+### setUpgradeTimelock
+
+```solidity
+function setUpgradeTimelock(address timelock) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
 

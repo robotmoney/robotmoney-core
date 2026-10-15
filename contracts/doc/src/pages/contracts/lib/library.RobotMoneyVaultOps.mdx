@@ -1,0 +1,287 @@
+---
+title: "RobotMoneyVaultOps"
+description: "The off-hot-path adapter loops of `RobotMoneyVault`, as an externally linked library: the two emergency drains, the explicit-target pull of `adminRebalance` and the drift view. Its code runs by DELEGATECALL on the vault proxy's own storage, with the vault's `msg.sender`, so every event is logged by the vault. The logic is the code the vault carried inline before issue 1808, unchanged. The deposit and redeem paths stay in the vault."
+---
+
+# RobotMoneyVaultOps
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/RobotMoneyVaultOps.sol)
+
+**Title:** RobotMoneyVaultOps
+
+The off-hot-path adapter loops of `RobotMoneyVault`, as an externally linked library:
+the two emergency drains, the explicit-target pull of `adminRebalance` and the drift
+view. Its code runs by DELEGATECALL on the vault proxy's own storage, with the
+vault's `msg.sender`, so every event is logged by the vault. The logic is the code
+the vault carried inline before issue 1808, unchanged. The deposit and redeem paths
+stay in the vault.
+
+## Constants
+
+### MAX_BPS
+
+```solidity
+uint256 internal constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
+```
+
+## Functions
+
+<a id="drainall-adapterinfo"></a>
+
+### drainAll
+
+Try to withdraw every active adapter's full balance. A failing adapter is logged
+and skipped, so it never blocks the others.
+
+```solidity
+function drainAll(AdapterInfo[] storage adapters) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` |  |
+
+<a id="drainone-adapterinfo-uint256"></a>
+
+### drainOne
+
+Try to withdraw one active adapter's full balance. Reverts `AdapterNotFound` for an
+unknown or inactive index.
+
+```solidity
+function drainOne(AdapterInfo[] storage adapters, uint256 index) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` |  |
+| index | `uint256` |  |
+
+<a id="pulltotargets-adapterinfo-uint256"></a>
+
+### pullToTargets
+
+Pull every active adapter's balance above `targetBalances[i]` back to the vault.
+
+```solidity
+function pullToTargets(AdapterInfo[] storage adapters, uint256[] calldata targetBalances)
+        external
+        returns (uint256 totalMoved);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` |  |
+| targetBalances | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalMoved | `uint256` | The USDC the adapters returned. |
+
+<a id="adapterdrift-adapterinfo-uint256-uint256"></a>
+
+### adapterDrift
+
+Current vs. equal-weight target balance and signed drift for every adapter, with
+the targets of the `activeCount` active adapters partitioning `total` exactly.
+
+```solidity
+function adapterDrift(AdapterInfo[] storage adapters, uint256 total, uint256 activeCount)
+        external
+        view
+        returns (
+            uint256[] memory currentBalances,
+            uint256[] memory targetBalances,
+            int256[] memory drifts
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` |  |
+| total | `uint256` |  |
+| activeCount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currentBalances | `uint256[]` |  |
+| targetBalances | `uint256[]` |  |
+| drifts | `int256[]` |  |
+
+<a id="adapterinfo-adapterinfo-uint256"></a>
+
+### adapterInfo
+
+One adapter entry with its live balance and its equal-weight target in bps.
+Panics on an out-of-range `index`, like the array getter.
+
+```solidity
+function adapterInfo(AdapterInfo[] storage adapters, uint256 index)
+        external
+        view
+        returns (
+            address adapterAddr,
+            uint16 capBps,
+            bool active,
+            uint256 currentBalance,
+            uint256 targetBps
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterAddr | `address` |  |
+| capBps | `uint16` |  |
+| active | `bool` |  |
+| currentBalance | `uint256` |  |
+| targetBps | `uint256` |  |
+
+<a id="equalweightbps-uint256-uint256"></a>
+
+### equalWeightBps
+
+Share of `MAX_BPS` owed to the `rank`-th (0-based, registry order) of `active`
+equally-weighted adapters. `MAX_BPS / active` alone floors (3333 x 3 = 9999), so
+the `MAX_BPS % active` leftover bps go one each to the lowest ranks and the
+target set sums to exactly `MAX_BPS` (issue #1391). Callers still take
+`min(capBps, targetBps)`.
+
+```solidity
+function equalWeightBps(uint256 rank, uint256 active) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rank | `uint256` |  |
+| active | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="equalweightbalance-uint256-uint256-uint256"></a>
+
+### equalWeightBalance
+
+The `rank`-th active adapter's slice of `total` when `active` adapters split it
+equally, as the difference of two prefix shares so the slices partition `total`
+exactly (issue #1391). Mirrors `RobotMoneyVault._equalWeightBalance`.
+
+```solidity
+function equalWeightBalance(uint256 total, uint256 rank, uint256 active)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+| rank | `uint256` |  |
+| active | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Events
+
+### Pulled
+
+Same signatures as the `RobotMoneyVault` events (the vault declares them for its ABI).
+
+```solidity
+event Pulled(uint256 indexed index, address indexed adapter, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+
+### EmergencyWithdrawAdapterCalled
+
+```solidity
+event EmergencyWithdrawAdapterCalled(
+        uint256 indexed index, address indexed adapter, uint256 amount, bool success
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+| success | `bool` |  |
+
+## Errors
+
+### AdapterNotFound
+
+Same selector as `RobotMoneyVault.AdapterNotFound`.
+
+```solidity
+error AdapterNotFound();
+```
+
+## Structs
+
+### AdapterInfo
+
+<i>
+
+Layout-identical to `RobotMoneyVault.AdapterInfo`. The vault casts its `adapters`
+storage array to this type (`_opsAdapters`); only the nominal type differs.
+
+</i>
+
+```solidity
+struct AdapterInfo {
+        IStrategyAdapter adapter;
+        uint16 capBps;
+        bool active;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `IStrategyAdapter` |  |
+| capBps | `uint16` |  |
+| active | `bool` |  |
+

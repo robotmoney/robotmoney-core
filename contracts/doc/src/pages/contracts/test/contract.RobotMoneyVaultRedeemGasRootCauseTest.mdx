@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRedeemGasRootCauseTest"
 
 # RobotMoneyVaultRedeemGasRootCauseTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/43c7fdd6cd2df0b047667397347ead508f651d1b/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
 
 **Inherits:** Test
 
@@ -194,8 +194,10 @@ function test_rootCause_limitAtSameBlockCostRevertsTyped() public;
 
 <i>
 
-Replace the vault's runtime code with the same code, gas floors zeroed as asked.
-Storage and immutables are unchanged (the floors are constants, not storage).
+Replace the vault implementation's runtime code with the same code, gas floors zeroed
+as asked. The vault is an ERC-1967 proxy (issue 1808), so the floors live in the code of
+the implementation it delegates to. Storage and immutables are unchanged (the floors
+are constants, not storage).
 
 </i>
 

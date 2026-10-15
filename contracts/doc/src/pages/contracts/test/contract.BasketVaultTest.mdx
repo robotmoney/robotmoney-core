@@ -4,7 +4,7 @@ title: "BasketVaultTest"
 
 # BasketVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -674,7 +674,8 @@ function test_constructor_grantsEmergencyRoleToEmergencyResponderOnly() public v
 
 ### test_constructor_revertsWhenAdminIsZero
 
-Constructor reverts when admin_ is address(0).
+The initializer (the constructor before issue 1808) reverts when admin_ is
+address(0): the proxy is never created.
 
 ```solidity
 function test_constructor_revertsWhenAdminIsZero() public;
@@ -684,11 +685,26 @@ function test_constructor_revertsWhenAdminIsZero() public;
 
 ### test_constructor_revertsWhenEmergencyResponderIsZero
 
-Constructor reverts when emergencyResponder_ is address(0).
+The initializer reverts when emergencyResponder_ is address(0).
 
 ```solidity
 function test_constructor_revertsWhenEmergencyResponderIsZero() public;
 ```
+
+<a id="_expectharnessinitreverts-address-address"></a>
+
+### _expectHarnessInitReverts
+
+```solidity
+function _expectHarnessInitReverts(address admin_, address emergency_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin_ | `address` |  |
+| emergency_ | `address` |  |
 
 <a id="test_setmaxslippagebps_requiresadminrole"></a>
 

@@ -4,7 +4,7 @@ title: "BasketAssetConfigGuard"
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/BasketAssetConfigGuard.sol)
 
 ## Constants
 
@@ -89,6 +89,38 @@ function requireObservationHistory(address pool, uint32 twapWindow) public view;
 | ---- | ---- | ----------- |
 | pool | `address` |  |
 | twapWindow | `uint32` |  |
+
+<a id="addasset-assetinfo-assetinfo-bool-address-uint32-uint128"></a>
+
+### addAsset
+
+The body of `BasketVault.addAsset` after its zero-address and `maxAssets` checks
+(moved here in issue 1808 so the proxied vault family fits EIP-170). In order:
+ADP-2 adapter allowlist, ORA-3 execution pool == TWAP pool, pool usability, then
+NC-8 reuse of an inactive entry or a push of a new one. Emits `AssetAdded` as the
+vault (delegatecall).
+
+```solidity
+function addAsset(
+        AssetInfo[] storage assets,
+        AssetInfo memory a,
+        bool adapterAllowed,
+        address usdc,
+        uint32 twapWindow,
+        uint128 minLiquidity
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetInfo[]` |  |
+| a | `AssetInfo` |  |
+| adapterAllowed | `bool` | Whether `a.adapter`'s codehash is on the vault's allowlist. |
+| usdc | `address` |  |
+| twapWindow | `uint32` |  |
+| minLiquidity | `uint128` |  |
 
 <a id="reuseorrejectduplicate-assetinfo-address-address-uint24-address-venue"></a>
 
@@ -224,6 +256,38 @@ function _payLeg(
 | supplyBefore | `uint256` |  |
 | exitFeeBps | `uint256` |  |
 | feeRecipient | `address` |  |
+
+## Events
+
+### AssetAdded
+
+<i>
+
+Same signature as `BasketVault.AssetAdded` (the vault declares it for its ABI).
+
+</i>
+
+```solidity
+event AssetAdded(
+        uint256 indexed index,
+        address indexed token,
+        address pool,
+        uint24 swapFee,
+        address adapter,
+        Venue venue
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| token | `address` |  |
+| pool | `address` |  |
+| swapFee | `uint24` |  |
+| adapter | `address` |  |
+| venue | `Venue` |  |
 
 ## Errors
 

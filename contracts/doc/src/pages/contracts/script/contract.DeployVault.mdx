@@ -5,9 +5,9 @@ description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/851b6f6154c5148deb9edad9c16aa038d73ecd19/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployVault.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployVault
 
@@ -36,8 +36,13 @@ DEPLOYMENT_OUT        — output JSON path
 USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
 EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and release
+mode of the vault proxy (`UpgradeAuthority`, issue 1808)
 
 </i>
+
+The vault is an ERC-1967 proxy initialized in its constructor (issue 1808). The manifest
+`vault` is the proxy; `vault_implementation` is the implementation it points at.
 
 ## Constants
 
@@ -478,12 +483,12 @@ function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 | vault_ | `RobotMoneyVault` |  |
 | adapter_ | `address` |  |
 
-<a id="_deploy-params"></a>
+<a id="_deploy-params-upgradeconfig"></a>
 
 ### _deploy
 
 ```solidity
-function _deploy(Params memory p) internal returns (Deployed memory d);
+function _deploy(Params memory p, UpgradeConfig memory u) internal returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -491,6 +496,7 @@ function _deploy(Params memory p) internal returns (Deployed memory d);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | p | `Params` |  |
+| u | `UpgradeConfig` |  |
 
 **Returns**
 
@@ -511,6 +517,7 @@ address it wraps.
 Seed fields: seed_share_receiver, seed_shares (minted to the receiver) and
 deployer_share_balance_after (read from the vault at write time, must be 0).
 The verifier asserts the deployer balance is 0 and the receiver holds the seed.
+Upgrade fields (issue 1808): vault_implementation, upgrade_timelock, upgrade_mode.
 
 ```solidity
 function _writeDeploymentJsonTo(
@@ -566,6 +573,8 @@ struct Deployed {
         CompoundV3Adapter compoundAdapter;
         MorphoAdapter moonwellAdapter;
         address admin;
+        address vaultImplementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -579,4 +588,6 @@ struct Deployed {
 | compoundAdapter | `CompoundV3Adapter` |  |
 | moonwellAdapter | `MorphoAdapter` |  |
 | admin | `address` |  |
+| vaultImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

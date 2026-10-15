@@ -5,9 +5,9 @@ description: "`AccessControl` with a \"last-admin floor\" — the final holder o
 
 # AdminFloorAccessControlCounter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/AdminFloorAccessControlCounter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/AdminFloorAccessControlCounter.sol)
 
-**Inherits:** AccessControl
+**Inherits:** AccessControlUpgradeable
 
 **Title:** AdminFloorAccessControlCounter
 
@@ -37,6 +37,9 @@ both vectors. `_revokeRole` is invoked *before* the membership set is
 mutated, so when an `ADMIN_ROLE` revoke is in flight the current
 member count still includes the account being removed; a count of
 exactly 1 therefore means this is the last admin.
+
+Upgradeable base (issue 1808): the role map lives in OpenZeppelin's ERC-7201
+namespaced storage. `adminCount` stays a sequential slot of the inheriting vault.
 
 ## Constants
 
