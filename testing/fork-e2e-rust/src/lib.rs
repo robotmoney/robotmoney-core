@@ -56,6 +56,8 @@ pub mod base_testnet;
 pub mod base_testnet_addresses;
 /// The vault a test deploys for itself through the stage scripts (clean room rule, core 1498).
 pub mod deployed;
+/// Governed core contracts behind ERC-1967 proxies, deployed from their artifacts (core 1808).
+pub mod governed;
 pub mod scenarios;
 
 // -- Deployed addresses module is re-exported for ergonomic use ----

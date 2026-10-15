@@ -34,33 +34,13 @@
 //! when `RMPC_FORK_RPC_URL` is unset so contributors without an archive RPC
 //! can still run `cargo test`.
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, U256};
 use rmpc_fork_e2e::{
     addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IBasketVault, IERC20,
 };
 
 // 50 USDC (6 decimals).
 const DEPOSIT_USDC: u64 = 50_000_000;
-
-// ── Bytecode loading ──────────────────────────────────────────────────────────
-
-/// Read the Forge-compiled creation bytecode for `contract_name` from the
-/// `out/` artifact directory under the workspace root.
-///
-/// Returns `None` when the workspace root or the artifact file cannot be
-/// located. The caller skips the test in that case with a clear message.
-fn load_bytecode(contract_name: &str) -> Option<Vec<u8>> {
-    let root = test_utils::find_workspace_root()?;
-    let path = root
-        .join("out")
-        .join(format!("{contract_name}.sol"))
-        .join(format!("{contract_name}.json"));
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let hex_str = parsed["bytecode"]["object"].as_str()?;
-    let hex_str = hex_str.trim_start_matches("0x");
-    hex::decode(hex_str).ok()
-}
 
 // ── ABI-encode constructor arguments ─────────────────────────────────────────
 
@@ -129,18 +109,6 @@ fn basket_round_trip(
     asset_fee: u32,
     label: &str,
 ) {
-    // ── Load bytecode ──────────────────────────────────────────────────
-    let bytecode = match load_bytecode(contract_name) {
-        Some(b) => b,
-        None => {
-            eprintln!(
-                "[basket_vault_round_trip/{label}] SKIP: could not load bytecode for \
-                 {contract_name} — run `forge build` from the workspace root first"
-            );
-            return;
-        }
-    };
-
     // ── Fund test account ──────────────────────────────────────────────
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit = U256::from(DEPOSIT_USDC);
@@ -187,14 +155,16 @@ fn basket_round_trip(
         admin.address, // emergency responder
     );
 
-    let mut initcode = bytecode;
-    initcode.extend_from_slice(&ctor_args);
-
-    // ── Deploy vault ───────────────────────────────────────────────────
-    // 6M gas: covers CREATE + BasketVault constructor storage writes.
-    let vault_addr = admin
-        .deploy(Bytes::from(initcode), 6_000_000)
-        .expect("deploy basket vault");
+    // Core 1808: the basket vault is a governed proxy. Its `initialize(InitParams, timelock, mode)` takes
+    // the old constructor words first (InitParams is an all-static struct, so it encodes inline).
+    let vault_addr = rmpc_fork_e2e::governed::deploy_governed(
+        &admin,
+        &format!("{contract_name}.sol"),
+        contract_name,
+        &ctor_args,
+        8_000_000,
+    )
+    .expect("deploy basket vault");
     eprintln!("[basket_vault_round_trip/{label}] vault deployed at {vault_addr:#x}");
 
     // ── Verify: vault.asset() == USDC ──────────────────────────────────

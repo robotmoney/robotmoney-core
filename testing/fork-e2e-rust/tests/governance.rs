@@ -75,6 +75,25 @@ fn load_initcode(sol_file: &str, contract_name: &str) -> Bytes {
     )
 }
 
+/// Deploy a governed core contract (core 1808) behind an ERC-1967 proxy, initialized with the
+/// address arguments its constructor used to take.
+fn deploy_governed(
+    deployer: &Account<'_>,
+    sol_file: &str,
+    contract_name: &str,
+    args: &[Address],
+    gas_limit: u64,
+) -> Address {
+    rmpc_fork_e2e::governed::deploy_governed_with_address_args(
+        deployer,
+        sol_file,
+        contract_name,
+        args,
+        gas_limit,
+    )
+    .unwrap_or_else(|e| panic!("deploy {contract_name}: {e}"))
+}
+
 /// Deploy `sol_file:contract_name` with ABI-encoded address constructor
 /// arguments (each left-padded to a 32-byte slot).
 fn deploy_with_address_args(
@@ -253,7 +272,7 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
         .expect("fund admin");
     let me = admin.address;
 
-    let registry = deploy_with_address_args(
+    let registry = deploy_governed(
         &admin,
         "VaultRegistry.sol",
         "VaultRegistry",
@@ -264,7 +283,7 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
         deploy_with_address_args(&admin, "MockVault.sol", "MockVault", &[usdc], 2_000_000);
     let vault_b =
         deploy_with_address_args(&admin, "MockVault.sol", "MockVault", &[usdc], 2_000_000);
-    let router = deploy_with_address_args(
+    let router = deploy_governed(
         &admin,
         "PortfolioRouter.sol",
         "PortfolioRouter",
@@ -272,7 +291,7 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
         8_000_000,
     );
     // InvestmentCommitteePolicy(admin_, gateway_): the gateway is never called here.
-    let ic_policy = deploy_with_address_args(
+    let ic_policy = deploy_governed(
         &admin,
         "InvestmentCommitteePolicy.sol",
         "InvestmentCommitteePolicy",
@@ -281,7 +300,7 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
     );
     // ConsensusRecommendationReceipt(admin_, gateway_, icPolicy_): the test
     // account is the gateway, so it can call `recordReceipt` directly.
-    let receipts = deploy_with_address_args(
+    let receipts = deploy_governed(
         &admin,
         "ConsensusRecommendationReceipt.sol",
         "ConsensusRecommendationReceipt",
@@ -290,7 +309,7 @@ fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
     );
     // RouterGovernance(_router, _receipts, _admin): `_admin` gets ADMIN_ROLE and
     // WEIGHT_SETTER_ROLE, standing in for the timelock.
-    let governance = deploy_with_address_args(
+    let governance = deploy_governed(
         &admin,
         "RouterGovernance.sol",
         "RouterGovernance",

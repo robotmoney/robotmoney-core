@@ -211,7 +211,7 @@ fn deploy_gateway(
     admin: Address,
     pauser: Address,
 ) -> Address {
-    let mut code = load_initcode("RobotMoneyGateway.sol", "RobotMoneyGateway").to_vec();
+    let mut code: Vec<u8> = Vec::new();
     // 5 × address args: usdc, vault, admin, pauser, router=address(0)
     let mut args = [0u8; 160];
     args[12..32].copy_from_slice(usdc.as_slice());
@@ -222,9 +222,14 @@ fn deploy_gateway(
     code.extend_from_slice(&args);
     // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
     // committee routing additions in issue #1049 (deployment cost ~5.15M).
-    deployer
-        .deploy(Bytes::from(code), 8_000_000)
-        .expect("deploy RobotMoneyGateway")
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "RobotMoneyGateway.sol",
+        "RobotMoneyGateway",
+        &code,
+        8_000_000,
+    )
+    .expect("deploy RobotMoneyGateway")
 }
 
 /// Approve `spender` to pull `amount` USDC from `account`.
@@ -826,11 +831,16 @@ fn router_withdrawal() {
 
     // VaultRegistry
     let registry = {
-        let mut code = load_initcode("VaultRegistry.sol", "VaultRegistry").to_vec();
+        let mut code: Vec<u8> = Vec::new();
         code.extend_from_slice(&encode_address_arg(admin.address));
-        admin
-            .deploy(Bytes::from(code), 3_000_000)
-            .expect("deploy VaultRegistry")
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "VaultRegistry.sol",
+            "VaultRegistry",
+            &code,
+            3_000_000,
+        )
+        .expect("deploy VaultRegistry")
     };
 
     // Two 1:1 MockVaults
@@ -904,15 +914,20 @@ fn router_withdrawal() {
 
     // PortfolioRouter (60/40 split)
     let router = {
-        let mut code = load_initcode("PortfolioRouter.sol", "PortfolioRouter").to_vec();
+        let mut code: Vec<u8> = Vec::new();
         let mut args = [0u8; 96];
         args[12..32].copy_from_slice(usdc.as_slice());
         args[44..64].copy_from_slice(registry.as_slice());
         args[76..96].copy_from_slice(admin.address.as_slice());
         code.extend_from_slice(&args);
-        admin
-            .deploy(Bytes::from(code), 4_000_000)
-            .expect("deploy PortfolioRouter")
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "PortfolioRouter.sol",
+            "PortfolioRouter",
+            &code,
+            4_000_000,
+        )
+        .expect("deploy PortfolioRouter")
     };
 
     // Set 60/40 weights.
@@ -932,7 +947,7 @@ fn router_withdrawal() {
     // Constructor: (usdc, vault, admin, pauser, router) — 5 × address.
     // `vault` arg: use vault_a as the pinned vault (single-vault path still needs one).
     let gateway = {
-        let mut code = load_initcode("RobotMoneyGateway.sol", "RobotMoneyGateway").to_vec();
+        let mut code: Vec<u8> = Vec::new();
         let mut args = [0u8; 160];
         args[12..32].copy_from_slice(usdc.as_slice());
         args[44..64].copy_from_slice(vault_a.as_slice()); // pinned vault
@@ -942,9 +957,14 @@ fn router_withdrawal() {
         code.extend_from_slice(&args);
         // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
         // committee routing additions in issue #1049 (deployment cost ~5.15M).
-        admin
-            .deploy(Bytes::from(code), 8_000_000)
-            .expect("deploy RobotMoneyGateway")
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "RobotMoneyGateway.sol",
+            "RobotMoneyGateway",
+            &code,
+            8_000_000,
+        )
+        .expect("deploy RobotMoneyGateway")
     };
 
     eprintln!(
