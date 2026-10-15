@@ -280,6 +280,7 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         dir.path(),
         &mdir,
         &counts,
+        false,
     )?;
     let nominal_safe = serde_json::json!({
         "safe": format!("{deployer:#x}"),
@@ -296,6 +297,7 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         dir.path(),
         &mdir,
         &counts,
+        true,
     )?;
     let out = mdir.join("vault.json");
     let text = std::fs::read_to_string(&out)?;
@@ -333,6 +335,7 @@ fn run_publish_stage(
     dir: &std::path::Path,
     mdir: &std::path::Path,
     counts: &std::path::Path,
+    resume: bool,
 ) -> Result<(), HarnessError> {
     let status = Command::new("bun")
         .current_dir(root)
@@ -357,9 +360,11 @@ fn run_publish_stage(
         ])
         .arg("--counts-dir")
         .arg(counts)
-        // One evidence directory per stage: each run is its own single-stage publish, not a resume of the last one.
+        // One evidence directory for both stages: the vault run resumes the libs run, so its expected start nonce
+        // counts the libraries the libs stage sent (none when it adopted them already on chain).
         .arg("--evidence")
-        .arg(dir.join(format!("evidence-{stage}")))
+        .arg(dir.join("evidence"))
+        .args(if resume { &["--resume"][..] } else { &[][..] })
         .env("PUBLISH_MANIFEST_DIR", mdir)
         // The CLI refuses an unattended run without YES=1, and refuses YES=1 on 8453. This is the Twin chain only.
         .env("YES", "1")
