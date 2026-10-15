@@ -10,7 +10,7 @@ use alloy_primitives::{Address, Bytes, FixedBytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall as _, SolEvent as _};
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{ITimelockEvents, Topics},
+    abi::{IGovernedUpgradeEvents, ITimelockEvents, Topics},
     db::CountTable,
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -164,6 +164,103 @@ async fn timelock_and_safe_events_are_indexed_listed_and_rolled_back_on_reorg() 
 
     stub.shutdown();
     // A reorg above block 9 removes the rows with every other event table.
+    fx.db.delete_above_block(CHAIN, 9).await.unwrap();
+    assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 0);
+}
+
+/// Issue 1810: a proxied core contract's `Upgraded` and `UpgradesFrozen` are
+/// stored as `proxy` rows naming the implementation (and the frozen code
+/// hash), from the gateway and from RouterGovernance, which is now watched.
+/// The same topic from the Timelock is not a proxy event. A reorg removes the
+/// rows, so the derived freeze state rolls back with them.
+#[tokio::test]
+async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() {
+    let fx = pg_fixture().await;
+    let gateway = cfg().gateway;
+    let governance = Address::from([0x66u8; 20]);
+    let impl_v1 = Address::from([0x1au8; 20]);
+    let impl_v2 = Address::from([0x2bu8; 20]);
+
+    let upgraded =
+        |implementation| IGovernedUpgradeEvents::Upgraded { implementation }.encode_log_data();
+    let frozen = IGovernedUpgradeEvents::UpgradesFrozen {
+        proxy: gateway,
+        implementation: impl_v2,
+        codeHash: FixedBytes([0x77; 32]),
+    }
+    .encode_log_data();
+
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            log_json(gateway, &upgraded(impl_v1), 10, 0),
+            log_json(governance, &upgraded(impl_v1), 10, 1),
+            log_json(gateway, &upgraded(impl_v2), 10, 2),
+            log_json(gateway, &frozen, 10, 3),
+            // Not a Robot Money proxy: ignored.
+            log_json(timelock(), &upgraded(impl_v2), 10, 4),
+        ]),
+    );
+    let rpc = JsonRpc::new(&stub.url);
+    let mut c = cfg();
+    c.router_governance = Some(governance);
+    let outcome = run_once(&fx.db, &rpc, &c).await.unwrap();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+
+    // RouterGovernance is in the eth_getLogs address set.
+    let asked_governance = stub.captured_requests().iter().any(|r| {
+        r["method"] == "eth_getLogs"
+            && r["params"][0]["address"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == &format!("{governance:#x}")))
+    });
+    assert!(
+        asked_governance,
+        "RouterGovernance must be watched for proxy events"
+    );
+
+    let rows: Vec<(Vec<u8>, String, String, String)> = sqlx::query_as(
+        "SELECT contract, contract_kind, event_name, detail FROM admin_events \
+         WHERE chain_id = $1 ORDER BY log_index",
+    )
+    .bind(CHAIN)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        4,
+        "the Timelock's Upgraded is not a proxy event: {rows:?}"
+    );
+    for r in &rows {
+        assert_eq!(r.1, "proxy");
+    }
+    assert_eq!(
+        (rows[0].0.as_slice(), rows[0].2.as_str()),
+        (gateway.as_slice(), "Upgraded")
+    );
+    assert!(
+        rows[0].3.contains(&format!("{impl_v1:#x}")),
+        "{}",
+        rows[0].3
+    );
+    assert_eq!(rows[1].0.as_slice(), governance.as_slice());
+    assert!(
+        rows[2].3.contains(&format!("{impl_v2:#x}")),
+        "{}",
+        rows[2].3
+    );
+    assert_eq!(rows[3].2, "UpgradesFrozen");
+    assert!(
+        rows[3].3.contains(&format!("{impl_v2:#x}")),
+        "{}",
+        rows[3].3
+    );
+    assert!(rows[3].3.contains(&"77".repeat(32)), "{}", rows[3].3);
+
+    stub.shutdown();
     fx.db.delete_above_block(CHAIN, 9).await.unwrap();
     assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 0);
 }

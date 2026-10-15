@@ -5,8 +5,10 @@ lifecycle tests) is implemented in the source by issue 1808 and recorded in
 [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) (Proposed).
 No upgradeable Robot Money deployment exists on Base 8453: the existing Base
 mainnet contracts remain direct deployments and cannot be upgraded in place.
-Stages 2 to 4 (release sheet and publish evidence; signing clients, ABI
-consumers, dapp and indexer; Twin rehearsal and cutover) are planned.
+Stage 3 (signing clients, ABI consumers, dapp, explorer, indexer and monitoring)
+is implemented by issue 1810; see "Signing clients and disclosure (stage 3)"
+below. Stages 2 and 4 (release sheet and publish evidence; Twin rehearsal and
+cutover) are planned.
 
 ## Decision and scope
 
@@ -126,6 +128,88 @@ invalidation where their semantics change. The indexer must track implementation
 changes and freeze events without treating its cache as signing authority. Public contract
 metadata should show whether upgrades remain possible.
 
+## Signing clients and disclosure (stage 3)
+
+Implemented by issue 1810. Every Robot Money write a client signs goes to the
+gateway proxy, so the gateway is the proxy the signing clients verify.
+
+**Verification before signing.** `rmpc` (`deposit`, `withdraw`,
+`withdraw-router`, the committee's signed tilt `committee vote-submit`, and
+`receipt submit`) and the dapp's
+admin writes pin a block, then check at that block:
+
+1. `keccak256(eth_getCode(gateway))` equals the proxy pin
+   (`gateway_runtime_hash`, `VITE_GATEWAY_EXPECTED_CODE_HASH`);
+2. the ERC-1967 implementation slot names exactly the approved implementation
+   (`gateway_implementation`, `VITE_GATEWAY_EXPECTED_IMPLEMENTATION`);
+3. `keccak256(eth_getCode(implementation))` equals its approved code hash
+   (`gateway_implementation_runtime_hash`,
+   `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`).
+
+The approved pair comes from the gateway manifest (`gateway_implementation`,
+`gateway_implementation_runtime_hash`). The rules fail closed: a proxy with no
+approved implementation, an approved implementation on an address whose slot
+is empty, another address in the slot, another code hash, a slot word that is
+not an address, or any failed read refuses (`rmpc`:
+`ErrImplementationNotApproved`, `ErrImplementationUnverified`). A gateway with
+an empty slot and no pin is a direct deployment, checked by the code-hash pin
+alone. Every `rmpc` preflight read (proxy, implementation, `usdc()`, `vault()`,
+`agents()`, window gross, allowance, balance, vault share checks) runs at the
+same pinned block. The dapp's pins are build-time-only, like the code-hash pin;
+a runtime `/config.json` cannot supply or replace them. Indexed state never
+authorizes signing.
+
+**Outstanding signed writes and queued transactions across an upgrade.** No
+gateway call carries an implementation version, and adding one is a Solidity
+change (stage 1 scope). The clients therefore bind what they sign:
+
+- `rmpc` re-reads the implementation at `latest` after signing and before
+  broadcast. A changed or unapproved implementation discards the signed
+  transaction unsent (`ErrImplementationChanged`), so it can never execute.
+- After the receipt, `rmpc` reads the implementation slot at the block the
+  transaction executed in. Anything other than the implementation it verified
+  is reported as `ErrImplementationChanged` with the `tx_hash`, never as a
+  success, and the replay-cache entry stays so the write is not re-sent
+  blindly.
+- A signed gateway write carries a `deadline` of at most
+  `MAX_DEADLINE_SKEW` (600 s) ahead of the block time. An upgrade must wait the
+  timelock's minimum delay after it is scheduled, which is far longer, and the
+  `CallScheduled` operation is public for that whole time. A write signed before
+  an upgrade can only execute after it inside that bound, and the receipt check
+  above reports it when it does.
+- Gateway authorizations (agent policies, owner consent, pending
+  `commitAuthorization` commitments) are proxy state and survive an upgrade by
+  design; the storage-layout gate keeps their meaning. An upgrade that changes
+  their semantics must migrate or invalidate them in its reviewed reinitializer
+  (`upgradeToAndCall` data). Pending commitments also expire after
+  `COMMIT_EXPIRY_BLOCKS`. The dapp gates every admin flow, including a
+  reveal, on a verified gateway with the implementation pin. It verifies when
+  the page loads, the wallet connects or changes chain, and on "Re-verify"; it
+  does not re-check an open page before each signature and has no receipt-time
+  check, so an upgrade during an open session is caught on the next
+  verification, not at the click.
+- Queued timelock operations: a queued `freezeUpgrades` is bound to the
+  reviewed implementation and code hash and reverts after an intervening
+  upgrade; a queued upgrade reverts once the proxy is frozen. Review and cancel
+  every pending upgrade operation before freezing.
+
+After an approved upgrade, every client's implementation pin is updated from
+the new release manifest. Until then the clients refuse to sign, which is the
+intended fail-closed behavior.
+
+**Disclosure.** The explorer indexer stores every proxied core contract's
+`Upgraded` and `UpgradesFrozen` events in `admin_events` (`contract_kind =
+'proxy'`, migration 0019) and now watches RouterGovernance for them. The API
+lists them with the governance events and gives each contract its
+`implementation`, `upgrade_state` (`frozen`, `upgradeable`, `unknown`) and
+`frozen_at_block` on `/v1/chains/:chain_id/contracts`. The dapp shows the
+gateway's live implementation and freeze state once verified, and the vault
+detail shows each vault's indexed implementation and upgrade state. `rmpc
+get-gateway` reports the implementation, its code hash, `upgradesFrozen()` and
+`upgradeTimelock()` beside the approved pin. The watchdog pages each governed
+upgrade or freeze (an event in a later block than the proxy's deployment) once;
+it never pauses.
+
 ## Delivery sequence and acceptance gates
 
 1. Inventory every stateful contract, constructor, immutable, storage layout,
@@ -168,9 +252,9 @@ the target design until code and on-chain evidence exist.
 | `docs/technical/security-model.md` §2, §4, §13 | Replace blanket proxy prohibition with restricted per-instance UUPS policy, upgrade threat model, freeze evidence, and release gates. | Done: §2 proxy, delegatecall and initializer rows; §4 upgrade-authority row; §13 release-gate row. |
 | `docs/technical/smart-contracts.md` §2, §5 | Preserve historic direct-address facts; distinguish current state from target, then document actual proxy and implementation addresses after deployment. | Done for the source; the proxy and implementation addresses are added after a proxied deployment. |
 | `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. | Done. |
-| `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure is stage 3. |
+| `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure done in stage 3 (issue 1810): explorer API, dapp, `rmpc get-gateway`, watchdog. |
 | `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Planned (stages 2 and 4). |
-| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. The release sheet's mode, frozen counts, client and indexer configuration are stages 2 and 3. |
+| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. The release sheet's mode and frozen counts are stage 2. |
 | `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern, Proposed until it is reviewed and accepted. |
 
 ## References

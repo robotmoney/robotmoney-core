@@ -367,6 +367,21 @@ sol! {
         event ReceiptReleased(bytes32 indexed receiptId, address indexed releasedBy, uint64 releasedAt);
     }
 
+    /// Upgrade and freeze events every proxied core contract emits from its own
+    /// address (contracts/lib/GovernedUUPS.sol, issue 1808): the gateway, the
+    /// vaults, the registry, the router, RouterGovernance, the IC policy and the
+    /// receipt register. Indexed into `admin_events` with `contract_kind =
+    /// 'proxy'` (issue 1810).
+    #[sol(abi)]
+    #[allow(missing_docs)]
+    interface IGovernedUpgradeEvents {
+        /// ERC-1967 `Upgraded`, emitted by the proxy constructor and by every
+        /// governed upgrade.
+        event Upgraded(address indexed implementation);
+        /// Upgrades on this proxy are permanently disabled. GovernedUUPS.sol.
+        event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+    }
+
     /// Event surface of OpenZeppelin `TimelockController`, the contract the Safe schedules every
     /// governed change through. Signatures are OpenZeppelin's, so there is no Robot Money source file to
     /// check them against.
@@ -457,6 +472,11 @@ pub struct Topics {
     pub safe_added_owner: B256,
     pub safe_removed_owner: B256,
     pub safe_changed_threshold: B256,
+    // GovernedUUPS proxy events (issue 1810), emitted by every proxied core contract.
+    /// ERC-1967 `Upgraded(address)`.
+    pub proxy_upgraded: B256,
+    /// `UpgradesFrozen(address,address,bytes32)`.
+    pub proxy_upgrades_frozen: B256,
 }
 
 impl Topics {
@@ -518,6 +538,8 @@ impl Topics {
             safe_added_owner: keccak256(b"AddedOwner(address)"),
             safe_removed_owner: keccak256(b"RemovedOwner(address)"),
             safe_changed_threshold: keccak256(b"ChangedThreshold(uint256)"),
+            proxy_upgraded: keccak256(b"Upgraded(address)"),
+            proxy_upgrades_frozen: keccak256(b"UpgradesFrozen(address,address,bytes32)"),
         }
     }
 
@@ -561,6 +583,8 @@ impl Topics {
             self.safe_added_owner,
             self.safe_removed_owner,
             self.safe_changed_threshold,
+            self.proxy_upgraded,
+            self.proxy_upgrades_frozen,
         ]
     }
 }
@@ -708,6 +732,7 @@ mod tests {
             IPortfolioRouterEvents,
             IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
+            IGovernedUpgradeEvents,
         );
         out
     }
@@ -978,6 +1003,32 @@ mod tests {
                 "ReceiptReleased",
                 t.consensus_receipt_released,
             ),
+            // GovernedUUPS proxy events — issue 1810. Declared once on the
+            // shared base, so the gateway's and the vault's artifacts carry them.
+            (
+                "RobotMoneyGateway.sol",
+                "RobotMoneyGateway",
+                "Upgraded",
+                t.proxy_upgraded,
+            ),
+            (
+                "RobotMoneyGateway.sol",
+                "RobotMoneyGateway",
+                "UpgradesFrozen",
+                t.proxy_upgrades_frozen,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "Upgraded",
+                t.proxy_upgraded,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "UpgradesFrozen",
+                t.proxy_upgrades_frozen,
+            ),
         ];
 
         // The `sol!` declarations' own view of themselves, keyed by topic-0.
@@ -1038,9 +1089,10 @@ mod tests {
             checks.len(),
             "not every entry in the artifact cross-check table was evaluated"
         );
-        // 26 since issue #1698 deleted the four RouterGovernance voting events.
+        // 26 since issue #1698 deleted the four RouterGovernance voting events;
+        // 30 since issue 1810 added the two proxy events on two artifacts.
         assert!(
-            checked >= 26,
+            checked >= 30,
             "artifact cross-check covered only {checked} events — entries were removed \
              from the table without removing the corresponding topic from `Topics`"
         );
@@ -1168,6 +1220,15 @@ mod tests {
         assert_eq!(
             t.consensus_receipt_released,
             IConsensusRecommendationReceiptEvents::ReceiptReleased::SIGNATURE_HASH
+        );
+        // GovernedUUPS proxy events — issue 1810.
+        assert_eq!(
+            t.proxy_upgraded,
+            IGovernedUpgradeEvents::Upgraded::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.proxy_upgrades_frozen,
+            IGovernedUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH
         );
     }
 
@@ -1335,6 +1396,17 @@ mod tests {
                 "ReceiptReleased",
                 b"ReceiptReleased(bytes32,address,uint64)",
                 IConsensusRecommendationReceiptEvents::ReceiptReleased::SIGNATURE_HASH,
+            ),
+            // contracts/lib/GovernedUUPS.sol — issue 1810.
+            (
+                "Upgraded",
+                b"Upgraded(address)",
+                IGovernedUpgradeEvents::Upgraded::SIGNATURE_HASH,
+            ),
+            (
+                "UpgradesFrozen",
+                b"UpgradesFrozen(address,address,bytes32)",
+                IGovernedUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH,
             ),
         ];
 

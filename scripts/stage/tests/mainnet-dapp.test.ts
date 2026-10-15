@@ -103,6 +103,26 @@ describe("the env builder from the manifests", () => {
     expect(env.INDEXER_SAFE).toBe(SAFE);
     expect(env.INDEXER_TIMELOCK).toBe(TIMELOCK);
     expect(env.VITE_TIMELOCK_ADDRESS).toBe(TIMELOCK);
+    // A direct (legacy) gateway's manifest has no implementation: the pins are empty.
+    expect(env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION).toBe("");
+    expect(env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH).toBe("");
+  });
+
+  test("passes a proxied gateway's implementation pin through, and refuses a half or zero pin (issue 1810)", () => {
+    const IMPL = A(0x10a);
+    const IMPL_HASH = `0x${"cd".repeat(32)}`;
+    const proxied = fixture("proxied", (d) => {
+      Object.assign(d[manifestOf("gateway")]!, { gateway_implementation: IMPL, gateway_implementation_runtime_hash: IMPL_HASH });
+    });
+    const penv = buildMainnetDappEnv(input(proxied));
+    expect(penv.VITE_GATEWAY_EXPECTED_IMPLEMENTATION).toBe(IMPL);
+    expect(penv.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH).toBe(IMPL_HASH);
+    const half = fixture("impl-half", (d) => void (d[manifestOf("gateway")]!.gateway_implementation = IMPL));
+    expect(refusal(() => buildMainnetDappEnv(input(half)))).toBe("manifest-field");
+    const zero = fixture("impl-zero", (d) => {
+      Object.assign(d[manifestOf("gateway")]!, { gateway_implementation: IMPL, gateway_implementation_runtime_hash: `0x${"0".repeat(64)}` });
+    });
+    expect(refusal(() => buildMainnetDappEnv(input(zero)))).toBe("manifest-field");
   });
 
   test("is chain 8453, mainnet class, with an EMPTY faucet key and no devnet RPC", () => {

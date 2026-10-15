@@ -56,6 +56,7 @@ import {
   routerAbi,
   registryAbi,
   BASKET_VAULT_SHORTLIST_ABI,
+  GOVERNED_UUPS_ABI,
 } from "../../src/lib/abi";
 import {
   gatewayAbiGenerated,
@@ -125,6 +126,17 @@ const PAIRS: readonly AbiPair[] = [
     label: "BASKET_VAULT_SHORTLIST_ABI vs ProtocolAssetVault",
     handMaintained: BASKET_VAULT_SHORTLIST_ABI,
     canonical: protocolAssetVaultAbiGenerated,
+  },
+  // Issue 1810: the GovernedUUPS views, on two proxied contracts.
+  {
+    label: "GOVERNED_UUPS_ABI vs RobotMoneyGateway",
+    handMaintained: GOVERNED_UUPS_ABI,
+    canonical: gatewayAbiGenerated,
+  },
+  {
+    label: "GOVERNED_UUPS_ABI vs RobotMoneyVault",
+    handMaintained: GOVERNED_UUPS_ABI,
+    canonical: robotMoneyVaultAbiGenerated,
   },
 ];
 

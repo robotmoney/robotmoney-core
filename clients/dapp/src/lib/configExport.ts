@@ -14,6 +14,10 @@
  *   chain_id, rpc_url, gateway_address, usdc_address, vault_address,
  *   gateway_runtime_hash
  *
+ * Optional top-level fields (issue 1810), emitted only for a proxied gateway:
+ *   gateway_implementation, gateway_implementation_runtime_hash
+ *   rmpc refuses every write on a proxied gateway without them.
+ *
  * Required [signer] sub-table fields (encrypted_keystore path):
  *   allow_software_fallback = true
  *   keystore_path
@@ -46,6 +50,12 @@ interface RmpcExportInputs {
   vault_address: string;
   /** keccak256(eth_getCode(gateway_address)) — must be non-zero */
   gateway_runtime_hash: string;
+  /**
+   * The verified ERC-1967 implementation behind a proxied gateway and its
+   * code hash (issue 1810). Omit both for a direct gateway.
+   */
+  gateway_implementation?: string;
+  gateway_implementation_runtime_hash?: string;
   signer: SignerSpec;
 }
 
@@ -65,6 +75,12 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
     `usdc_address         = ${tomlStr(inputs.usdc_address)}`,
     `vault_address        = ${tomlStr(inputs.vault_address)}`,
     `gateway_runtime_hash = ${tomlStr(inputs.gateway_runtime_hash)}`,
+    ...(inputs.gateway_implementation && inputs.gateway_implementation_runtime_hash
+      ? [
+          `gateway_implementation = ${tomlStr(inputs.gateway_implementation)}`,
+          `gateway_implementation_runtime_hash = ${tomlStr(inputs.gateway_implementation_runtime_hash)}`,
+        ]
+      : []),
     ``,
     `[signer]`,
     ...buildSignerLines(inputs.signer),

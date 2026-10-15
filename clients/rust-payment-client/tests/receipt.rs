@@ -37,7 +37,10 @@
 
 mod common;
 
-use crate::common::{jrpc_result, jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE};
+use crate::common::{
+    install_direct_gateway_code_mocks, install_gateway_implementation, jrpc_result,
+    jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
+};
 use alloy_primitives::{b256, hex as ahex, keccak256, Address, B256};
 use alloy_sol_types::SolCall;
 use assert_cmd::Command;
@@ -134,6 +137,11 @@ struct ReceiptFixture {
 
 impl ReceiptFixture {
     fn build(rpc_url: &str) -> Self {
+        Self::build_with(rpc_url, "")
+    }
+
+    /// [`Self::build`] with `extra` top-level TOML lines.
+    fn build_with(rpc_url: &str, extra: &str) -> Self {
         use rust_payment_client::signer::software::SoftwareSigner;
 
         // anvil account #0, the same deterministic key the other suites use.
@@ -160,7 +168,7 @@ vault_address         = "0x0000000000000000000000000000000000000d00"
 ic_policy_address     = "0x0000000000000000000000000000000000000e00"
 gateway_runtime_hash  = "{runtime_hash}"
 max_fee_per_gas_cap   = 100000000000
-
+{extra}
 [signer]
 allow_software_fallback = true
 keystore_path           = "{ks}"
@@ -222,6 +230,7 @@ fn simple_receipt_body() -> String {
 /// `eth_sendRawTransaction` mock is registered by the caller, because the
 /// refusal tests need it pinned at `expect(0)`.
 async fn mock_write_preamble(server: &mut mockito::ServerGuard) {
+    install_direct_gateway_code_mocks(server).await;
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
@@ -735,6 +744,7 @@ async fn receipt_submit_refuses_when_the_anchor_transaction_reverts_on_chain() {
 
     // Everything the happy path needs EXCEPT the receipt mock, which is
     // replaced below by the reverted one.
+    install_direct_gateway_code_mocks(&mut server).await;
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
@@ -1605,4 +1615,74 @@ fn bps_conversion_absorbs_producer_settle_dust_and_refuses_a_real_negative() {
     let real_negative = [0.5, 0.5, 0.1, -0.1];
     bucket_shares_to_bps(&real_negative)
         .expect_err("a share more negative than the tolerance is refused BY NAME");
+}
+
+/// Issue 1810: the anchor goes to the gateway proxy, so `receipt submit`
+/// verifies the live implementation before signing. The proxy code (and its
+/// pinned hash) is unchanged; the slot names an implementation nobody
+/// approved. Nothing is signed or sent.
+#[tokio::test]
+async fn receipt_submit_refuses_an_unapproved_gateway_implementation() {
+    use alloy_primitives::{address, Address};
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+    const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0xbb];
+
+    let mut server = mockito::Server::new_async().await;
+    let body = fixture_str("consensus-receipt.valid.json");
+    server
+        .mock("GET", RECEIPT_PATH)
+        .with_status(200)
+        .with_body(&body)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    mock_write_preamble(&mut server).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, None).await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = ReceiptFixture::build_with(
+        &server.url(),
+        &format!(
+            "gateway_implementation = \"{IMPL_A:#x}\"\n\
+             gateway_implementation_runtime_hash = \"0x{}\"\n",
+            ahex::encode(keccak256(IMPL_A_CODE))
+        ),
+    );
+    let (_, _, pinned) = pinned_golden(0);
+    let url = format!("{}{RECEIPT_PATH}", server.url());
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "receipt",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "submit",
+            "--receipt-url",
+            &url,
+            "--expected-digest",
+            &pinned,
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let v = stdout_json(&output);
+    assert_eq!(output.status.code(), Some(2), "refusal exit code: {v}");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    send.assert_async().await;
 }

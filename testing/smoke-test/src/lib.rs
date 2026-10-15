@@ -745,6 +745,16 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         &self.gateway_runtime_hash
     }
+    /// The approved ERC-1967 implementation behind the gateway proxy, from
+    /// the gateway manifest (issue 1810).
+    pub fn gateway_implementation_hex(&self) -> &str {
+        &self.topology.gateway_implementation
+    }
+    /// `keccak256` of the gateway implementation's runtime code, from the
+    /// gateway manifest (issue 1810).
+    pub fn gateway_implementation_runtime_hash(&self) -> &str {
+        &self.topology.gateway_implementation_runtime_hash
+    }
     /// Raw string form of the gateway address (for TOML/config templating).
     pub fn gateway_hex(&self) -> &str {
         &self.topology.gateway
@@ -2944,6 +2954,15 @@ fn dapp_compose_env(
         kv("VITE_GATEWAY_ADDRESS", &d.gateway),
         kv("VITE_VAULT_ADDRESS", &d.vault),
         kv("VITE_GATEWAY_EXPECTED_CODE_HASH", &d.gateway_runtime_hash),
+        // Issue 1810: the gateway is an ERC-1967 proxy; admin writes need its approved implementation.
+        kv(
+            "VITE_GATEWAY_EXPECTED_IMPLEMENTATION",
+            &d.gateway_implementation,
+        ),
+        kv(
+            "VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH",
+            &d.gateway_implementation_runtime_hash,
+        ),
         // Issue #320: registry and router addresses so the DestinationSelector can list registered vaults and
         // offer the Portfolio Router deposit path.
         kv("VITE_REGISTRY_ADDRESS", &d.registry),
@@ -2990,6 +3009,8 @@ struct DappDeployed {
     gateway: String,
     vault: String,
     gateway_runtime_hash: String,
+    gateway_implementation: String,
+    gateway_implementation_runtime_hash: String,
     registry: String,
     router: String,
     governance: String,
@@ -3005,6 +3026,10 @@ impl DappDeployed {
             gateway: fixture.gateway_hex().to_string(),
             vault: fixture.vault_hex().to_string(),
             gateway_runtime_hash: fixture.gateway_runtime_hash().to_string(),
+            gateway_implementation: fixture.gateway_implementation_hex().to_string(),
+            gateway_implementation_runtime_hash: fixture
+                .gateway_implementation_runtime_hash()
+                .to_string(),
             registry: fixture.registry_hex().to_string(),
             router: fixture.router_hex().to_string(),
             governance: fixture.governance_hex().to_string(),
@@ -4083,6 +4108,8 @@ ccc333\t\teth-beacon
             gateway: a(1),
             vault: a(2),
             gateway_runtime_hash: format!("0x{:064x}", 3),
+            gateway_implementation: a(10),
+            gateway_implementation_runtime_hash: format!("0x{:064x}", 11),
             registry: a(4),
             router: a(5),
             governance: a(6),
@@ -4156,6 +4183,15 @@ ccc333\t\teth-beacon
         );
         assert_eq!(get("VITE_DAPP_URL"), Some("https://dapp.example"));
         assert_eq!(get("INDEXER_RPC_URL"), Some("http://twin-chain:8545"));
+        // Issue 1810: the dapp's admin writes need the gateway implementation pin.
+        assert_eq!(
+            get("VITE_GATEWAY_EXPECTED_IMPLEMENTATION"),
+            Some(format!("0x{:040x}", 10).as_str())
+        );
+        assert_eq!(
+            get("VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH"),
+            Some(format!("0x{:064x}", 11).as_str())
+        );
         assert_eq!(get("DAPP_PORT"), Some("5173"));
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
     }

@@ -328,31 +328,10 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
         Err(err) => {
             // Salvage what we can: chain_id from config (since on mismatch
-            // we don't have an authoritative value). gateway_code_hash_match
-            // depends on which step tripped — we conservatively report
-            // false across the board on any failure.
-            let mut checks = ChecksOutput::unknown();
-            // ErrChainIdMismatch is the only case where we know the others
-            // weren't even attempted; for everything else the earlier
-            // checks did pass, but we have no `report` to read from. Keep
-            // it simple: emit the variant name and let operators inspect
-            // logs for the rest. Set `chain_id_match` and
-            // `gateway_code_hash_match` based on the specific error.
-            match &err {
-                RmpcError::ErrChainIdMismatch => {}
-                RmpcError::ErrCodeHashMismatch => {
-                    checks.chain_id_match = true;
-                }
-                RmpcError::ErrDepositsPaused => {
-                    checks.chain_id_match = true;
-                    checks.gateway_code_hash_match = true;
-                    checks.deposits_paused = true;
-                }
-                _ => {
-                    checks.chain_id_match = true;
-                    checks.gateway_code_hash_match = true;
-                }
-            }
+            // we don't have an authoritative value), and the per-check flags
+            // the failing step implies (the same table the write commands
+            // use for their refusal snapshot).
+            let checks = ChecksOutput::from_err_partial(&err);
             (false, checks, cfg.chain_id, Some(err.name().to_string()))
         }
     };
@@ -422,7 +401,9 @@ mod tests {
     fn sample_report() -> PreflightReport {
         PreflightReport {
             chain_id: 31337,
+            block_number: 1,
             gateway_runtime_hash_ok: true,
+            gateway_implementation: None,
             deposits_paused: false,
             agent_active: true,
             agent_valid_until: 9_999_999_999,

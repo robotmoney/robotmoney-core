@@ -54,6 +54,12 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   gatewayRuntimeHash?: string;
   /**
+   * The verified implementation behind a proxied gateway and its code hash
+   * (issue 1810), exported beside `gatewayRuntimeHash`.
+   */
+  gatewayImplementation?: string;
+  gatewayImplementationRuntimeHash?: string;
+  /**
    * TimelockController address (issue #647 / architecture §4.5).
    * When provided, the Timelock tab is inserted in the admin area.
    * When absent the tab is still rendered in the error/missing-config state.
@@ -197,6 +203,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           vault={a.vaultAddress}
           usdcAddress={a.usdcAddress}
           gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
+          gatewayImplementation={a.gatewayImplementation}
+          gatewayImplementationRuntimeHash={a.gatewayImplementationRuntimeHash}
           chainId={a.chainId}
           agent={a.agent as Address}
         />

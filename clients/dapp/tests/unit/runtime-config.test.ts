@@ -458,3 +458,34 @@ describe("loadRuntimeConfig — mainnet build (issue 1729)", () => {
     expect(config.VITE_VAULT_ADDRESS).toBe("0x3333333333333333333333333333333333333333");
   });
 });
+
+/**
+ * Issue 1810: the gateway implementation pin decides, like the code-hash pin,
+ * whether admin writes are allowed. It is build-time-only: a runtime document
+ * can neither supply nor replace it, and `deriveDappConfig` reads it from the
+ * bundle's env.
+ */
+describe("gateway implementation pin is build-time-only (issue 1810)", () => {
+  const IMPL_PIN = "0x00000000000000000000000000000000000a11ce";
+  const IMPL_HASH = "0x" + "cd".repeat(32);
+
+  it("is absent from the runtime allowlist and dropped from a runtime document", () => {
+    expect(RUNTIME_CONFIG_KEYS).not.toContain("VITE_GATEWAY_EXPECTED_IMPLEMENTATION");
+    expect(RUNTIME_CONFIG_KEYS).not.toContain("VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const parsed = parseRuntimeConfig({
+      VITE_GATEWAY_EXPECTED_IMPLEMENTATION: IMPL_PIN,
+      VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: IMPL_HASH,
+    });
+    expect(parsed).toEqual({});
+  });
+
+  it("reaches the dapp config from the build-time env", () => {
+    const cfg = deriveDappConfig({
+      VITE_GATEWAY_EXPECTED_IMPLEMENTATION: IMPL_PIN,
+      VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: IMPL_HASH,
+    });
+    expect(cfg.expectedImplementation).toBe(IMPL_PIN);
+    expect(cfg.expectedImplementationHash).toBe(IMPL_HASH);
+  });
+});

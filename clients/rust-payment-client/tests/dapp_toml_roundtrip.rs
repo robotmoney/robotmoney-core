@@ -231,3 +231,27 @@ fn renamed_required_field_fails_direct_load() {
         Matcher::Any,
     );
 }
+
+/// Issue 1810: for a proxied gateway the dapp export adds the two
+/// implementation-pin lines (`configExport.ts`). They must be fields rmpc's
+/// `deny_unknown_fields` schema accepts, under exactly these names.
+#[test]
+fn dapp_exported_implementation_pin_parses() {
+    let base = std::fs::read_to_string(FIXTURE_PATH).expect("read fixture");
+    let impl_addr = "0x00000000000000000000000000000000000a11ce";
+    let impl_hash = format!("0x{}", "cd".repeat(32));
+    let toml = base.replace(
+        "\n[signer]",
+        &format!(
+            "gateway_implementation = \"{impl_addr}\"\n\
+             gateway_implementation_runtime_hash = \"{impl_hash}\"\n\n[signer]"
+        ),
+    );
+    assert_ne!(toml, base, "the pin lines were inserted");
+    let cfg = Config::from_str(&toml).expect("rmpc parses the dapp's implementation pin");
+    assert_eq!(cfg.gateway_implementation.as_deref(), Some(impl_addr));
+    assert_eq!(
+        cfg.gateway_implementation_runtime_hash.as_deref(),
+        Some(impl_hash.as_str())
+    );
+}

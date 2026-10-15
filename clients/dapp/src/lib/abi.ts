@@ -640,3 +640,27 @@ export function decodeShortlist(result: unknown): ShortlistEntry[] {
       Array.isArray(balances) && typeof balances[i] === "bigint" ? (balances[i] as bigint) : 0n,
   }));
 }
+
+/**
+ * The upgrade-disclosure views every proxied core contract inherits from
+ * `contracts/lib/GovernedUUPS.sol` (issue 1808): the freeze flag and the only
+ * account that can upgrade or freeze. Read by the gateway verifier to show
+ * the live freeze state (issue 1810). Checked against the gateway and the
+ * vault artifacts by `abi-parity.test.ts`.
+ */
+export const GOVERNED_UUPS_ABI = [
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "upgradeTimelock",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;

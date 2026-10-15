@@ -87,6 +87,14 @@ export function AdminFlow(props: Props) {
       gatewayVerificationState.status === "verified"
         ? gatewayVerificationState.computedHash
         : undefined,
+    gatewayImplementation:
+      gatewayVerificationState.status === "verified"
+        ? (gatewayVerificationState.implementation ?? undefined)
+        : undefined,
+    gatewayImplementationRuntimeHash:
+      gatewayVerificationState.status === "verified"
+        ? gatewayVerificationState.implementationCodeHash
+        : undefined,
   });
 
   return (

@@ -179,6 +179,8 @@ fn assert_required_fields(fields: &BTreeMap<String, String>) {
         "vault_addr",
         "agent_addr",
         "gateway_runtime_hash",
+        "gateway_implementation",
+        "gateway_implementation_runtime_hash",
         "dapp_url",
         "explorer_api_url",
     ] {

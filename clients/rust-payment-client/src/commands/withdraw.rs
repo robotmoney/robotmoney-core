@@ -201,7 +201,13 @@ pub fn run(args: Args) -> i32 {
     // -- Withdraw-specific preflight: vault checks -------------------------
     let vault_preflight_result = session.rt.block_on(async {
         Preflight::new(&session.rpc, &cfg)
-            .run_withdraw_vault(source_vault, gateway_addr, agent_address, shares)
+            .run_withdraw_vault(
+                source_vault,
+                gateway_addr,
+                agent_address,
+                shares,
+                report.block_number,
+            )
             .await
     });
     if let Err(err) = vault_preflight_result {
@@ -235,6 +241,7 @@ pub fn run(args: Args) -> i32 {
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: 0,
             checks: &|| ChecksOutput::from_report(&report),
+            gateway_implementation: report.gateway_implementation,
         },
     ) {
         Ok(c) => c,

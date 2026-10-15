@@ -455,3 +455,115 @@ async fn vault_detail_block_number_is_the_cursor_even_when_the_last_snapshot_is_
     assert_eq!(d["chain_head_block"], 52_424_276);
     assert_eq!(d["vault"]["snapshot_block"], 900);
 }
+
+/// Issue 1810: `/v1/chains/:chain_id/contracts` discloses each proxy's
+/// implementation (its newest indexed `Upgraded`) and its freeze state; the
+/// proxy events are listed with the governance events. A contract with no
+/// upgrade event is `unknown`, never claimed upgradeable or frozen.
+#[tokio::test]
+async fn contracts_disclose_implementation_and_freeze_state_from_proxy_events() {
+    let s = boot().await;
+    run(&s.pool, true, None, Some(1000), Some(1010)).await;
+    let gateway = [0x11u8; 20];
+    let router = [0x33u8; 20];
+    let vault = [0x22u8; 20];
+    for (addr, kind) in [
+        (gateway, "gateway"),
+        (router, "portfolio_router"),
+        (vault, "vault"),
+    ] {
+        sqlx::query("INSERT INTO contracts (chain_id, address, kind) VALUES ($1, $2, $3)")
+            .bind(PRIMARY_CHAIN_ID)
+            .bind(&addr[..])
+            .bind(kind)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
+    let v1 = format!("0x{}", "1a".repeat(20));
+    let v2 = format!("0x{}", "2b".repeat(20));
+    // (contract, block, log_index, event, detail)
+    let events = [
+        (
+            gateway,
+            10i64,
+            0i32,
+            "Upgraded",
+            format!(r#"{{"implementation":"{v1}"}}"#),
+        ),
+        (
+            gateway,
+            20,
+            0,
+            "Upgraded",
+            format!(r#"{{"implementation":"{v2}"}}"#),
+        ),
+        (
+            gateway,
+            30,
+            0,
+            "UpgradesFrozen",
+            format!(
+                r#"{{"implementation":"{v2}","code_hash":"0x{}"}}"#,
+                "77".repeat(32)
+            ),
+        ),
+        (
+            router,
+            12,
+            0,
+            "Upgraded",
+            format!(r#"{{"implementation":"{v1}"}}"#),
+        ),
+    ];
+    for (contract, block, log_index, event, detail) in &events {
+        sqlx::query(
+            "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
+                                       contract_kind, event_name, detail) \
+             VALUES ($1, $2, $3, $4, $5, 'proxy', $6, $7)",
+        )
+        .bind(PRIMARY_CHAIN_ID)
+        .bind(block)
+        .bind(log_index)
+        .bind(&[0x01u8; 32][..])
+        .bind(&contract[..])
+        .bind(*event)
+        .bind(detail)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    }
+
+    let body = get(&s, &format!("/v1/chains/{PRIMARY_CHAIN_ID}/contracts")).await;
+    let by_kind = |kind: &str| -> serde_json::Value {
+        body["contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["kind"] == kind)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind} in {body}"))
+    };
+    let g = by_kind("gateway");
+    assert_eq!(g["implementation"], v2, "the newest Upgraded wins: {g}");
+    assert_eq!(g["upgrade_state"], "frozen");
+    assert_eq!(g["frozen_at_block"], 30);
+    let r = by_kind("portfolio_router");
+    assert_eq!(r["implementation"], v1);
+    assert_eq!(r["upgrade_state"], "upgradeable");
+    assert!(r["frozen_at_block"].is_null());
+    let v = by_kind("vault");
+    assert!(v["implementation"].is_null());
+    assert_eq!(v["upgrade_state"], "unknown");
+
+    let admin = get(&s, "/v1/governance/admin-events").await;
+    let proxy_rows = admin["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["contract_kind"] == "proxy")
+        .count();
+    assert_eq!(proxy_rows, 4, "{admin}");
+    assert_eq!(admin["events"][0]["event_name"], "UpgradesFrozen");
+    assert_eq!(admin["events"][0]["detail"]["implementation"], v2);
+}

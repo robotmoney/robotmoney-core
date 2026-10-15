@@ -31,6 +31,28 @@ pub enum RmpcError {
     #[error("ErrChainIdMismatch: RPC eth_chainId does not match configured chain_id")]
     ErrChainIdMismatch,
 
+    /// The gateway proxy points at an implementation the operator did not
+    /// approve: the ERC-1967 implementation slot names another address, the
+    /// implementation's code hash differs from
+    /// `gateway_implementation_runtime_hash`, or the proxy/direct shape of
+    /// the gateway differs from the config. The proxy's own code hash can
+    /// still match. Issue 1810.
+    #[error("ErrImplementationNotApproved: {0}")]
+    ErrImplementationNotApproved(String),
+
+    /// The gateway implementation could not be read (the implementation slot
+    /// or the implementation code read failed). A write never proceeds on an
+    /// unverified implementation. Issue 1810.
+    #[error("ErrImplementationUnverified: gateway implementation read failed: {0}")]
+    ErrImplementationUnverified(String),
+
+    /// The gateway implementation changed after this write was checked: before
+    /// broadcast (the signed transaction is discarded, never sent) or by the
+    /// block the transaction executed in (the result is not reported as a
+    /// success). Issue 1810.
+    #[error("ErrImplementationChanged: {0}")]
+    ErrImplementationChanged(String),
+
     /// Deposits are paused: the gateway or its vault reports
     /// `depositsPaused() == true`. Deposit-only refusal: a deposit pause
     /// never blocks a withdrawal, so no withdraw path raises it (core 1494).
@@ -179,6 +201,9 @@ impl RmpcError {
             RmpcError::ErrConcurrentInvocation => "ErrConcurrentInvocation",
             RmpcError::ErrCodeHashMismatch => "ErrCodeHashMismatch",
             RmpcError::ErrChainIdMismatch => "ErrChainIdMismatch",
+            RmpcError::ErrImplementationNotApproved(_) => "ErrImplementationNotApproved",
+            RmpcError::ErrImplementationUnverified(_) => "ErrImplementationUnverified",
+            RmpcError::ErrImplementationChanged(_) => "ErrImplementationChanged",
             RmpcError::ErrDepositsPaused => "ErrDepositsPaused",
             RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
             RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
@@ -227,6 +252,9 @@ mod tests {
             RmpcError::ErrConcurrentInvocation,
             RmpcError::ErrCodeHashMismatch,
             RmpcError::ErrChainIdMismatch,
+            RmpcError::ErrImplementationNotApproved("unapproved".into()),
+            RmpcError::ErrImplementationUnverified("read failed".into()),
+            RmpcError::ErrImplementationChanged("changed".into()),
             RmpcError::ErrDepositsPaused,
             RmpcError::ErrAllowanceInsufficient,
             RmpcError::ErrBalanceInsufficient,

@@ -183,3 +183,80 @@ describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
     expect(el !== null).toBe(shown);
   });
 });
+
+describe("VaultDetail upgradeability (issue 1810)", () => {
+  /** Answer the vault detail and the contracts list by URL. */
+  function routedFetch(contracts: unknown): FetchLike {
+    return vi.fn(async (url: string) => ({
+      ok: true as const,
+      status: 200,
+      json: async () =>
+        url.includes("/contracts")
+          ? { chain_id: 8453, contracts, block_number: 1000, indexed_at: "2026-01-01T12:00:00Z" }
+          : makeVaultDetailFixture({ risk_label: "STABLE_YIELD" }),
+    })) as unknown as FetchLike;
+  }
+  const IMPL = "0x1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a";
+
+  it("renders the indexed implementation and a permanent freeze", async () => {
+    const fetchImpl = routedFetch([
+      {
+        chain_id: 8453,
+        address: VAULT_ADDR.toUpperCase().replace("0X", "0x"),
+        kind: "vault",
+        implementation: IMPL,
+        upgrade_state: "frozen",
+        frozen_at_block: 77,
+      },
+    ]);
+    const { getByTestId } = render(
+      <VaultDetail apiUrl="http://api" address={VAULT_ADDR} fetchImpl={fetchImpl} />,
+    );
+    await waitFor(() =>
+      expect(getByTestId("vault-detail-upgrade-state").getAttribute("data-upgrade-state")).toBe(
+        "frozen",
+      ),
+    );
+    expect(getByTestId("vault-detail-upgrade-state").textContent).toContain("permanently");
+    expect(getByTestId("vault-detail-implementation").textContent).toContain(IMPL);
+    expect(getByTestId("vault-detail-frozen-at").textContent).toContain("77");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://api/v1/chains/8453/contracts",
+      expect.anything(),
+    );
+  });
+
+  it("renders an upgradeable vault", async () => {
+    const fetchImpl = routedFetch([
+      {
+        chain_id: 8453,
+        address: VAULT_ADDR,
+        kind: "vault",
+        implementation: IMPL,
+        upgrade_state: "upgradeable",
+        frozen_at_block: null,
+      },
+    ]);
+    const { getByTestId, queryByTestId } = render(
+      <VaultDetail apiUrl="http://api" address={VAULT_ADDR} fetchImpl={fetchImpl} />,
+    );
+    await waitFor(() =>
+      expect(getByTestId("vault-detail-upgrade-state").getAttribute("data-upgrade-state")).toBe(
+        "upgradeable",
+      ),
+    );
+    expect(getByTestId("vault-detail-upgrade-state").textContent).toContain("timelock");
+    expect(queryByTestId("vault-detail-frozen-at")).toBeNull();
+  });
+
+  it("says unknown, never frozen, when the vault is not listed", async () => {
+    const { getByTestId } = render(
+      <VaultDetail apiUrl="http://api" address={VAULT_ADDR} fetchImpl={routedFetch([])} />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-name")).toBeTruthy());
+    expect(getByTestId("vault-detail-upgrade-state").getAttribute("data-upgrade-state")).toBe(
+      "unknown",
+    );
+    expect(getByTestId("vault-detail-implementation").textContent).toContain("unknown");
+  });
+});

@@ -52,6 +52,28 @@ impl Fixture {
     /// Build a temp keystore + config TOML pointing at `rpc_url`, with
     /// `chain_id` baked in.
     pub fn build(rpc_url: &str, chain_id: u64) -> Self {
+        Self::build_with(rpc_url, chain_id, "")
+    }
+
+    /// [`Self::build`] with an ERC-1967 proxied gateway: `implementation` and
+    /// the hash of `implementation_code` are the approved pair (issue 1810).
+    pub fn build_proxied(
+        rpc_url: &str,
+        chain_id: u64,
+        implementation: Address,
+        implementation_code: &[u8],
+    ) -> Self {
+        let extra = format!(
+            "gateway_implementation = \"{implementation:#x}\"\n\
+             gateway_implementation_runtime_hash = \"0x{}\"\n",
+            ahex::encode(keccak256(implementation_code))
+        );
+        Self::build_with(rpc_url, chain_id, &extra)
+    }
+
+    /// [`Self::build`] with `extra` top-level TOML lines appended before the
+    /// `[signer]` table.
+    pub fn build_with(rpc_url: &str, chain_id: u64, extra: &str) -> Self {
         let tmp = TempDir::new().expect("tempdir");
         let keystore_path = tmp.path().join("keystore.json");
         SoftwareSigner::create_keystore(&keystore_path, &TEST_PRIVKEY, TEST_PASSPHRASE)
@@ -67,7 +89,7 @@ usdc_address          = "{USDC:#x}"
 vault_address         = "{VAULT:#x}"
 gateway_runtime_hash  = "{runtime_hash}"
 max_fee_per_gas_cap   = 100000000000
-
+{extra}
 [signer]
 allow_software_fallback = true
 keystore_path           = "{}"
@@ -207,7 +229,7 @@ pub fn abi_addr_hex(a: Address) -> String {
 /// be keyed on — all callers happen to use the same software-signer
 /// address, but the parameter is left explicit.
 pub async fn install_happy_path_mocks(
-    server: &mut mockito::ServerGuard,
+    server: &mut mockito::Server,
     chain_id: u64,
     _agent_address: Address,
 ) {
@@ -224,6 +246,16 @@ pub async fn install_happy_path_mocks(
         .match_body(Matcher::PartialJson(json!({"method": "eth_getCode"})))
         .with_status(200)
         .with_body(jrpc_result(&format!("0x{}", ahex::encode(GATEWAY_CODE))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // An empty ERC-1967 implementation slot: a direct (non-proxy) gateway,
+    // which the code-hash pin alone verifies (issue 1810).
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", "00".repeat(32))))
         .expect_at_least(0)
         .create_async()
         .await;
@@ -310,7 +342,7 @@ pub async fn install_happy_path_mocks(
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
         .with_status(200)
-        .with_body(jrpc_result("0x100"))
+        .with_body(jrpc_result(FIXTURE_BLOCK_TAG))
         .expect_at_least(0)
         .create_async()
         .await;
@@ -321,6 +353,82 @@ pub async fn install_happy_path_mocks(
         ))
         .with_status(200)
         .with_body(jrpc_result_raw(r#"{"timestamp":"0x64a9f4c0"}"#))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
+/// The block the shared fixtures' `eth_blockNumber` mock reports, as the tag
+/// the preflight pins every read to.
+pub const FIXTURE_BLOCK_TAG: &str = "0x100";
+
+/// Matches a JSON-RPC body whose last param is the block `tag`.
+pub fn at_block(tag: &str) -> Matcher {
+    Matcher::Regex(format!(r#""{tag}"\]"#))
+}
+
+/// `eth_blockNumber`, the fixture gateway code, and an empty ERC-1967
+/// implementation slot: the gateway-code reads every write makes before
+/// signing (issue 1810), for tests that do not install the happy path.
+pub async fn install_direct_gateway_code_mocks(server: &mut mockito::Server) {
+    for (method, body) in [
+        ("eth_blockNumber", jrpc_result(FIXTURE_BLOCK_TAG)),
+        (
+            "eth_getCode",
+            jrpc_result(&format!("0x{}", ahex::encode(GATEWAY_CODE))),
+        ),
+        (
+            "eth_getStorageAt",
+            jrpc_result(&format!("0x{}", "00".repeat(32))),
+        ),
+    ] {
+        server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJson(json!({ "method": method })))
+            .with_status(200)
+            .with_body(body)
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+}
+
+/// Make the fixture gateway an ERC-1967 proxy whose implementation slot
+/// names `implementation` for reads tagged `tag` (every read when `None`),
+/// and serve `code` as that implementation's code. The proxy's own code
+/// (and so `gateway_runtime_hash`) is unchanged.
+///
+/// Register it AFTER the happy-path mocks: with every mock satisfied,
+/// mockito answers from the last registered match.
+pub async fn install_gateway_implementation(
+    server: &mut mockito::Server,
+    implementation: Address,
+    code: &[u8],
+    tag: Option<&str>,
+) {
+    let mut slot = vec![
+        Matcher::PartialJson(json!({"method": "eth_getStorageAt"})),
+        Matcher::Regex(format!(r#""params":\["{GATEWAY:#x}""#)),
+    ];
+    if let Some(tag) = tag {
+        slot.push(at_block(tag));
+    }
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(slot))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", abi_addr_hex(implementation))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#""params":\["{implementation:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(code))))
         .expect_at_least(0)
         .create_async()
         .await;
@@ -343,7 +451,7 @@ pub async fn install_happy_path_mocks(
 /// the same ERC-20 selectors it stubs at `u128::MAX`. The withdraw path
 /// never reads the vault's `depositsPaused()` (core 1494).
 pub async fn install_withdraw_preflight_mocks(
-    server: &mut mockito::ServerGuard,
+    server: &mut mockito::Server,
     max_withdraw_per_payment: U256,
     max_withdraw_per_window: U256,
     withdraw_window_gross: U256,

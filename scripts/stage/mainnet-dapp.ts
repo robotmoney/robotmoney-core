@@ -150,6 +150,12 @@ export function assertMergedConfigLoopback(configJson: string): void {
 export interface MainnetAddresses {
   gateway: string;
   gatewayCodeHash: string;
+  /**
+   * Issue 1810: the approved ERC-1967 implementation behind a proxied gateway and its code hash, from the
+   * gateway manifest. Empty for a direct (legacy) gateway, whose manifest has neither field.
+   */
+  gatewayImplementation: string;
+  gatewayImplementationHash: string;
   registry: string;
   router: string;
   governance: string;
@@ -207,6 +213,17 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   if (typeof hash !== "string" || !BYTES32.test(hash) || /^0x0{64}$/.test(hash)) {
     throw new MainnetDappError("manifest-field", `${files.gateway} gateway_runtime_hash is not a non-zero bytes32`);
   }
+  // Issue 1810: a proxied gateway's manifest names its implementation; both fields or neither.
+  let gatewayImplementation = "";
+  let gatewayImplementationHash = "";
+  if (g.gateway_implementation !== undefined || g.gateway_implementation_runtime_hash !== undefined) {
+    gatewayImplementation = addr(files.gateway, "gateway_implementation", g.gateway_implementation);
+    const ih = g.gateway_implementation_runtime_hash;
+    if (typeof ih !== "string" || !BYTES32.test(ih) || /^0x0{64}$/.test(ih)) {
+      throw new MainnetDappError("manifest-field", `${files.gateway} gateway_implementation_runtime_hash is not a non-zero bytes32`);
+    }
+    gatewayImplementationHash = ih;
+  }
   const registry = addr(files.registry, "registry", docs[files.registry]!.registry);
   const router = addr(files.router, "router", docs[files.router]!.router);
   const governance = addr(files.governance, "governance", docs[files.governance]!.governance);
@@ -239,7 +256,7 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
   }
-  return { gateway, gatewayCodeHash: hash, registry, router, governance, consensusReceipt, timelock, safe, vaults };
+  return { gateway, gatewayCodeHash: hash, gatewayImplementation, gatewayImplementationHash, registry, router, governance, consensusReceipt, timelock, safe, vaults };
 }
 
 // ─── the environment ─────────────────────────────────────────────────────────
@@ -313,6 +330,8 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_ADDRESS: a.gateway,
     VITE_VAULT_ADDRESS: a.vaults.rmUSDC,
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
+    VITE_GATEWAY_EXPECTED_IMPLEMENTATION: a.gatewayImplementation,
+    VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: a.gatewayImplementationHash,
     VITE_REGISTRY_ADDRESS: a.registry,
     VITE_ROUTER_ADDRESS: a.router,
     VITE_TIMELOCK_ADDRESS: a.timelock,

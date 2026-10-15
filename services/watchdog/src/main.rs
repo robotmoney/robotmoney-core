@@ -55,6 +55,7 @@ use watchdog::{
     receipt_liveness::{
         check_receipt_liveness_status, AlertPager, PageAction, ReceiptLivenessStatus,
     },
+    upgrade_monitor::alert_new_proxy_changes,
     watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
     WatchdogError,
 };
@@ -447,6 +448,20 @@ async fn main() {
                 }
                 Err(e) => error!("consensus receipt liveness check failed: {e}"),
             }
+        }
+
+        // Governed upgrades and freezes of proxied core contracts (issue 1810).
+        // Alert-only: an upgrade never pauses the gateway.
+        if let Err(e) = alert_new_proxy_changes(
+            &pool,
+            &client,
+            config.action.webhook_url.as_deref(),
+            chain_id,
+            now,
+        )
+        .await
+        {
+            error!("proxy upgrade check failed: {e}");
         }
 
         tokio::time::sleep(Duration::from_secs(args.poll_interval_secs)).await;

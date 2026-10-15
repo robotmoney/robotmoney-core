@@ -18,6 +18,12 @@ Before signing any deposit transaction, the client RPC-reads:
 - `eth_chainId` matches the configured `chain_id`
 - `keccak256(eth_getCode(gateway))` matches the configured
   `gateway_runtime_hash`
+- the gateway's ERC-1967 implementation slot names the configured
+  `gateway_implementation`, and that implementation's code hash matches
+  `gateway_implementation_runtime_hash`
+
+Every read runs at one pinned block. The same gateway check runs before
+the committee's signed tilt (`committee vote-submit`) and `receipt submit` sign.
 
 | Condition | Error code | Meaning |
 |---|---|---|
@@ -30,10 +36,16 @@ Before signing any deposit transaction, the client RPC-reads:
 | `usdc.allowance(self, gateway) < amount` | `ErrInsufficientAllowance` | Approve the gateway for at least `amount`. |
 | `eth_chainId != config.chain_id` | `ErrChainIdMismatch` | The RPC endpoint is on the wrong chain. |
 | `keccak256(eth_getCode(gateway)) != gateway_runtime_hash` | `ErrCodeHashMismatch` | The deployed gateway bytecode does not match the pinned hash. |
+| The implementation slot names another address, the implementation code hash differs, a proxy has no approved implementation configured, or an approved implementation is configured for a gateway with an empty slot | `ErrImplementationNotApproved` | The gateway proxy points at logic the operator did not approve. The proxy hash can still match. |
+| The implementation slot or the implementation code cannot be read | `ErrImplementationUnverified` | The client cannot prove which logic would run. It never signs on an unverified implementation. |
+| The implementation changed after preflight (the signed transaction is discarded unsent), or the transaction executed under another implementation (carries `tx_hash`) | `ErrImplementationChanged` | Review what changed before any retry. A write that executed is not reported as a success. |
 
-The MVP gateway is non-upgradeable, so the legitimate path for
-`gateway_runtime_hash` to change is a v1 redeployment plus an operator
-config bump. The client refuses to sign on mismatch — this is not advisory.
+A proxied gateway's own code hash never changes when it is upgraded, so
+`gateway_runtime_hash` alone cannot detect an upgrade. An approved upgrade
+means updating `gateway_implementation` and
+`gateway_implementation_runtime_hash` from the new release manifest. A
+direct (non-proxy) gateway sets neither. The client refuses to sign on any
+mismatch — this is not advisory.
 
 ## Nonce lock refusal (implementation-plan §4.6)
 
