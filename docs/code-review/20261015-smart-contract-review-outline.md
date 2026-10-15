@@ -7,6 +7,7 @@
 - Pin the exact repository, branch, commit, dirty-tree state, compiler versions, optimizer settings, linked libraries, and deployment configurations before reviewing.
 - Review Solidity contracts, linked libraries, deployment and upgrade scripts, storage-layout artifacts, and contract-facing configuration needed to establish deployed behavior. Trace important calls into adapters, clients, indexers, and release tooling when they affect an on-chain invariant or authority boundary; record those seams without expanding into a general off-chain review.
 - Enumerate every production contract and proxy in the target release, including vaults, basket vaults, router, gateway, registry, policies, receipt/governance contracts, adapters, oracles, tokens, timelocks, and emergency controls. Confirm which components are deployed, retired, planned, or test-only.
+- Inventory every public/external entrypoint, fallback/receive path, privileged setter, external call, and linked library. Map how assets and authority can flow across contracts, including direct calls that bypass the expected client or gateway.
 - List chains, addresses, implementations, roles, caps, fee/slippage settings, oracle and keeper parameters, and deployment assumptions. Separate source-level conclusions from live-chain verification.
 - Treat third-party protocol internals as out of scope unless a specific integration assumption is necessary to establish a finding; state that assumption and its evidence.
 
@@ -15,9 +16,11 @@
 - Identify assets and claims: USDC and other underlying tokens, vault shares, adapter positions, basket assets, exclusion-recovery claims, receipts, and any signed or replay-protected operation.
 - Map trusted and less-trusted actors: depositor, share owner, agent, committee member, keeper, ADMIN, EMERGENCY, Safe, proposer/canceller/executor, relayer, upgrade authority, oracle/recorder, and external venue. Record role grants and actual deployment holders separately from intended policy.
 - For each boundary, trace caller identity, authorization, calldata and signatures, state transitions, external calls, token movement, emitted events, and failure behavior. Challenge assumptions about atomicity, ordering, freshness, and who can compose calls.
+- Perform a manual function-by-function pass over in-scope production code and a focused review of every change since the last reviewed commit. Use static tools to generate candidates and coverage leads, then verify their claims in source and reachable execution paths.
+- Turn `docs/prd.md` §12, `docs/architecture.md` §8, `docs/technical/security-model.md`, and every stable ID in `docs/technical/smart-contract-invariants.md` into a traceability matrix: invariant, implementing code, test or proof, counterexample attempted, and remaining gap. Include negative invariants and the actual custody and governance boundaries.
 - Use adversarial scenarios and minimized Foundry reproductions for material claims. Include negative tests for fixes and meaningful stateful/fuzz tests for accounting, share supply, role changes, and boundary conditions. Distinguish source inspection, local reproduction, fork evidence, and live deployment evidence.
 - Attempt to refute every candidate: establish prerequisites, attacker capability, impact, reachability through deployed entrypoints, mitigations, and whether an administrator action is required. Assign severity only after this analysis; deduplicate by root cause while preserving cross-contract impact.
-- Run the repository-required build, tests, static analysis, storage-layout checks, and deployment/config validation. Record exact commands and results, skipped checks, failures, and environmental limits. Passing regression tests do not alone establish that a finding is fixed.
+- Run the repository-required build, tests, static analysis, storage-layout checks, and deployment/config validation. Record exact commands and results, skipped checks, failures, and environmental limits. Inspect `vm.skip`, expected-failure labels, vacuous assertions, narrow selectors, and missing harness actions before crediting formal or invariant coverage. Passing regression tests do not alone establish that a finding is fixed.
 
 ## Coverage checklist
 
@@ -43,6 +46,7 @@
 - Trace every swap and unwind path, including normal, emergency, override, and partial-failure paths. Check minimum output, maximum loss, deadlines, checked casts, return-array lengths, reentrancy, token callbacks, and atomicity across multiple legs.
 - Verify deposit and redemption NAV marks against executable prices and realistic slippage. Test TWAP/spot disagreement, stale or manipulated observations, sampling cadence, ring size, missing honest updates, repeated samples, thin liquidity, fees, and arbitrage/keeper competition.
 - Check per-caller and per-leg floors, router previews, unavailable legs, zero-weight and skipped legs, and whether a failure in one leg should revert or safely skip the whole operation.
+- Model transaction ordering and economic feasibility: flash liquidity, transaction bundles, sandwich and back-run timing, keeper/oracle competition, fees, pool depth, protocol caps, and attacker profit versus user loss under the actual deployment settings.
 - Review removal/reappearance of basket assets, rescue/sweep protections, and whether a returned token or residual position can become stranded or misattributed.
 
 ### 4. Router and multi-vault composition
@@ -51,6 +55,7 @@
 - Trace deposits, `depositFor`, `depositTo`, withdrawals, redemptions, previews, per-leg minimums, skipped legs, unavailable legs, and partial success. Check receiver and asset attribution and prevent duplicate counting or loss of caller protections.
 - Verify receipt/digest binding, nonce and replay protection, expiry/deadline behavior, weight-vector provenance, and the relation between a previewed vector and the vector used at execution.
 - Check governance/application paths and all legacy routes: no bypass through an alternate setter, default vector, migration, or retired governance contract.
+- Verify invariant behavior when router weights, registry status, vault implementations, or leg availability change between preview, signature, and execution; confirm previously held positions remain redeemable after a leg is retired or reweighted.
 
 ### 5. Gateway, agents, committee, and signatures
 
@@ -65,6 +70,7 @@
 - Review pause/unpause, shutdown, force removal, loss write-off, sweep/rescue, caps, fees, adapter configuration, router weights, policy changes, upgrades, and freeze powers. Evaluate each action's delay, proposer/canceller/executor roles, batching, and possible call ordering.
 - Verify emergency actions preserve user exits where required and do not silently reprice recoverable assets. Resolve the intended authority boundary for writing off healthy or illiquid positions and attribute later recoveries.
 - Check quorum/voting units, snapshots, threshold and delay bounds, one-voter control, proposal replay, receipt release/application semantics, and all alternate governance paths.
+- Examine `ProposerFloorTimelock`, Safe module/threshold assumptions, proposer and canceller loss, open executor behavior, and emergency-key compromise or loss through the entire schedule-to-execute lifecycle.
 - Exercise operational recovery procedures through the actual Safe/timelock topology where possible; do not infer deployed safety from role names or example sheets.
 
 ### 7. Upgradeability, initialization, and storage safety
@@ -72,6 +78,7 @@
 - Inventory every proxy, implementation, beacon or linked library and its upgrade/freeze authority. Verify initializer protection, reinitializers, implementation locking, proxy admin paths, and deploy-time ownership handoff.
 - Compare storage layouts against the pinned deployed baseline, including inheritance, packing, mappings, structs, enums, and linked-library storage assumptions. Ensure the comparison cannot be rewritten by the change under review.
 - Check upgrade authorization, build provenance, implementation code identity, atomic initialization, rollback/failure behavior, post-upgrade readback, and irreversible freeze semantics.
+- Verify CREATE2/address derivation, initializer front-running, UUPS compatibility and upgrade entrypoints, implementation self-locking, and that the reviewed source plus pinned compiler settings reproduce the deployed implementation bytecode. Check the compiler version against its published known-bugs list.
 - Verify proxy implementation pins and code-hash checks cover the logic users actually call, are checked at the relevant transaction boundary, and have a safe rotation/retirement process.
 - Inspect migrations and reinitializers for lost roles, changed accounting, stale external references, unbounded work, and compatibility with existing positions and claims.
 
@@ -79,14 +86,25 @@
 
 - Check safe token transfers, fee-on-transfer/rebasing assumptions, approval lifecycle, non-standard return values, decimals, zero-address handling, and native-token paths if present.
 - Review reentrancy, checks-effects-interactions, callbacks, delegatecall/library boundaries, `tx.origin`, `block.timestamp`/block-number assumptions, signatures and domain separators, unchecked arithmetic/casts, array indexing, and denial-of-service through loops or revert propagation.
+- Check chain-ID/domain separation and cross-chain replay; signature malleability or encoding collisions where signatures are used; block-builder ordering and forced token/native-asset transfers; private-state or randomness assumptions if any feature relies on them.
+- Bound gas and storage growth for user exits, emergency recovery, oracle observation, exclusions, adapter and asset arrays, and governance operations at realistic maximum history sizes. Establish a workable recovery path when an external dependency reverts or runs out of gas.
 - Check events against state transitions and ensure emitted values identify actual assets, recipients, agents, vaults, and amounts. Confirm off-chain consumers cannot confuse direct and routed actions or infer authority from untrusted fields.
 - Review compiler version, optimizer/via-IR settings, dependencies, known inherited behavior, and any assembly or custom storage code.
 
 ### 9. Deployment truth, invariants, and residual risk
 
 - Compare production source, deployment scripts, stage sheets, manifests, addresses, roles, caps, oracle configuration, and runbooks. Identify any difference that changes a security conclusion.
+- Verify production bytecode and configuration against the reviewed commit or build manifest on every target chain. If live deployment inspection is not possible, identify the exact checks required before a release decision.
 - Reconcile prior audit/review dispositions with current code and tests. Keep historical findings as immutable baseline evidence; record current status, evidence, and any remaining assumptions separately.
 - State what was not reviewed, what could not be reproduced, external protocol assumptions, live-chain checks not performed, and residual risks accepted by the owner.
+
+## Audit completeness and reporting gates
+
+- Produce a contract/entrypoint inventory, trust-boundary and asset-flow map, invariant-to-evidence matrix, tool-output triage, and historical-finding disposition table. Mark each item covered, not applicable with a reason, or unverified; an unchecked item is a scope gap.
+- Give each material finding a reproducible attack sequence and deployment-realistic impact bound. Explain attacker cost, required privilege, affected holders, liveness or loss, and any cap or time-window assumptions.
+- Review every proposed fix and its new call paths, then rerun the relevant reproduction and invariant checks at the final review commit. If code changes after sign-off, assess the delta and update the verdict.
+- Separate code correctness, deployment/config correctness, and operational assumptions in the final verdict. List blockers, accepted risks with an explicit decision owner, and checks still required before release.
+- Use the [OWASP Smart Contract Security Verification Standard](https://scs.owasp.org/SCSVS/) and [Solidity security considerations](https://docs.soliditylang.org/en/latest/security-considerations.html) as secondary checklists; explain any applicable control not covered by the project-specific review.
 
 ## Required finding record
 
