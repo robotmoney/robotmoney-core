@@ -295,7 +295,11 @@ async fn two_registered_vaults_indexed_independently() {
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
     );
-    stub2.set("eth_getBlockByNumber", stub_block(89, 0xbc, 0xab));
+    // The stub answers every header request with this one block, including the reorg check's read
+    // of block 65. It carries block 65's hash (0xab), so tick 2 sees no reorg. A different hash
+    // would read as a reorg of block 65, and the rollback now deletes the vaults registered above
+    // its root (QA plan X7, DI-8), which these two vaults would not survive.
+    stub2.set("eth_getBlockByNumber", stub_block(89, 0xab, 0xaa));
 
     let rpc2 = JsonRpc::new(&stub2.url);
     let cfg2 = IndexerConfig {
@@ -430,12 +434,13 @@ async fn weights_set_event_populates_router_weight_snapshots() {
 /// tick.
 ///
 /// The tick's address set is read from `vaults` before the tick's own `VaultRegistered` is applied,
-/// so the first `eth_getLogs` cannot name the new vault. The stub answers like a node
-/// (`honour_log_filter`), so the deposit at block 55 is not in that answer. Before the fix the next
+/// so it cannot name the new vault. The stub answers like a node (`honour_log_filter`), so the
+/// deposit at block 55 is only in an answer whose filter names the vault. Before the fix the next
 /// tick started at block 66 and the deposit was never fetched: no `vault_transfer_events` row, no
-/// position, and the vault's TVL history began after it. The indexer must ask again for the new
-/// vault alone (and its ExclusionLedger, X7), from its registration block (50) to the target (65),
-/// and apply what comes back before closing the run.
+/// position, and the vault's TVL history began after it. The indexer discovers the registrations
+/// of the interval first (a registry-only `eth_getLogs`, issue 1796 DI-1), adds the new vault and
+/// its ExclusionLedger (X7) to the address set, and then fetches the interval's logs once with the
+/// complete set.
 ///
 /// The ledger is the one the new vault's `exclusionLedger()` names (security round 1): the
 /// address the vault's initializer created, read from the vault in the same tick, never an
@@ -532,8 +537,8 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
         "the tick closes at the target"
     );
 
-    // The first call could not name the vault; the second names it alone, from its registration
-    // block to the target.
+    // The first call discovers the interval's registrations from the registry alone; the second is
+    // the interval's log fetch, with the new vault in its address set.
     let get_logs: Vec<serde_json::Value> = stub
         .captured_requests()
         .into_iter()
@@ -543,7 +548,7 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
     assert_eq!(
         get_logs.len(),
         2,
-        "a tick that registers a vault asks once more for that vault's logs: {get_logs:?}"
+        "a tick that registers a vault discovers it, then fetches the interval once: {get_logs:?}"
     );
     let want = format!("{:#x}", new_vault);
     let addrs = |r: &serde_json::Value| -> Vec<String> {
@@ -554,23 +559,27 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
             .map(|a| a.as_str().unwrap().to_lowercase())
             .collect()
     };
-    assert!(
-        !addrs(&get_logs[0]).contains(&want),
-        "the tick's first filter is read before the registration is applied"
+    assert_eq!(
+        addrs(&get_logs[0]),
+        vec![format!("{:#x}", registry_addr)],
+        "the discovery read names the registry alone"
     );
     // The new vault and its ExclusionLedger (QA plan X7), whose exclusion-record events come from
     // the ledger's own address: the one the vault names, not its CREATE address at nonce 1.
-    assert_eq!(
-        addrs(&get_logs[1]),
-        vec![want.clone(), format!("{:#x}", new_ledger)]
-    );
+    for want in [want.clone(), format!("{:#x}", new_ledger)] {
+        assert!(
+            addrs(&get_logs[1]).contains(&want),
+            "the interval's fetch names {want}: {:?}",
+            addrs(&get_logs[1])
+        );
+    }
     assert!(
         !addrs(&get_logs[1]).contains(&format!("{:#x}", new_vault.create(1))),
         "no address derived from the vault is watched as its ledger"
     );
     assert_eq!(
-        get_logs[1]["params"][0]["fromBlock"], "0x32",
-        "from the registration block (50)"
+        get_logs[1]["params"][0]["fromBlock"], "0x0",
+        "from the tick's first block, which covers the registration block (50)"
     );
     assert_eq!(
         get_logs[1]["params"][0]["toBlock"], "0x41",
@@ -626,10 +635,12 @@ async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {
         "the deposit's block is stored like any event block"
     );
 
-    // The new vault's TVL history starts in this tick, at the target, after the deposit.
+    // The new vault's TVL history starts in this tick, at the deposit block (the event-driven
+    // snapshot). The read at the target (65) finds the same state and writes no second row
+    // (issue 1768).
     let snaps: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)::BIGINT FROM vault_snapshots \
-         WHERE chain_id = $1 AND contract = $2 AND block_number = 65",
+         WHERE chain_id = $1 AND contract = $2 AND block_number = 55",
     )
     .bind(8453i64)
     .bind(&new_vault.into_array()[..])
@@ -873,7 +884,26 @@ async fn retired_vault_withdrawals_still_index_and_snapshot() {
         .filter(|r| r["method"].as_str() == Some("eth_getLogs"))
         .collect();
     stub.shutdown();
-    assert_eq!(tick3_get_logs.len(), 1, "no vault is registered in tick 3");
+    // Each tick first discovers registrations from the registry alone (DI-1). The tick's fetch is
+    // the other call, and no vault is registered in tick 3.
+    let registry_only = vec![format!("{:#x}", registry_addr)];
+    let addrs_of = |r: &serde_json::Value| -> Vec<String> {
+        r["params"][0]["address"]
+            .as_array()
+            .expect("address filter must be an array")
+            .iter()
+            .map(|a| a.as_str().unwrap().to_lowercase())
+            .collect()
+    };
+    let tick3_get_logs: Vec<serde_json::Value> = tick3_get_logs
+        .into_iter()
+        .filter(|r| addrs_of(r) != registry_only)
+        .collect();
+    assert_eq!(
+        tick3_get_logs.len(),
+        1,
+        "one fetch for the interval in tick 3: {tick3_get_logs:?}"
+    );
     let filter: Vec<String> = tick3_get_logs[0]["params"][0]["address"]
         .as_array()
         .expect("address filter must be an array")
@@ -937,8 +967,10 @@ async fn retired_vault_withdrawals_still_index_and_snapshot() {
     );
     assert_eq!(position(paused_vault).await, "1500000");
 
-    // Each vault's newest snapshot is read in tick 3, after the exits. The retired vault's TVL is
-    // 0, not the 1000000 it held when it was retired.
+    // Each vault's newest snapshot is read after the exits. The retired vault's TVL is 0, not the
+    // 1000000 it held when it was retired. The exits are at block 90, where the event-driven snapshot
+    // is taken. Tick 3's read at the target (100) finds the same state and writes no second row
+    // (issue 1768), so the newest row is the one at the exit block.
     let latest_snapshot = |vault: Address| {
         let pool = fx.db.pool().clone();
         async move {
@@ -955,12 +987,12 @@ async fn retired_vault_withdrawals_still_index_and_snapshot() {
     };
     assert_eq!(
         latest_snapshot(old_vault).await,
-        (100i64, "0".to_string()),
+        (90i64, "0".to_string()),
         "the retired vault is snapshotted after its holder exits"
     );
     assert_eq!(
         latest_snapshot(paused_vault).await,
-        (100i64, "1500000".to_string()),
+        (90i64, "1500000".to_string()),
         "the paused vault is snapshotted after its holder's partial exit"
     );
 }
