@@ -35,6 +35,7 @@ export interface World {
     counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[];
     emptyCode?: string[];
     vaultOut?: Record<string, string>;
+    manifestMode?: Record<string, string>;
     failBroadcastOutput?: { stdout?: string; stderr?: string }; castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>;
   };
   state(): any;

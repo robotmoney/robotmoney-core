@@ -20,6 +20,7 @@ interface Cfg {
   chainId: number;
   vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
+  manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 
@@ -87,6 +88,12 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
         consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: cfg.libsAddress ?? addr(0x1009), adapter: addr(0xa2),
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
+        // issue 1808/1809: a proxy stage records each implementation, the upgrade authority and the release mode it read (UPGRADE_MODE)
+        ...(process.env.UPGRADE_MODE ? {
+          vault_implementation: addr(0x1101), registry_implementation: addr(0x1102), router_implementation: addr(0x1103), gateway_implementation: addr(0x1104),
+          governance_implementation: addr(0x1105), policy_implementation: addr(0x1106), consensus_receipt_implementation: addr(0x1107), implementation: addr(0x1108),
+          upgrade_timelock: addr(0x1008), upgrade_mode: cfg.manifestMode?.[file] ?? process.env.UPGRADE_MODE,
+        } : {}),
         // the vault stage's three strategy adapters (issue 1705 C4: the verifier sheet reads them)
         aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3),
       }));

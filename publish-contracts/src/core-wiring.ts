@@ -78,9 +78,6 @@ export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
   if (env === "EXPECTED_CHAIN_ID") return { from: "chain" };
   if (env === "DEPLOYMENT_OUT") return { from: "out" };
   if (env === "AGENT_ADDRESSES") return { from: "literal", value: "none" };
-  // Issue 1808: every core stage initializes its proxy with a release mode and the core scripts have no default. Until the release sheet carries the mode
-  // (upgradeability stage 2), this tool deploys every proxy frozen in its initializer: never silently upgradeable, and the same behaviour as a direct deployment.
-  if (env === "UPGRADE_MODE") return { from: "literal", value: "frozen" };
   const m = MANIFEST_ENV[env];
   if (m) return { from: "manifest", ...m };
   if (env === ELIGIBILITY_BPS_ENV) return { from: "computed" };

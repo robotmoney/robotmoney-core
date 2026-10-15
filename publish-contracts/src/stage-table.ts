@@ -23,6 +23,30 @@ export interface TableStage {
   /** Names from the top-level `create2Libraries` that forge deploys by itself (CREATE2 through the factory, ahead of the stage's first transaction) because the stage deploys a contract that links them (issue 1721). Absent: none. */
   create2Libraries?: string[];
   vault: TableVaultKey | null;
+  /** The ERC-1967 proxies the stage deploys (upgradeability stage 2, issue 1809). Absent: the stage deploys no proxy. */
+  proxies?: TableProxy[];
+}
+/**
+ * One proxied core contract a stage deploys (issue 1809): the manifest field of the proxy and of its implementation, the build artifact of the implementation and the
+ * committed storage-layout snapshot (contracts/test/fixtures/storage-layout, gated by scripts/ci/check-core-storage-layout.sh) whose bytes identify its layout.
+ */
+export interface TableProxy { field: string; implementationField: string; contract: string; layout: string }
+/**
+ * How every proxy is governed (issue 1809): the timelock stage deploys the one upgrade and freeze authority LAST, at a CREATE2 address predicted from the inputs, and
+ * each proxy is two deployer transactions (implementation, then the proxy whose constructor initializes it). The mode env carries the release mode.
+ */
+export interface UpgradeAuthority {
+  stage: string;
+  contract: string;
+  address: "create2";
+  factory: string;
+  salt: string;
+  inputs: string[];
+  modeEnv: string;
+  modes: string[];
+  transactionsPerProxy: number;
+  layoutPins: string;
+  note: string;
 }
 export interface TableVault extends Partial<VaultRules> { key: TableVaultKey; stage: string; artifact: string; manifest: string }
 /**
@@ -69,6 +93,8 @@ export interface TableRedeploy {
 export interface StageTable {
   version: 1;
   stages: TableStage[];
+  /** Upgradeability stage 2 (issue 1809). Absent: the table deploys no proxy (a core checkout from before issue 1808). */
+  upgradeAuthority?: UpgradeAuthority;
   vaults: TableVault[];
   libraries: TableLibrary[];
   create2Libraries?: TableCreate2Library[];
@@ -110,6 +136,7 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   const c2Names = new Set(c2.map((l) => l.name));
   for (const s of t.stages) if (s.create2Libraries !== undefined) { strList(s.create2Libraries, `stage ${s.name} create2Libraries`); for (const l of s.create2Libraries) if (!c2Names.has(l)) bad(`stage ${s.name} lists unknown create2 library '${l}'`); }
   for (const l of t.libraries) if (!l.name || !l.artifact || !l.manifestKey || !l.path) bad(`library ${String(l.name)} needs name, artifact, manifestKey and path`);
+  upgradeProblems(t as StageTable);
   const redeploys: unknown = t.redeploys;
   if (redeploys !== undefined) {
     if (!Array.isArray(redeploys)) bad("redeploys must be a list");
@@ -133,6 +160,36 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
     else if (st.vault !== v.key || st.manifest !== v.manifest) bad(`vault ${v.key} disagrees with its stage ${v.stage}`);
   }
   return t as StageTable;
+}
+
+const LAYOUT = /^contracts\/test\/fixtures\/storage-layout\/\w+\.json$/;
+/**
+ * Issue 1809: the proxy rows and the upgrade authority agree. A stage with proxies reads the authority's inputs and mode env; a stage that reads the mode env deploys a
+ * proxy; the authority's stage exists and runs after every proxy stage (the timelock is deployed last); every proxy names a field, an implementation field, an artifact
+ * and a layout snapshot.
+ */
+function upgradeProblems(t: StageTable): void {
+  const proxyStages = t.stages.filter((s) => s.proxies !== undefined);
+  const u = t.upgradeAuthority;
+  if (!u) { if (proxyStages.length > 0) bad("stages list proxies but the table has no upgradeAuthority"); return; }
+  if (typeof u.stage !== "string" || typeof u.contract !== "string" || u.address !== "create2" || !/^0x[0-9a-fA-F]{40}$/.test(String(u.factory)) || typeof u.salt !== "string" || u.salt === "") bad("upgradeAuthority needs stage, contract, address create2, a factory address and a salt");
+  strList(u.inputs, "upgradeAuthority inputs"); strList(u.modes, "upgradeAuthority modes");
+  if (typeof u.modeEnv !== "string" || u.modeEnv === "") bad("upgradeAuthority needs modeEnv");
+  if (!Number.isInteger(u.transactionsPerProxy) || u.transactionsPerProxy < 1) bad("upgradeAuthority transactionsPerProxy must be a positive integer");
+  if (typeof u.layoutPins !== "string" || !LAYOUT.test(u.layoutPins)) bad("upgradeAuthority layoutPins must be a file under contracts/test/fixtures/storage-layout");
+  const at = t.stages.findIndex((s) => s.name === u.stage);
+  if (at < 0) bad(`upgradeAuthority names unknown stage '${u.stage}'`);
+  for (const s of t.stages) {
+    const reads = s.requiredEnv.includes(u.modeEnv);
+    if (reads !== (s.proxies !== undefined && s.proxies.length > 0)) bad(`stage ${s.name}: ${reads ? `reads ${u.modeEnv} but lists no proxies` : `lists proxies but does not read ${u.modeEnv}`}`);
+    if (!s.proxies) continue;
+    for (const i of u.inputs) if (!s.requiredEnv.includes(i)) bad(`stage ${s.name} deploys a proxy but does not read ${i}`);
+    if (t.stages.indexOf(s) > at) bad(`stage ${s.name} deploys a proxy after the ${u.stage} stage: the upgrade authority is deployed last`);
+    for (const p of s.proxies) {
+      if (!p || typeof p.field !== "string" || typeof p.implementationField !== "string" || typeof p.contract !== "string" || p.field === "" || p.implementationField === "" || p.contract === "") bad(`stage ${s.name}: a proxy needs field, implementationField and contract`);
+      if (typeof p.layout !== "string" || !LAYOUT.test(p.layout)) bad(`stage ${s.name} proxy ${p.field}: layout must be a snapshot under contracts/test/fixtures/storage-layout`);
+    }
+  }
 }
 
 const DECISION_LINK = /^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/;

@@ -59,6 +59,14 @@
       "create2Libraries": [
         "GovernedUpgrade",
         "RobotMoneyVaultOps"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "vault_implementation",
+          "contract": "RobotMoneyVault",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyVault.json"
+        }
       ]
     },
     {
@@ -83,6 +91,14 @@
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "registry",
+          "implementationField": "registry_implementation",
+          "contract": "VaultRegistry",
+          "layout": "contracts/test/fixtures/storage-layout/VaultRegistry.json"
+        }
       ]
     },
     {
@@ -108,6 +124,14 @@
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "router",
+          "implementationField": "router_implementation",
+          "contract": "PortfolioRouter",
+          "layout": "contracts/test/fixtures/storage-layout/PortfolioRouter.json"
+        }
       ]
     },
     {
@@ -136,6 +160,14 @@
       "create2Libraries": [
         "GovernedUpgrade",
         "GatewayWindows"
+      ],
+      "proxies": [
+        {
+          "field": "gateway",
+          "implementationField": "gateway_implementation",
+          "contract": "RobotMoneyGateway",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json"
+        }
       ]
     },
     {
@@ -161,6 +193,20 @@
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "policy",
+          "implementationField": "policy_implementation",
+          "contract": "InvestmentCommitteePolicy",
+          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json"
+        },
+        {
+          "field": "consensus_receipt",
+          "implementationField": "consensus_receipt_implementation",
+          "contract": "ConsensusRecommendationReceipt",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json"
+        }
       ]
     },
     {
@@ -187,6 +233,14 @@
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "governance",
+          "implementationField": "governance_implementation",
+          "contract": "RouterGovernance",
+          "layout": "contracts/test/fixtures/storage-layout/RouterGovernance.json"
+        }
       ]
     },
     {
@@ -223,6 +277,14 @@
         "BasketViews",
         "BasketSwaps",
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "ProtocolAssetVault",
+          "layout": "contracts/test/fixtures/storage-layout/ProtocolAssetVault.json"
+        }
       ]
     },
     {
@@ -260,6 +322,14 @@
         "BasketViews",
         "BasketSwaps",
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "AgentTokenVault",
+          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json"
+        }
       ]
     },
     {
@@ -296,6 +366,14 @@
         "BasketViews",
         "BasketSwaps",
         "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "vault",
+          "implementationField": "implementation",
+          "contract": "RwaBasketVault",
+          "layout": "contracts/test/fixtures/storage-layout/RwaBasketVault.json"
+        }
       ]
     },
     {
@@ -329,6 +407,25 @@
       "vault": null
     }
   ],
+  "upgradeAuthority": {
+    "stage": "timelock",
+    "contract": "TimelockController",
+    "address": "create2",
+    "factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+    "salt": "robotmoney.core.timelock.v1",
+    "inputs": [
+      "SAFE_ADDRESS",
+      "TIMELOCK_MIN_DELAY"
+    ],
+    "modeEnv": "UPGRADE_MODE",
+    "modes": [
+      "upgradeable",
+      "frozen"
+    ],
+    "transactionsPerProxy": 2,
+    "layoutPins": "contracts/test/fixtures/storage-layout/pins.json",
+    "note": "Upgradeability stage 2 (issue 1809). Every stage with proxies deploys, per proxy, one implementation (its constructor disables initializers) and one ERC1967Proxy whose constructor runs initialize atomically: two deployer transactions per proxy. The release mode changes no count: it is only an initialize argument. Every proxy names the timelock as its only upgrade and freeze authority from its first block. The timelock stage runs LAST and deploys the TimelockController at the CREATE2 address the factory gives for the salt and the init code built from SAFE_ADDRESS and TIMELOCK_MIN_DELAY, so no interim deployer upgrade path exists. A resumed stage replays its own transactions with forge --resume at the same nonces, so its proxy and implementation addresses do not move. The publish-contracts verifier reads each proxy's ERC-1967 slots, upgradeTimelock(), upgradesFrozen() and initialized version, and records them with the layout identifier in upgradeability.json."
+  },
   "govern": {
     "stage": 13,
     "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
