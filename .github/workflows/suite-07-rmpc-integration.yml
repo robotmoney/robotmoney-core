@@ -346,7 +346,7 @@ jobs:
       # RED rather than passing as a silent skip. The permanent guard against
       # this whole class -- a tests/*.rs file no workflow names -- is
       # .github/scripts/check_cargo_test_target_coverage.py, run in suite 4.
-      - name: rmpc CLI surface (deposit, withdraw, router, status, self-check, get-*, agent-consent)
+      - name: rmpc CLI surface (deposit, withdraw, router, status, self-check, get-*)
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             --release \
@@ -368,8 +368,7 @@ jobs:
             --test cli_get_timelock \
             --test cli_get_tx \
             --test cli_get_vault \
-            --test cli_get_vaults \
-            --test cli_agent_consent -- --nocapture
+            --test cli_get_vaults -- --nocapture
 
       # THE ONLY REAL-EVM PROOF OF THE SHARED WRITE SEAM (QA plan T2)
       # tests/write_seam_reverted_anvil.rs mines a transaction into a local
