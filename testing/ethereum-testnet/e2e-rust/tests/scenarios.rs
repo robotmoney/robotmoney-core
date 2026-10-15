@@ -825,7 +825,12 @@ fn implementation_swap_refused_with_unchanged_proxy_hash() {
 
         // The proxy code hash still matches the pin.
         let code = cast(rpc, &["code", &gateway]);
-        let code_hash = cast(rpc, &["keccak", &code]);
+        let code_hash = format!(
+            "{:#x}",
+            alloy_primitives::keccak256(
+                hex::decode(code.trim_start_matches("0x")).expect("cast code is hex")
+            )
+        );
         assert_eq!(
             code_hash.to_lowercase(),
             fx.gateway_runtime_hash().to_lowercase(),
