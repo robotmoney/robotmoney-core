@@ -24,6 +24,9 @@ import { recordDependencyManifest, type RecorderSpawn } from "./record-dependenc
 import { contractsFromManifests } from "./verify/sources.ts";
 import { REDEPLOY_ROW, redeploysOf } from "./redeploy-vault.ts";
 
+/** Issue 1809: the record of the upgradeability labels, written by verify under deployments/<chain>/. */
+export const UPGRADEABILITY_MANIFEST = "upgradeability.json";
+
 /**
  * The expected asset config of one vault: core's config files (poolFee becomes swapFee) with the adapter this run deployed, read from the
  * vault manifest. rmUSDC holds no basket assets and rmAGENT launches with RM only.
@@ -125,6 +128,7 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
   return {
     chainId: ctx.chainId, deployer: s.admin, pauser: s.pauser, emergency: s.emergency, safeOwners: s.safeOwners, safeThreshold: s.safeThreshold,
     timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), deploymentKind: s.kind, vaults,
+    upgradeMode: s.upgrade.mode, ...(s.upgrade.freezeDeadline ? { freezeDeadline: s.upgrade.freezeDeadline } : {}),
     defaultWeights: ([...ROUTER_STAGE_ELIGIBLE, ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
   };
 }
@@ -204,7 +208,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
-    logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"),
+    logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
     handoverBlock: handoverBlock(manifest),
@@ -251,6 +255,12 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });
   // stdout: the verifier labels, one per line under [verify], the format of deployments/base-8453/verifier-labels.txt, so a caller can diff stage against mainnet.
   // Pass or fail is the exit code (and the verify.check log lines on stderr).
+  // Issue 1809: the upgradeability record (proxies, implementations, code hashes, layout ids, authority, delay, initialization, freeze state, the immutability claim and what
+  // stays governed) is written beside the deployment manifests on every run, pass or fail, and copied into the evidence as its `upgradeability` section.
+  if (report.upgradeability) {
+    writeFileSync(join(manifestDir(ctx), UPGRADEABILITY_MANIFEST), JSON.stringify({ chain_id: ctx.chainId, core_sha: ctx.coreSha, ...report.upgradeability }, null, 2) + "\n");
+    ctx.log.log(report.upgradeability.core_immutable ? "info" : "warn", "verify.upgradeability", { file: UPGRADEABILITY_MANIFEST, mode: report.upgradeability.mode, core_immutable: report.upgradeability.core_immutable, refused_because: report.upgradeability.immutability_refused_because });
+  }
   const emit = deps.emit ?? ((l: string) => console.log(l));
   emit("[verify]");
   for (const c of report.checks) emit(c.label);

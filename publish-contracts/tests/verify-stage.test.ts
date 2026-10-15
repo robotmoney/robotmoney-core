@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { RM_TOKEN } from "../src/verify/constants.ts";
 import { join } from "node:path";
 import { PublishError } from "../src/errors.ts";
@@ -420,5 +420,35 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
     // an entry whose transactions are not on chain at all is refused too
     const unbacked = await run([{ ...entry(drifted), schedule_tx: "0x" + "99".repeat(32), execute_tx: "0x" + "98".repeat(32) }]);
     expect(unbacked.err).toMatchObject({ kind: "VERIFY" });
+  });
+});
+
+// Issue 1809: the verify stage hands the verifier the sheet's release mode and the core checkout (the layout snapshots), and writes the verifier's upgradeability record
+// beside the deployment manifests on every run, pass or fail, for the evidence to copy.
+describe("stage 12 records the upgradeability of the deployment (issue 1809)", () => {
+  const record = (core_immutable: boolean) => ({ mode: "frozen", freeze_deadline: null, timelock: { address: "0x0000000000000000000000000000000000000009", min_delay: "60" }, transactions_per_proxy: 2, proxies: {}, core_immutable, immutability_refused_because: core_immutable ? [] : ["x"], remaining_governed_parameters: ["p"], upstream_dependencies: ["d"] });
+  test("the verifier sheet carries UPGRADE_MODE, the options carry the core checkout, and upgradeability.json is written with the chain and the DEPLOY_SHA", async () => {
+    const { ctx } = setup();
+    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+    let seen: any;
+    const deps = { verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [{ label: "x", ok: true, detail: "" }], upgradeability: record(true) }; }, verifySources: async () => ({ ok: true, checks: [] }), emit: () => {} };
+    await runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest, deps as never);
+    expect(seen.sheet.upgradeMode).toBe("frozen");
+    expect(seen.sheet.freezeDeadline).toBeUndefined();
+    expect(seen.coreDir).toBe(ctx.coreDir);
+    const out = JSON.parse(readFileSync(join(ctx.coreDir, "deployments", "918453", "upgradeability.json"), "utf8"));
+    expect(out).toMatchObject({ chain_id: 918453, core_sha: SHA, mode: "frozen", core_immutable: true, transactions_per_proxy: 2 });
+  });
+  test("a failing verify still writes the record (core_immutable false), then fails the stage", async () => {
+    const { ctx } = setup();
+    const manifest = { ...newManifest(ctx, "0xa"), firstBlock: 5 };
+    const deps = { verifyDeployment: async () => ({ ok: false, checks: [{ label: "router: upgradesFrozen() agrees with the release mode", ok: false, detail: "x" }], upgradeability: record(false) }), verifySources: async () => ({ ok: true, checks: [] }), emit: () => {} };
+    await expect(runVerifyStage({ ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext, stageByName("verify"), manifest, deps as never)).rejects.toMatchObject({ kind: "VERIFY" });
+    expect(JSON.parse(readFileSync(join(ctx.coreDir, "deployments", "918453", "upgradeability.json"), "utf8")).core_immutable).toBe(false);
+  });
+  test("an upgradeable sheet hands the verifier its freeze deadline", () => {
+    const { ctx } = setup();
+    const s = buildVerifySheet({ ...ctx, sheet: parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])) }, "0x00000000000000000000000000000000000050fe");
+    expect(s).toMatchObject({ upgradeMode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
   });
 });

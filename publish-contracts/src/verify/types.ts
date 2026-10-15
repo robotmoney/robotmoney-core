@@ -2,6 +2,7 @@
 // Spec: the one-deployment-scheme plan, "Stage 12 verifier" (devops issue 53); issues devops 57 (S8) and 61.
 
 import type { StageTable } from "../stage-table.ts";
+import type { UpgradeabilityRecord } from "./upgradeability.ts";
 
 export type Address = `0x${string}`;
 export type Hex = `0x${string}`;
@@ -17,6 +18,8 @@ export interface Check {
 export interface VerifyReport {
   ok: boolean;
   checks: Check[];
+  /** Issue 1809: what the upgradeability labels read (proxies, implementations, code hashes, layout ids, authority, delay, initialization, freeze state) and the immutability claim. */
+  upgradeability?: UpgradeabilityRecord;
 }
 
 export type VaultKind = "usdc" | "basket" | "agent";
@@ -81,6 +84,10 @@ export interface VerifySheet {
   timelockDelay: number;
   /** Issue 1727: the deployment kind of the run (the sheet's DEPLOYMENT_KIND). Absent means production, the strictest reading: the 172800 s floor on 8453. */
   deploymentKind?: "production" | "rehearsal";
+  /** Issue 1809: the sheet's UPGRADE_MODE. Absent fails "upgrades: the sheet declares the release mode" and every freeze-state label. */
+  upgradeMode?: "upgradeable" | "frozen";
+  /** Issue 1809: the sheet's UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC), the proving-period deadline of an upgradeable release. */
+  freezeDeadline?: string;
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
@@ -104,6 +111,10 @@ export interface VerifyOptions {
   frozenCounts: Record<string, number>;
   /** Directory with forge `out/` artifacts for the code-hash comparison. */
   artifactsDir: string;
+  /** Issue 1809: the core checkout at the DEPLOY_SHA, for the storage-layout snapshots the layout identifiers hash. Absent: the layout labels fail. */
+  coreDir?: string;
+  /** Issue 1809, test seam: the time (seconds) the freeze deadline is compared with. Absent: the head block's timestamp. */
+  now?: bigint;
   /**
    * The deployer nonce the runner recorded at the end of the last deployer stage. Set only when the govern stage has run: govern pays
    * gas for the Safe execTransaction calls from the deployer keystore, so the live nonce then exceeds the frozen sum by design.

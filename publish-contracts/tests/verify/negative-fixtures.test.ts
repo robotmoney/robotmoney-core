@@ -14,7 +14,8 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { ERC1967_ADMIN_SLOT } from "../../src/verify/upgradeability.ts";
+import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
 const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
@@ -54,6 +55,18 @@ const RULES: Rule[] = [
   // code present and code equals the build
   [/^(.+): has code$/, (w, m) => { w.chain.codes.delete(subject(m[1]).toLowerCase()); }],
   [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(subject(m[1]).toLowerCase(), "0x6000"); }],
+  // upgradeability (issue 1809): each proxy label, the release mode, the freeze deadline and the immutability claim
+  [/^(.+): is the build's proxy with no admin and no beacon$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${ERC1967_ADMIN_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^(.+): implementation slot equals the manifest$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${IMPL_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^(.+): implementation links the build's libraries$/, (w) => { w.chain.codes.set(GOVERNED_UPGRADE_LIB.toLowerCase(), "0x6000"); }],
+  [/^(.+): upgradeTimelock\(\) is the deployed timelock$/, (w, m) => w.chain.set(subject(m[1]), "upgradeTimelock", OTHER)],
+  [/^(.+): initialized once and not initializing$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${INIT_SLOT}`, Z32); }],
+  [/^(.+): upgradesFrozen\(\) agrees with the release mode$/, (w, m) => w.chain.set(subject(m[1]), "upgradesFrozen", false)],
+  [/^(.+): manifest upgrade_mode equals the release sheet$/, (w) => { w.sheet.upgradeMode = "upgradeable"; }],
+  [/^(.+): storage layout identifier recorded$/, (w) => { delete w.opts.coreDir; }],
+  [/^upgrades: the sheet declares the release mode$/, (w) => { delete w.sheet.upgradeMode; }],
+  [/^upgrades: the freeze deadline is not missed$/, (w) => { w.sheet.upgradeMode = "upgradeable"; }],
+  [/^upgrades: core immutability is claimed only when the full core set verifies frozen on chain$/, (w) => w.chain.set(ROUTER, "upgradesFrozen", false)],
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^deployment kind: the timelock delay agrees with the kind$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],

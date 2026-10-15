@@ -5,11 +5,12 @@ import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbi, toBytes, t
 import { checkEvidence, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
 import { buildRegisterCalls } from "../src/committee-register.ts";
 import { finalDeployerNonce } from "../src/counts.ts";
+import { withUpgradeability } from "./upgradeability-fixture.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 const T0 = 1000;
-const prod = (): any => ({
+const prod = (): any => withUpgradeability({
   chain_id: 8453, core_sha: "ab".repeat(20), plan_approved_at: "2026-10-05T10:00:00Z",
   owner_exceptions: [{ text: "x", recorded_at: "2026-10-04T10:00:00Z" }],
   stages: [{ stage: "safe", frozen_count: 2, receipt_count: 2, tx_hashes: [h(1), h(2)], receipts_status: [1, 1] }],
@@ -19,12 +20,13 @@ const prod = (): any => ({
   deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 172800, schedule_status: 1, execute_status: 1 })),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
-});
+} as any);
 const RID = h(0xabc), DIGEST = h(0xd16), SUB = a(0x5ab1);
 const reh = (): any => {
   const e: any = prod();
   e.deployment_kind = "rehearsal";
   e.timelock.min_delay = 900;
+  e.upgradeability.timelock.min_delay = "900"; // issue 1809: the record read the same timelock
   e.deployer_start_nonce = 118;
   e.deployer_nonce_final = 118 + 3;
   e.govern = GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 900, schedule_status: 1, execute_status: 1 }));
@@ -72,6 +74,7 @@ describe("evidence kind", () => {
     r.timelock.min_delay = 172800;
     expect(problems(r, R)).toContain("cannot be told from production");
     r.timelock.min_delay = 172799;
+    r.upgradeability.timelock.min_delay = "172799";
     expect(checkEvidence(r, undefined, undefined, R)).toEqual([]);
   });
   test("govern gaps follow the kind: 900 s passes as a rehearsal, fails as production", () => {
