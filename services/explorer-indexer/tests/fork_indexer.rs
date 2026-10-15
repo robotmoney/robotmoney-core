@@ -279,7 +279,8 @@ async fn exclusion_record_of_a_proxy_vault_is_indexed_at_its_factory_ledger() {
     let holder =
         Address::from_str(smoke_test::SHARE_RECEIVER_ADDRESS_HEX).expect("share receiver address");
     let holder_hex = format!("{holder:#x}");
-    let amount: u128 = 1_000 * 1_000_000;
+    // The published vault caps one deposit at 100 USDC (`ERC4626ExceededMaxDeposit` above it).
+    let amount: u128 = 100 * 1_000_000;
     tokio::task::block_in_place(|| -> Result<(), smoke_test::HarnessError> {
         twin.fund_usdc(holder, amount)?;
         twin.cast_send(
