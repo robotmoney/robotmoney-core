@@ -15,9 +15,10 @@ fail() { echo "fusion-cross-repo: $*" >&2; exit 1; }
 # silent skip (AC-CORE-04, AC-E2E-03, AC-E2E-04).
 : "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance)}"
 : "${FUSION_ROUTER_ADDRESS:?set FUSION_ROUTER_ADDRESS (PortfolioRouter)}"
-# AC-CORE-04 names three witnesses — "vault balances, router weights, and
-# proposal count" — and AC-E2E-03 repeats them. Weights and proposal count alone
-# would miss an asset movement, so the mapped vaults are required too:
+# AC-CORE-04 names "vault balances, router weights, and proposal count", and
+# AC-E2E-03 repeats them. The proposal count no longer exists (issue 1698
+# removed propose/vote/execute from RouterGovernance; see lib/inv4.sh). Weights
+# alone would miss an asset movement, so the mapped vaults are required too:
 # comma-separated rmUSDC,rmPROTO,rmAGENT,rmRWA addresses from the 2.7 manifest.
 : "${FUSION_VAULT_ADDRESSES:?set FUSION_VAULT_ADDRESSES (comma-separated mapped vault addresses)}"
 
@@ -113,7 +114,7 @@ printf '%s\n' "$worker_out" >&2
 # T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
 # `releaseReceipt` is a one-shot state transition: a second `cast send` reverts
 # ReceiptAlreadyReleased, and under `set -euo pipefail` that aborts the script at
-# this line — so the INV-4 comparison, the draft assertion and the evidence JSON
+# this line — so the INV-4 comparison and the evidence JSON
 # after it never execute, and a real INV-4 regression between the two runs would
 # be invisible behind the false failure. Read the state first, which is also what
 # an operator does. The post-condition read below stays the actual assertion.
@@ -140,38 +141,12 @@ released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool
   "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
 [[ "$released" == "true" ]] || fail "receipt is anchored but not released"
 
-draft="$("$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal \
-  --receipt-id "$receipt_id" --receipt-file "$FUSION_FRONTEND_RECEIPT_FILE")" \
-  || fail "released frontend receipt did not produce a governance handoff result"
-# T15. `skipped_no_weights` is NOT an accepted outcome: runbook §5.5 already says
-# an absent `weights` array is a FAILED assertion, never a skipped one — a receipt
-# with no allocation vector cannot carry a recommendation. A ready_for_review
-# draft must additionally name four vaults whose bps total 10000 and carry the
-# calldata a human reviews, and those bps must be the RECEIPT's own weights in
-# canonical bucket order: the weights are the one field that becomes treasury
-# calldata and the one the analyst signature check cannot cover.
-jq -e --arg id "$receipt_id" \
-  '.ok == true and (.drafts | length == 1) and .drafts[0].receipt_id == $id and
-   (.drafts[0].status == "ready_for_review" or .drafts[0].status == "blocked_active_proposal")' \
-  <<<"$draft" >/dev/null || fail "unexpected governance draft output: $(jq -c '{ok,n:(.drafts|length),status:[.drafts[]?.status]}' <<<"$draft" 2>/dev/null)"
-
-if jq -e '.drafts[0].status == "ready_for_review"' <<<"$draft" >/dev/null 2>&1; then
-  jq -e '(.drafts[0].vaults | length) == 4
-         and ([.drafts[0].vaults[].weight_bps] | add) == 10000
-         and (.drafts[0].propose_calldata | type) == "string"
-         and (.drafts[0].propose_calldata | length) > 0' <<<"$draft" >/dev/null \
-    || fail "a ready_for_review draft must name four vaults whose bps total 10000 and carry propose_calldata: \
-$(jq -c '{vaults:(.drafts[0].vaults|length?),bps:[.drafts[0].vaults[]?.weight_bps],calldata:(.drafts[0].propose_calldata|type?)}' <<<"$draft" 2>/dev/null)"
-  draft_bps="$(jq -c '[.drafts[0].vaults[].weight_bps]' <<<"$draft")"
-  receipt_bps="$(jq -c '[.weights[]?.weight_bps]' "$FUSION_FRONTEND_RECEIPT_FILE" 2>/dev/null)"
-  [[ -n "$receipt_bps" && "$receipt_bps" != "[]" && "$draft_bps" == "$receipt_bps" ]] \
-    || fail "the drafted bps do not equal the receipt's weights in canonical bucket order \
-(draft: $draft_bps, receipt: ${receipt_bps:-<none>})"
-fi
-
 # INV-4 "after" witnesses, closing the window opened before the submit. Record
-# and release are signalling-only: a drafted proposal is a JSON document for a
-# human, so nothing here may have moved.
+# and release are signalling-only, so nothing here may have moved. Issue 1698:
+# there is no draft step. A receipt reaches the router only through
+# RouterGovernance.applyReceipt (publish-contracts govern row apply-receipt),
+# which releases it and sets the weights in one call; this seam runs the
+# release-only row, so the router weights (both reads) must be unchanged.
 witnesses_after="$(witnesses)"
 record "inv4-witnesses-after.txt" "$witnesses_after"
 inv4_unreadable "$witnesses_after" \
@@ -196,12 +171,12 @@ jq -n --arg receipt_id "$receipt_id" --arg payload_digest "$digest" \
   --argjson witnesses_after "$(witnesses_json <<<"$witnesses_after")" \
   '{ok:true,
     stages:["frontend_artifact","core_verify_file","core_verify_url","submit",
-            ("release:" + $release_action),"proposal_drafted","inv4_unchanged"],
+            ("release:" + $release_action),"inv4_unchanged"],
     release:{action:$release_action,
              broadcast:($release_action == "sent")},
     receipt_id:$receipt_id,payload_digest:$payload_digest,
     anchored_url:{url:$receipt_url,payload_digest:$url_digest,matches_submitted_bytes:true},
     inv4:{witnesses_before:$witnesses_before,
           witnesses_after:$witnesses_after,
-          window:"immediately before submit .. immediately after release and draft",
+          window:"immediately before submit .. immediately after release",
           unchanged:true}}'
