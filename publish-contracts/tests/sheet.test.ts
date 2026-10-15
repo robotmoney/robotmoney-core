@@ -260,3 +260,41 @@ describe("govern carries the four vault unpauses only; the rest is deploy-time c
     expect(eligibilityBps(zero, "PROTO")).toEqual([10000, 0]);
   });
 });
+
+// Issue 1705 Q4 (a), docs/technical/governance-isomorphism.md §1.1: the rehearsal may differ from production only in chain id, owner keys, key custody and the
+// timelock delay. Router eligibility, the router vector and the unpause set are none of those, so the Twin sheet carries the 8453 values.
+describe("rule b twin sheet", () => {
+  const ROUTER_NAMES = ["ELIGIBLE_VAULTS", "ROUTER_WEIGHTS", "GOVERN_UNPAUSE_VAULTS"] as const;
+  const values = (rel: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const line of readFileSync(join(REPO, rel), "utf8").split("\n")) {
+      const m = /^([A-Z][A-Z0-9_]*)=(\S*)/.exec(line.trim());
+      if (m) out[m[1]!] = m[2]!;
+    }
+    return out;
+  };
+  const twin = values("deployments/twin-918453/stage-sheet.env");
+  const mainnet = values("deployments/base-8453-rehearsal/stage-sheet.example.env");
+  const table = JSON.parse(readFileSync(join(REPO, "scripts", "deploy", "stage-table.json"), "utf8"));
+  test("the two sheets are the Twin chain and chain 8453", () => {
+    expect(twin.CHAIN_ID).toBe("918453");
+    expect(mainnet.CHAIN_ID).toBe("8453");
+  });
+  for (const name of ROUTER_NAMES) {
+    test(`${name} is equal on the Twin sheet and the 8453 example sheet`, () => {
+      expect(twin[name]).toBeDefined();
+      expect([name, twin[name]]).toEqual([name, mainnet[name]]);
+    });
+  }
+  test("the table records no Twin exception for these names, and the unpause set is the table's stage 13 vaults", () => {
+    expect(JSON.stringify(table)).not.toMatch(/twinSheetException/);
+    const stage13 = (table.vaults as { key: string; unpauseInStage13: boolean }[]).filter((v) => v.unpauseInStage13).map((v) => v.key);
+    expect(twin.GOVERN_UNPAUSE_VAULTS!.split(",")).toEqual(stage13);
+  });
+  test("the Twin sheet parses with the launch vector and the four unpauses", () => {
+    const s = parseSheet(readFileSync(join(REPO, "deployments/twin-918453/stage-sheet.env"), "utf8"));
+    expect(s.weights.map((w) => `${w.key}:${w.bps}`).join(",")).toBe("USDC:9500,PROTO:500,AGENT:0,RWA:0");
+    expect([...s.eligibleVaults]).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect([...s.govern.unpauseVaults]).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+  });
+});

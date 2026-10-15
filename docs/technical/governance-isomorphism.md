@@ -61,8 +61,10 @@ signatures are required, and the Safe contract is what enforces it.**
 
 ### 1.2 After the handover: the unpause-only matrix
 
-Exactly one class of operation runs after the timelock handover (issue 1520): the
-unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all of which deploy paused (core 1710). Unpause needs `ADMIN_ROLE`,
+Stage 13 is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA,
+issue 1520), all of which deploy paused (core 1710; `scripts/deploy/stage-table.json`
+`vaults[].deployPaused` and `unpauseInStage13`, issue 1705). Router weights change only
+through the on-demand apply-receipt row, never in stage 13. Unpause needs `ADMIN_ROLE`,
 which the timelock holds, so each unpause is a Safe transaction that schedules one
 timelock operation and a second Safe transaction that executes it after the delay
 ([security-model.md](./security-model.md), the pause-key abuse and pause-trigger rows).
