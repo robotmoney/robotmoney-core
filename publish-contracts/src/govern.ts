@@ -3,14 +3,11 @@
 // ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each of the four vaults (rmUSDC too, issue 1710: all four deploy paused). The docs put exactly this
 // there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
-// stages), and the verify stage asserts them against the sheet. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY
-// are constructor arguments of today's RouterGovernance bytecode only: there is no voting by anyone, the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for, and
-// RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
-// deployment, when a weight-setter applyReceipt call will replace them.
+// stages), and the verify stage asserts them against the sheet. There is no voting by anyone: RouterGovernance has no propose, vote or execute (issue 1698).
 // ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696): the Safe, through the timelock, is the only body that changes any
 // contract configuration, router weights included. WEIGHT_SETTER_ROLE is the only authority over router weights and it submits the Investment
-// Committee's consensus receipt; that submission is the rebalance: ONE timelock batch, releaseReceipt(receiptId) plus the weight change (on today's
-// bytecode RouterGovernance.setDefaultWeights(vaults, bps)), read back as isReleased and the router weights. Never part of stage 13.
+// Committee's consensus receipt; that submission is the rebalance: ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps),
+// which releases the receipt and sets the router's active vector together, read back as isReleased and the router weights. Never part of stage 13.
 // The rows (GOVERN_ROWS):
 //   unpause-USDC, unpause-PROTO, unpause-AGENT, unpause-RWA   one timelock operation per unpause (never a shared operation), all scheduled in ONE sitting.
 //                                               All four vaults deploy paused (issue 1710), so stage 13 opens all four. After a pause-all the same rows reopen a vault
@@ -31,16 +28,16 @@
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
-//   apply-receipt                the Twin rehearsal's rebalance (issue 1696): ONE timelock batch, releaseReceipt(receiptId) plus the router weight change for the
+//   apply-receipt                the rebalance (issue 1696, issue 1698): ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) for the
 // receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
 // vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
-// the batch and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
+// the call and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
 // Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
-// Issue 1743: apply-receipt writes the DEFAULT vector, so it REFUSES (GOVERN, nothing sent) while router.votedWeightsActive() is true, and its read-back checks the EFFECTIVE weights
-// (what deposits route by) equal the receipt's vector, with votedWeightsActive false. The deploy no longer leaves a voted vector.
-//   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's voted vector
-// so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no voted vector is active. Runs on 8453 in
-// production and in a rehearsal, never in stage 13, with its own delay. A later vote that sets a voted vector again opens round 2 with the same explicit `--row`.
+// apply-receipt sets the router's ACTIVE vector (setWeights through the weight setter), so its read-back checks getWeights and the EFFECTIVE weights (what deposits route
+// by, issue 1743) equal the receipt's vector, with votedWeightsActive true. The default vector is untouched and stays the fallback.
+//   clear-voted-weights          on demand (issue 1743), no arguments: ONE timelock call, RouterGovernance.clearVotedWeights() (ADMIN_ROLE, the timelock), which clears the router's active vector
+// so routing falls back to the default. It reads votedWeightsActive false and effective == default back. Refused (GOVERN, nothing scheduled) when no active vector is in effect. Runs on 8453 in
+// production and in a rehearsal, never in stage 13, with its own delay. A later applied receipt that sets an active vector again opens round 2 with the same explicit `--row`.
 //   redeploy-vault              on demand (issue 1796), no arguments: the Safe, through the timelock, replaces ONE vault of the live deployment (rmPROTO) with the one the `redeploy-vault`
 // verb deployed. ONE timelock batch of five calls (registry.registerVault(new), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs),
 // registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused or retired vault. The order is forced by the contracts (a vault must be made
@@ -63,7 +60,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
-import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCalls, planApply } from "./apply-receipt.ts";
+import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, buildRedeployCalls, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems,
@@ -908,7 +905,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         ctx.log.log("info", "govern.round_rescheduled", { row: CLEAR_ROW, round: n, cancelled_operation: prev.scheduled.operation_id });
       }
     } else if (rowComplete(prev)) {
-      // An executed round, and the router reads a voted vector again (a vote passed since): a NEW round, a new operation.
+      // An executed round, and the router reads an active vector again (a receipt was applied since): a NEW round, a new operation.
       if (!(await votedNow())) throw new PublishError("GOVERN", `govern row ${CLEAR_ROW} executed in round ${prev!.round ?? 1} and router.votedWeightsActive() reads false: there is nothing to clear`, { row: CLEAR_ROW, round: prev!.round ?? 1 });
       const done = prev!.round ?? 1;
       state[roundKey(name, done)] = prev!;
@@ -1080,7 +1077,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   }
 
   if (applying) {
-    // Issue 1696: ONE timelock batch, releaseReceipt + the router weight change. Never part of the matrix, on 8453 only when named with a receipt id and a payload.
+    // Issue 1696, issue 1698: ONE timelock call, RouterGovernance.applyReceipt, which releases the receipt and sets the router's active vector together. Never part of the
+    // matrix, on 8453 only when named with a receipt id and a payload.
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --receipt-id 0x<bytes32>`);
     if (o.payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE (the receipt payload, whose receipt digest, keccak256 of the domain line + the canonical bytes, is the digest the receipt stored)`);
     const receiptId = assertReceiptId(o.receiptId);
@@ -1110,18 +1108,17 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       const listed = await rd<Address[]>(a.registry, REGISTRY_ELIGIBLE_ABI, "listVaults");
       const eligible: Address[] = [];
       for (const v of listed) if (await rd<boolean>(a.registry, REGISTRY_ELIGIBLE_ABI, "isRouterEligible", [v])) eligible.push(v);
-      const votedWeightsActive = await rd<boolean>(a.router, ROUTER_WEIGHTS_ABI, "votedWeightsActive");
-      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined, votedWeightsActive });
-      const calls = buildApplyCalls(receipt, governance, receiptId, vec);
-      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
+      const call = buildApplyCall(governance, receiptId, receiptPayloadDigest(payload), vec);
+      const p = { timelock: a.timelock, calls: [{ target: call.target, data: call.data }], salt: salt(name), form: "single" as const };
       const id = await api.operationId(handle, p);
       const prior = state[name]?.scheduled?.operation_id;
       if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: APPLY_ROW, receipt_id: receiptId, prior, id });
       const readBack = async () => {
-        const [defaultVaults, defaultBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getDefaultWeights");
+        const [activeVaults, activeBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getWeights");
         const [effectiveVaults, effectiveBps] = await rd<[Address[], bigint[]]>(a.router, ROUTER_WEIGHTS_ABI, "getEffectiveWeights");
         const votedWeightsActive = await rd<boolean>(a.router, ROUTER_WEIGHTS_ABI, "votedWeightsActive");
-        const bad = applyReadBackProblems(receiptId, await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]), { defaultVaults, defaultBps, effectiveVaults, effectiveBps, votedWeightsActive }, vec);
+        const bad = applyReadBackProblems(receiptId, await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]), { activeVaults, activeBps, effectiveVaults, effectiveBps, votedWeightsActive }, vec);
         // the evidence records what the read-back saw, so a later change of the router never rewrites the entry
         if (bad.length === 0) state[name]!.observed = { voted_weights_active: votedWeightsActive, effective_vaults: [...effectiveVaults], effective_bps: effectiveBps.map(Number) };
         return bad;
@@ -1129,9 +1126,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       state[name] = { ...(state[name] ?? { round: 1 }), apply: { vaults: vec.vaults, bps: vec.bps, payload_digest: receiptPayloadDigest(payload) } };
       await round(name, {
         id, description: `apply receipt ${receiptId}`, readBack,
-        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${calls.map((c) => c.label).join("; ")}` }),
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${APPLY_ROW}: ${call.label}` }),
         execute: async () => {
-          // Issue 1796: the operation is not done, so a receipt that reads released was released by another path after the schedule (a stale operation): its releaseReceipt would revert the whole batch.
+          // Issue 1796: the operation is not done, so a receipt that reads released was released by another path after the schedule (a stale operation): applyReceipt would revert.
           if (await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: receipt ${receiptId} was released after operation ${id} was scheduled. Nothing was sent. Cancel the operation through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
           return api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` });
         },
@@ -1141,7 +1138,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       if (r.scheduled) emitPhase(o, APPLY_ROW, "scheduled", r.scheduled);
       if (r.executed) emitPhase(o, APPLY_ROW, "executed", r.executed);
     }
-    await recordApplication(name, receiptId, receipt, governance);
+    await recordApplication(name, receiptId, governance);
     save();
     ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: APPLY_ROW, receipt_id: receiptId });
     return { rows: [name], skipped: [], opIds };
@@ -1151,7 +1148,7 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
    * The evidence entry of an executed apply round (`receipt_applications` of the run manifest, checked by evidence-check). The block timestamps are read from
    * the chain, from the receipt of each Safe transaction. A round adopted from the chain with no transaction of its own writes no entry.
    */
-  async function recordApplication(name: string, receiptId: Hex, receipt: Address, governance: Address): Promise<void> {
+  async function recordApplication(name: string, receiptId: Hex, governance: Address): Promise<void> {
     const r = state[name]!;
     if (!r.executed?.tx_hash || !r.scheduled?.tx_hash || !r.apply) return;
     const at = async (hash: string): Promise<number> => {
@@ -1159,8 +1156,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
     };
     const entry = {
-      step: APPLY_ROW, receipt_id: receiptId, target: receipt, governance, vaults: r.apply.vaults, bps: r.apply.bps, payload_digest: r.apply.payload_digest,
-      // issue 1743: the EFFECTIVE weights the read-back saw after the execute, and the voted flag (false)
+      step: APPLY_ROW, receipt_id: receiptId, target: governance, governance, vaults: r.apply.vaults, bps: r.apply.bps, payload_digest: r.apply.payload_digest,
+      // issue 1743: the EFFECTIVE weights the read-back saw after the execute, and the active-vector flag (true: applyReceipt sets the active vector, issue 1698)
       voted_weights_active: r.observed?.voted_weights_active, effective_vaults: r.observed?.effective_vaults, effective_bps: r.observed?.effective_bps,
       operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await at(r.scheduled.tx_hash),
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),

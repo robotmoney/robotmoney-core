@@ -44,7 +44,7 @@ const path = (e: any) => {
   e.committee_registrations = [{ step: "register-committee", submitter: SUB, agent_label: "s", gateway: a(30), ic_policy: a(31), timelock: a(9), valid_until: "9999999", operation_id: h(810), schedule_tx: h(210), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(211), execute_status: 1, submitter_safe: { ...SAFE_FACTS }, execute_block_timestamp: T0 + 900 }];
   e.recorded_receipts = [{ receipt_id: RID, payload_digest: DIGEST, payload_uri: "https://twin.invalid/r.json", submitter: SUB, tx_hash: h(220), status: 1, submitter_safe: { address: SUB, ...SAFE_FACTS, safe_tx_hash: h(0x5a), nonce: 3, signers: [a(2), a(3)], sent_by: a(20) } }];
   e.consensus_receipt = { address: a(32) }; e.governance = { address: a(33) };
-  e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: a(32), governance: a(33), vaults: [a(5), a(6)], bps: [9000, 1000], voted_weights_active: false, effective_vaults: [a(5), a(6)], effective_bps: [9000, 1000], payload_digest: DIGEST, operation_id: h(812), schedule_tx: h(212), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(213), execute_status: 1, execute_block_timestamp: T0 + 910 }];
+  e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: a(33), governance: a(33), vaults: [a(5), a(6)], bps: [9000, 1000], voted_weights_active: true, effective_vaults: [a(5), a(6)], effective_bps: [9000, 1000], payload_digest: DIGEST, operation_id: h(812), schedule_tx: h(212), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(213), execute_status: 1, execute_block_timestamp: T0 + 910 }];
   return e;
 };
 const R = { kind: "rehearsal" as const };

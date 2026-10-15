@@ -8,17 +8,13 @@ import { join } from "node:path";
 import { keygen, keygenWithPassword } from "../keystore/keygen.ts";
 
 export const MIN_PASSWORD_CHARS = 16;
-export const DEFAULT_VOTERS = 2;
 export const SAFE_OWNER_COUNT = 3;
 export const SAFE_THRESHOLD = 2;
 export const KEY_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Key names for one rehearsal: deployer, pauser, emergency, voters (no agent: the deploy authorizes none) and three Safe owners. */
-export function defaultKeyNames(voters = DEFAULT_VOTERS): string[] {
-  const names = ["DEPLOYER", "PAUSER", "EMERGENCY"];
-  for (let i = 1; i <= voters; i++) names.push(`VOTER${i}`);
-  names.push("SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C");
-  return names;
+/** Key names for one rehearsal: deployer, pauser, emergency (no agent: the deploy authorizes none; no voter: there is no voting, issue 1698) and three Safe owners. */
+export function defaultKeyNames(): string[] {
+  return ["DEPLOYER", "PAUSER", "EMERGENCY", "SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"];
 }
 
 /** Reads the password from a file that only its owner can read. Refuses a short one. */
@@ -42,13 +38,12 @@ export interface MakeKeysOptions {
   /** The passphrase held in memory only (the hidden-prompt path): no file is read or written. */
   password?: string;
   names?: string[];
-  voters?: number;
 }
 export interface RehearsalKeys { dir: string; addresses: Record<string, string>; names: string[] }
 
 /** Validates everything before it writes anything, so a refusal leaves no half-made key set. */
 export function makeRehearsalKeys(o: MakeKeysOptions): RehearsalKeys {
-  const names = o.names ?? defaultKeyNames(o.voters);
+  const names = o.names ?? defaultKeyNames();
   if (!names.length) throw new Error("give at least one key name");
   const seen = new Set<string>();
   for (const n of names) {
@@ -77,7 +72,6 @@ export const REHEARSAL_VAULT_NAME = "Robot Money USDC";
 export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
   const a = k.addresses;
   const get = (n: string) => { const v = a[n]; if (!v) throw new Error(`no key named ${n}`); return v; };
-  const voters = k.names.filter((n) => /^VOTER\d+$/.test(n)).map(get);
   const owners = ["SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"].map(get);
   const lines = [
     ...(chainId === undefined ? [] : [`CHAIN_ID=${chainId}`]),
@@ -85,7 +79,6 @@ export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
     `RECEIPT_ADMIN_ADDRESS=${get("DEPLOYER")}`, // the sheet requires it to equal ADMIN_ADDRESS (the deployer revokes the receipt roles in the timelock stage)
     `PAUSER_ADDRESS=${get("PAUSER")}`,
     `EMERGENCY_ADDRESS=${get("EMERGENCY")}`,
-    `VOTER_ADDRESSES=${voters.join(",")}`,
     `SAFE_OWNERS=${owners.join(",")}`,
     `SAFE_THRESHOLD=${SAFE_THRESHOLD}`,
     `VAULT_NAME=${REHEARSAL_VAULT_NAME}`,

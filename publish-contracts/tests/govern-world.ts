@@ -11,7 +11,7 @@ import { manifestBase } from "../src/stage-table.ts";
 import { stageManifestName } from "../src/verify/constants.ts";
 import { SAFE_141, type Signer } from "../src/safe/index.ts";
 import { RECEIPT_ABI, SAFE_ADMIN_ABI, VAULT_ABI, type GovernApi } from "../src/govern.ts";
-import { GOVERNANCE_WEIGHTS_ABI } from "../src/apply-receipt.ts";
+import { GOVERNANCE_APPLY_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
@@ -64,7 +64,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     digests: new Map<string, Hex>(),
     vaultCaps: new Map<string, bigint>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
-    /** Issue 1743: a VOTED vector on the router. While set, votedWeightsActive reads true and getEffectiveWeights reads it instead of the default; an executed clearVotedWeights removes it. */
+    /** Issue 1743: the ACTIVE ("voted") vector on the router. An executed applyReceipt sets it (issue 1698). While set, votedWeightsActive reads true and getEffectiveWeights reads it
+     *  instead of the default; an executed clearVotedWeights removes it. */
     voted: undefined as { vaults: Address[]; bps: bigint[] } | undefined,
     /** The chain clock at each Safe transaction hash: getTransactionReceipt answers with it as the block number, getBlock({blockNumber}) as the timestamp. */
     txClock: new Map<string, bigint>(),
@@ -93,8 +94,6 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
         if (functionName in s.reads) return s.reads[functionName];
         switch (functionName) {
-          case "votingPower": return sheet.voterPower;
-          case "quorumThreshold": return sheet.quorum;
           case "tvlCap": return sheet.vaults[key!].tvlCap;
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
           case "exitFeeBps": return sheet.vaults[key!].exitFeeBps;
@@ -108,11 +107,10 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
           case "vaultCap": return s.vaultCaps.get(String(args?.[0])) ?? 0n;
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
+          case "getWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [[], []];
           case "getEffectiveWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [s.weights.vaults, s.weights.bps];
           case "votedWeightsActive": return s.voted !== undefined;
           case "depositsPaused": return s.paused.has(address);
-          case "votingPeriod": return sheet.votingPeriod;
-          case "executionDelay": return sheet.executionDelay;
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
           case "hasRole": if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
@@ -181,8 +179,15 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           if (s.failOn?.(c)) throw new Error("injected revert");
           if (c.target === A.governance) {
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
-            const w = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: c.data });
-            s.weights = { vaults: [...(w.args[0] as Address[])], bps: [...(w.args[1] as bigint[])] };
+            // RouterGovernance.applyReceipt (issue 1698): the contract's own checks, then release and the active vector in one call
+            const w = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: c.data });
+            const [rid, digest, vs, bps] = w.args as [Hex, Hex, Address[], bigint[]];
+            if (!s.recorded.has(rid.toLowerCase()) && !s.recorded.has(rid)) throw new Error("ReceiptNotRecorded");
+            if (s.released.has(rid.toLowerCase())) throw new Error("ReceiptAlreadyReleased");
+            if ((s.digests.get(rid.toLowerCase()) ?? "").toLowerCase() !== digest.toLowerCase()) throw new Error("PayloadDigestMismatch");
+            if (new Set(vs.map((x) => x.toLowerCase())).size !== vs.length) throw new Error("DuplicateVault");
+            s.released.add(rid.toLowerCase());
+            s.voted = { vaults: [...vs], bps: [...bps] };
             continue;
           }
           if (c.target === A.router) {

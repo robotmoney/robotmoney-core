@@ -65,16 +65,14 @@ export const releaseCalldata = (receiptId: string): Hex => encodeFunctionData({ 
 const releaseLabel = (r: any) => `release-receipt ${r?.receipt_id}`;
 
 /**
- * A post-launch receipt application (issue 1696, `govern --row apply-receipt`), recorded under `receipt_applications` (never in `govern`, so stage 13 stays the
- * four unpauses). One entry per receipt: ONE timelock batch of exactly two calls, releaseReceipt(receipt_id) on the receipt contract (`consensus_receipt.address`)
- * then setDefaultWeights(vaults, bps) on the governance contract (`governance.address`), one schedule and one execute at least MAINNET_DELAY_FLOOR apart.
+ * A post-launch receipt application (issue 1696, issue 1698, `govern --row apply-receipt`), recorded under `receipt_applications` (never in `govern`, so stage 13 stays the
+ * four unpauses). One entry per receipt: ONE timelock call, applyReceipt(receipt_id, payload_digest, vaults, bps) on the weight setter (`governance.address`), which
+ * releases the receipt and sets the router's active vector together, one schedule and one execute at least MAINNET_DELAY_FLOOR apart.
  * The Twin run writes the same entries into the run manifest and `--receipt-applications` checks them (a Twin run proves execution only, not mainnet governance).
  */
-const APPLY_WEIGHTS_ABI = parseAbi(["function setDefaultWeights(address[] vaults, uint256[] bps)"]);
-export const applyCalldata = (receiptId: string, vaults: string[], bps: number[]): [Hex, Hex] => [
-  releaseCalldata(receiptId),
-  encodeFunctionData({ abi: APPLY_WEIGHTS_ABI, functionName: "setDefaultWeights", args: [vaults as Hex[], bps.map(BigInt)] }),
-];
+const APPLY_RECEIPT_ABI = parseAbi(["function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
+export const applyCalldata = (receiptId: string, payloadDigest: string, vaults: string[], bps: number[]): Hex =>
+  encodeFunctionData({ abi: APPLY_RECEIPT_ABI, functionName: "applyReceipt", args: [receiptId as Hex, payloadDigest as Hex, vaults as Hex[], bps.map(BigInt)] });
 const applyLabel = (r: any) => `apply-receipt ${r?.receipt_id}`;
 
 /** Operations built INSIDE this module for the rehearsal cancel row. Identity-based and never serialised: a `cancelled` field in evidence JSON means nothing. */
@@ -111,8 +109,8 @@ function operationProblems(operations: any[], bad: (m: string) => void, floor: n
 /** The shape of the `receipt_applications` list and of each entry (no chain read). Also run on its own for a Twin run manifest. */
 function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
   const apps: any[] = ev?.receipt_applications === undefined ? [] : Array.isArray(ev.receipt_applications) ? ev.receipt_applications : (bad("receipt_applications is not a list"), []);
-  if (apps.length > 0 && !ADDR.test(ev?.consensus_receipt?.address ?? "")) bad("consensus_receipt.address is missing: a receipt application has no release target to check");
-  if (apps.length > 0 && !ADDR.test(ev?.governance?.address ?? "")) bad("governance.address is missing: a receipt application has no weight-change target to check");
+  if (apps.length > 0 && !ADDR.test(ev?.consensus_receipt?.address ?? "")) bad("consensus_receipt.address is missing: a receipt application names a receipt on it");
+  if (apps.length > 0 && !ADDR.test(ev?.governance?.address ?? "")) bad("governance.address is missing: a receipt application has no applyReceipt target to check");
   const seen = new Set<string>();
   for (const r of apps) {
     const w = applyLabel(r);
@@ -120,25 +118,26 @@ function applicationShapeProblems(ev: any, bad: (m: string) => void): any[] {
     else if (seen.has(lc(r.receipt_id))) bad(`${w}: receipt_id has more than one evidence entry`);
     else seen.add(lc(r.receipt_id));
     if (r?.step !== undefined && r.step !== "apply-receipt") bad(`${w}: step '${r.step}' is not apply-receipt`);
-    if (lc(r?.target ?? "") !== lc(ev?.consensus_receipt?.address ?? "")) bad(`${w}: target ${r?.target} is not the receipt contract ${ev?.consensus_receipt?.address}`);
+    if (lc(r?.target ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: target ${r?.target} is not the weight setter ${ev?.governance?.address}: an application is one applyReceipt call`);
     if (lc(r?.governance ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: governance ${r?.governance} is not the governance contract ${ev?.governance?.address}`);
+    if (!TX.test(r?.payload_digest ?? "")) bad(`${w}: payload_digest is not a bytes32`);
     const vaults: unknown[] = Array.isArray(r?.vaults) ? r.vaults : [];
     const bps: unknown[] = Array.isArray(r?.bps) ? r.bps : [];
     if (vaults.length === 0 || vaults.length !== bps.length || !vaults.every((v) => typeof v === "string" && ADDR.test(v)) || new Set(vaults.map((v) => lc(String(v)))).size !== vaults.length) bad(`${w}: vaults and bps are not a list of distinct addresses with one weight each`);
     else if (!bps.every((x) => Number.isInteger(x) && (x as number) >= 0) || (bps as number[]).reduce((t, x) => t + x, 0) !== 10000) bad(`${w}: bps do not sum to 10000`);
     if (releasedIds(ev).has(lc(r?.receipt_id ?? ""))) bad(`${w}: the receipt is also under receipt_releases: a receipt is released once`);
-    effectiveReadBackProblems(w, r, vaults, bps, bad);
+    effectiveReadBackProblems(w, r, vaults, bps, true, bad);
   }
   return apps;
 }
 
 /**
- * Issue 1743: the router's EFFECTIVE weights are what deposits route by. After an application (or a clear) the read-back saw votedWeightsActive false, and the entry records it
- * (`voted_weights_active: false`, `effective_vaults`, `effective_bps`). A voted vector on top of the default would leave routing unchanged while the default read right.
- * `vaults` / `bps` are the vector the entry claims the router holds (the applied one); undefined for a clear entry, which only needs a well formed vector.
+ * Issue 1743: the router's EFFECTIVE weights are what deposits route by, and the entry records what the read-back saw (`voted_weights_active`, `effective_vaults`, `effective_bps`).
+ * `active` is the flag the round must leave: true after an application (applyReceipt sets the router's active vector, issue 1698), false after a clear or a redeploy (routing on
+ * the default vector). `vaults` / `bps` are the vector the entry claims the router routes by; undefined for a clear entry, which only needs a well formed vector.
  */
-function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, bad: (m: string) => void): void {
-  if (r?.voted_weights_active !== false) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want false: the read-back must show no voted vector overriding the default (issue 1743)`);
+function effectiveReadBackProblems(w: string, r: any, vaults: unknown[] | undefined, bps: unknown[] | undefined, active: boolean, bad: (m: string) => void): void {
+  if (r?.voted_weights_active !== active) bad(`${w}: voted_weights_active is ${String(r?.voted_weights_active)}, want ${active}: ${active ? "the applied vector must be the router's active vector" : "the read-back must show no active vector overriding the default"} (issue 1743)`);
   const ev: unknown[] = Array.isArray(r?.effective_vaults) ? r.effective_vaults : [];
   const eb: unknown[] = Array.isArray(r?.effective_bps) ? r.effective_bps : [];
   if (ev.length === 0 || ev.length !== eb.length || !ev.every((v) => typeof v === "string" && ADDR.test(v)) || !eb.every((x) => Number.isInteger(x) && (x as number) >= 0) || (eb as number[]).reduce((t, x) => t + x, 0) !== 10000) {
@@ -169,7 +168,7 @@ function clearShapeProblems(ev: any, bad: (m: string) => void): any[] {
     if (seen.has(n)) bad(`${w}: more than one evidence entry for this round`); else seen.add(n);
     if (lc(r?.governance ?? "") !== lc(ev?.governance?.address ?? "")) bad(`${w}: governance ${r?.governance} is not the governance contract ${ev?.governance?.address}`);
     if (!ADDR.test(r?.router ?? "")) bad(`${w}: router is not an address`);
-    effectiveReadBackProblems(w, r, undefined, undefined, bad);
+    effectiveReadBackProblems(w, r, undefined, undefined, false, bad);
   }
   return clears;
 }
@@ -226,7 +225,7 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     else {
       try { vectorsFromFinal({ finalVaults: vaults as string[], finalBps: bps as number[], oldVault: r.old_vault, newVault: r.new_vault }); } catch (e) { bad(`${w}: ${(e as Error).message}`); }
     }
-    effectiveReadBackProblems(w, r, vaults, bps, bad);
+    effectiveReadBackProblems(w, r, vaults, bps, false, bad);
     if (r?.old_vault_status !== "Retired") bad(`${w}: old_vault_status is ${String(r?.old_vault_status)}, want Retired`);
     if (r?.new_vault_status !== "Active") bad(`${w}: new_vault_status is ${String(r?.new_vault_status)}, want Active`);
   }
@@ -677,9 +676,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
 }
 
 /**
- * Chain check of `receipt_applications` (issue 1696). Each entry is ONE timelock batch: the schedule tx has exactly two CallScheduled events with one operation
- * id (the recorded operation_id), index 0 releaseReceipt(receipt_id) on the receipt contract, index 1 setDefaultWeights(vaults, bps) on the governance contract,
- * each with a delay of at least MAINNET_DELAY_FLOOR. The execute tx has the two matching CallExecuted events. The block gap is at least MAINNET_DELAY_FLOOR.
+ * Chain check of `receipt_applications` (issue 1696, issue 1698). Each entry is ONE timelock call: the schedule tx has exactly one CallScheduled event (the recorded
+ * operation_id), applyReceipt(receipt_id, payload_digest, vaults, bps) on the weight setter, with a delay of at least MAINNET_DELAY_FLOOR. The execute tx has the
+ * matching CallExecuted event. The block gap is at least MAINNET_DELAY_FLOOR.
  * It does not read the chain id: a Twin run uses it too (run it with `--receipt-applications`).
  */
 export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReader, floor: number = MAINNET_DELAY_FLOOR): Promise<string[]> {
@@ -695,29 +694,22 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
   };
   for (const r of Array.isArray(ev?.receipt_applications) ? ev.receipt_applications : []) {
     const w = applyLabel(r);
-    if (!TX.test(r?.receipt_id ?? "") || !ADDR.test(ev.consensus_receipt?.address ?? "") || !ADDR.test(ev.governance?.address ?? "") || !Array.isArray(r.vaults) || !Array.isArray(r.bps) || r.vaults.length !== r.bps.length) continue; // the offline check already named it
+    if (!TX.test(r?.receipt_id ?? "") || !TX.test(r?.payload_digest ?? "") || !ADDR.test(ev.governance?.address ?? "") || !Array.isArray(r.vaults) || !Array.isArray(r.bps) || r.vaults.length !== r.bps.length) continue; // the offline check already named it
     const sc = await status(`${w} schedule`, r.schedule_tx);
     if (!sc) continue;
     const scheduled = timelockEvents(sc, ev.timelock.address, "CallScheduled").sort((x, y) => Number(x.index - y.index));
     if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock`); continue; }
-    const [relData, wData] = applyCalldata(r.receipt_id, r.vaults, r.bps);
-    const wantCalls = [{ target: ev.consensus_receipt.address as string, data: relData, what: `releaseReceipt(${r.receipt_id})` }, { target: ev.governance.address as string, data: wData, what: "setDefaultWeights(vaults, bps) of the recorded vector" }];
-    if (scheduled.length !== wantCalls.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an application is exactly ${wantCalls.length} calls (release, then weights) in one batch`);
-    scheduled.forEach((e, i) => {
-      const want = wantCalls[i];
-      if (want === undefined) { bad(`${w}: CallScheduled call ${i} is not part of an application`); return; }
-      if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${want.target}`);
-      else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${want.what}`);
-      if (e.index !== BigInt(i)) bad(`${w}: CallScheduled call ${i} has batch index ${e.index}`);
-      if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
-      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the batch calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
-    });
+    const want = { target: ev.governance.address as string, data: applyCalldata(r.receipt_id, r.payload_digest, r.vaults, r.bps) };
+    if (scheduled.length !== 1) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, an application is exactly one applyReceipt call`);
+    const e = scheduled[0]!;
+    if (lc(e.target) !== lc(want.target)) bad(`${w}: CallScheduled target ${e.target} is not the weight setter ${want.target}`);
+    else if (lc(e.data) !== lc(want.data)) bad(`${w}: CallScheduled calldata is not applyReceipt(receipt_id, payload_digest, vaults, bps) of the recorded entry`);
+    if (!(e.delay !== undefined && e.delay >= BigInt(floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${floor} s`);
     if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
     const schedTs = await ts(sc);
     const ex = await status(`${w} execute`, r.execute_tx);
     if (!ex) continue;
-    const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
-    if (executed.length !== wantCalls.length || !executed.every((e, i) => lc(e.target) === lc(wantCalls[i]!.target) && lc(e.data) === lc(wantCalls[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the scheduled release and weight change`);
+    if (!timelockEvents(ex, ev.timelock.address, "CallExecuted").some((x) => lc(x.id) === lc(e.id) && lc(x.target) === lc(want.target) && lc(x.data) === lc(want.data))) bad(`${w}: the execute tx has no CallExecuted event for the scheduled applyReceipt`);
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${floor} s`);
   }

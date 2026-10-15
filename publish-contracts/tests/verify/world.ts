@@ -83,9 +83,6 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
 export const NAV_GUARD_BPS = 100n;
 export const POOL_LIQUIDITY = 10n ** 18n;
 export const POOL_LIQUIDITY_FLOOR = 10n ** 12n;
-export const VOTER_A = addr(0xb001);
-export const VOTER_B = addr(0xb002);
-const GOV_SHEET = { voters: [VOTER_A, VOTER_B], voterPower: 1000n, quorum: 2n, votingPeriod: 3600n, executionDelay: 3600n };
 const DEFAULT_BPS = [9500, 500, 0, 0];
 
 type Handler = (args: any[]) => unknown;
@@ -254,11 +251,12 @@ export function buildWorld(chainId = 8453): World {
   ch.set(REGISTRY, "listVaults", Object.values(VAULTS).map((v) => v.address));
   ch.set(REGISTRY, "vaultCount", 4n);
   ch.set(REGISTRY, "isRouterEligible", () => true);
-  // deploy-time configuration (issue 1520): voting power, quorum, voting period, execution delay and the router default weights
-  ch.set(GOV, "votingPower", () => GOV_SHEET.voterPower);
-  ch.set(GOV, "quorumThreshold", GOV_SHEET.quorum);
-  ch.set(GOV, "votingPeriod", GOV_SHEET.votingPeriod);
-  ch.set(GOV, "executionDelay", GOV_SHEET.executionDelay);
+  // the weight setter (issue 1698): applyReceipt is gated by governance's own WEIGHT_SETTER_ROLE (the timelock) and releases on the receipt register
+  ch.grant(GOV, WEIGHT_SETTER_ROLE, TIMELOCK);
+  ch.grant(REC, ADMIN_ROLE, GOV);
+  ch.set(GOV, "router", ROUTER);
+  ch.set(GOV, "receipts", REC);
+  // deploy-time configuration (issue 1520): the router default weights
   ch.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), DEFAULT_BPS.map((x) => BigInt(x))]);
   // issue 1743: no voted vector is active, so the effective vector is the default one
   ch.set(ROUTER, "votedWeightsActive", false);
@@ -343,7 +341,6 @@ export function buildWorld(chainId = 8453): World {
 
   const sheet: VerifySheet = {
     chainId, deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safeOwners: [...OWNERS], safeThreshold: 2, timelockDelay: delay, vaults: vsheet,
-    governance: { ...GOV_SHEET, voters: [...GOV_SHEET.voters] },
     defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
   };
   ch.txs.set(PROOF_TX.toLowerCase(), { to: SAFE, input: proofInput(chainId), value: 0n, status: "success" });

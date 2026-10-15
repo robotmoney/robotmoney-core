@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { keccak256, pad, toHex } from "viem";
+import { keccak256, pad, toFunctionSelector, toHex } from "viem";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
@@ -91,13 +91,16 @@ const RULES: Rule[] = [
   [/^(.+): EMERGENCY_ROLE held by emergency key$/, (w, m) => w.chain.revoke(subject(m[1]), EMERGENCY_ROLE, EMERGENCY)],
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
   // deploy-time configuration (issue 1520)
-  [/^governance: votingPower of every voter equals sheet$/, (w) => w.chain.set(GOV, "votingPower", 1n)],
-  [/^governance: quorumThreshold equals sheet$/, (w) => w.chain.set(GOV, "quorumThreshold", 99n)],
-  [/^governance: votingPeriod equals sheet$/, (w) => w.chain.set(GOV, "votingPeriod", 99_999n)],
-  [/^governance: executionDelay equals sheet$/, (w) => w.chain.set(GOV, "executionDelay", 99_999n)],
+  // the weight setter (issue 1698)
+  [/^governance: WEIGHT_SETTER_ROLE \(applyReceipt\) held by timelock$/, (w) => w.chain.revoke(GOV, WEIGHT_SETTER_ROLE, TIMELOCK)],
+  [/^governance: WEIGHT_SETTER_ROLE \(applyReceipt\) has exactly one holder$/, (w) => w.chain.grant(GOV, WEIGHT_SETTER_ROLE, OTHER)],
+  [/^governance: router\(\) equals the deployed router$/, (w) => w.chain.set(GOV, "router", OTHER)],
+  [/^governance: receipts\(\) equals the deployed receipt register$/, (w) => w.chain.set(GOV, "receipts", OTHER)],
+  [/^receipt: ADMIN_ROLE held by governance \(applyReceipt releases\)$/, (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
+  [/^governance: runtime code has no voting function$/, (w) => w.chain.codes.set(GOV.toLowerCase(), `0x63${toFunctionSelector("quorumThreshold()").slice(2)}${w.chain.codes.get(GOV.toLowerCase())!.slice(2)}` as `0x${string}`)],
   [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
   // issue 1743: a voted vector on the router overrides the default vector
-  [/^router: votedWeightsActive is false after deploy$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+  [/^router: votedWeightsActive is true only after an applied receipt$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
   [/^router: effective weights equal the sheet's launch vector$/, (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
   // issue 1696: a receipt the run manifest says the Safe applied reads not released
   [/^receipt: applied receipt is released and its weights are on the router$/, (w) => { w.opts.appliedReceipt = { receiptId: `0x${"ab".repeat(32)}`, vaults: Object.values(VAULTS).map((v) => v.address), bps: [9500, 500, 0, 0] }; w.chain.set(REC, "isReleased", () => false); }],

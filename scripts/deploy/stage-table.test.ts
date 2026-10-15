@@ -18,7 +18,7 @@ function scriptSource(path: string): string {
   return own + extra + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -133,7 +133,9 @@ describe("stage-table.json", () => {
     for (const old of ["voting-power-quorum", "other-setters", "migrate-eligibility", "router-weights"]) expect(JSON.stringify(g)).not.toContain(old);
     // the deploy-time configuration is read by the stages that set it
     const env = (n: string) => table.stages.find((s) => s.name === n)!.requiredEnv;
-    expect(env("governance")).toEqual(expect.arrayContaining(["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]));
+    // issue 1698: RouterGovernance has no voting, so the governance stage reads no voter, quorum or period, and it needs the receipt register
+    expect(env("governance")).toContain("CONSENSUS_RECEIPT_ADDRESS");
+    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(env("governance")).not.toContain(gone);
     for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
   });
 

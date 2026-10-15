@@ -76,17 +76,13 @@ describe("issue 1520: the stage 12 verifier fails when any deploy-time value dif
   const { buildWorld, failed, GOV, ROUTER, VAULTS, addr } = require("./verify/world.ts") as typeof import("./verify/world.ts");
   const { verifyDeployment } = require("../src/verify/index.ts") as typeof import("../src/verify/index.ts");
   const cases: [string, string, (w: ReturnType<typeof buildWorld>) => void][] = [
-    ["voting power", "governance: votingPower of every voter equals sheet", (w) => w.chain.set(GOV, "votingPower", 1n)],
-    ["quorum", "governance: quorumThreshold equals sheet", (w) => w.chain.set(GOV, "quorumThreshold", 3n)],
-    ["voting period", "governance: votingPeriod equals sheet", (w) => w.chain.set(GOV, "votingPeriod", 7200n)],
-    ["execution delay", "governance: executionDelay equals sheet", (w) => w.chain.set(GOV, "executionDelay", 7200n)],
     ["tvl cap", "vault[rmPROTO]: tvlCap equals sheet", (w) => w.chain.set(VAULTS.rmPROTO.address, "tvlCap", 1n)],
     ["per-deposit cap", "vault[rmAGENT]: perDepositCap equals sheet", (w) => w.chain.set(VAULTS.rmAGENT.address, "perDepositCap", 1n)],
     ["exit fee", "vault[rmRWA]: exitFeeBps equals sheet", (w) => w.chain.set(VAULTS.rmRWA.address, "exitFeeBps", 9999n)],
     ["fee recipient", "vault[rmUSDC]: feeRecipient equals sheet", (w) => w.chain.set(VAULTS.rmUSDC.address, "feeRecipient", addr(0xbad))],
     ["router eligibility", "vault[rmPROTO]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmPROTO.routerEligible = false; }],
     ["router eligibility of a basket the sheet leaves ineligible", "vault[rmAGENT]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmAGENT.routerEligible = false; }],
-    ["router voted vector", "router: votedWeightsActive is false after deploy", (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+    ["router active vector", "router: votedWeightsActive is true only after an applied receipt", (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
     ["router effective weights", "router: effective weights equal the sheet's launch vector", (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
     ["router default weights", "router: default weights equal sheet", (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [1n, 2n, 3n, 9994n]])],
   ];

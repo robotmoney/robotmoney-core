@@ -42,3 +42,29 @@ test("signals remain advisory until member authentication lands", () => {
     expect(text).toContain("receipts are the only rebalance input");
   }
 });
+
+// Issue 1698: RouterGovernance has no voting. Outside the history (docs/archive, docs/code-review, docs/audits.md) no doc and no contract source names the
+// deleted voting surface: the functions, events and sheet names that would describe a vote path. The contract source covered is every production .sol file
+// (contracts/, scripts included, forge tests and the generated contract docs excluded).
+function solidity(path: string): string[] {
+  return readdirSync(join(ROOT, path), { withFileTypes: true }).flatMap((entry) => {
+    const child = `${path}/${entry.name}`;
+    if (["contracts/test", "contracts/doc"].includes(child)) return [];
+    return entry.isDirectory() ? solidity(child) : entry.name.endsWith(".sol") ? [child] : [];
+  });
+}
+const VOTING_VOCABULARY = /\b(?:setVotingPower|votingPower|totalVotingPower|quorumThreshold|setQuorumThreshold|votingPeriod|setVotingPeriod|executionDelay|setExecutionDelay|activeProposal|proposalState|cadenceParams|proposalVoteSnapshot|hasVoted|ProposalCreated|VoteCast|ProposalExecuted|ProposalCancelled|VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)\b|RouterGovernance\.(?:propose|vote|execute)\b/;
+// Third-party protocols' own governance events (Compound, Aave) are monitored upstream, not ours.
+const THIRD_PARTY = /(?:Compound|Aave)[^\n]*ProposalCreated/;
+
+test("no voting vocabulary outside history", () => {
+  const sources = [...files, ...solidity("contracts")];
+  expect(sources.filter((f) => f.endsWith(".sol")).length).toBeGreaterThan(10);
+  const hits: string[] = [];
+  for (const file of sources) {
+    read(file).split("\n").forEach((line, i) => {
+      if (VOTING_VOCABULARY.test(line) && !THIRD_PARTY.test(line)) hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 160)}`);
+    });
+  }
+  expect(hits).toEqual([]);
+});

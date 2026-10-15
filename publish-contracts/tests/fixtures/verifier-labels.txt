@@ -9,8 +9,8 @@ manifest: vault.json present
 manifest: registry.json present
 manifest: router.json present
 manifest: gateway.json present
-manifest: governance.json present
 manifest: ic-policy.json present
+manifest: governance.json present
 manifest: protocol-asset-vault.json present
 manifest: agent-token-vault.json present
 manifest: rwa-basket-vault.json present
@@ -22,8 +22,8 @@ manifest: vault.json chain_id equals sheet
 manifest: registry.json chain_id equals sheet
 manifest: router.json chain_id equals sheet
 manifest: gateway.json chain_id equals sheet
-manifest: governance.json chain_id equals sheet
 manifest: ic-policy.json chain_id equals sheet
+manifest: governance.json chain_id equals sheet
 manifest: protocol-asset-vault.json chain_id equals sheet
 manifest: agent-token-vault.json chain_id equals sheet
 manifest: rwa-basket-vault.json chain_id equals sheet
@@ -116,12 +116,14 @@ router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by emergency
 gateway: not paused
 gateway: router() equals the deployed router
 registry: router() equals the deployed router
-governance: votingPower of every voter equals sheet
-governance: quorumThreshold equals sheet
-governance: votingPeriod equals sheet
-governance: executionDelay equals sheet
+governance: WEIGHT_SETTER_ROLE (applyReceipt) held by timelock
+governance: WEIGHT_SETTER_ROLE (applyReceipt) has exactly one holder
+governance: router() equals the deployed router
+governance: receipts() equals the deployed receipt register
+receipt: ADMIN_ROLE held by governance (applyReceipt releases)
+governance: runtime code has no voting function
 router: default weights equal sheet
-router: votedWeightsActive is false after deploy
+router: votedWeightsActive is true only after an applied receipt
 router: effective weights equal the sheet's launch vector
 receipt: applied receipt is released and its weights are on the router
 vault[rmUSDC]: ADMIN_ROLE held by timelock

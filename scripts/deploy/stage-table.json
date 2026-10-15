@@ -106,27 +106,6 @@
       "vault": null
     },
     {
-      "name": "governance",
-      "kind": "forge",
-      "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
-      "requiredEnv": [
-        "ADMIN_ADDRESS",
-        "ROUTER_ADDRESS",
-        "QUORUM_THRESHOLD",
-        "VOTING_PERIOD",
-        "EXECUTION_DELAY",
-        "VOTER_ADDRESSES",
-        "VOTER_POWER",
-        "DEPLOYMENT_OUT"
-      ],
-      "optionalEnv": [
-        "EXPECTED_CHAIN_ID"
-      ],
-      "manifest": "deployments/<chain>/governance.json",
-      "libraries": [],
-      "vault": null
-    },
-    {
       "name": "ic-policy",
       "kind": "forge",
       "script": "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
@@ -140,6 +119,24 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/ic-policy.json",
+      "libraries": [],
+      "vault": null
+    },
+    {
+      "name": "governance",
+      "kind": "forge",
+      "script": "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "ROUTER_ADDRESS",
+        "CONSENSUS_RECEIPT_ADDRESS",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/governance.json",
+      "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after ic-policy because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's ADMIN_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
       "libraries": [],
       "vault": null
     },
@@ -268,7 +265,7 @@
   ],
   "govern": {
     "stage": 13,
-    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. The governance stage's VOTER_*, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY are constructor arguments of today's RouterGovernance bytecode, not governance: there is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696), never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
+    "description": "After the timelock handover the only mainnet operation is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all four deployed paused: one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait, then executed. Vault setters, router eligibility and router default weights are deploy-time configuration set by the deployer in stages 4 to 10, before the handover, and asserted by the verify stage. There is no voting by anyone. Router weights change on demand through the apply-receipt row (core 1696): the Safe schedules RouterGovernance.applyReceipt on the timelock, never in stage 13. update-delay, batch and cancel are Twin-only demonstrations of the Safe tool and are refused on 8453.",
     "mainnetRows": [
       "unpause-USDC",
       "unpause-PROTO",
