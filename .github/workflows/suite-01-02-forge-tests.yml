@@ -156,7 +156,7 @@ jobs:
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,FourVaultInitialState}.t.sol"
 
       # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
-      - name: forge test (four-vault rules: paused router leg, adapter write-off — issue 1705)
+      - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
         run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
