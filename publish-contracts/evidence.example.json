@@ -101,5 +101,22 @@
       "execute_status": 1,
       "execute_block_timestamp": 0
     }
-  ]
+  ],
+  "upgradeability": {
+    "_comment": "Issue 1809: copy deployments/8453/upgradeability.json, which the verify stage writes from the chain, here unchanged (drop chain_id and core_sha). One entry per proxied core contract of the stage table (the ten: vault[rmUSDC], registry, router, gateway, icpolicy, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]): proxy and implementation addresses, both runtime code hashes, the storage layout file and its layout_id, upgrade_timelock, upgrades_frozen, initialized_version and manifest_upgrade_mode. mode is the sheet's UPGRADE_MODE; freeze_deadline is set only for an upgradeable release (required on a production one). core_immutable is true only for a frozen release whose full core set verified frozen with every check passing; otherwise immutability_refused_because says why. remaining_governed_parameters and upstream_dependencies are the verifier's lists of what a freeze does not make immutable. evidence-check reads every proxy fact back from the chain with --rpc or --chain-fixture.",
+    "mode": "frozen",
+    "freeze_deadline": null,
+    "timelock": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "min_delay": "172800"
+    },
+    "transactions_per_proxy": 2,
+    "proxies": {},
+    "core_immutable": false,
+    "immutability_refused_because": [
+      "<copy from upgradeability.json>"
+    ],
+    "remaining_governed_parameters": [],
+    "upstream_dependencies": []
+  }
 }

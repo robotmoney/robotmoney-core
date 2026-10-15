@@ -269,6 +269,58 @@ describe("stage-table.json", () => {
     });
   });
 
+  // Issue 1809 (upgradeability stage 2): the proxy rows and the upgrade authority agree with the scripts, the layout gate and the CREATE2 prediction.
+  describe("proxies and the upgrade authority", () => {
+    const cli = cliLoadStageTable(ROOT);
+    const u = cli.upgradeAuthority!;
+    const proxyStages = cli.stages.filter((s) => s.proxies);
+    test("every stage that reads UPGRADE_MODE lists its proxies, and the timelock stage, deployed last, lists none", () => {
+      expect(u.modeEnv).toBe("UPGRADE_MODE");
+      expect(proxyStages.map((s) => s.name)).toEqual(cli.stages.filter((s) => s.requiredEnv.includes("UPGRADE_MODE")).map((s) => s.name));
+      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
+      expect(cli.stages[cli.stages.length - 1]!.name).toBe(u.stage);
+      expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
+    });
+    test("the ten proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
+      const gate = read("scripts/ci/check-core-storage-layout.sh");
+      const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
+      const listed = proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)).sort();
+      expect(listed).toEqual(gated);
+      expect(listed).toHaveLength(10);
+      for (const s of proxyStages) for (const p of s.proxies!) {
+        expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
+        expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);
+      }
+      expect(existsSync(join(ROOT, u.layoutPins))).toBe(true);
+    });
+    test("each proxy stage's script writes the proxy and implementation manifest fields the table names, and the mode and authority", () => {
+      for (const s of proxyStages) {
+        const src = scriptSource(s.script.split(":")[0]!);
+        for (const p of s.proxies!) {
+          for (const f of [p.field, p.implementationField, "upgrade_timelock", "upgrade_mode"]) expect(src, `${s.name} ${f}`).toMatch(new RegExp(`"${f}"|'"${f}"|"${f}":|,"${f}":"|"${f}":"`));
+          expect(src, `${s.name} ${p.contract}`).toContain(p.contract);
+        }
+      }
+    });
+    test("the CREATE2 prediction the table states is the one the scripts compute", () => {
+      const auth = read("contracts/script/UpgradeAuthority.sol");
+      expect(auth).toContain(`keccak256("${u.salt}")`);
+      expect(auth).toContain("predictTimelock(address safe, uint256 minDelay)");
+      expect(u.inputs).toEqual(["SAFE_ADDRESS", "TIMELOCK_MIN_DELAY"]);
+      for (const i of u.inputs) expect(auth).toContain(`"${i}"`);
+      expect(u.factory.toLowerCase()).toBe("0x4e59b44847b379578588920ca78fbf26c0b4956c");
+      expect(u.modes.sort()).toEqual(["frozen", "upgradeable"]);
+      for (const m of u.modes) expect(auth).toContain(`keccak256("${m}")`);
+      expect(read(cli.stages.find((s) => s.name === u.stage)!.script.split(":")[0]!)).toContain(u.contract);
+    });
+    test("one implementation and one initializing proxy per proxied contract: the stated transactions per proxy", () => {
+      expect(u.transactionsPerProxy).toBe(2);
+      const auth = read("contracts/script/UpgradeAuthority.sol");
+      // the proxy constructor runs the initializer (no separate initialize transaction) and the mode only feeds that initializer
+      expect(auth).toContain("proxy = address(new ERC1967Proxy(implementation, initData));");
+    });
+  });
+
   test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {
     const cli = cliLoadStageTable(ROOT);
     expect(cli.stages.map((s) => s.name)).toEqual(EXPECTED);

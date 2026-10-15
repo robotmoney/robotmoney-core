@@ -303,3 +303,34 @@ describe("rule b twin sheet", () => {
 test("VAULT_NAME is refused with the reason: one registry-name source for all four vaults", () => {
   expect(() => parseSheet(sheetText({}, ['VAULT_NAME="Robot Money USDC"']))).toThrow(/VAULT_NAME is refused: .*one registry-name source/);
 });
+
+// Issue 1809 (upgradeability stage 2): the release mode of every core proxy is a required sheet name with no default; an upgradeable production release on 8453 names
+// its freeze deadline, a frozen one refuses one.
+describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
+  const MAIN = { CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
+  test("UPGRADE_MODE is required, has no default and takes only upgradeable or frozen", () => {
+    expect(REQUIRED_NAMES).toContain("UPGRADE_MODE");
+    expect(refused(sheetText({ UPGRADE_MODE: null })).message).toContain("missing required names: UPGRADE_MODE");
+    expect(refused(sheetText({ UPGRADE_MODE: "frozen-later" })).message).toContain("UPGRADE_MODE must be upgradeable or frozen");
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "frozen" })).upgrade).toEqual({ mode: "frozen" });
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" })).upgrade).toEqual({ mode: "upgradeable" });
+  });
+  test("an upgradeable production release on 8453 needs the freeze deadline; a rehearsal, the Twin chain and a frozen release do not", () => {
+    expect(refused(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" })).message).toContain("UPGRADE_FREEZE_DEADLINE");
+    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])).upgrade).toEqual({ mode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
+    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "frozen" })).upgrade).toEqual({ mode: "frozen" });
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" })).upgrade.freezeDeadline).toBeUndefined();
+  });
+  test("a deadline with the frozen mode is a contradiction, and a deadline that is not an ISO 8601 UTC time is refused", () => {
+    expect(refused(sheetText({ UPGRADE_MODE: "frozen" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])).message).toContain("nothing to freeze later");
+    for (const bad of ["2027-01-31", "2027-02-30T00:00:00Z", "2027-01-31T00:00:00+01:00", "tomorrow"]) {
+      expect(refused(sheetText({ UPGRADE_MODE: "upgradeable" }, [`UPGRADE_FREEZE_DEADLINE=${bad}`])).message, bad).toContain("ISO 8601 UTC");
+    }
+  });
+  test("every committed sheet declares its mode: the Twin sheet, the 8453 rehearsal example and the production fixture are frozen", () => {
+    for (const f of ["deployments/twin-918453/stage-sheet.env", "deployments/base-8453-rehearsal/stage-sheet.example.env"]) {
+      expect(parseSheet(readFileSync(join(REPO, f), "utf8")).upgrade, f).toEqual({ mode: "frozen" });
+    }
+    expect(parseSheet(exampleText()).upgrade).toEqual({ mode: "frozen" });
+  });
+});

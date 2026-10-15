@@ -7,7 +7,8 @@ import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { coreContracts } from "../../src/verify/constants.ts";
 import { loadManifests } from "../../src/verify/manifests.ts";
-import { buildWorld, failed, VAULTS } from "./world.ts";
+import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
+import { buildWorld, failed, IMPLS } from "./world.ts";
 
 const table = getStageTable();
 const art = (key: "USDC" | "PROTO" | "AGENT" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
@@ -28,20 +29,22 @@ describe("verify artifacts come from the core table", () => {
 
   test("rmRWA running ProtocolAssetVault code fails (it must be RwaBasketVault)", async () => {
     const w = buildWorld();
-    w.chain.codes.set(VAULTS.rmRWA.address.toLowerCase(), w.chain.codes.get(VAULTS.rmPROTO.address.toLowerCase())!);
-    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]")]);
+    // issue 1808: behind its proxy, the rmRWA implementation runs the rmPROTO build. The sheet's frozen mode claims immutability, so the claim is refused too (issue 1809).
+    w.chain.codes.set(IMPLS["vault[rmRWA]"]!.toLowerCase(), w.chain.codes.get(IMPLS["vault[rmPROTO]"]!.toLowerCase())!);
+    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]"), CLAIM_LABEL]);
   });
 
   test("rmAGENT running basket code fails", async () => {
     const w = buildWorld();
-    w.chain.codes.set(VAULTS.rmAGENT.address.toLowerCase(), w.chain.codes.get(VAULTS.rmPROTO.address.toLowerCase())!);
-    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmAGENT]")]);
+    w.chain.codes.set(IMPLS["vault[rmAGENT]"]!.toLowerCase(), w.chain.codes.get(IMPLS["vault[rmPROTO]"]!.toLowerCase())!);
+    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmAGENT]"), CLAIM_LABEL]);
   });
 
   test("a missing RwaBasketVault build artifact fails that vault only", async () => {
     const w = buildWorld();
     rmSync(join(w.artifactsDir, "RwaBasketVault.sol"), { recursive: true });
-    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]")]);
+    // the library links of the implementation are read from the same artifact (issue 1809)
+    expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]"), "vault[rmRWA]: implementation links the build's libraries", CLAIM_LABEL]);
   });
 
   test("the library is checked against the table's library artifact (TickMath), not its manifest key", async () => {

@@ -22,7 +22,7 @@ import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { manifestBase, manifestPathFor } from "./stage-table.ts";
-import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
+import { eligibilityBps, type Address, type Sheet, type UpgradeMode } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
@@ -93,6 +93,11 @@ export interface RunManifest {
   version: 1;
   /** Issue 1727: the deployment kind of the run, from the sheet's DEPLOYMENT_KIND. A manifest written before the field existed is a production run. */
   deploymentKind?: DeploymentKind;
+  /**
+   * Issue 1809: the release mode every proxy of the run is initialized with, from the sheet's UPGRADE_MODE. A run never changes it: a resume under another mode would leave
+   * some proxies frozen and others upgradeable. A manifest written before the field existed ran with the interim literal `frozen` (issue 1808).
+   */
+  upgradeMode?: UpgradeMode;
   /**
    * Issue 1727, rehearsal only: the deployer nonce at the first deployer stage. A rehearsal reuses a deployer that is not at nonce 0, so every nonce check is relative
    * to this value. It is recorded once, before the first transaction, and never rewritten. Production runs never carry it: a fresh deployer starts at 0.
@@ -850,12 +855,31 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (expectedCount === undefined && adoptedLibs.length === 0 && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
   rec.count = expectedCount ?? sent.count;
   if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
+  proxyManifestCheck(ctx, row, outPath);
   if (sent.firstBlock !== undefined && (manifest.firstBlock === undefined || sent.firstBlock < manifest.firstBlock)) manifest.firstBlock = sent.firstBlock;
   rec.status = "done";
   rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
   manifest.stages[row.name] = rec;
   saveRunManifest(ctx.evidenceDir, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: startNonce, end_nonce: nonce1, count: rec.count });
+}
+
+/**
+ * Issue 1809: after a stage that deploys proxies (a fresh broadcast or a `forge --resume` that finished a partial one), its manifest must name every proxy and its implementation,
+ * the upgrade authority, and the sheet's release mode. A stage that came back in another mode or without the addresses is not a state a later stage may build on: the stage stays
+ * `started` and the run stops (MANIFEST). The verifier then proves the same facts on chain.
+ */
+export function proxyManifestCheck(ctx: Pick<RunContext, "sheet">, row: Pick<StageRow, "name">, outPath: string): void {
+  const proxies = getStageTable().stages.find((s) => s.name === row.name)?.proxies ?? [];
+  if (proxies.length === 0 || !ctx.sheet.upgrade) return;
+  let m: Record<string, unknown>;
+  try { m = JSON.parse(readFileSync(outPath, "utf8")); } catch (e) { throw new PublishError("MANIFEST", `manifest ${outPath} of ${row.name} is not valid JSON: ${(e as Error).message}`, { stage: row.name }); }
+  const A = /^0x[0-9a-fA-F]{40}$/;
+  const problems: string[] = [];
+  for (const p of proxies) for (const f of [p.field, p.implementationField]) if (typeof m[f] !== "string" || !A.test(m[f] as string) || /^0x0{40}$/.test(m[f] as string)) problems.push(`${f} is not an address`);
+  if (typeof m.upgrade_timelock !== "string" || !A.test(m.upgrade_timelock)) problems.push("upgrade_timelock is not an address");
+  if (m.upgrade_mode !== ctx.sheet.upgrade.mode) problems.push(`upgrade_mode is ${String(m.upgrade_mode)}, the sheet's UPGRADE_MODE is ${ctx.sheet.upgrade.mode}`);
+  if (problems.length) throw new PublishError("MANIFEST", `stage ${row.name}: its proxy manifest ${outPath} is not the release the sheet declares: ${problems.join("; ")}. Stop and read the chain before anything else runs.`, { stage: row.name, problems });
 }
 
 /**
@@ -1006,7 +1030,7 @@ export type StageHandler = (ctx: RunContext, row: StageRow, manifest: RunManifes
 export interface Handlers { prove: StageHandler; verify: StageHandler; govern: StageHandler }
 
 export function newManifest(ctx: RunContext, deployer: string): RunManifest {
-  return { version: 1, deploymentKind: ctx.sheet.kind, chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
+  return { version: 1, deploymentKind: ctx.sheet.kind, ...(ctx.sheet.upgrade ? { upgradeMode: ctx.sheet.upgrade.mode } : {}), chainId: ctx.chainId, coreSha: ctx.coreSha, deployer, environment: ctx.environment, startedAt: new Date().toISOString(), stages: {} };
 }
 
 export interface RunResult { manifest: RunManifest; ran: string[]; skipped: string[] }
@@ -1053,6 +1077,9 @@ export async function runStages(ctx: RunContext, names: string[], handlers: Hand
     if (manifest.chainId !== ctx.chainId || manifest.coreSha !== ctx.coreSha || manifest.deployer.toLowerCase() !== deployer.toLowerCase()) throw new PublishError("RESUME", "the run manifest belongs to a different chain, core SHA or deployer");
     if ((manifest.deploymentKind ?? "production") !== ctx.sheet.kind) throw new PublishError("RESUME", `the run manifest is a ${manifest.deploymentKind ?? "production"} run, the sheet says DEPLOYMENT_KIND ${ctx.sheet.kind}: a run never changes kind`);
     if (manifest.deploymentKind === undefined) manifest.deploymentKind = "production";
+    const runMode = manifest.upgradeMode ?? "frozen";
+    if (ctx.sheet.upgrade && runMode !== ctx.sheet.upgrade.mode) throw new PublishError("RESUME", `the run manifest deployed its proxies with UPGRADE_MODE ${runMode}, the sheet says ${ctx.sheet.upgrade.mode}: a run never changes its release mode (a resume would leave some proxies frozen and others upgradeable). Resume with the run's own sheet, or start a fresh run`, { run_mode: runMode, sheet_mode: ctx.sheet.upgrade.mode });
+    manifest.upgradeMode = runMode;
   } else manifest = newManifest(ctx, deployer);
   const ran: string[] = [], skipped: string[] = [];
   let stop = async () => {};

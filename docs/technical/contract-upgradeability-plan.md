@@ -7,8 +7,9 @@ No upgradeable Robot Money deployment exists on Base 8453: the existing Base
 mainnet contracts remain direct deployments and cannot be upgraded in place.
 Stage 3 (signing clients, ABI consumers, dapp, explorer, indexer and monitoring)
 is implemented by issue 1810; see "Signing clients and disclosure (stage 3)"
-below. Stages 2 and 4 (release sheet and publish evidence; Twin rehearsal and
-cutover) are planned.
+below. Stage 2 (release sheet and publish evidence) is implemented by issue
+1809; see "Release tooling and evidence (stage 2)" below. Stage 4 (Twin
+rehearsal and cutover) is planned.
 
 ## Decision and scope
 
@@ -127,6 +128,40 @@ authorizations are handled across upgrades, including version binding or
 invalidation where their semantics change. The indexer must track implementation
 changes and freeze events without treating its cache as signing authority. Public contract
 metadata should show whether upgrades remain possible.
+
+## Release tooling and evidence (stage 2)
+
+Implemented by issue 1809. The operator procedure is
+`docs/operations/contract-release-runbooks.md` 4.12.
+
+- **Mode.** The sheet's `UPGRADE_MODE` (`upgradeable` or `frozen`, required, no
+  default) is the mode of every proxy of the release; `UPGRADE_FREEZE_DEADLINE`
+  is required for an upgradeable production release on 8453 and refused with
+  `frozen`. A run never changes its mode, and a resume under another mode is
+  refused.
+- **Stage table.** Each proxy stage lists its `proxies` (proxy and
+  implementation manifest fields, contract, layout snapshot);
+  `upgradeAuthority` states the deployed-last timelock, its CREATE2 inputs and
+  2 deployer transactions per proxy. The counts do not depend on the mode.
+- **Verify.** Per proxied core contract the verifier proves the build's
+  `ERC1967Proxy` with empty admin and beacon slots, the implementation the
+  manifest names (and the gateway's implementation pin), the build's linked
+  libraries, `upgradeTimelock()`, the initialized version, `upgradesFrozen()`
+  against the mode, and the layout identifier (keccak256 of the committed
+  snapshot and the OpenZeppelin pins). It fails a missed freeze deadline.
+- **Claim.** Core immutability is claimed only when the full proxied core set
+  of the stage table reads frozen on chain and verifies; a frozen-mode release
+  fails verification otherwise. The record lists the parameters a freeze leaves
+  governed and the upstream dependencies it does not control.
+- **Evidence.** `deployments/<chain>/upgradeability.json` becomes the evidence
+  `upgradeability` section; `evidence-check` checks it offline and reads every
+  proxy fact back from the chain.
+
+The sheet declares one mode for all proxies rather than one per proxy: every
+proxy stage reads the same `UPGRADE_MODE`, and a release that wants a different
+mode per contract needs a stage-table change. Implementation addresses are not
+typed into the sheet ahead of the run; the build fixes their code and verify
+records their addresses and hashes for the per-release runbook.
 
 ## Signing clients and disclosure (stage 3)
 
@@ -253,8 +288,8 @@ the target design until code and on-chain evidence exist.
 | `docs/technical/smart-contracts.md` §2, §5 | Preserve historic direct-address facts; distinguish current state from target, then document actual proxy and implementation addresses after deployment. | Done for the source; the proxy and implementation addresses are added after a proxied deployment. |
 | `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. | Done. |
 | `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure done in stage 3 (issue 1810): explorer API, dapp, `rmpc get-gateway`, watchdog. |
-| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Planned (stages 2 and 4). |
-| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. The release sheet's mode and frozen counts are stage 2. |
+| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Stage 2 done (issue 1809): runbook 4.12 covers the mode, the stage order, resume, the verify labels and record, freeze ownership, the deadline, missed-deadline alerts and the voluntary cutover plan. The Twin rehearsal of an upgrade and freeze is stage 4. |
+| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. Stage 2 done (issue 1809): the sheet's `UPGRADE_MODE` and `UPGRADE_FREEZE_DEADLINE`, the stage table's `proxies` and `upgradeAuthority`, the verifier's per-proxy labels and `upgradeability.json`, the evidence section, and source verification of every implementation. No frozen counts exist yet for a proxied DEPLOY_SHA: the next Twin rehearsal measures them. |
 | `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern, Proposed until it is reviewed and accepted. |
 
 ## References

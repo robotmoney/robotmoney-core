@@ -9,7 +9,8 @@ import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
+import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
+import { buildWorld, failed, IMPLS, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -357,10 +358,11 @@ describe("mutations fail with the expected label", () => {
 
   test("on-chain code differs from the build outside the immutable ranges", async () => {
     const w = buildWorld();
-    const key = VAULTS.rmUSDC.address.toLowerCase();
+    // issue 1808: the code that runs is the implementation's; a changed byte there fails the code label and refuses the immutability claim (issue 1809)
+    const key = IMPLS["vault[rmUSDC]"]!.toLowerCase();
     const code = w.chain.codes.get(key)!;
     w.chain.codes.set(key, (code.slice(0, -2) + "ff") as `0x${string}`);
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmUSDC]: runtime code equals build artifact (masked)"]);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmUSDC]: runtime code equals build artifact (masked)", CLAIM_LABEL]);
   });
 
   test("a missing manifest stops the run with a failed presence label", async () => {
@@ -484,6 +486,7 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
   function rotate(w: World, { updateManifest }: { updateManifest: boolean }): void {
     const g = GOV.toLowerCase(), n = NEW_GOV.toLowerCase();
     w.chain.codes.set(n, w.chain.codes.get(g)!);
+    for (const [k, v] of [...w.chain.storage]) if (k.startsWith(`${g}|`)) w.chain.storage.set(`${n}|${k.slice(g.length + 1)}`, v);
     for (const [k, v] of [...w.chain.handlers]) if (k.startsWith(`${g}:`)) w.chain.handlers.set(`${n}:${k.slice(g.length + 1)}`, v);
     for (const r of [...w.chain.roles]) { const [at, role, who] = r.split("|"); if (at === g) w.chain.roles.add(`${n}|${role}|${who}`); }
     w.chain.revoke(ROUTER, WEIGHT_SETTER_ROLE, GOV);

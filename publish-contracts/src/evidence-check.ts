@@ -29,6 +29,8 @@ import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
 import { loadStageTable } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
+import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
+import { proxySpecs } from "./verify/upgradeability.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -338,7 +340,13 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
 const registrationOperations = (regs: any[]): any[] => regs.map((r) => ({ ...r, step: regLabel(r) }));
 
 /** How the evidence is read (issue 1727). `kind` is the deployment kind the caller expects: production unless the operator passed --deployment-kind rehearsal. */
-export interface EvidenceOpts { kind?: DeploymentKind }
+export interface EvidenceOpts {
+  kind?: DeploymentKind;
+  /** Issue 1809: the full proxied core set by verifier name (the stage table's proxies). Absent: read from this repo's stage table. */
+  proxies?: readonly string[];
+}
+/** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
+export const repoProxyNames = (): string[] => proxySpecs(loadStageTable(new URL("../../", import.meta.url).pathname)).map((s) => s.name);
 const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
 /** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
 function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
@@ -514,6 +522,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (ev?.verifier?.exit_code !== 0) bad("the verifier did not exit 0");
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
+  p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(), kind));
   return p;
 }
 
@@ -523,8 +532,10 @@ export interface ChainReader {
   getTransactionCount(a: { address: `0x${string}` }): Promise<number>;
   getTransactionReceipt(a: { hash: Hex }): Promise<{ status: "success" | "reverted"; blockNumber: bigint; logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }>;
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
-  /** Runtime code at an address (viem getCode). Needed only when the evidence records an adopted stage. */
+  /** Runtime code at an address (viem getCode). Needed when the evidence records an adopted stage, and for the upgradeability record (issue 1809). */
   getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
+  /** One storage word (viem getStorageAt). Needed for the upgradeability record's ERC-1967 implementation slots (issue 1809). */
+  getStorageAt?(a: { address: `0x${string}`; slot: Hex }): Promise<Hex | undefined>;
   readContract(a: { address: `0x${string}`; abi: any; functionName: string }): Promise<unknown>;
 }
 
@@ -653,6 +664,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     const gap = (await ts(ex)) - schedTs;
     if (!(gap >= FLOOR)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${FLOOR} s`);
   }
+  p.push(...(await upgradeabilityOnChainProblems(ev, chain)));
   p.push(...(await checkReceiptApplicationsOnChain(ev, chain, FLOOR)));
   p.push(...(await checkVotedWeightsClearsOnChain(ev, chain, FLOOR)));
   p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
@@ -920,8 +932,10 @@ export interface ChainFixture {
   receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[] }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
-  /** Runtime code by lower-case address, recorded for the adopted libraries only (issue 1721). Optional: older fixtures have none. */
+  /** Runtime code by lower-case address, recorded for the adopted libraries (issue 1721) and the proxies and implementations (issue 1809). Optional: older fixtures have none. */
   codes?: Record<string, string>;
+  /** Storage words by `<lower-case address>:<slot>`, recorded for the ERC-1967 implementation slots (issue 1809). Optional: older fixtures have none. */
+  storage?: Record<string, string>;
 }
 
 const readKey = (address: string, fn: string) => `${lc(address)}:${fn}`;
@@ -938,6 +952,7 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
     getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
+    getStorageAt: async ({ address, slot }) => (fx.storage?.[`${lc(address)}:${lc(slot)}`] ?? miss(`storage ${slot} of ${address}`)) as Hex,
     readContract: async ({ address, functionName }) => {
       const k = readKey(address, functionName);
       return k in fx.reads ? fx.reads[k] : miss(`read ${k}`);
@@ -966,6 +981,11 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
       const c = await inner.getCode!(a);
       (fixture.codes ??= {})[lc(a.address)] = c ?? "0x";
       return c;
+    },
+    getStorageAt: async (a) => {
+      const v = await inner.getStorageAt!(a);
+      (fixture.storage ??= {})[`${lc(a.address)}:${lc(a.slot)}`] = v ?? "0x";
+      return v;
     },
     readContract: async (a) => {
       const v = await inner.readContract(a);

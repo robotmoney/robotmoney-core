@@ -51,6 +51,17 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
+  /**
+   * Issue 1809 (upgradeability stage 2): the release mode of every core proxy, `upgradeable` or `frozen`. Required, no default: no sheet can leave a final
+   * deployment upgradeable by omission. `frozen` freezes upgrades inside each proxy's atomic initialization.
+   */
+  UPGRADE_MODE: { kind: "string" },
+  /**
+   * Issue 1809: the proving-period freeze deadline of an `upgradeable` release, an ISO 8601 UTC time (2027-01-31T00:00:00Z). Required for an upgradeable PRODUCTION
+   * release on 8453, refused with `frozen`. It is an operational commitment of the Safe signers, never an on-chain freeze: verify fails once it has passed with a proxy
+   * still upgradeable (docs/operations/contract-release-runbooks.md 4.12).
+   */
+  UPGRADE_FREEZE_DEADLINE: { kind: "string" },
   /** Issue 1727: `production` (the default when the line is absent) or `rehearsal` (a Base mainnet rehearsal with a 900 s timelock). Sheet only: never an environment variable, never a CLI flag. */
   DEPLOYMENT_KIND: { kind: "string" },
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
@@ -63,8 +74,14 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
 
-/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production) and USDC_ADDRESS are the only optional names (USDC_ADDRESS is a constant: when present it must equal it). */
-export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND"]);
+/**
+ * Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production), USDC_ADDRESS (a constant: when present it must equal it) and
+ * UPGRADE_FREEZE_DEADLINE (its presence is ruled by UPGRADE_MODE) are the only optional names.
+ */
+export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND", "UPGRADE_FREEZE_DEADLINE"]);
+/** The release modes (issue 1809). The words are the deploy scripts' (UpgradeAuthority.parseUpgradeMode in core). */
+export const UPGRADE_MODES = ["upgradeable", "frozen"] as const;
+export type UpgradeMode = (typeof UPGRADE_MODES)[number];
 export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n));
 
 /** Refused by name with a reason. Anything else not in the whitelist is refused as unknown. */
@@ -111,6 +128,8 @@ export interface Sheet {
   feeRecipient: Address | "@safe";
   seedDeposit: bigint;
   timelockMinDelay: bigint;
+  /** Issue 1809: the release mode of every core proxy, and the freeze deadline of an upgradeable release (ISO 8601 UTC, normalised). */
+  upgrade: { mode: UpgradeMode; freezeDeadline?: string };
   vaults: Record<VaultKey, SheetVault>;
   /** Baskets made router-eligible by the deployer in the basket vault stages (rmUSDC is eligible from the router stage). */
   eligibleVaults: VaultKey[];
@@ -265,6 +284,8 @@ export function parseSheet(text: string): Sheet {
     if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
   }
 
+  const upgrade = parseUpgrade(v, chainId, kind);
+
   const vaults = {} as Record<VaultKey, SheetVault>;
   for (const k of VAULT_KEYS) {
     const [t, p, f] = vaultSheetNames(k) as [string, string, string];
@@ -320,9 +341,29 @@ export function parseSheet(text: string): Sheet {
 
   return {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
-    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, vaults,
+    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
+}
+
+const DEADLINE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
+/**
+ * Issue 1809. UPGRADE_MODE is required and is one of the two words. An upgradeable PRODUCTION release on 8453 is the proving period: it needs UPGRADE_FREEZE_DEADLINE, the
+ * time by which the Safe signers have frozen every proxy. A frozen release has nothing to freeze later, so a deadline there is refused as a contradiction.
+ */
+export function parseUpgrade(v: Record<string, string | undefined>, chainId: number, kind: DeploymentKind): Sheet["upgrade"] {
+  const mode = v.UPGRADE_MODE ?? "";
+  if (!(UPGRADE_MODES as readonly string[]).includes(mode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")}, got '${mode}'. There is no default: the release mode of every core proxy is declared (docs/technical/contract-upgradeability-plan.md, Release modes).`, { name: "UPGRADE_MODE" });
+  const raw = v.UPGRADE_FREEZE_DEADLINE;
+  if (raw === undefined || raw === "") {
+    if (mode === "upgradeable" && chainId === MAINNET_CHAIN_ID && kind === "production") throw err("UPGRADE_MODE=upgradeable on a production release on chain 8453 is the proving period: UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC, for example 2027-01-31T00:00:00Z) names when the Safe signers have frozen every proxy", { name: "UPGRADE_FREEZE_DEADLINE" });
+    return { mode: mode as UpgradeMode };
+  }
+  if (mode === "frozen") throw err("UPGRADE_FREEZE_DEADLINE is set but UPGRADE_MODE is frozen: every proxy is frozen in its initializer, there is nothing to freeze later. Delete the line", { name: "UPGRADE_FREEZE_DEADLINE" });
+  const m = DEADLINE.exec(raw);
+  const t = m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : Number.NaN;
+  if (!m || Number.isNaN(t) || new Date(t).toISOString().replace(".000Z", "Z") !== raw) throw err(`UPGRADE_FREEZE_DEADLINE must be an ISO 8601 UTC time such as 2027-01-31T00:00:00Z, got '${raw}'`, { name: "UPGRADE_FREEZE_DEADLINE" });
+  return { mode: mode as UpgradeMode, freezeDeadline: raw };
 }
 
 const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "AGENT:0", "RWA:0"].sort().join(",");

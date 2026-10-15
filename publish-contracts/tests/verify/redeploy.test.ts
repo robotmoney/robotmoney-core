@@ -7,9 +7,10 @@ import { toFunctionSelector, type Hex } from "viem";
 import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE } from "../../src/verify/constants.ts";
-import { buildWorld, failed, addr, DEPLOYER, EMERGENCY, REGISTRY, ROUTER, TIMELOCK, VAULTS, type World } from "./world.ts";
+import { buildWorld, failed, IMPLS, addr, DEPLOYER, EMERGENCY, REGISTRY, ROUTER, TIMELOCK, VAULTS, type World } from "./world.ts";
 
 const NEW = addr(0xb0012);
+const NEW_IMPL = addr(0x1e22);
 const OLD = VAULTS.rmPROTO.address;
 const REPLACEMENT = "protocol-asset-vault.replacement-1.json";
 const SEL = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
@@ -25,10 +26,12 @@ function redeployed(over: { status?: number; oldEligible?: boolean; oldRetiredFl
   const patch = (hex: string): string => hex.slice(0, 120) + SEL + hex.slice(120 + SEL.length);
   j.deployedBytecode.object = patch(j.deployedBytecode.object);
   writeFileSync(art, JSON.stringify(j));
-  const oldCode = w.chain.codes.get(OLD.toLowerCase())!;
-  const patched = patch(oldCode) as Hex;
-  for (const [a, c] of w.chain.codes) if (c === oldCode) w.chain.codes.set(a, patched);
-  w.chain.codes.set(NEW.toLowerCase(), patched);
+  // issue 1808: both generations are proxies; the code that runs (and carries the selector) is each one's implementation
+  const oldImpl = IMPLS["vault[rmPROTO]"]!.toLowerCase();
+  const patched = patch(w.chain.codes.get(oldImpl)!) as Hex;
+  w.chain.codes.set(oldImpl, patched);
+  w.chain.codes.set(NEW_IMPL.toLowerCase(), patched);
+  w.proxy(NEW, NEW_IMPL);
   // the new vault carries everything the old one carried: handlers and roles
   for (const [k, h] of [...w.chain.handlers]) if (k.startsWith(`${OLD.toLowerCase()}:`)) w.chain.handlers.set(`${NEW.toLowerCase()}:${k.split(":")[1]}`, h);
   for (const k of [...w.chain.roles]) if (k.startsWith(`${OLD.toLowerCase()}|`)) w.chain.roles.add(k.replace(OLD.toLowerCase(), NEW.toLowerCase()));
@@ -39,7 +42,7 @@ function redeployed(over: { status?: number; oldEligible?: boolean; oldRetiredFl
   w.chain.set(OLD, "retired", over.oldRetiredFlag ?? true);
   w.chain.set(NEW, "registry", REGISTRY);
   w.sheet.vaults.rmPROTO!.expectPaused = false;
-  writeFileSync(join(w.manifestDir, REPLACEMENT), JSON.stringify({ chain_id: 8453, vault: NEW }));
+  writeFileSync(join(w.manifestDir, REPLACEMENT), JSON.stringify({ chain_id: 8453, vault: NEW, implementation: NEW_IMPL, upgrade_timelock: TIMELOCK, upgrade_mode: "frozen" }));
   const listed = [VAULTS.rmUSDC.address, OLD, VAULTS.rmAGENT.address, VAULTS.rmRWA.address, NEW];
   w.chain.set(REGISTRY, "listVaults", listed);
   w.chain.set(REGISTRY, "vaultCount", 5n);

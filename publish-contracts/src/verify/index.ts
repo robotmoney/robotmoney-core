@@ -17,6 +17,7 @@ import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
+import { CODE_LABEL, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
 import type { Address, ChainReader, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport } from "./types.ts";
 
@@ -248,12 +249,15 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
   ];
   for (const t of codeTargets) {
-    await c.run(`${t.label}: runtime code equals build artifact (masked)`, async () => {
+    await c.run(`${t.label}: ${CODE_LABEL}`, async () => {
       // Issue 1808: a core contract behind an ERC-1967 proxy is checked through the implementation its slot names.
       const r = await compareDeployedCode(chain, t.address, loadArtifact(t.dir ?? opts.artifactsDir, t.artifact), tryLoadArtifact(t.dir ?? opts.artifactsDir, ERC1967_PROXY_ARTIFACT));
       return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
     });
   }
+
+  // ---- upgradeability (issue 1809): every proxied core contract is the build's ERC-1967 proxy in the sheet's release mode, governed by the timelock alone
+  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now });
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
   for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, emergency: sheet.emergency, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
@@ -274,7 +278,9 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
   });
 
-  return c.report();
+  // ---- the immutability claim (issue 1809), last: it needs every other check of the run
+  finishUpgradeability(c, table, upgradeability);
+  return { ...c.report(), upgradeability };
 }
 
 async function deployTimeChecks(

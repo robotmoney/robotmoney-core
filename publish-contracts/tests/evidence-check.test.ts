@@ -9,12 +9,13 @@ import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { keccak256 } from "viem";
+import { withUpgradeability, withUpgradeabilityReads } from "./upgradeability-fixture.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 /** The unpauses are scheduled in one sitting: step i is scheduled i seconds after step 0, and each waits one 172800 s delay. */
 const T0 = 1000;
-const good = () => ({
+const good = () => withUpgradeability({
   chain_id: 8453, core_sha: "ab".repeat(20), plan_approved_at: "2026-10-05T10:00:00Z",
   owner_exceptions: [{ text: "signer C is a Ledger on a shared laptop", recorded_at: "2026-10-04T10:00:00Z" }],
   stages: [{ stage: "safe", frozen_count: 2, receipt_count: 2, tx_hashes: [h(1), h(2)], receipts_status: [1, 1] }],
@@ -25,7 +26,7 @@ const good = () => ({
   deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 172800, schedule_status: 1, execute_status: 1 })),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
-});
+} as any);
 const mut = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
 
 describe("evidence check", () => {
@@ -122,13 +123,13 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     add(r.schedule_tx, sched, t0);
     add(r.execute_tx, [log("CallExecuted", id, 0n, o.clearTarget ?? GOV, data)], t0 + (o.clearGap ?? 172800));
   });
-  return {
+  return withUpgradeabilityReads(ev, {
     getChainId: async () => o.chainId ?? 8453,
     getTransactionCount: async () => o.nonce ?? 3,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
     readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
-  };
+  });
 }
 const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
 const RCPT = a(30);
@@ -464,7 +465,8 @@ const adoptedEv = (txs = 0) => {
   e.deployer_nonce_final = 2 + txs + 1;
   return e;
 };
-const codeChain = (e: any, code: Hex | undefined = LIBCODE, nonce = 3): ChainReader => ({ ...stub(e, { nonce }), getCode: async () => code });
+// issue 1809: the proxies and implementations of the upgradeability record keep their own code; every other address holds `code`
+const codeChain = (e: any, code: Hex | undefined = LIBCODE, nonce = 3): ChainReader => withUpgradeabilityReads(e, { ...stub(e, { nonce }), getCode: async () => code });
 describe("evidence check: an adopted libs stage (issue 1721)", () => {
   test("offline: an adopted libs stage with zero receipts passes, the frozen count of 4 is not demanded of it", () => {
     expect(checkEvidence(adoptedEv(), FROZEN_WITH_LIBS)).toEqual([]);
@@ -535,7 +537,7 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     const e = adoptedEv();
     expect((await checkEvidenceOnChain(e, codeChain(e, "0x73" + "22".repeat(20) + "3014" as Hex), FROZEN_WITH_LIBS)).join()).toContain("code hash on chain");
     expect((await checkEvidenceOnChain(e, codeChain(e, "0x"), FROZEN_WITH_LIBS)).join()).toContain("has no code");
-    const noReader = stub(e, { nonce: 3 });
+    const noReader: ChainReader = { ...stub(e, { nonce: 3 }), getCode: undefined };
     expect((await checkEvidenceOnChain(e, noReader, FROZEN_WITH_LIBS)).join()).toContain("cannot read code");
   });
   test("on chain: the on-chain deployer nonce uses the adopted count too, so a stray extra transaction is refused", async () => {

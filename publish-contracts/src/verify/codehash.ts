@@ -9,14 +9,30 @@ export interface Ref { start: number; length: number }
 export interface Artifact { object: string; refs: Ref[] }
 
 /** Load `<out>/<Name>.sol/<Name>.json` (forge layout). Falls back to any directory holding `<Name>.json`. */
-export function loadArtifact(outDir: string, name: string): Artifact {
+function artifactJson(outDir: string, name: string): any {
   let path = join(outDir, `${name}.sol`, `${name}.json`);
   if (!existsSync(path)) {
     const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
     if (!hit) throw new Error(`no build artifact for ${name} under ${outDir}`);
     path = join(outDir, hit, `${name}.json`);
   }
-  const j = JSON.parse(readFileSync(path, "utf8"));
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/**
+ * Issue 1809: the libraries an artifact's runtime code links externally (DELEGATECALL targets), each with the byte offset of every 20-byte address slot. The code
+ * comparison masks those slots, so the verifier reads the linked addresses from the chain and compares each library's own code with the build.
+ */
+export function linkedLibraries(outDir: string, name: string): { name: string; start: number }[] {
+  const out: { name: string; start: number }[] = [];
+  for (const file of Object.values<any>(artifactJson(outDir, name).deployedBytecode?.linkReferences ?? {})) {
+    for (const [lib, list] of Object.entries<any>(file)) for (const r of list) out.push({ name: lib, start: r.start });
+  }
+  return out;
+}
+
+export function loadArtifact(outDir: string, name: string): Artifact {
+  const j = artifactJson(outDir, name);
   const d = j.deployedBytecode;
   if (!d?.object) throw new Error(`artifact ${name} has no deployedBytecode`);
   const refs: Ref[] = [];
