@@ -52,8 +52,6 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
   /** The agent stage registers this permissionless price recorder as RM's pool (core 1676). */
   RECORDER_ADDRESS: { stage: RECORDER_STAGE, field: "recorder" },
-  /** QA plan v1 D3 (core 1820): the rmUSDC stage creates its ExclusionLedger through the factory the libs stage deployed (CREATE2, one per chain). */
-  EXCLUSION_LEDGER_FACTORY: { stage: LIBS_STAGE, field: "exclusion_ledger_factory" },
 };
 export const VAULT_LIST_ENV = "VAULT_ADDRESSES";
 /**

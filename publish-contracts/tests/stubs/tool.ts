@@ -108,8 +108,6 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         } : {}),
         // the vault stage's three strategy adapters (issue 1705 C4: the verifier sheet reads them)
         aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3),
-        // QA plan v1 D3 (core 1820): the libs stage names the ExclusionLedgerFactory the vault stage reads (EXCLUSION_LEDGER_FACTORY)
-        exclusion_ledger_factory: addr(0x100b),
       }));
     }
   };
