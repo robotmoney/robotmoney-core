@@ -1113,6 +1113,10 @@ fn refusal_field_set_is_identical_across_the_three_write_commands() {
         "1000",
         "--vaults",
         &vault,
+        // A router redemption must name its floors before it reaches the signer (QA plan D9). A single
+        // 0 is the explicit "no floor", so the command goes on to the signer refusal this test compares.
+        "--min-assets-per-leg",
+        "0",
         "--order-id",
         &order,
     ]);
