@@ -6,6 +6,14 @@ audits and automated scanners). Each file is an immutable record of what a given
 reviewer found at a given commit; dispositions are tracked separately in
 [`../audits.md`](../audits.md) (the Audit Ledger).
 
+## Audit workspaces
+
+Dated subdirectories hold review plans and work in progress. The
+[2026-10-15 smart-contract audit](20261015-smart-contract-audit/README.md)
+has a chapter index, scope and method, coverage checklists, and prior-finding
+cross-checks. Its chapters are a plan; findings and dispositions require review
+evidence before they enter the audit ledger.
+
 ## Filename pattern
 
 ```
