@@ -45,6 +45,13 @@ regexes = [
   # secret. It was committed in config/agent-token-shortlist.json (commit b4e6476d, since
   # reverted) and gitleaks scans the whole PR commit range. Delete this entry with the history.
   '''0x7c678e2a3551a8d92c49819894c995e9b973a885b1ca5ab096853095e9a329d6''',
+  # Dummy credential value used by the evidence secret-scan regression tests
+  # (publish-contracts/tests/evidence-secret-scan.test.ts) and quoted in the security review
+  # (docs/code-review/20261015-review-security-claude.{md,json}). It is the literal placeholder
+  # "abcdefghijk12345" assigned to ALCHEMY_API_KEY / DEPLOYER_PRIVATE_KEY / WEBHOOK_SECRET so the
+  # test can prove the scanner flags a secret assignment. It guards nothing. It is committed in
+  # history, so it cannot be rewritten away. Delete this entry with those fixtures.
+  '''abcdefghijk12345''',
 ]
 
 # Path allowlist: known-safe files that intentionally contain placeholder or
