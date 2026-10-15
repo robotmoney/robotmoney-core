@@ -17,6 +17,7 @@ import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-rece
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
 import { claimedOwnerOf, siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
+import { scrubGitEnv } from "./git-env.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
@@ -127,9 +128,9 @@ export const USAGE = `publish contracts
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's). On 8453 the plan and every run that can
-                     broadcast (publish, a deployer stage, safe, prove-control, govern, redeploy-vault) pass the release gate first (QA plan v1 E4, issue 1816): the dir must be a clean dir of a git
-                     checkout at the release sha or a later commit that tracks <sha>.json with the same bytes, for a plain baseline as for a reconstructed one (COUNTS_MISSING).
-  --counts-require-origin-dev  8453, any baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
+                     broadcast (publish, a deployer stage, safe, prove-control, govern, redeploy-vault) pass the release gate first (issue 1816): <sha>.json must be committed and clean in its git work
+                     tree (COUNTS_UNTRACKED); a reconstructed baseline needs the stricter clean-checkout proof of issue 1740 (COUNTS_MISSING).
+  --counts-require-origin-dev  8453, reconstructed baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --logs-rpc URL     prove-control --resume only: a separate RPC for eth_getLogs (the scan for a landed proof). Every other read stays on --rpc.
   --logs-window N    prove-control --resume: blocks per eth_getLogs call (default 2000), halved on a range-limit error
@@ -614,13 +615,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const shaRun = redeployShaRun(priorRun, { coreSha: a.coreSha, path: shaPath, priorOut: a.priorOut, priorOutSha });
     if (shaRun) log.log("info", "run.redeploy_sha", { path: shaPath, original_sha: shaRun.originalSha, redeploy_sha: shaRun.redeploySha, ...(priorOutSha ? { prior_out_sha: priorOutSha } : {}) });
     // The contracts-freeze gate (core 1524; QA plan v1 E4, issue 1816): on 8453 the plan AND every run that can broadcast (releaseGated) run only at a release-tagged SHA of
-    // the sheet's kind, whose frozen counts file is committed and clean in the counts checkout (plain or reconstructed), with green CI. No signer exists yet, no forge has run.
+    // the sheet's kind, whose frozen counts file is committed and clean in its git work tree (COUNTS_UNTRACKED; a reconstructed baseline gets the whole-dir proof of issue 1740), with green CI. No signer exists yet, no forge has run.
     // The govern row at a redeploy round's sha has no frozen file of its own (E1): like the redeploy-vault verb, it is gated on the tag and CI only.
+    const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     const gated = releaseGated({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, measure: a.measure });
     if (gated) {
       const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, requireCounts: !shaRun, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
-        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted });
-      log.log("info", a.stage === "plan" ? "plan.release_gate" : "run.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
+        run, runEnv: scrubGitEnv(castEnv) });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts; a run at a redeploy sha
     // uses the original sha's counts and needs no file for the redeploy sha (QA plan v1 E1).
@@ -645,7 +648,6 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, deploymentKind: sheet.kind, startNonceBasis: planNonceBasis(sheet.kind), plan }));
       return 0;
     }
-    const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
     // before any signer exists, so the order plan then publish is not something an operator can get wrong. Since QA plan v1 E4 the release gate above already did it for every
     // gated run (once: the re-verification is not repeated), so only a dry run of the deployer stages on 8453 reaches this block.

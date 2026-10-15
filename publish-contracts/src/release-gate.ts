@@ -1,25 +1,25 @@
-// The contracts-freeze gate of the mainnet plan job (core 1524), and since QA plan v1 E4 (issue 1816) of every run on 8453 that can broadcast (cli.ts releaseGated:
-// publish, every deployer stage, safe, prove-control, govern, redeploy-vault). On chain 8453 such a run refuses unless, in this order:
+// The contracts-freeze gate (core 1524). On chain 8453 the plan, and since issue 1816 every non-dry run that broadcasts (cli.ts releaseGated: publish, every deployer stage, safe,
+// prove-control, govern, redeploy-vault; not verify alone, pause-all, record-receipt), refuses unless, in this order:
 //   1. an annotated release/<version> tag points at DEPLOY_SHA, and the remote holds the same tag object (RELEASE_SHA_UNTAGGED, RELEASE_TAG_REMOTE_MISMATCH)
 //      The TAG KIND must match the deployment kind of the sheet (issue 1727): a production plan needs release/<version>, a rehearsal plan needs release/<version>-rehearsal.
 //      A rehearsal tag never satisfies a production plan and the reverse (RELEASE_TAG_KIND).
-//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING), and the COUNTS checkout proves it committed and clean (gitFrozenDirCommitted, issue 1740).
-//      Every baseline is held to that proof: a reconstructed one since issue 1740, a plain measured one since QA plan v1 E4 (a hand-edited or uncommitted file is refused).
+//   2. deployments/frozen-counts/<sha>.json exists for it                 (COUNTS_MISSING), and is committed and clean in its git work tree (COUNTS_UNTRACKED, issue 1816). A reconstructed baseline is also proven committed in the COUNTS checkout (issue 1740, gitFrozenDirCommitted)
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts <sha> --repo robotmoney/robotmoney-core exits 0 (CI_NOT_GREEN); the repository is never the caller's GITHUB_REPOSITORY
 //   Security round 2 (review: SECURITY_TRUST_ROOT): step 1 checks the tag on the canonical repository (the origin's effective URL must be robotmoney/robotmoney-core,
 //   release-tag.ts verifyCanonicalRemoteTag).
 //   Security round 3 (review: SECURITY_TRUST_ROOT): step 1 reads the local tags with replace refs off and a scrubbed environment, and asks the canonical repository
 //   (its https URL, from outside the checkout) for the tag object and the commit it peels to, which must be the sha. A refs/replace ref, a GIT_DIR in the
-//   environment or a repo-local config of the checkout under test can no longer make an untagged commit pass.
+//   environment or a repo-local config of the checkout under test can no longer make an untagged commit pass. The step 2 git status runs with replace refs off too.
 //   (the single-vault redeploy, issue 1796, skips step 2: it has no frozen counts of its own)
 // Each refusal happens before any signer is built. On the Twin chain none of these apply, so rehearsals keep measuring.
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { anchorChainOf, fileHashOf, loadFrozen, type FrozenFile } from "./counts.ts";
+import { anchorChainOf, fileHashOf, frozenPath, loadFrozen, type FrozenFile } from "./counts.ts";
 import { PublishError } from "./errors.ts";
-import { gitEnv } from "./git-env.ts";
+import { gitEnv, scrubGitEnv } from "./git-env.ts";
+import { spawnTool, type ProcessRunner } from "./runner.ts";
 import { releaseTagsFor, tagKind, verifyCanonicalRemoteTag, type RemoteTagCheck } from "./release-tag.ts";
 import type { DeploymentKind } from "./chains.ts";
 
@@ -48,6 +48,20 @@ export const spawnCheckShaGreen: CheckShaGreen = async (i) => {
   return { code, output: `${out}${err}` };
 };
 
+/**
+ * Issue 1816: the frozen counts file must be committed and unmodified in its git work tree. `git status --porcelain --ignored` on that one path prints nothing.
+ * Untracked, modified, staged-new and ignored files are refused, and a git that fails (no work tree) is refused too, never read as clean.
+ */
+export async function assertCountsTracked(run: ProcessRunner, countsDir: string, sha: string, env: Record<string, string> = {}): Promise<void> {
+  const file = frozenPath(countsDir, sha);
+  const r = await run("git", ["-C", countsDir, "status", "--porcelain", "--untracked-files=all", "--ignored", "--", file], { env });
+  const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
+  if (r.code !== 0 || lines.length > 0) {
+    const why = r.code !== 0 ? ` (git status failed: ${r.stderr.trim().split("\n").slice(-1)[0] ?? ""})` : `: ${lines.join("; ")}`;
+    throw new PublishError("COUNTS_UNTRACKED", `the frozen counts file ${file} is not committed and clean in its git work tree${why}. Review it, commit it, and run again.`, { sha });
+  }
+}
+
 export interface ReleaseGateInput {
   sha: string; coreDir: string; countsDir: string; env: Record<string, string | undefined>;
   /** The deployment kind of the sheet (issue 1727). Required: there is no default, so a caller cannot forget it. */
@@ -72,9 +86,8 @@ export interface ReleaseGateInput {
    */
   anchorCommitted?: (anchorPath: string, expectedHash: string) => Promise<void>;
   /**
-   * Issue 1733 and 1740: the counts dir of a baseline must be a clean dir of a checkout at the release sha or a descendant of it, tracking every frozen file in it with the
-   * same bytes (gitFrozenDirCommitted). Required for EVERY frozen file the gate loads, plain or reconstructed (QA plan v1 E4, issue 1816): without it the gate refuses
-   * (COUNTS_MISSING). Default seam in the CLI: gitFrozenDirCommitted.
+   * Issue 1733 and 1740: the counts dir of a reconstructed baseline must be a clean dir of a checkout at the release sha or a descendant of it, tracking every frozen file in it with the
+   * same bytes (gitFrozenDirCommitted). Required for any reconstructed file. Default seam in the CLI: gitFrozenDirCommitted.
    */
   frozenDirCommitted?: (countsDir: string) => Promise<void>;
   /**
@@ -82,6 +95,9 @@ export interface ReleaseGateInput {
    * original deployment sha). The tag of the kind, the remote tag object and green CI are still required.
    */
   requireCounts?: boolean;
+  /** Issue 1816: the runner of the tracked-and-clean check of the counts file (default: the real read-only git status) and the environment its git child gets. */
+  run?: ProcessRunner;
+  runEnv?: Record<string, string>;
 }
 
 const DUBIOUS = "git refuses a checkout owned by another user (safe.directory): the counts checkout must be owned by the operator";
@@ -171,22 +187,19 @@ export async function tagForKind(i: Pick<ReleaseGateInput, "sha" | "coreDir" | "
   throw new PublishError("RELEASE_TAG_KIND", `the sheet says DEPLOYMENT_KIND ${i.kind} and needs an annotated ${want} tag at ${i.sha}, but the tag(s) there are: ${have}. A rehearsal tag never satisfies a production deployment and a production tag never satisfies a rehearsal.`, { sha: i.sha, kind: i.kind, tags: found });
 }
 
-/** Returns the release tag name. Throws RELEASE_SHA_UNTAGGED, RELEASE_TAG_KIND, COUNTS_MISSING or CI_NOT_GREEN. */
+/** Returns the release tag name. Throws RELEASE_SHA_UNTAGGED, RELEASE_TAG_KIND, COUNTS_MISSING, COUNTS_UNTRACKED or CI_NOT_GREEN. */
 export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const tag = await tagForKind(i);
   if (!tag) throw new PublishError("RELEASE_SHA_UNTAGGED", `DEPLOY_SHA ${i.sha} is not a release SHA: no annotated release/<version>${i.kind === "rehearsal" ? "-rehearsal" : ""} tag in ${i.coreDir} points at it. Tag the release SHA, rehearse on the Twin chain at that SHA, commit its frozen counts, then plan.`, { sha: i.sha });
   // security round 3: the sha goes with the tag, so the canonical repository must peel the tag to it (a local peel alone is no proof: release-tag.ts)
   await (i.remoteTag ?? ((d, t, s) => verifyCanonicalRemoteTag(d, t, undefined, s)))(i.coreDir, tag, i.sha);
   const frozen = i.requireCounts === false ? undefined : loadFrozen(i.countsDir, i.sha); // throws COUNTS_MISSING; a reconstructed baseline is also verified against the stage table here
+  // Issue 1816: a measured file must be committed and clean (COUNTS_UNTRACKED). A reconstructed baseline gets the stricter whole-dir proof below instead (gitFrozenDirCommitted, COUNTS_MISSING).
+  if (frozen && !frozen.measured.reconstructed) await assertCountsTracked(i.run ?? spawnTool, i.countsDir, i.sha, scrubGitEnv(i.runEnv ?? gitEnv())); // replace refs off, no GIT_* of the caller (security round 3)
   if (frozen?.measured.reconstructed) {
     if (!i.verifyReconstructed) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json is a reconstructed baseline (issue 1733) and the gate has no way to re-verify it on chain: it is refused`, { sha: i.sha });
     await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
     await assertBaselineCommitted({ countsDir: i.countsDir, sha: i.sha, frozen, frozenDirCommitted: i.frozenDirCommitted, anchorCommitted: i.anchorCommitted });
-  } else if (frozen) {
-    // QA plan v1 E4 (issue 1816, review T7): a PLAIN measured baseline gets the same committed-and-clean proof of its counts dir. Before, only a reconstructed file did,
-    // so a plain <sha>.json that was hand-edited, never committed or left beside untracked files passed on its shape alone. It has no anchor and no chain records to prove.
-    if (!i.frozenDirCommitted) throw new PublishError("COUNTS_MISSING", `deployments/frozen-counts/${i.sha}.json needs a proof that the counts dir is the committed, clean one and the gate was given none: refused`, { sha: i.sha });
-    await i.frozenDirCommitted(i.countsDir); // throws COUNTS_MISSING: not a git work tree, not a descendant of the release sha, a file untracked or edited, the dir not clean
   }
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
   if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453.`, { sha: i.sha });

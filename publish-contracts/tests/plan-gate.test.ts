@@ -1,15 +1,10 @@
 // devops 58 (S11): the plan job's gate. A planted short delay on 8453 fails before any signer exists, so before any approval.
-// QA plan v1 E4 (issue 1816, review T7): the same release gate on every broadcasting 8453 run, and the committed-and-clean proof for a plain baseline too (bottom of the file).
+// Issue 1816 (QA plan v1 E4 matrix): the same release gate on every broadcasting 8453 run; a plain counts file must be committed and clean (COUNTS_UNTRACKED).
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { releaseGated } from "../src/cli.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../src/chains.ts";
-import { spawnTool } from "../src/runner.ts";
-import { CORE_REPO, checkShaGreenArgv } from "../src/release-gate.ts";
-import { COUNTS, tmp, writeCounts } from "./fixtures.ts";
+import { CORE_REPO, checkShaGreenArgv, assertCountsTracked } from "../src/release-gate.ts";
 import { world, type World } from "./harness.ts";
 
 async function plan(w: ReturnType<typeof world>, over: Record<string, unknown> = {}): Promise<{ code: number; signerMade: boolean; forgeCalls: number }> {
@@ -140,7 +135,7 @@ describe("plan gate", () => {
   });
 });
 
-// QA plan v1 E4 (issue 1816, review T7): the gate ran on `--stage plan` only, so a publish, prove-control or govern on 8453 at an untagged sha reached forge whenever the
+// QA plan v1 E4 (issue 1816, review T7): the matrix of broadcasting runs below (dev's block after it covers the dirt kinds). The gate ran on `--stage plan` only, so a publish, prove-control or govern on 8453 at an untagged sha reached forge whenever the
 // plan job was skipped. Now every run that can broadcast passes the same gate before any signer exists and before forge runs (cli.ts releaseGated).
 const OWNERS = Array.from({ length: 3 }, (_, i) => ["--owner-signer", `keystore:/k/OWNER_${i}`]).flat();
 /** Every way to name a broadcasting 8453 run: the verbs, the default stage set, deploy, all, one deployer stage, safe, prove-control, govern in a list, govern rows. */
@@ -187,14 +182,16 @@ describe("the release gate on every broadcasting 8453 run (QA plan v1 E4, issue 
       const r = await broadcast(w, args, { checkShaGreen: async (i: { sha: string }) => { greenSha = i.sha; return { code: 0, output: "GREEN" }; } });
       const what = args.filter((a) => !a.startsWith("keystore:") && a !== "--owner-signer").join(" ") || "(default stages)";
       expect(r.code, what).not.toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
-      expect(w.logs().some((l) => l.event === "run.release_gate" && l.ok === true && l.tag === "release/1.0.0"), what).toBe(true);
+      expect(w.logs().some((l) => l.event === "plan.release_gate" && l.ok === true && l.tag === "release/1.0.0"), what).toBe(true);
       expect(greenSha, what).toBe("a".repeat(40));
       expect(r.signerMade, what).toBe(true); // the refusal above came from the gate, not from a step the run never reaches
     }
   });
   test("each later gate step refuses a broadcasting run too: remote tag, tag kind, counts, CI (the order of the plan gate)", async () => {
-    const run = async (over: Record<string, unknown>, o: { writeFrozen?: boolean; sheet?: Record<string, string> } = {}) => {
-      const w = world({ chainId: MAINNET_CHAIN_ID, ...o });
+    const run = async (over: Record<string, unknown>, o: { writeFrozen?: boolean; sheet?: Record<string, string>; gitCountsDirty?: string[] } = {}) => {
+      const { gitCountsDirty, ...worldOpts } = o;
+      const w = world({ chainId: MAINNET_CHAIN_ID, ...worldOpts });
+      if (gitCountsDirty) w.cfg.gitCountsDirty = gitCountsDirty;
       const r = await broadcast(w, ["publish", ...OWNERS], over);
       expect(r.signerMade).toBe(false);
       expect(forgeCalls(w)).toBe(0);
@@ -203,7 +200,7 @@ describe("the release gate on every broadcasting 8453 run (QA plan v1 E4, issue 
     expect(await run({ remoteTag: async () => { throw new PublishError("RELEASE_TAG_REMOTE_MISMATCH", "moved"); } })).toBe(EXIT_CODES.RELEASE_TAG_REMOTE_MISMATCH);
     expect(await run({ releaseTag: async () => "release/1.0.0-rehearsal" })).toBe(EXIT_CODES.RELEASE_TAG_KIND);
     expect(await run({}, { writeFrozen: false })).toBe(EXIT_CODES.COUNTS_MISSING);
-    expect(await run({ frozenDirCommitted: async () => { throw new PublishError("COUNTS_MISSING", "the counts dir is not clean"); } })).toBe(EXIT_CODES.COUNTS_MISSING);
+    expect(await run({}, { gitCountsDirty: ["?? x.json"] })).toBe(EXIT_CODES.COUNTS_UNTRACKED);
     expect(await run({ checkShaGreen: async () => ({ code: 1, output: "FAIL  forge-test (failure)" }) })).toBe(EXIT_CODES.CI_NOT_GREEN);
     expect(await run({ env: { GITHUB_TOKEN: undefined, GH_TOKEN: undefined } })).toBe(EXIT_CODES.CI_NOT_GREEN);
   });
@@ -233,83 +230,135 @@ describe("the release gate on every broadcasting 8453 run (QA plan v1 E4, issue 
   });
 });
 
-// QA plan v1 E4 (release-gate.ts): before, only a RECONSTRUCTED baseline was proven committed and clean in its counts checkout (issue 1740). A plain measured <sha>.json
-// passed on its shape alone: hand-edited, never committed or beside untracked files. Real git repositories here, the release layout of the runbook: the code from a clean
-// checkout at the release sha X, the counts from a clone at Y, a descendant of X whose data-only commit adds X.json.
-const FROZEN = join("deployments", "frozen-counts");
-const cleanEnv = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" };
-const git = (dir: string, ...a: string[]): string => execFileSync("git", ["-C", dir, ...a], { stdio: "pipe", env: { ...cleanEnv, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).toString().trim();
-/** The CLI's one git spawn (the dirty-tree check of the core checkout) runs the real git; forge and cast stay the stubs. */
-const realGit = (tool: string, args: string[], opts: { env?: Record<string, string> }) => spawnTool(tool as never, args, tool === "git" ? { ...opts, env: cleanEnv } : (opts as never));
 
-interface PlainLayout { w: World; x: string; counts: string; file: string }
-function plainLayout(commit = true): PlainLayout {
-  const w = world({ chainId: MAINNET_CHAIN_ID, writeFrozen: false });
-  rmSync(join(w.coreDir, ".git"), { recursive: true, force: true });
-  git(w.coreDir, "init", "-q"); git(w.coreDir, "config", "commit.gpgsign", "false");
-  writeCounts(join(w.coreDir, FROZEN), "9".repeat(40), COUNTS); // an earlier release's plain file, committed at X like the repo's own
-  git(w.coreDir, "add", "-A"); git(w.coreDir, "commit", "-q", "-m", "release sha X");
-  const x = git(w.coreDir, "rev-parse", "HEAD");
-  const dev = join(tmp("pc-e4-dev-"), "dev");
-  execFileSync("git", ["clone", "-q", w.coreDir, dev], { stdio: "pipe", env: cleanEnv });
-  git(dev, "config", "commit.gpgsign", "false");
-  const file = writeCounts(join(dev, FROZEN), x, COUNTS); // a plain measured file: no reconstructed block, no anchor
-  if (commit) { git(dev, "add", `${FROZEN}/${x}.json`); git(dev, "commit", "-q", "-m", "data-only: frozen counts of X"); }
-  return { w, x, counts: join(dev, FROZEN), file };
-}
-/** One gated run against the layout with the CLI's REAL committed-dir proof (the harness default passes it). */
-const gatedRun = (l: PlainLayout, args: string[], over: Record<string, unknown> = {}) =>
-  broadcast(l.w, [...args, "--core-sha", l.x, "--counts-dir", l.counts], { run: realGit as never, frozenDirCommitted: undefined, ...over });
-const GATED: string[][] = [["--stage", "plan"], ["publish", ...OWNERS], ["--stage", "libs"], ["govern"]];
+// Issue 1816: every non-dry run that broadcasts on 8453 passes the release gate before any signer exists, not only --stage plan. pause-all and a verify-only run are never gated.
+describe("release gate on every broadcasting run on 8453", () => {
+  const quiet = async (f: () => Promise<number>): Promise<number> => { const l = console.log; console.log = () => {}; try { return await f(); } finally { console.log = l; } };
+  const noSigner = () => { throw new Error("the gate must refuse before a signer is built"); };
+  const runs: Array<[string, string[]]> = [["publish", ["publish", ...OWNERS]], ["govern", ["govern"]], ["stage prove-control", ["--stage", "prove-control", ...OWNERS]], ["stage deploy", ["--stage", "deploy", ...OWNERS]], ["stage all", ["--stage", "all", ...OWNERS]], ["default run", [...OWNERS]]];
 
-describe("the frozen counts file is committed and clean for a plain baseline too (QA plan v1 E4)", () => {
-  test("hand-edited frozen counts refused: a committed plain X.json changed in the working tree stops the plan and every broadcasting run with COUNTS_MISSING, before any signer or forge", async () => {
-    const l = plainLayout();
-    const j = JSON.parse(readFileSync(l.file, "utf8"));
-    j.counts.vault += 1; // still a well-formed counts file: only the committed-bytes proof can see the edit
-    writeFileSync(l.file, JSON.stringify(j, null, 2));
-    for (const args of GATED) {
-      const r = await gatedRun(l, args);
-      const what = args[0] === "--stage" ? args.join(" ") : args[0]!;
-      expect(r.code, what).toBe(EXIT_CODES.COUNTS_MISSING);
-      expect(lastFailure(l.w), what).toContain("differs from the committed bytes");
-      expect(r.signerMade, what).toBe(false);
-      expect(forgeCalls(l.w), what).toBe(0);
+  for (const [name, args] of runs) {
+    test(`${name}: an untagged SHA is RELEASE_SHA_UNTAGGED, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: MAINNET_CHAIN_ID });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { releaseTag: async () => null, makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+      expect(signerMade).toBe(false);
+    });
+    test(`${name}: red CI is CI_NOT_GREEN, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: MAINNET_CHAIN_ID });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { checkShaGreen: async () => ({ code: 1, output: "RED" }), makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.CI_NOT_GREEN);
+      expect(signerMade).toBe(false);
+    });
+    test(`${name}: a missing counts file is COUNTS_MISSING, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: MAINNET_CHAIN_ID, writeFrozen: false });
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.COUNTS_MISSING);
+      expect(signerMade).toBe(false);
+    });
+    test(`${name}: an untracked counts file is COUNTS_UNTRACKED, with no signer`, async () => {
+      let signerMade = false;
+      const w = world({ chainId: MAINNET_CHAIN_ID });
+      w.cfg.gitCountsDirty = ["?? x.json"];
+      expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.COUNTS_UNTRACKED);
+      expect(signerMade).toBe(false);
+    });
+  }
+
+  test("pause-all on 8453 with an untagged SHA and red CI: neither check is read", async () => {
+    let tagRead = false, greenRan = false;
+    const w = world({ chainId: MAINNET_CHAIN_ID });
+    const code = await quiet(() => w.run(["pause-all", "--environment", "base-mainnet"], { releaseTag: async () => { tagRead = true; return null; }, checkShaGreen: async () => { greenRan = true; return { code: 1, output: "RED" }; } }));
+    expect(code).toBe(EXIT_CODES.RESUME); // it got as far as reading the run manifest, which this world has none of
+    expect(tagRead).toBe(false);
+    expect(greenRan).toBe(false);
+  });
+
+  test("a verify-only run on 8453 broadcasts nothing, so it is not gated", async () => {
+    let tagRead = false;
+    const w = world({ chainId: MAINNET_CHAIN_ID });
+    const code = await quiet(() => w.run(["verify", "--environment", "base-mainnet"], { releaseTag: async () => { tagRead = true; return null; } }));
+    expect(code).not.toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+    expect(tagRead).toBe(false);
+  });
+
+  test("a dry run on 8453 broadcasts nothing, so it is not gated", async () => {
+    let tagRead = false;
+    const w = world({ chainId: MAINNET_CHAIN_ID });
+    const code = await quiet(() => w.run(["publish", "--dry-run", "--environment", "base-mainnet"], { releaseTag: async () => { tagRead = true; return null; } }));
+    expect(code).not.toBe(EXIT_CODES.RELEASE_SHA_UNTAGGED);
+    expect(tagRead).toBe(false);
+  });
+
+  test("publish on the Twin chain at an untagged SHA is not gated", async () => {
+    let tagRead = false;
+    const w = world({ chainId: TWIN_CHAIN_ID });
+    await quiet(() => w.run(["publish"], { releaseTag: async () => { tagRead = true; return null; } }));
+    expect(tagRead).toBe(false);
+  });
+
+  test("publish on 8453 passes the gate and logs it with its stage", async () => {
+    const w = world({ chainId: MAINNET_CHAIN_ID });
+    await quiet(() => w.run(["publish", ...OWNERS, "--environment", "base-mainnet"]));
+    const gate = w.logs().find((l: { event?: string }) => l.event === "plan.release_gate");
+    expect(gate?.ok).toBe(true);
+    expect(gate?.stage).toBe("publish");
+  });
+
+  describe("the frozen counts file must be committed and clean in its git work tree", () => {
+    const dirt: Array<[string, string[]]> = [["untracked", ["?? x.json"]], ["modified", [" M x.json"]], ["staged new", ["A  x.json"]], ["ignored", ["!! x.json"]]];
+    for (const [kind, lines] of dirt) {
+      test(`${kind}: refused on 8453 with COUNTS_UNTRACKED, for the plan and for publish, before a signer`, async () => {
+        for (const args of [["--stage", "plan"], ["publish", ...OWNERS]]) {
+          let signerMade = false;
+          const w = world({ chainId: MAINNET_CHAIN_ID });
+          w.cfg.gitCountsDirty = lines;
+          expect(await quiet(() => w.run([...args, "--environment", "base-mainnet"], { makeSigner: () => { signerMade = true; return noSigner(); } }))).toBe(EXIT_CODES.COUNTS_UNTRACKED);
+          expect(signerMade).toBe(false);
+        }
+      });
     }
-  });
-  test("an uncommitted plain X.json in the counts checkout is refused the same way", async () => {
-    const l = plainLayout(false);
-    for (const args of GATED) {
-      const r = await gatedRun(l, args);
-      expect(r.code, args.join(" ")).toBe(EXIT_CODES.COUNTS_MISSING);
-      expect(lastFailure(l.w), args.join(" ")).toContain("is not tracked at HEAD");
-      expect(r.signerMade, args.join(" ")).toBe(false);
-    }
-  });
-  test("an untracked stray file beside a committed plain X.json is refused (the dir must be clean)", async () => {
-    const l = plainLayout();
-    writeFileSync(join(l.counts, "notes.txt"), "x");
-    const r = await gatedRun(l, ["publish", ...OWNERS]);
-    expect(r.code).toBe(EXIT_CODES.COUNTS_MISSING);
-    expect(lastFailure(l.w)).toContain("is not clean");
-  });
-  test("mutation: the committed, clean plain X.json passes: the plan exits 0 and a broadcasting run passes the gate before it builds a signer", async () => {
-    const l = plainLayout();
-    expect((await gatedRun(l, ["--stage", "plan"])).code).toBe(0);
-    expect(l.w.logs().some((e) => e.event === "plan.release_gate" && e.ok === true)).toBe(true);
-    const r = await gatedRun(l, ["--stage", "libs"]);
-    expect(r.code).not.toBe(EXIT_CODES.COUNTS_MISSING);
-    expect(l.w.logs().some((e) => e.event === "run.release_gate" && e.ok === true && e.counts === "committed")).toBe(true);
-    expect(r.signerMade).toBe(true);
-  });
-  test("the release gate given no committed-dir proof refuses a plain baseline (the seam is required, never skipped)", async () => {
-    const { assertReleaseGate } = await import("../src/release-gate.ts");
-    const dir = tmp("pc-e4-plain-");
-    writeCounts(dir, "a".repeat(40), COUNTS);
-    const gate = (frozenDirCommitted?: (d: string) => Promise<void>) => assertReleaseGate({ sha: "a".repeat(40), coreDir: "/x", countsDir: dir, env: { GITHUB_TOKEN: "t" }, kind: "production", releaseTag: async () => "release/1.0.0", remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }), frozenDirCommitted });
-    await expect(gate()).rejects.toMatchObject({ kind: "COUNTS_MISSING", message: expect.stringContaining("committed, clean one") });
-    const seen: string[] = [];
-    expect(await gate(async (d) => { seen.push(d); })).toBe("release/1.0.0");
-    expect(seen).toEqual([dir]);
+    test("the check asks git for the one counts file, with --ignored", async () => {
+      const w = world({ chainId: MAINNET_CHAIN_ID });
+      expect(await quiet(() => w.run(["--stage", "plan", "--environment", "base-mainnet"]))).toBe(0);
+      const call = w.state().calls.find((c: { tool: string; args: string[] }) => c.tool === "git" && c.args.includes("--"));
+      expect(call?.args).toEqual(["-C", w.countsDir, "status", "--porcelain", "--untracked-files=all", "--ignored", "--", `${w.countsDir}/${"a".repeat(40)}.json`]);
+    });
+    test("a git failure on the counts file is refused, never read as clean", async () => {
+      const failing = async () => ({ code: 128, stdout: "", stderr: "fatal: not a git repository" });
+      await expect(assertCountsTracked(failing, "/x", "a".repeat(40))).rejects.toMatchObject({ kind: "COUNTS_UNTRACKED" });
+      await expect(assertCountsTracked(async () => ({ code: 0, stdout: "", stderr: "" }), "/x", "a".repeat(40))).resolves.toBeUndefined();
+    });
+    test("against a real git work tree: untracked is refused, committed is accepted, then modified is refused", async () => {
+      const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const { spawnTool } = await import("../src/runner.ts");
+      const { gitEnv } = await import("../src/git-env.ts");
+      const repo = mkdtempSync(join(tmpdir(), "counts-tracked-"));
+      const dir = join(repo, "deployments", "frozen-counts");
+      mkdirSync(dir, { recursive: true });
+      const git = (...a: string[]) => { const r = spawnSync("git", ["-C", repo, ...a], { env: gitEnv() }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); };
+      git("init", "-q");
+      const sha = "b".repeat(40);
+      writeFileSync(join(dir, `${sha}.json`), "{}\n");
+      const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" };
+      await expect(assertCountsTracked(spawnTool, dir, sha, env)).rejects.toMatchObject({ kind: "COUNTS_UNTRACKED" });
+      git("add", "--", join(dir, `${sha}.json`));
+      await expect(assertCountsTracked(spawnTool, dir, sha, env)).rejects.toMatchObject({ kind: "COUNTS_UNTRACKED" }); // staged, not committed
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "counts");
+      await expect(assertCountsTracked(spawnTool, dir, sha, env)).resolves.toBeUndefined();
+      writeFileSync(join(dir, `${sha}.json`), "{\"x\":1}\n");
+      await expect(assertCountsTracked(spawnTool, dir, sha, env)).rejects.toMatchObject({ kind: "COUNTS_UNTRACKED" });
+    });
+    test("the same dirty file is accepted on the Twin chain", async () => {
+      const w = world({ chainId: TWIN_CHAIN_ID });
+      w.cfg.gitCountsDirty = ["?? x.json"];
+      expect(await quiet(() => w.run(["--stage", "plan"]))).toBe(0);
+    });
+    test("COUNTS_UNTRACKED has its own exit code", () => {
+      expect(EXIT_CODES.COUNTS_UNTRACKED).toBe(31);
+    });
   });
 });

@@ -25,6 +25,7 @@ interface Cfg {
   staleNonceReads?: Record<string, number>; // script file -> how many `cast nonce` reads of the sender after its successful broadcast answer the nonce from BEFORE it
                                            // (QA plan v1 E6, issue 1723: a load-balanced RPC node behind the broadcast block)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
+  gitCountsDirty?: string[];               // issue 1816: the lines it prints for the path-limited status of the frozen counts file (default: committed and clean)
   manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
@@ -46,7 +47,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (tool === "git") {
     // only the read-only status of the core checkout is ever asked: anything else is an error the test sees
     if (args[0] !== "-C" || args[2] !== "status" || args[3] !== "--porcelain") out(`stub git: unsupported ${args.join(" ")}`, 1);
-    out((cfg.gitDirty ?? []).join("\n"));
+    out(((args.includes("--") ? cfg.gitCountsDirty : cfg.gitDirty) ?? []).join("\n"));
   }
 
   if (tool === "cast") {

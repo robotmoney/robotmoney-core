@@ -292,6 +292,7 @@ describe("a reconstructed file is verified on every load, so a hand-set or tampe
     writeFileSync(frozenPath(dir, SHA), JSON.stringify(f));
     let calls = 0;
     const gate = (d: string) => assertReleaseGate({ sha: SHA, coreDir: "/x", countsDir: d, env: { GITHUB_TOKEN: "t" }, kind: "rehearsal", releaseTags: async () => ["release/v1-rehearsal"], remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "" }),
+      run: async () => ({ code: 0, stdout: "", stderr: "" }), // issue 1816: the pure measurement is committed and clean
       frozenDirCommitted: async () => {}, verifyReconstructed: async (file) => { calls++; await verifyReconstructionOnChain(file.measured.reconstructed!, { table, out: OUTS, getCode: chain() }); } });
     expect(await gate(dir)).toBe("release/v1-rehearsal");
     expect(calls).toBe(1);
