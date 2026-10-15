@@ -83,16 +83,17 @@ struct Cli {
     #[arg(long, env = "INDEXER_REGISTRY")]
     registry: Option<String>,
 
-    /// Optional PortfolioRouter / RouterGovernance contract address.
-    /// When set, the indexer ingests ProposalCreated, VoteCast,
-    /// ProposalExecuted, and WeightsApplied events.
+    /// Optional RouterGovernance (weight setter) contract address. When set,
+    /// it is registered in `contracts` and bounds deploy-block detection.
+    /// RouterGovernance has no voting (issue 1698) and emits no event the
+    /// indexer stores; an applied receipt arrives as the router's WeightsSet.
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 
     /// Optional PortfolioRouter contract address (may differ from RouterGovernance).
     /// When set, the indexer ingests WeightsSet and DefaultWeightsSet events
-    /// emitted by direct admin calls to setWeights() / setDefaultWeights()
-    /// (the demo-seed path), and watches RouterDeposit events to take a fresh
+    /// emitted by setWeights() (which RouterGovernance.applyReceipt calls) /
+    /// setDefaultWeights(), and watches RouterDeposit events to take a fresh
     /// TVL snapshot of all registered vaults in any block where a router
     /// deposit is processed.
     #[arg(long, env = "INDEXER_PORTFOLIO_ROUTER")]

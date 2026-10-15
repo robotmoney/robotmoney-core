@@ -19,9 +19,12 @@
 //! now runs the devnet leg with `--skip base_testnet`, runs the testnet leg in its own step only
 //! when the testnet secrets are set, and proves the refusal with `CI=true` and no testnet env.
 //!
-//! One part still skips under CI on purpose: the vault-stack part of the Base testnet leg needs
-//! `RM_TESTNET_VAULT_ADDR`, a Robot Money deploy on Base's public testnet, which is out of scope
-//! (#839). The suite 5 step requires the Uniswap and Aave markers of that leg, not the vault one.
+//! The vault-stack part on Base's public testnet is its own test, `vault_stack_base_testnet`. It
+//! needs `RM_TESTNET_VAULT_ADDR`, a Robot Money deploy on Base's public testnet, which is out of
+//! scope (#839). Without it the test skips on a laptop and panics under CI, like every other leg.
+//! No deploy exists there today, so suite 5 leaves that test out by name (`--skip
+//! vault_stack_base_testnet`) and the `adapters_against_live_services::base_testnet` leg runs the
+//! Uniswap and Aave parts with no skip at all (QA plan v1 T5).
 //!
 //! ## Adapter coverage (grep-able names in `--nocapture` output)
 //! - **Uniswap** V3 swap — USDC -> WETH `exactInputSingle` on the live router.
@@ -37,8 +40,8 @@
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{
-    base_testnet_addresses, parameterized_e2e, scenarios, skip_network_or_refuse, Account,
-    ForkFixture, HarnessError, Network, IERC20,
+    base_testnet_addresses, parameterized_e2e, run_network_leg, scenarios, skip_network_or_refuse,
+    Account, ForkFixture, HarnessError, Network, IERC20,
 };
 
 sol! {
@@ -251,29 +254,17 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
 
 // ── Adapters: Compound / Morpho / Curve via the vault round-trip ──────────────
 
-/// Deposit USDC into the `RobotMoneyVault` for `network`, which routes funds
-/// into every registered strategy adapter (Aave / Compound / Morpho, plus any
-/// Curve-routed basket leg). Asserts shares are minted, proving the full
-/// adapter stack mediates the deposit. Skips when no vault is configured for the
-/// network (testnet vault deploy is a prerequisite, out of scope for #839).
-fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<(), HarnessError> {
-    let vault = match network {
-        // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
-        Network::RobotMoneyDevnet => Some(fx.deployed()?.vault),
-        Network::BaseTestnet => base_testnet_addresses::robotmoney_vault(),
-    };
-    let Some(vault) = vault else {
-        // Only the Base testnet leg gets here. This skip stays under CI on purpose (QA plan v1
-        // T5): no Robot Money deploy exists on Base's public testnet. Suite 5 does not require
-        // this part's marker, and the devnet leg's step requires its vault-stack marker.
-        eprintln!(
-            "[multi_network_adapters] Compound/Morpho/Curve via vault on {}: \
-             skipped — no RobotMoneyVault deployed (set RM_TESTNET_VAULT_ADDR after deploy)",
-            network.name()
-        );
-        return Ok(());
-    };
-
+/// Deposit USDC into `vault`, the `RobotMoneyVault` on `network`, which routes
+/// funds into every registered strategy adapter (Aave / Compound / Morpho, plus
+/// any Curve-routed basket leg). Asserts shares are minted, proving the full
+/// adapter stack mediates the deposit. The caller names the vault: the devnet
+/// leg deploys its own, and `vault_stack_base_testnet` reads
+/// `RM_TESTNET_VAULT_ADDR` (a testnet vault deploy is out of scope for #839).
+fn exercise_vault_adapter_stack(
+    fx: &ForkFixture,
+    network: Network,
+    vault: Address,
+) -> Result<(), HarnessError> {
     let deposit = U256::from(50_000_000u64); // 50 USDC
     let user = match funded_account(fx, network, one_eth() * U256::from(5u64), deposit) {
         Ok(u) => u,
@@ -361,6 +352,39 @@ parameterized_e2e!(
 
         exercise_uniswap(&fx, network).expect("Uniswap adapter");
         exercise_aave(&fx, network).expect("Aave adapter");
-        exercise_vault_adapter_stack(&fx, network).expect("Compound/Morpho/Curve vault stack");
+        // The vault-stack part runs here on devnet only. On Base's public testnet it is the
+        // separate test below, so this leg has no part that skips (QA plan v1 T5).
+        if network == Network::RobotMoneyDevnet {
+            // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
+            let vault = fx.deployed().expect("devnet vault stage").vault;
+            exercise_vault_adapter_stack(&fx, network, vault)
+                .expect("Compound/Morpho/Curve vault stack");
+        }
     }
 );
+
+/// The Compound/Morpho/Curve vault stack on Base's public testnet. It needs a Robot Money deploy
+/// there (`RM_TESTNET_VAULT_ADDR`), which is out of scope for #839 and does not exist today.
+/// Without it the test skips on a laptop and panics under CI, so a CI run cannot pass it without
+/// running it. Suite 5 leaves it out by name (`--skip vault_stack_base_testnet`) until that deploy
+/// exists; the name carries `base_testnet`, so the devnet step's `--skip base_testnet` drops it too.
+#[test]
+fn vault_stack_base_testnet() {
+    let network = Network::BaseTestnet;
+    let Some(vault) = base_testnet_addresses::robotmoney_vault() else {
+        skip_network_or_refuse(
+            "vault_stack_base_testnet",
+            network,
+            "RM_TESTNET_VAULT_ADDR (a Robot Money vault deployed on Base's public testnet)",
+        );
+        return;
+    };
+    run_network_leg(
+        "vault_stack_base_testnet",
+        network,
+        &|network: Network, fx: ForkFixture| {
+            exercise_vault_adapter_stack(&fx, network, vault)
+                .expect("Compound/Morpho/Curve vault stack");
+        },
+    );
+}

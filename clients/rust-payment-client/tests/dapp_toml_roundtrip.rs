@@ -19,8 +19,9 @@
 mod common;
 
 use crate::common::{
-    enc_bool, install_happy_path_mocks, jrpc_result, match_eth_call_selector, selector_hex_of,
-    GATEWAY, GATEWAY_CODE, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE, USDC, VAULT,
+    enc_address, enc_bool, install_happy_path_mocks, jrpc_result, match_eth_call_selector,
+    selector_hex_of, GATEWAY, GATEWAY_CODE, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE, USDC,
+    VAULT,
 };
 use alloy_primitives::{hex as ahex, keccak256};
 use assert_cmd::Command;
@@ -157,6 +158,10 @@ fn dapp_toml_loads_directly_through_rmpc_config_loader() {
     assert_eq!(cfg.gateway_runtime_hash, runtime_hash);
     assert!(cfg.signer.allow_software_fallback);
     assert_eq!(cfg.signer.keystore_path, keystore_path);
+    // QA plan U6: the export pins the binding, so the D2 preflight check runs.
+    let pinned = format!("{SHARE_RECEIVER:#x}");
+    assert_eq!(cfg.share_receiver.as_deref(), Some(pinned.as_str()));
+    assert_eq!(cfg.agent_owner.as_deref(), Some(pinned.as_str()));
 }
 
 /// The exported config must contain a non-zero gateway_runtime_hash.
@@ -277,6 +282,18 @@ async fn dapp_toml_drives_rmpc_self_check_to_success() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
     install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    // The fixture pins agent_owner (QA plan U6), so the preflight reads
+    // agentOwner(self) and must find the pinned owner.
+    let owner_read = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentOwnerCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(SHARE_RECEIVER)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
 
     let tmp = TempDir::new().unwrap();
     let keystore_path = tmp.path().join("agent.keystore.json");
@@ -313,6 +330,7 @@ async fn dapp_toml_drives_rmpc_self_check_to_success() {
     assert_eq!(v["checks"]["gateway_code_hash_match"], true);
     assert_eq!(v["checks"]["agent_active"], true);
     assert_eq!(v["checks"]["deposits_paused"], false);
+    owner_read.assert_async().await;
 }
 
 /// Negative drift-detector test: renaming a required flat field in the fixture

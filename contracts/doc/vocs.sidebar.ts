@@ -275,6 +275,7 @@ export const sidebar = [
             { text: "FeatureFlagsTest", link: "/contracts/test/contract.FeatureFlagsTest" },
             { text: "FeeOnTransferUSDC", link: "/contracts/test/contract.FeeOnTransferUSDC" },
             { text: "FixedLiquidityPool", link: "/contracts/test/contract.FixedLiquidityPool" },
+            { text: "FourVaultInitialStateTest", link: "/contracts/test/contract.FourVaultInitialStateTest" },
             { text: "GasBurningAdapter", link: "/contracts/test/contract.GasBurningAdapter" },
             { text: "GasMeteredStubVault", link: "/contracts/test/contract.GasMeteredStubVault" },
             { text: "GasUSDC", link: "/contracts/test/contract.GasUSDC" },

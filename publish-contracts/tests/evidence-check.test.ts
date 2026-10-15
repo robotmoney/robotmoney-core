@@ -724,6 +724,30 @@ describe("evidence secret scan: a hash field exempts its own value, never its li
     }))).toEqual(["hash-named.json", "list.json", "snake.json"]);
   });
 
+  test("a token, auth, credential or bearer key is not exempt, and a key off the public-name allowlist exempts nothing", () => {
+    // the end-of-line shape `"name": "0x<64 hex>",` passes only under a name that says it is public: a hash, a qualified id, a role, a topic
+    const one = (k: string) => JSON.stringify({ x: { [k]: KEY, n: 1 } }, null, 2) + "\n";
+    const names = ["token", "authToken", "auth_token", "accessToken", "credential", "credentials", "bearer", "apikey", "sessionId", "signer", "id", "note", "value"];
+    const hits = scan(Object.fromEntries(names.map((k) => [`${k}.json`, one(k)])));
+    expect(flagged(hits)).toEqual(names.map((k) => `${k}.json`).sort());
+    // the quoted JSON key forms of the credential names are a secret assignment too, like "privateKey"
+    for (const k of ["token", "authToken", "auth_token", "accessToken", "credential", "credentials", "bearer"]) expect(hits).toContain(`${k}.json:3: secret assignment`);
+    // a list under such a name exempts nothing either
+    expect(flagged(scan({ "tokens.json": JSON.stringify({ tokens: [KEY] }, null, 2) + "\n", "values.json": JSON.stringify({ values: [KEY] }, null, 2) + "\n" }))).toEqual(["tokens.json", "values.json"]);
+  });
+
+  test("an ERC-20 token address, a pool id on a one-line manifest and a code_hashes object scan clean", () => {
+    const TOKEN = "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3";
+    expect(scan({
+      "agent-token-vault.json": JSON.stringify({ chain_id: 8453, assets: [{ symbol: "RM", token: TOKEN, pool_id: h(30) }] }) + "\n",
+      "assets.json": JSON.stringify({ assets: [{ symbol: "RM", token: TOKEN }] }, null, 2) + "\n",
+      "timelock.json": JSON.stringify({ code_hashes: { safe: h(31), consensus_receipt: h(32) }, pool_id: h(33) }, null, 2) + "\n",
+      "govern-pending.txt": `next: govern --row set-unwind-guard --admin-arg token=${TOKEN} --admin-arg token=all\n`,
+    })).toEqual([]);
+    // the same object under a secret name is not a hash object: its keys exempt nothing
+    expect(flagged(scan({ "keys.json": JSON.stringify({ signer_keys: { safe: KEY } }, null, 2) + "\n" }))).toEqual(["keys.json"]);
+  });
+
   test("a hash word elsewhere on the line exempts nothing: a key beside a tx hash, and a bare 64-hex on a hash or tx line, are flagged", () => {
     expect(flagged(scan({
       "log.jsonl": JSON.stringify({ event: "tx.sent", hash: h(2), signer: KEY }) + "\n",

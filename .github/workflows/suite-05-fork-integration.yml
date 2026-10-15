@@ -9,8 +9,8 @@
 # integration and that breakage reaching users.
 #
 # WHY A PARALLEL MATRIX (issue #607)
-# Running all test files with --test-threads=1 against one chain took ~60 min because
-# governance tests each wait on a voting period. Splitting into independent matrix slots,
+# Running all test files with --test-threads=1 against one chain took ~60 min because the
+# pre-1698 governance tests each waited on a voting period. Splitting into independent matrix slots,
 # each on its own runner with its own chain, cuts wall-clock to the heaviest slot.
 # fail-fast: false keeps every slot's signal independent.
 #
@@ -23,8 +23,9 @@
 # - The three twin-* slots run the tests straight on the Twin fork (RMPC_TESTNET_RPC_URL).
 # - The goldens and governance slots point RMPC_FORK_RPC_URL at the Twin fork, so each test forks
 #   the Twin again at the pin (RMPC_FORK_BLOCK) and may move time and rewind state without
-#   touching the shared Twin chain. Governance scenarios advance the EVM clock with
-#   evm_increaseTime: no real waiting.
+#   touching the shared Twin chain. The governance scenarios deploy their own receipt-path stack
+#   and drive the one-call RouterGovernance.applyReceipt (issue 1698): there is no voting period
+#   to wait for.
 #
 # WHY --test-threads=1
 # Within a slot, ephemeral accounts are funded through the anvil admin RPCs (fund gas, fund USDC).
@@ -243,8 +244,8 @@ jobs:
       BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
       BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
       # Robot Money contracts deployed to Base's public testnet (deploy is a prerequisite,
-      # out of scope for #839). Absent ⇒ the vault-stack adapter sub-test skips
-      # while the live Aave/Uniswap legs still run.
+      # out of scope for #839). Only the separate vault_stack_base_testnet test reads it, and
+      # every step below leaves that test out by name (QA plan v1 T5).
       RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}
     steps:
       - uses: actions/checkout@v4
@@ -341,9 +342,11 @@ jobs:
 
       # The Base testnet leg talks to Base's public testnet, so it needs the RPC and a funded key.
       # Like the funding assertion above, it runs only when both secrets are set, and the leg
-      # panics under CI when either is missing. The vault-stack part of this leg still skips: no
-      # Robot Money deploy exists on Base's public testnet (RM_TESTNET_VAULT_ADDR, #839), so only
-      # the Uniswap and Aave markers are required.
+      # panics under CI when either is missing. The leg runs Uniswap and Aave and skips nothing.
+      # The vault-stack part is its own test, vault_stack_base_testnet, which this step leaves out
+      # by name: no Robot Money deploy exists on Base's public testnet (RM_TESTNET_VAULT_ADDR,
+      # #839), and that test panics under CI without one (QA plan v1 T5). Drop the --skip when the
+      # deploy exists.
       - name: Multi-network adapter e2e, Base testnet leg (needs the testnet secrets)
         if: ${{ env.BASE_TESTNET_RPC_URL != '' && env.BASE_TESTNET_FUNDER_KEY != '' }}
         working-directory: testing/fork-e2e-rust
@@ -353,7 +356,8 @@ jobs:
             [multi_network_adapters] Aave on Base testnet: OK
         run: |
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
-            --release --test multi_network_adapters -- --test-threads=1 --nocapture base_testnet
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture base_testnet \
+            --skip vault_stack_base_testnet
 
       # A ref without the testnet secrets does not run the leg above. Say so in the run summary
       # instead of letting a skipped step pass unnoticed.
@@ -371,7 +375,8 @@ jobs:
           # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
           set +e
           out="$(env -u BASE_TESTNET_RPC_URL -u BASE_TESTNET_FUNDER_KEY CI=true \
-            cargo test --release --test multi_network_adapters base_testnet 2>&1)"
+            cargo test --release --test multi_network_adapters base_testnet \
+            -- --skip vault_stack_base_testnet 2>&1)"
           status=$?
           set -e
           echo "$out" | tail -25

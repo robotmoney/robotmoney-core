@@ -1,13 +1,15 @@
 //! Issue #654 — account history multi-event indexing tests.
 //!
-//! Verifies that the indexer stores all five event types from
+//! Verifies that the indexer stores the four event types from
 //! architecture §5.4 into `account_history_events`:
 //!
 //!   - AgentDeposit → kind="deposit"
 //!   - ERC-4626 Withdraw → kind="withdrawal"
 //!   - ExitFeeCharged → kind="fee_charged"
 //!   - AgentAuthorized / AgentRevoked → kind="policy_change"
-//!   - VoteCast → kind="governance_vote"
+//!
+//! There is no governance-vote kind. RouterGovernance voting was deleted
+//! (issue 1698, QA plan C1): a stray `VoteCast` log writes nothing.
 //!
 //! Tests run against a real Postgres container (skipped if Docker
 //! is unavailable) and use the stub RPC server from `common`.
@@ -17,7 +19,7 @@ mod common;
 use alloy_primitives::{Address, U256};
 use common::pg_fixture;
 use explorer_indexer::{
-    abi::{IGatewayEvents, IRouterGovernanceEvents, IVaultEvents},
+    abi::{IGatewayEvents, IVaultEvents},
     db::CountTable,
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -58,6 +60,19 @@ fn stub_block(number: u64) -> serde_json::Value {
         "timestamp":  "0x65000000",
         "transactions": []
     })
+}
+
+// The voting events RouterGovernance emitted before issue 1698 deleted them.
+// abi.rs no longer declares them, so the test declares them to build the logs.
+alloy_sol_types::sol! {
+    event ProposalCreated(
+        uint256 indexed proposalId,
+        address indexed proposer,
+        address[] vaults,
+        uint256[] bps,
+        uint64 votingDeadline
+    );
+    event VoteCast(uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor);
 }
 
 /// Standard IndexerConfig for account_history tests.
@@ -318,10 +333,12 @@ async fn account_history_policy_change_authorized_indexed() {
     );
 }
 
-/// AC-5: VoteCast event is stored as `kind="governance_vote"` in
-/// account_history_events, keyed to the voter address.
+/// AC-5 (QA plan C1, core issue 1698): RouterGovernance voting was deleted,
+/// so the indexer ignores the old `ProposalCreated` / `VoteCast` logs. The
+/// tick succeeds, writes no `governance_vote` history row (no row at all),
+/// and the governance tables migration 0023 dropped stay gone.
 #[tokio::test]
-async fn account_history_governance_vote_indexed() {
+async fn account_history_ignores_deleted_governance_vote_events() {
     let fx = pg_fixture().await;
 
     let gateway = Address::from([0x11u8; 20]);
@@ -330,9 +347,8 @@ async fn account_history_governance_vote_indexed() {
     let voter = Address::from([0x33u8; 20]);
     let proposer = Address::from([0x44u8; 20]);
 
-    // First seed a proposal so the governance_votes FK is satisfied.
     let proposal_log = encode_log(
-        IRouterGovernanceEvents::ProposalCreated {
+        ProposalCreated {
             proposalId: U256::from(1u64),
             proposer,
             vaults: vec![],
@@ -345,7 +361,7 @@ async fn account_history_governance_vote_indexed() {
         0,
     );
     let vote_log = encode_log(
-        IRouterGovernanceEvents::VoteCast {
+        VoteCast {
             proposalId: U256::from(1u64),
             voter,
             power: U256::from(1u64),
@@ -357,6 +373,8 @@ async fn account_history_governance_vote_indexed() {
         0,
     );
 
+    // The stub answers eth_getLogs with these logs whatever the filter says,
+    // so they reach handle_log even though the indexer no longer asks for them.
     let stub = common::StubRpcServer::start().await;
     stub.set("eth_blockNumber", serde_json::Value::String("0x0f".into())); // 15
     stub.set(
@@ -379,22 +397,19 @@ async fn account_history_governance_vote_indexed() {
     );
     stub.shutdown();
 
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM account_history_events WHERE chain_id = $1 AND kind = 'governance_vote'")
-            .bind(8453_i64)
+    assert_eq!(
+        fx.db.count(CountTable::AccountHistoryEvents).await.unwrap(),
+        0,
+        "a deleted voting event must write no account history row"
+    );
+    for table in ["governance_proposals", "governance_votes"] {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table)
             .fetch_one(fx.db.pool())
             .await
             .unwrap();
-    assert_eq!(
-        count, 1,
-        "one governance_vote history row expected, got {count}"
-    );
-
-    // governance_votes must also be populated (no regression).
-    assert!(
-        fx.db.count(CountTable::GovernanceVotes).await.unwrap() >= 1,
-        "governance_votes must still be populated"
-    );
+        assert!(!exists, "migration 0023 must drop {table}");
+    }
 }
 
 /// AC-6: A deposit and withdrawal for the same account in the same block

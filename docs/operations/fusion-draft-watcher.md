@@ -5,10 +5,20 @@ Implements: issue #1248 — (fusion) governance handoff; round-2 review task T09
 
 # Running the Fusion draft watcher under a supervisor
 
-`scripts/fusion/watch-released-drafts.sh` is the persistent, read-only watcher
-AC-GOV-01 names. It polls `ReceiptReleased`, drafts a `RouterGovernance.propose`
-call for each released receipt, quarantines anything it had to refuse, and
-advances a durable block cursor. It **never signs and never broadcasts**.
+> **Retired by issue 1698 (QA plan v1 C1).** A receipt is now released only
+> inside `RouterGovernance.applyReceipt`, the one timelock call that also writes
+> its weights. A `ReceiptReleased` log therefore marks a receipt that is already
+> applied, and there is no proposal left to draft: the contract has no proposal,
+> vote or execute function. `rmpc governance draft-proposal` is deleted, so this
+> watcher has no command to run. Do not install it on a new host. The Safe
+> applies a receipt with `govern --row apply-receipt`
+> (`docs/technical/router-governance-handoff-runbook.md` §2). The rest of this
+> page records how the pre-1698 watcher was supervised.
+
+`scripts/fusion/watch-released-drafts.sh` was the persistent, read-only watcher
+AC-GOV-01 named. It polled `ReceiptReleased`, drafted a weight-setter call for
+each released receipt, quarantined anything it had to refuse, and advanced a
+durable block cursor. It **never signed and never broadcast**.
 
 ## Why a supervisor is part of the deliverable
 

@@ -837,7 +837,7 @@ async fn get_vault_detail_includes_all_four_data_sets() {
     assert_eq!(fees[0]["net_assets"], "995000");
 }
 
-// ─── Governance endpoint tests (issue #307) ────────────────────────────────
+// ─── Router weight and governance endpoint tests (issue #307) ──────────────
 
 /// GET /v1/router/weights — current weight vector and history.
 #[tokio::test]
@@ -872,7 +872,7 @@ async fn get_router_weights_returns_current_and_history() {
 /// GET /v1/router/weights returns empty arrays when no snapshots exist.
 #[tokio::test]
 async fn get_router_weights_empty_when_no_snapshots() {
-    // The fixture seeds the governance data; we just confirm the response
+    // The fixture seeds the router weight data; we just confirm the response
     // shape is valid even when current_weights is non-empty. The companion
     // "empty" case is implicitly covered by the snapshot count assertion above.
     let s = start_with_seed().await;
@@ -884,106 +884,31 @@ async fn get_router_weights_empty_when_no_snapshots() {
     assert_eq!(resp.status(), 200);
 }
 
-/// GET /v1/governance/proposals — list with status labels and tallies.
+/// QA plan C1 (core issue 1698): RouterGovernance voting was deleted, so the
+/// proposals list and detail routes are gone. Both fall through to the global
+/// 404 handler, the same as any unknown path. Migration 0023 (applied by the
+/// harness) dropped the tables they read, so a route that came back would
+/// 500 instead.
 #[tokio::test]
-async fn list_proposals_returns_all_with_status_labels() {
+async fn governance_proposals_routes_are_removed() {
     let s = start_with_seed().await;
-    let body: serde_json::Value = http()
-        .get(format!("http://{}/v1/governance/proposals", s.addr))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-
-    let proposals = body["proposals"].as_array().unwrap();
-    assert_eq!(proposals.len(), 2, "fixture seeds 2 proposals");
-
-    // Ordered by block_number DESC: proposal 2 (block 860) first.
-    let p2 = &proposals[0];
-    assert_eq!(p2["proposal_id"], 2);
-    assert_eq!(p2["status"], "executed");
-    assert_eq!(p2["votes_for"], 1);
-    assert_eq!(p2["votes_against"], 0);
-
-    let p1 = &proposals[1];
-    assert_eq!(p1["proposal_id"], 1);
-    assert_eq!(p1["status"], "open");
-    assert_eq!(p1["votes_for"], 0);
-    assert_eq!(p1["votes_against"], 0);
-
-    // Freshness envelope.
-    assert!(body["block_number"].is_i64());
-    assert!(body["indexed_at"].is_string());
-}
-
-/// GET /v1/governance/proposals/:id — detail with per-voter vote list.
-#[tokio::test]
-async fn get_proposal_returns_detail_with_votes() {
-    let s = start_with_seed().await;
-    let body: serde_json::Value = http()
-        .get(format!("http://{}/v1/governance/proposals/2", s.addr))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-
-    let proposal = &body["proposal"];
-    assert_eq!(proposal["proposal_id"], 2);
-    assert_eq!(proposal["status"], "executed");
-    assert_eq!(proposal["executed_block"], 880);
-    assert_eq!(proposal["votes_for"], 1);
-    assert_eq!(proposal["votes_against"], 0);
-
-    let votes = proposal["votes"].as_array().unwrap();
-    assert_eq!(votes.len(), 1);
-    assert_eq!(votes[0]["support"], true);
-    assert_eq!(votes[0]["weight"], "1");
-    assert!(votes[0]["voter"].is_string());
-
-    // Freshness envelope.
-    assert!(body["block_number"].is_i64());
-    assert!(body["indexed_at"].is_string());
-}
-
-/// GET /v1/governance/proposals/:id returns 404 for unknown proposal.
-#[tokio::test]
-async fn get_proposal_unknown_id_returns_404() {
-    let s = start_with_seed().await;
+    for path in ["/v1/governance/proposals", "/v1/governance/proposals/1"] {
+        let resp = http()
+            .get(format!("http://{}{path}", s.addr))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404, "{path} must not be served");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["error"], "not_found", "{path}");
+    }
+    // The governed-change admin events stay: they are not voting.
     let resp = http()
-        .get(format!("http://{}/v1/governance/proposals/9999", s.addr))
+        .get(format!("http://{}/v1/governance/admin-events", s.addr))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 404);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["error"], "not_found");
-}
-
-/// GET /v1/governance/proposals/:id — open proposal has no executed_block.
-#[tokio::test]
-async fn get_open_proposal_has_no_executed_block() {
-    let s = start_with_seed().await;
-    let body: serde_json::Value = http()
-        .get(format!("http://{}/v1/governance/proposals/1", s.addr))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-
-    let proposal = &body["proposal"];
-    assert_eq!(proposal["proposal_id"], 1);
-    assert_eq!(proposal["status"], "open");
-    assert!(
-        proposal["executed_block"].is_null(),
-        "open proposal must not have executed_block"
-    );
-    assert_eq!(proposal["votes"].as_array().unwrap().len(), 0);
+    assert_eq!(resp.status(), 200);
 }
 
 // --- Suite-08: multi-vault protocol stats endpoints (issue #316) ---
@@ -1145,7 +1070,7 @@ async fn stats_activity_feed_entry_shape() {
     );
 }
 
-/// Suite-08 AC: GET /v1/router/state reflects the most recent WeightsApplied event.
+/// Suite-08 AC: GET /v1/router/state reflects the most recent WeightsSet event.
 #[tokio::test]
 async fn router_state_returns_current_weights() {
     let s = start_with_seed().await;
@@ -1168,7 +1093,7 @@ async fn router_state_returns_current_weights() {
     let history = body["history"]
         .as_array()
         .expect("history must be an array");
-    assert_eq!(history.len(), 1, "fixture has one WeightsApplied event");
+    assert_eq!(history.len(), 1, "fixture has one WeightsSet event");
     assert!(body["block_number"].is_i64());
 }
 

@@ -48,8 +48,9 @@ product:
 - **Account layer** — watched address or connected wallet; shows portfolio
   positions, transaction history, and agent policies.
 - **Action layer** — wallet required; vault-selector deposit and multi-vault
-  withdrawal. The governance proposal surface renders nothing on mainnet: there are no proposals, because nobody holds a voter key, because router weights change only when the
-  Safe applies a consensus receipt through the timelock.
+  withdrawal. There is no governance proposal surface: router weights change
+  only when the Safe applies a consensus receipt through the timelock, in one
+  `RouterGovernance.applyReceipt` call (issue 1698).
 
 Before any implementation issue begins, five questions must be resolved:
 
@@ -101,9 +102,11 @@ portfolio router ABI are missing and must be added.
   `docs/technical/vault-registry-decisions.md` §3.4.
 - `portfolioRouterAbi` — `deposit(...)`, `previewDeposit(uint256)`,
   `activeVaults()` per `docs/technical/portfolio-router-decisions.md` §3.1–3.2.
-- `routerGovernanceAbi` — `propose(...)`, `castVote(...)`, `execute(...)`,
-  `getProposal(uint256)` for the proposal surface. `RouterGovernance.propose`,
-  `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+- `routerGovernanceAbi` — the read surface only (`currentWeights()`). Issue
+  1698 deleted the contract's proposal, vote and execute functions with the
+  voter set. The weight setter's `applyReceipt` call replaced them, and only
+  the Safe schedules it through the timelock, so the dapp builds no governance
+  write.
 
 No existing ABI in `abi.ts` needs to be changed. The edit is purely additive.
 Risk of merge conflict with other in-flight issues: moderate (other issues may
@@ -400,12 +403,12 @@ This scout (317)
    The `resolveExplorerApiUrl` / `fetchAgentDeposits` pattern in `explorerApi.ts`
    is the established model — extend it with typed functions per new endpoint.
 
-7. **Governance proposal surface.** `GovernanceVoteTab` depends on the
-   `RouterGovernance.sol` contract and its `castVote` / `getProposal` surface.
-   That contract is deployed as of the governance phase issues (#341, #342). The
-   tab is fully additive but must import `routerGovernanceAbi` from `abi.ts`
-   (added in step 1 of the serialization sequence). On mainnet it renders
-   nothing: there are no proposals, because nobody holds a voter key.
+7. **Governance proposal surface (removed, issue 1698).** The first plan had a
+   `GovernanceVoteTab` over `RouterGovernance`'s `castVote` / `getProposal`
+   surface (#341, #342). Issue 1698 deleted that surface from the contract,
+   and QA plan v1 C1 deletes the dapp's `GovernancePanel`. Router weights change
+   only through the Safe's `applyReceipt` call; the dapp reads the current
+   weights.
 
 ---
 

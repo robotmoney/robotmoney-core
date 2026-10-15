@@ -14,6 +14,12 @@
  * functionName, `tx-preview-calldata` equals the calldata of the signed
  * args, and the preview target is the signed address. The reveal screen must
  * re-render the same policy preview the commit screen showed for step 2.
+ *
+ * The agent is not the depositor, so every surface first collects the agent's
+ * EIP-712 AgentConsent (issue 1791, QA plan D2/U4). The tests sign it with a
+ * key they hold and paste it; the signed reveal must carry exactly those
+ * bytes as its fourth argument, and a consent for another owner keeps the
+ * commit disabled.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act } from "react";
@@ -24,6 +30,7 @@ import { OnboardingWizard } from "../../src/components/OnboardingWizard";
 import { RotationTab } from "../../src/components/RotationTab";
 import { computeCommitHash } from "../../src/lib/commitReveal";
 import type { PreviewContext } from "../../src/lib/preview";
+import { CONSENT_AGENT, pasteAgentConsent, signAgentConsent } from "./helpers/agentConsent";
 
 // ---------------------------------------------------------------------------
 // wagmi mock state
@@ -37,11 +44,15 @@ interface SignedCall {
 }
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
-const AGENT = "0x2222222222222222222222222222222222222222" as const;
+/** An agent whose key the test holds, so it can sign the agent's consent. */
+const AGENT = CONSENT_AGENT.address.toLowerCase() as `0x${string}`;
 const OLD_AGENT = "0x5555555555555555555555555555555555555555" as const;
 const DEPOSITOR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const COMMIT_TX = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as const;
+const REVOKE_TX = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" as const;
+const CHAIN_ID = 918453;
+const CONSENT_NONCE = 0n;
 
 const state = vi.hoisted(() => ({
   calls: [] as unknown[],
@@ -54,13 +65,14 @@ vi.mock("wagmi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("wagmi")>();
   return {
     ...actual,
-    useAccount: () => ({ address: DEPOSITOR, isConnected: true }),
+    useAccount: () => ({ address: DEPOSITOR, isConnected: true, chainId: 918453 }),
     useChainId: () => 918453,
     useReadContract: ({ functionName }: { functionName: string }) => {
       if (functionName === "usdc") return { data: "0x4444444444444444444444444444444444444444" };
       // Rotation: the wallet has no ADMIN_ROLE (depositor path) and the new agent is unowned.
       if (functionName === "hasRole") return { data: false };
       if (functionName === "agentOwner") return { data: ZERO };
+      if (functionName === "agentConsentNonce") return { data: 0n };
       return { data: 1000n };
     },
     useBalance: () => ({ data: { value: 1000n } }),
@@ -134,6 +146,23 @@ async function confirmCommit() {
   });
 }
 
+/** The agent's consent for this depositor at the live nonce, as `rmpc agent-consent` prints it. */
+function consentForDepositor(owner: `0x${string}` = DEPOSITOR) {
+  return signAgentConsent({
+    owner: getAddress(owner),
+    shareReceiver: getAddress(owner),
+    nonce: CONSENT_NONCE,
+    chainId: CHAIN_ID,
+    gateway: GATEWAY,
+  });
+}
+
+/** The reveal carries the pasted consent as its fourth argument. */
+function expectRevealCarriesConsent(reveal: SignedCall, consent: Hex) {
+  expect(reveal.args).toHaveLength(4);
+  expect(reveal.args[3]).toBe(consent.toLowerCase());
+}
+
 /** The commit hash binds the agent, the depositor and the salt the reveal later signs. */
 function expectCommitMatchesReveal(commit: SignedCall, reveal: SignedCall) {
   const [agent, salt] = reveal.args as [Address, Hex];
@@ -169,6 +198,10 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
   it("tx-preview-fn equals signed functionName", async () => {
     renderTab();
     expectNoAuthorizeAgentPreview();
+    // No commit before the agent consents: the reveal would revert InvalidAgentConsent.
+    expect(screen.getByTestId("authorize-submit")).toBeDisabled();
+    const consent = await consentForDepositor();
+    await pasteAgentConsent("authorize", consent);
     const stepTwoCalldata = previewCalldata(screen.getByTestId("authorize-next-reveal-preview"));
 
     fireEvent.click(screen.getByTestId("authorize-submit"));
@@ -192,10 +225,21 @@ describe("AuthorizeTab — commit and reveal previews (QA plan U4)", () => {
     expect(reveal.functionName).toBe("revealAuthorization");
     expectPreviewIsSignedCall(revealPreview, reveal);
     expectCommitMatchesReveal(commit, reveal);
+    expectRevealCarriesConsent(reveal, consent);
+  });
+
+  it("a consent signed for another owner keeps the commit disabled", async () => {
+    renderTab();
+    const foreign = await consentForDepositor("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    await pasteAgentConsent("authorize", foreign, "wrong-signer");
+    expect(screen.getByTestId("authorize-submit")).toBeDisabled();
+    await pasteAgentConsent("authorize", "0x1234", "malformed");
+    expect(screen.getByTestId("authorize-submit")).toBeDisabled();
   });
 
   it("an agent edit after the commit does not change the reveal it previews and signs", async () => {
     const view = renderTab();
+    await pasteAgentConsent("authorize", await consentForDepositor());
     fireEvent.click(screen.getByTestId("authorize-submit"));
     await waitFor(() => expect(state.calls).toHaveLength(1));
     await confirmCommit();
@@ -244,6 +288,9 @@ describe("OnboardingWizard — commit and reveal previews (QA plan U4)", () => {
   it("tx-preview-fn equals signed functionName", async () => {
     renderToCommitStep();
     expectNoAuthorizeAgentPreview();
+    expect(screen.getByTestId("wizard-commit-submit")).toBeDisabled();
+    const consent = await consentForDepositor();
+    await pasteAgentConsent("wizard", consent);
     const stepTwoCalldata = previewCalldata(screen.getByTestId("wizard-next-reveal-preview"));
 
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
@@ -266,6 +313,7 @@ describe("OnboardingWizard — commit and reveal previews (QA plan U4)", () => {
     expect(reveal.functionName).toBe("revealAuthorization");
     expectPreviewIsSignedCall(revealPreview, reveal);
     expectCommitMatchesReveal(commit, reveal);
+    expectRevealCarriesConsent(reveal, consent);
   });
 });
 
@@ -284,11 +332,21 @@ describe("RotationTab depositor path — commit and reveal previews (QA plan U4)
       target: { value: DEPOSITOR },
     });
     expectNoAuthorizeAgentPreview();
+    // Nothing is signed, not even the revoke, before the new agent consents.
+    expect(screen.getByTestId("rotation-revoke-submit")).toBeDisabled();
+    const consent = await consentForDepositor();
+    await pasteAgentConsent("rotation", consent);
     const stepThreeCalldata = previewCalldata(screen.getByTestId("rotation-step3"));
 
-    // Step 1 (revoke) unlocks step 2.
+    // Step 1 (revoke), once the wallet accepts it, unlocks step 2.
+    await waitFor(() => expect(screen.getByTestId("rotation-revoke-submit")).not.toBeDisabled());
     fireEvent.click(screen.getByTestId("rotation-revoke-submit"));
     await waitFor(() => expect(state.calls).toHaveLength(1));
+    expect(screen.getByTestId("rotation-authorize-submit")).toBeDisabled();
+    await act(async () => {
+      state.onSuccess!(REVOKE_TX);
+    });
+    state.onSuccess = null;
 
     fireEvent.click(screen.getByTestId("rotation-authorize-submit"));
     await waitFor(() => expect(state.calls).toHaveLength(2));
@@ -308,5 +366,8 @@ describe("RotationTab depositor path — commit and reveal previews (QA plan U4)
     expect(reveal.functionName).toBe("revealAuthorization");
     expectPreviewIsSignedCall(step3, reveal);
     expectCommitMatchesReveal(commit, reveal);
+    expectRevealCarriesConsent(reveal, consent);
+    // Accepted is not mined: "Rotation complete" waits for a success receipt (QA plan U5).
+    expect(screen.queryByTestId("rotation-complete")).toBeNull();
   });
 });

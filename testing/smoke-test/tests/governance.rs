@@ -3,7 +3,10 @@
 //! Verifies that:
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
-//!   - The deployer holds no voting power and no admin; the timelock is admin.
+//!   - RouterGovernance releases from the deployed receipt register, which grants it ADMIN_ROLE
+//!     (issue 1698: one `applyReceipt` call releases a receipt and applies its weights; there is no
+//!     voting path, so there is no voting power to check).
+//!   - The deployer holds no admin; the timelock is admin.
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release -- governance --test-threads=1 --nocapture
@@ -45,24 +48,29 @@ fn governance_has_code() {
     );
 }
 
-/// Voting power is not set by the deployer. A fresh address has none, and the
-/// deployer's own power is zero: quorum and voters come through the real Safe
-/// and the timelock (the stage 13 govern matrix).
+/// The weight setter applies receipts from the register the deploy wired (issue 1698, QA plan v1 C1).
+/// `applyReceipt` releases the receipt on `receiptContract()` and then calls `setWeights`, so stage 11
+/// must point `receiptContract()` at the deployed ConsensusRecommendationReceipt and the register must
+/// grant the weight setter ADMIN_ROLE (its `releaseReceipt` gate). Either one missing makes every
+/// `apply-receipt` revert. This replaces the pre-1698 voting-power check: there is no voting path.
 #[test]
-fn deployer_holds_no_voting_power() {
-    require_prereqs("deployer_holds_no_voting_power");
+fn governance_releases_from_the_deployed_receipt_register() {
+    require_prereqs("governance_releases_from_the_deployed_receipt_register");
     let fx = fixture();
-    let deployer: Address = fx
-        .published()
-        .keys
-        .address("ADMIN_ADDRESS")
-        .expect("deployer address")
-        .parse()
-        .expect("parse deployer address");
+    let register = fx.consensus_receipt();
+    assert_ne!(
+        register,
+        Address::ZERO,
+        "the ic-policy manifest names no ConsensusRecommendationReceipt"
+    );
     assert_eq!(
-        read_voting_power(fx, deployer),
-        0,
-        "the deployer must not hold voting power"
+        read_receipt_contract(fx),
+        register,
+        "RouterGovernance.receiptContract() must be the deployed receipt register"
+    );
+    assert!(
+        has_admin_role(fx, register, fx.governance()),
+        "the receipt register must grant RouterGovernance ADMIN_ROLE (the releaseReceipt gate)"
     );
 }
 
@@ -79,11 +87,11 @@ fn deployer_holds_no_admin_role_timelock_does() {
         .parse()
         .expect("parse deployer address");
     assert!(
-        !deployer_has_admin_role(fx, deployer),
+        !has_admin_role(fx, fx.governance(), deployer),
         "deployer must not hold ADMIN_ROLE on RouterGovernance"
     );
     assert!(
-        deployer_has_admin_role(fx, fx.timelock()),
+        has_admin_role(fx, fx.governance(), fx.timelock()),
         "the timelock must hold ADMIN_ROLE on RouterGovernance"
     );
 }
@@ -98,31 +106,34 @@ fn get_code(url: &str, addr: Address) -> String {
     )
 }
 
-/// Read votingPower(addr) from the RouterGovernance contract.
-/// votingPower(address) selector: keccak256("votingPower(address)")[0..4] = 0xc07473f6
-/// (verified via `cast sig "votingPower(address)"` — issue #1311 found this
-/// target had never executed anywhere, so the previously-hardcoded 0x13c8a7f5
-/// selector, which does not match any function on RouterGovernance, had never
-/// been caught).
-fn read_voting_power(fx: &Fixture, voter: Address) -> u128 {
-    // ABI-encode: selector + left-padded address (12 zero bytes + 20 addr bytes)
-    let voter_hex = format!("{voter:x}");
-    let data = format!("0xc07473f6{voter_hex:0>64}");
+/// Read `receiptContract()` from the RouterGovernance contract.
+/// receiptContract() selector: keccak256("receiptContract()")[0..4] = 0xd435b3a3
+/// (`cast sig "receiptContract()"`).
+fn read_receipt_contract(fx: &Fixture) -> Address {
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
         serde_json::json!([
-            {"to": format!("{:#x}", fx.governance()), "data": data},
+            {"to": format!("{:#x}", fx.governance()), "data": "0xd435b3a3"},
             "latest"
         ]),
     );
-    u256_from_hex(&result)
+    let word = result.trim_start_matches("0x");
+    assert_eq!(
+        word.len(),
+        64,
+        "receiptContract() returned {result:?}, not one word"
+    );
+    format!("0x{}", &word[24..])
+        .parse()
+        .expect("receiptContract() word is an address")
 }
 
-/// Check hasRole(ADMIN_ROLE, account) on the governance contract.
+/// Check hasRole(ADMIN_ROLE, account) on `target` (RouterGovernance or the receipt register; both
+/// define ADMIN_ROLE as keccak256("ADMIN_ROLE")).
 /// hasRole(bytes32,address) selector: 0x91d14854
 /// ADMIN_ROLE = keccak256("ADMIN_ROLE") = 0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775
-fn deployer_has_admin_role(fx: &Fixture, account: Address) -> bool {
+fn has_admin_role(fx: &Fixture, target: Address, account: Address) -> bool {
     let admin_role = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
     let account_hex = format!("{account:x}");
     let data = format!("0x91d14854{admin_role}{account_hex:0>64}");
@@ -130,22 +141,11 @@ fn deployer_has_admin_role(fx: &Fixture, account: Address) -> bool {
         fx.rpc_url(),
         "eth_call",
         serde_json::json!([
-            {"to": format!("{:#x}", fx.governance()), "data": data},
+            {"to": format!("{target:#x}"), "data": data},
             "latest"
         ]),
     );
     result.trim_start_matches("0x").ends_with('1')
-}
-
-fn u256_from_hex(hex: &str) -> u128 {
-    let stripped = hex.trim_start_matches("0x");
-    let len = stripped.len();
-    let slice = if len > 32 {
-        &stripped[len - 32..]
-    } else {
-        stripped
-    };
-    u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
 fn rpc_call<T: for<'de> serde::Deserialize<'de>>(

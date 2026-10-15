@@ -14,7 +14,7 @@ const BOTH: [string, RegExp][] = [
 ];
 const RUNBOOK_ONLY: [string, RegExp][] = [
   ["the production floor is unchanged", /172800/], ["funding ETH", /0\.00237 ETH/], ["funding USDC", /5 USDC/], ["the owner question on the submitter key", /OWNER QUESTION/],
-  ["the per-row table", /\| `batch` \| yes, explicit `--row`/], ["no fixture", /no fixture|REAL/], ["rmpc refuses a software signer on 8453", /ErrProductionSignerRequired/], ["libs adoption", /effectiveCounts/],
+  ["the per-row table", /\| `batch` \| yes, explicit `--row`/], ["no fixture", /no fixture|REAL/], ["the deleted rmpc hardware refusal (QA plan D12)", /ErrProductionSignerRequired/], ["libs adoption", /effectiveCounts/],
   ["explicit selection, never default", /nothing selects it by default/],
 ];
 describe("docs for the rehearsal kind (issue 1727)", () => {

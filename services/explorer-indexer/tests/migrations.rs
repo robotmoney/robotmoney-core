@@ -1,10 +1,11 @@
 //! Schema sanity: bring up Postgres in a container, apply migrations,
-//! confirm all nine §11 tables plus vaults and governance tables exist
+//! confirm all nine §11 tables plus vaults and router weight snapshots exist
 //! with `chain_id` and (where applicable) `block_number` columns.
 //!
 //! Also covers issue #315 acceptance criteria:
-//!   - Migration 0003 creates router_weight_snapshots, governance_proposals,
-//!     governance_votes tables and the account_positions view.
+//!   - Migration 0003 creates router_weight_snapshots and the
+//!     account_positions view. (It also created governance_proposals and
+//!     governance_votes; migration 0023 dropped them, issue 1698.)
 //!   - vault_address column is added to vault_snapshots and backfilled.
 //!
 //! Issue #1359 adds the two `migrate_only_mode_*` tests, which drive the
@@ -27,7 +28,7 @@ use alloy_primitives::U256;
 use common::{pg_fixture, raw_pg};
 use explorer_indexer::db::{
     assert_migrations_are_transactional, compare_schema, embedded_schema_version,
-    first_non_transactional, AppliedMigration, CountTable, DbError, SchemaDivergence,
+    first_non_transactional, AppliedMigration, CountTable, DbError, SchemaDivergence, MIGRATOR,
 };
 use explorer_indexer::Db;
 use sqlx::migrate::{Migration, MigrationType};
@@ -460,9 +461,7 @@ async fn migrations_create_all_tables() {
         CountTable::IndexerRuns,
         // migration 0002
         CountTable::Vaults,
-        // migration 0003 — governance tables (issue #307)
-        CountTable::GovernanceProposals,
-        CountTable::GovernanceVotes,
+        // migrations 0004/0005 — router weight history (issue #307)
         CountTable::RouterWeightSnapshots,
     ] {
         let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
@@ -472,19 +471,21 @@ async fn migrations_create_all_tables() {
     }
 }
 
-/// Issue #315 AC — Migration 0003 creates the three new tables and the
-/// account_positions view.
+/// Issue #315 AC — the multi-vault migrations create router_weight_snapshots
+/// and the account_positions view. The two governance tables they also created
+/// are gone since migration 0023 (issue 1698).
 #[tokio::test]
 async fn migration_0003_creates_multi_vault_tables() {
     let fx = pg_fixture().await;
-    for t in [
-        CountTable::RouterWeightSnapshots,
-        CountTable::GovernanceProposals,
-        CountTable::GovernanceVotes,
-    ] {
-        let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(n, 0, "table {t:?} must exist and be empty after migration");
-    }
+    let n = fx
+        .db
+        .count(CountTable::RouterWeightSnapshots)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        n, 0,
+        "router_weight_snapshots must exist and be empty after migration"
+    );
 
     // account_positions is a VIEW — verify it exists by selecting from it.
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*)::BIGINT FROM account_positions")
@@ -581,9 +582,7 @@ async fn every_row_has_chain_id_and_block_number() {
         "agent_policies",
         "vault_snapshots",
         "wallet_positions",
-        // migration 0003
-        "governance_proposals",
-        "governance_votes",
+        // migration 0004
         "router_weight_snapshots",
     ];
     let needs_chain_id = [
@@ -598,9 +597,7 @@ async fn every_row_has_chain_id_and_block_number() {
         "indexer_runs",
         // migration 0002
         "vaults",
-        // migration 0003
-        "governance_proposals",
-        "governance_votes",
+        // migration 0004
         "router_weight_snapshots",
     ];
     for t in needs_chain_id {
@@ -623,6 +620,118 @@ async fn every_row_has_chain_id_and_block_number() {
         .unwrap();
         assert_eq!(row.0, 1, "{t} must have a block_number column");
     }
+}
+
+// ─── QA plan C1 — migration 0023 drops RouterGovernance voting ────────────────
+
+/// Migration `0023` (QA plan C1, core issue 1698) removes what the deleted
+/// RouterGovernance voting events fed. On a database that ran 0001..0022 and
+/// holds a proposal, a vote and a `governance_vote` history row, it must drop
+/// `governance_votes` and `governance_proposals`, delete the `governance_vote`
+/// history row, and keep every other history row and `router_weight_snapshots`.
+#[tokio::test]
+async fn migration_0023_drops_governance_voting_tables_and_history_rows() {
+    let pg = raw_pg().await;
+    let pool = sqlx::PgPool::connect(&pg.url)
+        .await
+        .expect("connect to the raw database");
+
+    // The pre-0023 world: every embedded migration below 23, in order.
+    for m in MIGRATOR.iter().filter(|m| m.version < 23) {
+        sqlx::raw_sql(m.sql.as_ref())
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("apply migration {}: {e}", m.version));
+    }
+
+    let db = Db::from_pool(pool.clone());
+    db.upsert_chain(8453, "base", "stub").await.unwrap();
+    sqlx::query(
+        "INSERT INTO governance_proposals \
+           (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, created_at) \
+         VALUES (8453, 1, 9, 0, $1, $2, 9)",
+    )
+    .bind(vec![0x66u8; 32])
+    .bind(vec![0x44u8; 20])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-0023 proposal");
+    sqlx::query(
+        "INSERT INTO governance_votes \
+           (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
+         VALUES (8453, 1, $1, 10, 0, $2, TRUE, 1)",
+    )
+    .bind(vec![0x33u8; 20])
+    .bind(vec![0x77u8; 32])
+    .execute(&pool)
+    .await
+    .expect("seed one pre-0023 vote");
+    db.insert_history_event(
+        8453,
+        10,
+        0,
+        [0x77u8; 32],
+        [0x33u8; 20],
+        "governance_vote",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db.insert_history_event(
+        8453,
+        11,
+        0,
+        [0x88u8; 32],
+        [0x33u8; 20],
+        "deposit",
+        Some([0x22u8; 20]),
+        Some([0x11u8; 20]),
+        Some(U256::from(1_000_000u64)),
+    )
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/0023_drop_governance_voting.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0023 must apply to a populated governance schema");
+
+    for table in ["governance_proposals", "governance_votes"] {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!exists, "0023 must drop {table}");
+    }
+    let snapshots_exist: bool =
+        sqlx::query_scalar("SELECT to_regclass('router_weight_snapshots') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        snapshots_exist,
+        "router_weight_snapshots is the router's weight history and must survive 0023"
+    );
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM account_history_events ORDER BY block_number")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        kinds,
+        vec!["deposit".to_string()],
+        "0023 must delete the governance_vote row and keep every other kind"
+    );
+    assert!(
+        CountTable::try_from("governance_votes").is_err()
+            && CountTable::try_from("governance_proposals").is_err(),
+        "the count allowlist must not name a dropped table"
+    );
 }
 
 // ─── T20/T12 — migration 0016 must REFUSE rather than fabricate provenance ────

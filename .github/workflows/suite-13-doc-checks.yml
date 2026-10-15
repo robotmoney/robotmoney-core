@@ -133,14 +133,17 @@ jobs:
         run: python3 .github/scripts/check_fusion_closeout_docs.py
 
       - name: Self-test governance docs drift guard (issue #1698)
-        # Plants each RouterGovernance voting residue in prd.md and architecture.md and
-        # drops each required phrase, and expects the guard to fire BEFORE the real check runs.
+        # Plants each RouterGovernance voting residue in prd.md, architecture.md and a non-model
+        # doc, drops each required phrase, and expects the guard to fire BEFORE the real check
+        # runs; residue in docs/code-review/ and the QA plan must pass.
         run: python3 .github/scripts/check_governance_docs.py --self-test
 
       - name: Governance docs drift (issue #1646, #1698)
         # security-model section references resolve; governance-decisions, prd and architecture
         # keep the no-voting applyReceipt model and none of the deleted RouterGovernance voting
-        # text; manual-admin-actions names the IC policy, receipt and basket vaults.
+        # text; every other doc under docs/ carries none of that text and no pre-1698 two-call
+        # apply-receipt batch (QA plan v1 C1); manual-admin-actions names the IC policy, receipt
+        # and basket vaults.
         run: python3 .github/scripts/check_governance_docs.py
 
       - name: Self-test no-voting client gate (issue #1698)

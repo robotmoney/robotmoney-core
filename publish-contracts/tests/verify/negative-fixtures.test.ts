@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
-import { verifyDeployment } from "../../src/verify/index.ts";
+import { RECORDER_RING_SLOTS, verifyDeployment } from "../../src/verify/index.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
   KEEPER_ROLE, SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
@@ -125,7 +125,8 @@ const RULES: Rule[] = [
   [/^vault\[rmAGENT\]: V4 adapter codehash is allowed$/, (w) => w.chain.set(VAULTS.rmAGENT.address, "adapterCodeHashAllowed", false)],
   [/^vault\[rmAGENT\]: V4 adapter is bound to the recorder, the PoolManager and the pool key$/, (w) => w.chain.set(V4_ADAPTER, "RECORDER", OTHER)],
   [/^recorder: PoolKey and PoolManager equal config$/, (w) => w.chain.set(RECORDER, "tickSpacing", 200)],
-  [/^recorder: observation ring holds the full window floor$/, (w) => w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 900])],
+  // core 1793: one slot below the 7,201-slot ring the 4 h sell anchor needs
+  [/^recorder: observation ring holds the full window floor$/, (w) => w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 7200])],
   [/^recorder: has no owner, role or setter$/, (w) => {
     // the recorder code gains the `owner()` selector 0x8da5cb5b, as a PUSH4 would carry it
     w.chain.codes.set(RECORDER.toLowerCase(), `${w.chain.codes.get(RECORDER.toLowerCase())!}638da5cb5b` as `0x${string}`);
@@ -235,6 +236,31 @@ describe("negative fixture for every verifier label", () => {
     const r = await verifyDeployment(w.opts);
     expect(r.ok).toBe(false);
     expect(failed(r)).toContain(label);
+  });
+});
+
+describe("the recorder ring holds the 4 h sell anchor window (core 1793, QA plan D5)", () => {
+  const label = "recorder: observation ring holds the full window floor";
+  const ROOT = join(import.meta.dir, "../../..");
+  test("the floor is the deploy script's RING_SLOTS and the sell anchor window / 2 s + 1", () => {
+    const script = readFileSync(join(ROOT, "contracts/script/DeployUniswapV4PriceRecorder.s.sol"), "utf8");
+    const views = readFileSync(join(ROOT, "contracts/lib/BasketViews.sol"), "utf8");
+    const ring = Number(/uint16 public constant RING_SLOTS = ([\d_]+);/.exec(script)![1]!.replaceAll("_", ""));
+    const anchorWindow = Number(/uint32 internal constant SELL_ANCHOR_WINDOW = ([\d_]+);/.exec(views)![1]!.replaceAll("_", ""));
+    expect(RECORDER_RING_SLOTS).toBe(ring);
+    expect(RECORDER_RING_SLOTS).toBe(anchorWindow / 2 + 1);
+  });
+  test("a 901-slot recorder (Deploy 2's ring, the 1800 s NAV floor) fails the ring label", async () => {
+    const w = buildWorld(8453);
+    w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 901]);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toContain(label);
+    expect(r.checks.find((x) => x.label === label)!.detail).toContain(`needs ${RECORDER_RING_SLOTS}`);
+  });
+  test("a ring of exactly 7,201 live slots passes", async () => {
+    const w = buildWorld(8453);
+    w.chain.set(RECORDER, "slot0", [1n << 96n, -403009, 3, RECORDER_RING_SLOTS]);
+    expect(failed(await verifyDeployment(w.opts))).not.toContain(label);
   });
 });
 

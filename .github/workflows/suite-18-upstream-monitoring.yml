@@ -10,8 +10,9 @@
 # structured JSON and exits non-zero on alert. This suite is the only automated
 # signal that those monitors still fire correctly and runs them against live RPC.
 #
-# Component alerts and Base-fork keeper integration run here. External nightly
-# monitoring lives in suite-18-live-monitoring.yml (heavy class).
+# Component alerts run here. External nightly monitoring, and the Base-fork keeper
+# test that reads live Base state (QA plan v1 E10: nightly only, never on a PR),
+# live in suite-18-live-monitoring.yml (heavy class).
 
 name: upstream-contract-monitoring
 
@@ -70,7 +71,9 @@ jobs:
     name: recorder-keeper-selftest
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # Core 1779: runs the real keeper against a real UniswapV4PriceRecorder on a local anvil chain.
-    # The test fails loudly when anvil, forge or cast is missing.
+    # The test fails loudly when anvil, forge or cast is missing. The Base-fork half
+    # (test-recorder-keeper-fork.sh) is the nightly job recorder-keeper-fork in
+    # suite-18-live-monitoring.yml (QA plan v1 E10).
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -87,8 +90,3 @@ jobs:
 
       - name: Recorder keeper self-test
         run: bash scripts/ops/test-recorder-keeper.sh
-
-      - name: Base fork keeper NAV guard and deposit
-        env:
-          BASE_FORK_RPC_URL: ${{ secrets.BASE_UPSTREAM_RPC || 'https://mainnet.base.org' }}
-        run: bash scripts/ops/test-recorder-keeper-fork.sh

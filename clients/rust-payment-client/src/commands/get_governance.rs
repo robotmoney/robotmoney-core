@@ -1,14 +1,22 @@
 //! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
+//! Canonical: docs/technical/governance-decisions.md §7 — read surface
 //! Implements: issue #309 (rmpc get-governance subprocess assertion)
+//! Implements: issue #1698 (no proposal or voter state is left to read)
 //!
 //! `rmpc get-governance` — direct on-chain read of RouterGovernance state.
 //!
 //! Sub-reads (all `eth_call`, pinned to a single `eth_blockNumber` snapshot):
 //!
-//! - `RouterGovernance.currentProposalId()` → current proposal id (0 = none).
-//! - `RouterGovernance.cadenceParams()` → voting period, delay, quorum, total power.
-//! - `RouterGovernance.activeProposal()` → proposal details (skipped when id = 0).
-//! - `RouterGovernance.currentWeights()` → current router weights as seen by governance.
+//! - `RouterGovernance.router()` → the Portfolio Router it sets weights on.
+//! - `RouterGovernance.receiptContract()` → the receipt register
+//!   `applyReceipt` releases from (zero until stage 11 sets it).
+//! - `RouterGovernance.currentWeights()` → the router weights the weight
+//!   setter last applied (the router's applied vector).
+//!
+//! Issue 1698 deleted the voting path (`propose`, `vote`, `execute`,
+//! `currentProposalId`, `activeProposal`, `cadenceParams`), so there is no
+//! proposal, voter, quorum or voting-period field to report. A weight change
+//! is one Safe-scheduled timelock call, `applyReceipt`.
 //!
 //! Config field `governance_address` must be set; exits `EXIT_STARTUP_FAIL`
 //! when absent.
@@ -28,7 +36,7 @@ use crate::config::Config;
 use crate::gateway::RouterGovernance;
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
-use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
+use crate::read_output::{Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
@@ -41,49 +49,20 @@ pub struct WeightEntry {
     pub bps: u64,
 }
 
-/// Optional proposal summary.
-#[derive(Debug, Serialize)]
-pub struct ProposalSummary {
-    /// Proposal id (decimal string).
-    pub proposal_id: String,
-    pub proposer: String,
-    pub proposed_vaults: Vec<String>,
-    pub proposed_bps: Vec<u64>,
-    /// Block timestamp when voting ends.
-    pub voting_deadline: u64,
-    pub executable_after: u64,
-    /// Total voting power cast FOR (decimal string).
-    pub votes_for: DecimalU256,
-    /// Total voting power cast AGAINST. Always "0" — this contract only
-    /// supports FOR votes; included for API completeness.
-    pub votes_against: DecimalU256,
-    /// Total voting power abstained. Always "0" — this contract only
-    /// supports FOR votes; included for API completeness.
-    pub votes_abstain: DecimalU256,
-    pub executed: bool,
-    pub cancelled: bool,
-}
-
 /// `data` payload for `rmpc get-governance`.
 #[derive(Debug, Default, Serialize)]
 pub struct GovernanceData {
     /// RouterGovernance address (from operator config).
     pub address: String,
-    /// Current proposal id. `"0"` means no active proposal.
-    pub current_proposal_id: DecimalU256,
-    /// Voting period in seconds.
-    pub voting_period_secs: u64,
-    /// Execution delay in seconds.
-    pub execution_delay_secs: u64,
-    /// Quorum threshold (decimal string).
-    pub quorum_threshold: DecimalU256,
-    /// Total voting power outstanding (decimal string).
-    pub total_voting_power: DecimalU256,
-    /// Current router weights as seen by governance. Empty when no weights set.
+    /// The Portfolio Router this contract sets weights on. `null` when the
+    /// read failed (the failure is in the envelope's `errors`).
+    pub router: Option<String>,
+    /// The receipt register `applyReceipt` releases from. `null` while it is
+    /// unset (the zero address) or when the read failed.
+    pub receipt_contract: Option<String>,
+    /// The router weights the weight setter last applied. Empty when no
+    /// receipt has been applied (the router routes by its default vector).
     pub current_weights: Vec<WeightEntry>,
-    /// Active proposal, if any. `null` when `current_proposal_id == 0`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_proposal: Option<ProposalSummary>,
 }
 
 /// Entry point invoked from `main.rs`. Returns the process exit code.
@@ -163,29 +142,17 @@ async fn read_governance(
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
 
-    // currentProposalId().
-    let proposal_id = match call_current_proposal_id(rpc, governance, &block_tag).await {
-        Ok(id) => {
-            b.data_mut().current_proposal_id = DecimalU256(id);
-            id
-        }
-        Err(e) => {
-            b.record_err("current_proposal_id".to_string(), e.to_string());
-            U256::ZERO
-        }
-    };
+    // router().
+    match call_address(rpc, governance, &block_tag, Read::Router).await {
+        Ok(a) => b.data_mut().router = Some(format!("{a:#x}")),
+        Err(e) => b.record_err("router".to_string(), e.to_string()),
+    }
 
-    // cadenceParams().
-    match call_cadence_params(rpc, governance, &block_tag).await {
-        Ok((vp, ed, qt, tvp)) => {
-            b.data_mut().voting_period_secs = vp;
-            b.data_mut().execution_delay_secs = ed;
-            b.data_mut().quorum_threshold = DecimalU256(qt);
-            b.data_mut().total_voting_power = DecimalU256(tvp);
-        }
-        Err(e) => {
-            b.record_err("cadence_params".to_string(), e.to_string());
-        }
+    // receiptContract().
+    match call_address(rpc, governance, &block_tag, Read::ReceiptContract).await {
+        Ok(a) if a == Address::ZERO => {}
+        Ok(a) => b.data_mut().receipt_contract = Some(format!("{a:#x}")),
+        Err(e) => b.record_err("receipt_contract".to_string(), e.to_string()),
     }
 
     // currentWeights().
@@ -206,50 +173,26 @@ async fn read_governance(
         }
     }
 
-    // activeProposal() — only read when there's an active proposal.
-    if proposal_id > U256::ZERO {
-        match call_active_proposal(rpc, governance, &block_tag).await {
-            Ok(p) => {
-                b.data_mut().active_proposal = Some(p);
-            }
-            Err(e) => {
-                b.record_err("active_proposal".to_string(), e.to_string());
-            }
-        }
-    }
-
     Ok(b.finish())
 }
 
-async fn call_current_proposal_id(
-    rpc: &FailoverRpcClient,
-    governance: Address,
-    block_tag: &str,
-) -> crate::errors::Result<U256> {
-    let data = RouterGovernance::currentProposalIdCall {}.abi_encode();
-    let out = rpc
-        .eth_call(
-            &CallRequest {
-                to: governance,
-                from: None,
-                data: data.into(),
-            },
-            Some(block_tag),
-        )
-        .await?;
-    let r =
-        RouterGovernance::currentProposalIdCall::abi_decode_returns(&out, true).map_err(|e| {
-            crate::errors::RmpcError::ErrRpcDecode(format!("currentProposalId abi decode: {e}"))
-        })?;
-    Ok(r._0)
+/// The two single-address reads `get-governance` makes.
+#[derive(Debug, Clone, Copy)]
+enum Read {
+    Router,
+    ReceiptContract,
 }
 
-async fn call_cadence_params(
+async fn call_address(
     rpc: &FailoverRpcClient,
     governance: Address,
     block_tag: &str,
-) -> crate::errors::Result<(u64, u64, U256, U256)> {
-    let data = RouterGovernance::cadenceParamsCall {}.abi_encode();
+    read: Read,
+) -> crate::errors::Result<Address> {
+    let data = match read {
+        Read::Router => RouterGovernance::routerCall {}.abi_encode(),
+        Read::ReceiptContract => RouterGovernance::receiptContractCall {}.abi_encode(),
+    };
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -260,18 +203,13 @@ async fn call_cadence_params(
             Some(block_tag),
         )
         .await?;
-    let r = RouterGovernance::cadenceParamsCall::abi_decode_returns(&out, true).map_err(|e| {
-        crate::errors::RmpcError::ErrRpcDecode(format!("cadenceParams abi decode: {e}"))
-    })?;
-    // Underscore-prefixed because that is how `RouterGovernance.sol` names
-    // these return parameters, and the binding is now generated straight from
-    // the Foundry artifact rather than hand-trimmed (issue #1362).
-    Ok((
-        r._votingPeriod,
-        r._executionDelay,
-        r._quorumThreshold,
-        r._totalVotingPower,
-    ))
+    let decoded = match read {
+        Read::Router => RouterGovernance::routerCall::abi_decode_returns(&out, true).map(|r| r._0),
+        Read::ReceiptContract => {
+            RouterGovernance::receiptContractCall::abi_decode_returns(&out, true).map(|r| r._0)
+        }
+    };
+    decoded.map_err(|e| crate::errors::RmpcError::ErrRpcDecode(format!("{read:?} abi decode: {e}")))
 }
 
 async fn call_current_weights(
@@ -294,41 +232,6 @@ async fn call_current_weights(
         crate::errors::RmpcError::ErrRpcDecode(format!("currentWeights abi decode: {e}"))
     })?;
     Ok((r.vaults, r.bps))
-}
-
-async fn call_active_proposal(
-    rpc: &FailoverRpcClient,
-    governance: Address,
-    block_tag: &str,
-) -> std::result::Result<ProposalSummary, String> {
-    let data = RouterGovernance::activeProposalCall {}.abi_encode();
-    let out = rpc
-        .eth_call(
-            &CallRequest {
-                to: governance,
-                from: None,
-                data: data.into(),
-            },
-            Some(block_tag),
-        )
-        .await
-        .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = RouterGovernance::activeProposalCall::abi_decode_returns(&out, true)
-        .map_err(|e| format!("abi decode: {e}"))?;
-
-    Ok(ProposalSummary {
-        proposal_id: r.id.to_string(),
-        proposer: format!("{:#x}", r.proposer),
-        proposed_vaults: r.vaults.iter().map(|v| format!("{v:#x}")).collect(),
-        proposed_bps: r.bps.iter().map(|b| b.saturating_to::<u64>()).collect(),
-        voting_deadline: r.votingDeadline,
-        executable_after: r.executableAfter,
-        votes_for: DecimalU256(r.votesFor),
-        votes_against: DecimalU256(U256::ZERO),
-        votes_abstain: DecimalU256(U256::ZERO),
-        executed: r.executed,
-        cancelled: r.cancelled,
-    })
 }
 
 #[cfg(test)]
@@ -363,17 +266,27 @@ keystore_path           = "{ks}"
         assert_eq!(code, EXIT_STARTUP_FAIL);
     }
 
+    /// Issue 1698: the envelope carries no proposal, voter or cadence field.
     #[test]
-    fn governance_data_serialises_without_proposal() {
+    fn governance_data_has_no_voting_fields() {
         let data = GovernanceData {
             address: "0x0000000000000000000000000000000000000001".to_string(),
-            current_proposal_id: DecimalU256(U256::ZERO),
-            current_weights: vec![],
-            active_proposal: None,
-            ..Default::default()
+            router: Some("0x0000000000000000000000000000000000000002".to_string()),
+            receipt_contract: None,
+            current_weights: vec![WeightEntry {
+                vault: "0x0000000000000000000000000000000000000003".to_string(),
+                bps: 10_000,
+            }],
         };
         let v: serde_json::Value = serde_json::to_value(&data).unwrap();
-        assert!(v["active_proposal"].is_null() || v.get("active_proposal").is_none());
-        assert_eq!(v["current_proposal_id"].as_str().unwrap(), "0");
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["address", "current_weights", "receipt_contract", "router"],
+            "get-governance reads the applied weights and the receipt register only"
+        );
+        assert!(v["receipt_contract"].is_null());
+        assert_eq!(v["current_weights"][0]["bps"], 10_000);
     }
 }

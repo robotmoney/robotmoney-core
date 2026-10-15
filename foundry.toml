@@ -34,6 +34,9 @@ fs_permissions = [
     # DERIVE the anchoring digest by hashing the committed golden canonical
     # bytes rather than transcribing a constant (issue #1247 AC11, #1280).
     { access = "read", path = "./tests" },
+    # Read-only access to the stage table so FourVaultInitialState.t.sol (issue 1705) can
+    # compare each vault stage's paused state with the table's `vaults[].deployPaused`.
+    { access = "read", path = "./scripts/deploy" },
 ]
 
 # Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth

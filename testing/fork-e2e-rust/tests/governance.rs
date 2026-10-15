@@ -1,32 +1,41 @@
 //! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
-//! Implements: issue #309
+//! Canonical: docs/technical/governance-decisions.md §3.2, §3.7 — a receipt is applied, not voted on
+//! Implements: issue #309; issue #1698 (QA plan v1 C1) — one `applyReceipt` call, no voting
 //!
-//! Fork e2e scenarios for the RouterGovernance → PortfolioRouter weight
-//! execution path. Each scenario deploys a fresh RouterGovernance +
-//! PortfolioRouter + VaultRegistry + MockVault stack on an anvil-fork
-//! backend, drives the full propose → vote → execute round-trip (or the
-//! relevant failure branch), and asserts on on-chain state.
+//! Fork e2e scenarios for the weight setter's receipt path: RouterGovernance releases on the
+//! ConsensusRecommendationReceipt register and writes PortfolioRouter weights. Each scenario deploys a
+//! fresh stack on an anvil-fork backend (a VaultRegistry, two MockVaults, a PortfolioRouter, an
+//! InvestmentCommitteePolicy, a ConsensusRecommendationReceipt and a RouterGovernance), records one
+//! consensus receipt, and drives `RouterGovernance.applyReceipt` (or one of its refusals), asserting
+//! on-chain state.
+//!
+//! Issue 1698 deleted the propose -> vote -> execute path, the voter set, voting power, quorum, voting
+//! period and execution delay. These scenarios replaced the three that drove that path. The Safe and the
+//! timelock are not deployed here: the deployer holds RouterGovernance `ADMIN_ROLE` as the timelock does
+//! after stage 11, and stands in as the register's gateway (its only permitted writer). The deploy wiring
+//! itself (stage 11 points `receiptContract` at the register and grants the weight setter the register's
+//! `ADMIN_ROLE`) is asserted on the real deployment by `testing/smoke-test/tests/governance.rs`.
 //!
 //! Covered scenarios:
 //!
-//! - `governance_propose_vote_execute` — happy path: propose a new weight
-//!   vector, cast votes past quorum, advance time past the voting deadline
-//!   and execution delay, call `execute()`, assert `WeightsApplied` event
-//!   emitted and `router.getWeights()` returns the new weights.
+//! - `governance_apply_receipt_releases_and_sets_weights_in_one_call` — happy path: one `applyReceipt`
+//!   releases the receipt (`ReceiptReleased` from the register) and writes its vector (`ReceiptApplied`
+//!   from the weight setter) in the same transaction; `isReleased` is true and `router.getWeights()`
+//!   returns the receipt's vector.
 //!
-//! - `governance_quorum_not_reached` — proposal expires without enough
-//!   votes; after the voting deadline `router.getWeights()` is unchanged.
+//! - `governance_apply_receipt_refuses_a_digest_mismatch` — the call names a digest the register did not
+//!   store; it reverts, the receipt stays unreleased and the router weights are unchanged.
 //!
-//! - `governance_execute_before_delay_reverts` — quorum is reached but
-//!   `execute()` is called before the execution delay elapses; the call
-//!   reverts.
+//! - `governance_apply_receipt_refused_vector_releases_nothing` — the router refuses the vector (a
+//!   duplicate vault); the whole call reverts, so the receipt stays unreleased, and the same receipt then
+//!   applies with a valid vector.
 //!
 //! Each test boots its own anvil fork backend (per ADR §3.5), providing
 //! full state isolation without snapshot/revert coordination.
 
 use std::path::PathBuf;
 
-use alloy_primitives::{keccak256, Address, Bytes, U256};
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::Value as JsonValue;
@@ -104,36 +113,45 @@ sol! {
         function grantRole(bytes32 role, address account) external;
     }
 
-    /// RouterGovernance interface.
+    /// RouterGovernance interface (issue 1698: the weight setter applies a receipt, no voting).
     #[allow(missing_docs)]
     interface IRouterGovernance {
-        function propose(address[] calldata vaults, uint256[] calldata bps) external returns (uint256 proposalId);
-        function vote(uint256 proposalId) external;
-        function execute(uint256 proposalId) external;
-        function setVotingPower(address voter, uint256 power) external;
-        function setQuorumThreshold(uint256 threshold) external;
-        function currentProposalId() external view returns (uint256);
-        function votingPower(address voter) external view returns (uint256);
-        function cadenceParams() external view returns (uint64 votingPeriod, uint64 executionDelay, uint256 quorumThreshold, uint256 totalVotingPower);
-        function currentWeights() external view returns (address[] memory vaults, uint256[] memory bps);
-
-        // ProposalState enum: Active=0, Defeated=1, Queued=2, Executed=3
-        function proposalState(uint256 proposalId) external view returns (uint8);
+        function setReceiptContract(address receipt) external;
+        function receiptContract() external view returns (address);
+        function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] calldata vaults, uint256[] calldata bps) external;
     }
 
-    /// MockVault interface.
+    /// InvestmentCommitteePolicy subset: the register reads COMMITTEE_AGENT_ROLE from it.
     #[allow(missing_docs)]
-    interface IMockVault {
-        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
-        function asset() external view returns (address);
+    interface IInvestmentCommitteePolicy {
+        function registerAgent(address agent, string calldata agentId) external;
+    }
+
+    /// ConsensusRecommendationReceipt subset.
+    #[allow(missing_docs)]
+    interface IConsensusRecommendationReceipt {
+        function recordReceipt(address submitter, bytes32 receiptId, bytes32 payloadDigest, string calldata payloadUri) external returns (uint256 index);
+        function isRecorded(bytes32 receiptId) external view returns (bool);
+        function isReleased(bytes32 receiptId) external view returns (bool);
+        function grantRole(bytes32 role, address account) external;
     }
 }
 
 // ── Event signature helpers ───────────────────────────────────────────────────
 
-/// `WeightsApplied(uint256,address[],uint256[])` — topic0.
-fn weights_applied_topic0() -> alloy_primitives::B256 {
-    keccak256(b"WeightsApplied(uint256,address[],uint256[])")
+/// `RouterGovernance.ReceiptApplied(bytes32,bytes32,address[],uint256[])` — topic0.
+fn receipt_applied_topic0() -> B256 {
+    keccak256(b"ReceiptApplied(bytes32,bytes32,address[],uint256[])")
+}
+
+/// `ConsensusRecommendationReceipt.ReceiptReleased(bytes32,address,uint64)` — topic0.
+fn receipt_released_topic0() -> B256 {
+    keccak256(b"ReceiptReleased(bytes32,address,uint64)")
+}
+
+/// `ADMIN_ROLE` of RouterGovernance and of the receipt register: `keccak256("ADMIN_ROLE")`.
+fn admin_role() -> B256 {
+    keccak256(b"ADMIN_ROLE")
 }
 
 // ── Contract deployment helpers ──────────────────────────────────────────────
@@ -174,46 +192,53 @@ fn deploy_portfolio_router(
         .expect("deploy PortfolioRouter")
 }
 
-/// Deploy `RouterGovernance`.
-///
-/// Constructor: `(address _router, address _admin, uint64 _votingPeriod,
-///                uint64 _executionDelay, uint256 _quorumThreshold)`.
-///
-/// Args ABI layout: router(32) + admin(32) + votingPeriod(32) +
-///                  executionDelay(32) + quorumThreshold(32) = 160 bytes.
+/// Deploy `RouterGovernance`. Constructor (issue 1698): `(address _router, address _admin)`.
 fn deploy_router_governance(
     deployer: &rmpc_fork_e2e::Account<'_>,
     router: Address,
     admin: Address,
-    voting_period_secs: u64,
-    execution_delay_secs: u64,
-    quorum_threshold: U256,
 ) -> Address {
     let mut code = load_initcode("RouterGovernance.sol", "RouterGovernance").to_vec();
-    // 5 ABI-encoded 32-byte slots:
-    //   [0..32]   = router   (address, left-padded in slot 0)
-    //   [32..64]  = admin    (address, left-padded in slot 1)
-    //   [64..96]  = votingPeriod  (uint64, right-aligned in slot 2)
-    //   [96..128] = executionDelay (uint64, right-aligned in slot 3)
-    //   [128..160] = quorumThreshold (uint256, slot 4)
-    let mut args = [0u8; 160];
-    // router address (slot 0, bytes 12..32)
-    args[12..32].copy_from_slice(router.as_slice());
-    // admin address (slot 1, bytes 44..64)
-    args[44..64].copy_from_slice(admin.as_slice());
-    // votingPeriod uint64 (slot 2, bytes 88..96 = right-aligned last 8 bytes)
-    let vp_be = voting_period_secs.to_be_bytes();
-    args[88..96].copy_from_slice(&vp_be);
-    // executionDelay uint64 (slot 3, bytes 120..128)
-    let ed_be = execution_delay_secs.to_be_bytes();
-    args[120..128].copy_from_slice(&ed_be);
-    // quorumThreshold uint256 (slot 4, bytes 128..160)
-    let qt_bytes = quorum_threshold.to_be_bytes::<32>();
-    args[128..160].copy_from_slice(&qt_bytes);
-    code.extend_from_slice(&args);
+    code.extend_from_slice(&encode_address_arg(router));
+    code.extend_from_slice(&encode_address_arg(admin));
     deployer
         .deploy(Bytes::from(code), 5_000_000)
         .expect("deploy RouterGovernance")
+}
+
+/// Deploy `InvestmentCommitteePolicy(admin, gateway)`.
+fn deploy_ic_policy(
+    deployer: &rmpc_fork_e2e::Account<'_>,
+    admin: Address,
+    gateway: Address,
+) -> Address {
+    let mut code =
+        load_initcode("InvestmentCommitteePolicy.sol", "InvestmentCommitteePolicy").to_vec();
+    code.extend_from_slice(&encode_address_arg(admin));
+    code.extend_from_slice(&encode_address_arg(gateway));
+    deployer
+        .deploy(Bytes::from(code), 5_000_000)
+        .expect("deploy InvestmentCommitteePolicy")
+}
+
+/// Deploy `ConsensusRecommendationReceipt(admin, gateway, icPolicy)`.
+fn deploy_receipt_register(
+    deployer: &rmpc_fork_e2e::Account<'_>,
+    admin: Address,
+    gateway: Address,
+    ic_policy: Address,
+) -> Address {
+    let mut code = load_initcode(
+        "ConsensusRecommendationReceipt.sol",
+        "ConsensusRecommendationReceipt",
+    )
+    .to_vec();
+    code.extend_from_slice(&encode_address_arg(admin));
+    code.extend_from_slice(&encode_address_arg(gateway));
+    code.extend_from_slice(&encode_address_arg(ic_policy));
+    deployer
+        .deploy(Bytes::from(code), 5_000_000)
+        .expect("deploy ConsensusRecommendationReceipt")
 }
 
 /// Register `vault_addr` in `registry` with a minimal metadata struct.
@@ -303,13 +328,6 @@ fn grant_router_admin(deployer: &rmpc_fork_e2e::Account<'_>, router: Address, go
         .expect("grantRole(WEIGHT_SETTER_ROLE, governance)");
 }
 
-/// Advance the EVM clock by `seconds` using `evm_increaseTime` + `evm_mine`.
-fn advance_time(fx: &ForkFixture, seconds: u64) {
-    fx.rpc()
-        .evm_increase_time(seconds)
-        .expect("evm_increase_time");
-}
-
 /// Read `router.getWeights()` and return (vaults, bps) — decoded from the
 /// ABI return blob.
 fn read_router_weights(
@@ -324,69 +342,49 @@ fn read_router_weights(
     (r.vaults, r.bps)
 }
 
-/// Read `governance.proposalState(id)` and return it as a u8.
-fn read_proposal_state(caller: &rmpc_fork_e2e::Account<'_>, governance: Address, id: U256) -> u8 {
-    let raw = caller
-        .call(
-            governance,
-            &IRouterGovernance::proposalStateCall { proposalId: id },
-        )
-        .expect("proposalState()");
-    if raw.is_empty() {
-        return 255; // sentinel for decode error
-    }
-    raw[31] // uint8 right-aligned in 32 bytes
+/// One deployed receipt-path stack.
+struct Stack {
+    router: Address,
+    governance: Address,
+    register: Address,
+    vault_a: Address,
+    vault_b: Address,
 }
 
-// ── Scenario 1: happy path ────────────────────────────────────────────────────
+/// The receipt every scenario records, and the digest the register stores for it.
+fn receipt_id() -> B256 {
+    keccak256(b"fork-e2e governance receipt")
+}
+fn payload_digest() -> B256 {
+    keccak256(b"fork-e2e governance payload")
+}
 
-/// governance_propose_vote_execute — propose a new weight vector, vote past
-/// quorum, advance time past voting deadline and execution delay, execute, and
-/// assert `WeightsApplied` event + router weights updated.
-#[test]
-fn governance_propose_vote_execute() {
-    skip_if_no_fork!();
-    let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[governance_propose_vote_execute] {}", fx.summary_line());
-
+/// Deploy and wire the stack the way stage 11 wires it, with the deployer standing in for the timelock
+/// (RouterGovernance `ADMIN_ROLE`) and for the gateway (the register's only writer). The router starts at
+/// 100% vault_a; the deployer records one receipt as an allowlisted committee agent.
+fn deploy_stack(tag: &str, deployer: &rmpc_fork_e2e::Account<'_>) -> Stack {
     let usdc = rmpc_fork_e2e::addresses::USDC;
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let me = deployer.address;
 
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
-        .expect("fund deployer");
-
-    // Deploy the full governance stack.
-    let registry = deploy_registry(&deployer, deployer.address);
-    let vault_a = deploy_mock_vault(&deployer, usdc);
-    let vault_b = deploy_mock_vault(&deployer, usdc);
-
-    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 3600 s
-    // (MIN_EXECUTION_DELAY), quorum = 1.
-    let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
-    let governance = deploy_router_governance(
-        &deployer,
-        router,
-        deployer.address,
-        3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
-        3600,             // executionDelay — MIN_EXECUTION_DELAY enforced by constructor
-        U256::from(2u64), // quorumThreshold — MIN_QUORUM_THRESHOLD is 2 (RouterGovernance.sol:69)
-    );
-
+    let registry = deploy_registry(deployer, me);
+    let vault_a = deploy_mock_vault(deployer, usdc);
+    let vault_b = deploy_mock_vault(deployer, usdc);
+    let router = deploy_portfolio_router(deployer, usdc, registry, me);
+    let governance = deploy_router_governance(deployer, router, me);
+    let ic_policy = deploy_ic_policy(deployer, me, me);
+    let register = deploy_receipt_register(deployer, me, me, ic_policy);
     eprintln!(
-        "[governance_propose_vote_execute] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} governance={governance:#x}"
+        "[{tag}] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} \
+         governance={governance:#x} ic_policy={ic_policy:#x} register={register:#x}"
     );
 
-    // Register vaults in the registry.
-    register_vault(&deployer, registry, vault_a, usdc, "Vault A");
-    register_vault(&deployer, registry, vault_b, usdc, "Vault B");
-
+    register_vault(deployer, registry, vault_a, usdc, "Vault A");
+    register_vault(deployer, registry, vault_b, usdc, "Vault B");
     // Issue #475: mark both vaults router-eligible via the single registry gate.
-    mark_router_eligible(&deployer, registry, vault_a);
-    mark_router_eligible(&deployer, registry, vault_b);
+    mark_router_eligible(deployer, registry, vault_a);
+    mark_router_eligible(deployer, registry, vault_b);
 
-    // Set an initial 100% weight on vault_a (router needs weights before governance
-    // can propose a change — the deployer holds ADMIN_ROLE on the router initially).
+    // Initial 100% vault_a, written by the deployer (the router constructor grants it WEIGHT_SETTER_ROLE).
     deployer
         .send(
             router,
@@ -399,427 +397,304 @@ fn governance_propose_vote_execute() {
         )
         .expect("setWeights initial");
 
-    // Grant ADMIN_ROLE on the router to the governance contract so it can call
-    // setWeights on execution.
-    grant_router_admin(&deployer, router, governance);
-
-    // Grant voting power to deployer.
+    // The weight setter holds ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router.
+    grant_router_admin(deployer, router, governance);
+    // Stage 11: point the weight setter at the register and grant it the register's ADMIN_ROLE (the
+    // releaseReceipt gate).
     deployer
         .send(
             governance,
-            &IRouterGovernance::setVotingPowerCall {
-                voter: deployer.address,
-                power: U256::from(100u64),
+            &IRouterGovernance::setReceiptContractCall { receipt: register },
+            U256::ZERO,
+            200_000,
+        )
+        .expect("setReceiptContract");
+    deployer
+        .send(
+            register,
+            &IConsensusRecommendationReceipt::grantRoleCall {
+                role: admin_role(),
+                account: governance,
             },
             U256::ZERO,
             200_000,
         )
-        .expect("setVotingPower");
+        .expect("register grantRole(ADMIN_ROLE, governance)");
 
-    // Propose a new 60/40 weight split.
+    // The committee records one receipt through the "gateway" (the deployer here).
+    deployer
+        .send(
+            ic_policy,
+            &IInvestmentCommitteePolicy::registerAgentCall {
+                agent: me,
+                agentId: "fork-e2e".to_string(),
+            },
+            U256::ZERO,
+            300_000,
+        )
+        .expect("registerAgent");
+    deployer
+        .send(
+            register,
+            &IConsensusRecommendationReceipt::recordReceiptCall {
+                submitter: me,
+                receiptId: receipt_id(),
+                payloadDigest: payload_digest(),
+                payloadUri: "https://receipts.invalid/fork-e2e.json".to_string(),
+            },
+            U256::ZERO,
+            500_000,
+        )
+        .expect("recordReceipt");
+    assert!(
+        read_bool(
+            deployer,
+            register,
+            &IConsensusRecommendationReceipt::isRecordedCall {
+                receiptId: receipt_id()
+            }
+        ),
+        "the receipt must be recorded before any scenario applies it"
+    );
+
+    Stack {
+        router,
+        governance,
+        register,
+        vault_a,
+        vault_b,
+    }
+}
+
+/// eth_call a view that returns one `bool`.
+fn read_bool<C: SolCall>(caller: &rmpc_fork_e2e::Account<'_>, to: Address, call: &C) -> bool {
+    let raw = caller.call(to, call).expect("bool view");
+    assert_eq!(raw.len(), 32, "a bool view returns one word, got {raw:?}");
+    raw[31] == 1
+}
+
+fn is_released(caller: &rmpc_fork_e2e::Account<'_>, s: &Stack) -> bool {
+    read_bool(
+        caller,
+        s.register,
+        &IConsensusRecommendationReceipt::isReleasedCall {
+            receiptId: receipt_id(),
+        },
+    )
+}
+
+/// The router still routes 100% to vault_a: nothing was applied.
+fn assert_weights_unchanged(caller: &rmpc_fork_e2e::Account<'_>, s: &Stack, tag: &str) {
+    let (w_vaults, w_bps) = read_router_weights(caller, s.router);
+    assert_eq!(
+        w_vaults,
+        vec![s.vault_a],
+        "[{tag}] router vaults must be unchanged"
+    );
+    assert_eq!(
+        w_bps,
+        vec![U256::from(10_000u64)],
+        "[{tag}] router bps must be unchanged"
+    );
+}
+
+/// The call must have reverted on chain.
+fn assert_reverted(
+    result: Result<rmpc_fork_e2e::Receipt, rmpc_fork_e2e::HarnessError>,
+    what: &str,
+) {
+    match result {
+        Err(rmpc_fork_e2e::HarnessError::Reverted(_)) => {}
+        Ok(r) => panic!("{what} must revert; it succeeded in {:?}", r.tx_hash),
+        Err(e) => panic!("{what}: expected Reverted, got {e:?}"),
+    }
+}
+
+// ── Scenario 1: one call releases and applies ─────────────────────────────────
+
+/// governance_apply_receipt_releases_and_sets_weights_in_one_call — one `applyReceipt` releases the
+/// recorded receipt and writes its 60/40 vector in the same transaction.
+#[test]
+fn governance_apply_receipt_releases_and_sets_weights_in_one_call() {
+    const TAG: &str = "governance_apply_receipt_releases_and_sets_weights_in_one_call";
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    eprintln!("[{TAG}] {}", fx.summary_line());
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let deployer = fx
+        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
+        .expect("fund deployer");
+    let s = deploy_stack(TAG, &deployer);
+    assert!(
+        !is_released(&deployer, &s),
+        "a recorded receipt starts unreleased"
+    );
+
     let receipt = deployer
         .send(
-            governance,
-            &IRouterGovernance::proposeCall {
-                vaults: vec![vault_a, vault_b],
+            s.governance,
+            &IRouterGovernance::applyReceiptCall {
+                receiptId: receipt_id(),
+                payloadDigest: payload_digest(),
+                vaults: vec![s.vault_a, s.vault_b],
                 bps: vec![U256::from(6000u64), U256::from(4000u64)],
             },
             U256::ZERO,
-            500_000,
+            800_000,
         )
-        .expect("propose");
-    assert_eq!(receipt.status, 1, "propose must succeed");
-
-    let proposal_id = U256::from(1u64);
-    let state_after_propose = read_proposal_state(&deployer, governance, proposal_id);
-    assert_eq!(
-        state_after_propose, 0,
-        "proposal must be Active after creation"
-    );
-    eprintln!("[governance_propose_vote_execute] proposal created, state=Active");
-
-    // Cast a FOR vote from the deployer.
-    let vote_receipt = deployer
-        .send(
-            governance,
-            &IRouterGovernance::voteCall {
-                proposalId: proposal_id,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("vote");
-    assert_eq!(vote_receipt.status, 1, "vote must succeed");
-    eprintln!("[governance_propose_vote_execute] vote cast");
-
-    // Advance time past voting period (3600 s) + execution delay (3600 s).
-    advance_time(&fx, 7201);
-
-    // State must now be Queued (quorum reached, delay elapsed).
-    let state_after_time = read_proposal_state(&deployer, governance, proposal_id);
-    // After deadline + delay: state is Queued (2) — still Queued until execute() is called.
-    assert_eq!(
-        state_after_time, 2,
-        "proposal must be Queued after voting + delay"
-    );
-    eprintln!("[governance_propose_vote_execute] state=Queued, executing...");
-
-    // Execute the proposal.
-    let exec_receipt = deployer
-        .send(
-            governance,
-            &IRouterGovernance::executeCall {
-                proposalId: proposal_id,
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("execute");
-    assert_eq!(exec_receipt.status, 1, "execute must succeed");
+        .expect("applyReceipt");
     eprintln!(
-        "[governance_propose_vote_execute] execute tx {:?} gasUsed={}",
-        exec_receipt.tx_hash, exec_receipt.gas_used
+        "[{TAG}] applyReceipt tx {:?} gasUsed={}",
+        receipt.tx_hash, receipt.gas_used
     );
 
-    // Assert WeightsApplied event is present.
-    let topic0 = weights_applied_topic0();
-    let weights_applied_log = exec_receipt
-        .logs
-        .iter()
-        .find(|l| l.topics.first() == Some(&topic0) && l.address == governance);
+    // Release and weights are one transaction: both events are in this receipt.
+    let released = receipt.logs.iter().any(|l| {
+        l.address == s.register
+            && l.topics.first() == Some(&receipt_released_topic0())
+            && l.topics.get(1) == Some(&receipt_id())
+    });
     assert!(
-        weights_applied_log.is_some(),
-        "WeightsApplied event not found in receipt logs; logs={:?}",
-        exec_receipt.logs
+        released,
+        "ReceiptReleased from the register missing; logs={:?}",
+        receipt.logs
     );
-    eprintln!("[governance_propose_vote_execute] WeightsApplied event confirmed");
-
-    // Assert router weights updated to 60/40.
-    let (w_vaults, w_bps) = read_router_weights(&deployer, router);
-    assert_eq!(
-        w_vaults.len(),
-        2,
-        "router must have 2 vaults after governance execution"
-    );
+    let applied = receipt.logs.iter().any(|l| {
+        l.address == s.governance
+            && l.topics.first() == Some(&receipt_applied_topic0())
+            && l.topics.get(1) == Some(&receipt_id())
+    });
     assert!(
-        w_vaults.contains(&vault_a),
-        "vault_a must be in router weights"
+        applied,
+        "ReceiptApplied from the weight setter missing; logs={:?}",
+        receipt.logs
     );
-    assert!(
-        w_vaults.contains(&vault_b),
-        "vault_b must be in router weights"
-    );
+    assert!(is_released(&deployer, &s), "the receipt must be released");
 
-    // Find bps for each vault.
-    let idx_a = w_vaults.iter().position(|v| *v == vault_a).unwrap();
-    let idx_b = w_vaults.iter().position(|v| *v == vault_b).unwrap();
+    let (w_vaults, w_bps) = read_router_weights(&deployer, s.router);
+    assert_eq!(w_vaults, vec![s.vault_a, s.vault_b], "router vaults");
     assert_eq!(
-        w_bps[idx_a],
-        U256::from(6000u64),
-        "vault_a must have 60% weight"
-    );
-    assert_eq!(
-        w_bps[idx_b],
-        U256::from(4000u64),
-        "vault_b must have 40% weight"
+        w_bps,
+        vec![U256::from(6000u64), U256::from(4000u64)],
+        "router bps must be the receipt's vector"
     );
 
-    // Assert proposal state is now Executed (3).
-    let state_after_exec = read_proposal_state(&deployer, governance, proposal_id);
-    assert_eq!(state_after_exec, 3, "proposal must be Executed");
-    eprintln!("[governance_propose_vote_execute] state=Executed, weights confirmed");
-
-    eprintln!("[governance_propose_vote_execute] passed");
-}
-
-// ── Scenario 2: quorum not reached ───────────────────────────────────────────
-
-/// governance_quorum_not_reached — proposal is created with a quorum
-/// threshold higher than available voting power; after the voting deadline
-/// the proposal is Defeated and router weights remain unchanged.
-#[test]
-fn governance_quorum_not_reached() {
-    skip_if_no_fork!();
-    let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[governance_quorum_not_reached] {}", fx.summary_line());
-
-    let usdc = rmpc_fork_e2e::addresses::USDC;
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
-
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
-        .expect("fund deployer");
-
-    let registry = deploy_registry(&deployer, deployer.address);
-    let vault_a = deploy_mock_vault(&deployer, usdc);
-    let vault_b = deploy_mock_vault(&deployer, usdc);
-
-    let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
-
-    // quorumThreshold = 1000, but we'll only grant 50 voting power to the
-    // deployer — quorum can never be reached.
-    let governance = deploy_router_governance(
-        &deployer,
-        router,
-        deployer.address,
-        3600,                // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
-        3600,                // executionDelay — MIN_EXECUTION_DELAY enforced by constructor
-        U256::from(1000u64), // quorumThreshold — unreachable
-    );
-
-    eprintln!(
-        "[governance_quorum_not_reached] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} governance={governance:#x}"
-    );
-
-    register_vault(&deployer, registry, vault_a, usdc, "Vault A");
-    register_vault(&deployer, registry, vault_b, usdc, "Vault B");
-
-    // Issue #475: mark MockVaults router-eligible via the single registry gate.
-    mark_router_eligible(&deployer, registry, vault_a);
-    mark_router_eligible(&deployer, registry, vault_b);
-
-    // Set initial weights (100% vault_a).
-    deployer
-        .send(
-            router,
-            &IPortfolioRouter::setWeightsCall {
-                vaults: vec![vault_a],
+    // One operation per receipt: applying it again reverts and changes nothing.
+    assert_reverted(
+        deployer.send(
+            s.governance,
+            &IRouterGovernance::applyReceiptCall {
+                receiptId: receipt_id(),
+                payloadDigest: payload_digest(),
+                vaults: vec![s.vault_a],
                 bps: vec![U256::from(10_000u64)],
             },
             U256::ZERO,
-            500_000,
-        )
-        .expect("setWeights initial");
-
-    // Grant governance ADMIN_ROLE so execute() would work if it were called.
-    grant_router_admin(&deployer, router, governance);
-
-    // Grant only 50 voting power — below quorum of 1000.
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::setVotingPowerCall {
-                voter: deployer.address,
-                power: U256::from(50u64),
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("setVotingPower");
-
-    // Propose a 60/40 split.
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::proposeCall {
-                vaults: vec![vault_a, vault_b],
-                bps: vec![U256::from(6000u64), U256::from(4000u64)],
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("propose");
-
-    let proposal_id = U256::from(1u64);
-
-    // Cast the only available vote (50 power — still below quorum of 1000).
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::voteCall {
-                proposalId: proposal_id,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("vote");
-
-    eprintln!("[governance_quorum_not_reached] vote cast (insufficient), advancing time...");
-
-    // Advance past the voting period (3600 s).
-    advance_time(&fx, 3601);
-
-    // State must be Defeated (1).
-    let state = read_proposal_state(&deployer, governance, proposal_id);
+            800_000,
+        ),
+        "a second applyReceipt of a released receipt",
+    );
+    let (_, w_bps) = read_router_weights(&deployer, s.router);
     assert_eq!(
-        state, 1,
-        "proposal must be Defeated when quorum not reached"
+        w_bps,
+        vec![U256::from(6000u64), U256::from(4000u64)],
+        "a refused second application changes nothing"
     );
-    eprintln!("[governance_quorum_not_reached] state=Defeated confirmed");
-
-    // Router weights must be unchanged (still 100% vault_a).
-    let (w_vaults, w_bps) = read_router_weights(&deployer, router);
-    assert_eq!(w_vaults.len(), 1, "router must still have 1 vault");
-    assert_eq!(w_vaults[0], vault_a, "router vault must still be vault_a");
-    assert_eq!(
-        w_bps[0],
-        U256::from(10_000u64),
-        "router bps must still be 100%"
-    );
-    eprintln!("[governance_quorum_not_reached] router weights unchanged, confirmed");
-
-    // Attempting to execute must revert with QuorumNotReached.
-    let exec_result = deployer.send(
-        governance,
-        &IRouterGovernance::executeCall {
-            proposalId: proposal_id,
-        },
-        U256::ZERO,
-        300_000,
-    );
-    assert!(
-        exec_result.is_err(),
-        "execute on Defeated proposal must revert; got Ok"
-    );
-    match exec_result.unwrap_err() {
-        rmpc_fork_e2e::HarnessError::Reverted(_) => {
-            eprintln!("[governance_quorum_not_reached] execute() revert confirmed");
-        }
-        e => panic!("expected Reverted error, got: {e:?}"),
-    }
-
-    eprintln!("[governance_quorum_not_reached] passed");
+    eprintln!("[{TAG}] passed");
 }
 
-// ── Scenario 3: execute before delay reverts ──────────────────────────────────
+// ── Scenario 2: digest mismatch ───────────────────────────────────────────────
 
-/// governance_execute_before_delay_reverts — quorum is reached during the
-/// voting period, but `execute()` is called before the execution delay
-/// elapses; the call must revert.
+/// governance_apply_receipt_refuses_a_digest_mismatch — the call names a digest the register did not
+/// store; it reverts, the receipt stays unreleased and the weights are unchanged.
 #[test]
-fn governance_execute_before_delay_reverts() {
+fn governance_apply_receipt_refuses_a_digest_mismatch() {
+    const TAG: &str = "governance_apply_receipt_refuses_a_digest_mismatch";
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
-    eprintln!(
-        "[governance_execute_before_delay_reverts] {}",
-        fx.summary_line()
-    );
-
-    let usdc = rmpc_fork_e2e::addresses::USDC;
+    eprintln!("[{TAG}] {}", fx.summary_line());
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
-
     let deployer = fx
         .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
         .expect("fund deployer");
+    let s = deploy_stack(TAG, &deployer);
 
-    let registry = deploy_registry(&deployer, deployer.address);
-    let vault_a = deploy_mock_vault(&deployer, usdc);
-    let vault_b = deploy_mock_vault(&deployer, usdc);
-
-    let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
-
-    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 7200 s (2 hours — large
-    // enough to test that we can't skip it even after the voting period ends).
-    let governance = deploy_router_governance(
-        &deployer,
-        router,
-        deployer.address,
-        3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
-        7200,             // executionDelay — large so we can trigger before it elapses
-        U256::from(2u64), // quorumThreshold — MIN_QUORUM_THRESHOLD is 2 (RouterGovernance.sol:69)
-    );
-
-    eprintln!(
-        "[governance_execute_before_delay_reverts] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} governance={governance:#x}"
-    );
-
-    register_vault(&deployer, registry, vault_a, usdc, "Vault A");
-    register_vault(&deployer, registry, vault_b, usdc, "Vault B");
-
-    // Issue #475: mark MockVaults router-eligible via the single registry gate.
-    mark_router_eligible(&deployer, registry, vault_a);
-    mark_router_eligible(&deployer, registry, vault_b);
-
-    deployer
-        .send(
-            router,
-            &IPortfolioRouter::setWeightsCall {
-                vaults: vec![vault_a],
-                bps: vec![U256::from(10_000u64)],
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("setWeights initial");
-
-    grant_router_admin(&deployer, router, governance);
-
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::setVotingPowerCall {
-                voter: deployer.address,
-                power: U256::from(100u64),
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("setVotingPower");
-
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::proposeCall {
-                vaults: vec![vault_a, vault_b],
+    assert_reverted(
+        deployer.send(
+            s.governance,
+            &IRouterGovernance::applyReceiptCall {
+                receiptId: receipt_id(),
+                payloadDigest: keccak256(b"an edited payload"),
+                vaults: vec![s.vault_a, s.vault_b],
                 bps: vec![U256::from(6000u64), U256::from(4000u64)],
             },
             U256::ZERO,
-            500_000,
-        )
-        .expect("propose");
-
-    let proposal_id = U256::from(1u64);
-
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::voteCall {
-                proposalId: proposal_id,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("vote");
-
-    eprintln!(
-        "[governance_execute_before_delay_reverts] quorum vote cast, advancing time past voting period only..."
-    );
-
-    // Advance past voting period (3601 s) but NOT past the execution delay (7200 s).
-    advance_time(&fx, 3601);
-
-    // State must be Queued (quorum reached, voting period over, delay not elapsed).
-    let state = read_proposal_state(&deployer, governance, proposal_id);
-    assert_eq!(state, 2, "proposal must be Queued after voting period");
-    eprintln!(
-        "[governance_execute_before_delay_reverts] state=Queued, attempting early execute..."
-    );
-
-    // Attempting to execute before delay must revert.
-    let exec_result = deployer.send(
-        governance,
-        &IRouterGovernance::executeCall {
-            proposalId: proposal_id,
-        },
-        U256::ZERO,
-        300_000,
+            800_000,
+        ),
+        "applyReceipt with a digest the register did not store",
     );
     assert!(
-        exec_result.is_err(),
-        "execute() before delay must revert; got Ok"
+        !is_released(&deployer, &s),
+        "a refused application releases nothing"
     );
-    match exec_result.unwrap_err() {
-        rmpc_fork_e2e::HarnessError::Reverted(_) => {
-            eprintln!("[governance_execute_before_delay_reverts] revert before delay confirmed");
-        }
-        e => panic!("expected Reverted error, got: {e:?}"),
-    }
+    assert_weights_unchanged(&deployer, &s, TAG);
+    eprintln!("[{TAG}] passed");
+}
 
-    // Router weights must be unchanged.
-    let (w_vaults, _w_bps) = read_router_weights(&deployer, router);
-    assert_eq!(w_vaults.len(), 1, "router weights must be unchanged");
-    assert_eq!(w_vaults[0], vault_a, "router must still point to vault_a");
-    eprintln!("[governance_execute_before_delay_reverts] router weights unchanged, confirmed");
+// ── Scenario 3: a refused vector releases nothing ─────────────────────────────
 
-    eprintln!("[governance_execute_before_delay_reverts] passed");
+/// governance_apply_receipt_refused_vector_releases_nothing — the router refuses a duplicate vault, so
+/// the whole call reverts: the receipt stays unreleased, and the same receipt then applies.
+#[test]
+fn governance_apply_receipt_refused_vector_releases_nothing() {
+    const TAG: &str = "governance_apply_receipt_refused_vector_releases_nothing";
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    eprintln!("[{TAG}] {}", fx.summary_line());
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let deployer = fx
+        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
+        .expect("fund deployer");
+    let s = deploy_stack(TAG, &deployer);
+
+    // A duplicate vault (PortfolioRouter DuplicateVault, QA plan v1 C1): the release inside the same
+    // call must roll back with it.
+    assert_reverted(
+        deployer.send(
+            s.governance,
+            &IRouterGovernance::applyReceiptCall {
+                receiptId: receipt_id(),
+                payloadDigest: payload_digest(),
+                vaults: vec![s.vault_a, s.vault_a],
+                bps: vec![U256::from(5000u64), U256::from(5000u64)],
+            },
+            U256::ZERO,
+            800_000,
+        ),
+        "applyReceipt with a duplicate vault",
+    );
+    assert!(
+        !is_released(&deployer, &s),
+        "a vector the router refuses must release nothing"
+    );
+    assert_weights_unchanged(&deployer, &s, TAG);
+
+    // Nothing was consumed: the same receipt applies with a valid vector.
+    deployer
+        .send(
+            s.governance,
+            &IRouterGovernance::applyReceiptCall {
+                receiptId: receipt_id(),
+                payloadDigest: payload_digest(),
+                vaults: vec![s.vault_b],
+                bps: vec![U256::from(10_000u64)],
+            },
+            U256::ZERO,
+            800_000,
+        )
+        .expect("applyReceipt with a valid vector after the refusal");
+    assert!(is_released(&deployer, &s), "the receipt is released now");
+    let (w_vaults, _) = read_router_weights(&deployer, s.router);
+    assert_eq!(w_vaults, vec![s.vault_b], "the valid vector was applied");
+    eprintln!("[{TAG}] passed");
 }

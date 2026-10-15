@@ -13,7 +13,7 @@ import { resolveCounts } from "../src/counts.ts";
 import { GOVERN_ROWS, govRowRefusal, resumeCommand, runGovern, stageRows } from "../src/govern.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, buildRedeployCalls, oldVaultBuild, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems, redeployRecordKey, redeployRefusal,
-  redeployShaPath, redeployShaRun, redeploysOf, vectorsFromFinal, type RedeployAfter, type RedeployBefore, type RedeployRecord,
+  redeployShaPath, redeployShaRun, redeploysOf, vectorsFromFinal, verifyBuildRefusal, type RedeployAfter, type RedeployBefore, type RedeployRecord,
 } from "../src/redeploy-vault.ts";
 import { loadRunManifest, measuredCounts, newManifest, saveRunManifest, type RunManifest } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
@@ -196,6 +196,9 @@ describe("the command line", () => {
   test("--prior-out goes with verify only", () => {
     expect(parseCli(["verify", "--prior-out", "/o", ...base]).priorOut).toBe("/o");
     expect(() => parseCli(["govern", "--prior-out", "/o", ...base])).toThrow("--prior-out goes with the verify");
+    // QA plan v1 E1: a stage set that reaches the verify stage carries it (and cli.ts checks its sha); one that never reaches verify does not
+    for (const s of [[], ["--stage", "all"], ["--stage", "verify"], ["--stage", "timelock,verify"]]) expect(parseCli([...base, ...s, "--prior-out", "/o"]).priorOut).toBe("/o");
+    for (const s of [["--stage", "deploy"], ["--stage", "govern"], ["--stage", "plan"], ["--stage", "vault,timelock"]]) expect(() => parseCli([...base, ...s, "--prior-out", "/o"])).toThrow("--prior-out goes with the verify");
   });
   test("the usage text documents the verb, the row and both arguments", () => {
     for (const w of ["redeploy-vault", "--vault KEY", "--prior-out DIR", "--row redeploy-vault", "new.setRegistry(registry)", "router.setVaultCap(new, vaultCap(old))", "registry.retire(old)"]) expect(USAGE).toContain(w);
@@ -790,12 +793,15 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
   });
   const run = (...rounds: RedeployRecord[]) => ({ coreSha: ORIGINAL, vault_redeploys: rounds });
 
-  test("only govern --row redeploy-vault and verify are covered", () => {
+  test("govern --row redeploy-vault, the verify and every stage set that reaches the verify stage are covered", () => {
     expect(redeployShaPath({ verb: "govern", row: REDEPLOY_ROW })).toBe("govern-row");
     expect(redeployShaPath({ stage: "govern", row: REDEPLOY_ROW })).toBe("govern-row");
     expect(redeployShaPath({ verb: "verify" })).toBe("verify");
     expect(redeployShaPath({ stage: "verify" })).toBe("verify");
-    for (const a of [{ verb: "govern" }, { verb: "govern", row: "unpause-PROTO" }, { verb: "publish" }, { verb: "redeploy-vault" }, { stage: "verify,govern" }, { stage: "all" }, {}]) expect(redeployShaPath(a)).toBeUndefined();
+    // QA plan v1 E1: the default set (a --resume run skips the finished deployer stages, never verify), all, and a list naming verify reach the verify stage too
+    for (const a of [{}, { stage: "all" }, { stage: "verify,govern" }, { stage: "timelock, verify" }]) expect(redeployShaPath(a)).toBe("stage-set");
+    // never the verify stage: the other verbs, the deployer stages alone, govern alone; a dry run skips verify
+    for (const a of [{ verb: "govern" }, { verb: "govern", row: "unpause-PROTO" }, { verb: "publish" }, { verb: "redeploy-vault" }, { verb: "pause-all" }, { stage: "deploy" }, { stage: "govern" }, { stage: "vault,timelock" }, { dryRun: true }, { stage: "all", dryRun: true }]) expect(redeployShaPath(a)).toBeUndefined();
   });
 
   test("the govern row may name the round's sha (or the original one); any other sha is left to runStages, which refuses it", () => {
@@ -830,6 +836,62 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
     usage(run(), { coreSha: ORIGINAL, path: "verify", priorOut: "/o", priorOutSha: THIRD }, "not at the original deployment sha");
     usage(run(round(), round({ ordinal: 2, core_sha: THIRD })), { coreSha: THIRD, path: "verify", priorOut: "/o", priorOutSha: ORIGINAL }, "two builds only");
     usage(run(round(), round({ ordinal: 2, core_sha: ORIGINAL })), { coreSha: FIX, path: "verify", priorOut: "/o", priorOutSha: ORIGINAL }, "two builds only");
+  });
+
+  test("a stage set that reaches the verify stage after a round at FIX is refused with USAGE at the original sha and at FIX, and its --prior-out is checked; never a pair", () => {
+    const usage = (m: ReturnType<typeof run> | undefined, i: Parameters<typeof redeployShaRun>[1], text: string) => expect(failure(() => redeployShaRun(m, i))).toMatchObject({ kind: "USAGE", message: expect.stringContaining(text) });
+    // the original sha: its verify stage would compare the replacing vault with the original build, fail and pause all four vaults
+    usage(run(round()), { coreSha: ORIGINAL, path: "stage-set" }, `verify --core-sha ${FIX} --prior-out`);
+    usage(run(round()), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL }, "pauses all four vaults");
+    // the redeploy sha: only the verify alone may name it
+    usage(run(round()), { coreSha: FIX, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL }, "only the verify alone");
+    // a --prior-out of the wrong build or outside a checkout, with or without a round, and before any run manifest exists
+    usage(run(round()), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: FIX }, `not at the original deployment sha ${ORIGINAL}`);
+    usage(run(), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o" }, "not inside a git checkout");
+    usage(undefined, { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: THIRD }, "not at the original deployment sha");
+    usage(run(round(), round({ ordinal: 2, core_sha: THIRD })), { coreSha: ORIGINAL, path: "stage-set" }, "two builds only");
+    // nothing to refuse: no round, rounds at the original sha only, a third sha (runStages refuses it, RESUME), no manifest
+    expect(redeployShaRun(run(), { coreSha: ORIGINAL, path: "stage-set" })).toBeUndefined();
+    expect(redeployShaRun(run(round({ core_sha: ORIGINAL })), { coreSha: ORIGINAL, path: "stage-set", priorOut: "/o", priorOutSha: ORIGINAL })).toBeUndefined();
+    expect(redeployShaRun(run(round()), { coreSha: THIRD, path: "stage-set" })).toBeUndefined();
+    expect(redeployShaRun(undefined, { coreSha: ORIGINAL, path: "stage-set" })).toBeUndefined();
+  });
+
+  test("the verify stage refuses a wrong build itself, marked so that nothing is paused: the original sha, no --prior-out, a --prior-out of another sha", () => {
+    const m = run(round());
+    const refusal = (ctx: Parameters<typeof verifyBuildRefusal>[1]) => verifyBuildRefusal(m, ctx);
+    for (const [ctx, text] of [
+      [{ coreSha: ORIGINAL, priorArtifactsDir: "/o", priorArtifactsSha: ORIGINAL }, `this run is at ${ORIGINAL}`],
+      [{ coreSha: FIX }, "no --prior-out"],
+      [{ coreSha: FIX, priorArtifactsDir: "/o", priorArtifactsSha: FIX }, `a build at ${FIX}, not at the original sha`],
+      [{ coreSha: FIX, priorArtifactsDir: "/o" }, "a build at no git checkout"],
+    ] as const) expect(refusal(ctx)).toMatchObject({ kind: "USAGE", message: expect.stringContaining(text), details: { refused_before_verify: true, original_sha: ORIGINAL, redeploy_shas: [FIX] } });
+    expect(verifyBuildRefusal(run(round(), round({ ordinal: 2, core_sha: THIRD })), { coreSha: THIRD, priorArtifactsDir: "/o", priorArtifactsSha: ORIGINAL })?.message).toContain("two builds only");
+    // the run the model accepts, and rounds at the original sha (one build serves all), pass
+    expect(refusal({ coreSha: FIX, priorArtifactsDir: "/o", priorArtifactsSha: ORIGINAL })).toBeUndefined();
+    expect(verifyBuildRefusal(run(round({ core_sha: ORIGINAL })), { coreSha: ORIGINAL })).toBeUndefined();
+    expect(verifyBuildRefusal(run(), { coreSha: ORIGINAL })).toBeUndefined();
+  });
+
+  test("evidence: a round at another sha than the evidence core_sha needs the verify's verified_at_sha (that sha) and prior_out_sha (the deployment's)", () => {
+    const at = (...rs: object[]) => checkVaultRedeploys(ev({ core_sha: ORIGINAL, vault_redeploys: rs.map((r, i) => ({ ...entry(), ordinal: i + 1, operation_id: h(77 + i), schedule_tx: h(10 + 2 * i), execute_tx: h(11 + 2 * i), ...r })) }), 900).join("\n");
+    expect(at({ core_sha: FIX, verified_at_sha: FIX, prior_out_sha: ORIGINAL })).toBe("");
+    // evidence that never ran the verify at FIX with --prior-out
+    expect(at({ core_sha: FIX })).toContain("prior_out_sha is missing");
+    expect(at({ core_sha: FIX })).toContain("verified_at_sha is missing");
+    expect(at({ core_sha: FIX, prior_out_sha: ORIGINAL })).toContain("verified_at_sha is missing");
+    expect(at({ core_sha: FIX, verified_at_sha: ORIGINAL, prior_out_sha: ORIGINAL })).toContain(`verified_at_sha ${ORIGINAL} is not ${FIX}`);
+    expect(at({ core_sha: FIX, verified_at_sha: FIX, prior_out_sha: FIX })).toContain(`prior_out_sha ${FIX} is not the evidence core_sha ${ORIGINAL}`);
+    // a later round at FIX after one at the original sha: the verify at FIX wrote both fields on both rounds
+    expect(at({ core_sha: ORIGINAL, verified_at_sha: FIX, prior_out_sha: ORIGINAL }, { core_sha: FIX, verified_at_sha: FIX, prior_out_sha: ORIGINAL })).toBe("");
+    expect(at({ core_sha: ORIGINAL }, { core_sha: FIX, verified_at_sha: FIX, prior_out_sha: ORIGINAL })).toContain("round 1: prior_out_sha is missing");
+    // rounds at two other shas: no verify can check them
+    expect(at({ core_sha: FIX, verified_at_sha: FIX, prior_out_sha: ORIGINAL }, { core_sha: THIRD, verified_at_sha: THIRD, prior_out_sha: ORIGINAL })).toContain("two builds only");
+    // rounds at the deployment's sha need neither field; a field present must be right, and the two come together
+    expect(at({ core_sha: ORIGINAL })).toBe("");
+    expect(at({ core_sha: ORIGINAL, verified_at_sha: ORIGINAL, prior_out_sha: ORIGINAL })).toBe("");
+    expect(at({ core_sha: ORIGINAL, verified_at_sha: FIX, prior_out_sha: ORIGINAL })).toContain(`verified_at_sha ${FIX} is not ${ORIGINAL}`);
+    expect(at({ core_sha: ORIGINAL, verified_at_sha: ORIGINAL })).toContain("written together");
   });
 
   test("the retired vault of a later round runs the build of the round before it", () => {
@@ -905,6 +967,8 @@ function shaWorld(o: { chainId?: 918453 | 8453; frozen?: boolean } = {}) {
     w, tl, priorOut, pauses: () => pauses, seen: () => seen, manifest: () => loadRunManifest(w.evidence)!,
     runGov: (g: object = {}) => w.run(["govern", "--row", REDEPLOY_ROW, "--core-sha", FIX], { govern: govern(g), pauseAll }),
     runVerify: (args: string[] = ["--core-sha", FIX, "--prior-out", priorOut], over: object = {}) => w.run(["verify", ...args], { verify, pauseAll, ...over }),
+    /** Any run (no verb): the default stage set, --stage all, a stage list. */
+    runStageSet: (args: string[], over: object = {}) => w.run(args, { verify, pauseAll, govern: govern(), ...over }),
   };
 }
 
@@ -980,6 +1044,38 @@ describe("the sha model (QA plan v1 E1): the govern row and the verify through m
     expect(t.seen()).toBeUndefined();
     expect(t.pauses()).toBe(0);
     expect(t.manifest().stages.verify).toBeUndefined();
+  });
+
+  test("QA plan v1 E1: every run that reaches the verify stage after the round is refused before any signer unless it is the verify alone at the redeploy sha: --resume of the default set, --stage all, --stage verify,govern; nothing paused", async () => {
+    const t = shaWorld();
+    expect(await t.runGov()).toBe(0);
+    let built = 0;
+    const noSigner = { makeSigner: () => { built++; throw new Error("no signer may be built"); } };
+    const refused = async (args: string[], text: string) => {
+      expect(await t.runStageSet(args, noSigner)).toBe(EXIT_CODES.USAGE);
+      expect(String(t.w.logs().filter((l) => l.event === "run.failed").pop()?.message)).toContain(text);
+    };
+    const sets = [["--resume"], ["--stage", "all", "--resume"], ["--stage", "verify,govern", "--resume"]];
+    // the original sha: the DT-2 failure (the verify stage compares the replacing vault with the original build, fails and pauses all four vaults)
+    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${ORIGINAL}\n`);
+    for (const s of sets) await refused(["--core-sha", ORIGINAL, ...s], `verify --core-sha ${FIX} --prior-out`);
+    await refused(["--core-sha", ORIGINAL, "--resume", "--prior-out", t.priorOut], "pauses all four vaults");
+    // a --prior-out of the wrong build is checked on a stage set too
+    const wrong = join(tmp("pc-e1-set-wrong-"), "core");
+    mkdirSync(join(wrong, ".git"), { recursive: true });
+    writeFileSync(join(wrong, ".git", "HEAD"), `${FIX}\n`);
+    await refused(["--core-sha", ORIGINAL, "--resume", "--prior-out", join(wrong, "out")], `not at the original deployment sha ${ORIGINAL}`);
+    // the redeploy sha: only the verify alone may name it
+    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${FIX}\n`);
+    for (const s of sets) await refused(["--core-sha", FIX, ...s, "--prior-out", t.priorOut], "only the verify alone");
+    expect(built).toBe(0);
+    expect(t.seen()).toBeUndefined();
+    expect(t.pauses()).toBe(0);
+    expect(t.w.logs().some((l) => l.event === "pause_all.auto")).toBe(false);
+    expect(t.manifest().stages.verify).toBeUndefined();
+    // the verify alone at the redeploy sha still passes
+    expect(await t.runVerify()).toBe(0);
+    expect(t.pauses()).toBe(0);
   });
 
   test("a run at the redeploy sha that is not the row or the verify is held to the run manifest's sha (RESUME), and the govern row at the original sha names the same operation", async () => {

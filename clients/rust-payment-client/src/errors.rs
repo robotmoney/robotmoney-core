@@ -46,11 +46,6 @@ pub enum RmpcError {
     #[error("ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true")]
     ErrSoftwareSignerDisallowed,
 
-    #[error(
-        "ErrProductionSignerRequired: Base mainnet write commands require an HSM/KMS/device-bound signer; software keystores are non-production only"
-    )]
-    ErrProductionSignerRequired,
-
     /// The same `(order_id, idempotency_key, deadline)` tuple was
     /// already submitted from this client; the local replay cache
     /// returns the prior `tx_hash` instead of re-broadcasting. Audit
@@ -244,7 +239,6 @@ impl RmpcError {
             RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
             RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
             RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
-            RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
             RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
             RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
             RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
@@ -296,7 +290,6 @@ mod tests {
             RmpcError::ErrAllowanceInsufficient,
             RmpcError::ErrBalanceInsufficient,
             RmpcError::ErrSoftwareSignerDisallowed,
-            RmpcError::ErrProductionSignerRequired,
             RmpcError::ErrOrderIdAlreadySubmitted {
                 tx_hash: "0x00".into(),
             },

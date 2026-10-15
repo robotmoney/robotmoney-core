@@ -57,9 +57,8 @@
 
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
-    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents,
-    IRouterGovernanceEvents, ITimelockEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents,
-    Topics,
+    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents, ITimelockEvents,
+    IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -91,14 +90,16 @@ pub struct IndexerConfig {
     /// indexer calls `listVaults()` on each tick and ingests
     /// `VaultRegistered` / `VaultStatusChanged` events from the registry.
     pub registry: Option<Address>,
-    /// Optional PortfolioRouter / RouterGovernance contract address.
-    /// When set, the indexer ingests `ProposalCreated`, `VoteCast`,
-    /// `ProposalExecuted`, and `WeightsApplied` events.
+    /// Optional RouterGovernance (weight setter) contract address. When set,
+    /// it is registered in `contracts` and bounds deploy-block detection. It
+    /// is not watched: RouterGovernance has no voting since issue 1698 and
+    /// emits no event the indexer stores. The weights an applied receipt
+    /// writes arrive as the router's `WeightsSet`.
     pub router_governance: Option<Address>,
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
-    /// and `DefaultWeightsSet` events emitted by direct admin calls to
-    /// `setWeights()` / `setDefaultWeights()` (the demo-seed path), and
+    /// and `DefaultWeightsSet` events emitted by `setWeights()` (which
+    /// `RouterGovernance.applyReceipt` calls) / `setDefaultWeights()`, and
     /// watches `RouterDeposit` events to take a fresh TVL snapshot of every
     /// registered vault in any block where a router deposit is processed —
     /// ensuring deposits via the router are reflected in the TVL index without
@@ -153,11 +154,9 @@ impl IndexerConfig {
                 addrs.push(reg);
             }
         }
-        if let Some(gov) = self.router_governance {
-            addrs.push(gov);
-        }
+        // `router_governance` is deliberately absent: it emits no indexed event
+        // (issue 1698 deleted its voting events).
         if let Some(pr) = self.portfolio_router {
-            // Only add if not already present (e.g. when portfolio_router == router_governance).
             if !addrs.contains(&pr) {
                 addrs.push(pr);
             }
@@ -2289,113 +2288,10 @@ pub async fn handle_log(
         return Ok(r);
     }
 
-    // ProposalCreated — insert a new governance proposal row.
-    // New signature: (uint256 indexed proposalId, address indexed proposer,
-    //                  address[] vaults, uint256[] bps, uint64 votingDeadline).
-    // Fields description/createdAt/deadlineBlock removed; use empty-string/
-    // block_number/votingDeadline-as-deadline as DB defaults.
-    if topic0 == topics.proposal_created {
-        let decoded =
-            IRouterGovernanceEvents::ProposalCreated::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("ProposalCreated: {e}")))?;
-        let r = db
-            .insert_proposal(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                decoded.proposer.into_array(),
-                "", // description removed from ProposalCreated (RouterGovernance.sol:106)
-                log.block_number as i64, // createdAt removed; use block_number
-                decoded.votingDeadline as i64,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // VoteCast — insert a per-voter vote row and update running tally.
-    // New signature: (uint256 indexed proposalId, address indexed voter,
-    //                  uint256 power, uint256 totalFor).
-    // `support` bool removed (all votes are FOR); `weight` renamed to `power`.
-    if topic0 == topics.vote_cast {
-        let decoded = IRouterGovernanceEvents::VoteCast::decode_log(&into_alloy_log(log), true)
-            .map_err(|e| IndexerError::Decode(format!("VoteCast: {e}")))?;
-        let mut r = db
-            .insert_vote(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                decoded.voter.into_array(),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                true, // support bool removed; governance only records FOR votes
-                decoded.power,
-            )
-            .await?;
-        // Store governance_vote in account history for the voter.
-        r += db
-            .insert_history_event(
-                cfg.chain_id,
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                decoded.voter.into_array(),
-                "governance_vote",
-                None,
-                None,
-                None,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // ProposalExecuted — mark proposal status = 2 (executed).
-    // New signature: (uint256 indexed proposalId, address indexed executor).
-    if topic0 == topics.proposal_executed {
-        let decoded =
-            IRouterGovernanceEvents::ProposalExecuted::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("ProposalExecuted: {e}")))?;
-        let r = db
-            .execute_proposal(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                log.block_number as i64,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // WeightsApplied — record a router weight snapshot.
-    // New signature: (uint256 indexed proposalId, address[] vaults, uint256[] bps).
-    if topic0 == topics.weights_applied {
-        let decoded =
-            IRouterGovernanceEvents::WeightsApplied::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("WeightsApplied: {e}")))?;
-        let vault_addresses: Vec<[u8; 20]> =
-            decoded.vaults.iter().map(|a| a.into_array()).collect();
-        let bps_values: Vec<i64> = decoded
-            .bps
-            .iter()
-            .map(|b| b.try_into().unwrap_or(i64::MAX))
-            .collect();
-        let r = db
-            .insert_router_weight_snapshot(
-                cfg.chain_id,
-                log.address.into_array(),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                vault_addresses,
-                bps_values,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // WeightsSet — direct admin call to PortfolioRouter.setWeights().
+    // WeightsSet — PortfolioRouter.setWeights() by the weight setter.
     // Signature: WeightsSet(address[] vaults, uint256[] bps).
-    // This is the path taken by the demo seed script (not governance execution).
+    // RouterGovernance.applyReceipt calls setWeights(), so this is the event an
+    // applied consensus receipt produces (issue 1698).
     if topic0 == topics.weights_set {
         let decoded = IPortfolioRouterEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;

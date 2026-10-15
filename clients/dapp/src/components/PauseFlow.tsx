@@ -24,9 +24,15 @@
  * DEPOSIT_PAUSER_ROLE; the structured preview still renders so the operator
  * sees what *would* be signed. Pause stays a direct wallet transaction.
  */
-import { useAccount, useReadContract, useSimulateContract, useChainId } from "wagmi";
+import {
+  useAccount,
+  useReadContract,
+  useSimulateContract,
+  useChainId,
+  useWaitForTransactionReceipt,
+} from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
-import type { Address } from "viem";
+import type { Address, Hash } from "viem";
 import { DEPOSIT_PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { SafeProposalPanel } from "./SafeProposalPanel";
@@ -64,7 +70,14 @@ export function PauseFlow(props: PauseFlowProps) {
   const hasPauserRole = Boolean(hasPauserData);
 
   const pauseWrite = useGuardedWriteContract();
-  const { writeContract, isPending } = pauseWrite;
+  const { writeContract } = pauseWrite;
+  // The pause's receipt: a pause the wallet accepted but the chain reverted
+  // says so (QA plan U5).
+  const pauseReceipt = useWaitForTransactionReceipt({
+    hash: pauseWrite.data as Hash | undefined,
+    query: { enabled: Boolean(pauseWrite.data) },
+  });
+  const isPending = pauseWrite.isPending || pauseReceipt.isFetching === true;
 
   const ctx: PreviewContext = {
     gateway: props.gatewayAddress,
@@ -122,7 +135,8 @@ export function PauseFlow(props: PauseFlowProps) {
         <WriteStatus
           testId="pause"
           label="Deposit pause"
-          write={{ error: pauseWrite.error, isPending }}
+          write={pauseWrite}
+          receipt={pauseReceipt}
         />
       </section>
 

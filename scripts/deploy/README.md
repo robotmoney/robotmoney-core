@@ -15,7 +15,15 @@
   - `manifest`: template `deployments/<chain>/<file>.json`. Replace `<chain>` with the chain id. The driver sets `DEPLOYMENT_OUT` to this file.
   - `libraries`: names from the top-level `libraries` to link with `forge script --libraries`. Empty when none.
   - `vault`: `USDC|PROTO|AGENT|RWA` for a vault stage, else `null`.
-- `vaults[]`: `{ key, stage, artifact, manifest }`. `artifact` is the forge contract name for code-hash checks (`RwaBasketVault` for rmRWA).
+- `vaults[]`: `{ key, stage, artifact, manifest }` and the vault's rules (issue 1705). `artifact` is the forge contract name for code-hash checks (`RwaBasketVault` for rmRWA). Every rule field is present on every vault, with no default:
+  - `deployPaused`: the vault stage leaves deposits paused (`true` on all four, core 1710).
+  - `unpauseRow`: the govern row that opens the vault, always `unpause-<key>`.
+  - `unpauseInStage13`: stage 13 runs that row. On 8453 the sheet's `GOVERN_UNPAUSE_VAULTS` must list every such vault.
+  - `seed`: `none`, or `sheet:<ENV>`, the env name the vault stage reads the seed amount from (rmUSDC: `sheet:SEED_DEPOSIT_USDC`).
+  - `eligibilitySource`: `router-stage` (the router stage makes the vault eligible) or `sheet:ELIGIBLE_VAULTS` (the vault's own stage, through `registry.migrateEligibility`).
+  - `emergencyLevers`: every `EMERGENCY_ROLE` function of the vault contract, the levers that act without the timelock.
+  - `registryNameSource`: `sheet:<ENV>` (a stage registers the vault under that env value) or `script:<CONSTANT>` (the vault script's own constant).
+- `vaultRuleDecisions`: for each rule field on which the vaults differ, the decision behind the difference (an issue number or an owner decision). The parser refuses a difference with no decision. The publish-contracts CLI derives its govern rows, evidence steps and verifier expectations from these rules (`publish-contracts/src/vault-rules.ts`), and refuses a `--core-dir` checkout whose table carries other rules. `stage-table.test.ts` ("vault rules") checks each rule against the scripts and contracts, and `contracts/test/FourVaultInitialState.t.sol` runs the four vault stages in process and compares `depositsPaused()` with `deployPaused`.
 - `libraries[]`: `{ name, artifact, manifestKey, path }`. `manifestKey` is the key the libs manifest holds the address under. `path` is the source file for `--libraries path:artifact:address`.
 - `artifacts`: forge contract names for `gateway`, `router`, `registry`, `governance`, `timelock`, `icPolicy`, `receipt`.
 

@@ -237,3 +237,11 @@ The workflow runs:
 
 The nightly run requires the `BASE_RPC_URL` secret to be set in the repository.
 If the secret is absent, the live-check steps are skipped and only the mock tests run.
+
+The same workflow holds the job `recorder-keeper-fork` (core 1779, QA plan v1 E10). It runs
+only on schedule and on `workflow_dispatch`, never on a pull request or a push. It runs
+`scripts/ops/test-recorder-keeper-fork.sh` on an isolated Base fork against Deploy 2's rmAGENT
+and its recorder, whose addresses it reads from `deployments/8453/deploy-2`. It uses the
+`BASE_UPSTREAM_RPC` secret, with `https://mainnet.base.org` when the secret is unset. It fails,
+never skips, when the fork or a deployed contract is missing. See "Recorder keeper" in
+`docs/operations/contract-release-runbooks.md`.

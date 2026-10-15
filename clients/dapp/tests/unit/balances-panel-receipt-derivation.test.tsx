@@ -16,7 +16,7 @@
  * receipt row and turns the test red.
  *
  * Wagmi is mocked at the module boundary (same pattern as
- * governance-panel.test.tsx).
+ * vault-selector-deposit-tab.test.tsx).
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "./helpers/render";

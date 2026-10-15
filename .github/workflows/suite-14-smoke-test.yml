@@ -275,7 +275,8 @@ jobs:
   #                          FiatToken slot), fund gas, warp
   #   - twin_fork_env:       the same three steps straight through TwinFork on the real Base USDC, no publish run
   #   - twin_publish:        its own job below (not a matrix row): path-gated on pull_request
-  #   - governance:          the deployer holds no voting power or admin; the timelock is admin (core 1488)
+  #   - governance:          the deployer holds no admin, the timelock is admin (core 1488), and the weight
+  #                          setter releases from the deployed receipt register (issue 1698)
   #
   # The 70-minute budget covers the dapp image builds of cli_meta (the indexer compiles with cargo
   # --release, issue #880) plus the publish run. The Twin fork itself is ready in about a minute

@@ -207,6 +207,12 @@ snapshot is sufficient. A heartbeat snapshot would add rows without data value.
 
 ### 5.2 `governance_proposals`
 
+> **Dropped (issue 1698, QA plan v1 C1).** `RouterGovernance` has no voting path, so it emits no
+> proposal or vote events. Migration `0023_drop_governance_voting.sql` drops `governance_votes`
+> and `governance_proposals`, and explorer-api no longer serves `/v1/governance/proposals`. The
+> weight change arrives as the router's `WeightsSet` and stays in `router_weight_snapshots`. The
+> specification below is kept as the record of what 0005 created.
+
 One row per `ProposalCreated` event from `RouterGovernance.sol`, updated
 atomically on terminal events (`ProposalPassed`, `ProposalRejected`,
 `ProposalExecuted`, `ProposalExpired`).
@@ -271,6 +277,12 @@ no-op when the state column already carries the terminal value.
 
 ### 5.3 `governance_votes`
 
+> **Dropped (issue 1698, QA plan v1 C1).** `RouterGovernance` has no voting path, so it emits no
+> proposal or vote events. Migration `0023_drop_governance_voting.sql` drops `governance_votes`
+> and `governance_proposals`, and explorer-api no longer serves `/v1/governance/proposals`. The
+> weight change arrives as the router's `WeightsSet` and stays in `router_weight_snapshots`. The
+> specification below is kept as the record of what 0005 created.
+
 One row per `VoteCast` event from `RouterGovernance.sol`. Append-only; no
 update path.
 
@@ -309,9 +321,9 @@ same block, `ProposalCreated` must be processed before `VoteCast`. The
 existing `handle_log` loop iterates logs in `log_index` order, which satisfies
 this as long as governance contracts emit `ProposalCreated` before any same-block
 `VoteCast` (contractually impossible: a `VoteCast` needs an open proposal, which
-starts in a separate block). On mainnet these tables stay empty: there are no proposals, because nobody holds a voter key. `RouterGovernance.propose`, `vote` and `execute` exist
-in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted
-before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+starts in a separate block). Issue 1698 deleted the contract's proposal, vote and execute
+functions with the voter set, and the weight setter's `applyReceipt` call replaced them, so these
+tables are dropped (migration 0023).
 
 ---
 
@@ -448,8 +460,12 @@ No heartbeat is needed for router weights (see §5.1).
 
 ### 8.3 Governance event ingestion
 
-`RouterGovernance.sol` emits seven events (per
-`docs/technical/governance-decisions.md` §3.5). The indexer must:
+> **Superseded (issue 1698).** `RouterGovernance` now emits only `ReceiptContractSet` and
+> `ReceiptApplied`, and the indexer no longer subscribes to the proposal and vote events. The
+> plan below is the pre-1698 record.
+
+`RouterGovernance.sol` emitted seven events (per
+`docs/technical/governance-decisions.md` §3.5). The indexer had to:
 
 1. Add `cfg.governance: Option<Address>` to `IndexerConfig`.
 2. Register the governance contract in `contracts` with `kind = 'governance'`.

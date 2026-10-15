@@ -1,6 +1,6 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useAccount, useBlockNumber, useWaitForTransactionReceipt } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { isAddress, type Address, type Hex } from "viem";
@@ -14,9 +14,12 @@ import {
   type RevealInputs,
 } from "../lib/commitReveal";
 import { markRegistered } from "../lib/useVaultRegistration";
+import { useAgentConsent } from "../lib/useAgentConsent";
+import { NO_AGENT_CONSENT } from "../lib/agentConsent";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
 import { WriteStatus } from "./WriteStatus";
+import { AgentConsentField } from "./AgentConsentField";
 
 type AuthPhase = "commit" | "reveal";
 
@@ -32,8 +35,10 @@ type Props = Readonly<{
 
 export function AuthorizeTab(props: Props) {
   const { address, isConnected } = useAccount();
-  const write = useGuardedWriteContract();
-  const { writeContract, isPending } = write;
+  // One hook per step, so each step shows its own refusal and receipt (QA plan U5).
+  const commitWrite = useGuardedWriteContract();
+  const revealWrite = useGuardedWriteContract();
+  const isPending = commitWrite.isPending || revealWrite.isPending;
 
   const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
   // The salt the next commit uses. It exists before the commit so the commit
@@ -46,6 +51,7 @@ export function AuthorizeTab(props: Props) {
   // We wait for its receipt to get the actual on-chain block number, which
   // is used to gate the reveal (must be in a strictly later block).
   const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
+  const [revealTxHash, setRevealTxHash] = useState<Hex | null>(null);
 
   const [validUntil, setValidUntil] = useState(() =>
     Math.floor(props.now / 1000 + 86400).toString(),
@@ -74,6 +80,16 @@ export function AuthorizeTab(props: Props) {
         }
       : null;
 
+  // An agent other than this wallet must consent (issue 1791). The consent is
+  // collected before the commit, so no commit is spent on a reveal that would
+  // revert InvalidAgentConsent, and the step-2 preview already carries it.
+  const agentConsent = useAgentConsent({
+    gateway: props.gatewayAddress,
+    agent: props.agent,
+    revealer: address,
+    shareReceiver: props.shareReceiver,
+  });
+
   // Step 1 signs commitAuthorization; step 2 signs revealAuthorization. Each
   // preview is built from the same inputs its write uses (QA plan U4, DR-4).
   const commitInputs: CommitInputs | null =
@@ -81,7 +97,15 @@ export function AuthorizeTab(props: Props) {
       ? { agent: props.agent as Address, committer: address, salt }
       : null;
   const revealInputs: RevealInputs | null =
-    committed ?? (validAgent && policy ? { agent: props.agent as Address, salt, policy } : null);
+    committed ??
+    (validAgent && policy
+      ? {
+          agent: props.agent as Address,
+          salt,
+          policy,
+          agentConsent: agentConsent.consent ?? NO_AGENT_CONSENT,
+        }
+      : null);
 
   const commitPreview = commitInputs
     ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
@@ -93,13 +117,26 @@ export function AuthorizeTab(props: Props) {
   // Wait for the commit tx receipt to learn the exact block it mined in.
   // This is needed to correctly gate the reveal: the contract rejects reveals
   // in the same block as the commit (CommitmentTooRecent).
-  const { data: commitReceipt } = useWaitForTransactionReceipt({
+  const commitReceipt = useWaitForTransactionReceipt({
     hash: commitTxHash ?? undefined,
     query: { enabled: commitTxHash !== null },
   });
+  const revealReceipt = useWaitForTransactionReceipt({
+    hash: revealTxHash ?? undefined,
+    query: { enabled: revealTxHash !== null },
+  });
+  const commitReverted = commitReceipt.data?.status === "reverted";
+  const revealMined = revealReceipt.data?.status === "success";
 
-  // The block the commit actually mined in (from the receipt).
-  const commitBlockNumber = commitReceipt?.blockNumber ?? null;
+  // The block the commit actually mined in (from the receipt). A reverted
+  // commit recorded nothing, so it never opens the reveal.
+  const commitBlockNumber = commitReverted ? null : (commitReceipt.data?.blockNumber ?? null);
+
+  // The wallet is registered only once the reveal is mined, never when the
+  // wallet merely accepted it (QA plan U5): a reverted reveal binds nothing.
+  useEffect(() => {
+    if (revealMined && address) markRegistered(address);
+  }, [revealMined, address]);
 
   // Current block number — polled while in reveal phase to detect when
   // at least one block has passed since the commit.
@@ -118,10 +155,11 @@ export function AuthorizeTab(props: Props) {
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
+    if (agentConsent.consent === null) return;
     // Freeze what this commit binds: a later edit of the shared agent field
     // must not change the reveal that follows it.
     const snapshot = revealInputs;
-    writeContract(
+    commitWrite.writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
@@ -140,17 +178,13 @@ export function AuthorizeTab(props: Props) {
   const onReveal = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!committed || revealPreview?.ok !== true) return;
-    writeContract(
+    revealWrite.writeContract(
       {
         address: props.gatewayAddress,
         abi: gatewayAbi,
         ...revealAuthorizationCall(committed),
       },
-      {
-        onSuccess: () => {
-          if (address) markRegistered(address);
-        },
-      },
+      { onSuccess: (txHash) => setRevealTxHash(txHash) },
     );
   };
 
@@ -178,17 +212,39 @@ export function AuthorizeTab(props: Props) {
           type="submit"
           data-testid="authorize-reveal-submit"
           disabled={
-            !isConnected || isPending || !revealReady || !committed || revealPreview?.ok !== true
+            !isConnected ||
+            isPending ||
+            !revealReady ||
+            !committed ||
+            revealPreview?.ok !== true ||
+            revealTxHash !== null
           }
         >
           Sign reveal transaction
         </button>
-        {/* A refused or rejected reveal says why (QA plan U5, finding DR-9). */}
+        {/* The commit's receipt (a reverted commit never opens the reveal) and the reveal's
+            refusal, wallet error and receipt (QA plan U5, finding DR-9). */}
+        <WriteStatus
+          testId="authorize-commit"
+          label="Commit"
+          write={{ error: commitWrite.error, data: commitTxHash ?? undefined }}
+          receipt={commitReceipt}
+        />
         <WriteStatus
           testId="authorize-reveal"
           label="Reveal"
-          write={{ error: write.error, isPending }}
+          write={{
+            error: revealWrite.error,
+            isPending: revealWrite.isPending,
+            data: revealTxHash ?? undefined,
+          }}
+          receipt={revealReceipt}
         />
+        {revealMined && (
+          <p data-testid="authorize-complete" className="hint">
+            Agent authorized: this wallet is its recorded owner.
+          </p>
+        )}
       </form>
     );
   }
@@ -215,6 +271,7 @@ export function AuthorizeTab(props: Props) {
         shareReceiver={props.shareReceiver}
         setShareReceiver={props.setShareReceiver}
       />
+      <AgentConsentField testIdPrefix="authorize" consent={agentConsent} />
       {commitPreview && (
         <div data-testid="authorize-commit-preview">
           <TxPreview preview={commitPreview} />
@@ -236,6 +293,7 @@ export function AuthorizeTab(props: Props) {
           !validAgent ||
           !validReceiver ||
           isPending ||
+          agentConsent.consent === null ||
           commitPreview?.ok !== true ||
           revealPreview?.ok !== true
         }
@@ -246,7 +304,7 @@ export function AuthorizeTab(props: Props) {
       <WriteStatus
         testId="authorize-commit"
         label="Commit"
-        write={{ error: write.error, isPending }}
+        write={{ error: commitWrite.error, isPending: commitWrite.isPending }}
       />
     </form>
   );

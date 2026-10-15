@@ -144,7 +144,10 @@ export const gatewayAbi = [
   },
   // Permissionless two-step commit/reveal authorization (AZ-DAPP-1).
   // commitAuthorization takes keccak256(abi.encode(agent, caller, salt));
-  // revealAuthorization re-derives the hash and authorizes the agent.
+  // revealAuthorization re-derives the hash and authorizes the agent. Its
+  // fourth argument is the agent's EIP-712 AgentConsent signature (issue
+  // 1791): required when the agent is not the revealer, empty ("0x") when a
+  // depositor binds itself.
   {
     type: "function",
     name: "commitAuthorization",
@@ -175,7 +178,34 @@ export const gatewayAbi = [
           { name: "allowedSourceVaults", type: "address[]" },
         ],
       },
+      { name: "agentConsent", type: "bytes" },
     ],
+    outputs: [],
+  },
+  // Agent consent (issue 1791). The nonce a consent is signed at; each
+  // successful reveal advances it, so one signature authorizes once.
+  {
+    type: "function",
+    name: "agentConsentNonce",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  // True for a binding the agent consented to (or made itself). Only an
+  // unconsented binding (made by an ADMIN_ROLE holder) can be released.
+  {
+    type: "function",
+    name: "agentConsented",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  // Called by the agent itself to undo a binding made without its consent.
+  {
+    type: "function",
+    name: "releaseAgent",
+    stateMutability: "nonpayable",
+    inputs: [],
     outputs: [],
   },
 ] as const;

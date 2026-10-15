@@ -126,7 +126,6 @@ const RAW_METHOD_ALLOWED = new Set(["components/SafeProposalPanel.tsx", FAUCET])
 const KNOWN_WRITERS = [
   "components/AuthorizeTab.tsx",
   "components/DepositWithdrawTab.tsx",
-  "components/GovernancePanel.tsx",
   "components/MultiVaultWithdrawalTab.tsx",
   "components/OnboardingWizard.tsx",
   "components/PauseFlow.tsx",

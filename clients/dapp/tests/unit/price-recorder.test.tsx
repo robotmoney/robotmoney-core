@@ -14,8 +14,9 @@ import {
   resolveDepositState,
 } from "../../src/lib/vaultDepositState";
 
-// Deploy 2 recorder on Base 8453.
-const RECORDER = "0x0aDc14e6521aF213F9DCe5585D530f237831E934";
+// A placeholder recorder in mixed case, so the lower-casing is visible. Never a deployed address:
+// scripts/ci/check-no-production-addresses.ts lists the Deploy 2 recorder (QA plan v1 E10).
+const RECORDER = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01";
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const V3_POOL = "0x2222222222222222222222222222222222222222";
 

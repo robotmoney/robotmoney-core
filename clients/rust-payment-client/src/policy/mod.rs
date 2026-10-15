@@ -24,11 +24,13 @@
 //! 5. `gateway.vault()` matches `config.vault_address`, and
 //!    `vault.depositsPaused() == false`
 //! 6. `gateway.agents(self).active && validUntil >= now`
-//!    (`ErrAgentNotAuthorized`, then `ErrPolicyExpired`)
-//! 6b. when the config pins them, `agents(self).shareReceiver ==
-//!    config.share_receiver` and `agentOwner(self) == config.agent_owner`
-//!    (`ErrAgentBindingMismatch`, QA plan D2: a squatter who bound this
-//!    agent address first would otherwise receive its deposits' shares)
+//!    (`ErrAgentNotAuthorized`, then `ErrPolicyExpired`); and (6b) when the
+//!    config pins them, `agents(self).shareReceiver == config.share_receiver`
+//!    and `agentOwner(self) == config.agent_owner` (`ErrAgentBindingMismatch`,
+//!    QA plan D2: a squatter who bound this agent address first would
+//!    otherwise receive its deposits' shares). The dapp's config export
+//!    writes both keys once the authorizing wallet is connected (QA plan
+//!    U6), so an exported config runs it.
 //! 7. `amount <= agents(self).maxPerPayment` (`ErrDepositCapExceeded`)
 //! 8. `effectiveDepositWindowGross(self) + amount <= maxPerWindow`
 //!    (issue #497: rolling-window gross replaces per-calendar-window mapping)

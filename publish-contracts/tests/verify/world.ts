@@ -359,7 +359,8 @@ export function buildWorld(chainId = 8453): World {
     ch.allowlistLog(usdcVault, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, adapterHashes[i]! as Hex, true);
   }
 
-  // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a ring of 901 slots and holds no admin.
+  // core 1676: the recorder and the V4 adapter read back the configured PoolKey. The recorder keeps a live ring of 7,201 slots (core 1793,
+  // the 4 h sell anchor window) and holds no admin.
   ch.set(RECORDER, "POOL_MANAGER", POOL_MANAGER);
   ch.set(RECORDER, "POOL_ID", RM_POOL_ID);
   ch.set(RECORDER, "token0", RM_POOL_KEY.currency0);
@@ -367,7 +368,7 @@ export function buildWorld(chainId = 8453): World {
   ch.set(RECORDER, "fee", RM_POOL_KEY.fee);
   ch.set(RECORDER, "tickSpacing", RM_POOL_KEY.tickSpacing);
   ch.set(RECORDER, "hooks", ZERO);
-  ch.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 901]);
+  ch.set(RECORDER, "slot0", [1n << 96n, -403009, 3, 7201]);
   ch.set(V4_ADAPTER, "POOL_MANAGER", POOL_MANAGER);
   ch.set(V4_ADAPTER, "RECORDER", RECORDER);
   ch.set(V4_ADAPTER, "POOL_ID", RM_POOL_ID);
@@ -396,7 +397,7 @@ export function buildWorld(chainId = 8453): World {
   });
   w("safe.json", { chain_id: chainId, safe: SAFE });
   w(file("libs"), { chain_id: chainId, tick_math: LIBS.tick_math });
-  w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 901 });
+  w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 7201 });
   for (const v of table.vaults) if (v.key !== "USDC") {
     const vkey = ({ PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" } as Record<string, string>)[v.key]!;
     w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, ...(v.key === "AGENT" ? { adapter: ZERO, adapter_v4: V4_ADAPTER, recorder: RECORDER } : {}) });

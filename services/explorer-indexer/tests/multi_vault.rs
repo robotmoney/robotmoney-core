@@ -5,10 +5,13 @@
 //! AC-2: vault_snapshots rows for the second registered vault are indexed
 //!       independently (two registered vaults, each gets its own snapshot).
 //!
-//! AC-3: router_weight_snapshots populated on WeightsApplied events.
+//! AC-3: router_weight_snapshots populated on the router's WeightsSet events
+//!       (RouterGovernance.applyReceipt calls PortfolioRouter.setWeights).
 //!
-//! AC-4: governance_proposals and governance_votes populated on
-//!       ProposalCreated and VoteCast events.
+//! AC-4 (governance_proposals / governance_votes from ProposalCreated and
+//! VoteCast) is gone: RouterGovernance voting was deleted (issue 1698) and
+//! migration 0023 dropped both tables. `account_history.rs` checks the old
+//! events are ignored.
 //!
 //! DI-1: a vault registered in a tick has its own Deposit logs from the
 //!       registration block to the tick target fetched and applied in that
@@ -29,7 +32,7 @@ mod common;
 use alloy_primitives::{Address, U256};
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{IRouterGovernanceEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents},
+    abi::{IPortfolioRouterEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents},
     db::CountTable,
     indexer::{exclusion_ledger_of, run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -156,9 +159,9 @@ fn encode_event_log<E: alloy_sol_types::SolEvent>(
     })
 }
 
-/// Encode a `WeightsApplied` log from RouterGovernance.
-/// New signature (RouterGovernance.sol:132):
-/// `(uint256 indexed proposalId, address[] vaults, uint256[] bps)`.
+/// Encode a `WeightsSet(address[] vaults, uint256[] bps)` log from the
+/// PortfolioRouter. `RouterGovernance.applyReceipt` produces it through
+/// `setWeights` (issue 1698).
 fn encode_weights_set_log(
     router_addr: Address,
     vaults: &[Address],
@@ -170,8 +173,7 @@ fn encode_weights_set_log(
     use alloy_primitives::LogData;
     use alloy_sol_types::SolEvent as _;
 
-    let event = IRouterGovernanceEvents::WeightsApplied {
-        proposalId: U256::from(1u64),
+    let event = IPortfolioRouterEvents::WeightsSet {
         vaults: vaults.to_vec(),
         bps: bps.to_vec(),
     };
@@ -189,93 +191,6 @@ fn encode_weights_set_log(
         "data":             data_hex,
         "blockNumber":      format!("0x{:x}", block_number),
         "blockHash":        format!("0x{}", hex::encode([0xbcu8; 32])),
-        "transactionHash":  format!("0x{}", hex::encode(tx_hash)),
-        "transactionIndex": "0x0",
-        "logIndex":         format!("0x{:x}", log_index),
-    })
-}
-
-/// Encode a `ProposalCreated` log from RouterGovernance.
-/// New signature (RouterGovernance.sol:106):
-/// `(uint256 indexed proposalId, address indexed proposer, address[] vaults, uint256[] bps, uint64 votingDeadline)`.
-#[allow(clippy::too_many_arguments)]
-fn encode_proposal_created_log(
-    gov_addr: Address,
-    proposal_id: U256,
-    proposer: Address,
-    _description: &str,
-    deadline_block: U256,
-    block_number: u64,
-    tx_hash: [u8; 32],
-    log_index: u32,
-) -> serde_json::Value {
-    use alloy_primitives::LogData;
-    use alloy_sol_types::SolEvent as _;
-
-    let event = IRouterGovernanceEvents::ProposalCreated {
-        proposalId: proposal_id,
-        proposer,
-        vaults: vec![],
-        bps: vec![],
-        votingDeadline: deadline_block.try_into().unwrap_or(u64::MAX),
-    };
-    let log_data: LogData = event.encode_log_data();
-    let topics: Vec<String> = log_data
-        .topics()
-        .iter()
-        .map(|t| format!("{:#x}", t))
-        .collect();
-    let data_hex = format!("0x{}", hex::encode(log_data.data.as_ref()));
-
-    serde_json::json!({
-        "address":          format!("{:#x}", gov_addr),
-        "topics":           topics,
-        "data":             data_hex,
-        "blockNumber":      format!("0x{:x}", block_number),
-        "blockHash":        format!("0x{}", hex::encode([0xcdu8; 32])),
-        "transactionHash":  format!("0x{}", hex::encode(tx_hash)),
-        "transactionIndex": "0x0",
-        "logIndex":         format!("0x{:x}", log_index),
-    })
-}
-
-/// Encode a `VoteCast` log from RouterGovernance.
-/// New signature (RouterGovernance.sol:119):
-/// `(uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor)`.
-#[allow(clippy::too_many_arguments)]
-fn encode_vote_cast_log(
-    gov_addr: Address,
-    proposal_id: U256,
-    voter: Address,
-    _support: bool,
-    weight: U256,
-    block_number: u64,
-    tx_hash: [u8; 32],
-    log_index: u32,
-) -> serde_json::Value {
-    use alloy_primitives::LogData;
-    use alloy_sol_types::SolEvent as _;
-
-    let event = IRouterGovernanceEvents::VoteCast {
-        proposalId: proposal_id,
-        voter,
-        power: weight,
-        totalFor: weight, // simplified: totalFor = power for single-voter tests
-    };
-    let log_data: LogData = event.encode_log_data();
-    let topics: Vec<String> = log_data
-        .topics()
-        .iter()
-        .map(|t| format!("{:#x}", t))
-        .collect();
-    let data_hex = format!("0x{}", hex::encode(log_data.data.as_ref()));
-
-    serde_json::json!({
-        "address":          format!("{:#x}", gov_addr),
-        "topics":           topics,
-        "data":             data_hex,
-        "blockNumber":      format!("0x{:x}", block_number),
-        "blockHash":        format!("0x{}", hex::encode([0xdeu8; 32])),
         "transactionHash":  format!("0x{}", hex::encode(tx_hash)),
         "transactionIndex": "0x0",
         "logIndex":         format!("0x{:x}", log_index),
@@ -425,7 +340,7 @@ async fn two_registered_vaults_indexed_independently() {
     assert!(snaps_b.0 >= 1, "vault B must have at least one snapshot");
 }
 
-/// AC-3: WeightsApplied event from RouterGovernance populates
+/// AC-3: WeightsSet event from the PortfolioRouter populates
 /// router_weight_snapshots with one row per vault leg.
 #[tokio::test]
 async fn weights_set_event_populates_router_weight_snapshots() {
@@ -465,8 +380,8 @@ async fn weights_set_event_populates_router_weight_snapshots() {
         gateway: Address::from([0xCCu8; 20]),
         vault: Address::from([0xDDu8; 20]),
         registry: None,
-        router_governance: Some(router_addr),
-        portfolio_router: None,
+        router_governance: None,
+        portfolio_router: Some(router_addr),
         investment_committee: None,
         consensus_receipt: None,
         timelock: None,
@@ -506,165 +421,6 @@ async fn weights_set_event_populates_router_weight_snapshots() {
         vec![vault_a.as_slice().to_vec(), vault_b.as_slice().to_vec()]
     );
     assert_eq!(row.1, vec![6000i64, 4000i64]);
-}
-
-/// AC-4a: ProposalCreated event populates governance_proposals.
-#[tokio::test]
-async fn proposal_created_event_populates_governance_proposals() {
-    let fx = pg_fixture().await;
-
-    let gov_addr = Address::from([0x99u8; 20]);
-    let proposer = Address::from([0x11u8; 20]);
-    let _vault_a = Address::from([0xAAu8; 20]);
-
-    let proposal_log = encode_proposal_created_log(
-        gov_addr,
-        U256::from(1u64),
-        proposer,
-        "vault_a=10000bps",
-        U256::from(48u64), // deadlineBlock
-        50u64,
-        [0x33u8; 32],
-        0,
-    );
-
-    let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()), // 70
-    );
-    stub.set("eth_getLogs", serde_json::Value::Array(vec![proposal_log]));
-    stub.set(
-        "eth_call",
-        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
-    );
-    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
-
-    let rpc = JsonRpc::new(&stub.url);
-    let cfg = IndexerConfig {
-        chain_id: 8453,
-        chain_name: "base".into(),
-        rpc_label: "stub".into(),
-        gateway: Address::from([0xCCu8; 20]),
-        vault: Address::from([0xDDu8; 20]),
-        registry: None,
-        router_governance: Some(gov_addr),
-        portfolio_router: None,
-        investment_committee: None,
-        consensus_receipt: None,
-        timelock: None,
-        safe: None,
-        max_blocks_per_tick: 200,
-        start_block: None,
-        end_block: Some(65),
-        feature_flags: 4,
-    };
-
-    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
-    stub.shutdown();
-
-    let count = fx.db.count(CountTable::GovernanceProposals).await.unwrap();
-    assert_eq!(
-        count, 1,
-        "governance_proposals must have one row after ProposalCreated"
-    );
-}
-
-/// AC-4b: VoteCast event populates governance_votes.
-///
-/// A ProposalCreated row must exist before VoteCast because of the FK
-/// constraint. We insert the proposal row directly, then fire a VoteCast
-/// tick to verify the vote row is created.
-#[tokio::test]
-async fn vote_cast_event_populates_governance_votes() {
-    let fx = pg_fixture().await;
-
-    let gov_addr = Address::from([0x99u8; 20]);
-    let voter = Address::from([0x44u8; 20]);
-
-    // Insert prerequisite chain + contract rows and a governance_proposals
-    // row so the FK in governance_votes is satisfied.
-    fx.db.upsert_chain(8453, "base", "stub").await.unwrap();
-    fx.db
-        .upsert_contract(8453, gov_addr.into_array(), "router_governance", None)
-        .await
-        .unwrap();
-    fx.db
-        .insert_proposal(
-            8453,
-            1i64,
-            40i64,
-            0i32,
-            [0x11u8; 32],
-            gov_addr.into_array(),
-            "seed proposal",
-            1_748_000_000i64,
-            100i64,
-        )
-        .await
-        .unwrap();
-
-    let vote_log = encode_vote_cast_log(
-        gov_addr,
-        U256::from(1u64),
-        voter,
-        true,
-        U256::from(500_000u64),
-        55u64,
-        [0x44u8; 32],
-        0,
-    );
-
-    let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()), // 70
-    );
-    stub.set("eth_getLogs", serde_json::Value::Array(vec![vote_log]));
-    stub.set(
-        "eth_call",
-        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
-    );
-    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
-
-    let rpc = JsonRpc::new(&stub.url);
-    let cfg = IndexerConfig {
-        chain_id: 8453,
-        chain_name: "base".into(),
-        rpc_label: "stub".into(),
-        gateway: Address::from([0xCCu8; 20]),
-        vault: Address::from([0xDDu8; 20]),
-        registry: None,
-        router_governance: Some(gov_addr),
-        portfolio_router: None,
-        investment_committee: None,
-        consensus_receipt: None,
-        timelock: None,
-        safe: None,
-        max_blocks_per_tick: 200,
-        start_block: None,
-        end_block: Some(65),
-        feature_flags: 4,
-    };
-
-    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
-    stub.shutdown();
-
-    let count = fx.db.count(CountTable::GovernanceVotes).await.unwrap();
-    assert_eq!(
-        count, 1,
-        "governance_votes must have one row after VoteCast"
-    );
-
-    // Verify voter address.
-    let row: (Vec<u8>,) = sqlx::query_as("SELECT voter FROM governance_votes WHERE chain_id = $1")
-        .bind(8453i64)
-        .fetch_one(fx.db.pool())
-        .await
-        .unwrap();
-    assert_eq!(row.0, voter.as_slice(), "voter address must match");
 }
 
 /// DI-1: a vault registered and deposited into within one tick has its deposit indexed in that

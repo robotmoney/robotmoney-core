@@ -114,12 +114,13 @@ was ever material you could copy, it is a devnet key.
 For devnet, the submitter is an ordinary `rmpc` software keystore, loaded the
 same way every other `rmpc` write command loads one: the passphrase comes
 strictly from `$RMPC_KEYSTORE_PASSPHRASE`, never from stdin and never from a
-CLI flag. `rmpc receipt` (like `committee`) refuses a software
-signer for production-grade chain ids (`require_production_grade_for_write`),
-which is the mechanical guard keeping the devnet arrangement devnet-only.
-Only depositor writes (`deposit`, `withdraw`, `withdraw-router`) may use a
-software keystore on Base mainnet (owner decision 2026-10-06, issue #1545);
-the submitter is not a depositor, so the guard stays for it.
+CLI flag. `rmpc receipt` (like `committee`) signs with a software keystore
+on every chain, Base mainnet included, after the production warning: a
+hardware wallet, HSM or KMS is optional, never required (owner decision
+2026-10-14, QA plan Decision D12; the old `require_production_grade_for_write`
+gate is gone). What keeps the single-key arrangement devnet-only is the role,
+not a signer refusal: on 8453 the submitter is the Safe, and an EOA without
+the submitter roles reverts.
 
 ---
 
@@ -323,7 +324,7 @@ key on argv, and none of them signs anything; only the Safe, through the timeloc
 | Script | What it does | Idempotency / restart rule |
 |---|---|---|
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
-| `watch-released-drafts.sh` | Polls `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emits a human-review-only draft per released receipt. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range was actually examined. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. **Restarted by `scripts/fusion/fusion-draft-watcher.service`** (`Restart=always`, `StartLimitIntervalSec=0`, `OnFailure=` pages `fusion_draft_watcher_process_down`); install per `docs/operations/fusion-draft-watcher.md`. |
+| `watch-released-drafts.sh` | **Retired by issue 1698.** It polled `ReceiptReleased` behind `FUSION_CONFIRMATIONS` and emitted a human-review-only draft per released receipt. A receipt is now released only inside `RouterGovernance.applyReceipt`, which applies its weights in the same transaction, so there is nothing left to draft, and `rmpc governance draft-proposal` is deleted. | The block cursor is a durable file, written atomically and advanced **only** after a whole confirmed range was actually examined. A crash mid-range rescans it; drafts are read-only JSON, so a rescan costs nothing. **Restarted by `scripts/fusion/fusion-draft-watcher.service`** (`Restart=always`, `StartLimitIntervalSec=0`, `OnFailure=` pages `fusion_draft_watcher_process_down`); install per `docs/operations/fusion-draft-watcher.md`. |
 | `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, submits, releases, drafts, and asserts INV-4. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison, the draft assertion and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
 | `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion **and on any selected-but-unconfigured stage**. | Stage selection is explicit (`--stages`, `--no-anchor`). Every `SKIP` carries a `reason`: `not_selected` (green), `unconfigured` (**not** green), `prerequisite_failed`, `delegated`. An unknown stage name and a missing witness address refuse to start. |
 
@@ -356,8 +357,9 @@ is handled as a transport failure too — guarded, shape-checked, counted and
 retried — rather than killing the loop under `set -euo pipefail` with no alert
 at all, and every cycle's draft result is persisted to `$FUSION_DRAFT_RESULT`.
 
-**The draft is bound to the on-chain commitment.** `draft-proposal` reads the
-anchored tuple with `getReceiptById`, fetches the bytes from the **anchored
+**The draft was bound to the on-chain commitment (pre-1698).** The deleted
+`rmpc governance draft-proposal` command read the anchored tuple with
+`getReceiptById`, fetches the bytes from the **anchored
 `payloadUri`** (a `--receipt-url` that disagrees is refused, not preferred),
 and refuses unless `keccak256(domain line + canonical_bytes) == payloadDigest` and every
 analyst signature verifies — the same checks `rmpc receipt submit` runs before
@@ -375,10 +377,14 @@ re-broadcasts on an unknown anchor state, and the post-submit confirmation has
 its own bounded read loop so a transient read failure after a successful submit
 cannot report the anchor as missing.
 
-The draft watcher's read-only property is structural, not a convention:
-`rmpc governance draft-proposal` imports no signer, no nonce lock and no
-broadcast path (`clients/rust-payment-client/src/commands/governance_draft.rs`),
-so there is no code path from a `ReceiptReleased` log to a transaction.
+Issue 1698 retired the draft path (QA plan v1 C1). `RouterGovernance` has no
+proposal, vote or execute function, and a receipt is released only inside the
+one `RouterGovernance.applyReceipt` call the Safe schedules through the timelock
+(govern row `apply-receipt`), which writes its weights in the same transaction.
+`rmpc governance draft-proposal` is deleted with it. The digest binding it
+carried now lives in the govern row, which refuses a payload whose digest
+differs from the recorded one, and in `applyReceipt`, which refuses
+`ReceiptDigestMismatch` on chain (`docs/technical/governance-decisions.md` §3.7).
 
 **Why the orchestrator is separate from `cross-repo-acceptance.sh`.** The older
 script is one straight line from artifact to draft and always anchors. The

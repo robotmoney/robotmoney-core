@@ -11,13 +11,22 @@
    call-path or voting text. Issue #1698 deleted RouterGovernance's
    propose/vote/execute path, so no canonical doc may describe it as present,
    as "today's bytecode", or as deleted later.
-3. docs/operations/manual-admin-actions.md names the IC policy, the consensus
+3. Every other Markdown file under docs/ carries none of that voting residue
+   either, and does not describe the pre-1698 two-call `apply-receipt` batch
+   (release plus `setDefaultWeights`). Before this widening the gate read only
+   the three model docs, so it printed OK while security-model.md,
+   smart-contracts.md and about a dozen other docs still said voting existed
+   (QA plan v1 C1, completeness critic). Dated review artifacts (docs/code-review/) and
+   the QA plan, which quotes the residue as its work list, are records and are
+   not read.
+4. docs/operations/manual-admin-actions.md names the IC policy, the consensus
    receipt and the basket vaults in the timelock handover.
 
-`--self-test` builds a throwaway tree, plants each banned phrase in prd.md and
-architecture.md, drops each required phrase, and expects the guard to fire; it
-also expects a compliant tree to pass. Set CHECK_REPO_ROOT to run the real check
-against another tree.
+`--self-test` builds a throwaway tree, plants each banned phrase in prd.md,
+architecture.md and a non-model doc, drops each required phrase, and expects the
+guard to fire; it also expects a compliant tree, and residue planted in the
+skipped record paths, to pass. Set CHECK_REPO_ROOT to run the real check against
+another tree.
 
 Wired into .github/workflows/suite-13-doc-checks.yml.
 """
@@ -37,6 +46,15 @@ MANUAL = Path("docs/operations/manual-admin-actions.md")
 
 # The three canonical docs that state the router-weight governance model.
 MODEL_DOCS = (GOVERNANCE, PRD, ARCHITECTURE)
+
+# Every Markdown file under DOCS_ROOT is read for VOTING_RESIDUE (QA plan v1 C1).
+# These are records, not statements of the current model: dated review
+# artifacts, and the QA plan that lists the residue as work to do.
+DOCS_ROOT = Path("docs")
+RESIDUE_RECORDS = (
+    Path("docs/code-review"),
+    Path("docs/development/qa-plan-v1.md"),
+)
 
 REF = re.compile(r"security-model(?:\.md)?[`)\]]*,?\s*(?:§|[Ss]ection\s)(\d+(?:\.\d+)?)")
 SKIP_PARTS = {"node_modules", "lib", ".git", "code-review", "target"}
@@ -70,6 +88,10 @@ VOTING_RESIDUE = (
     "governance votes",
     "-> active vote ->",
     "proposes router weights",
+    # The pre-1698 two-call batch (releaseReceipt plus setDefaultWeights). The
+    # apply-receipt operation is now one applyReceipt call.
+    "`apply-receipt` batch",
+    "apply-receipt batch",
 )
 
 # The model every doc must keep stating.
@@ -146,6 +168,28 @@ def check_governance(root: Path, errors: list[str]) -> None:
         check_model_doc(root, rel, errors)
 
 
+def is_record(rel: Path) -> bool:
+    return any(rel == r or r in rel.parents for r in RESIDUE_RECORDS)
+
+
+def check_residue_everywhere(root: Path, errors: list[str]) -> None:
+    """VOTING_RESIDUE in any other doc under docs/ (the model docs are read by check_model_doc)."""
+    docs = root / DOCS_ROOT
+    if not docs.is_dir():
+        return
+    for path in sorted(docs.rglob("*.md")):
+        rel = path.relative_to(root)
+        if rel in MODEL_DOCS or is_record(rel):
+            continue
+        try:
+            folded = path.read_text().lower()
+        except UnicodeDecodeError:
+            continue
+        for banned in VOTING_RESIDUE:
+            if banned.lower() in folded:
+                errors.append(f"{rel} still describes RouterGovernance voting (issue #1698): {banned}")
+
+
 def check_manual(root: Path, errors: list[str]) -> None:
     text = (root / MANUAL).read_text()
     for needle in ("InvestmentCommitteePolicy", "ConsensusRecommendationReceipt", "basket vaults"):
@@ -157,6 +201,7 @@ def run(root: Path) -> list[str]:
     errors: list[str] = []
     check_refs(root, errors)
     check_governance(root, errors)
+    check_residue_everywhere(root, errors)
     check_manual(root, errors)
     return errors
 
@@ -222,6 +267,23 @@ def self_test() -> int:
             _write_tree(root)
             (root / rel).unlink()
             expect(f"{rel.name} missing fails", root, want_fail=True, needle=rel.name)
+
+        # Every other doc under docs/ is read for the residue (QA plan v1 C1).
+        other = Path("docs/technical/smart-contracts.md")
+        for banned in VOTING_RESIDUE:
+            _write_tree(root)
+            (root / other).parent.mkdir(parents=True, exist_ok=True)
+            (root / other).write_text(f"# Contracts\n\nLegacy: {banned} here.\n")
+            expect(f"{other.name} planted '{banned}' fails", root, want_fail=True, needle=str(other))
+        # _write_tree rewrites only its own files, so remove the planted doc before the next case.
+        (root / other).unlink()
+        # The records are not read: a dated review and the QA plan may quote the residue.
+        for record in (Path("docs/code-review/20261012-security-review.md"), Path("docs/development/qa-plan-v1.md")):
+            _write_tree(root)
+            (root / record).parent.mkdir(parents=True, exist_ok=True)
+            (root / record).write_text("RouterGovernance.propose exist in the deployed test bytecode\n")
+            expect(f"{record} residue passes", root, want_fail=False)
+            (root / record).unlink()
 
         _write_tree(root)
         (root / GOVERNANCE).write_text(COMPLIANT_MODEL + "\ncreateProposal\n")

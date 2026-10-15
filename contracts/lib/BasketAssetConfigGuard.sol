@@ -197,7 +197,8 @@ library BasketAssetConfigGuard {
         if (bal > 0) {
             // Runs as the vault (delegatecall): price the balance through the vault's own TWAP view.
             IDustPricedVault self = IDustPricedVault(address(this));
-            uint256 floor = self.assetUsdcValue(index, bal) * (10_000 - self.maxSlippageBps()) / 10_000;
+            uint256 floor =
+                self.assetUsdcValue(index, bal) * (10_000 - self.maxSlippageBps()) / 10_000;
             if (floor > 0) revert AssetStillHeld();
         }
         assets[index].active = false;

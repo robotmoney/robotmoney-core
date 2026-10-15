@@ -146,7 +146,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=22 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=24 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test migrations -- --test-threads=1 --nocapture
 
@@ -208,7 +208,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test vault_snapshot_cadence -- --test-threads=1 --nocapture
 
       # Two targets that landed on fusion/deployment-workflow without a job
@@ -227,7 +227,7 @@ jobs:
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
-          CARGO_TEST_MIN_EXECUTED=1 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=3 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test catch_up_budget -- --nocapture
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- rpc::tests::backoff rpc::tests::retry_after indexer::tests::catch_up --nocapture
@@ -298,9 +298,10 @@ jobs:
             -- --test-threads=1 --nocapture
           echo "::endgroup::"
           echo "::group::services/explorer-indexer/tests/reorg_cursor_vault_status.rs:"
-          # 49 tests: reorg_cursor_vault_status 10, account_history 8, account_position_vote_power 2,
-          # committee_indexing 10, multi_vault 6, vault_detail 7, vault_registry 6 (QA plan v1 T5).
-          CARGO_TEST_MIN_EXECUTED=49 bash .github/scripts/cargo_test_require_executed.sh \
+          # 53 tests: reorg_cursor_vault_status 15, account_history 8, account_position_vote_power 1,
+          # committee_indexing 10, multi_vault 4, vault_detail 9, vault_registry 6 (QA plan v1 T5; C1
+          # removed the governance-vote cases with the voting tables).
+          CARGO_TEST_MIN_EXECUTED=53 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
@@ -384,8 +385,9 @@ jobs:
       # dominated by endpoints.rs booting a seeded container per test.
       - name: explorer-api HTTP contract, CORS, router shape, schema parity
         run: |
-          # 57 tests: endpoints 50, router_introspection 1, cors 4, canonical_schema 2 (QA plan v1 T5).
-          CARGO_TEST_MIN_EXECUTED=57 bash .github/scripts/cargo_test_require_executed.sh \
+          # 58 tests: endpoints 51, router_introspection 1, cors 4, canonical_schema 2 (QA plan v1 T5; C1
+          # removed the /v1/governance/proposals cases with the route).
+          CARGO_TEST_MIN_EXECUTED=58 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test endpoints \
             --test router_introspection \

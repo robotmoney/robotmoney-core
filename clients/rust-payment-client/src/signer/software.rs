@@ -59,7 +59,7 @@ use k256::ecdsa::{signature::hazmat::PrehashSigner, RecoveryId, Signature, Signi
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-use super::{AgentSigner, SignerBackendKind, SignerError};
+use super::{AgentConsent, AgentSigner, SignerBackendKind, SignerError};
 
 /// Environment variable name from which the passphrase is read in non-TTY
 /// contexts (CI, systemd unit). Stdin fallback is the operator-attended path.
@@ -377,6 +377,19 @@ impl AgentSigner for SoftwareSigner {
     }
 
     fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError> {
+        self.sign_prehash_low_s(hash)
+    }
+
+    fn sign_agent_consent(&self, consent: &AgentConsent) -> Result<AlloySignature, SignerError> {
+        self.sign_prehash_low_s(&consent.digest(self.address).0)
+    }
+}
+
+impl SoftwareSigner {
+    /// RFC 6979 ECDSA over a 32-byte prehash, normalised to low `s` (EIP-2)
+    /// with the matching parity. Private: reachable only through the two
+    /// typed trait entry points.
+    fn sign_prehash_low_s(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError> {
         let (signature, recid): (Signature, RecoveryId) = self
             .signing_key
             .sign_prehash(hash.as_slice())
@@ -681,6 +694,40 @@ mod tests {
         let b = signer.sign_eip1559_hash(&hash).unwrap();
         assert_eq!(a.r(), b.r());
         assert_eq!(a.s(), b.s());
+    }
+
+    /// Issue #1791: the agent key signs the gateway's `AgentConsent` and the
+    /// 65-byte `r ‖ s ‖ v` is exactly what `cast wallet sign --data` produces
+    /// for the same typed data (low `s`, `v` = 27). The gateway recovers the
+    /// agent from it.
+    #[test]
+    fn agent_consent_signature_matches_cast_golden_vector() {
+        use crate::signer::consent::encode_rsv;
+        use alloy_primitives::address;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keystore.json");
+        SoftwareSigner::create_keystore(&path, &test_privkey(), TEST_PASSPHRASE).unwrap();
+        let signer = SoftwareSigner::load_with_passphrase(&path, TEST_PASSPHRASE, true).unwrap();
+
+        let consent = AgentConsent {
+            owner: address!("3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"),
+            share_receiver: address!("3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"),
+            nonce: AlloyU256::from(3u64),
+            chain_id: 8453,
+            gateway: address!("0000000000000000000000000000000000000b00"),
+        };
+        let sig = signer.sign_agent_consent(&consent).unwrap();
+        assert_eq!(
+            hex::encode(encode_rsv(&sig)),
+            "e38b75ee922654c47fc343bb040b28fa809f2302b4e05f99fd2090da06f897ff\
+             5d60b64ba17d2729dd8df7d7e15f7fec9059d8dcba7ffba665dc5d24924d8fb5\
+             1b",
+        );
+        let recovered = sig
+            .recover_address_from_prehash(&consent.digest(signer.public_address()))
+            .unwrap();
+        assert_eq!(recovered, signer.public_address());
     }
 
     #[test]

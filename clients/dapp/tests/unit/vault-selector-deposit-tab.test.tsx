@@ -12,7 +12,7 @@
  * invocations resolve correctly.
  *
  * Wagmi hooks are mocked at the module boundary (same pattern as
- * governance-panel.test.tsx) so the tests run without a live WagmiProvider.
+ * timelock-panel.test.tsx) so the tests run without a live WagmiProvider.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "./helpers/render";

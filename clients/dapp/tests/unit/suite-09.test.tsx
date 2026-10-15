@@ -41,7 +41,6 @@ import type {
   VaultsResponse,
   VaultDetailResponse,
   RouterWeightsResponse,
-  ProposalsResponse,
   StatsResponse,
 } from "../../src/lib/explorerApi";
 
@@ -133,26 +132,6 @@ const routerWeightsFixture: RouterWeightsResponse = {
   indexed_at: "2026-01-01T12:00:00Z",
 };
 
-const proposalsFixture: ProposalsResponse = {
-  proposals: [
-    {
-      chain_id: 8453,
-      proposal_id: 1,
-      proposer: "0x" + "33".repeat(20),
-      description: "Increase vault-a weight to 60%",
-      created_at: 1748000000,
-      deadline_block: 900,
-      status: "open",
-      votes_for: 0,
-      votes_against: 0,
-      block_number: 850,
-      indexed_at: "2026-01-01T12:00:00Z",
-    },
-  ],
-  block_number: 850,
-  indexed_at: "2026-01-01T12:00:00Z",
-};
-
 const statsFixture: StatsResponse = {
   total_tvl: "99999999",
   unique_depositors: 1,
@@ -209,13 +188,12 @@ function makeFetch(body: unknown, ok = true, status = 200): FetchLike {
 }
 
 /**
- * RouterView calls three URLs:
- * /v1/router/weights, /v1/governance/proposals, /v1/vaults.
- * Return different fixtures depending on which URL is called.
+ * RouterView calls two URLs: /v1/router/weights and /v1/vaults. Any other URL
+ * is a 404, so a reintroduced call to the deleted /v1/governance/proposals
+ * route (issue 1698) turns the tab into its error state and fails these tests.
  */
 function makeRouterFetch(
   weights: RouterWeightsResponse = routerWeightsFixture,
-  proposals = proposalsFixture,
   vaults: VaultsResponse = vaultsFixture,
 ): FetchLike {
   return vi.fn(async (url: string) => {
@@ -225,7 +203,7 @@ function makeRouterFetch(
     if (url.includes("/v1/vaults")) {
       return { ok: true, status: 200, json: async () => vaults };
     }
-    return { ok: true, status: 200, json: async () => proposals };
+    return { ok: false, status: 404, json: async () => ({}) };
   }) as unknown as FetchLike;
 }
 
@@ -482,27 +460,16 @@ describe("RouterView", () => {
     expect(queryByTestId("router-view-weights-table")).toBeNull();
   });
 
-  it("renders pending open proposal description", async () => {
-    const { getByTestId } = render(
-      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+  it("shows no proposal section and never calls the deleted proposals route (issue 1698)", async () => {
+    const fetchImpl = makeRouterFetch();
+    const { getByTestId, queryByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={fetchImpl} />,
     );
-    await waitFor(() => expect(getByTestId("router-view-pending-proposal")).toBeTruthy());
-    expect(getByTestId("router-view-proposal-description").textContent).toBe(
-      "Increase vault-a weight to 60%",
-    );
-    expect(getByTestId("router-view-proposal-status").textContent).toBe("open");
-  });
-
-  it("shows no pending proposal when all proposals are executed", async () => {
-    const noOpen: ProposalsResponse = {
-      proposals: [{ ...proposalsFixture.proposals[0], status: "executed" }],
-      block_number: 850,
-      indexed_at: "2026-01-01T12:00:00Z",
-    };
-    const noOpenFetch = makeRouterFetch(routerWeightsFixture, noOpen);
-
-    const { getByTestId } = render(<RouterView apiUrl="http://api" fetchImpl={noOpenFetch} />);
-    await waitFor(() => expect(getByTestId("router-view-no-proposal")).toBeTruthy());
+    await waitFor(() => expect(getByTestId("router-view-history-table")).toBeTruthy());
+    expect(queryByTestId("router-view-pending-proposal")).toBeNull();
+    expect(queryByTestId("router-view-no-proposal")).toBeNull();
+    const urls = vi.mocked(fetchImpl).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/governance"))).toBe(false);
   });
 
   it("renders weight history rows", async () => {

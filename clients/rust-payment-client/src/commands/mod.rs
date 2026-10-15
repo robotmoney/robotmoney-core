@@ -5,6 +5,7 @@
 //! Each module exposes a `run(...)` function that returns the process exit
 //! code. JSON output goes on stdout; logs/warnings go on stderr.
 
+pub mod agent_consent;
 pub mod build_info;
 pub mod committee;
 pub mod committee_identity;
@@ -21,7 +22,6 @@ pub mod get_timelock;
 pub mod get_tx;
 pub mod get_vault;
 pub mod get_vaults;
-pub mod governance_draft;
 pub mod receipt;
 pub mod self_check;
 pub mod status;

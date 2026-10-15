@@ -557,6 +557,15 @@ const RECORDER_LABELS = [
   "recorder: has no owner, role or setter",
 ] as const;
 
+/**
+ * Core 1793 (QA plan D5): the live ring the recorder must hold. The USDC sell anchor reads the recorder over `BasketViews.SELL_ANCHOR_WINDOW`
+ * (14,400 s). At one `record()` per 2 s block the ring keeps that window only with 14,400 / 2 + 1 = 7,201 slots
+ * (`DeployUniswapV4PriceRecorder.RING_SLOTS`). A 901-slot ring (the 1800 s NAV floor, Deploy 2's recorder) lets a spammer evict the anchor's
+ * history down to about 1,800 s, so the anchor gives no protection. The live `observationCardinality` is read, not `cardinalityNext`: a ring
+ * grown with `grow(7201)` stays at its old size until its index wraps.
+ */
+export const RECORDER_RING_SLOTS = 7_201;
+
 /** Function selectors that would make the recorder administrable. None may be in its runtime code (it has no owner, role or setter). */
 const ADMIN_SELECTORS = [
   "owner()", "admin()", "pendingOwner()", "transferOwnership(address)", "renounceOwnership()", "acceptOwnership()", "hasRole(bytes32,address)",
@@ -568,7 +577,7 @@ const ADMIN_SELECTORS = [
  * Core 1676 (owner decision 2026-10-08). The rmAGENT asset is a Uniswap V4 pool. Its vault pool is the price recorder, its adapter the V4 swap
  * adapter. Read from the chain and compared with core's config (never with the chain itself): the asset row's venue and pool, the adapter's
  * codehash on the vault allowlist, the adapter's immutable binding, the recorder's PoolKey (and that the key hashes to the configured pool id),
- * the recorder's ring size, and the absence of any admin selector in the recorder's runtime code (the negative invariant).
+ * the recorder's live ring size (at least `RECORDER_RING_SLOTS`), and the absence of any admin selector in the recorder's runtime code (the negative invariant).
  */
 async function v4AssetChecks(
   c: Collector, chain: ChainReader, v: ManifestVault, asset: ExpectedAsset,
@@ -633,7 +642,13 @@ async function v4AssetChecks(
   });
   await c.run(RECORDER_LABELS[1], async () => {
     const [, , , cardinality] = (await chain.read(ctx.recorder, "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality)")) as readonly [bigint, number, number, number];
-    return { ok: Number(cardinality) >= 901, detail: `observationCardinality ${cardinality}, the 1800 s window needs 901` };
+    const ok = Number(cardinality) >= RECORDER_RING_SLOTS;
+    return {
+      ok,
+      detail: ok
+        ? `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS}`
+        : `observationCardinality ${cardinality}, the 14,400 s sell anchor window needs ${RECORDER_RING_SLOTS} (core 1793): a spammer can evict the anchor's history from a smaller ring. Call grow(${RECORDER_RING_SLOTS}) and record until the index wraps, or deploy a new recorder`,
+    };
   });
   await c.run(RECORDER_LABELS[2], async () => {
     const code = (await chain.getCode(ctx.recorder)).slice(2).toLowerCase();

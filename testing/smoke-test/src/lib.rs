@@ -1575,8 +1575,11 @@ impl Fixture {
     }
 
     /// The test depositor authorizes the harness agent: `commitAuthorization(keccak(agent, depositor, salt))`,
-    /// then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
-    /// share receiver (the permissionless path requires it). Returns the reveal transaction hash.
+    /// then `revealAuthorization(agent, salt, policy, agentConsent)` in a later block. The policy names the
+    /// depositor as the share receiver (the permissionless path requires it). The depositor is not the agent and
+    /// holds no ADMIN_ROLE, so the reveal carries the agent's EIP-712 consent, signed with [`AGENT_PRIVATE_KEY`]
+    /// at the gateway's current `agentConsentNonce(agent)` (issue #1791, QA plan v1 D2). Returns the reveal
+    /// transaction hash.
     pub fn depositor_authorize_agent(
         &self,
         max_per_payment: u128,
@@ -1614,11 +1617,32 @@ impl Fixture {
         let policy = format!(
             "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
         );
+        // The consent binds this revealer and share receiver at the agent's current nonce; the gateway advances
+        // the nonce on success, so a re-authorization after a revoke signs the next one.
+        let agent_hex = format!("{agent:#x}");
+        let nonce = parse_word(
+            &self.cast_call_raw(self.gateway(), "agentConsentNonce(address)", &[&agent_hex])?,
+            "agentConsentNonce(address)",
+        )?;
+        let digest = agent_consent_digest(
+            self.gateway(),
+            self.chain_id,
+            agent,
+            depositor,
+            depositor,
+            nonce,
+        );
+        let consent = sign_digest(&AGENT_PRIVATE_KEY, &digest)?;
         self.cast_send(
             SHARE_RECEIVER_PRIVATE_KEY_HEX,
             self.gateway(),
-            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
-            &[&format!("{agent:#x}"), &format!("0x{}", hex::encode(salt.0)), &policy],
+            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]),bytes)",
+            &[
+                &agent_hex,
+                &format!("0x{}", hex::encode(salt.0)),
+                &policy,
+                &format!("0x{}", hex::encode(consent)),
+            ],
         )
     }
 
@@ -1861,6 +1885,78 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
     let pubkey = vk.to_encoded_point(false);
     let hash = keccak256(&pubkey.as_bytes()[1..]);
     Address::from_slice(&hash[12..])
+}
+
+/// EIP-712 digest of `AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
+/// (`RobotMoneyGateway`, `1`, `chain_id`, `gateway`), built exactly as
+/// `RobotMoneyGateway._requireAgentConsent` builds it (issue #1791). `nonce` is the 32-byte
+/// big-endian `agentConsentNonce(agent)` word. Mirrors `contracts/test/helpers/AgentConsent.sol`.
+fn agent_consent_digest(
+    gateway: Address,
+    chain_id: u64,
+    agent: Address,
+    owner: Address,
+    share_receiver: Address,
+    nonce: [u8; 32],
+) -> [u8; 32] {
+    fn word_addr(a: Address) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(a.as_slice());
+        w
+    }
+    let mut chain = [0u8; 32];
+    chain[24..].copy_from_slice(&chain_id.to_be_bytes());
+    let mut domain = Vec::with_capacity(160);
+    domain.extend_from_slice(
+        keccak256(
+            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+        )
+        .as_slice(),
+    );
+    domain.extend_from_slice(keccak256(b"RobotMoneyGateway").as_slice());
+    domain.extend_from_slice(keccak256(b"1").as_slice());
+    domain.extend_from_slice(&chain);
+    domain.extend_from_slice(&word_addr(gateway));
+    let mut strukt = Vec::with_capacity(160);
+    strukt.extend_from_slice(
+        keccak256(b"AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)")
+            .as_slice(),
+    );
+    strukt.extend_from_slice(&word_addr(agent));
+    strukt.extend_from_slice(&word_addr(owner));
+    strukt.extend_from_slice(&word_addr(share_receiver));
+    strukt.extend_from_slice(&nonce);
+    let mut typed = Vec::with_capacity(66);
+    typed.extend_from_slice(b"\x19\x01");
+    typed.extend_from_slice(keccak256(&domain).as_slice());
+    typed.extend_from_slice(keccak256(&strukt).as_slice());
+    keccak256(&typed).0
+}
+
+/// Sign a raw 32-byte digest with `privkey`: `r ‖ s ‖ v` (65 bytes, v = 27 or 28). k256 normalizes
+/// to low-s, which the gateway requires (EIP-2: it refuses the high-s twin).
+fn sign_digest(privkey: &[u8; 32], digest: &[u8; 32]) -> Result<[u8; 65], HarnessError> {
+    use k256::ecdsa::SigningKey;
+    let sk = SigningKey::from_bytes(privkey.into())
+        .map_err(|e| HarnessError::other(format!("invalid signing key: {e}")))?;
+    let (sig, recid) = sk
+        .sign_prehash_recoverable(digest)
+        .map_err(|e| HarnessError::other(format!("signing the digest failed: {e}")))?;
+    let mut out = [0u8; 65];
+    out[..64].copy_from_slice(&sig.to_bytes());
+    out[64] = 27 + recid.to_byte();
+    Ok(out)
+}
+
+/// Parse one ABI word (`cast call` raw output, `0x` plus 64 hex digits) into 32 bytes.
+fn parse_word(raw: &str, what: &str) -> Result<[u8; 32], HarnessError> {
+    let s = raw.trim().strip_prefix("0x").unwrap_or(raw.trim());
+    let bytes = hex::decode(s)
+        .map_err(|e| HarnessError::other(format!("{what} returned non-hex {raw:?}: {e}")))?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| HarnessError::other(format!("{what} returned {raw:?}, not one 32-byte word")))
 }
 
 fn parse_addr(s: &str) -> Address {
@@ -3536,6 +3632,43 @@ mod tests {
     fn share_receiver_key_derives_the_share_receiver_address() {
         let pk = privkey_hex_to_bytes(SHARE_RECEIVER_PRIVATE_KEY_HEX).unwrap();
         assert_eq!(derive_address(&pk), parse_addr(SHARE_RECEIVER_ADDRESS_HEX));
+    }
+
+    /// The consent the depositor's reveal carries (issue #1791) must be the EIP-712 `AgentConsent` signature a
+    /// wallet produces, or the gateway refuses `InvalidAgentConsent` and every harness deploy stops at the
+    /// reveal. Vectors: gateway 0x11..11, chain 918453, the harness agent, the depositor as owner and share
+    /// receiver, nonce 0. The digest is the same tuple hashed with `cast abi-encode` and `cast keccak` (the
+    /// suite 11b step's construction); the signature is `cast wallet sign --data` over the typed-data JSON,
+    /// which equals `cast wallet sign --no-hash` over that digest.
+    #[test]
+    fn agent_consent_signature_matches_the_eip712_vector() {
+        let gateway = parse_addr("0x1111111111111111111111111111111111111111");
+        let depositor = parse_addr(SHARE_RECEIVER_ADDRESS_HEX);
+        let digest = agent_consent_digest(
+            gateway,
+            918453,
+            agent_address(),
+            depositor,
+            depositor,
+            [0u8; 32],
+        );
+        assert_eq!(
+            format!("0x{}", hex::encode(digest)),
+            "0x720ca83a29814f4c27a8ad63d31873619b0bd589e2c635b945510ec22de9ec59"
+        );
+        let sig = sign_digest(&AGENT_PRIVATE_KEY, &digest).unwrap();
+        assert_eq!(
+            format!("0x{}", hex::encode(sig)),
+            "0x7c45cc9c6de66e9918edc786a748333648ddc87777b3a7ec8432c8210d97f6ac\
+             0b1eb0c07d37d64effd1d78a043192b3dbc4a0555801e036ac15add28198af161b"
+        );
+        // A later nonce is a different digest: a consent authorizes once.
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        assert_ne!(
+            agent_consent_digest(gateway, 918453, agent_address(), depositor, depositor, one),
+            digest
+        );
     }
 
     const RECEIPT_A_ID_VECTOR: &str =

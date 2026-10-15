@@ -349,7 +349,7 @@ pub struct VaultDetailResponse {
     pub chain_head_block: Option<i64>,
 }
 
-// ─── Governance types (issue #307) ─────────────────────────────────────────
+// ─── Router weight types (issue #307) ──────────────────────────────────────
 
 /// Single vault weight entry in a weight snapshot.
 #[derive(Debug, Clone, Serialize)]
@@ -378,78 +378,6 @@ pub struct RouterWeightsResponse {
     pub history: Vec<WeightHistoryEntry>,
     #[serde(flatten)]
     pub freshness: Freshness,
-}
-
-/// Summary of a governance proposal for the list endpoint.
-#[derive(Debug, Serialize)]
-pub struct ProposalSummary {
-    pub chain_id: i64,
-    pub proposal_id: i64,
-    pub proposer: String,
-    pub description: String,
-    pub created_at: i64,
-    pub deadline_block: i64,
-    /// "open" | "passed" | "executed" | "expired"
-    pub status: &'static str,
-    pub votes_for: i64,
-    pub votes_against: i64,
-    pub block_number: i64,
-    pub indexed_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Response for GET /v1/governance/proposals.
-#[derive(Debug, Serialize)]
-pub struct ProposalsResponse {
-    pub proposals: Vec<ProposalSummary>,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
-/// Per-voter vote entry for the detail endpoint.
-#[derive(Debug, Serialize)]
-pub struct VoteEntry {
-    pub voter: String,
-    /// true = For, false = Against.
-    pub support: bool,
-    pub weight: String,
-    pub block_number: i64,
-    pub tx_hash: String,
-}
-
-/// Detailed proposal for GET /v1/governance/proposals/:id.
-#[derive(Debug, Serialize)]
-pub struct ProposalDetail {
-    pub chain_id: i64,
-    pub proposal_id: i64,
-    pub proposer: String,
-    pub description: String,
-    pub created_at: i64,
-    pub deadline_block: i64,
-    pub status: &'static str,
-    pub votes_for: i64,
-    pub votes_against: i64,
-    pub executed_block: Option<i64>,
-    pub block_number: i64,
-    pub indexed_at: chrono::DateTime<chrono::Utc>,
-    pub votes: Vec<VoteEntry>,
-}
-
-/// Response for GET /v1/governance/proposals/:id.
-#[derive(Debug, Serialize)]
-pub struct ProposalDetailResponse {
-    pub proposal: ProposalDetail,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
-/// Decode a governance proposal `status` smallint into a string label.
-pub fn proposal_status_label(status: i16) -> &'static str {
-    match status {
-        0 => "open",
-        1 => "passed",
-        2 => "executed",
-        _ => "expired",
-    }
 }
 
 // ─── GET /v1/stats ──────────────────────────────────────────────────────────
@@ -490,9 +418,9 @@ pub struct StatsResponse {
 /// Response envelope for GET /v1/router/state.
 #[derive(Debug, Serialize)]
 pub struct RouterStateResponse {
-    /// Most recent weight allocation (empty when no WeightsApplied ingested yet).
+    /// Most recent weight allocation (empty when no WeightsSet ingested yet).
     pub current_weights: Vec<VaultWeight>,
-    /// Full history of WeightsApplied events, ascending by block.
+    /// Full history of WeightsSet / DefaultWeightsSet events, ascending by block.
     pub history: Vec<WeightHistoryEntry>,
     #[serde(flatten)]
     pub freshness: Freshness,
@@ -594,8 +522,9 @@ pub fn exclusion_finalize_reason_label(reason: i16) -> &'static str {
 
 /// Kinds of events that appear in the per-account history feed.
 ///
-/// Architecture §5.4: "deposits, withdrawals, fee events, policy changes,
-/// and governance votes."
+/// Architecture §5.4: deposits, withdrawals, fee events and policy changes.
+/// There is no governance-vote kind: RouterGovernance voting was deleted
+/// (issue 1698) and migration 0023 removed the old `governance_vote` rows.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -603,7 +532,6 @@ pub enum EventKind {
     Withdrawal,
     FeeCharged,
     PolicyChange,
-    GovernanceVote,
 }
 
 impl EventKind {
@@ -613,7 +541,6 @@ impl EventKind {
             "withdrawal" => Self::Withdrawal,
             "fee_charged" => Self::FeeCharged,
             "policy_change" => Self::PolicyChange,
-            "governance_vote" => Self::GovernanceVote,
             _ => Self::Deposit,
         }
     }
@@ -629,13 +556,13 @@ pub struct AccountHistoryEntry {
     pub log_index: i32,
     pub tx_hash: String,
     /// Vault contract address for deposit/withdrawal/fee events.
-    /// `null` for policy_change and governance_vote events.
+    /// `null` for policy_change events.
     pub vault: Option<String>,
     /// Agent address for deposit and policy_change events.
-    /// `null` for withdrawal, fee_charged, and governance_vote events.
+    /// `null` for withdrawal and fee_charged events.
     pub agent: Option<String>,
     /// USDC amount for deposit, withdrawal, and fee_charged events.
-    /// `null` for policy_change and governance_vote events.
+    /// `null` for policy_change events.
     pub amount: Option<String>,
     pub indexed_at: DateTime<Utc>,
 }

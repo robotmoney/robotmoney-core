@@ -1,0 +1,18 @@
+{
+  "aave_adapter": "0x271F3B322dE3f9E6d1dE09450EC2cc106d2A158f",
+  "aave_v3_venue": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+  "aave_v3_venue_name": "Aave V3 USDC",
+  "admin": "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3",
+  "chain_id": 8453,
+  "compound_adapter": "0x82e5d09770fB95d4371FC513F3024c40cB861FE0",
+  "compound_v3_venue": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+  "compound_v3_venue_name": "Compound V3 USDC",
+  "deployer_share_balance_after": 0,
+  "moonwell_flagship_adapter": "0xAC2a54505229639BdAB9B7708F0e7202f4FEeA1d",
+  "moonwell_flagship_venue": "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca",
+  "moonwell_flagship_venue_name": "Moonwell Flagship USDC",
+  "seed_share_receiver": "0xa5dAD878b268bCf5c31E61b3bd665AEF61feA5CE",
+  "seed_shares": "1000000000000000000000000",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "vault": "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435"
+}

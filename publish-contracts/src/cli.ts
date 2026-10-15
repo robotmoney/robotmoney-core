@@ -116,8 +116,10 @@ export const USAGE = `publish contracts
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
-                     build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs at --core-sha <the round's core_sha> WITH --prior-out: at the original
-                     sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. The counts are the original sha's (its frozen file in the
+                     build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs ALONE at --core-sha <the round's core_sha> WITH --prior-out: at the
+                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. So is every other run that reaches the
+                     verify stage (the default set, --resume included, --stage all, a --stage list naming verify and another stage) at the original or the redeploy sha, and a --prior-out
+                     that is not a checkout of the original sha on any of them. The verify stage refuses a wrong build once more itself, and pauses nothing. The counts are the original sha's (its frozen file in the
                      counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha. A passing verify records prior_out_sha and verified_at_sha on each governed round.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
@@ -268,7 +270,9 @@ export function parseCli(argv: string[]): Parsed {
     if (!isRedeployKey(vaultArg)) throw new PublishError("USAGE", `--vault '${vaultArg}' cannot be redeployed: only ${REDEPLOY_KEYS.join(", ")}\n${USAGE}`);
   } else if (vaultArg !== undefined) throw new PublishError("USAGE", `--vault goes with the ${REDEPLOY_VERB} verb only\n${USAGE}`);
   const priorOut = v["prior-out"] as string | undefined;
-  if (priorOut !== undefined && !(verb === "verify" || stage === "verify" || stage === "all" || verb === undefined)) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
+  // --prior-out is read by the verify stage only: a run whose stages include verify (the verify verb, the default set, all, or a --stage list naming verify).
+  const reachesVerify = verb === "verify" || (verb === undefined && (stage === undefined || stage === "all" || stage.split(",").map((x) => x.trim()).includes("verify")));
+  if (priorOut !== undefined && !reachesVerify) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
@@ -593,8 +597,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // QA plan v1 E1 (review DT-2, QD-6, issue 1796): the single-vault redeploy's sha model. `govern --row redeploy-vault` and `verify --prior-out` may name the sha the
     // redeploy-vault verb ran at although the run manifest names the original deployment sha (redeploy-vault.ts redeployShaRun). A verify the model cannot check
     // (the original sha after a round at another sha, the redeploy sha without --prior-out, a --prior-out that is not a checkout of the original sha) is refused HERE,
-    // before any signer, frozen counts or forge: a failed verify would pause all four vaults.
-    const shaPath = a.stage === "plan" ? undefined : redeployShaPath({ verb: a.verb, stage: a.stage, row: a.row });
+    // before any signer, frozen counts or forge: a failed verify would pause all four vaults. A stage set that reaches verify never names the redeploy sha.
+    // Every run that reaches the verify stage is covered, not only the verify verb: the default stage set, --stage all and a list naming verify ("stage-set").
+    const shaPath = a.stage === "plan" ? undefined : redeployShaPath({ verb: a.verb, stage: a.stage, row: a.row, dryRun: a.dryRun });
     const priorRun = shaPath ? loadRunManifest(evidenceDir) : undefined;
     const priorOutSha = a.priorOut ? checkoutShaOf(resolve(cwd, a.priorOut)) : undefined;
     const shaRun = redeployShaRun(priorRun, { coreSha: a.coreSha, path: shaPath, priorOut: a.priorOut, priorOutSha });
@@ -652,8 +657,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), ...(deps.prove ?? {}) }); },
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
-            // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.
-            if (!isPublishError(e, "GOVERN_PENDING")) postflight = "verify";
+            // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
+            // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
+            if (!isPublishError(e, "GOVERN_PENDING") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },

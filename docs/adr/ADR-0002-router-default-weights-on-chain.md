@@ -37,10 +37,13 @@ The Router routes by `defaultWeights` whenever no active vector is set
 overrides it and leaves `defaultWeights` untouched.
 
 Updates to `defaultWeights` flow through the same Safe → Timelock →
-`ADMIN_ROLE` path used elsewhere in the protocol. On today's bytecode the
-`apply-receipt` batch writes the receipt's vector through
-`RouterGovernance.setDefaultWeights`; `RouterGovernance.propose`, `vote`
-and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+`ADMIN_ROLE` path used elsewhere in the protocol
+(`RouterGovernance.setDefaultWeights`). A consensus receipt does not write
+`defaultWeights`: issue 1698 replaced the pre-1698 two-call batch with one
+weight-setter call, `RouterGovernance.applyReceipt`, which releases the receipt
+and writes the active vector with `setWeights` in the same transaction. Issue
+1698 also deleted the contract's proposal, vote and execute functions with the
+voter set.
 
 ## Amendment — 2026-10-05: Launch default weights and who sets active weights
 

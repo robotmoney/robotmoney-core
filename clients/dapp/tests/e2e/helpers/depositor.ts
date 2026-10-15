@@ -15,12 +15,19 @@
  * environment step "fund gas" (`anvil_setBalance`, the same RPC that
  * `scripts/devnet/twin-fork.ts fund-gas` sends). No role is granted to any
  * test wallet.
+ *
+ * An agent other than the depositor consents to its binding (issue 1791):
+ * `fillAgentConsent` signs the gateway's EIP-712 AgentConsent with the
+ * agent's own key, exactly as `rmpc agent-consent` does, and pastes it into
+ * the surface's consent field. So every agent here is a `TestAccount` whose
+ * key the spec holds.
  */
 import type { Page } from "@playwright/test";
 import { createPublicClient, http, zeroAddress, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { DevnetEndpoints } from "./devnet";
 import { openDapp, openTab } from "./wallet";
+import { agentConsentTypedData } from "../../../src/lib/agentConsent";
 
 export interface TestAccount {
   privateKey: Hex;
@@ -39,6 +46,13 @@ export const DEFAULT_ADMIN_ROLE: Hex =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 const GATEWAY_READ_ABI = [
+  {
+    type: "function",
+    name: "agentConsentNonce",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
   {
     type: "function",
     name: "agentOwner",
@@ -203,23 +217,76 @@ export async function waitForAgentState(
 }
 
 /**
+ * The agent's EIP-712 AgentConsent for `owner`, signed with the agent's key at
+ * its live `agentConsentNonce` on the Twin gateway: what `rmpc agent-consent
+ * --owner <owner>` prints (issue 1791). `owner` must name itself as share
+ * receiver, as every depositor without ADMIN_ROLE does.
+ */
+export async function signAgentConsent(
+  endpoints: DevnetEndpoints,
+  agent: TestAccount,
+  owner: Address,
+): Promise<Hex> {
+  const nonce = await client(endpoints).readContract({
+    address: endpoints.gateway_addr as Address,
+    abi: GATEWAY_READ_ABI,
+    functionName: "agentConsentNonce",
+    args: [agent.address],
+  });
+  return privateKeyToAccount(agent.privateKey).signTypedData(
+    agentConsentTypedData({
+      agent: agent.address,
+      owner,
+      shareReceiver: owner,
+      nonce,
+      chainId: endpoints.chain_id,
+      gateway: endpoints.gateway_addr as Address,
+    }),
+  );
+}
+
+/**
+ * Sign `agent`'s consent for `owner` and paste it into the
+ * `<prefix>-agent-consent-input` field of the open surface ("authorize",
+ * "wizard" or "rotation"); waits until the dapp says it recovers to the agent.
+ */
+export async function fillAgentConsent(
+  page: Page,
+  endpoints: DevnetEndpoints,
+  prefix: string,
+  agent: TestAccount,
+  owner: Address,
+): Promise<void> {
+  const { expect } = await import("@playwright/test");
+  const signature = await signAgentConsent(endpoints, agent, owner);
+  await page.getByTestId(`${prefix}-agent-consent-input`).fill(signature);
+  await expect(page.getByTestId(`${prefix}-agent-consent-status`)).toHaveAttribute(
+    "data-status",
+    "ok",
+    { timeout: 30_000 },
+  );
+}
+
+/**
  * Drive the dapp's Authorize tab (commit, then reveal) as `depositor` so
  * `agent` becomes a depositor-owned agent. A caller without ADMIN_ROLE must
  * name itself as shareReceiver (RobotMoneyGateway._validatePolicy), so the
- * depositor's own address is used. Resolves once the chain shows
- * `agentOwner(agent) == depositor` and AGENT_ROLE on the agent.
+ * depositor's own address is used, and the agent consents with its own key
+ * (issue 1791). Resolves once the chain shows `agentOwner(agent) ==
+ * depositor` and AGENT_ROLE on the agent.
  */
 export async function authorizeOwnAgentViaUi(
   page: Page,
   endpoints: DevnetEndpoints,
   depositor: TestAccount,
-  agent: Address,
+  agent: TestAccount,
 ): Promise<void> {
   const { expect } = await import("@playwright/test");
   await openDapp(page, endpoints, { privateKey: depositor.privateKey });
   await openTab(page, "authorize");
-  await page.getByTestId("agent-input").fill(agent);
+  await page.getByTestId("agent-input").fill(agent.address);
   await page.getByTestId("shareReceiver-input").fill(depositor.address);
+  await fillAgentConsent(page, endpoints, "authorize", agent, depositor.address);
   await expect(page.locator('[data-testid="tx-preview"][data-ok="true"]').first()).toBeVisible();
 
   // Step 1 of 2: commit.
@@ -229,5 +296,5 @@ export async function authorizeOwnAgentViaUi(
   await expect(reveal).toBeEnabled({ timeout: 60_000 });
   await reveal.click();
 
-  await waitForAgentState(endpoints, agent, depositor.address);
+  await waitForAgentState(endpoints, agent.address, depositor.address);
 }

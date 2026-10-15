@@ -42,6 +42,11 @@ export interface RevealInputs {
   agent: Address;
   salt: Hex;
   policy: AgentPolicy;
+  /**
+   * The agent's EIP-712 AgentConsent signature (65 bytes), or `"0x"` when the
+   * revealer is the agent (issue 1791, `agentConsent.ts`).
+   */
+  agentConsent: Hex;
 }
 
 /** The `commitAuthorization(commitHash)` call the wallet signs for `c`. */
@@ -52,11 +57,11 @@ export function commitAuthorizationCall(c: CommitInputs) {
   } as const;
 }
 
-/** The `revealAuthorization(agent, salt, policy)` call the wallet signs for `r`. */
+/** The `revealAuthorization(agent, salt, policy, agentConsent)` call the wallet signs for `r`. */
 export function revealAuthorizationCall(r: RevealInputs) {
   return {
     functionName: "revealAuthorization",
-    args: [getAddress(r.agent), r.salt, policyTuple(r.policy)],
+    args: [getAddress(r.agent), r.salt, policyTuple(r.policy), r.agentConsent],
   } as const;
 }
 

@@ -97,8 +97,7 @@ contract WithdrawalsNeverFrozenTest is Test {
 
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        RouterGovernance governance =
-            new RouterGovernance(address(router), deployer);
+        RouterGovernance governance = new RouterGovernance(address(router), deployer);
 
         vm.startPrank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));

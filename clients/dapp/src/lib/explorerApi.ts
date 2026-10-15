@@ -227,26 +227,6 @@ export interface AccountHistoryResponse {
   readonly indexed_at: string;
 }
 
-export interface ProposalSummary {
-  readonly chain_id: number;
-  readonly proposal_id: number;
-  readonly proposer: string;
-  readonly description: string;
-  readonly created_at: number;
-  readonly deadline_block: number;
-  readonly status: string;
-  readonly votes_for: number;
-  readonly votes_against: number;
-  readonly block_number: number;
-  readonly indexed_at: string;
-}
-
-export interface ProposalsResponse {
-  readonly proposals: readonly ProposalSummary[];
-  readonly block_number: number;
-  readonly indexed_at: string;
-}
-
 // ─── Protocol stats types (issue #318) ──────────────────────────────────────
 
 /** One entry in the GET /v1/stats activity feed — always a deposit event. */
@@ -309,18 +289,6 @@ export async function fetchRouterWeights(
   const res = await fetchImpl(url, { signal: options.signal });
   if (!res.ok) throw new Error(`explorer API ${res.status}`);
   return (await res.json()) as RouterWeightsResponse;
-}
-
-/** GET /v1/governance/proposals — list governance proposals. */
-export async function fetchProposals(
-  baseUrl: string,
-  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
-): Promise<ProposalsResponse> {
-  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
-  const url = `${baseUrl.replace(/\/+$/, "")}/v1/governance/proposals`;
-  const res = await fetchImpl(url, { signal: options.signal });
-  if (!res.ok) throw new Error(`explorer API ${res.status}`);
-  return (await res.json()) as ProposalsResponse;
 }
 
 /** GET /v1/stats — aggregate protocol statistics. */

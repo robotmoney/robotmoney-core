@@ -9,6 +9,7 @@ import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
 import { WriteStatus } from "./WriteStatus";
+import { AgentConsentField } from "./AgentConsentField";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -22,9 +23,8 @@ export function RotationTab(props: Props) {
 
   const depositor = r.authorizePath === "depositor";
   const disableRevoke = !isConnected || !r.previewsOk || r.step !== "idle" || r.isPending;
-  const disableAuthorize =
-    !isConnected || !r.authorizeOk || r.step !== "revoke-sent" || r.isPending;
-  const disableReveal = !isConnected || !r.revealReady || r.isPending;
+  const disableAuthorize = !isConnected || !r.authorizeOk || !r.authorizeOpen || r.isPending;
+  const disableReveal = !isConnected || !r.revealReady || r.isPending || r.step === "final-sent";
 
   return (
     <section data-testid="rotation-form">
@@ -86,6 +86,15 @@ export function RotationTab(props: Props) {
         shareReceiver={r.shareReceiver}
         setShareReceiver={r.setShareReceiver}
       />
+      {/* The new agent's consent (issue 1791), before step 1: a rotation that revokes
+          the old agent and then cannot reveal the new one would leave no agent. */}
+      {depositor && (
+        <AgentConsentField
+          testIdPrefix="rotation"
+          consent={r.agentConsent}
+          disabled={r.step !== "idle"}
+        />
+      )}
 
       <form
         data-testid="rotation-step1"
@@ -99,6 +108,12 @@ export function RotationTab(props: Props) {
         <button type="submit" data-testid="rotation-revoke-submit" disabled={disableRevoke}>
           Step 1 — Sign revokeAgent(old) with wallet
         </button>
+        <WriteStatus
+          testId="rotation-revoke"
+          label="Revoke"
+          write={r.revokeStatus.write}
+          receipt={r.revokeStatus.receipt}
+        />
       </form>
 
       <form
@@ -115,6 +130,12 @@ export function RotationTab(props: Props) {
             ? "Step 2 — Sign commitAuthorization(new) with wallet"
             : "Step 2 — Sign authorizeAgent(new) with wallet"}
         </button>
+        <WriteStatus
+          testId="rotation-authorize"
+          label={depositor ? "Commit" : "authorizeAgent"}
+          write={r.authorizeStatus.write}
+          receipt={r.authorizeStatus.receipt}
+        />
       </form>
 
       {depositor && (
@@ -132,18 +153,18 @@ export function RotationTab(props: Props) {
           <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
             Step 3 — Sign revealAuthorization(new) with wallet
           </button>
+          <WriteStatus
+            testId="rotation-reveal"
+            label="Reveal"
+            write={r.revealStatus.write}
+            receipt={r.revealStatus.receipt}
+          />
         </form>
       )}
 
-      {r.step === "done" && (
-        <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>
-      )}
-      {/* A refused or rejected step says why (QA plan U5, finding DR-9). */}
-      <WriteStatus
-        testId="rotation"
-        label="Rotation step"
-        write={{ error: r.writeError, isPending: r.isPending }}
-      />
+      {/* Only once the final transaction is mined with status success (QA plan U5):
+          a step the wallet accepted but the chain reverted shows its revert above. */}
+      {r.done && <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>}
     </section>
   );
 }

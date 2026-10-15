@@ -41,22 +41,18 @@ export default defineConfig({
   ],
   // Two projects over the one devnet (globalSetup runs once). `safe-governance` holds the
   // specs that advance the Twin chain clock past the timelock delay (evm_increaseTime), so they
-  // run after every other spec has finished with the chain (core 1544). governance.spec.ts runs
-  // real Safe -> Timelock rounds to create its voting power and proposal (issue 1647).
+  // run after every other spec has finished with the chain (core 1544). Issue 1698 deleted the
+  // RouterGovernance voting path and its governance.spec.ts with it.
   projects: [
     {
       name: "dapp",
       // consensus-receipts.spec.ts needs a receipt a Fusion QA run anchored and runs only under
       // playwright.fusion.config.ts. Collected here it skipped on every run (QA plan v1 T5).
-      testIgnore: [
-        "**/safe-proposal-role-grant.spec.ts",
-        "**/governance.spec.ts",
-        "**/consensus-receipts.spec.ts",
-      ],
+      testIgnore: ["**/safe-proposal-role-grant.spec.ts", "**/consensus-receipts.spec.ts"],
     },
     {
       name: "safe-governance",
-      testMatch: ["**/safe-proposal-role-grant.spec.ts", "**/governance.spec.ts"],
+      testMatch: ["**/safe-proposal-role-grant.spec.ts"],
       dependencies: ["dapp"],
     },
   ],

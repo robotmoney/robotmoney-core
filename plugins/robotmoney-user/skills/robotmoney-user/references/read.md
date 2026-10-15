@@ -107,13 +107,14 @@ rmpc get-governance --config ./config.toml [--pretty]
 Reads the configured `RouterGovernance` contract (requires `governance_address`
 in the operator config). Returns:
 
-- `active_proposal` — always `null`: nobody holds a voter key, so there are no proposals.
-- `cadence` — constructor arguments of today's `RouterGovernance` bytecode
-  (quorum threshold, execution delay, voting period), printed as read. They are
-  not a governance model: there is no voting by anyone.
+- `router` — the Portfolio Router it sets weights on.
+- `receipt_contract` — the receipt register `applyReceipt` releases from;
+  `null` until stage 11 sets it.
 - `current_weights` — the last applied weight vector (vault addresses + bps).
   Router weights change only when `WEIGHT_SETTER_ROLE` applies the Investment
-  Committee's consensus receipt through the Safe and the timelock.
+  Committee's consensus receipt through the Safe and the timelock, in one
+  `applyReceipt` call. There is no voting by anyone (issue 1698), so there is
+  no proposal, voter, quorum or voting-period field.
 
 All reads are pinned to a single `eth_blockNumber` snapshot. Partial envelopes
 are supported; exit code is 0 even for partial results.
@@ -211,11 +212,9 @@ operator config.
 rmpc get-governance --config ./config.toml [--pretty]
 ```
 
-Reads the RouterGovernance state. Returns the constructor parameters of
-today's bytecode (`voting_period_secs`, `execution_delay_secs`,
-`quorum_threshold`, `total_voting_power`, the last always 0: there are no
-voters) and the current router weight vector as seen by governance.
-`active_proposal` is always `null`. Requires `governance_address` in the
+Reads the RouterGovernance state: `router`, `receipt_contract` and the
+router weight vector it last applied (`current_weights`). There is no
+proposal or voting field (issue 1698). Requires `governance_address` in the
 operator config.
 
 ---

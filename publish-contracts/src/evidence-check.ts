@@ -201,6 +201,15 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     return [];
   }
   const seen = new Set<string>();
+  // QA plan v1 E1 (DT-2): a round at another sha than the deployment's (the evidence core_sha) is checked by ONE verify only: at that sha, with --prior-out of a
+  // checkout at the deployment's sha. A verify that passed so writes verified_at_sha (the round's sha) and prior_out_sha (the deployment's) on every governed round
+  // (verify-stage.ts), so evidence without them never ran that verify. Rounds at the deployment's sha alone need neither; a field present must still be right.
+  // No evidence core_sha (a caller that names none): nothing to compare with, the evidence check itself requires it.
+  const original: string | undefined = typeof ev?.core_sha === "string" && ev.core_sha !== "" ? ev.core_sha : undefined;
+  const roundSha = (r: any): string | undefined => (typeof r?.core_sha === "string" && r.core_sha !== "" ? r.core_sha : original);
+  const foreign = original === undefined ? [] : [...new Set(rs.map(roundSha).filter((x): x is string => x !== undefined && x !== original))];
+  if (foreign.length > 1) bad(`vault_redeploys: rounds ran at ${foreign.join(", ")}, besides the deployment's ${original}: the verifier compares with two builds only (the checkout and --prior-out), so no verify can check them`);
+  const verifiedAt = foreign.length === 1 ? foreign[0]! : original;
   for (const r of rs) {
     const w = redeployLabel(r);
     if (r?.step !== undefined && r.step !== REDEPLOY_ROW) bad(`${w}: step '${r.step}' is not ${REDEPLOY_ROW}`);
@@ -219,6 +228,12 @@ function redeployShapeProblems(ev: any, kind: DeploymentKind, bad: (m: string) =
     if (!capOk) bad(`${w}: router_vault_cap ${String(r?.router_vault_cap)} is not a decimal uint256 string (the old vault's router.vaultCap, copied to the new vault by the batch)`);
     // QA plan v1 E1: the verify after the round compared every contract the redeploy did not replace with --prior-out, a build of the deployment's own sha
     if (r?.prior_out_sha !== undefined && r.prior_out_sha !== ev?.core_sha) bad(`${w}: prior_out_sha ${String(r.prior_out_sha)} is not the evidence core_sha ${String(ev?.core_sha)}: the contracts the redeploy did not replace are verified against the build of the original deployment sha`);
+    if (foreign.length > 0) {
+      const how = `a round ran at ${foreign.join(", ")}, not at the deployment's ${original}, so the verify after it runs at that sha with --prior-out of a checkout at ${original} and records it on every round`;
+      if (r?.prior_out_sha === undefined) bad(`${w}: prior_out_sha is missing: ${how}`);
+      if (r?.verified_at_sha === undefined) bad(`${w}: verified_at_sha is missing: ${how}`);
+    } else if ((r?.verified_at_sha === undefined) !== (r?.prior_out_sha === undefined)) bad(`${w}: verified_at_sha and prior_out_sha are written together by a passing verify with --prior-out: one of them is missing`);
+    if (r?.verified_at_sha !== undefined && verifiedAt !== undefined && foreign.length <= 1 && r.verified_at_sha !== verifiedAt) bad(`${w}: verified_at_sha ${String(r.verified_at_sha)} is not ${verifiedAt}: ${foreign.length ? `the replacing vault runs the build of ${verifiedAt}, the sha its round ran at` : "every round ran at the deployment's sha, so its verify runs there"}`);
     // the deploy half: every transaction the deployer sent for the vault, each with status 1
     const hashes: unknown[] = Array.isArray(r?.deploy_tx_hashes) ? r.deploy_tx_hashes : [];
     const st: unknown[] = Array.isArray(r?.deploy_receipt_statuses) ? r.deploy_receipt_statuses : [];
@@ -1040,8 +1055,9 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["PEM private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ["keystore json", /"ciphertext"\s*:|"crypto"\s*:\s*\{/],
   ["mnemonic-like phrase", /\b(?:[a-z]{3,8} ){11,23}[a-z]{3,8}\b/],
-  // QA plan v1 E8: the camelCase and quoted JSON key forms too (`privateKey: …`, `"private_key": "…"`), not only `PRIVATE_KEY=…`. A value the logger redacted is not a secret.
-  ["secret assignment", /\b(?:(?:PRIVATE[_-]?KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API[_-]?KEY)"?|TOKEN)\s*[=:]\s*(?!"?\[redacted\])\S{6,}/i],
+  // QA plan v1 E8: the camelCase and quoted JSON key forms too (`privateKey: …`, `"private_key": "…"`, `"authToken": "…"`, `"token": "…"`), not only `PRIVATE_KEY=…`.
+  // A value the logger redacted is not a secret. A bare `token` names an ERC-20 too (the asset configs, `--admin-arg token=0x…`): its 20-byte address value is public.
+  ["secret assignment", /\b(?:(?:PRIVATE[_-]?KEY|MNEMONIC|ETH_PASSWORD|PASSWORD|API[_-]?KEY|(?:AUTH|ACCESS|REFRESH|BEARER|SESSION)[_-]?TOKEN|BEARER|AUTHORIZATION|CREDENTIALS?)"?\s*[=:]\s*(?!"?\[redacted\])\S{6,}|TOKEN"?\s*[=:]\s*(?!"?\[redacted\])(?!"?0x[0-9a-fA-F]{40}(?![0-9a-fA-F]))\S{6,})/i],
 ];
 
 const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
@@ -1050,12 +1066,30 @@ const B32 = "0x[0-9a-fA-F]{64}(?![0-9a-fA-F])";
 
 /** Words of a label or key that name a public hash. `codehash` and `blockhash` are one word in some outputs. */
 const PUBLIC_HASH_WORDS = new Set(["tx", "txs", "txn", "hash", "hashes", "codehash", "codehashes", "blockhash", "transaction", "transactions", "block", "salt", "digest", "digests"]);
-/** Words of a label or key that name a secret. Any one of them wins over a hash word: `privateKeyHash` exempts nothing. */
-const SECRET_WORDS = new Set(["private", "priv", "privkey", "secret", "secrets", "mnemonic", "seed", "password", "passwd", "passphrase", "pass", "pw", "key", "keys", "pk", "sk", "keystore"]);
+/**
+ * Words of a label or key that name a secret. Any one of them wins over a hash word: `privateKeyHash` and `tokenHash` exempt nothing. Credentials too (token, auth,
+ * credential, bearer, session, cookie), and the run-together lower-case forms a camelCase split cannot see (`apikey`, `authtoken`).
+ */
+const SECRET_WORDS = new Set([
+  "private", "priv", "privkey", "privatekey", "secret", "secrets", "secretkey", "mnemonic", "seed", "password", "passwd", "passphrase", "pass", "pw", "key", "keys", "pk", "sk", "keystore",
+  "token", "tokens", "authtoken", "accesstoken", "auth", "authorization", "credential", "credentials", "cred", "creds", "bearer", "jwt", "session", "cookie", "apikey",
+]);
+/**
+ * Words of a key that name a public 32-byte value though no hash word does (QA plan v1 E8): a timelock predecessor, a role id, an event topic. `id` and `ids`
+ * count only beside a word that says whose id it is (ID_OWNERS): `operation_id`, `receipt_id`, `pool_id`, never a bare `id` (issue 1759 keeps that to two log events).
+ */
+const PUBLIC_ID_WORDS = new Set(["predecessor", "role", "roles", "topic", "topics"]);
+const ID_OWNERS = new Set(["operation", "operations", "receipt", "receipts", "pool"]);
 /** The lower-case words of a key or label: camelCase, snake_case, kebab-case, dotted and `address:function` names are split. */
 const nameWords = (name: string): string[] => name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 const isSecretName = (name: string): boolean => nameWords(name).some((w) => SECRET_WORDS.has(w));
 const isHashLabel = (name: string): boolean => !isSecretName(name) && nameWords(name).some((w) => PUBLIC_HASH_WORDS.has(w));
+/** A label or key that names a public 32-byte value and no secret: a hash word, or a public id (PUBLIC_ID_WORDS, an owned `id`). An allowlist: any other name exempts nothing. */
+const isPublicName = (name: string): boolean => {
+  if (isSecretName(name)) return false;
+  const w = nameWords(name);
+  return w.some((x) => PUBLIC_HASH_WORDS.has(x) || PUBLIC_ID_WORDS.has(x)) || (w.some((x) => x === "id" || x === "ids") && w.some((x) => ID_OWNERS.has(x)));
+};
 
 /** A label, then its 0x bytes32 value or an inline list of them: `"txHash": "0x…"`, `"tx_hashes": ["0x…", "0x…"]`, `Hash: 0x…`, `schedule_tx=0x…`. The label starts a word, never the tail of a longer one. */
 const LABELLED_B32 = new RegExp(`(?<!\\w)([A-Za-z][\\w.-]*)"?[ \\t]*[:=]?[ \\t]*(?:\\[[ \\t]*)?"?${B32}(?:"[ \\t]*,[ \\t]*"${B32})*`, "g");
@@ -1085,12 +1119,15 @@ function trackContainers(open: OpenContainer[], line: string): void {
 
 /**
  * Removes the 64-hex values of one line that sit in a public hash field, judged value by value, never by the line. `open` is the containers open at the line.
- * 1. a 0x bytes32 right after a label whose words name a public hash (tx, hash, transaction, block, salt, digest);
- * 2. a pretty-printed JSON line that is one 0x bytes32 value of a key, or one element of a named list (`"topics": [`), when that name is not a secret name;
+ * Every rule is an allowlist of public names (isPublicName); a name that is not on it exempts nothing, whatever it is (QA plan v1 E8):
+ * 1. a 0x bytes32 right after a label that names a public hash (tx, hash, transaction, block, salt, digest) or a public id (`operation_id`, `pool_id`, a role);
+ * 2. a pretty-printed JSON line that is one 0x bytes32 value of such a key, or of any non-secret key directly inside a hash-named object (`"code_hashes": {`),
+ *    or the `data` of an event log (inside `"logs"`), or one element of a list with such a name (`"topics": [`, `"tx_hashes": [`);
  * 3. `sha256:<64 hex>` directly under `configHashes` / `config_hashes` (the isomorphism report, src/isomorphism.ts), pretty-printed or on one line;
  * 4. the bare sha256 of `crossChecked.fileHash` in a frozen counts file.
- * A label or key that names a secret (private, key, secret, seed, mnemonic, password) never exempts: `"privateKey": "0x…",` stays and is flagged. So does a bare
- * 64-hex anywhere else, and a key beside a tx hash on the same line: a hash word elsewhere on the line no longer skips it.
+ * A label or key that names a secret or a credential (private, key, secret, seed, mnemonic, password, token, auth, credential, bearer) never exempts, and neither
+ * does any other name off the list: `"privateKey": "0x…",`, `"token": "0x…",` and `"signer": "0x…",` stay and are flagged. So does a bare 64-hex anywhere
+ * else, and a key beside a tx hash on the same line: a hash word elsewhere on the line no longer skips it.
  */
 export function stripHashFields(line: string, open: readonly OpenContainer[] = []): string {
   const top = open[open.length - 1];
@@ -1098,11 +1135,16 @@ export function stripHashFields(line: string, open: readonly OpenContainer[] = [
   if (SHA256_LINE.test(line) && top?.name !== undefined && CONFIG_HASH_KEYS.has(top.name)) return line.replace(new RegExp(SHA256_VALUE), "sha256:");
   const value = new RegExp(`"${B32}"(,?\\s*)$`);
   const keyed = KEYED_B32_LINE.exec(line);
-  if (keyed && nameWords(keyed[1]!).length > 0 && !isSecretName(keyed[1]!)) return line.replace(value, '"0x"$1');
-  if (ELEMENT_B32_LINE.test(line) && top?.list && top.name !== undefined && nameWords(top.name).length > 0 && !isSecretName(top.name)) return line.replace(value, '"0x"$1');
+  if (keyed) {
+    const key = keyed[1]!;
+    const inHashObject = top !== undefined && !top.list && top.name !== undefined && isHashLabel(top.name) && !isSecretName(key);
+    const logData = key === "data" && open.some((c) => c.name === "logs");
+    if (isPublicName(key) || inHashObject || logData) return line.replace(value, '"0x"$1');
+  }
+  if (ELEMENT_B32_LINE.test(line) && top?.list && top.name !== undefined && isPublicName(top.name)) return line.replace(value, '"0x"$1');
   return line
     .replace(INLINE_CONFIG_HASHES, (m) => m.replace(new RegExp(SHA256_VALUE, "g"), "sha256:"))
-    .replace(LABELLED_B32, (m, label: string) => (isHashLabel(label) ? m.replace(new RegExp(B32, "g"), "0x") : m));
+    .replace(LABELLED_B32, (m, label: string) => (isPublicName(label) ? m.replace(new RegExp(B32, "g"), "0x") : m));
 }
 
 /** The log events whose operation id is a public timelock operation id (govern.ts, safe/timelock.ts). */
@@ -1209,7 +1251,8 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   if (need.length) { console.error(`evidence: --vault-redeploys needs ${need.map((k) => `--${k}`).join(", ")}`); process.exit(2); }
   const m = JSON.parse(readFileSync(values["vault-redeploys"] as string, "utf8"));
   const entries: any[] = Array.isArray(m.vault_redeploys) ? m.vault_redeploys : [];
-  const ev = { deployment_kind: kind, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
+  // QA plan v1 E1: the run manifest's own sha is the deployment's, the one prior_out_sha must name (and verified_at_sha too, unless a round ran at another sha)
+  const ev = { deployment_kind: kind, core_sha: m.coreSha, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
   const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
   if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
   const problems = [...(entries.length > 0 ? [] : ["the run manifest has no vault_redeploys entry"]), ...entries.filter((r) => r?.status !== "governed").map((r) => `${redeployLabel(r)}: status is ${String(r?.status)}, want governed`), ...checkVaultRedeploys(ev, floor, kind)];

@@ -23,9 +23,13 @@
 #     name says expectedFail asserts the registry entry, and none is skipped today.
 #     A RED invariant would skip through _skipRed, naming the remediation issue
 #     that must remove the skip and flip it green.
-#   - The dedicated harnesses (CustodyMultiVault, StaleOracleRedemption,
-#     TwapManipulation, DeployAssertions) carry the family-wide custody,
-#     stale-oracle, TWAP-manipulation and post-deploy assertion scaffolding.
+#   - The dedicated harnesses (CustodyMultiVault, TwapManipulation,
+#     DeployAssertions) carry the family-wide custody, TWAP-manipulation and
+#     post-deploy assertion scaffolding. The fv/ tree is these three, CoverageMap
+#     and FvInvariants: CustodyMultiVault 4, TwapManipulation 2, DeployAssertions 3,
+#     CoverageMap 3 and FvInvariants 25, the floor of 37 below. There is no
+#     stale-oracle harness: StaleOracleRedemption.t.sol was deleted in #1505 with
+#     the Chronicle oracle, and SUP-5 is the registry assertion in FvInvariants.
 #
 # This is the phase scout gate for contract-security-remediation-2: it pins the
 # spec BEFORE any remediation lands, so every later fix is anchored by the

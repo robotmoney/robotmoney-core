@@ -69,6 +69,33 @@ describe("exportRmpcConfig", () => {
     ]);
   });
 
+  // QA plan U6 (rmpc half of D2): the dapp knows the agent's owner and share receiver at
+  // authorize time, so its export pins both. rmpc's preflight then refuses a binding that
+  // someone else made first (ErrAgentBindingMismatch); without the keys it skipped the check.
+  it("pins share_receiver and agent_owner when the wallet is known", () => {
+    const owner = "0x5555555555555555555555555555555555555555";
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      share_receiver: owner,
+      agent_owner: owner,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.share_receiver).toBe(owner);
+    expect(parsed.agent_owner).toBe(owner);
+    const topLevelKeys = Object.keys(parsed).filter((k) => k !== "signer");
+    expect(topLevelKeys).toEqual([
+      "chain_id",
+      "rpc_url",
+      "gateway_address",
+      "usdc_address",
+      "vault_address",
+      "gateway_runtime_hash",
+      "share_receiver",
+      "agent_owner",
+    ]);
+  });
+
   it("gateway_runtime_hash must be non-zero in the exported config", () => {
     const nonZeroHash = "0x" + "ab".repeat(32);
     const toml = exportRmpcConfig({

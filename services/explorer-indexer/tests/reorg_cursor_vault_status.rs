@@ -22,7 +22,7 @@
 
 mod common;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::Address;
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::db::{CountTable, REORG_ROLLBACK_EXCLUSIONS};
 use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
@@ -766,8 +766,8 @@ async fn rollback_set_equals_live_block_scoped_schema() {
         "vault_status_events",
         "agent_deposits",
         "agent_policies",
-        "governance_votes",
-        "governance_proposals",
+        // governance_votes and governance_proposals were here until migration
+        // 0023 dropped them (issue 1698): RouterGovernance has no voting.
         "router_weight_snapshots",
         "router_deposit_legs",
         "adapter_allocations",
@@ -922,42 +922,55 @@ async fn reorg_rollback_exclusions_are_documented_and_live() {
     );
 }
 
-/// The derived deletion order must respect the live foreign keys.
-/// `governance_votes` references `governance_proposals` and both are
-/// block-scoped: deleting the proposals first raises a foreign-key violation.
-/// A set derived in name order would do exactly that, so this asserts the
-/// FK-aware ordering, not just the membership.
+/// The derived deletion order must respect the live foreign keys. A
+/// block-scoped child that references a block-scoped parent must be deleted
+/// first: deleting the parent first raises a foreign-key violation. The live
+/// schema held one such pair (`governance_votes` → `governance_proposals`)
+/// until migration 0023 dropped it (issue 1698), so the test creates its own
+/// pair. The parent's name sorts first, so a set derived in name order would
+/// delete it first: this asserts the FK-aware ordering, not just membership.
 #[tokio::test]
 async fn rollback_order_deletes_children_before_parents() {
     let fx = pg_fixture().await;
+    let pool = raw_pool(&fx).await;
     let db = &fx.db;
     db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
 
-    db.insert_proposal(
-        CHAIN,
-        1,
-        105,
-        0,
-        [0xC1u8; 32],
-        [0x71u8; 20],
-        "orphaned proposal",
-        1_700_000_000,
-        200,
+    sqlx::query(
+        "CREATE TABLE fk_probe_a_parent ( \
+             chain_id     BIGINT NOT NULL, \
+             id           BIGINT NOT NULL, \
+             block_number BIGINT NOT NULL, \
+             PRIMARY KEY (chain_id, id) \
+         )",
     )
+    .execute(&pool)
     .await
-    .unwrap();
-    db.insert_vote(
-        CHAIN,
-        1,
-        [0x72u8; 20],
-        106,
-        0,
-        [0xC2u8; 32],
-        true,
-        U256::from(42u64),
+    .expect("create synthetic parent table");
+    sqlx::query(
+        "CREATE TABLE fk_probe_b_child ( \
+             chain_id     BIGINT NOT NULL, \
+             parent_id    BIGINT NOT NULL, \
+             block_number BIGINT NOT NULL, \
+             PRIMARY KEY (chain_id, parent_id, block_number), \
+             FOREIGN KEY (chain_id, parent_id) REFERENCES fk_probe_a_parent (chain_id, id) \
+         )",
     )
+    .execute(&pool)
     .await
-    .unwrap();
+    .expect("create synthetic child table");
+    sqlx::query("INSERT INTO fk_probe_a_parent (chain_id, id, block_number) VALUES ($1, 1, 105)")
+        .bind(CHAIN)
+        .execute(&pool)
+        .await
+        .expect("seed synthetic parent");
+    sqlx::query(
+        "INSERT INTO fk_probe_b_child (chain_id, parent_id, block_number) VALUES ($1, 1, 106)",
+    )
+    .bind(CHAIN)
+    .execute(&pool)
+    .await
+    .expect("seed synthetic child");
 
     let order = db.block_scoped_rollback_tables().await.unwrap();
     let pos = |name: &str| {
@@ -967,8 +980,8 @@ async fn rollback_order_deletes_children_before_parents() {
             .unwrap_or_else(|| panic!("{name} missing from rollback order: {order:?}"))
     };
     assert!(
-        pos("governance_votes") < pos("governance_proposals"),
-        "governance_votes references governance_proposals, so it must be deleted \
+        pos("fk_probe_b_child") < pos("fk_probe_a_parent"),
+        "fk_probe_b_child references fk_probe_a_parent, so it must be deleted \
          first; order was {order:?}"
     );
 
@@ -976,6 +989,6 @@ async fn rollback_order_deletes_children_before_parents() {
     db.delete_above_block(CHAIN, 100)
         .await
         .expect("rollback must not violate a foreign key");
-    assert_eq!(db.count(CountTable::GovernanceVotes).await.unwrap(), 0);
-    assert_eq!(db.count(CountTable::GovernanceProposals).await.unwrap(), 0);
+    assert_eq!(row_count(&pool, "fk_probe_b_child").await, 0);
+    assert_eq!(row_count(&pool, "fk_probe_a_parent").await, 0);
 }

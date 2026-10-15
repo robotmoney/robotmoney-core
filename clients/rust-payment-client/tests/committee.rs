@@ -37,7 +37,8 @@ use tempfile::TempDir;
 
 // ─── Test constants ───────────────────────────────────────────────────────────
 
-/// Use local devnet chain ID so software signer passes the production-grade check.
+/// Local devnet chain id. A software keystore signs on every chain (owner
+/// decision 2026-10-14); `committee_vote_submit_base_mainnet_*` covers 8453.
 const CHAIN_ID: u64 = 31337;
 
 /// Fake IC policy contract address for tests.
@@ -64,6 +65,10 @@ struct CommitteeFixture {
 
 impl CommitteeFixture {
     fn build(rpc_url: &str) -> Self {
+        Self::build_on(rpc_url, CHAIN_ID)
+    }
+
+    fn build_on(rpc_url: &str, chain_id: u64) -> Self {
         use alloy_primitives::keccak256;
         use rust_payment_client::signer::software::SoftwareSigner;
 
@@ -85,7 +90,7 @@ impl CommitteeFixture {
 
         let config_path = tmp.path().join("rmpc.toml");
         let toml = format!(
-            r#"chain_id              = {CHAIN_ID}
+            r#"chain_id              = {chain_id}
 rpc_url               = "{rpc_url}"
 gateway_address       = "{GATEWAY:#x}"
 usdc_address          = "0x0000000000000000000000000000000000000c00"
@@ -149,6 +154,62 @@ fn simple_receipt_body() -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+/// Owner decision 2026-10-14 (QA plan U7, Decision D12): a committee write on
+/// Base mainnet signs with the software keystore. The old gate refused it
+/// with `ErrProductionSignerRequired` before the keystore was read. Now the
+/// production warning prints and the command goes on to load the keystore;
+/// with no passphrase in the environment that load is the startup failure
+/// (exit 3), never a hardware refusal.
+#[test]
+fn committee_vote_submit_base_mainnet_signs_with_software_keystore() {
+    let logs = TempDir::new().unwrap();
+    let fix = CommitteeFixture::build_on("http://127.0.0.1:1", 8453);
+    let vote_hash = format!("{VOTE_JSON_HASH:#x}");
+    let prompt = format!("{PROMPT_HASH:#x}");
+    let inputs = format!("{INPUTS_DIGEST:#x}");
+
+    let output = rmpc()
+        .env("RMPC_LOG_DIR", logs.path())
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x2222222222222222222222222222222222222222",
+            "--stance",
+            "neutral",
+            "--weight-bps",
+            "2500",
+            "--confidence",
+            "50",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/mainnet",
+            "--vote-json-hash",
+            &vote_hash,
+            "--prompt-hash",
+            &prompt,
+            "--inputs-digest",
+            &inputs,
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_eq!(output.status.code(), Some(3), "keystore load is the stop");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("ErrProductionSignerRequired"),
+        "no hardware refusal on 8453: {stdout}"
+    );
+    common::assert_mainnet_warning_precedes_keystore_load(logs.path());
+}
 
 #[tokio::test]
 async fn test_committee_vote_submit_happy_path() {
@@ -673,12 +734,15 @@ async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
 /// `committee register`, `propose` and `vote` signed as an EOA against
 /// `onlyRole(ADMIN_ROLE)` / governance entry points that belong to the Safe
 /// after handover. They must not exist, so no operator reaches for them.
+/// `governance draft-proposal` built proposal calldata for a voting function
+/// issue 1698 deleted; it is gone too (QA plan C1).
 #[test]
 fn test_rmpc_has_no_governance_signing_commands() {
     for argv in [
         vec!["committee", "--config", "x.toml", "register"],
         vec!["propose", "--config", "x.toml"],
         vec!["vote", "--config", "x.toml"],
+        vec!["governance", "--config", "x.toml", "draft-proposal"],
     ] {
         let output = rmpc().args(&argv).output().expect("rmpc ran");
         assert!(

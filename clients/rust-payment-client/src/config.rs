@@ -120,20 +120,17 @@ pub struct Config {
     /// When absent that subcommand exits with `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub ic_policy_address: Option<String>,
-    /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex). Optional —
-    /// only required for `rmpc governance draft-proposal`, which reads
-    /// `isReleased`/`getReceiptById` and scans `ReceiptReleased` logs here.
-    /// When absent that command exits with `EXIT_STARTUP_FAIL`.
+    /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex).
+    /// Optional, and read by no command since issue 1698 deleted
+    /// `rmpc governance draft-proposal`. Kept so an existing config that sets
+    /// it still loads (`deny_unknown_fields`).
     #[serde(default)]
     pub receipt_address: Option<String>,
     /// Per-deployment vault-symbol → address table, keyed by the four
     /// symbols in `tests/fixtures/consensus-receipt.bucket-vault-map.json`
-    /// (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`). Optional — only required
-    /// for `rmpc governance draft-proposal`, which maps each receipt bucket
-    /// to a router vault address through this table. No address is global
-    /// (docs/product/20260623-product-proposal-investment-committee-v0.md
-    /// §6.1): a receipt-capable deployment must supply its own complete
-    /// table or the command refuses rather than guessing.
+    /// (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`). Optional, and read by no
+    /// command since issue 1698 deleted `rmpc governance draft-proposal`.
+    /// Kept so an existing config that sets it still loads.
     #[serde(default)]
     pub vault_addresses: Option<BTreeMap<String, String>>,
     /// The address this agent's deposits must mint shares to (0x-prefixed

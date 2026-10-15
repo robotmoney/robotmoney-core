@@ -58,7 +58,7 @@ pub const ROUTER_WEIGHT_SNAPSHOTS_MIGRATION: &str = include_str!(
 /// `router_weight_snapshots` tables (issue #307 and #316).
 /// Renumbered from 0003 to resolve version conflict with migrations 0003
 /// (multi-vault schema) and 0004 (router weight snapshots) added by issues
-/// #315 and #316 respectively.
+/// #315 and #316 respectively. Migration 0023 drops the two governance tables.
 pub const GOVERNANCE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0005_add_governance_tables.sql");
 
@@ -114,6 +114,13 @@ pub const EXCLUSION_RECORDS_MIGRATION: &str =
 /// `previewRedeem(totalSupply())` reading that `/v1/accounts/:address/positions` prices a position with.
 pub const PREVIEW_REDEEM_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0022_vault_snapshot_preview_redeem.sql"
+);
+
+/// Migration 0023 (QA plan C1, core issue 1698): drops `governance_proposals` and
+/// `governance_votes` and deletes `governance_vote` history rows. RouterGovernance
+/// voting was deleted, so the API serves against a schema without them.
+pub const DROP_GOVERNANCE_VOTING_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0023_drop_governance_voting.sql"
 );
 
 /// Primary chain used by the API instance under test.
@@ -232,6 +239,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply vault snapshot preview redeem migration (0022)");
+    sqlx::raw_sql(DROP_GOVERNANCE_VOTING_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply drop governance voting migration (0023)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -531,21 +542,18 @@ async fn seed_fixture(pool: &PgPool) {
     .await
     .unwrap();
 
-    // --- governance fixture (issue #307 suite-08) ---
+    // --- router weight fixture (issue #307 suite-08) ---
     //
     // Scenario:
     //   router_weight_snapshots: 1 WeightsSet at block 800 (50/50 vault_a/vault_b).
-    //   governance_proposals:
-    //     proposal 1 — open  (status=0), block 850.
-    //     proposal 2 — executed (status=2), block 860, executed_block=880.
-    //   governance_votes:
-    //     proposal 2 voter=agent (support=true, weight=1).
+    //
+    // There is no proposal or vote fixture: RouterGovernance voting was deleted
+    // (issue 1698) and migration 0023 dropped those tables.
     //
     // The router_address reuses the gateway bytes for simplicity.
     let router_addr = gateway.clone();
     let prop_tx =
         hex_bytes("ababababababababababababababababababababababababababababababababababab");
-    let exec_tx = hex_bytes("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
 
     // router_weight_snapshots
     sqlx::query(
@@ -560,74 +568,6 @@ async fn seed_fixture(pool: &PgPool) {
     .bind(&prop_tx[..])
     .bind(vec![vault_a_addr.clone(), vault_b_addr.clone()])
     .bind(vec![5000_i64, 5000_i64])
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
-
-    // governance_proposals: proposal 1 (open)
-    sqlx::query(
-        "INSERT INTO governance_proposals \
-         (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, \
-          created_at, deadline_block, status, votes_for, votes_against, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
-    )
-    .bind(PRIMARY_CHAIN_ID)
-    .bind(1_i64)
-    .bind(850_i64)
-    .bind(0_i32)
-    .bind(&prop_tx[..])
-    .bind(&agent[..])
-    .bind("Increase vault-a weight to 60%")
-    .bind(1_748_000_000_i64)
-    .bind(900_i64)
-    .bind(0_i16) // open
-    .bind(0_i64)
-    .bind(0_i64)
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
-
-    // governance_proposals: proposal 2 (executed)
-    sqlx::query(
-        "INSERT INTO governance_proposals \
-         (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, \
-          created_at, deadline_block, status, votes_for, votes_against, executed_block, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
-    )
-    .bind(PRIMARY_CHAIN_ID)
-    .bind(2_i64)
-    .bind(860_i64)
-    .bind(0_i32)
-    .bind(&exec_tx[..])
-    .bind(&agent[..])
-    .bind("Initial 50/50 weight proposal")
-    .bind(1_747_000_000_i64)
-    .bind(870_i64)
-    .bind(2_i16) // executed
-    .bind(1_i64)
-    .bind(0_i64)
-    .bind(880_i64)
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
-
-    // governance_votes: proposal 2, voter=agent (For)
-    sqlx::query(
-        "INSERT INTO governance_votes \
-         (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9)",
-    )
-    .bind(PRIMARY_CHAIN_ID)
-    .bind(2_i64)
-    .bind(&agent[..])
-    .bind(865_i64)
-    .bind(0_i32)
-    .bind(&exec_tx[..])
-    .bind(true)
-    .bind("1")
     .bind(indexed_at)
     .execute(pool)
     .await

@@ -1321,8 +1321,8 @@ fn the_live_run1_receipt_envelope_is_still_accepted_and_reproduces_its_published
 //      `receipt_id` is keccak over session+subject only, and each analyst
 //      signature covers that member's own `canonical_submission`, never the
 //      aggregate. `[10000,0,0,0]` passed cardinality, order, `<=10000` and
-//      `sum == 10000` — and that vector is what `governance-draft` turns into
-//      `RouterGovernance.propose` calldata.
+//      `sum == 10000` — and that vector is what the govern row `apply-receipt`
+//      turns into `RouterGovernance.applyReceipt` calldata.
 //   2. SWAPPED MEMBER LABELS. Filing member B's genuinely-signed submission
 //      under member A's entry left every signature `verified: true`, because the
 //      check verifies the carried string and never looks inside it. Fabricated

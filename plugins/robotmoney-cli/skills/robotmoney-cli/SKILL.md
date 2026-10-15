@@ -5,7 +5,9 @@ description: >
   surface for the Robot Money Rust payment client, including read commands
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
-  write commands (deposit, withdraw, status, self-check), Investment Committee commands (committee
+  write commands (deposit, withdraw, status, self-check), the agent-consent
+  signature a depositor needs to bind an rmpc agent (agent-consent),
+  Investment Committee commands (committee
   vote-submit), consensus recommendation receipt commands
   (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
@@ -35,7 +37,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `committee`, `receipt`, `committee-identity`.
+  `get-tx`, `agent-consent`, `committee`, `receipt`, `committee-identity`.
 
 ## Command surface
 
@@ -50,7 +52,7 @@ rmpc build-info      Print the git commit this binary was compiled from (JSON)
 rmpc get-vault       Read vault state directly from chain
 rmpc get-vaults      List all vaults registered in the VaultRegistry
 rmpc get-router      Read PortfolioRouter state: vault addresses, weight bps, and router cap
-rmpc get-governance  Read RouterGovernance state: constructor params and weights
+rmpc get-governance  Read RouterGovernance state: applied weights and receipt register
 rmpc get-timelock    Read TimelockController state
 rmpc get-gateway     Read gateway state directly from chain
 rmpc get-agent       Read an agent's authorization + window usage
@@ -59,6 +61,7 @@ rmpc get-balance     Read an ERC-20 token balance for an address (USDC by defaul
 rmpc get-allowance   Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash
+rmpc agent-consent   Sign the gateway's EIP-712 AgentConsent so a depositor can bind this agent
 rmpc committee       Investment Committee: submit signed allocation tilts
 rmpc receipt         Consensus recommendation receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
@@ -74,12 +77,10 @@ receipt, and that submission is the rebalance: one timelock operation releases
 the receipt and applies its weights (publish-contracts govern row
 `apply-receipt`, core 1696). There is no voting by token holders or anyone else:
 no voter set, no voting power, no quorum, no voting period, no execution delay,
-no propose, vote or execute. `rmpc get-governance` only reads the
-`RouterGovernance` state, and `rmpc governance draft-proposal` prints an unsigned
-review draft only. Today's test bytecode still carries the old voting functions.
-They are unused: the test deploys it with voter addresses nobody holds keys for.
-A later contract change (issue 1698) will delete them and add a weight-setter
-`applyReceipt` call.
+no propose, vote or execute. Issue 1698 deleted those functions from
+`RouterGovernance`; `applyReceipt` is its one weight-changing call.
+`rmpc get-governance` only reads the `RouterGovernance` state. rmpc drafts no
+governance call: the Safe schedules `applyReceipt` through the timelock.
 
 ## Example trace: read governance state
 
@@ -87,9 +88,24 @@ A later contract change (issue 1698) will delete them and add a weight-setter
 rmpc get-governance --config rmpc.toml --pretty
 ```
 
-The `get-governance` output includes `active_proposal` (always `null`, because
-nobody holds a voter key), the `cadence_params` block (constructor arguments of
-today's bytecode, not a governance model) and the router weight vector.
+The `get-governance` output is the router weight vector the weight setter last
+applied (`current_weights`), the receipt register it applies receipts from
+(`receipt_contract`, `null` until stage 11 sets it) and its `router`. It has
+no proposal, voter, quorum or voting-period field.
+
+## Agent consent: let a depositor bind this agent
+
+A depositor binds an agent other than itself only with the agent's EIP-712
+consent (issue 1791). rmpc holds the agent key, so the agent signs it:
+
+```bash
+rmpc agent-consent --config rmpc.toml --owner 0xDEPOSITOR --pretty
+```
+
+The output's `signature` (65 bytes, `0x`-prefixed) is the `agentConsent`
+argument the depositor passes to `revealAuthorization`; the dapp's Authorize
+tab has a field for it. One signature authorizes one reveal, by `--owner`
+only, on this chain and gateway only. Sign it again after a reveal.
 
 
 ## Investment Committee commands

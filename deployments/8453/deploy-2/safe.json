@@ -1,0 +1,18 @@
+{
+  "safe": "0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b",
+  "version": "1.4.1",
+  "threshold": 2,
+  "owners": [
+    "0xa5dAD878b268bCf5c31E61b3bd665AEF61feA5CE",
+    "0x5c6b2a1fa3A59aCc9C943Cc93FAD204fBfB0935a",
+    "0xB3cAbaD71CE97f582DCfdB5966294b8e4B7B7180"
+  ],
+  "factory": "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",
+  "singleton": "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
+  "fallback_handler": "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99",
+  "salt_nonce": "2026101002",
+  "created_by": "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3",
+  "tx_hash": "0x424f0767031f8b757d412d164142246e4aa0a41d2e730a9f6a82ce81d46bc8c0",
+  "block": 52484018,
+  "chain_id": 8453
+}

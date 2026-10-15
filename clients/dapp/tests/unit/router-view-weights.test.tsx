@@ -113,11 +113,8 @@ const explorerFetch: FetchLike = vi.fn(async (url: string) => {
       }),
     };
   }
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ proposals: [], block_number: 1, indexed_at: "2026-10-10T12:00:00Z" }),
-  };
+  // RouterView reads only the two routes above; the proposals route is gone (issue 1698).
+  return { ok: false, status: 404, json: async () => ({}) };
 }) as unknown as FetchLike;
 
 /** A reverting eth_call is retried by the transport before it fails: allow for it. */

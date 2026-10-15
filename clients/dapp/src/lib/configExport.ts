@@ -18,6 +18,15 @@
  *   allow_software_fallback = true
  *   keystore_path
  *
+ * Binding pins (QA plan D2/U6): `share_receiver` and `agent_owner`. The
+ * dapp knows both at authorize time: the connected wallet reveals, so it is
+ * the agent's owner, and a wallet without ADMIN_ROLE must name itself as
+ * share receiver. With both set, every `rmpc` deposit and withdraw preflight
+ * refuses (`ErrAgentBindingMismatch`) when the gateway shows another owner or
+ * receiver for the agent, so a binding someone else made first never
+ * receives the agent's shares unnoticed. The panel always passes them once a
+ * wallet is connected.
+ *
  * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
  * and `withdraw-router` sign with the software keystore on Base mainnet too,
  * after a production warning (owner decision 2026-10-06, issue #1545). A
@@ -68,6 +77,10 @@ interface RmpcExportInputs {
   vault_address: string;
   /** keccak256(eth_getCode(gateway_address)) — must be non-zero */
   gateway_runtime_hash: string;
+  /** The share receiver the depositor authorized: rmpc refuses a binding with another (QA plan D2). */
+  share_receiver?: string;
+  /** The wallet that revealed the authorization: rmpc refuses a binding owned by another. */
+  agent_owner?: string;
   signer: SignerSpec;
 }
 
@@ -87,6 +100,12 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
     `usdc_address         = ${tomlStr(inputs.usdc_address)}`,
     `vault_address        = ${tomlStr(inputs.vault_address)}`,
     `gateway_runtime_hash = ${tomlStr(inputs.gateway_runtime_hash)}`,
+    ...(inputs.share_receiver !== undefined
+      ? [`share_receiver       = ${tomlStr(inputs.share_receiver)}`]
+      : []),
+    ...(inputs.agent_owner !== undefined
+      ? [`agent_owner          = ${tomlStr(inputs.agent_owner)}`]
+      : []),
     ``,
     `[signer]`,
     ...buildSignerLines(inputs.signer),

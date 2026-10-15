@@ -1063,8 +1063,8 @@ impl ConsensusReceipt {
             }
 
             // ── weights, RECOMPUTED from the same submissions (invariant 8) ──
-            // The one field that becomes `RouterGovernance.propose` calldata and
-            // the one no analyst signature covers. OMISSION is not checkable and
+            // The one field that becomes `RouterGovernance.applyReceipt` calldata
+            // and the one no analyst signature covers. OMISSION is not checkable and
             // is not checked — a `position_actions` subject produces no vector
             // however many members submitted one, and the receipt does not carry
             // the subject's recommendation type. PRESENCE is a claim about the
@@ -1209,8 +1209,8 @@ pub fn bucket_shares_to_bps(
     // below 1, so the leftover is below the bucket count and one bp per bucket
     // always suffices — but that is a proof, and a proof stops holding when
     // someone widens SHARE_SUM_TOLERANCE. A vector that does not close on 10000
-    // must never leave this function: `RouterGovernance.propose` reverts on one,
-    // and by then it is signed.
+    // must never leave this function: `RouterGovernance.applyReceipt` reverts on
+    // one, and by then the Safe has signed it.
     if leftover != 0 {
         return Err(format!(
             "{leftover} basis point(s) could not be apportioned across \

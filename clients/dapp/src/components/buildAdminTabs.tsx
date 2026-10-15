@@ -36,6 +36,8 @@ export type BuildAdminTabsArgs = Readonly<{
    * fine because the FaucetTab is never inserted there.
    */
   faucetWalletAddresses: ReadonlyArray<Address>;
+  /** The connected wallet: the owner of the agents it authorizes (rmpc export pin, QA plan U6). */
+  walletAddress?: Address;
   now: number;
   /** VaultRegistry address for the DestinationSelector (issue #320). Optional. */
   registryAddress?: Address;
@@ -199,6 +201,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
           chainId={a.chainId}
           agent={a.agent as Address}
+          agentOwner={a.walletAddress}
+          shareReceiver={a.shareReceiver}
         />
       ),
     });

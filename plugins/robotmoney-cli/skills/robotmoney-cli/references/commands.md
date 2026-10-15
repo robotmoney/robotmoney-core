@@ -49,20 +49,21 @@ rmpc get-router --config <CONFIG> [--pretty]
 
 ### `rmpc get-governance`
 
-Read RouterGovernance state: constructor params and weights.
-Requires `governance_address` in config.
+Read RouterGovernance state: the weights it last applied and the receipt
+register it applies receipts from. Requires `governance_address` in config.
 
 ```
 rmpc get-governance --config <CONFIG> [--pretty]
 ```
 
-Output includes `active_proposal` (always `null`: nobody holds a voter key, so there are no proposals), the `cadence_params` block (constructor arguments of today's
-bytecode, not a governance model) and the router weight vector. Router weights
-change only when `WEIGHT_SETTER_ROLE` applies the Investment Committee's
-consensus receipt through the Safe and the timelock (publish-contracts govern
-row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc` has no
-governance write command. `RouterGovernance.propose`, `vote` and `execute`
-exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+Output: `router`, `receipt_contract` (`null` until stage 11 sets it) and
+`current_weights` (the router's applied vector; empty while the router routes
+by its default vector). Router weights change only when `WEIGHT_SETTER_ROLE`
+applies the Investment Committee's consensus receipt through the Safe and the
+timelock, in one `RouterGovernance.applyReceipt` call (publish-contracts govern
+row `apply-receipt`, core 1696). There is no voting by anyone: issue 1698
+deleted the voting functions, so there is no proposal, voter, quorum or
+voting-period field. `rmpc` has no governance write or draft command.
 
 ### `rmpc get-timelock`
 
@@ -332,44 +333,42 @@ Other named errors: `ErrReceiptFetchFailed`, `ErrReceiptReadFailed`,
 `ErrReceiptDigestMalformed`, `ErrReceiptRecordReverted` (missing role, or a
 receipt id already recorded — one receipt per session per subject).
 
-## Governance handoff commands
+## Agent consent
 
-`rmpc governance` turns a **released** consensus receipt into a draft weight
-change for a human to review (Project Fusion). It is the recommending side
-only: it never signs, never takes a nonce lock, and never broadcasts a
-transaction. There is no code path here that submits anything. The weight
-change itself is applied by the Safe through the timelock (govern row
-`apply-receipt`), not by this command.
+### `rmpc agent-consent`
 
-### `rmpc governance draft-proposal`
-
-Requires `receipt_address`, `router_address`, `governance_address`, and a
-`[vault_addresses]` table (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`) in
-config. Exactly one of `--receipt-id` or `--from-block` is required.
+Sign the gateway's EIP-712 `AgentConsent` with this agent's key, so a
+depositor can bind the agent (issue 1791). A depositor without `ADMIN_ROLE`
+binds an agent other than itself only with this signature, passed as the
+fourth argument (`agentConsent`) of `RobotMoneyGateway.revealAuthorization`.
 
 ```
-rmpc governance --config <CONFIG> draft-proposal --receipt-id <0x...64hex>
-  --receipt-url <URL> [--pretty]
+rmpc agent-consent --config <CONFIG> --owner <0xDEPOSITOR>
+  [--share-receiver <0xADDRESS>] [--pretty]
 ```
 
-```
-rmpc governance --config <CONFIG> draft-proposal --from-block 0
-  [--to-block latest] --receipt-url-template <URL_WITH_{receipt_id}>
-  [--pretty]
-```
+`--owner` is the depositor that will reveal and own the binding.
+`--share-receiver` defaults to `--owner`; a depositor without `ADMIN_ROLE`
+must name itself, so leave it out. The agent is the keystore's address, and
+the passphrase comes from `RMPC_KEYSTORE_PASSPHRASE` (never a prompt).
 
-For each released receipt: refuses if `isReleased` is false
-(`ErrReceiptNotReleased`); skips (not an error) a receipt with no `weights`
-vector (`status: "skipped_no_weights"`); re-checks
-`PortfolioRouter.isRouterEligibleAndActive` for every mapped vault and, if any
-is ineligible, drops it and redistributes its bps across the remaining
-eligible vaults (`fallback_applied: true`), refusing with
-`ErrNoEligibleVaults` only if every vault is ineligible; and reports
-`status: "blocked_active_proposal"` with the blocking proposal id instead of
-a submittable draft when today's `RouterGovernance` bytecode already holds an
-active or queued proposal. A ready draft carries `propose_calldata`, the hex
-calldata of today's bytecode, for a human to review. Never submitted by this
-command.
+The command reads `agentConsentNonce(agent)` and `agentOwner(agent)` from
+the gateway at one block, signs
+`AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
+(`RobotMoneyGateway`, `1`, chain id, gateway address), and prints `agent`,
+`owner`, `share_receiver`, `nonce`, `chain_id`, `gateway`, `block_number`,
+`current_owner` (`null` when unbound), `digest` and `signature` (65 bytes,
+`r ‖ s ‖ v`). It sends no transaction.
+
+One signature authorizes one reveal: the gateway advances the nonce on use,
+and the consent never verifies for another owner, share receiver, chain or
+gateway. A non-null `current_owner` means the reveal reverts
+`AgentAlreadyOwned` until that binding is revoked by its owner, or released
+by the agent with `releaseAgent` when it was made without consent.
+
+Refusals: `ErrChainIdMismatch` (the RPC serves another chain; exit 2),
+`ErrSoftwareSignerDisallowed` (exit 2). Config, keystore and RPC failures
+exit 3.
 
 ## Investment Swarm signing identity commands
 

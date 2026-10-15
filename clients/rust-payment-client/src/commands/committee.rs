@@ -54,7 +54,7 @@ use crate::nonce::AgentLock;
 use crate::output::emit;
 use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{Keystore, SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
+use crate::signer::AgentSigner;
 use crate::tx::{
     broadcast, build_eip1559, encode_signed, signing_hash, wait_for_successful_receipt,
     Eip1559Inputs,
@@ -231,18 +231,12 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         Err(code) => return code,
     };
 
-    if let Err(e) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software) {
-        log::error!("rmpc committee vote-submit: {e}");
-        emit_failure(
-            &CommitteeFailure {
-                ok: false,
-                error: e.name().to_string(),
-                message: Some(format!("{e}")),
-                tx_hash: None,
-            },
-            args.pretty,
-        );
-        return EXIT_REFUSAL;
+    // A software keystore signs on every chain, Base mainnet included; a
+    // hardware wallet, HSM or KMS is optional, never required (owner decision
+    // 2026-10-14, QA plan Decision D12). Base mainnet only adds the warning,
+    // as for the depositor writes (`write_path::open_session`).
+    if let Some(warn) = NetworkEnv::from_chain_id(cfg.chain_id).production_warning() {
+        log::warn!("rmpc committee vote-submit: {warn}");
     }
 
     let signer = match load_signer(&cfg, "vote-submit", args.pretty) {

@@ -163,6 +163,7 @@ contracts/test/contract.EligibilityWeightsInterlockTest.mdx
 contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
 contracts/test/contract.FixedLiquidityPool.mdx
+contracts/test/contract.FourVaultInitialStateTest.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx

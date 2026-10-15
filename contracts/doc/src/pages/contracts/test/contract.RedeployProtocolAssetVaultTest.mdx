@@ -1,11 +1,11 @@
 ---
 title: "RedeployProtocolAssetVaultTest"
-description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796). The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults, the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts."
+description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796). The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults, the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts. QA plan v1 E3: the batch also copies the old vault's router cap to the new vault, and the script pauses the new vault before its first asset is added."
 ---
 
 # RedeployProtocolAssetVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/RedeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83e1899a1c3ea08d208a2cdfc32e1b22389b35a9/contracts/test/RedeployProtocolAssetVault.t.sol)
 
 **Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
 
@@ -14,6 +14,22 @@ The deployment state is the Deploy 2 shape: registry and router governed by a ti
 the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the
 timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is
 replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
+QA plan v1 E3: the batch also copies the old vault's router cap to the new vault, and the script pauses the new vault
+before its first asset is added.
+
+## Constants
+
+### OLD_ROUTER_CAP
+
+<i>
+
+The old vault's per-leg router cap. Any nonzero value: a new address reads 0, which the router treats as uncapped.
+
+</i>
+
+```solidity
+uint256 internal constant OLD_ROUTER_CAP = 250 * 1e6;
+```
 
 ## State Variables
 
@@ -201,6 +217,23 @@ The link is ADMIN_ROLE-gated and the deploy dropped the deployer's ADMIN_ROLE: o
 function test_redeploy_deployerCannotLinkTheRegistryAfterHandover() public;
 ```
 
+<a id="test_redeploy_depositrevertsbetweencreationandfirstaddasset"></a>
+
+### test_redeploy_depositRevertsBetweenCreationAndFirstAddAsset
+
+<i>
+
+QA plan v1 E3 (review F2): the redeploy pauses the vault right after creating it, before the first `addAsset`. Once an asset is
+active `maxDeposit` opens, so the earlier add-then-pause order left a window in which a direct deposit into a vault of a live
+deployment minted shares before the ORA-4 guard was set. The vault's own log order shows the pause came first and was never
+undone, and `deposit` reverts `DepositsArePaused` (its first check) for as long as the pause holds.
+
+</i>
+
+```solidity
+function test_redeploy_depositRevertsBetweenCreationAndFirstAddAsset() public;
+```
+
 <a id="_fivelegs-address"></a>
 
 ### _fiveLegs
@@ -257,7 +290,8 @@ function _newLegs(address newVault) internal view returns (address[] memory v);
 
 <i>
 
-The six calls of the govern row, in its order: the link first, so the vault is bound before it is registered.
+The seven calls of the govern row, in its order: the link first, so the vault is bound before it is registered, then the cap,
+so the vault is capped before it becomes eligible.
 
 </i>
 
@@ -277,6 +311,36 @@ function _runBatch(BasketVault v) internal;
 
 ```solidity
 function test_batch_replacesTheVaultAndKeepsTheSplit() public;
+```
+
+<a id="test_batch_givesthenewvaulttheoldvaultsroutercap"></a>
+
+### test_batch_givesTheNewVaultTheOldVaultsRouterCap
+
+<i>
+
+QA plan v1 E3 (review F2): `vaultCap` is keyed by address and 0 is uncapped, so the new address starts with no per-leg cap.
+The batch's third call copies the old vault's cap before the new vault becomes eligible: router.vaultCap(new) == vaultCap(old).
+
+</i>
+
+```solidity
+function test_batch_givesTheNewVaultTheOldVaultsRouterCap() public;
+```
+
+<a id="test_batch_capcallneedsthetimelockasrouteradmin"></a>
+
+### test_batch_capCallNeedsTheTimelockAsRouterAdmin
+
+<i>
+
+The cap call runs as the timelock on the router: without the router's ADMIN_ROLE the whole batch reverts, which is why the
+govern row refuses to schedule unless the timelock holds it.
+
+</i>
+
+```solidity
+function test_batch_capCallNeedsTheTimelockAsRouterAdmin() public;
 ```
 
 <a id="test_batch_retirebeforemigraterevertsincontract"></a>

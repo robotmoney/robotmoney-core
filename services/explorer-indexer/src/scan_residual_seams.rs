@@ -102,8 +102,13 @@
 //!
 //! ## B2. IDX-5 — vote tally counted voters, not voting power (Med)
 //!
-//! [`crate::db::Db::insert_vote`] inserts the `governance_votes` row (which
-//! stores the per-vote `weight: U256`) and updates the running tally on
+//! **Superseded (issue 1698, QA plan C1):** RouterGovernance voting was
+//! deleted. `insert_vote`, `governance_votes` and `governance_proposals` no
+//! longer exist (migration 0023 dropped both tables). The record below is kept
+//! as history.
+//!
+//! `Db::insert_vote` inserted the `governance_votes` row (which stored the
+//! per-vote `weight: U256`) and updated the running tally on
 //! `governance_proposals`.
 //!
 //! **What was wrong:** the tally `UPDATE` set `{votes_for|votes_against} = {col}

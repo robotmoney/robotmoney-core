@@ -152,8 +152,9 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Read RouterGovernance state: active proposal, cadence params, and
-    /// last applied weight vector (issue #308 / §5.1).
+    /// Read RouterGovernance state: the router weights the weight setter last
+    /// applied, the receipt register it applies receipts from, and its router
+    /// (issue #308 / §5.1). There is no proposal or voter state (issue 1698).
     GetGovernance {
         #[arg(long, short = 'c')]
         config: PathBuf,
@@ -411,22 +412,29 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
-    /// Governance handoff (Project Fusion) — turn a released consensus
-    /// receipt into a draft `RouterGovernance.propose(vaults, bps)` for a
-    /// human to review. NEVER signs and NEVER broadcasts: the committee that
-    /// authored the receipt and the RouterGovernance voter set that must
-    /// approve a weight change are separate governing bodies, and this
-    /// command stands entirely on the recommending side of that line.
-    /// Implements: issue #1248.
-    Governance {
-        /// Path to the operator config TOML. Requires `receipt_address`,
-        /// `router_address`, `governance_address`, and `[vault_addresses]`.
+    /// Sign the gateway's EIP-712 `AgentConsent` with this agent's key so a
+    /// depositor can bind it (issue #1791). Prints the 65-byte signature the
+    /// depositor passes as `agentConsent` to
+    /// `RobotMoneyGateway.revealAuthorization`. Reads
+    /// `agentConsentNonce(agent)` from the gateway; sends no transaction.
+    /// One signature authorizes one reveal, by `--owner` only, on this chain
+    /// and gateway only.
+    AgentConsent {
+        /// Path to the operator config TOML. The agent is the keystore's
+        /// address; the passphrase comes from `RMPC_KEYSTORE_PASSPHRASE`.
         #[arg(long, short = 'c')]
         config: PathBuf,
-        #[command(subcommand)]
-        subcommand: GovernanceSubcommand,
+        /// The depositor that will call `revealAuthorization` and own the
+        /// binding (0x-prefixed address).
+        #[arg(long)]
+        owner: String,
+        /// The share receiver of the policy the depositor will reveal.
+        /// Defaults to `--owner`: a depositor without ADMIN_ROLE must name
+        /// itself.
+        #[arg(long = "share-receiver")]
+        share_receiver: Option<String>,
         /// Pretty-print the JSON output.
-        #[arg(long, global = true)]
+        #[arg(long)]
         pretty: bool,
     },
     /// Manage the local Investment Swarm signing identity — the
@@ -456,41 +464,6 @@ pub enum Command {
         /// Pretty-print the JSON output.
         #[arg(long, global = true)]
         pretty: bool,
-    },
-}
-
-/// Subcommands for `rmpc governance`.
-#[derive(Debug, Subcommand)]
-pub enum GovernanceSubcommand {
-    /// Draft a `RouterGovernance.propose(vaults, bps)` call from a released
-    /// consensus receipt, for human review only. Never signs, never
-    /// broadcasts. Exactly one of `--receipt-id` or `--from-block` is
-    /// required.
-    DraftProposal {
-        /// Single-receipt mode: the released receipt's id (0x-prefixed hex,
-        /// exactly what `ReceiptReleased.receiptId` carries). Mutually
-        /// exclusive with `--from-block`.
-        #[arg(long = "receipt-id", conflicts_with = "from_block")]
-        receipt_id: Option<String>,
-        /// URL serving the receipt JSON for `--receipt-id` mode. Mutually
-        /// exclusive with `--receipt-file`.
-        #[arg(long = "receipt-url", conflicts_with = "receipt_file")]
-        receipt_url: Option<String>,
-        /// Local path to the receipt JSON for `--receipt-id` mode. Mutually
-        /// exclusive with `--receipt-url`.
-        #[arg(long = "receipt-file", conflicts_with = "receipt_url")]
-        receipt_file: Option<PathBuf>,
-        /// Scan mode: earliest block to search `ReceiptReleased` logs from.
-        /// Mutually exclusive with `--receipt-id`.
-        #[arg(long = "from-block")]
-        from_block: Option<u64>,
-        /// Scan mode: latest block to search to. Defaults to `"latest"`.
-        #[arg(long = "to-block")]
-        to_block: Option<String>,
-        /// Scan mode: URL template for fetching each released receipt's
-        /// payload, with `{receipt_id}` substituted for the hex id.
-        #[arg(long = "receipt-url-template")]
-        receipt_url_template: Option<String>,
     },
 }
 

@@ -266,7 +266,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         ];
         effect =
           `Records a hidden commitment, bound to caller ${shorten(action.committer)}, to authorize agent ${shorten(action.agent)}. ` +
-          "No role, policy or funds change yet. At least one block later, revealAuthorization(agent, salt, policy) grants AGENT_ROLE " +
+          "No role, policy or funds change yet. At least one block later, revealAuthorization(agent, salt, policy, agentConsent) grants AGENT_ROLE " +
           "with the policy shown in the reveal preview; that policy is not part of this commitment.";
         break;
       }
@@ -283,6 +283,14 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
               "salt of the step-1 commitment; keccak256(abi.encode(agent, caller, salt)) must equal it",
           },
           ...policyArgs(action.policy),
+          {
+            name: "agentConsent",
+            raw: action.agentConsent,
+            gloss:
+              action.agentConsent === "0x"
+                ? "empty: the signing wallet is the agent, so the call is its consent"
+                : `the agent's EIP-712 AgentConsent signature for this owner, share receiver and nonce (issue 1791)`,
+          },
         ];
         effect = `Reveals the step-1 commitment; the signing wallet becomes this agent's recorded owner (agentOwner). ${policyEffect(action.agent, action.policy)}`;
         break;

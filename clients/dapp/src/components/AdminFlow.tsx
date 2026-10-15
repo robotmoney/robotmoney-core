@@ -88,6 +88,7 @@ export function AdminFlow(props: Props) {
     // multi-wallet onboarding lands we widen this list. The Faucet tab
     // gracefully renders "(no wallets connected)" when empty.
     faucetWalletAddresses: address ? [address] : [],
+    walletAddress: address,
     now: props.now,
     registryAddress: props.registryAddress,
     routerAddress: props.routerAddress,

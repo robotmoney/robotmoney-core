@@ -78,7 +78,6 @@ import { VaultCards } from "./components/VaultCards";
 import { LandingPriceStrip } from "./components/LandingPriceStrip";
 import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
-import { GovernancePanel } from "./components/GovernancePanel";
 import { ConsensusReceiptPanel } from "./components/ConsensusReceiptPanel";
 import { parseVaultAddressMap } from "./lib/consensusReceiptApi";
 import { makeConfig } from "./lib/wagmi";
@@ -256,20 +255,18 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                 content: (
                   <div className="tab-section-stack">
                     <RouterView apiUrl={cfg.explorerApiUrl} routerAddress={cfg.router} />
-                    {cfg.governance ? (
-                      <GovernancePanel
-                        governanceAddress={cfg.governance}
-                        apiUrl={cfg.explorerApiUrl}
-                      />
-                    ) : (
-                      <section data-testid="governance-config-missing">
-                        <h2>Governance — Weight Proposals</h2>
-                        <p className="hint">
-                          Router governance voting is unavailable until the governance contract
-                          address is configured.
-                        </p>
-                      </section>
-                    )}
+                    {/* Issue 1698: there is no proposal or vote surface. Router weights change
+                        only when the Safe schedules RouterGovernance.applyReceipt through the
+                        timelock, which applies the Investment Committee's consensus receipt. */}
+                    <section data-testid="router-governance-note">
+                      <h2>How router weights change</h2>
+                      <p className="hint">
+                        There is no voting. The Safe, through the timelock, applies the Investment
+                        Committee&apos;s consensus receipt in one call (
+                        <code>RouterGovernance.applyReceipt</code>), which writes its weights to the
+                        router. The Consensus Receipts tab shows each receipt.
+                      </p>
+                    </section>
                   </div>
                 ),
               },

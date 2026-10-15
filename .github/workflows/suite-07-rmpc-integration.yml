@@ -301,17 +301,6 @@ jobs:
             --test receipt -- --nocapture
           echo "::endgroup::"
 
-      # The governance-draft integration target was previously dark. It is the
-      # only executable proof that released receipts draft rather than submit.
-      - name: rmpc governance draft refusal and review-envelope
-        run: |
-          echo "::group::clients/rust-payment-client/tests/governance_draft.rs:"
-          bash .github/scripts/cargo_test_require_executed.sh \
-            --release \
-            --manifest-path clients/rust-payment-client/Cargo.toml \
-            --test governance_draft -- --nocapture
-          echo "::endgroup::"
-
       # Investment-Committee MCP identity: create / show-public-key / sign
       # (issue #1111). No RPC, no chain, no external resource — pure local
       # Ed25519 crypto driven through the release rmpc binary via assert_cmd.
@@ -357,7 +346,7 @@ jobs:
       # RED rather than passing as a silent skip. The permanent guard against
       # this whole class -- a tests/*.rs file no workflow names -- is
       # .github/scripts/check_cargo_test_target_coverage.py, run in suite 4.
-      - name: rmpc CLI surface (deposit, withdraw, router, status, self-check, get-*)
+      - name: rmpc CLI surface (deposit, withdraw, router, status, self-check, get-*, agent-consent)
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             --release \
@@ -379,7 +368,8 @@ jobs:
             --test cli_get_timelock \
             --test cli_get_tx \
             --test cli_get_vault \
-            --test cli_get_vaults -- --nocapture
+            --test cli_get_vaults \
+            --test cli_agent_consent -- --nocapture
 
       # THE ONLY REAL-EVM PROOF OF THE SHARED WRITE SEAM (QA plan T2)
       # tests/write_seam_reverted_anvil.rs mines a transaction into a local

@@ -19,8 +19,10 @@
  * keygen UI surface to assert against.
  */
 import { test, expect } from "./helpers/fixtures";
+import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
+import { fillAgentConsent } from "./helpers/depositor";
 
 let endpoints: DevnetEndpoints;
 let AGENT_ADDRESS: string;
@@ -67,6 +69,20 @@ test.describe("register-existing-address flow — UI invariants", () => {
     await expect(button).toBeDisabled();
 
     await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
+    // The agent is not this wallet: no commit before the agent consents (issue 1791).
+    await expect(button).toBeDisabled();
+    await expect(page.getByTestId("authorize-agent-consent-command")).toContainText(
+      "rmpc agent-consent",
+    );
+
+    // The agent signs AgentConsent for the connected wallet (openDapp's default admin key).
+    await fillAgentConsent(
+      page,
+      endpoints,
+      "authorize",
+      { privateKey: endpoints.agent_private_key as Hex, address: AGENT_ADDRESS as Address },
+      endpoints.admin_addr as Address,
+    );
     await expect(button).toBeEnabled();
   });
 

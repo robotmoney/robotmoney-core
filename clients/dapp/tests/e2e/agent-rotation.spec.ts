@@ -39,6 +39,7 @@ import {
   ADMIN_ROLE,
   agentPolicyOf,
   authorizeOwnAgentViaUi,
+  fillAgentConsent,
   freshAccount,
   freshDepositor,
   gatewayHasRole,
@@ -48,6 +49,9 @@ import {
 
 let endpoints: DevnetEndpoints;
 let DEPOSITOR: TestAccount;
+/** The agents' keys: each consents to its own binding (issue 1791). */
+let OLD_AGENT_ACCOUNT: TestAccount;
+let NEW_AGENT_ACCOUNT: TestAccount;
 let OLD_AGENT: Address;
 let NEW_AGENT: Address;
 let SHARE_RECEIVER: Address;
@@ -61,14 +65,16 @@ test.beforeAll(async ({ browser }) => {
   // AccessRoles._grantRole is mutex with ADMIN/DEPOSIT_PAUSER, and authorization
   // reverts with AgentAlreadyOwned on an owned agent, so neither may be a
   // harness key.
-  OLD_AGENT = freshAccount().address;
-  NEW_AGENT = freshAccount().address;
+  OLD_AGENT_ACCOUNT = freshAccount();
+  NEW_AGENT_ACCOUNT = freshAccount();
+  OLD_AGENT = OLD_AGENT_ACCOUNT.address;
+  NEW_AGENT = NEW_AGENT_ACCOUNT.address;
   // A caller without ADMIN_ROLE must name itself as shareReceiver.
   SHARE_RECEIVER = DEPOSITOR.address;
 
   const setupPage = await browser.newPage();
   try {
-    await authorizeOwnAgentViaUi(setupPage, endpoints, DEPOSITOR, OLD_AGENT);
+    await authorizeOwnAgentViaUi(setupPage, endpoints, DEPOSITOR, OLD_AGENT_ACCOUNT);
   } finally {
     await setupPage.close();
   }
@@ -124,7 +130,11 @@ test.describe("agent rotation flow — UI invariants", () => {
     await expect(page.getByTestId("rotation-depositor-path")).toBeVisible();
     await expect(page.getByTestId("rotation-depositor-error")).toHaveCount(0);
 
-    // After valid inputs, step-1 button must be enabled (previews OK).
+    // Nothing is signed before the new agent consents (issue 1791).
+    await expect(page.getByTestId("rotation-revoke-submit")).toBeDisabled();
+    await fillAgentConsent(page, endpoints, "rotation", NEW_AGENT_ACCOUNT, DEPOSITOR.address);
+
+    // After valid inputs and the consent, step-1 button must be enabled (previews OK).
     await expect(page.getByTestId("rotation-revoke-submit")).toBeEnabled();
   });
 
@@ -134,6 +144,8 @@ test.describe("agent rotation flow — UI invariants", () => {
       newAgent: NEW_AGENT,
       shareReceiver: SHARE_RECEIVER,
     });
+
+    await fillAgentConsent(page, endpoints, "rotation", NEW_AGENT_ACCOUNT, DEPOSITOR.address);
 
     // Step-2 must be disabled even after inputs are valid (awaiting step-1).
     await expect(page.getByTestId("rotation-authorize-submit")).toBeDisabled();

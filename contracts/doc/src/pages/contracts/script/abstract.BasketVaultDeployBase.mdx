@@ -5,7 +5,7 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83e1899a1c3ea08d208a2cdfc32e1b22389b35a9/contracts/script/BasketVaultDeployBase.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -392,7 +392,7 @@ function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed 
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_deployconfigured-params-cfg"></a>
+<a id="_deployconfigured-params-cfg-bool"></a>
 
 ### _deployConfigured
 
@@ -401,11 +401,15 @@ function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed 
 The part of `_deployAll` before registration: validates inputs, deploys the vault, adds the assets, sets the guards
 and pauses deposits. The vault is not registered. A redeploy into a live deployment (issue 1796) stops here: the registry
 is governed by the timelock after the handover, so the registration is a govern row, not a deployer call.
+`pauseBeforeAssets` (QA plan v1 E3, review F2): pause right after creation, before the first `addAsset`, instead of after
+the guards. The redeploy passes true: once an asset is active `maxDeposit` opens, and a direct `deposit` into a vault of a
+live deployment would mint shares before the ORA-4 guard is set. The launch path passes false and keeps its broadcast
+order (and so the adapter addresses a launch run creates); the same window exists there, for a vault no router routes to yet.
 
 </i>
 
 ```solidity
-function _deployConfigured(Params memory p, Cfg memory cfg)
+function _deployConfigured(Params memory p, Cfg memory cfg, bool pauseBeforeAssets)
         internal
         returns (Deployed memory d);
 ```
@@ -416,6 +420,7 @@ function _deployConfigured(Params memory p, Cfg memory cfg)
 | ---- | ---- | ----------- |
 | p | `Params` |  |
 | cfg | `Cfg` |  |
+| pauseBeforeAssets | `bool` |  |
 
 **Returns**
 

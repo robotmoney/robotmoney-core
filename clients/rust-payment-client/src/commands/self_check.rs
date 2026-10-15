@@ -382,14 +382,14 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 }
 
 /// The message states the signer decisions (QA plan U7, finding DR-12):
-/// depositor writes sign with the software keystore on every chain (owner
-/// decision 2026-10-06), and hardware is optional (owner decision
-/// 2026-10-14). Only `committee` and `receipt` still refuse it on Base
-/// mainnet ([`crate::signer::require_production_grade_for_write`]).
+/// every rmpc write signs with the software keystore on every chain (owner
+/// decision 2026-10-06 for depositor writes), and hardware is optional,
+/// never required (owner decision 2026-10-14, QA plan Decision D12 for
+/// `committee` and `receipt`).
 fn backend_operator_message(backend: SignerBackendKind) -> &'static str {
     match backend {
         SignerBackendKind::Software => {
-            "software keystore: deposit, withdraw and withdraw-router sign with it on every chain; committee and receipt writes on Base mainnet need an HSM/KMS signer"
+            "software keystore: every rmpc write signs with it on every chain; a hardware wallet, HSM or KMS is optional, never required"
         }
         SignerBackendKind::Hsm | SignerBackendKind::Kms => {
             "production-grade signer backend selected"

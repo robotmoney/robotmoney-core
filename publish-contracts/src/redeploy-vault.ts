@@ -166,16 +166,29 @@ export const redeploysOf = (m: Pick<RunManifest, "vault_redeploys">): RedeployRe
 // and every other contract (core, libraries, adapters, the three vaults not replaced, the retired one) with --prior-out, the out/ of a checkout at the original sha.
 // Neither run deploys anything, so neither needs a frozen counts file for the redeploy sha (counts.ts resolveCounts). Every other run names the original sha.
 // A verify at the original sha after a round at another sha would compare the replacing vault with the wrong build, fail, and pause all four vaults: it is refused
-// before any signer exists, and the refusal names the command that works.
+// before any signer exists, and the refusal names the command that works. That holds for EVERY run that reaches the verify stage, not only the verify verb: the
+// default stage set (on --resume every finished deployer stage is skipped, verify never is), `--stage all` and any list naming verify ("stage-set"). The verify stage
+// checks it once more itself (verifyBuildRefusal), so a caller that skipped this model still cannot fail the verify on the wrong build and pause the four vaults.
 
-/** The runs the sha model covers. */
-export type RedeployShaPath = "govern-row" | "verify";
+/**
+ * The runs the sha model covers. `stage-set`: a run of several stages that reaches the verify stage (the default set, `all`, a list naming verify and another
+ * stage). It never names a redeploy sha (only the verify alone may), and it is refused at the original sha after a round at another sha.
+ */
+export type RedeployShaPath = "govern-row" | "verify" | "stage-set";
 
-/** `govern --row redeploy-vault` (the verb or `--stage govern`) and `verify` (the verb or `--stage verify`). Any other run: undefined. */
-export function redeployShaPath(a: { verb?: string; stage?: string; row?: string }): RedeployShaPath | undefined {
+/**
+ * `govern --row redeploy-vault` (the verb or `--stage govern`), `verify` (the verb, or a `--stage` list of verify alone) and a stage set that reaches verify (no verb:
+ * the default set, `all`, or a list naming verify). Any other run: undefined: the other verbs never reach the verify stage, and a dry run skips it (runner.ts).
+ */
+export function redeployShaPath(a: { verb?: string; stage?: string; row?: string; dryRun?: boolean }): RedeployShaPath | undefined {
   const only = a.verb ?? a.stage;
   if (only === "govern" && a.row === REDEPLOY_ROW) return "govern-row";
-  return only === "verify" ? "verify" : undefined;
+  if (only === "verify") return "verify";
+  if (a.verb !== undefined || a.dryRun) return undefined;
+  if (a.stage === undefined || a.stage === "all") return "stage-set"; // the default set runs through verify, all runs every stage
+  const names = a.stage.split(",").map((x) => x.trim());
+  if (!names.includes("verify")) return undefined;
+  return names.every((n) => n === "verify") ? "verify" : "stage-set";
 }
 
 /** A run at a redeploy round's sha: the sha the run manifest names (the original deployment's) and the round's sha this run names. */
@@ -189,11 +202,15 @@ export interface RedeployShaRun { originalSha: string; redeploySha: string }
  *               --prior-out. Refused with USAGE before any signer exists (nothing sent, nothing paused): the original sha then, the redeploy sha without --prior-out,
  *               rounds at two other shas or an earlier round at another sha than the last (the verifier holds two builds), and a --prior-out that is not inside a
  *               git checkout of the original sha (`priorOutSha`: the HEAD of the checkout that holds it, undefined outside one).
+ *   stage-set   never a pair. Refused with USAGE before any signer exists, like the verify: a --prior-out that is not a checkout of the original sha, and, after rounds
+ *               at another sha, the original sha (its verify stage would compare the replacing vault with the wrong build, fail and pause all four vaults) and the
+ *               redeploy sha (only the verify alone may name it). Rounds at the original sha only, or a third sha (runStages refuses it, RESUME): undefined.
+ * No run manifest yet (a first run): a --prior-out must still be a checkout of this run's own sha, the sha the deployment will run.
  */
 export function redeployShaRun(manifest: Pick<RunManifest, "coreSha" | "vault_redeploys"> | undefined, i: { coreSha: string; path: RedeployShaPath | undefined; priorOut?: string; priorOutSha?: string }): RedeployShaRun | undefined {
-  if (!manifest || i.path === undefined) return undefined;
-  const original = manifest.coreSha;
-  const recs = redeploysOf(manifest);
+  if (i.path === undefined) return undefined;
+  const original = manifest?.coreSha ?? i.coreSha;
+  const recs = manifest ? redeploysOf(manifest) : [];
   if (i.path === "govern-row") {
     const rec = recs.find((r) => r.status === "deployed") ?? [...recs].reverse().find((r) => r.status === "governed");
     return rec !== undefined && i.coreSha !== original && rec.core_sha === i.coreSha ? { originalSha: original, redeploySha: i.coreSha } : undefined;
@@ -207,12 +224,36 @@ export function redeployShaRun(manifest: Pick<RunManifest, "coreSha" | "vault_re
   const foreign = [...new Set(recs.map(shaOf).filter((s) => s !== original))];
   if (foreign.length === 0) return undefined;
   const last = recs[recs.length - 1]!;
-  if (foreign.length > 1 || shaOf(last) !== foreign[0]) throw new PublishError("USAGE", `verify refused: the redeploy-vault rounds of this run were deployed at ${[...new Set(recs.map(shaOf))].join(", ")} (the last at ${shaOf(last)}), and the verifier compares with two builds only (the checkout and --prior-out). ${nothing}`);
+  const what = i.path === "stage-set" ? "a run of several stages that reaches the verify stage is" : "verify";
+  if (foreign.length > 1 || shaOf(last) !== foreign[0]) throw new PublishError("USAGE", `${what} refused: the redeploy-vault rounds of this run were deployed at ${[...new Set(recs.map(shaOf))].join(", ")} (the last at ${shaOf(last)}), and the verifier compares with two builds only (the checkout and --prior-out). ${nothing}`);
   const redeploySha = foreign[0]!;
-  if (i.coreSha === original) throw new PublishError("USAGE", `verify refused at the original sha ${original}: ${last.vault} was redeployed at ${redeploySha} (round ${last.ordinal}), so the build of this checkout is not the replacing vault's, and a failed verify pauses all four vaults. Run the verify at the redeploy sha: bun publish-contracts/src/cli.ts verify --core-sha ${redeploySha} --prior-out <forge out/ of a checkout at ${original}> (plus the same --chain, --rpc, --sheet, --signer, --environment and --evidence arguments). ${nothing}`);
+  const verifyAlone = `bun publish-contracts/src/cli.ts verify --core-sha ${redeploySha} --prior-out <forge out/ of a checkout at ${original}> (plus the same --chain, --rpc, --sheet, --signer, --environment and --evidence arguments)`;
+  if (i.coreSha === original) throw new PublishError("USAGE", `${what} refused at the original sha ${original}: ${last.vault} was redeployed at ${redeploySha} (round ${last.ordinal}), so the build of this checkout is not the replacing vault's, and a failed verify pauses all four vaults. Run the verify ${i.path === "stage-set" ? "alone, " : ""}at the redeploy sha: ${verifyAlone}${i.path === "stage-set" ? `, and name the other stages with a --stage list without verify` : ""}. ${nothing}`);
   if (i.coreSha !== redeploySha) return undefined; // a third sha: runStages refuses it (RESUME)
+  if (i.path === "stage-set") throw new PublishError("USAGE", `${what} refused at the redeploy sha ${redeploySha}: only the verify alone (the verify verb or --stage verify) may name the sha a redeploy-vault round was deployed at, every other stage runs at the original sha ${original}. Run the verify alone: ${verifyAlone}. ${nothing}`);
   if (i.priorOut === undefined) throw new PublishError("USAGE", `verify at the redeploy sha ${redeploySha} needs --prior-out <forge out/ of a checkout at the original sha ${original}>: every contract the redeploy did not replace runs that build. ${nothing}`);
   return { originalSha: original, redeploySha };
+}
+
+/**
+ * QA plan v1 E1 (DT-2): the verify stage's own guard, behind redeployShaRun in cli.ts. After a governed round at another sha than the run manifest's, the verify
+ * must run at that sha with --prior-out of a checkout at the original sha: the replacing vault runs the redeploy build, every other contract the original one.
+ * Any other verify would compare a contract with the wrong build, fail and pause all four vaults. Returns that refusal (USAGE, `details.refused_before_verify`,
+ * so cli.ts pauses nothing) or undefined. Rounds at the original sha only: undefined (one build serves all).
+ */
+export function verifyBuildRefusal(manifest: Pick<RunManifest, "coreSha" | "vault_redeploys">, ctx: { coreSha: string; priorArtifactsDir?: string; priorArtifactsSha?: string }): PublishError | undefined {
+  const original = manifest.coreSha;
+  const recs = redeploysOf(manifest);
+  const shaOf = (r: RedeployRecord): string => r.core_sha || original;
+  const foreign = [...new Set(recs.map(shaOf).filter((s) => s !== original))];
+  if (foreign.length === 0) return undefined;
+  const refuse = (why: string) => new PublishError("USAGE", `verify refused before the verifier ran: ${why}. A redeploy-vault round of this run was deployed at ${foreign.join(", ")}, the deployment at ${original}: run bun publish-contracts/src/cli.ts verify --core-sha ${foreign[0]} --prior-out <forge out/ of a checkout at ${original}>. Nothing was checked or paused.`, { refused_before_verify: true, original_sha: original, redeploy_shas: foreign });
+  const last = recs[recs.length - 1]!;
+  if (foreign.length > 1 || shaOf(last) !== foreign[0]) return refuse(`the rounds ran at ${[...new Set(recs.map(shaOf))].join(", ")} (the last at ${shaOf(last)}) and the verifier compares with two builds only`);
+  if (ctx.coreSha !== foreign[0]) return refuse(`this run is at ${ctx.coreSha}, so its build is not the replacing vault's`);
+  if (!ctx.priorArtifactsDir) return refuse("no --prior-out, so every contract the redeploy did not replace would be compared with the redeploy build");
+  if (ctx.priorArtifactsSha !== original) return refuse(`--prior-out ${ctx.priorArtifactsDir} is a build at ${ctx.priorArtifactsSha ?? "no git checkout"}, not at the original sha`);
+  return undefined;
 }
 
 /**

@@ -13,7 +13,7 @@
  * until rmpc implements those backends.
  */
 import { useState } from "react";
-import type { Address } from "viem";
+import { isAddress, type Address } from "viem";
 import { exportRmpcConfig, type SignerKind } from "../lib/configExport";
 
 interface Props {
@@ -24,6 +24,13 @@ interface Props {
   gatewayRuntimeHash: string;
   chainId: number;
   agent: Address;
+  /**
+   * The connected wallet. It reveals the authorization, so it is the agent's
+   * owner (`agent_owner`); absent until a wallet connects.
+   */
+  agentOwner?: Address;
+  /** The share receiver typed in the Authorize tab. Falls back to `agentOwner`. */
+  shareReceiver?: string;
 }
 
 export function ConfigExportPanel(props: Props) {
@@ -48,6 +55,14 @@ export function ConfigExportPanel(props: Props) {
             keystore_path: keystorePath,
           };
 
+  // Binding pins (QA plan D2/U6): rmpc refuses to deposit or withdraw when the
+  // gateway shows another owner or share receiver for this agent. A wallet
+  // without ADMIN_ROLE must name itself as share receiver, so the connected
+  // wallet is the fallback.
+  const shareReceiver =
+    props.shareReceiver !== undefined && isAddress(props.shareReceiver, { strict: false })
+      ? props.shareReceiver
+      : props.agentOwner;
   const toml = exportRmpcConfig({
     chain_id: props.chainId,
     rpc_url: rpcUrl,
@@ -55,6 +70,8 @@ export function ConfigExportPanel(props: Props) {
     usdc_address: props.usdcAddress,
     vault_address: props.vault,
     gateway_runtime_hash: props.gatewayRuntimeHash,
+    share_receiver: props.agentOwner ? shareReceiver : undefined,
+    agent_owner: props.agentOwner,
     signer,
   });
 
@@ -112,6 +129,18 @@ export function ConfigExportPanel(props: Props) {
           value={keystorePath}
           onChange={(e) => setKeystorePath(e.target.value)}
         />
+      )}
+      {props.agentOwner ? (
+        <p className="hint" data-testid="export-binding-pins">
+          The export pins <code>agent_owner</code> (this wallet) and <code>share_receiver</code>:
+          rmpc refuses to deposit or withdraw if the gateway shows another owner or receiver for
+          this agent.
+        </p>
+      ) : (
+        <p className="hint" data-testid="export-binding-pins-missing">
+          Connect the wallet that authorizes the agent to pin its owner and share receiver in the
+          export.
+        </p>
       )}
       <pre data-testid="exported-toml">{toml}</pre>
     </section>

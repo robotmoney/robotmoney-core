@@ -184,10 +184,11 @@ the local-devnet path; there is no unimplemented receipt interface.
   `WEIGHT_SETTER_ROLE` is the only authority over router weights, and it
   submits the committee's consensus receipt: one timelock operation releases
   the receipt (`releaseReceipt`, emits `ReceiptReleased`) and applies its
-  weights (publish-contracts govern row `apply-receipt`, core 1696; on today's
-  bytecode the batch is `releaseReceipt(receiptId)` plus
-  `RouterGovernance.setDefaultWeights(vaults, bps)`). There is no voting by
-  anyone (`docs/architecture.md` §2.3, §2.4, §4.8).
+  weights (publish-contracts govern row `apply-receipt`, core 1696). That
+  operation is one call, `RouterGovernance.applyReceipt(receiptId,
+  payloadDigest, vaults, bps)`, which releases the receipt and calls
+  `PortfolioRouter.setWeights` in the same transaction (issue 1698). There is
+  no voting by anyone (`docs/architecture.md` §2.3, §2.4, §4.8).
 - **Consensus derivation — deterministic; the judge explains, it does not decide
   (decided).** The weight vector is the **unweighted arithmetic mean of the
   analysts' normalized vectors** — `robotmoney-frontend`'s shipped
@@ -533,12 +534,12 @@ behaviors the shape leaves open.
 `RouterGovernance` (`RouterGovernance.sol:1-630` controls `PortfolioRouter`
 weights only, `docs/architecture.md:92-99,114-125`). The linkage is
 the `apply-receipt` govern row: the Safe (via timelock, `docs/architecture.md:4.5`)
-schedules one batch that releases the hash-verified receipt and applies its
-weight vector through the weight setter; the tool checks before sending that
-the bps sum to 10000 and that the vault list equals the registry's
-router-eligible list. `RouterGovernance.propose`, `vote` and `execute` exist in
-the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before
-the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+schedules one call, `RouterGovernance.applyReceipt`, that releases the
+hash-verified receipt and applies its weight vector through the weight setter;
+the tool checks before sending that the bps sum to 10000 and that the vault
+list equals the registry's router-eligible list. Issue 1698 deleted the
+contract's proposal, vote and execute functions with the voter set, and
+`applyReceipt` replaced them.
 
 #### Governance topology (this repo has more than one governing body)
 
@@ -548,7 +549,7 @@ included. Two roles sit beside it with no configuration authority:
 
 | Body | Membership | Governs |
 |---|---|---|
-| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, owners sign with encrypted keystores and a typed passphrase (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the `apply-receipt` batch) |
+| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, owners sign with encrypted keystores and a typed passphrase (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the one-call `apply-receipt` operation) |
 | **Committee agents** | `COMMITTEE_AGENT_ROLE` holders registered by the timelock | Nothing on chain: they record tilts and the consensus receipt as signed recommendations |
 | **Guardian** | Lower quorum than the full Safe; may pause, may **not** unpause (`docs/technical/security-model.md:212`) | Emergency pause |
 
@@ -690,8 +691,9 @@ Remaining uncertainty is in §6.
   payload signature count as off-chain evidence. `meanTakeWeights` supplies the
   normalized unweighted mean; conversion uses the schema-pinned binary64
   largest-remainder allocation in canonical bucket order, which closes exactly
-  at 10,000 bps. The Safe schedules the `apply-receipt` batch through the
-  timelock; it releases the receipt and applies its weights in one operation
+  at 10,000 bps. The Safe schedules the one-call `apply-receipt` operation
+  (`RouterGovernance.applyReceipt`) through the timelock; it releases the
+  receipt and applies its weights in one transaction
   after the pre-send eligibility checks. Nothing submits unattended. The existing
   per-vault registration and tilt-submission path (`committee vote-submit`, a
   signed tilt, not a vote on anything) is kept unchanged alongside receipts; no
