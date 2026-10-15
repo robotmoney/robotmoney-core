@@ -10,8 +10,9 @@
 //            24_576-byte runtime code-size cap.)
 pragma solidity ^0.8.24;
 
-import {AccessControlUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /// @title AdminFloorAccessControlCounter
 /// @notice `AccessControl` with a "last-admin floor" — the final holder of the

@@ -74,7 +74,8 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
 
         ic = CoreProxies.investmentCommitteePolicy(address(this), address(this));
         ic.registerAgent(submitter, "submitter");
-        receipts = CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
+        receipts =
+            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
 
         // The real governance stage: deploy, router ADMIN_ROLE, router WEIGHT_SETTER_ROLE
         // (the deployer's copy dropped), receipt ADMIN_ROLE. Each grant is read back.

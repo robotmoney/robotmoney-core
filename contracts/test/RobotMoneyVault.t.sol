@@ -159,7 +159,6 @@ contract ShortfallAdapter is IStrategyAdapter {
 
 /// @dev Exposes internal helpers for tests.
 contract VaultHarness is RobotMoneyVault {
-
     function exposed_decimalsOffset() external pure returns (uint8) {
         return _decimalsOffset();
     }

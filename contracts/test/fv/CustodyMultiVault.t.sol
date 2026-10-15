@@ -31,7 +31,12 @@ import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {InvUSDC} from "../CustodyInvariant.t.sol";
 import {NoYieldTestAdapter} from "../helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
-import {BasketVaultHarness, newBasketVaultHarness, MockPool, MockSwapRouter} from "../BasketVault.t.sol";
+import {
+    BasketVaultHarness,
+    newBasketVaultHarness,
+    MockPool,
+    MockSwapRouter
+} from "../BasketVault.t.sol";
 import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Intentionally violates SUP-1: one holder can redeem twice the assets.

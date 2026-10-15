@@ -15,13 +15,15 @@
 // venue selector (Venue enum) added per issue #555.
 pragma solidity ^0.8.24;
 
-import {ERC4626Upgradeable} from
-    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuardUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
@@ -1562,6 +1564,7 @@ abstract contract BasketVault is
     ) internal returns (uint256 amountOut) {
         // One swap executor for the whole vault, in the delegatecall-linked `BasketSwaps`
         // (issue 1808). It always pays this vault.
-        return BasketSwaps.swap(adapter, tokenIn, tokenOut, fee, amountIn, minAmountOut, SWAP_ROUTER);
+        return
+            BasketSwaps.swap(adapter, tokenIn, tokenOut, fee, amountIn, minAmountOut, SWAP_ROUTER);
     }
 }

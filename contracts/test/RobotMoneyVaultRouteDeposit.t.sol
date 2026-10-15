@@ -143,7 +143,6 @@ function newRouteHarness(
 /// @dev Exposes the allocator on its own so a test can count the adapter reads
 ///      `_routeDeposit` makes, without the surrounding `deposit()` NAV reads.
 contract RouteHarness is RobotMoneyVault {
-
     /// @dev Call with `amount` USDC ALREADY transferred into the vault — exactly
     ///      the state `_deposit` hands `_routeDeposit`.
     function exposed_routeDeposit(uint256 amount) external {

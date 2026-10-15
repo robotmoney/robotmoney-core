@@ -86,10 +86,25 @@ contract Ora3Pool {
 
 /// @dev A `Ora3BasketVault` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
 ///      the harness constructor took.
-function newOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_) returns (Ora3BasketVault) {
+function newOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_)
+    returns (Ora3BasketVault)
+{
     (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
-    BasketVault.InitParams memory p = BasketVault.InitParams({usdc: usdc_, swapRouter: router_, tvlCap: type(uint256).max, perDepositCap: type(uint256).max, exitFeeBps: 0, feeRecipient: admin_, admin: admin_, emergencyResponder: admin_});
-    return Ora3BasketVault(CoreProxies.proxy(address(new Ora3BasketVault()), abi.encodeCall(Ora3BasketVault.initialize, (p, t, m))));
+    BasketVault.InitParams memory p = BasketVault.InitParams({
+        usdc: usdc_,
+        swapRouter: router_,
+        tvlCap: type(uint256).max,
+        perDepositCap: type(uint256).max,
+        exitFeeBps: 0,
+        feeRecipient: admin_,
+        admin: admin_,
+        emergencyResponder: admin_
+    });
+    return Ora3BasketVault(
+        CoreProxies.proxy(
+            address(new Ora3BasketVault()), abi.encodeCall(Ora3BasketVault.initialize, (p, t, m))
+        )
+    );
 }
 
 /// @dev Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
@@ -343,7 +358,9 @@ contract DeployAssertionsTest is SafeFixture {
         address safe = _newDefaultSafe();
         _aclDeployer = address(harness);
         // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
-        CoreProxies.useUpgradeConfig(script.predictTimelock(safe, 2 days), GovernedUUPS.UpgradeMode.Upgradeable);
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, 2 days), GovernedUUPS.UpgradeMode.Upgradeable
+        );
         _aclEmergency = makeAddr("fv-emergency");
 
         // Construct the five contracts with the harness as admin so it holds the
@@ -353,8 +370,9 @@ contract DeployAssertionsTest is SafeFixture {
         _aclVault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, _aclDeployer, _aclDeployer
         );
-        _aclGateway =
-            CoreProxies.robotMoneyGateway(usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0));
+        _aclGateway = CoreProxies.robotMoneyGateway(
+            usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0)
+        );
         _aclRegistry = CoreProxies.vaultRegistry(_aclDeployer);
         _aclRouter = CoreProxies.portfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
         _aclGovernance =

@@ -92,7 +92,9 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         _installSafeSet();
         safe = _newDefaultSafe();
         // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
-        CoreProxies.useUpgradeConfig(script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable);
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         // The five core contracts: admin_ == address(script), matching
         // DeployTimelock.t.sol's convention (their revocation is already

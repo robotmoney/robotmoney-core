@@ -172,10 +172,29 @@ contract MockSwapRouter is ISwapRouter {
 
 /// @dev A `BasketVaultHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
 ///      the harness constructor took.
-function newBasketVaultHarness(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_) returns (BasketVaultHarness) {
+function newBasketVaultHarness(
+    IERC20 usdc_,
+    ISwapRouter swapRouter_,
+    address admin_,
+    address emergencyResponder_
+) returns (BasketVaultHarness) {
     (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
-    BasketVault.InitParams memory p = BasketVault.InitParams({usdc: usdc_, swapRouter: swapRouter_, tvlCap: 1_000_000e6, perDepositCap: 100_000e6, exitFeeBps: 0, feeRecipient: admin_, admin: admin_, emergencyResponder: emergencyResponder_});
-    return BasketVaultHarness(CoreProxies.proxy(address(new BasketVaultHarness()), abi.encodeCall(BasketVaultHarness.initialize, (p, t, m))));
+    BasketVault.InitParams memory p = BasketVault.InitParams({
+        usdc: usdc_,
+        swapRouter: swapRouter_,
+        tvlCap: 1_000_000e6,
+        perDepositCap: 100_000e6,
+        exitFeeBps: 0,
+        feeRecipient: admin_,
+        admin: admin_,
+        emergencyResponder: emergencyResponder_
+    });
+    return BasketVaultHarness(
+        CoreProxies.proxy(
+            address(new BasketVaultHarness()),
+            abi.encodeCall(BasketVaultHarness.initialize, (p, t, m))
+        )
+    );
 }
 
 contract BasketVaultHarness is BasketVault {

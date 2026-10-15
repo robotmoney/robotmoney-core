@@ -909,12 +909,15 @@ contract DeployTimelock is UpgradeAuthority {
     {
         address predicted = predictTimelock(safe, minDelay);
         if (predicted.code.length == 0) {
-            (bool ok,) =
-                CREATE2_FACTORY.call(abi.encodePacked(TIMELOCK_SALT, timelockInitCode(safe, minDelay)));
+            (bool ok,) = CREATE2_FACTORY.call(
+                abi.encodePacked(TIMELOCK_SALT, timelockInitCode(safe, minDelay))
+            );
             require(ok && predicted.code.length != 0, "timelock CREATE2 deployment failed");
         }
         timelock = TimelockController(payable(predicted));
-        require(timelock.getMinDelay() == minDelay, "timelock minDelay differs from TIMELOCK_MIN_DELAY");
+        require(
+            timelock.getMinDelay() == minDelay, "timelock minDelay differs from TIMELOCK_MIN_DELAY"
+        );
         require(
             timelock.hasRole(timelock.PROPOSER_ROLE(), safe)
                 && timelock.hasRole(timelock.CANCELLER_ROLE(), safe)

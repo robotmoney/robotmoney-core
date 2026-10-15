@@ -174,8 +174,9 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_depositUsesFixedGas() public {
         _setUp();
 
-        // The vault is the first contract the script creates.
-        address vaultAt = vm.computeCreateAddress(address(script), vm.getNonce(address(script)));
+        // The vault is an ERC-1967 proxy (issue 1808): the script creates its implementation
+        // first and the proxy second.
+        address vaultAt = vm.computeCreateAddress(address(script), vm.getNonce(address(script)) + 1);
         vm.expectCall(
             vaultAt,
             0,
@@ -187,7 +188,7 @@ contract DeploySeedDeposit is Test {
 
         DeployVault.Deployed memory d = _runDeploy();
 
-        assertEq(address(d.vault), vaultAt, "the vault is the script's first creation");
+        assertEq(address(d.vault), vaultAt, "the vault proxy is the script's second creation");
         assertGt(d.vault.totalSupply(), 0, "the seed deposit landed with the fixed gas");
     }
 

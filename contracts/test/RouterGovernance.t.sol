@@ -113,7 +113,8 @@ contract RouterGovernanceTest is Test {
         vm.stopPrank();
 
         router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
-        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(govAdmin, address(this));
+        InvestmentCommitteePolicy ic =
+            CoreProxies.investmentCommitteePolicy(govAdmin, address(this));
         receipts = CoreProxies.consensusRecommendationReceipt(govAdmin, address(this), address(ic));
         gov = CoreProxies.routerGovernance(address(router), address(receipts), govAdmin);
 

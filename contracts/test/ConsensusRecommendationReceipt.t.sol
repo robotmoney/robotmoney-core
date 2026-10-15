@@ -86,8 +86,9 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         // else — deliberately NOT to the gateway, because a gateway-routed
         // release would need the gateway to hold it (see docs/architecture.md
         // §4.9, "why release is not a gateway entrypoint").
-        receipts =
-            CoreProxies.consensusRecommendationReceipt(address(timelock), address(gateway), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(
+            address(timelock), address(gateway), address(ic)
+        );
 
         bytes32 icAdminRole = ic.ADMIN_ROLE();
         vm.prank(admin);

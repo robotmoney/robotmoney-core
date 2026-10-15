@@ -49,8 +49,9 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
         governingSafe = _newDefaultSafe();
         submitterSafe = _newDefaultSafe(); // a SECOND Safe: same owner keys, a different address and its own nonce
         timelock = _newGovTimelock(governingSafe, 1 hours);
-        receipts =
-            CoreProxies.consensusRecommendationReceipt(address(timelock), address(gateway), address(ic));
+        receipts = CoreProxies.consensusRecommendationReceipt(
+            address(timelock), address(gateway), address(ic)
+        );
 
         bytes32 icAdmin = ic.ADMIN_ROLE();
         vm.prank(admin);

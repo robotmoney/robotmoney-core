@@ -87,11 +87,10 @@ contract AgentTokenVault is BasketVault {
     /// @param p The arguments the constructor took before issue 1808.
     /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
     /// @param upgradeMode_ The release mode. `Undeclared` reverts.
-    function initialize(
-        InitParams calldata p,
-        address upgradeTimelock_,
-        UpgradeMode upgradeMode_
-    ) external initializer {
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
         __BasketVault_init("Robot Money Agent Tokens", "rmAGENT", _DEFAULT_SLIPPAGE_BPS, p);
         __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
     }

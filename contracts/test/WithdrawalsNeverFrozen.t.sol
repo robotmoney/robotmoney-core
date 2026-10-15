@@ -90,7 +90,9 @@ contract WithdrawalsNeverFrozenTest is Test {
         address deployer = address(script);
         safe = _createSafe();
         // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
-        CoreProxies.useUpgradeConfig(script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable);
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
 
@@ -386,13 +388,18 @@ contract WithdrawalsNeverFrozenTest is Test {
     function _buildOtherVaults(address deployer) internal {
         ISwapRouter sr = ISwapRouter(address(swapRouter));
         address fees = makeAddr("basketFees");
-        rmProto =
-            CoreProxies.protocolAssetVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
-        rmAgent = CoreProxies.agentTokenVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
+        rmProto = CoreProxies.protocolAssetVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        );
+        rmAgent = CoreProxies.agentTokenVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        );
         rmProto.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
         rmAgent.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
-        rmRwa = CoreProxies.rwaBasketVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
+        rmRwa = CoreProxies.rwaBasketVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        );
         rmRwa.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
     }
 

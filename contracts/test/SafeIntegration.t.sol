@@ -258,7 +258,9 @@ contract SafeIntegrationTest is Test {
         safe = ISafe(safeProxy);
         // Issue 1808: the Safe comes first, so every proxy names the timelock the handover
         // deploys for it as its upgrade authority.
-        CoreProxies.useUpgradeConfig(script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable);
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         vault = CoreProxies.robotMoneyVault(
             usdc,
@@ -295,7 +297,6 @@ contract SafeIntegrationTest is Test {
         vm.prank(deployer);
         IAccessControl(address(router))
             .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
-
 
         // Verify the Safe from the Safe itself, never from what this test asked
         // for (governance-isomorphism.md R12).

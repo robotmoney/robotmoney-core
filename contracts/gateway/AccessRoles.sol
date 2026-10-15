@@ -3,8 +3,9 @@
 // (See also: Plan tracking issue #109 §3.1 — AccessRoles.sol)
 pragma solidity ^0.8.24;
 
-import {AccessControlUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /// @title AccessRoles
 /// @notice Role constants and AccessControl wiring for the RobotMoney gateway.

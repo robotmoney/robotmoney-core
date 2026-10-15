@@ -5,8 +5,9 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuardUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";

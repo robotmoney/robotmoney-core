@@ -579,7 +579,8 @@ contract FvInvariantsTest is Test {
         // Stand up the weight setter and the receipt register it applies, and
         // hand it the router's weight role so applyReceipt -> setWeights is the
         // only weight-setting path.
-        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(address(this), address(this));
+        InvestmentCommitteePolicy ic =
+            CoreProxies.investmentCommitteePolicy(address(this), address(this));
         address submitter = makeAddr("submitter");
         ic.registerAgent(submitter, "submitter");
         ConsensusRecommendationReceipt receipts =

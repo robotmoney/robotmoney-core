@@ -768,7 +768,9 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("retire-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            CoreProxies.robotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+            CoreProxies.robotMoneyVault(
+                usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
+            )
         );
         vaults[1] = address(
             CoreProxies.protocolAssetVault(

@@ -159,7 +159,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // The receipt register's gateway is this test contract, so the test can
         // record a receipt directly (the committee's record path is not under test).
         icPolicy = CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
-        receipts = CoreProxies.consensusRecommendationReceipt(deployer, address(this), address(icPolicy));
+        receipts =
+            CoreProxies.consensusRecommendationReceipt(deployer, address(this), address(icPolicy));
         vm.startPrank(deployer);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentAthena);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentWoon);

@@ -1392,7 +1392,8 @@ contract PortfolioRouterTest is SafeGovernance {
         // Deploy fresh USDC + vault + router for this scenario.
         BlacklistableUSDC bUsdc = new BlacklistableUSDC();
         VaultRegistry bRegistry = CoreProxies.vaultRegistry(admin);
-        PortfolioRouter bRouter = CoreProxies.portfolioRouter(address(bUsdc), address(bRegistry), admin);
+        PortfolioRouter bRouter =
+            CoreProxies.portfolioRouter(address(bUsdc), address(bRegistry), admin);
 
         BlacklistableVault bVault = new BlacklistableVault(address(bUsdc));
         VaultRegistry.VaultMetadata memory bMeta = VaultRegistry.VaultMetadata({

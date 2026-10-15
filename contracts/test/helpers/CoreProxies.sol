@@ -72,14 +72,15 @@ library CoreProxies {
         timelock = address(uint160(w));
         mode = GovernedUUPS.UpgradeMode(uint8(w >> 160));
         if (timelock == address(0)) timelock = TEST_UPGRADE_TIMELOCK;
-        if (mode == GovernedUUPS.UpgradeMode.Undeclared) mode = GovernedUUPS.UpgradeMode.Upgradeable;
+        if (mode == GovernedUUPS.UpgradeMode.Undeclared) {
+            mode = GovernedUUPS.UpgradeMode.Upgradeable;
+        }
     }
 
     /// @notice The implementation an ERC-1967 proxy points at.
     function implementationOf(address proxy) internal view returns (address) {
-        bytes32 v = _vm().load(
-            proxy, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
-        );
+        bytes32 v =
+            _vm().load(proxy, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc);
         return address(uint160(uint256(v)));
     }
 
@@ -129,12 +130,20 @@ library CoreProxies {
     ) internal returns (ProtocolAssetVault) {
         address impl = _impl("ProtocolAssetVault", type(ProtocolAssetVault).creationCode);
         BasketVault.InitParams memory p = basketParams(
-            usdc, swapRouter, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder
+            usdc,
+            swapRouter,
+            tvlCap,
+            perDepositCap,
+            exitFeeBps,
+            feeRecipient,
+            admin,
+            emergencyResponder
         );
         (address t, GovernedUUPS.UpgradeMode m) = config();
-        return ProtocolAssetVault(
-            proxy(impl, abi.encodeCall(ProtocolAssetVault.initialize, (p, t, m)))
-        );
+        return
+            ProtocolAssetVault(
+                proxy(impl, abi.encodeCall(ProtocolAssetVault.initialize, (p, t, m)))
+            );
     }
 
     function agentTokenVault(
@@ -149,7 +158,14 @@ library CoreProxies {
     ) internal returns (AgentTokenVault) {
         address impl = _impl("AgentTokenVault", type(AgentTokenVault).creationCode);
         BasketVault.InitParams memory p = basketParams(
-            usdc, swapRouter, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder
+            usdc,
+            swapRouter,
+            tvlCap,
+            perDepositCap,
+            exitFeeBps,
+            feeRecipient,
+            admin,
+            emergencyResponder
         );
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return AgentTokenVault(proxy(impl, abi.encodeCall(AgentTokenVault.initialize, (p, t, m))));
@@ -167,7 +183,14 @@ library CoreProxies {
     ) internal returns (RwaBasketVault) {
         address impl = _impl("RwaBasketVault", type(RwaBasketVault).creationCode);
         BasketVault.InitParams memory p = basketParams(
-            usdc, swapRouter, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder
+            usdc,
+            swapRouter,
+            tvlCap,
+            perDepositCap,
+            exitFeeBps,
+            feeRecipient,
+            admin,
+            emergencyResponder
         );
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return RwaBasketVault(proxy(impl, abi.encodeCall(RwaBasketVault.initialize, (p, t, m))));
@@ -197,7 +220,9 @@ library CoreProxies {
         address impl = _impl("RouterGovernance", type(RouterGovernance).creationCode);
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return RouterGovernance(
-            proxy(impl, abi.encodeCall(RouterGovernance.initialize, (router, receipts, admin, t, m)))
+            proxy(
+                impl, abi.encodeCall(RouterGovernance.initialize, (router, receipts, admin, t, m))
+            )
         );
     }
 
@@ -213,7 +238,9 @@ library CoreProxies {
         return RobotMoneyGateway(
             proxy(
                 impl,
-                abi.encodeCall(RobotMoneyGateway.initialize, (usdc, vault, admin, pauser, router, t, m))
+                abi.encodeCall(
+                    RobotMoneyGateway.initialize, (usdc, vault, admin, pauser, router, t, m)
+                )
             )
         );
     }
@@ -222,11 +249,14 @@ library CoreProxies {
         internal
         returns (InvestmentCommitteePolicy)
     {
-        address impl =
-            _impl("InvestmentCommitteePolicy", type(InvestmentCommitteePolicy).creationCode);
+        address impl = _impl(
+            "InvestmentCommitteePolicy", type(InvestmentCommitteePolicy).creationCode
+        );
         (address t, GovernedUUPS.UpgradeMode m) = config();
         return InvestmentCommitteePolicy(
-            proxy(impl, abi.encodeCall(InvestmentCommitteePolicy.initialize, (admin, gateway, t, m)))
+            proxy(
+                impl, abi.encodeCall(InvestmentCommitteePolicy.initialize, (admin, gateway, t, m))
+            )
         );
     }
 
