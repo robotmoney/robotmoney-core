@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { sumCounts } from "../src/counts.ts";
 import type { CountsJsonLike } from "../src/counts-reconstruct.ts";
-import { verifyReconstructionOnChain } from "../src/counts-reconstruct.ts";
+import { adoptableOf, verifyReconstructionOnChain } from "../src/counts-reconstruct.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress } from "../src/libs-adopt.ts";
 import { gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
@@ -31,15 +31,19 @@ const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const TICK_RUNTIME = `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` as Hex;
-const THREE = [...buildCreate2Libraries(table.create2Libraries!, OUT).values()];
+const C2 = buildCreate2Libraries(table.create2Libraries!, OUT);
+const THREE = [...C2.values()];
+// Issue 1808: each create2 library is adopted by the first stage that lists it (vault, gateway, proto).
+const ADOPTING = ["vault", "gateway", "proto"].map((stage) => ({ stage, libs: adoptableOf(table, stage).map((l) => C2.get(l.artifact)!) }));
 const getCode = async (a: Address): Promise<string> => ({ [TICK.toLowerCase()]: TICK_RUNTIME, ...Object.fromEntries(THREE.map((b) => [b.address.toLowerCase(), b.runtime])) } as Record<string, string>)[a.toLowerCase()] ?? "0x";
 const adoptedRun = (sha: string): CountsJsonLike => {
-  const counts = { ...REF, libs: 0, proto: REF.proto! - 3 };
+  const counts: Record<string, number> = { ...REF, libs: 0 };
+  for (const a of ADOPTING) counts[a.stage] = REF[a.stage]! - a.libs.length;
   return {
     deploySha: sha, chainId: 918453, counts, deployerNonce: sumCounts(counts) + 1, pinBlock: 52_500_000, rehearsal: { conclusion: "success" },
     adopted: {
       libs: { deployerTxs: 0, factory: "0x4e59b44847b379578588920cA78FbF26c0B4956C", libraries: [{ name: "tick_math", artifact: "TickMath", address: TICK, codeHash: keccak256(TICK_RUNTIME) }] },
-      proto: { deployerTxs: REF.proto! - 3, libraries: THREE.map((b) => ({ name: b.name, artifact: b.artifact, address: b.address, codeHash: b.runtimeHash })) },
+      ...Object.fromEntries(ADOPTING.map((a) => [a.stage, { deployerTxs: REF[a.stage]! - a.libs.length, libraries: a.libs.map((b) => ({ name: b.name, artifact: b.artifact, address: b.address, codeHash: b.runtimeHash })) }])),
     } as never,
   };
 };
