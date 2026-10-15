@@ -12,6 +12,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's
 ///      balance-delta defense (`FeeOnTransferDetected`). Charges 1% on transfer.
@@ -163,7 +164,7 @@ contract RobotMoneyGatewayTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
@@ -266,22 +267,22 @@ contract RobotMoneyGatewayTest is Test {
 
     function test_constructor_revertsOnZeroAddresses() public {
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(
+        CoreProxies.robotMoneyGateway(
             IERC20(address(0)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(
+        CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(0)), admin, pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(
+        CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), address(0), pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(
+        CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, address(0), address(0)
         );
     }
@@ -289,7 +290,7 @@ contract RobotMoneyGatewayTest is Test {
     function test_constructor_revertsOnAssetMismatch() public {
         TestERC20 otherUsdc = new TestERC20();
         vm.expectRevert(RobotMoneyGateway.AssetMismatch.selector);
-        new RobotMoneyGateway(
+        CoreProxies.robotMoneyGateway(
             IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
     }
@@ -918,7 +919,7 @@ contract RobotMoneyGatewayTest is Test {
         // Fresh deployment using fee-on-transfer token.
         FeeOnTransferUSDC fotUsdc = new FeeOnTransferUSDC();
         MockVault fotVault = new MockVault(address(fotUsdc));
-        RobotMoneyGateway fotGateway = new RobotMoneyGateway(
+        RobotMoneyGateway fotGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser, address(0)
         );
 
@@ -1036,7 +1037,7 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that mints an extra share to the gateway during deposit. Trips
         // the post-call rmUSDC custody invariant (line 243-244).
         ShareLeakVault leaky = new ShareLeakVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
@@ -1056,7 +1057,7 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that under-pulls USDC during deposit; gateway is left with
         // leftover USDC. Trips the post-call USDC custody invariant (line 247-248).
         UnderPullVault underPull = new UnderPullVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
@@ -1081,7 +1082,7 @@ contract RobotMoneyGatewayTest is Test {
         // inside its own deposit() implementation. The nonReentrant modifier
         // must prevent the second entry.
         ReentrantVault reentrantVault = new ReentrantVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(reentrantVault)), admin, pauser, address(0)
         );
         reentrantVault.setGateway(gw);
@@ -1205,7 +1206,7 @@ contract GatewayRollingDepositWindowTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         vm.warp(1_700_000_000);
@@ -1667,7 +1668,7 @@ contract GatewayWithdrawTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         agentRole = gateway.AGENT_ROLE();
@@ -2362,7 +2363,7 @@ contract GatewayWithdrawTest is Test {
     function test_withdraw_revertsOnUnexpectedAssetsReceived() public {
         // Deploy a gateway backed by the misbehaving vault.
         UnexpectedAssetsRedeemVault badVault = new UnexpectedAssetsRedeemVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(badVault)), admin, pauser, address(0)
         );
         bytes32 role = gw.AGENT_ROLE();
@@ -2399,7 +2400,7 @@ contract GatewayWithdrawTest is Test {
 
     function test_withdraw_revertsOnShareCustodyInvariantViolated() public {
         ShareLeakRedeemVault leakyVault = new ShareLeakRedeemVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(leakyVault)), admin, pauser, address(0)
         );
 
@@ -2456,7 +2457,7 @@ contract GatewayCommitRevealTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         agentRole = gateway.AGENT_ROLE();

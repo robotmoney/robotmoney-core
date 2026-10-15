@@ -5,9 +5,9 @@ description: "The router's weight setter. It holds the Portfolio Router's `WEIGH
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/RouterGovernance.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** RouterGovernance
 
@@ -45,6 +45,12 @@ agent permissions, or protocol admin operations.
 
 Emits: `ReceiptApplied`.
 
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). This contract's own roles (ADMIN_ROLE, WEIGHT_SETTER_ROLE) carry no
+upgrade power, here or on any other proxy. `router` and `receipts` are set once at
+initialization and have no setter.
+
 ## Constants
 
 ### ADMIN_ROLE
@@ -66,12 +72,14 @@ so no `ADMIN_ROLE` holder can grant it.
 bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
+## State Variables
+
 ### router
 
 The Portfolio Router whose `setWeights` `applyReceipt` calls.
 
 ```solidity
-PortfolioRouter public immutable router;
+PortfolioRouter public router;
 ```
 
 ### receipts
@@ -81,17 +89,25 @@ contract applies. This contract holds `ADMIN_ROLE` there so it
 can release a receipt in the same call that applies it.
 
 ```solidity
-IConsensusRecommendationReceipt public immutable receipts;
+IConsensusRecommendationReceipt public receipts;
 ```
 
 ## Functions
 
-<a id="constructor-address-address-address"></a>
+<a id="initialize-address-address-address-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(address _router, address _receipts, address _admin);
+function initialize(
+        address _router,
+        address _receipts,
+        address _admin,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
 ```
 
 **Parameters**
@@ -101,6 +117,8 @@ constructor(address _router, address _receipts, address _admin);
 | _router | `address` | Portfolio Router whose weights this contract sets. |
 | _receipts | `address` | ConsensusRecommendationReceipt register. |
 | _admin | `address` | Receives `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`. The deploy<br/>is the deployer; the timelock stage hands both to the<br/>`TimelockController` and drops the deployer's copies. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="applyreceipt-bytes32-bytes32-address-uint256"></a>
 

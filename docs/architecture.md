@@ -189,14 +189,23 @@ OpenZeppelin access control, a deposit pause, reentrancy protection,
 caps, an exit fee ceiling, adapter routing, rebalance controls, and
 emergency shutdown. It is a direct non-proxy deployment on Base.
 
-The target release architecture uses an independent UUPS proxy for each
-approved stateful core contract, with upgrades controlled by the Safe through
-the admin timelock. Test, demo, rehearsal, and contained mainnet test instances
-stay upgradeable. A final mainnet proxy must either freeze upgrades in its
-deployment transaction or be frozen by a delayed governance action after an
-explicit production proving period. Existing direct addresses cannot acquire
-this behavior in place. The detailed scope, cutover, and safety gates are in
-`docs/technical/contract-upgradeability-plan.md`.
+The release architecture uses an independent UUPS proxy for each approved
+stateful core contract, with upgrades controlled by the Safe through the admin
+timelock. **Implemented in the source (issue 1808, ADR-0014), not deployed on
+8453:** `RobotMoneyVault`, the three basket vaults, `VaultRegistry`,
+`PortfolioRouter`, `RobotMoneyGateway`, `InvestmentCommitteePolicy`,
+`ConsensusRecommendationReceipt` and `RouterGovernance` each initialize behind
+their own ERC-1967 proxy (`GovernedUUPS`); the only upgrade and freeze authority
+is the proxy's `upgradeTimelock()`, and `freezeUpgrades` is one-way and bound to
+the reviewed implementation and code hash. Test, demo, rehearsal, and contained
+mainnet test instances stay upgradeable. A final mainnet proxy must either
+freeze upgrades in its deployment transaction or be frozen by a delayed
+governance action after an explicit production proving period. Existing direct
+addresses cannot acquire this behavior in place. The release-sheet mode, the
+signing-client checks and the Twin rehearsal are upgradeability stages 2 to 4
+(planned). The detailed scope, cutover, and safety gates are in
+`docs/technical/contract-upgradeability-plan.md` and
+`docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md`.
 
 The source tree also contains the basket-vault family — an abstract
 `BasketVault` base with hybrid NAV model: Uniswap V3 TWAP pricing for
@@ -1508,11 +1517,13 @@ are permitted: no test-only subclasses that alter readiness, no
 build-time branches, no `if (env == "test")` logic, no spoofed users
 or state.
 
-For the planned upgrade path, the same proxy and implementation artifacts are
-used in every environment. Upgrade/freeze mode is initialized state, and a
-one-way freeze is a Safe → timelock action. Final mainnet deployment must
+The same proxy and implementation artifacts are used in every environment
+(issue 1808). Upgrade/freeze mode is initialized state (the `upgradeMode`
+initializer argument, `Upgradeable` or `FrozenAtDeploy`, with no default), and
+a one-way freeze is a Safe → timelock action. Final mainnet deployment must
 choose freeze-at-deploy or a reviewed proving period with a freeze deadline;
-the release sheet records and verifies the choice. This does not change the
+the release sheet records and verifies the choice (planned, stage 2; until then
+`publish-contracts` deploys every proxy frozen). This does not change the
 status of current direct deployments.
 
 Production-readiness for a vault — whether the Portfolio Router may
@@ -1636,10 +1647,16 @@ this architecture:
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
-- For future proxy deployments, only the Safe-controlled admin timelock may
-  authorize an implementation upgrade or permanently freeze upgrades. A final
+- For proxy deployments (implemented in the source, issue 1808), only the
+  Safe-controlled admin timelock may authorize an implementation upgrade or
+  permanently freeze upgrades. It is the proxy's `upgradeTimelock()`, written
+  once at initialization and not a role, so no role holder (the deployer, the
+  emergency key, RouterGovernance) can upgrade. The timelock stays the last
+  deploy stage: every proxy names its CREATE2 address from the first block and
+  the timelock stage refuses a proxy that names another authority. A final
   release must record and verify its freeze choice. Adapter no-proxy and
-  codehash checks continue to apply. See the contract upgradeability plan.
+  codehash checks continue to apply. See ADR-0014 and the contract
+  upgradeability plan.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no

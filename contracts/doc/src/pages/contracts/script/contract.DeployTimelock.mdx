@@ -5,9 +5,9 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployTimelock.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployTimelock
 
@@ -107,6 +107,12 @@ longer the admin on any contract. Verify with:
 cast call &lt;vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") &lt;timelock>
 
 </i>
+
+Upgrade authority (issue 1808): every core contract is an ERC-1967 proxy whose only
+upgrade and freeze authority, `upgradeTimelock()`, was fixed at its initialization to
+the CREATE2 address of THIS timelock (`UpgradeAuthority.predictTimelock`). This stage
+deploys the timelock there through the canonical CREATE2 factory, checks its roles
+and delay, and asserts every handed-over contract names it, before any role moves.
 
 ## Constants
 
@@ -697,6 +703,76 @@ function _deployAndWire(Deployed memory d) internal returns (TimelockController 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
+
+<a id="_deploytimelockatprediction-address-uint256"></a>
+
+### _deployTimelockAtPrediction
+
+<i>
+
+Deploy the core timelock at `predictTimelock(safe, minDelay)` through the CREATE2
+factory. CREATE2 binds the init code, so code already at that address can only be
+this same timelock (anyone may have deployed it first): it is reused, and its roles
+and delay are checked either way.
+
+</i>
+
+```solidity
+function _deployTimelockAtPrediction(address safe, uint256 minDelay)
+        internal
+        returns (TimelockController timelock);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `TimelockController` |  |
+
+<a id="_requireupgradeauthority-deployed-address"></a>
+
+### _requireUpgradeAuthority
+
+<i>
+
+Issue 1808: every handed-over core proxy names this timelock as its only upgrade and
+freeze authority. A proxy that names any other address (the deployer, a placeholder,
+another deployment's timelock) stops the handover before any role moves.
+
+</i>
+
+```solidity
+function _requireUpgradeAuthority(Deployed memory d, address timelock) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| timelock | `address` |  |
+
+<a id="_requirenamestimelock-address-address"></a>
+
+### _requireNamesTimelock
+
+```solidity
+function _requireNamesTimelock(address proxy, address timelock) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| timelock | `address` |  |
 
 <a id="_transferagents-deployed-address"></a>
 

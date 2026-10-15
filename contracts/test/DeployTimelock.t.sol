@@ -29,6 +29,8 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @dev Fork-style unit tests for DeployTimelock.s.sol (issue #414).
 ///
@@ -116,6 +118,11 @@ contract DeployTimelockTest is SafeGovernance {
         // full Safe checks pass on a genuine Safe (no stub, no mock).
         _installSafeSet();
         safe = _newDefaultSafe();
+        // Issue 1808: every proxy names the timelock the handover deploys (CREATE2, bound to
+        // the Safe and the delay) as its upgrade authority.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         // In a real `forge script --broadcast` run one address does both jobs:
         // the broadcaster sends every grant and revoke, and it is also the
@@ -133,7 +140,7 @@ contract DeployTimelockTest is SafeGovernance {
         // contracts (issue #420 — replacing the registry placeholder that was
         // used as a stub for both).  Vault is constructed first so that the
         // gateway can validate vault.asset() == address(usdc) at deploy time.
-        vault = new RobotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max, // tvlCap (no cap for tests)
             type(uint256).max, // perDepositCap
@@ -142,16 +149,17 @@ contract DeployTimelockTest is SafeGovernance {
             address(script), // admin — script must hold ADMIN_ROLE to wire timelock
             address(script) // emergencyResponder
         );
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             usdc,
             vault,
             address(script), // admin — script holds ADMIN_ROLE to wire timelock
             admin, // pauser — must be distinct from admin (RoleSeparationViolated guard)
             address(0) // router (not exercised in these tests)
         );
-        registry = new VaultRegistry(address(script));
-        router = new PortfolioRouter(address(usdc), address(registry), address(script));
-        governance = new RouterGovernance(address(router), makeAddr("receipts"), address(script));
+        registry = CoreProxies.vaultRegistry(address(script));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(script));
+        governance =
+            CoreProxies.routerGovernance(address(router), makeAddr("receipts"), address(script));
         // R7: DeployTimelock now refuses a handover that would leave the
         // approving body unable to act, so the fixture must reflect what
         // DeployRouterGovernance does at deploy time — grant governance
@@ -1062,13 +1070,26 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         deployer = address(script);
         _installSafeSet();
         safe = _newDefaultSafe();
-        vault = new RobotMoneyVault(
-            usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        usdc_ = usdc;
+    }
+
+    TestERC20 internal usdc_;
+
+    /// @dev Issue 1808: the proxies name the timelock for `delay` (CREATE2, bound to the Safe
+    ///      and the delay), so the stack is built for the delay the test runs with.
+    function _build(uint256 delay) internal {
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, delay), GovernedUUPS.UpgradeMode.Upgradeable
         );
-        gateway = new RobotMoneyGateway(usdc, vault, deployer, makeAddr("floor-pauser"), address(0));
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
+        vault = CoreProxies.robotMoneyVault(
+            usdc_, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
+        );
+        gateway = CoreProxies.robotMoneyGateway(
+            usdc_, vault, deployer, makeAddr("floor-pauser"), address(0)
+        );
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc_), address(registry), deployer);
+        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1076,6 +1097,7 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     }
 
     function _run(uint256 delay) internal returns (DeployTimelock.Deployed memory) {
+        if (address(vault) == address(0)) _build(delay);
         address[] memory owners = _fixtureOwners();
         vm.prank(deployer);
         return script.runInProcess(
@@ -1094,12 +1116,14 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
     /// @notice On chain id 8453 a 60 second delay reverts.
     function test_delay60_revertsOnBase() public {
         vm.chainId(BASE_CHAIN_ID);
+        _build(60);
         vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         _run(60);
     }
 
     function test_delayJustBelowFloor_revertsOnBase() public {
         vm.chainId(BASE_CHAIN_ID);
+        _build(172_799);
         vm.expectRevert(bytes("TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"));
         _run(172_799);
     }
@@ -1192,16 +1216,21 @@ contract DeployTimelockManifestTest is SafeGovernance {
         _installSafeSet();
         address safe = _newDefaultSafe();
         address emergency = makeAddr("manifest-emergency");
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, 2 days), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
-        RobotMoneyVault vault = new RobotMoneyVault(
+        RobotMoneyVault vault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
         );
-        RobotMoneyGateway gateway =
-            new RobotMoneyGateway(usdc, vault, deployer, makeAddr("manifest-pauser"), address(0));
-        VaultRegistry registry = new VaultRegistry(deployer);
-        PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        RobotMoneyGateway gateway = CoreProxies.robotMoneyGateway(
+            usdc, vault, deployer, makeAddr("manifest-pauser"), address(0)
+        );
+        VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
+        PortfolioRouter router =
+            CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         RouterGovernance governance =
-            new RouterGovernance(address(router), makeAddr("receipts"), deployer);
+            CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
 
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
@@ -1354,6 +1383,10 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         deployer = address(script);
         _installSafeSet();
         safe = _newDefaultSafe();
+        // Issue 1808: every proxy (the CoreStages ones too) names the timelock the handover deploys.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         // Core stage scripts: vault, adapters, registry, router, gateway, and the deploy agent,
         // authorized by the admin (the deployer).
@@ -1373,9 +1406,9 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         vm.prank(deployer);
         gateway.authorizeAgent(submitter, _policy(submitter));
 
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
+        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1495,15 +1528,17 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         DeployTimelock script2 = new DeployTimelock();
         address deployer2 = address(script2);
         TestERC20 usdc2 = new TestERC20();
-        RobotMoneyVault vault2 = new RobotMoneyVault(
+        RobotMoneyVault vault2 = CoreProxies.robotMoneyVault(
             usdc2, type(uint256).max, type(uint256).max, 0, safe, deployer2, deployer2
         );
-        RobotMoneyGateway gateway2 =
-            new RobotMoneyGateway(usdc2, vault2, deployer2, makeAddr("pauser2"), address(0));
-        VaultRegistry registry2 = new VaultRegistry(deployer2);
-        PortfolioRouter router2 = new PortfolioRouter(address(usdc2), address(registry2), deployer2);
+        RobotMoneyGateway gateway2 = CoreProxies.robotMoneyGateway(
+            usdc2, vault2, deployer2, makeAddr("pauser2"), address(0)
+        );
+        VaultRegistry registry2 = CoreProxies.vaultRegistry(deployer2);
+        PortfolioRouter router2 =
+            CoreProxies.portfolioRouter(address(usdc2), address(registry2), deployer2);
         RouterGovernance governance2 =
-            new RouterGovernance(address(router2), makeAddr("receipts"), deployer2);
+            CoreProxies.routerGovernance(address(router2), makeAddr("receipts"), deployer2);
         vm.prank(deployer2);
         router2.grantRole(ADMIN_ROLE, address(governance2));
         vm.prank(deployer2);
@@ -1659,11 +1694,11 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         address[] memory agents_
     ) internal returns (DeployTimelock.Deployed memory out) {
         address deployer_ = address(script_);
-        VaultRegistry registry_ = new VaultRegistry(deployer_);
+        VaultRegistry registry_ = CoreProxies.vaultRegistry(deployer_);
         PortfolioRouter router_ =
-            new PortfolioRouter(address(dep_.usdc), address(registry_), deployer_);
+            CoreProxies.portfolioRouter(address(dep_.usdc), address(registry_), deployer_);
         RouterGovernance governance_ =
-            new RouterGovernance(address(router_), makeAddr("receipts"), deployer_);
+            CoreProxies.routerGovernance(address(router_), makeAddr("receipts"), deployer_);
         vm.prank(deployer_);
         router_.grantRole(ADMIN_ROLE, address(governance_));
         vm.prank(deployer_);
@@ -1831,9 +1866,16 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
     address internal submitter = makeAddr("run-stage-submitter");
     CoreStages.Stack internal dep;
     RobotMoneyGateway internal gateway;
+    address internal safe;
 
     function _set(string memory name, string memory value) internal {
         vm.setEnv(string.concat(_prefix(), name), value);
+    }
+
+    /// @dev The TIMELOCK_MIN_DELAY the test's successful `run()` uses: the stack is bound to the
+    ///      timelock for that delay (issue 1808).
+    function _stackDelay() internal pure virtual returns (uint256) {
+        return 172_800;
     }
 
     /// @dev Removes this test's own manifest once the test ends. The path is unique to this contract (see `OUT_PATH`), so nothing else is touched.
@@ -1851,6 +1893,14 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         // the call into run()'s body instead.
         deployer = tx.origin;
         vm.etch(deployer, address(new RunEntrypointRelay()).code);
+        // Issue 1808: the Safe comes first, so every proxy of the stack (the CoreStages ones
+        // too) names the timelock `run()` deploys for this Safe and `_stackDelay()`.
+        _installSafeSet();
+        address[] memory owners = _fixtureOwners();
+        safe = _newSafe(owners, FIXTURE_THRESHOLD);
+        CoreProxies.useUpgradeConfig(
+            harness.predictTimelock(safe, _stackDelay()), GovernedUUPS.UpgradeMode.Upgradeable
+        );
         TestERC20 usdc = new TestERC20();
         dep = new CoreStages()
             .run(
@@ -1879,16 +1929,18 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
             })
         );
 
-        VaultRegistry registry = new VaultRegistry(deployer);
-        PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
+        PortfolioRouter router =
+            CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         // The committee contracts are required inputs on every chain. The deployer
         // holds their admin roles until the handover. The receipt register exists
         // before governance, which releases receipts through it (issue 1698).
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(deployer, address(gateway));
+        InvestmentCommitteePolicy ic =
+            CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
         ConsensusRecommendationReceipt receipt =
-            new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
+            CoreProxies.consensusRecommendationReceipt(deployer, address(gateway), address(ic));
         RouterGovernance governance =
-            new RouterGovernance(address(router), address(receipt), deployer);
+            CoreProxies.routerGovernance(address(router), address(receipt), deployer);
         vm.prank(deployer);
         receipt.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1904,9 +1956,7 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         _set("REGISTRY_ADDRESS", vm.toString(address(registry)));
         _set("ROUTER_ADDRESS", vm.toString(address(router)));
         _set("GOVERNANCE_ADDRESS", vm.toString(address(governance)));
-        _installSafeSet();
-        address[] memory owners = _fixtureOwners();
-        _set("SAFE_ADDRESS", vm.toString(_newSafe(owners, FIXTURE_THRESHOLD)));
+        _set("SAFE_ADDRESS", vm.toString(safe));
         _set(
             "SAFE_OWNERS",
             string.concat(
@@ -2019,6 +2069,10 @@ contract DeployTimelockRehearsalKindTest is DeployTimelockKindBase {
         return "RM_1727_REHEARSAL_KIND_";
     }
 
+    function _stackDelay() internal pure override returns (uint256) {
+        return 900;
+    }
+
     /// @notice 899 and 172800 are refused in the rehearsal kind, 900 passes and records the kind. A rehearsal never carries a production delay: the chain could not tell them apart.
     function test_rehearsalKind_boundariesOnBase() public removesOwnManifest {
         _base("rehearsal", "899");
@@ -2066,6 +2120,10 @@ contract DeployTimelockUnknownKindTest is DeployTimelockKindBase {
 contract DeployTimelockTwinChainDelayTest is DeployTimelockRunEntrypointBase {
     function _prefix() internal pure override returns (string memory) {
         return "RM_REVIEW_R04_TWIN_";
+    }
+
+    function _stackDelay() internal pure override returns (uint256) {
+        return 60;
     }
 
     /// @notice On the Twin chain (918453) the same short delay is a plain parameter.
@@ -2162,6 +2220,7 @@ contract DeployTimelockReceiptAdminTest is DeployTimelockRunEntrypointBase {
     ///         leave the deployer holding the receipt contract's admin roles.
     function test_run_revertsWhenReceiptAdminAddressIsWrong() public removesOwnManifest {
         ReceiptRoleStub receipt = new ReceiptRoleStub(deployer);
+        receipt.setUpgradeTimelock(harness.predictTimelock(safe, _stackDelay()));
         _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
         _set("RECEIPT_ADMIN_ADDRESS", vm.toString(makeAddr("not-the-receipt-admin")));
         vm.expectRevert(
@@ -2175,13 +2234,19 @@ contract DeployTimelockReceiptAdminTest is DeployTimelockRunEntrypointBase {
 }
 
 /// @dev Stands in for ConsensusRecommendationReceipt's role surface: the
-///      handover only needs `hasRole` / `grantRole` / `revokeRole`.
+///      handover only needs `hasRole` / `grantRole` / `revokeRole`, and (issue 1808)
+///      `upgradeTimelock`, which must name the timelock the handover deploys.
 contract ReceiptRoleStub is AccessControl {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    address public upgradeTimelock;
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);
+    }
+
+    function setUpgradeTimelock(address timelock) external {
+        upgradeTimelock = timelock;
     }
 }
 
@@ -2222,15 +2287,18 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         deployer = address(script);
         _installSafeSet();
         safe = _newDefaultSafe();
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         address swapRouter = makeAddr("four-swap-router");
-        RobotMoneyVault rmUsdc = new RobotMoneyVault(
+        RobotMoneyVault rmUsdc = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, deployer, deployer
         );
         vaults.push(address(rmUsdc));
         vaults.push(
             address(
-                new ProtocolAssetVault(
+                CoreProxies.protocolAssetVault(
                     IERC20(address(usdc)),
                     ISwapRouter(swapRouter),
                     type(uint256).max,
@@ -2244,7 +2312,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         );
         vaults.push(
             address(
-                new AgentTokenVault(
+                CoreProxies.agentTokenVault(
                     IERC20(address(usdc)),
                     ISwapRouter(swapRouter),
                     type(uint256).max,
@@ -2258,7 +2326,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         );
         vaults.push(
             address(
-                new RwaBasketVault(
+                CoreProxies.rwaBasketVault(
                     IERC20(address(usdc)),
                     ISwapRouter(swapRouter),
                     type(uint256).max,
@@ -2271,10 +2339,12 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
             )
         );
 
-        gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0));
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
+        gateway = CoreProxies.robotMoneyGateway(
+            usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0)
+        );
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
+        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);

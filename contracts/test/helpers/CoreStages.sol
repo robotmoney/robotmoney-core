@@ -15,6 +15,8 @@ import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
+import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
+import {CoreProxies} from "./CoreProxies.sol";
 
 /// @notice Runs the core stage scripts in process, in production order:
 ///         libs, vault, registry, router, gateway. Tests use it where a single deploy script used to be called. The production gateway stage authorizes no agent. `run` authorizes
@@ -109,6 +111,15 @@ contract CoreStages {
         s.pauser = pauser_;
         s.shareReceiver = shareReceiver_;
         s.usdc = usdc_;
+
+        // Issue 1808: the stage scripts initialize every proxy with the upgrade timelock and
+        // mode the calling test set (`CoreProxies.useUpgradeConfig`), so a handover test can
+        // bind the stack to the timelock the timelock stage deploys.
+        (address timelock, GovernedUUPS.UpgradeMode mode) = CoreProxies.configOf(msg.sender);
+        vaultScript.setUpgradeConfig(timelock, mode);
+        registryScript.setUpgradeConfig(timelock, mode);
+        routerScript.setUpgradeConfig(timelock, mode);
+        gatewayScript.setUpgradeConfig(timelock, mode);
 
         libsScript.runInProcess();
         stages.push("libs");

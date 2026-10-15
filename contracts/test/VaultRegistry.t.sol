@@ -13,6 +13,7 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Minimal stand-in for `PortfolioRouter` exposing only the
 ///         `defaultWeightsLength()` view the registry's stale-length guard
@@ -108,14 +109,14 @@ contract VaultRegistryTest is Test {
     // ─── setUp ────────────────────────────────────────────────────────────────
 
     function setUp() public {
-        registry = new VaultRegistry(admin);
+        registry = CoreProxies.vaultRegistry(admin);
     }
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     function test_constructor_revertsOnZeroAdmin() public {
         vm.expectRevert(VaultRegistry.ZeroAddress.selector);
-        new VaultRegistry(address(0));
+        CoreProxies.vaultRegistry(address(0));
     }
 
     function test_constructor_grantsAdminRole() public view {
@@ -767,10 +768,12 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("retire-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            new RobotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+            CoreProxies.robotMoneyVault(
+                usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
+            )
         );
         vaults[1] = address(
-            new ProtocolAssetVault(
+            CoreProxies.protocolAssetVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -782,7 +785,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[2] = address(
-            new AgentTokenVault(
+            CoreProxies.agentTokenVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -794,7 +797,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[3] = address(
-            new RwaBasketVault(
+            CoreProxies.rwaBasketVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,

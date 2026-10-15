@@ -1,0 +1,45 @@
+---
+title: "newRouteHarness"
+---
+
+# newRouteHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RobotMoneyVaultRouteDeposit.t.sol)
+
+<a id="newrouteharness-ierc20-uint256-uint256-address-address"></a>
+
+### newRouteHarness
+
+<i>
+
+A `RouteHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the
+arguments the harness constructor took.
+
+</i>
+
+```solidity
+function newRouteHarness(
+    IERC20 asset_,
+    uint256 tvlCap_,
+    uint256 perDepositCap_,
+    address feeRecipient_,
+    address admin_
+) returns (RouteHarness);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `IERC20` |  |
+| tvlCap_ | `uint256` |  |
+| perDepositCap_ | `uint256` |  |
+| feeRecipient_ | `address` |  |
+| admin_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RouteHarness` |  |
+

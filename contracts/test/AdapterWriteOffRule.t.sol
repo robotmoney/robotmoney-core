@@ -9,6 +9,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestUSDC, MockAdapter} from "./RobotMoneyVault.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Issue 1705 Q2 (a), the rule for the mainnet test, shown on a real RobotMoneyVault:
 ///         - Only EMERGENCY_ROLE (the emergency key) may write off an adapter, through
@@ -39,7 +40,7 @@ contract AdapterWriteOffRuleTest is Test {
     function setUp() public {
         usdc = new TestUSDC();
         // The handover state: ADMIN_ROLE is the timelock, EMERGENCY_ROLE the emergency key.
-        vault = new RobotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)),
             1_000_000 * ONE_USDC,
             100_000 * ONE_USDC,

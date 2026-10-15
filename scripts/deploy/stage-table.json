@@ -42,6 +42,9 @@
         "SEED_SHARE_RECEIVER",
         "SEED_DEPOSIT_USDC",
         "EXIT_FEE_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -49,8 +52,14 @@
       ],
       "manifest": "deployments/<chain>/vault.json",
       "manifestNotes": "Seed fields: seed_share_receiver (SEED_SHARE_RECEIVER), seed_shares (minted to the receiver) and deployer_share_balance_after (must be 0). Verify asserts the deployer holds zero shares and the receiver holds the seed shares.",
-      "libraries": [],
-      "vault": "USDC"
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": "USDC",
+      "create2Libraries": [
+        "GovernedUpgrade",
+        "RobotMoneyVaultOps"
+      ]
     },
     {
       "name": "registry",
@@ -59,14 +68,22 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "VAULT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/registry.json",
-      "libraries": [],
-      "vault": null
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ]
     },
     {
       "name": "router",
@@ -76,14 +93,22 @@
         "ADMIN_ADDRESS",
         "REGISTRY_ADDRESS",
         "VAULT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/router.json",
-      "libraries": [],
-      "vault": null
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ]
     },
     {
       "name": "gateway",
@@ -95,14 +120,23 @@
         "SHARE_RECEIVER_ADDRESS",
         "VAULT_ADDRESS",
         "ROUTER_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/gateway.json",
-      "libraries": [],
-      "vault": null
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade",
+        "GatewayWindows"
+      ]
     },
     {
       "name": "ic-policy",
@@ -112,14 +146,22 @@
         "ADMIN_ADDRESS",
         "GATEWAY_ADDRESS",
         "RECEIPT_ADMIN_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/ic-policy.json",
-      "libraries": [],
-      "vault": null
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ]
     },
     {
       "name": "governance",
@@ -129,6 +171,9 @@
         "ADMIN_ADDRESS",
         "ROUTER_ADDRESS",
         "CONSENSUS_RECEIPT_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -136,8 +181,13 @@
       ],
       "manifest": "deployments/<chain>/governance.json",
       "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after ic-policy because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's ADMIN_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
-      "libraries": [],
-      "vault": null
+      "libraries": [
+        "tick_math"
+      ],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ]
     },
     {
       "name": "proto",
@@ -154,6 +204,9 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -167,7 +220,9 @@
       "create2Libraries": [
         "BasketAssetConfigGuard",
         "TwapTickMath",
-        "BasketViews"
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
       ]
     },
     {
@@ -186,6 +241,9 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -199,7 +257,9 @@
       "create2Libraries": [
         "BasketAssetConfigGuard",
         "TwapTickMath",
-        "BasketViews"
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
       ]
     },
     {
@@ -217,6 +277,9 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -230,7 +293,9 @@
       "create2Libraries": [
         "BasketAssetConfigGuard",
         "TwapTickMath",
-        "BasketViews"
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
       ]
     },
     {
@@ -258,7 +323,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/timelock.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null
     }
   ],
@@ -293,6 +360,7 @@
         "EXIT_FEE_BPS",
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -306,7 +374,9 @@
       "create2Libraries": [
         "BasketAssetConfigGuard",
         "TwapTickMath",
-        "BasketViews"
+        "BasketViews",
+        "BasketSwaps",
+        "GovernedUpgrade"
       ]
     }
   ],
@@ -422,6 +492,26 @@
       "name": "BasketViews",
       "artifact": "BasketViews",
       "path": "contracts/lib/BasketViews.sol"
+    },
+    {
+      "name": "BasketSwaps",
+      "artifact": "BasketSwaps",
+      "path": "contracts/lib/BasketSwaps.sol"
+    },
+    {
+      "name": "GovernedUpgrade",
+      "artifact": "GovernedUpgrade",
+      "path": "contracts/lib/GovernedUUPS.sol"
+    },
+    {
+      "name": "RobotMoneyVaultOps",
+      "artifact": "RobotMoneyVaultOps",
+      "path": "contracts/lib/RobotMoneyVaultOps.sol"
+    },
+    {
+      "name": "GatewayWindows",
+      "artifact": "GatewayWindows",
+      "path": "contracts/lib/GatewayWindows.sol"
     }
   ],
   "artifacts": {

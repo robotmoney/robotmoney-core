@@ -11,6 +11,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Any contract: a rotation target needs code, nothing else.
 contract RotationStubGovernance {}
@@ -41,8 +42,8 @@ contract WeightSetterRotationTest is SafeGovernance {
 
     function setUp() public {
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        VaultRegistry registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
 
         _installSafeSet();
         safe = _newDefaultSafe();

@@ -1,4 +1,4 @@
-// The Twin pre-deploy of the four CREATE2 libraries (issue 1721), on a stub RPC that keeps code by address.
+// The Twin pre-deploy of the CREATE2 libraries (issues 1721, 1808), on a stub RPC that keeps code by address.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { keccak256, type Hex } from "viem";
@@ -38,10 +38,14 @@ function fakeAnvil(o: { chain?: number; anvil?: boolean; code?: Record<string, s
 }
 
 describe("predeployLibraries", () => {
-  test("creates all four, dependencies first, each at the CREATE2 address of the build with the build's runtime code", async () => {
+  test("creates every library of the table, dependencies first, each at the CREATE2 address of the build with the build's runtime code", async () => {
     const f = fakeAnvil();
     const r = await predeployLibraries(f.rpc, LIBS, OUT);
-    expect(r.map((x) => [x.built.artifact, x.created])).toEqual([["TickMath", true], ["BasketAssetConfigGuard", true], ["TwapTickMath", true], ["BasketViews", true]]);
+    // Issue 1808 adds BasketSwaps, GovernedUpgrade, RobotMoneyVaultOps and GatewayWindows to the four of issue 1721.
+    expect(r.map((x) => [x.built.artifact, x.created])).toEqual([
+      ["TickMath", true], ["BasketAssetConfigGuard", true], ["TwapTickMath", true], ["BasketViews", true],
+      ["BasketSwaps", true], ["GovernedUpgrade", true], ["RobotMoneyVaultOps", true], ["GatewayWindows", true],
+    ]);
     for (const x of r) expect(keccak256(f.code[x.built.address.toLowerCase()] as Hex)).toBe(x.built.runtimeHash);
     expect(r.findIndex((x) => x.built.artifact === "TwapTickMath")).toBeLessThan(r.findIndex((x) => x.built.artifact === "BasketViews"));
     expect(r[0]!.built.address).toBe(predictedLibraryAddress(r[0]!.built.creation));
@@ -49,7 +53,7 @@ describe("predeployLibraries", () => {
   test("a library that is already there with the right code is left alone", async () => {
     const f = fakeAnvil({ code: { [BUILT.get("TickMath")!.address.toLowerCase()]: BUILT.get("TickMath")!.runtime } });
     const r = await predeployLibraries(f.rpc, LIBS, OUT);
-    expect(r.map((x) => x.created)).toEqual([false, true, true, true]);
+    expect(r.map((x) => x.created)).toEqual([false, true, true, true, true, true, true, true]);
   });
   test("a library address that holds other code is refused", async () => {
     const f = fakeAnvil({ code: { [BUILT.get("TwapTickMath")!.address.toLowerCase()]: "0x6001600155" } });

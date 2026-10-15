@@ -114,7 +114,8 @@
 | Admin / fee recipient (Safe) | [`0x88bA7364cC6cE5054981d571b33f8fb3E91475A0`](https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0) |
 
 **Notes:**
-- RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not.
+- RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not. Every address in this section is a direct deployment and cannot be upgraded in place.
+- From issue 1808 the source deploys every core contract (rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
 - VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
@@ -126,12 +127,15 @@
 
 ```
 RobotMoneyVault
-  ├── ERC4626   (OpenZeppelin v5 — ERC-20 shares + ERC-4626 accounting)
-  ├── AccessControl (three roles: ADMIN, EMERGENCY, KEEPER)
-  └── ReentrancyGuard
+  ├── ERC4626Upgradeable   (OpenZeppelin v5.0.2 — ERC-20 shares + ERC-4626 accounting, ERC-7201 storage)
+  ├── AdminFloorAccessControlCounter → AccessControlUpgradeable (three roles: ADMIN, EMERGENCY, KEEPER)
+  ├── ReentrancyGuardUpgradeable
+  └── GovernedUUPS   (upgrade and freeze entry points; the rules are the linked GovernedUpgrade library)
 ```
 
 The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (core 1494). The deployed v1 vault predates this and still inherits OZ Pausable.
+
+Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, upgradeTimelock, upgradeMode)` replaces the constructor (same arguments plus the upgrade authority and release mode) and runs inside the proxy's constructor. Only `upgradeTimelock()` (the Safe-controlled timelock) can `upgradeToAndCall` or `freezeUpgrades`; no role below carries upgrade power. The emergency drains, the `adminRebalance` pull, `getAdapterInfo` and `getAdapterDrift` run in the linked `RobotMoneyVaultOps` library, unchanged. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 
 ### 3.2 Access control roles
 
@@ -352,7 +356,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | Current deployed contracts are direct and have no in-place upgrade path. Target policy calls for per-instance UUPS proxies on approved stateful core contracts, upgradeable during test/demo/rehearsal and optionally during a bounded mainnet proving period, then permanently frozen; final mainnet may be frozen at deployment. This is a plan, not deployed behavior. See `docs/technical/contract-upgradeability-plan.md` |
+| Upgradeability | The deployed 8453 contracts are direct and have no in-place upgrade path. The source (issue 1808) runs every core contract behind its own ERC-1967 proxy: only the Safe-controlled timelock (`upgradeTimelock()`, not a role) can upgrade or freeze; `freezeUpgrades(expectedImplementation, expectedCodeHash)` is one-way and bound to the reviewed implementation; the release mode is a required initializer argument (`Upgradeable` or `FrozenAtDeploy`, no default). Not deployed on 8453. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) and `docs/technical/contract-upgradeability-plan.md` |
 | Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
 | Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
@@ -365,7 +369,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. Future proxy deployment is planned, not live |
+| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. The source now deploys a governed UUPS proxy (issue 1808, ADR-0014); no proxied vault is live on 8453 |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |

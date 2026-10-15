@@ -20,6 +20,8 @@ import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.so
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title DeployTimelockCommitteeTest
 /// @notice Issue #1319: before this change, `DeployTimelock.s.sol` only handed
@@ -89,21 +91,25 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         script = new DeployTimelock();
         _installSafeSet();
         safe = _newDefaultSafe();
+        // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
 
         // The five core contracts: admin_ == address(script), matching
         // DeployTimelock.t.sol's convention (their revocation is already
         // covered there / in DeployAssertions.t.sol — not re-tested here).
-        vault = new RobotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, address(script), address(script)
         );
-        gateway = new RobotMoneyGateway(usdc, vault, address(script), pauser, address(0));
-        registry = new VaultRegistry(address(script));
+        gateway = CoreProxies.robotMoneyGateway(usdc, vault, address(script), pauser, address(0));
+        registry = CoreProxies.vaultRegistry(address(script));
         // The router is built with this test contract as its first admin so the setup below
         // needs no prank of the script (issue #1644): `_wireGovernance` wires governance,
         // then hands every router role to address(script) and drops this contract's own,
         // which leaves the router exactly as a script-built one. Governance is built per
         // test, after the receipt register it releases receipts through (issue 1698).
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
 
         // InvestmentCommitteePolicy: admin_ == address(this) (this test
         // contract), so that DeployTimelock's `revokeRole(ADMIN_ROLE,
@@ -112,7 +118,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         // holder. address(script) additionally needs the roles because that
         // is the identity every one of DeployTimelock's grant/revoke calls
         // actually executes as (see contract NatSpec above).
-        icPolicy = new InvestmentCommitteePolicy(address(this), address(gateway));
+        icPolicy = CoreProxies.investmentCommitteePolicy(address(this), address(gateway));
         icPolicy.grantRole(ADMIN_ROLE, address(script));
         icPolicy.grantRole(DEFAULT_ADMIN_ROLE, address(script));
         // Gateway separately holds ADMIN_ROLE on the IC policy so it can
@@ -126,7 +132,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
     ///      router ADMIN_ROLE and WEIGHT_SETTER_ROLE grants (R7), then hand every router
     ///      role to address(script).
     function _wireGovernance(address receipts_) internal {
-        governance = new RouterGovernance(address(router), receipts_, address(script));
+        governance = CoreProxies.routerGovernance(address(router), receipts_, address(script));
         router.grantRole(keccak256("ADMIN_ROLE"), address(governance));
         router.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
         bytes32[4] memory routerRoles = [
@@ -148,7 +154,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         internal
         returns (ConsensusRecommendationReceipt receipts)
     {
-        receipts = new ConsensusRecommendationReceipt(
+        receipts = CoreProxies.consensusRecommendationReceipt(
             receiptConstructedAdmin, address(gateway), address(icPolicy)
         );
         if (receiptConstructedAdmin != address(script)) {
@@ -373,7 +379,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
     // revert — proving the ceremony never silently no-ops or partially
     // succeeds when misconfigured.
     function test_receiptAdmin_notAuthorized_revertsLoudly() public {
-        ConsensusRecommendationReceipt receipts = new ConsensusRecommendationReceipt(
+        ConsensusRecommendationReceipt receipts = CoreProxies.consensusRecommendationReceipt(
             independentReceiptAdmin, address(gateway), address(icPolicy)
         );
         _wireGovernance(address(receipts));

@@ -1,0 +1,295 @@
+---
+title: "UpgradeAuthority"
+description: "What every stage that deploys a proxied core contract shares (issue 1808):"
+---
+
+# UpgradeAuthority
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/UpgradeAuthority.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** UpgradeAuthority
+
+What every stage that deploys a proxied core contract shares (issue 1808):
+
+- The upgrade authority. The timelock stage deploys the `TimelockController` LAST,
+after every proxy. The proxies still name it from their first block: its address
+is the CREATE2 address of the exact timelock the timelock stage deploys
+(proposer and canceller = the Safe, executor = anyone, no admin, `minDelay`),
+through the canonical CREATE2 factory with `TIMELOCK_SALT`. CREATE2 binds the
+init code, so nothing but that Safe-controlled timelock can ever have code at the
+address: there is no interim deployer, EOA or placeholder upgrade authority. The
+timelock stage deploys it there and asserts every proxy names it.
+- The release mode, `UPGRADE_MODE`: `upgradeable` or `frozen`, required, no default.
+`frozen` freezes upgrades inside the atomic proxy initialization.
+- One ERC-1967 proxy per contract, initialized in its constructor (no window in which
+the proxy exists uninitialized).
+
+Env vars (every proxy stage; all required on every chain, no defaults):
+SAFE_ADDRESS        — the Safe that will be the timelock's only proposer
+TIMELOCK_MIN_DELAY  — the timelock delay the timelock stage deploys with
+UPGRADE_MODE        — `upgradeable` or `frozen`
+
+## Constants
+
+### TIMELOCK_SALT
+
+CREATE2 salt of the core timelock.
+
+```solidity
+bytes32 public constant TIMELOCK_SALT = keccak256("robotmoney.core.timelock.v1");
+```
+
+## State Variables
+
+### _inProcessUpgrade
+
+<i>
+
+In-process (forge test) override, set by `setUpgradeConfig`. The broadcast `run()`
+never reads it: it reads the env.
+
+</i>
+
+```solidity
+UpgradeConfig internal _inProcessUpgrade;
+```
+
+## Functions
+
+<a id="setupgradeconfig-address-governeduups-upgrademode"></a>
+
+### setUpgradeConfig
+
+Test seam for the in-process entry points: the timelock and mode the next
+in-process run initializes its proxies with. Unset, an in-process run uses this
+script contract as the timelock and `Upgradeable`. Never read by `run()`.
+
+```solidity
+function setUpgradeConfig(address timelock, GovernedUUPS.UpgradeMode mode) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="timelockinitcode-address-uint256"></a>
+
+### timelockInitCode
+
+The init code of the core timelock for `safe` and `minDelay`.
+
+```solidity
+function timelockInitCode(address safe, uint256 minDelay) public pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="predicttimelock-address-uint256"></a>
+
+### predictTimelock
+
+The address the timelock stage deploys the core timelock at.
+
+```solidity
+function predictTimelock(address safe, uint256 minDelay) public pure returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_readupgradeconfig-string"></a>
+
+### _readUpgradeConfig
+
+<i>
+
+The broadcast upgrade config: `&lt;prefix>SAFE_ADDRESS`, `&lt;prefix>TIMELOCK_MIN_DELAY`
+and `&lt;prefix>UPGRADE_MODE`, all required.
+
+</i>
+
+```solidity
+function _readUpgradeConfig(string memory prefix)
+        internal
+        view
+        returns (UpgradeConfig memory c);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `UpgradeConfig` |  |
+
+<a id="_inprocessupgradeconfig"></a>
+
+### _inProcessUpgradeConfig
+
+<i>
+
+The in-process upgrade config (see `setUpgradeConfig`).
+
+</i>
+
+```solidity
+function _inProcessUpgradeConfig() internal view returns (UpgradeConfig memory c);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `UpgradeConfig` |  |
+
+<a id="parseupgrademode-string"></a>
+
+### parseUpgradeMode
+
+`upgradeable` or `frozen`. Anything else reverts: there is no default mode.
+
+```solidity
+function parseUpgradeMode(string memory s) public pure returns (GovernedUUPS.UpgradeMode);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="upgrademodename-governeduups-upgrademode"></a>
+
+### upgradeModeName
+
+The manifest word for `mode`.
+
+```solidity
+function upgradeModeName(GovernedUUPS.UpgradeMode mode) public pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_deployproxy-address-bytes"></a>
+
+### _deployProxy
+
+<i>
+
+Deploy one ERC-1967 proxy for `implementation`, initialized atomically with
+`initData` in the proxy's constructor.
+
+</i>
+
+```solidity
+function _deployProxy(address implementation, bytes memory initData)
+        internal
+        returns (address proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| implementation | `address` |  |
+| initData | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+<a id="_implementationof-address"></a>
+
+### _implementationOf
+
+<i>
+
+The implementation an ERC-1967 proxy points at (the implementation slot).
+
+</i>
+
+```solidity
+function _implementationOf(address proxy) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+## Structs
+
+### UpgradeConfig
+
+The upgrade authority and release mode a stage initializes its proxies with.
+
+```solidity
+struct UpgradeConfig {
+        address timelock;
+        GovernedUUPS.UpgradeMode mode;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+

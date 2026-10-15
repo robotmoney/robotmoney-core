@@ -12,7 +12,7 @@ import {console2} from "forge-std/console2.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployInvestmentCommitteePolicy
 /// @notice Foundry deploy script for the InvestmentCommitteePolicy contract.
@@ -45,7 +45,12 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///                              contract (the deployer until DeployTimelock hands it over).
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///           EXPECTED_CHAIN_ID — mandatory and equal to 8453 on Base mainnet
-contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
+///
+///         SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+///         of both proxies (`UpgradeAuthority`, issue 1808). The manifest `policy` and
+///         `consensus_receipt` are the ERC-1967 proxies; `policy_implementation` and
+///         `consensus_receipt_implementation` are their implementations.
+contract DeployInvestmentCommitteePolicy is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "ic-policy.json";
 
@@ -58,6 +63,9 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
         address admin;
         address receiptAdmin;
         address gateway;
+        address policyImplementation;
+        address receiptsImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys the
@@ -72,8 +80,10 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
         require(receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         require(gateway.code.length > 0, "GATEWAY_ADDRESS has no code on this chain");
 
+        UpgradeConfig memory u = _readUpgradeConfig("");
+
         vm.startBroadcast();
-        d = _deploy(admin, receiptAdmin, gateway);
+        d = _deploy(admin, receiptAdmin, gateway, u);
         _wireGateway(d);
         vm.stopBroadcast();
 
@@ -107,7 +117,7 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
         require(receiptAdmin_ != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         require(gateway_ != address(0), "GATEWAY_ADDRESS=0");
 
-        d = _deploy(admin_, receiptAdmin_, gateway_);
+        d = _deploy(admin_, receiptAdmin_, gateway_, _inProcessUpgradeConfig());
         _logResult(d);
         // Note: _wireGateway requires the broadcaster/pranker to hold ADMIN_ROLE
         // on the gateway. Callers of this in-process variant must set up the
@@ -124,17 +134,37 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _deploy(address admin_, address receiptAdmin_, address gateway_)
-        internal
-        returns (Deployed memory d)
-    {
+    function _deploy(
+        address admin_,
+        address receiptAdmin_,
+        address gateway_,
+        UpgradeConfig memory u
+    ) internal returns (Deployed memory d) {
         d.admin = admin_;
         d.receiptAdmin = receiptAdmin_;
         d.gateway = gateway_;
-        d.policy = new InvestmentCommitteePolicy(admin_, gateway_);
+        d.upgrade = u;
+        d.policyImplementation = address(new InvestmentCommitteePolicy());
+        d.policy = InvestmentCommitteePolicy(
+            _deployProxy(
+                d.policyImplementation,
+                abi.encodeCall(
+                    InvestmentCommitteePolicy.initialize, (admin_, gateway_, u.timelock, u.mode)
+                )
+            )
+        );
         // One ceremony: the receipt contract reads COMMITTEE_AGENT_ROLE off the
         // IC policy, so it keeps no registry of its own (issue #1247 task 4.0).
-        d.receipts = new ConsensusRecommendationReceipt(receiptAdmin_, gateway_, address(d.policy));
+        d.receiptsImplementation = address(new ConsensusRecommendationReceipt());
+        d.receipts = ConsensusRecommendationReceipt(
+            _deployProxy(
+                d.receiptsImplementation,
+                abi.encodeCall(
+                    ConsensusRecommendationReceipt.initialize,
+                    (receiptAdmin_, gateway_, address(d.policy), u.timelock, u.mode)
+                )
+            )
+        );
     }
 
     /// @notice Wire the deployed IC policy into the gateway.
@@ -181,6 +211,10 @@ contract DeployInvestmentCommitteePolicy is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "policy", address(d.policy));
         vm.serializeAddress(obj, "consensus_receipt", address(d.receipts));
+        vm.serializeAddress(obj, "policy_implementation", d.policyImplementation);
+        vm.serializeAddress(obj, "consensus_receipt_implementation", d.receiptsImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "receipt_admin", d.receiptAdmin);
         string memory json = vm.serializeAddress(obj, "gateway", d.gateway);

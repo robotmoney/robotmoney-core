@@ -1,0 +1,87 @@
+{
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
+  },
+  "storage": [
+    {
+      "label": "_metadata",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_mapping(t_address,t_struct(VaultMetadata)_storage)"
+    },
+    {
+      "label": "_status",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_mapping(t_address,t_enum(VaultStatus))"
+    },
+    {
+      "label": "_vaults",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_array(t_address)dyn_storage"
+    },
+    {
+      "label": "_registered",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_address,t_bool)"
+    },
+    {
+      "label": "_routerEligible",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_mapping(t_address,t_bool)"
+    },
+    {
+      "label": "routerEligibleCount",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_uint256"
+    },
+    {
+      "label": "router",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_contract(IRouterDefaultWeights)"
+    }
+  ],
+  "structs": {
+    "t_struct(VaultMetadata)_storage": [
+      {
+        "label": "name",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_string_storage"
+      },
+      {
+        "label": "asset",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_address"
+      },
+      {
+        "label": "registeredAt",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_uint256"
+      }
+    ]
+  }
+}

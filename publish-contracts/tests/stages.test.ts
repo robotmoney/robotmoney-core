@@ -75,7 +75,10 @@ describe("stage list built from core's stage table", () => {
   });
   test("the libs stage links nothing and every library a stage links comes from the libs manifest key", () => {
     expect(STAGES.find((s) => s.name === LIBS_STAGE)!.libraries).toEqual([]);
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.vault)).toEqual(["PROTO", "AGENT", "RWA"]);
+    // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
+    // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
+    // The libs and recorder stages deploy no proxy and link nothing.
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {
@@ -124,7 +127,9 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
   const stage = (n: string) => STAGES.find((s) => s.name === n)!;
   test("the governance stage takes no voting value and wires the receipt register from the ic-policy manifest (issue 1698)", () => {
     for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(stage("governance").requiredEnv).not.toContain(k);
-    expect(requiredSheetNames(stage("governance"))).toEqual(["ADMIN_ADDRESS"]);
+    // Issue 1808: TIMELOCK_MIN_DELAY (with SAFE_ADDRESS from the Safe manifest) names the timelock the governance proxy's upgrade authority is.
+    expect(requiredSheetNames(stage("governance"))).toEqual(["ADMIN_ADDRESS", "TIMELOCK_MIN_DELAY"]);
+    expect(resolveEnv("UPGRADE_MODE", null)).toEqual({ from: "literal", value: "frozen" });
     expect(resolveEnv("CONSENSUS_RECEIPT_ADDRESS", null)).toEqual({ from: "manifest", stage: "ic-policy", field: "consensus_receipt" });
     const names = forge.map((s) => s.name);
     expect(names.indexOf("ic-policy")).toBeLessThan(names.indexOf("governance"));

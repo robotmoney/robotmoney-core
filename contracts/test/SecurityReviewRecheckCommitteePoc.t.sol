@@ -13,6 +13,7 @@ import {
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
     address attacker = address(0xB2);
@@ -113,7 +114,7 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
 
     function test_selfRegisteredAgentCannotAnchorReceipt() public {
         ConsensusRecommendationReceipt receipt =
-            new ConsensusRecommendationReceipt(admin, address(gateway), address(ic));
+            CoreProxies.consensusRecommendationReceipt(admin, address(gateway), address(ic));
         vm.prank(admin);
         gateway.setConsensusReceipt(address(receipt));
 

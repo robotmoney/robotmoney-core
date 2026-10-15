@@ -15,7 +15,9 @@ function scriptSource(path: string): string {
   const own = read(path);
   const base = path.replace(/[^/]+$/, "");
   const extra = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
-  return own + extra + read(`${base}ExpectedChainGuard.sol`);
+  // Issue 1808: the proxy stages read SAFE_ADDRESS, TIMELOCK_MIN_DELAY and UPGRADE_MODE through UpgradeAuthority.
+  const upgrade = /UpgradeAuthority|BasketVaultDeployBase/.test(own) ? read(`${base}UpgradeAuthority.sol`) : "";
+  return own + extra + upgrade + read(`${base}ExpectedChainGuard.sol`);
 }
 
 const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"];
@@ -96,16 +98,37 @@ describe("stage-table.json", () => {
     }
   });
 
-  test("create2Libraries name real library sources, and a stage lists them only if it deploys a vault that links them (issue 1721)", () => {
+  test("create2Libraries name real library sources, and a stage lists exactly the libraries the contracts it deploys link (issues 1721, 1808)", () => {
     const c2 = (table as any).create2Libraries as { name: string; artifact: string; path: string }[];
-    expect(c2.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"]);
+    expect(c2.map((l) => l.artifact)).toEqual([
+      "BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows",
+    ]);
     for (const l of c2) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
-    for (const s of table.stages as any[]) for (const n of s.create2Libraries ?? []) {
-      expect(c2.map((l) => l.name)).toContain(n);
-      expect(s.vault && s.vault !== "USDC").toBe(true);
-      expect(read("contracts/vaults/BasketVault.sol")).toMatch(new RegExp(`import \\{[^}]*\\b${n}\\b`));
+    // The sources of the proxied contracts each stage deploys. A library is linked when one of them imports from its file
+    // (GovernedUpgrade is linked through the GovernedUUPS base, declared in the same file).
+    const sources: Record<string, string[]> = {
+      vault: ["contracts/RobotMoneyVault.sol"],
+      registry: ["contracts/VaultRegistry.sol"],
+      router: ["contracts/PortfolioRouter.sol"],
+      gateway: ["contracts/gateway/RobotMoneyGateway.sol"],
+      "ic-policy": ["contracts/gateway/InvestmentCommitteePolicy.sol", "contracts/gateway/ConsensusRecommendationReceipt.sol"],
+      governance: ["contracts/RouterGovernance.sol"],
+      proto: ["contracts/vaults/BasketVault.sol"],
+      agent: ["contracts/vaults/BasketVault.sol"],
+      rwa: ["contracts/vaults/BasketVault.sol"],
+    };
+    const fileOf = (n: string) => c2.find((l) => l.name === n)!.path.split("/").pop()!;
+    for (const s of table.stages as any[]) {
+      const listed: string[] = s.create2Libraries ?? [];
+      for (const n of listed) expect(c2.map((l) => l.name)).toContain(n);
+      const src = (sources[s.name] ?? []).map(read).join("\n");
+      const imported = c2.filter((l) => new RegExp(`import \\{[^}]*\\} from "[^"]*/${fileOf(l.name)}"`).test(src)).map((l) => l.name);
+      expect([s.name, [...listed].sort()]).toEqual([s.name, [...imported].sort()]);
     }
-    expect((table.stages as any[]).filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["proto", "agent", "rwa"]);
+    // Every proxied core contract links GovernedUpgrade (issue 1808): every stage that deploys one lists it.
+    expect((table.stages as any[]).filter((s) => s.create2Libraries?.includes("GovernedUpgrade")).map((s) => s.name)).toEqual([
+      "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa",
+    ]);
   });
 
   test("artifacts name contracts that exist under contracts/", () => {
@@ -157,7 +180,9 @@ describe("stage-table.json", () => {
       });
       test(`${r.vault}: the redeploy reads the same sheet inputs as the vault's launch stage, plus the timelock and the emergency key`, () => {
         const stage = table.stages.find((s) => s.vault === r.vault)!;
-        const launch = stage.requiredEnv.filter((n) => n !== "ROUTER_DEFAULT_BPS");
+        // Issue 1808: the redeploy names the live timelock (TIMELOCK_ADDRESS) as the proxy's upgrade authority, so it reads no
+        // SAFE_ADDRESS or TIMELOCK_MIN_DELAY to predict one. It still declares UPGRADE_MODE.
+        const launch = stage.requiredEnv.filter((n) => !["ROUTER_DEFAULT_BPS", "SAFE_ADDRESS", "TIMELOCK_MIN_DELAY"].includes(n));
         expect([...r.requiredEnv].sort()).toEqual([...launch, "TIMELOCK_ADDRESS", "EMERGENCY_ADDRESS"].sort());
         expect(r.libraries).toEqual(stage.libraries);
         expect(r.create2Libraries).toEqual(stage.create2Libraries);

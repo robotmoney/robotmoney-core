@@ -1,99 +1,125 @@
 {
+  "libraries": [
+    "contracts/lib/GatewayWindows.sol:GatewayWindows",
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
+  },
   "storage": [
     {
-      "label": "_roles",
+      "label": "usdcToken",
       "offset": 0,
       "slot": "0",
-      "type": "t_mapping(t_bytes32,t_struct(RoleData)_storage)"
+      "type": "t_contract(IERC20)"
     },
     {
-      "label": "_status",
+      "label": "vaultContract",
       "offset": 0,
       "slot": "1",
-      "type": "t_uint256"
+      "type": "t_contract(IERC4626)"
+    },
+    {
+      "label": "routerContract",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_contract(IPortfolioRouter)"
     },
     {
       "label": "commitments",
       "offset": 0,
-      "slot": "2",
+      "slot": "3",
       "type": "t_mapping(t_bytes32,t_struct(Commitment)_storage)"
     },
     {
       "label": "agents",
       "offset": 0,
-      "slot": "3",
+      "slot": "4",
       "type": "t_mapping(t_address,t_struct(AgentPolicy)_storage)"
     },
     {
       "label": "agentOwner",
       "offset": 0,
-      "slot": "4",
+      "slot": "5",
       "type": "t_mapping(t_address,t_address)"
     },
     {
       "label": "agentWindowGross",
       "offset": 0,
-      "slot": "5",
+      "slot": "6",
       "type": "t_mapping(t_address,t_mapping(t_uint64,t_uint256))"
     },
     {
       "label": "agentDepositWindow",
       "offset": 0,
-      "slot": "6",
+      "slot": "7",
       "type": "t_mapping(t_address,t_struct(DepositWindow)_storage)"
     },
     {
       "label": "agentWithdrawWindow",
       "offset": 0,
-      "slot": "7",
+      "slot": "8",
       "type": "t_mapping(t_address,t_struct(WithdrawWindow)_storage)"
     },
     {
       "label": "_depositWindow",
       "offset": 0,
-      "slot": "8",
+      "slot": "9",
       "type": "t_mapping(t_address,t_struct(RollingWindow)_storage)"
     },
     {
       "label": "_withdrawWindow",
       "offset": 0,
-      "slot": "9",
+      "slot": "10",
       "type": "t_mapping(t_address,t_struct(RollingWindow)_storage)"
     },
     {
       "label": "usedPaymentIds",
       "offset": 0,
-      "slot": "10",
+      "slot": "11",
       "type": "t_mapping(t_bytes32,t_bool)"
     },
     {
       "label": "_depositsPaused",
       "offset": 0,
-      "slot": "11",
+      "slot": "12",
       "type": "t_bool"
     },
     {
       "label": "icPolicy",
       "offset": 1,
-      "slot": "11",
+      "slot": "12",
       "type": "t_contract(IInvestmentCommitteePolicy)"
     },
     {
       "label": "_adminCount",
       "offset": 0,
-      "slot": "12",
+      "slot": "13",
       "type": "t_uint256"
     },
     {
       "label": "_defaultAdminCount",
       "offset": 0,
-      "slot": "13",
+      "slot": "14",
       "type": "t_uint256"
     },
     {
       "label": "consensusReceipt",
       "offset": 0,
-      "slot": "14",
+      "slot": "15",
       "type": "t_contract(IConsensusRecommendationReceipt)"
     }
   ],
@@ -186,20 +212,6 @@
         "offset": 0,
         "slot": "1",
         "type": "t_uint256"
-      }
-    ],
-    "t_struct(RoleData)_storage": [
-      {
-        "label": "hasRole",
-        "offset": 0,
-        "slot": "0",
-        "type": "t_mapping(t_address,t_bool)"
-      },
-      {
-        "label": "adminRole",
-        "offset": 0,
-        "slot": "1",
-        "type": "t_bytes32"
       }
     ],
     "t_struct(RollingWindow)_storage": [

@@ -11,7 +11,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployRouterGovernance
 /// @notice Foundry deploy script for RouterGovernance, the router's weight setter.
@@ -38,7 +38,12 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           CONSENSUS_RECEIPT_ADDRESS — deployed ConsensusRecommendationReceipt
 ///           EXPECTED_CHAIN_ID         — mandatory and equal to 8453 on Base mainnet
 ///           DEPLOYMENT_OUT            — path for the output JSON
-contract DeployRouterGovernance is ExpectedChainGuard {
+///           SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and release
+///                                       mode of the governance proxy (`UpgradeAuthority`,
+///                                       issue 1808). RouterGovernance's roles carry no upgrade
+///                                       power. The manifest `governance` is the ERC-1967 proxy;
+///                                       `governance_implementation` is its implementation.
+contract DeployRouterGovernance is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "governance.json";
 
@@ -50,6 +55,8 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         PortfolioRouter router;
         address receipts;
         address admin;
+        address governanceImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys
@@ -64,8 +71,9 @@ contract DeployRouterGovernance is ExpectedChainGuard {
 
         // `msg.sender` is the broadcasting account under `forge script`, and it
         // is that account whose router and receipt admin roles the grants use.
+        UpgradeConfig memory u = _readUpgradeConfig("");
         vm.startBroadcast();
-        d = _deploy(msg.sender, admin, router, receipts);
+        d = _deploy(msg.sender, admin, router, receipts, u);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -86,22 +94,35 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         require(receipts_ != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
         // Under `vm.startPrank` the script's outgoing calls carry `admin_` as
         // their sender, NOT this function's `msg.sender` (the test contract).
+        UpgradeConfig memory u = _inProcessUpgradeConfig();
         vm.startPrank(admin_);
-        d = _deploy(admin_, admin_, router_, receipts_);
+        d = _deploy(admin_, admin_, router_, receipts_, u);
         vm.stopPrank();
         _logResult(d);
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _deploy(address granter_, address admin_, address router_, address receipts_)
-        internal
-        returns (Deployed memory d)
-    {
+    function _deploy(
+        address granter_,
+        address admin_,
+        address router_,
+        address receipts_,
+        UpgradeConfig memory u
+    ) internal returns (Deployed memory d) {
         d.admin = admin_;
         d.router = PortfolioRouter(router_);
         d.receipts = receipts_;
-        d.governance = new RouterGovernance(router_, receipts_, admin_);
+        d.upgrade = u;
+        d.governanceImplementation = address(new RouterGovernance());
+        d.governance = RouterGovernance(
+            _deployProxy(
+                d.governanceImplementation,
+                abi.encodeCall(
+                    RouterGovernance.initialize, (router_, receipts_, admin_, u.timelock, u.mode)
+                )
+            )
+        );
 
         _grantRouterAdmin(d, granter_);
         _grantWeightSetter(d, granter_);
@@ -165,6 +186,9 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         string memory obj = "governance_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "governance", address(d.governance));
+        vm.serializeAddress(obj, "governance_implementation", d.governanceImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "router", address(d.router));
         vm.serializeAddress(obj, "consensus_receipt", d.receipts);
         string memory json = vm.serializeAddress(obj, "admin", d.admin);

@@ -5,9 +5,9 @@ description: "On-chain registry of authorised Robot Money vaults."
 
 # VaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/VaultRegistry.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** VaultRegistry
 
@@ -22,6 +22,10 @@ Access model: `ADMIN_ROLE` is required for `registerVault` and
 `setVaultStatus`. This role is self-administered (its own role-admin)
 so the deployer is the sole initial admin, matching the gateway's
 access-control pattern.
+
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `ADMIN_ROLE` carries no upgrade power.
 
 ## Constants
 
@@ -130,12 +134,16 @@ IRouterDefaultWeights public router;
 
 ## Functions
 
-<a id="constructor-address"></a>
+<a id="initialize-address-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(address admin);
+function initialize(address admin, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer;
 ```
 
 **Parameters**
@@ -143,6 +151,8 @@ constructor(address admin);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="registervault-address-vaultmetadata"></a>
 

@@ -21,6 +21,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ShortlistStubSwapRouter} from "./ProtocolAssetVaultShortlist.t.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
@@ -58,15 +59,15 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         timelock = _newGovTimelock(safe, DELAY);
 
         usdc = new MockUsdc();
-        core = new RobotMoneyVault(
+        core = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, address(this), address(this)
         );
-        gateway = new RobotMoneyGateway(usdc, core, address(this), pauser, address(0));
-        ic = new InvestmentCommitteePolicy(address(this), address(gateway));
-        registry = new VaultRegistry(address(this));
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
-        gov = new RouterGovernance(address(router), makeAddr("receipts"), address(this));
-        agentVault = new AgentTokenVault(
+        gateway = CoreProxies.robotMoneyGateway(usdc, core, address(this), pauser, address(0));
+        ic = CoreProxies.investmentCommitteePolicy(address(this), address(gateway));
+        registry = CoreProxies.vaultRegistry(address(this));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
+        gov = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), address(this));
+        agentVault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(new ShortlistStubSwapRouter())),
             10_000_000 * ONE_USDC,

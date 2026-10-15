@@ -15,12 +15,16 @@
 // venue selector (Venue enum) added per issue #555.
 pragma solidity ^0.8.24;
 
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
@@ -30,6 +34,7 @@ import {BpsMath} from "../lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
+import {BasketSwaps} from "../lib/BasketSwaps.sol";
 import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 
 /// @title BasketVault
@@ -40,7 +45,18 @@ import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCoun
 ///         arithmetic-mean tick) over a per-asset, admin-configurable window.
 ///
 ///         Subclasses set the vault name/symbol, max basket size, and default slippage.
-abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
+///
+///         Every concrete subclass runs behind its own ERC-1967 proxy (issue 1808): the
+///         subclass `initialize` calls `__BasketVault_init`, which replaces the constructor,
+///         the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze
+///         the proxy (`GovernedUUPS`). ADMIN_ROLE and EMERGENCY_ROLE carry no upgrade power.
+///         Freezing upgrades never pauses or alters withdrawals.
+abstract contract BasketVault is
+    ERC4626Upgradeable,
+    AdminFloorAccessControlCounter,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS
+{
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -136,10 +152,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     AssetInfo[] public assets;
 
-    // ─── Immutables ───────────────────────────────────────────────────
+    // ─── Pinned at initialization (no setter) ──────────────────────────
 
-    ISwapRouter public immutable SWAP_ROUTER;
-    IERC20 internal immutable _USDC;
+    ISwapRouter public SWAP_ROUTER;
+    IERC20 internal _USDC;
 
     // ─── Config ───────────────────────────────────────────────────────
 
@@ -393,50 +409,61 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      `reabsorbRemovedAsset` is not met by the swap output.
     error SlippageExceeded();
 
-    // ─── Constructor ─────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────
 
-    /// @param admin_              Receives ADMIN_ROLE (cold/multisig key for
-    ///                            parameter changes). Must not be address(0).
-    /// @param emergencyResponder_ Receives EMERGENCY_ROLE (hot key for rapid
-    ///                            unwind/shutdown). Must not be address(0).
-    ///                            May equal admin_ as a conscious choice
-    ///                            (e.g. in test environments), but operators
-    ///                            SHOULD use distinct addresses in production
-    ///                            so a single key compromise cannot both alter
-    ///                            parameters and trigger an emergency unwind.
-    constructor(
+    /// @notice The per-instance arguments the constructor took before issue 1808. A struct, so
+    ///         a subclass `initialize` stays inside the stack limit.
+    /// @param admin              Receives ADMIN_ROLE (cold/multisig key for parameter changes).
+    ///                           Must not be address(0).
+    /// @param emergencyResponder Receives EMERGENCY_ROLE (hot key for rapid unwind/shutdown).
+    ///                           Must not be address(0). May equal admin as a conscious choice
+    ///                           (e.g. in test environments), but operators SHOULD use distinct
+    ///                           addresses in production so a single key compromise cannot
+    ///                           both alter parameters and trigger an emergency unwind.
+    struct InitParams {
+        IERC20 usdc;
+        ISwapRouter swapRouter;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address feeRecipient;
+        address admin;
+        address emergencyResponder;
+    }
+
+    /// @dev Atomic proxy initialization of the shared basket state, called once from the
+    ///      concrete subclass's `initialize` (it replaces the constructor). The subclass also
+    ///      calls `__GovernedUUPS_init`.
+    function __BasketVault_init(
         string memory name_,
         string memory symbol_,
-        IERC20 usdc_,
-        ISwapRouter swapRouter_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
         uint256 initialSlippageBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    ) ERC4626(usdc_) ERC20(name_, symbol_) {
+        InitParams calldata p
+    ) internal onlyInitializing {
+        __ERC20_init(name_, symbol_);
+        __ERC4626_init(p.usdc);
+        __AccessControl_init();
+        __ReentrancyGuard_init();
         if (
-            address(usdc_) == address(0) || address(swapRouter_) == address(0)
-                || feeRecipient_ == address(0) || admin_ == address(0)
-                || emergencyResponder_ == address(0)
+            address(p.usdc) == address(0) || address(p.swapRouter) == address(0)
+                || p.feeRecipient == address(0) || p.admin == address(0)
+                || p.emergencyResponder == address(0)
         ) revert ZeroAddress();
-        if (exitFeeBps_ > MAX_EXIT_FEE_BPS) revert InvalidFee();
+        if (p.exitFeeBps > MAX_EXIT_FEE_BPS) revert InvalidFee();
         if (initialSlippageBps_ > MAX_SLIPPAGE_BPS) revert InvalidParam();
 
-        _USDC = usdc_;
-        SWAP_ROUTER = swapRouter_;
-        tvlCap = tvlCap_;
-        perDepositCap = perDepositCap_;
-        exitFeeBps = exitFeeBps_;
+        _USDC = p.usdc;
+        SWAP_ROUTER = p.swapRouter;
+        tvlCap = p.tvlCap;
+        perDepositCap = p.perDepositCap;
+        exitFeeBps = p.exitFeeBps;
         maxSlippageBps = initialSlippageBps_;
-        feeRecipient = feeRecipient_;
+        feeRecipient = p.feeRecipient;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
-        _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(EMERGENCY_ROLE, emergencyResponder_);
+        _grantRole(ADMIN_ROLE, p.admin);
+        _grantRole(EMERGENCY_ROLE, p.emergencyResponder);
     }
 
     /// @notice Subclasses declare the maximum number of assets in the basket.
@@ -474,7 +501,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     // ─── ERC-4626 share scale ─────────────────────────────────────────
 
-    function decimals() public pure override(ERC4626) returns (uint8) {
+    function decimals() public pure override(ERC4626Upgradeable) returns (uint8) {
         return 6;
     }
 
@@ -667,8 +694,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
                 assets[i].token,
                 assets[i].swapFee,
                 swapIn,
-                minOut,
-                address(this)
+                minOut
             );
             emit Swapped(address(_USDC), assets[i].token, swapIn, amountOut);
         }
@@ -900,8 +926,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
                 address(_USDC),
                 assets[i].swapFee,
                 sellAmount,
-                minUsdcOut,
-                address(this)
+                minUsdcOut
             );
             emit Swapped(assets[i].token, address(_USDC), sellAmount, received);
             usdcOut += received;
@@ -1049,72 +1074,41 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ) external onlyRole(ADMIN_ROLE) {
         if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
         if (assets.length >= maxAssets()) revert MaxAssetsReached();
-        // ADP-2 / NC-2: vet any external adapter before it can both price NAV and
-        // receive token approvals. The on-chain control is the codehash allowlist —
-        // ADMIN_ROLE must have pre-approved the exact runtime bytecode, which pins
-        // every address baked into the adapter (including its linked TickMath
-        // library), so an attacker-controlled or hot-swappable adapter is rejected.
+        // The rest runs in the delegatecall-linked `BasketAssetConfigGuard.addAsset` (issue
+        // 1808: kept out of the EIP-170-tight vault bytecode), in this order:
         //
-        // The default Uniswap V3 path (adapter == 0) routes through the immutable
-        // audited SWAP_ROUTER and needs no vetting.
-        //
-        // NOTE: unlike RobotMoneyVault's delegatecall-free strategy adapters, the
-        // basket swap adapters (UniswapV3/Aerodrome) legitimately DELEGATECALL the
-        // shared, linked `TickMath` library on the TWAP path, so a blanket runtime
-        // DELEGATECALL scan is inapplicable here; codehash pinning subsumes the
-        // no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a
-        // deploy-time invariant (`AdapterBytecodeGuard`, run by the basket vault deploy scripts).
-        BasketAssetConfigGuard.requireAllowedAdapter(
-            adapter_, adapter_ == address(0) || adapterCodeHashAllowed[adapter_.codehash]
-        );
-        // ORA-3 / F-09: the pool the NAV TWAP is read from must be the SAME pool
-        // trades execute against. The guard asserts the execution pool resolved
-        // from `swapFee_` matches the registered TWAP `pool_` (fee tier for V3/V4,
-        // tickSpacing for Aerodrome). Without this a deep-honest TWAP pool can
-        // coexist with a thin execution pool (mint-cheap/redeem-dear).
-        BasketAssetConfigGuard.requireExecutionPoolMatchesTwap(
-            pool_, swapFee_, BasketAssetConfigGuard.Venue(uint8(venue_))
-        );
-        // Pool usability: pairs token/USDC, enough TWAP cardinality + history, and
-        // enough in-range liquidity for synchronous redemption. Extracted to the
-        // delegatecall-linked guard to keep the EIP-170-tight vault bytecode small.
-        BasketAssetConfigGuard.requirePoolUsable(
-            pool_, token_, address(_USDC), DEFAULT_TWAP_WINDOW, MIN_POOL_LIQUIDITY
-        );
-
-        // NC-8 (no duplicate AssetInfo): an ACTIVE re-add is rejected; an INACTIVE
-        // (previously removed) entry is reused/re-activated in place rather than
-        // appending a second AssetInfo for the same token. Without this, `assets`
-        // could hold two entries for one token, double-counting it in NAV
-        // (`totalAssets` sums every active entry) and corrupting the equal-weight
-        // split. The scan/write lives in the delegatecall-linked guard to keep the
-        // EIP-170-tight basket-vault bytecode small. `assets` and the guard's
-        // mirror `AssetInfo` share an identical storage layout.
-        uint256 reusedIndex = BasketAssetConfigGuard.reuseOrRejectDuplicate(
+        // - ADP-2 / NC-2: vet any external adapter before it can both price NAV and receive
+        //   token approvals. The on-chain control is the codehash allowlist: ADMIN_ROLE must
+        //   have pre-approved the exact runtime bytecode, which pins every address baked into
+        //   the adapter (including its linked TickMath library). The default Uniswap V3 path
+        //   (adapter == 0) routes through the audited SWAP_ROUTER and needs no vetting. Unlike
+        //   RobotMoneyVault's delegatecall-free strategy adapters, the basket swap adapters
+        //   legitimately DELEGATECALL the linked `TickMath` library, so codehash pinning
+        //   subsumes the no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a
+        //   deploy-time invariant (`AdapterBytecodeGuard`, run by the basket deploy scripts).
+        // - ORA-3 / F-09: the pool the NAV TWAP is read from must be the SAME pool trades
+        //   execute against (fee tier for V3/V4, tickSpacing for Aerodrome).
+        // - Pool usability: pairs token/USDC, enough TWAP cardinality + history, and enough
+        //   in-range liquidity for synchronous redemption.
+        // - NC-8 (no duplicate AssetInfo): an ACTIVE re-add is rejected; an INACTIVE entry is
+        //   reused and re-activated in place, never appended twice (a second entry would
+        //   double-count the token in NAV). `assets` and the guard's mirror `AssetInfo` share
+        //   an identical storage layout.
+        BasketAssetConfigGuard.addAsset(
             _guardAssets(),
-            token_,
-            pool_,
-            swapFee_,
-            adapter_,
-            BasketAssetConfigGuard.Venue(uint8(venue_))
-        );
-        if (reusedIndex != type(uint256).max) {
-            // The guard refreshed an inactive entry in place; emit and return.
-            emit AssetAdded(reusedIndex, token_, pool_, swapFee_, adapter_, venue_);
-            return;
-        }
-
-        assets.push(
-            AssetInfo({
+            BasketAssetConfigGuard.AssetInfo({
                 token: token_,
                 pool: pool_,
                 swapFee: swapFee_,
                 active: true,
                 adapter: adapter_,
-                venue: venue_
-            })
+                venue: BasketAssetConfigGuard.Venue(uint8(venue_))
+            }),
+            adapterCodeHashAllowed[adapter_.codehash],
+            address(_USDC),
+            DEFAULT_TWAP_WINDOW,
+            MIN_POOL_LIQUIDITY
         );
-        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_, venue_);
     }
 
     /// @notice Deactivate a basket asset. The vault must hold zero of that token. Restricted to ADMIN_ROLE.
@@ -1151,45 +1145,21 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///                   floor. Only enforced on the pool-healthy path; the
     ///                   degraded-pool path quarantines instead of swapping.
     function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant {
-        AssetInfo memory assetInfo = assets[index]; // reverts on OOB index
-        // Only inactive (removed) entries qualify: active assets are already
-        // counted in NAV and are sold proportionally on withdrawal.
-        if (assetInfo.active) revert AssetInBasket();
-
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-
-        // LIFE-6 / NC-8: the happy path is a TWAP-derived, slippage-bounded swap
-        // back to USDC into NAV (same construction as the proportional-withdraw
-        // sell leg), crediting all holders pro-rata with no caller-supplied
-        // recipient. But a removed asset's pool can be DEGRADED (e.g. its TWAP
-        // observation history is gone, so `observe()` reverts "OLD") — in which
-        // case the swap floor cannot be priced and a naive call would
-        // revert-and-strand the reappeared balance on the vault forever.
+        // Runs in the delegatecall-linked `BasketSwaps.reabsorb` (issue 1808). Panics on an
+        // out-of-range index. Only inactive (removed) entries qualify: active assets are
+        // already counted in NAV and are sold proportionally on withdrawal.
         //
-        // The quarantine fallback removes that liveness cliff: when the TWAP read
-        // reverts, the balance is permissionlessly swept to the governed
-        // quarantine address instead of being stranded. Quarantine is the
-        // reversible safety valve (an offline multisig can later recover it), so
-        // the reappeared balance is always actionable — `reabsorbRemovedAsset`
-        // can never revert-and-strand (LIFE-6). The floor read reuses the existing
-        // self-only `emergencyTwapUsdcValue` so its revert is catchable.
+        // LIFE-6 / NC-8: the happy path is a TWAP-derived, slippage-bounded swap back to USDC
+        // into NAV (same construction as the proportional-withdraw sell leg), crediting all
+        // holders pro-rata with no caller-supplied recipient. A removed asset's pool can be
+        // DEGRADED (its TWAP observation history gone, so `observe()` reverts "OLD"); then the
+        // balance is permissionlessly swept to the governed quarantine address instead of
+        // being stranded, so `reabsorbRemovedAsset` can never revert-and-strand. The floor
+        // read is the self-only `emergencyTwapUsdcValue`, so its revert is catchable.
         //
-        // AZ-BSK-5: enforce the caller-supplied minUsdcOut with a stable
-        // SlippageExceeded error so off-chain consumers get a consistent
-        // revert surface. The TWAP-derived floor is the worst-case bound on
-        // the swap output; if it falls below the caller's floor the swap
-        // cannot be guaranteed to satisfy minUsdcOut, so we revert early.
-        try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-            // Pool healthy: reject early if TWAP floor undercuts caller's minimum,
-            // then swap to USDC into NAV under the TWAP-derived floor.
-            uint256 floor = _applySlippage(twapValue);
-            if (floor < minUsdcOut) revert SlippageExceeded();
-            _emergencyUnwindAsset(assetInfo, floor);
-        } catch {
-            // Pool degraded: TWAP unavailable. Sweep rather than strand (INV-1);
-            // `sweep` emits ForeignTokenQuarantined(token, amount, caller).
-            _sweepToQuarantine(assetInfo.token);
-        }
+        // AZ-BSK-5: the TWAP-derived floor is the worst-case bound on the swap output; if it
+        // falls below the caller's `minUsdcOut` the call reverts `SlippageExceeded` early.
+        BasketSwaps.reabsorb(_guardAssets(), index, minUsdcOut, address(_USDC), SWAP_ROUTER);
     }
 
     /// @dev TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
@@ -1278,23 +1248,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      Reverts when any router leg cannot satisfy its effective floor.
     function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            AssetInfo memory assetInfo = assets[i];
-            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-            if (bal == 0) continue;
-            uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
-            uint256 effectiveFloor;
-            try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-                uint256 twapFloor = _applySlippage(twapValue);
-                effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
-            } catch {
-                if (configuredMin == 0) revert EmergencyFloorUnavailable(assetInfo.token);
-                effectiveFloor = configuredMin;
-            }
-            _emergencyUnwindAsset(assetInfo, effectiveFloor);
-        }
+        // The per-asset loop runs in the delegatecall-linked `BasketSwaps.unwindAll` (issue 1808).
+        BasketSwaps.unwindAll(_guardAssets(), address(_USDC), SWAP_ROUTER);
     }
 
     function emergencyTwapUsdcValue(AssetInfo calldata assetInfo, uint256 amount)
@@ -1320,19 +1275,8 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         nonReentrant
     {
         _setDepositsPaused(true);
-        uint256 len = tokens.length;
-        for (uint256 i = 0; i < len; i++) {
-            EmergencyUnwindGuard memory guard = emergencyUnwindGuard[tokens[i]];
-            if (!guard.overrideAllowed) revert EmergencyUnwindOverrideDisabled();
-            AssetInfo memory assetInfo = _activeAssetForToken(tokens[i]);
-            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-            if (bal == 0) continue;
-            uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
-            emit EmergencyUnwindOverrideUsed(
-                assetInfo.token, bal, guard.minUsdcOut, appliedFloor, msg.sender
-            );
-            _emergencyUnwindAssetWithCap(assetInfo, appliedFloor);
-        }
+        // The per-token loop runs in the delegatecall-linked `BasketSwaps.unwindWithOverride`.
+        BasketSwaps.unwindWithOverride(_guardAssets(), tokens, address(_USDC), SWAP_ROUTER);
     }
 
     function shutdownVault() external onlyRole(EMERGENCY_ROLE) {
@@ -1392,16 +1336,6 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             if (token == assets[i].token) protected_ = true;
         }
         if (protected_) revert ForeignTokenQuarantine.TokenIsProtected(token);
-        _sweepToQuarantine(token);
-    }
-
-    /// @dev Single inlining site for the permissionless quarantine sweep so the
-    ///      `ForeignTokenQuarantine.sweep` body is emitted into the
-    ///      EIP-170-tight basket-vault bytecode only once, shared by
-    ///      `sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
-    ///      fallback. Moves the caller's full balance of `token` to the fixed
-    ///      quarantine address; no caller-supplied recipient (INV-1).
-    function _sweepToQuarantine(address token) private {
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
@@ -1607,66 +1541,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         revert AssetNotFound();
     }
 
-    // slither-disable-start reentrancy-balance
-    // The caller (`emergencyUnwind`) holds the contract-level `nonReentrant`
-    // guard, so the pre-call `balanceOf` read cannot be observed by a
-    // reentrant call before the swap completes. The emitted `Swapped` event
-    // uses the freshly-returned `received` amount, not the stale balance.
-    function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        if (bal == 0) return;
-        uint256 received = _executeSwap(
-            assetInfo.adapter,
-            assetInfo.token,
-            address(_USDC),
-            assetInfo.swapFee,
-            bal,
-            minUsdcOut,
-            address(this)
-        );
-        emit Swapped(assetInfo.token, address(_USDC), bal, received);
-    }
-
-    // slither-disable-end reentrancy-balance
-
-    /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
-    ///      `amountOutMinimum` and additionally enforces the cap with a typed
-    ///      `EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
-    ///      a stable error surface regardless of the underlying router's
-    ///      slippage revert format.
-    // slither-disable-start reentrancy-balance
-    // The caller (`emergencyUnwindWithOverride`) holds the contract-level
-    // `nonReentrant` guard, so the pre-call `balanceOf` read cannot be observed
-    // by a reentrant call before the swap completes. The post-call comparison
-    // against `appliedFloor` uses the router's freshly-returned `received`
-    // amount, not the stale `bal`, so the "stale balance used after the call"
-    // pattern flagged by slither is a false positive here.
-    function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
-        internal
-    {
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        if (bal == 0) return;
-        uint256 received = _executeSwap(
-            assetInfo.adapter,
-            assetInfo.token,
-            address(_USDC),
-            assetInfo.swapFee,
-            bal,
-            appliedFloor,
-            address(this)
-        );
-        if (received < appliedFloor) {
-            revert EmergencyUnwindLossCapExceeded(assetInfo.token, received, appliedFloor);
-        }
-        emit Swapped(assetInfo.token, address(_USDC), bal, received);
-    }
-
-    // slither-disable-end reentrancy-balance
-
     // ─── Swap execution helper ────────────────────────────────────────
 
     /// @dev Routes a swap through the per-asset adapter when set, or falls back
-    ///      to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
+    ///      to the pinned Uniswap V3 SWAP_ROUTER.  Centralises approval
     ///      management: forceApprove before the call, clear after.
     ///
     ///      Deadline note (audit 2026-06-09, L-5): adapters take an explicit
@@ -1682,30 +1560,11 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         address tokenOut,
         uint24 fee,
         uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
+        uint256 minAmountOut
     ) internal returns (uint256 amountOut) {
-        if (adapter != address(0)) {
-            // Adapter pulls `tokenIn` from this contract via transferFrom.
-            IERC20(tokenIn).forceApprove(adapter, amountIn);
-            amountOut = IBasketSwapAdapter(adapter)
-                .swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient, block.timestamp);
-            IERC20(tokenIn).forceApprove(adapter, 0);
-        } else {
-            // Default Uniswap V3 path (backward-compatible).
-            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), amountIn);
-            amountOut = SWAP_ROUTER.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: tokenIn,
-                    tokenOut: tokenOut,
-                    fee: fee,
-                    recipient: recipient,
-                    amountIn: amountIn,
-                    amountOutMinimum: minAmountOut,
-                    sqrtPriceLimitX96: 0
-                })
-            );
-            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), 0);
-        }
+        // One swap executor for the whole vault, in the delegatecall-linked `BasketSwaps`
+        // (issue 1808). It always pays this vault.
+        return
+            BasketSwaps.swap(adapter, tokenIn, tokenOut, fee, amountIn, minAmountOut, SWAP_ROUTER);
     }
 }

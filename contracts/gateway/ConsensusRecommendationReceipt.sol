@@ -5,7 +5,10 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -49,9 +52,14 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 /// `contract/src/__fixtures__/` in `robotmoney-frontend`.
 ///
 /// Emits: `ReceiptRecorded`, `ReceiptReleased`.
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `gateway` and `icPolicy` are set once at initialization and have no setter.
 contract ConsensusRecommendationReceipt is
     AdminFloorAccessControl,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS,
     IConsensusRecommendationReceipt
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
@@ -75,10 +83,10 @@ contract ConsensusRecommendationReceipt is
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    address public immutable gateway;
+    address public gateway;
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    address public immutable icPolicy;
+    address public icPolicy;
 
     /// @dev Append-only receipt log.
     Receipt[] private _receipts;
@@ -86,15 +94,27 @@ contract ConsensusRecommendationReceipt is
     /// @dev `receiptId` → 1-based index into `_receipts` (0 means absent).
     mapping(bytes32 => uint256) private _indexPlusOne;
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param admin_     Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
     ///                   In every non-test deployment this is the
     ///                   `TimelockController` (INV-3).
     /// @param gateway_   Deployed `RobotMoneyGateway`; sole permitted writer.
     /// @param icPolicy_  Deployed `InvestmentCommitteePolicy`; the single source
     ///                   of `COMMITTEE_AGENT_ROLE` membership.
-    constructor(address admin_, address gateway_, address icPolicy_) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        address admin_,
+        address gateway_,
+        address icPolicy_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (admin_ == address(0) || gateway_ == address(0) || icPolicy_ == address(0)) {
             revert ZeroAddress();
         }

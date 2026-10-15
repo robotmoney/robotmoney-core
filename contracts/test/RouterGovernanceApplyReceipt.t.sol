@@ -16,6 +16,7 @@ import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendation
 import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title RouterGovernanceApplyReceiptTest
 /// @notice A recorded consensus receipt is applied the production way: two of the three
@@ -56,8 +57,8 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         timelock = _newGovTimelock(safe, DELAY);
 
         usdc = new MockUsdc();
-        registry = new VaultRegistry(address(this));
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        registry = CoreProxies.vaultRegistry(address(this));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
         registry.registerVault(
@@ -71,9 +72,10 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         registry.setRouterEligible(address(vaultA), true);
         registry.setRouterEligible(address(vaultB), true);
 
-        ic = new InvestmentCommitteePolicy(address(this), address(this));
+        ic = CoreProxies.investmentCommitteePolicy(address(this), address(this));
         ic.registerAgent(submitter, "submitter");
-        receipts = new ConsensusRecommendationReceipt(address(this), address(this), address(ic));
+        receipts =
+            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
 
         // The real governance stage: deploy, router ADMIN_ROLE, router WEIGHT_SETTER_ROLE
         // (the deployer's copy dropped), receipt ADMIN_ROLE. Each grant is read back.
@@ -320,7 +322,8 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
     // ─── No voting surface ───────────────────────────────────────────────────
 
     /// @notice The deployed weight setter, router and receipt register expose no voting
-    ///         function. Checked two ways on the deployed runtime code: no PUSH4 of any
+    ///         function. Checked two ways on the deployed runtime code (each contract is an
+    ///         ERC-1967 proxy since issue 1808, so the scan reads the implementation it runs): no PUSH4 of any
     ///         voting selector (the dispatcher pushes every external selector), and each
     ///         zero-argument voting getter reverts with empty data (no such function, no
     ///         fallback).
@@ -345,7 +348,7 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
             for (uint256 i = 0; i < sigs.length; i++) {
                 bytes4 sel = bytes4(keccak256(bytes(sigs[i])));
                 assertFalse(
-                    _pushes4(deployed[c].code, sel),
+                    _pushes4(CoreProxies.implementationOf(deployed[c]).code, sel),
                     string.concat("voting selector in runtime code: ", sigs[i])
                 );
             }
@@ -357,7 +360,12 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
             }
         }
         // The positive control: the scan does find a selector the contract has.
-        assertTrue(_pushes4(address(gov).code, RouterGovernance.applyReceipt.selector));
+        assertTrue(
+            _pushes4(
+                CoreProxies.implementationOf(address(gov)).code,
+                RouterGovernance.applyReceipt.selector
+            )
+        );
     }
 
     /// @dev True when `code` contains a PUSH4 whose immediate is `sel`. Walks opcodes so

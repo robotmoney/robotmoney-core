@@ -1,0 +1,38 @@
+---
+title: "newOra3BasketVault"
+---
+
+# newOra3BasketVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/fv/DeployAssertions.t.sol)
+
+<a id="newora3basketvault-ierc20-iswaprouter-address"></a>
+
+### newOra3BasketVault
+
+<i>
+
+A `Ora3BasketVault` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
+the harness constructor took.
+
+</i>
+
+```solidity
+function newOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_)
+    returns (Ora3BasketVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| router_ | `ISwapRouter` |  |
+| admin_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Ora3BasketVault` |  |
+

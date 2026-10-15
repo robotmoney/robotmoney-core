@@ -13,7 +13,8 @@
   - `requiredEnv`: names the script reads with no default. This includes `DEPLOYMENT_OUT`. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
   - `optionalEnv`: names the script may read but does not need (no value here changes a deploy parameter).
   - `manifest`: template `deployments/<chain>/<file>.json`. Replace `<chain>` with the chain id. The driver sets `DEPLOYMENT_OUT` to this file.
-  - `libraries`: names from the top-level `libraries` to link with `forge script --libraries`. Empty when none.
+  - `libraries`: names from the top-level `libraries` to link with `forge script --libraries`. Empty when none. Every stage that deploys a proxied core contract (issue 1808) lists `tick_math`, the basket stages because they link it and the others so that every stage compiles with the same settings: `--libraries` changes the metadata hash of everything compiled, so one setting gives each CREATE2 library (`GovernedUpgrade` above all, linked by every proxied contract) one address for the whole release. The `timelock` stage lists it too: every proxy stage predicts the timelock's CREATE2 address from the `TimelockController` init code, metadata included, so the stage that deploys it must compile with the same setting.
+  - `create2Libraries`: names from the top-level `create2Libraries` that forge deploys by itself through the CREATE2 factory because a contract the stage deploys links them (issue 1721); a stage that finds one already on chain adopts it. The stage-table test derives each list from the imports of the contracts the stage deploys.
   - `vault`: `USDC|PROTO|AGENT|RWA` for a vault stage, else `null`.
 - `vaults[]`: `{ key, stage, artifact, manifest }`. `artifact` is the forge contract name for code-hash checks (`RwaBasketVault` for rmRWA).
 - `libraries[]`: `{ name, artifact, manifestKey, path }`. `manifestKey` is the key the libs manifest holds the address under. `path` is the source file for `--libraries path:artifact:address`.
@@ -24,6 +25,10 @@ Run order is the table order. The per-stage wiring (which manifest key feeds whi
 ## Stage 13 (govern)
 
 `stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each of the four vaults, rmUSDC included, because all four deploy paused (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. Router weights change on demand through the govern row `apply-receipt` (core 1696): the Safe, through the timelock, releases the Investment Committee's consensus receipt and applies its weights in one `RouterGovernance.applyReceipt` call. There is no voting by anyone. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
+
+## Upgrade authority and release mode (issue 1808)
+
+Every stage that deploys a proxied core contract (`vault`, `registry`, `router`, `gateway`, `ic-policy`, `governance`, `proto`, `agent`, `rwa`) reads `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY` and `UPGRADE_MODE` (`upgradeable` or `frozen`), all required. The first two name the CREATE2 address of the timelock the `timelock` stage deploys (`contracts/script/UpgradeAuthority.sol`), which every proxy records as its only upgrade and freeze authority; the `timelock` stage deploys it there and refuses the handover if any proxy names another. `UPGRADE_MODE=frozen` freezes upgrades inside each proxy's initialization. Until the release sheet carries the mode (upgradeability stage 2), publish-contracts passes `frozen`. The single-vault redeploy names the live `TIMELOCK_ADDRESS` instead. See `docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md`.
 
 ## Required env (no defaults)
 

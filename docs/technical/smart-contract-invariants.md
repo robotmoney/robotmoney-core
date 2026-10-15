@@ -237,6 +237,24 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`GOV-5` — The timelock/Safe is never the *sole* unrecoverable point of liveness that the admin-floor masks.**
 > 🟡 TRUSTED · admin-floor protects the timelock's membership, not the off-chain Safe quorum — see Layer-2 note in the audit doc · documented assumption (not directly FV-able; track operationally).
 
+> **`GOV-6` — No account but a core proxy's `upgradeTimelock()` (the Safe-controlled timelock) ever changes its implementation or freezes it; no role grant, revoke, renounce or reinitializer moves that authority.**
+> ✅ PROVEN (in the source, issue 1808; no proxied deployment on 8453 yet) · `contracts/lib/GovernedUUPS.sol:GovernedUpgrade._authorize`, `GovernedUpgrade.init` (once per proxy) · static-guard + behavioural — `GovernedUpgrade.t.sol::test_onlyTheTimelock_canUpgradeOrFreeze`, `test_roleChanges_doNotMoveUpgradeAuthority`, `test_safeDirectUpgrade_isRefused`, `test_doubleParentInitialization_reverts`.
+
+> **`GOV-7` — A frozen core proxy is never upgraded and never re-initialized, by a new or a previously queued operation, and the freeze is never undone.**
+> ✅ PROVEN (in the source, issue 1808) · `GovernedUpgrade._authorize`, `GovernedUpgrade.freezeUpgrades` (one-way flag, initializers disabled) · behavioural — `GovernedUpgrade.t.sol::test_delayedFreeze_isOneWay`, `test_pendingUpgrade_afterTheFreeze_fails`, `test_noRoleOrInitializerRoute_clearsTheFreeze`, `test_freezeAtDeploy_isFrozenFromTheFirstBlock`; fork — `UpgradeLifecycleFork.t.sol::test_fork_freezeThroughSafeAndTimelock_blocksAQueuedUpgrade`.
+
+> **`GOV-8` — A freeze never locks in an implementation other than the one it was reviewed against.**
+> ✅ PROVEN (in the source, issue 1808) · `GovernedUpgrade.freezeUpgrades(expectedImplementation, expectedCodeHash)` · behavioural — `GovernedUpgrade.t.sol::test_freeze_wrongTarget_reverts`, `test_interveningUpgrade_beforeAQueuedFreeze_blocksTheFreeze`.
+
+> **`GOV-9` — A core proxy is never observable uninitialized and an implementation is never initializable; the release mode is never defaulted.**
+> ✅ PROVEN (in the source, issue 1808) · `UpgradeAuthority._deployProxy` (init in the proxy constructor), `GovernedUUPS` constructor (`_disableInitializers`), `GovernedUpgrade.init` (`UpgradeModeUndeclared`) · behavioural — `GovernedUpgrade.t.sol::test_implementationTakeover_isImpossible`, `test_initializerReplay_reverts`, `test_releaseMode_isRequired_andTheTimelockNonZero`, `UpgradeAuthorityStages.t.sol::test_stageEnv_isRequired_andNamesThePrediction`.
+
+> **`GOV-10` — No interim authority: before the timelock stage nobody can upgrade or freeze a core proxy, and the timelock stage never hands over a proxy that names another authority.**
+> ✅ PROVEN (in the source, issue 1808) · `UpgradeAuthority.predictTimelock` (CREATE2, bound to the Safe and the delay), `DeployTimelock._deployTimelockAtPrediction`, `DeployTimelock._requireUpgradeAuthority` · behavioural — `UpgradeAuthorityStages.t.sol::test_noInterimAuthority_thenTheHandoverDeploysThePredictedTimelock`, `test_handover_refusesAProxyNamingAnotherAuthority`.
+
+> **`GOV-11` — An upgrade never moves an existing storage slot of a core contract.**
+> ✅ PROVEN for the committed layouts (issue 1808) · `scripts/ci/check-core-storage-layout.sh` against `contracts/test/fixtures/storage-layout/` (sequential layout, stored structs, linked libraries, ERC-7201 namespaces, OpenZeppelin submodule pins) · static-guard (CI, with a self-test) + behavioural — `GovernedUpgrade.t.sol::test_upgradeEveryProxy_throughSafeAndTimelock_keepsState`, `test_incompatibleLayout_isWhatTheLayoutGateCatches`; fork — `UpgradeLifecycleFork.t.sol::test_fork_upgradeEveryProxy_throughSafeAndTimelock_keepsState`. A v2's own layout is reviewed when its snapshot is rewritten.
+
 ---
 
 ## 9. Adapters (ADP)

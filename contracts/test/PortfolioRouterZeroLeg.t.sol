@@ -12,6 +12,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {MockUSDC} from "./PortfolioRouter.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice 1:1 vault that REVERTS on `deposit(0)` (like rmAGENT: a zero swap) and
 ///         counts every `deposit` call, so a test can prove a leg was never called.
@@ -73,8 +74,8 @@ contract PortfolioRouterZeroLegTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
         for (uint256 i = 0; i < 4; i++) {
             v[i] = new StrictZeroRevertVault(address(usdc));
             vm.startPrank(admin);

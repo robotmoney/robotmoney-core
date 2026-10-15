@@ -13,6 +13,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
 ///      constructor admin, and `adminOwner`, who owns agents in these tests)
@@ -44,7 +45,7 @@ abstract contract GatewayAgentPolicyFixture is Test {
         vm.roll(100);
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         ADMIN_ROLE = gateway.ADMIN_ROLE();

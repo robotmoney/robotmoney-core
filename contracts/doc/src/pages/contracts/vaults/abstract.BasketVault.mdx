@@ -5,9 +5,9 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/vaults/BasketVault.sol)
 
-**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
+**Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** BasketVault
 
@@ -18,6 +18,12 @@ NAV is denominated in USDC using a Uniswap V3 TWAP (time-weighted
 arithmetic-mean tick) over a per-asset, admin-configurable window.
 
 Subclasses set the vault name/symbol, max basket size, and default slippage.
+
+Every concrete subclass runs behind its own ERC-1967 proxy (issue 1808): the
+subclass `initialize` calls `__BasketVault_init`, which replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze
+the proxy (`GovernedUUPS`). ADMIN_ROLE and EMERGENCY_ROLE carry no upgrade power.
+Freezing upgrades never pauses or alters withdrawals.
 
 ## Constants
 
@@ -81,18 +87,6 @@ ADMIN_ROLE has set an explicit per-asset window.
 
 ```solidity
 uint32 public constant DEFAULT_TWAP_WINDOW = 1_800;
-```
-
-### SWAP_ROUTER
-
-```solidity
-ISwapRouter public immutable SWAP_ROUTER;
-```
-
-### _USDC
-
-```solidity
-IERC20 internal immutable _USDC;
 ```
 
 ### MAX_NAV_DEVIATION_BPS
@@ -165,6 +159,18 @@ uint128 public constant MIN_POOL_LIQUIDITY = 1e6;
 
 ```solidity
 AssetInfo[] public assets;
+```
+
+### SWAP_ROUTER
+
+```solidity
+ISwapRouter public SWAP_ROUTER;
+```
+
+### _USDC
+
+```solidity
+IERC20 internal _USDC;
 ```
 
 ### tvlCap
@@ -310,24 +316,25 @@ uint256 internal _lastWithdrawnAssets;
 
 ## Functions
 
-<a id="constructor-string-string-ierc20-iswaprouter-uint256-uint256-uint256-uint256-address-address-address"></a>
+<a id="__basketvault_init-string-string-uint256-initparams"></a>
 
-### constructor
+### __BasketVault_init
+
+<i>
+
+Atomic proxy initialization of the shared basket state, called once from the
+concrete subclass's `initialize` (it replaces the constructor). The subclass also
+calls `__GovernedUUPS_init`.
+
+</i>
 
 ```solidity
-constructor(
+function __BasketVault_init(
         string memory name_,
         string memory symbol_,
-        IERC20 usdc_,
-        ISwapRouter swapRouter_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
         uint256 initialSlippageBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    ) ERC4626(usdc_) ERC20(name_, symbol_);
+        InitParams calldata p
+    ) internal onlyInitializing;
 ```
 
 **Parameters**
@@ -336,15 +343,8 @@ constructor(
 | ---- | ---- | ----------- |
 | name_ | `string` |  |
 | symbol_ | `string` |  |
-| usdc_ | `IERC20` |  |
-| swapRouter_ | `ISwapRouter` |  |
-| tvlCap_ | `uint256` |  |
-| perDepositCap_ | `uint256` |  |
-| exitFeeBps_ | `uint256` |  |
 | initialSlippageBps_ | `uint256` |  |
-| feeRecipient_ | `address` |  |
-| admin_ | `address` | Receives ADMIN_ROLE (cold/multisig key for<br/>parameter changes). Must not be address(0). |
-| emergencyResponder_ | `address` | Receives EMERGENCY_ROLE (hot key for rapid<br/>unwind/shutdown). Must not be address(0).<br/>May equal admin_ as a conscious choice<br/>(e.g. in test environments), but operators<br/>SHOULD use distinct addresses in production<br/>so a single key compromise cannot both alter<br/>parameters and trigger an emergency unwind. |
+| p | `InitParams` |  |
 
 <a id="maxassets"></a>
 
@@ -400,7 +400,7 @@ See `IERC20Metadata`.
 </i>
 
 ```solidity
-function decimals() public pure override(ERC4626) returns (uint8);
+function decimals() public pure override(ERC4626Upgradeable) returns (uint8);
 ```
 
 **Returns**
@@ -1490,31 +1490,6 @@ function sweepForeignToken(address token) external;
 | ---- | ---- | ----------- |
 | token | `address` | Foreign ERC-20 to quarantine. Must not be USDC, the share<br/>token, or any active/configured basket asset. |
 
-<a id="_sweeptoquarantine-address"></a>
-
-### _sweepToQuarantine
-
-<i>
-
-Single inlining site for the permissionless quarantine sweep so the
-`ForeignTokenQuarantine.sweep` body is emitted into the
-EIP-170-tight basket-vault bytecode only once, shared by
-`sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
-fallback. Moves the caller's full balance of `token` to the fixed
-quarantine address; no caller-supplied recipient (INV-1).
-
-</i>
-
-```solidity
-function _sweepToQuarantine(address token) private;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
-
 <a id="settvlcap-uint256"></a>
 
 ### setTvlCap
@@ -1907,55 +1882,14 @@ function _activeAssetForToken(address token) internal view returns (AssetInfo me
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `AssetInfo` |  |
 
-<a id="_emergencyunwindasset-assetinfo-uint256"></a>
-
-### _emergencyUnwindAsset
-
-```solidity
-function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| minUsdcOut | `uint256` |  |
-
-<a id="_emergencyunwindassetwithcap-assetinfo-uint256"></a>
-
-### _emergencyUnwindAssetWithCap
-
-<i>
-
-Override-path swap helper. Passes `appliedFloor` as the router-level
-`amountOutMinimum` and additionally enforces the cap with a typed
-`EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
-a stable error surface regardless of the underlying router's
-slippage revert format.
-
-</i>
-
-```solidity
-function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
-        internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| appliedFloor | `uint256` |  |
-
-<a id="_executeswap-address-address-address-uint24-uint256-uint256-address"></a>
+<a id="_executeswap-address-address-address-uint24-uint256-uint256"></a>
 
 ### _executeSwap
 
 <i>
 
 Routes a swap through the per-asset adapter when set, or falls back
-to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
+to the pinned Uniswap V3 SWAP_ROUTER.  Centralises approval
 management: forceApprove before the call, clear after.
 
 </i>
@@ -1975,8 +1909,7 @@ function _executeSwap(
         address tokenOut,
         uint24 fee,
         uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
+        uint256 minAmountOut
     ) internal returns (uint256 amountOut);
 ```
 
@@ -1990,7 +1923,6 @@ function _executeSwap(
 | fee | `uint24` |  |
 | amountIn | `uint256` |  |
 | minAmountOut | `uint256` |  |
-| recipient | `address` |  |
 
 **Returns**
 
@@ -2807,6 +2739,37 @@ struct EmergencyUnwindGuard {
 | minUsdcOut | `uint256` |  |
 | overrideAllowed | `bool` |  |
 | maxLossBps | `uint256` |  |
+
+### InitParams
+
+The per-instance arguments the constructor took before issue 1808. A struct, so
+a subclass `initialize` stays inside the stack limit.
+
+```solidity
+struct InitParams {
+        IERC20 usdc;
+        ISwapRouter swapRouter;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        address feeRecipient;
+        address admin;
+        address emergencyResponder;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| swapRouter | `ISwapRouter` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` | Receives ADMIN_ROLE (cold/multisig key for parameter changes).<br/>Must not be address(0). |
+| emergencyResponder | `address` | Receives EMERGENCY_ROLE (hot key for rapid unwind/shutdown).<br/>Must not be address(0). May equal admin as a conscious choice<br/>(e.g. in test environments), but operators SHOULD use distinct<br/>addresses in production so a single key compromise cannot<br/>both alter parameters and trigger an emergency unwind. |
 
 ## Enums
 

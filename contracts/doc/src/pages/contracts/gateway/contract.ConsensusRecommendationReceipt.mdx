@@ -5,9 +5,9 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
 
 **Title:** ConsensusRecommendationReceipt
 
@@ -49,6 +49,10 @@ Payload contract: `tests/fixtures/consensus-receipt.schema.json` and
 
 Emits: `ReceiptRecorded`, `ReceiptReleased`.
 
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `gateway` and `icPolicy` are set once at initialization and have no setter.
+
 ## Constants
 
 ### ADMIN_ROLE
@@ -80,12 +84,14 @@ Domain separator for the receipt-id preimage, pinned by
 string internal constant RECEIPT_ID_DOMAIN = "robotmoney:consensus-receipt-id:v1\n";
 ```
 
+## State Variables
+
 ### gateway
 
 The RobotMoneyGateway. All receipt writes must originate here.
 
 ```solidity
-address public immutable gateway;
+address public gateway;
 ```
 
 **Returns**
@@ -99,7 +105,7 @@ address public immutable gateway;
 The InvestmentCommitteePolicy whose `COMMITTEE_AGENT_ROLE` gates submitters.
 
 ```solidity
-address public immutable icPolicy;
+address public icPolicy;
 ```
 
 **Returns**
@@ -107,8 +113,6 @@ address public immutable icPolicy;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
-
-## State Variables
 
 ### _receipts
 
@@ -136,12 +140,20 @@ mapping(bytes32 => uint256) private _indexPlusOne;
 
 ## Functions
 
-<a id="constructor-address-address-address"></a>
+<a id="initialize-address-address-address-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(address admin_, address gateway_, address icPolicy_);
+function initialize(
+        address admin_,
+        address gateway_,
+        address icPolicy_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
 ```
 
 **Parameters**
@@ -151,6 +163,8 @@ constructor(address admin_, address gateway_, address icPolicy_);
 | admin_ | `address` | Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.<br/>In every non-test deployment this is the<br/>`TimelockController` (INV-3). |
 | gateway_ | `address` | Deployed `RobotMoneyGateway`; sole permitted writer. |
 | icPolicy_ | `address` | Deployed `InvestmentCommitteePolicy`; the single source<br/>of `COMMITTEE_AGENT_ROLE` membership. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="_revokerole-bytes32-address"></a>
 

@@ -4,7 +4,7 @@ title: "DeployTimelockRehearsalKindTest"
 
 # DeployTimelockRehearsalKindTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
@@ -30,6 +30,27 @@ function _prefix() internal pure override returns (string memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
+
+<a id="_stackdelay"></a>
+
+### _stackDelay
+
+<i>
+
+The TIMELOCK_MIN_DELAY the test's successful `run()` uses: the stack is bound to the
+timelock for that delay (issue 1808).
+
+</i>
+
+```solidity
+function _stackDelay() internal pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="test_rehearsalkind_boundariesonbase"></a>
 

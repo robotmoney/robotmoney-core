@@ -13,37 +13,6 @@
  */
 export const gatewayAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [
-      {
-        name: "usdc_",
-        type: "address",
-        internalType: "contract IERC20",
-      },
-      {
-        name: "vault_",
-        type: "address",
-        internalType: "contract IERC4626",
-      },
-      {
-        name: "admin_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "pauser_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "router_",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
     inputs: [],
@@ -671,6 +640,24 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getRoleAdmin",
     inputs: [
       {
@@ -745,10 +732,66 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "usdc_",
+        type: "address",
+        internalType: "contract IERC20",
+      },
+      {
+        name: "vault_",
+        type: "address",
+        internalType: "contract IERC4626",
+      },
+      {
+        name: "admin_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "pauser_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "router_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "pauseDeposits",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -1039,6 +1082,50 @@ export const gatewayAbiGenerated = [
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -1627,6 +1714,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "RoleAdminChanged",
     inputs: [
       {
@@ -1696,6 +1796,44 @@ export const gatewayAbiGenerated = [
         type: "address",
         indexed: true,
         internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
       },
     ],
     anonymous: false,
@@ -1871,6 +2009,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "InvalidShareReceiver",
     inputs: [],
   },
@@ -1897,6 +2040,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "NotAgentOwner",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -1953,6 +2101,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "SharesExceedWithdrawPerPaymentCap",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "UUPSUnauthorizedCallContext",
     inputs: [],
   },
   {
@@ -2960,47 +3113,6 @@ export const vaultAbiGenerated = [
  */
 export const robotMoneyVaultAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [
-      {
-        name: "_asset",
-        type: "address",
-        internalType: "contract IERC20",
-      },
-      {
-        name: "_tvlCap",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "_perDepositCap",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "_exitFeeBps",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "_feeRecipient",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "_admin",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "_emergencyResponder",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
     inputs: [],
@@ -3496,6 +3608,24 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getAdapterDrift",
     inputs: [],
     outputs: [
@@ -3616,6 +3746,59 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "_asset",
+        type: "address",
+        internalType: "contract IERC20",
+      },
+      {
+        name: "_tvlCap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "_perDepositCap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "_exitFeeBps",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "_feeRecipient",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_admin",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_emergencyResponder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -3900,6 +4083,19 @@ export const robotMoneyVaultAbiGenerated = [
         name: "",
         type: "uint256",
         internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
       },
     ],
     stateMutability: "view",
@@ -4379,6 +4575,50 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "withdraw",
     inputs: [
       {
@@ -4784,6 +5024,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "MaxRebalanceBpsUpdated",
     inputs: [
       {
@@ -5061,6 +5314,44 @@ export const robotMoneyVaultAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
       },
     ],
     anonymous: false,
@@ -5488,6 +5779,11 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "InvalidParam",
     inputs: [],
   },
@@ -5509,6 +5805,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "NoActiveAdapters",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -5570,6 +5871,11 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "UUPSUnauthorizedCallContext",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "UnauthorizedRebalancer",
     inputs: [],
   },
@@ -5600,17 +5906,6 @@ export const robotMoneyVaultAbiGenerated = [
  */
 export const registryAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [
-      {
-        name: "admin",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
     inputs: [],
@@ -5635,6 +5930,24 @@ export const registryAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -5783,6 +6096,29 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "admin",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "isRouterEligible",
     inputs: [
       {
@@ -5859,6 +6195,19 @@ export const registryAbiGenerated = [
     ],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -6053,6 +6402,50 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "vaultCount",
     inputs: [],
     outputs: [
@@ -6063,6 +6456,19 @@ export const registryAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
   },
   {
     type: "event",
@@ -6185,6 +6591,44 @@ export const registryAbiGenerated = [
   },
   {
     type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "VaultRegistered",
     inputs: [
       {
@@ -6261,7 +6705,17 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -6314,6 +6768,11 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "UUPSUnauthorizedCallContext",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -6323,27 +6782,6 @@ export const registryAbiGenerated = [
  * Full PortfolioRouter ABI — generated from Foundry artifact.
  */
 export const routerAbiGenerated = [
-  {
-    type: "constructor",
-    inputs: [
-      {
-        name: "_usdc",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "_registry",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "_admin",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
   {
     type: "function",
     name: "ADMIN_ROLE",
@@ -6535,6 +6973,24 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getDefaultWeights",
     inputs: [],
     outputs: [
@@ -6693,6 +7149,39 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "_usdc",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_registry",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_admin",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "isRouterEligible",
     inputs: [
       {
@@ -6805,6 +7294,19 @@ export const routerAbiGenerated = [
     ],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -7039,6 +7541,50 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "usdc",
     inputs: [],
     outputs: [
@@ -7122,6 +7668,19 @@ export const routerAbiGenerated = [
         type: "address",
         indexed: true,
         internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
       },
     ],
     anonymous: false,
@@ -7272,6 +7831,44 @@ export const routerAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
       },
     ],
     anonymous: false,
@@ -7465,6 +8062,11 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "InvalidWeightSum",
     inputs: [],
   },
@@ -7501,6 +8103,11 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "NoWeightsSet",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -7614,6 +8221,11 @@ export const routerAbiGenerated = [
         internalType: "address",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "UUPSUnauthorizedCallContext",
+    inputs: [],
   },
   {
     type: "error",
@@ -7737,52 +8349,6 @@ export const routerAbiGenerated = [
  * generate and nothing to compare.
  */
 export const agentTokenVaultAbiGenerated = [
-  {
-    type: "constructor",
-    inputs: [
-      {
-        name: "usdc_",
-        type: "address",
-        internalType: "contract IERC20",
-      },
-      {
-        name: "swapRouter_",
-        type: "address",
-        internalType: "contract ISwapRouter",
-      },
-      {
-        name: "tvlCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "perDepositCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "exitFeeBps_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "feeRecipient_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "admin_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "emergencyResponder_",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
   {
     type: "function",
     name: "ADMIN_ROLE",
@@ -8455,6 +9021,24 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getRoleAdmin",
     inputs: [
       {
@@ -8513,6 +9097,71 @@ export const agentTokenVaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "p",
+        type: "tuple",
+        internalType: "struct BasketVault.InitParams",
+        components: [
+          {
+            name: "usdc",
+            type: "address",
+            internalType: "contract IERC20",
+          },
+          {
+            name: "swapRouter",
+            type: "address",
+            internalType: "contract ISwapRouter",
+          },
+          {
+            name: "tvlCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "perDepositCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "exitFeeBps",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "feeRecipient",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "admin",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "emergencyResponder",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -8808,6 +9457,19 @@ export const agentTokenVaultAbiGenerated = [
         name: "",
         type: "uint256",
         internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
       },
     ],
     stateMutability: "view",
@@ -9412,6 +10074,50 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "withdraw",
     inputs: [
       {
@@ -9778,6 +10484,19 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "MaxSlippageUpdated",
     inputs: [
       {
@@ -10081,6 +10800,44 @@ export const agentTokenVaultAbiGenerated = [
     type: "event",
     name: "Unretired",
     inputs: [],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
+      },
+    ],
     anonymous: false,
   },
   {
@@ -10523,6 +11280,11 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "InvalidParam",
     inputs: [],
   },
@@ -10581,6 +11343,11 @@ export const agentTokenVaultAbiGenerated = [
   {
     type: "error",
     name: "NotImplemented",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -10668,6 +11435,11 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "UUPSUnauthorizedCallContext",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -10696,52 +11468,6 @@ export const agentTokenVaultAbiGenerated = [
  * fails CI instead of degrading quietly.
  */
 export const protocolAssetVaultAbiGenerated = [
-  {
-    type: "constructor",
-    inputs: [
-      {
-        name: "usdc_",
-        type: "address",
-        internalType: "contract IERC20",
-      },
-      {
-        name: "swapRouter_",
-        type: "address",
-        internalType: "contract ISwapRouter",
-      },
-      {
-        name: "tvlCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "perDepositCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "exitFeeBps_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "feeRecipient_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "admin_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "emergencyResponder_",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
   {
     type: "function",
     name: "ADMIN_ROLE",
@@ -11388,6 +12114,24 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "freezeUpgrades",
+    inputs: [
+      {
+        name: "expectedImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "expectedCodeHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getRoleAdmin",
     inputs: [
       {
@@ -11446,6 +12190,71 @@ export const protocolAssetVaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "initialize",
+    inputs: [
+      {
+        name: "p",
+        type: "tuple",
+        internalType: "struct BasketVault.InitParams",
+        components: [
+          {
+            name: "usdc",
+            type: "address",
+            internalType: "contract IERC20",
+          },
+          {
+            name: "swapRouter",
+            type: "address",
+            internalType: "contract ISwapRouter",
+          },
+          {
+            name: "tvlCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "perDepositCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "exitFeeBps",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "feeRecipient",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "admin",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "emergencyResponder",
+            type: "address",
+            internalType: "address",
+          },
+        ],
+      },
+      {
+        name: "upgradeTimelock_",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "upgradeMode_",
+        type: "uint8",
+        internalType: "enum GovernedUUPS.UpgradeMode",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -11741,6 +12550,19 @@ export const protocolAssetVaultAbiGenerated = [
         name: "",
         type: "uint256",
         internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "proxiableUUID",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
       },
     ],
     stateMutability: "view",
@@ -12345,6 +13167,50 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "upgradeTimelock",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "upgradeToAndCall",
+    inputs: [
+      {
+        name: "newImplementation",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "data",
+        type: "bytes",
+        internalType: "bytes",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "withdraw",
     inputs: [
       {
@@ -12711,6 +13577,19 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "Initialized",
+    inputs: [
+      {
+        name: "version",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "MaxSlippageUpdated",
     inputs: [
       {
@@ -13014,6 +13893,44 @@ export const protocolAssetVaultAbiGenerated = [
     type: "event",
     name: "Unretired",
     inputs: [],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Upgraded",
+    inputs: [
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "UpgradesFrozen",
+    inputs: [
+      {
+        name: "proxy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "implementation",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "codeHash",
+        type: "bytes32",
+        indexed: false,
+        internalType: "bytes32",
+      },
+    ],
     anonymous: false,
   },
   {
@@ -13456,6 +14373,11 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InvalidInitialization",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "InvalidParam",
     inputs: [],
   },
@@ -13514,6 +14436,11 @@ export const protocolAssetVaultAbiGenerated = [
   {
     type: "error",
     name: "NotImplemented",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotInitializing",
     inputs: [],
   },
   {
@@ -13598,6 +14525,11 @@ export const protocolAssetVaultAbiGenerated = [
         internalType: "address",
       },
     ],
+  },
+  {
+    type: "error",
+    name: "UUPSUnauthorizedCallContext",
+    inputs: [],
   },
   {
     type: "error",

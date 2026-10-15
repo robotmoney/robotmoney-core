@@ -5,7 +5,7 @@ description: "ERC-4626 USDC vault holding a basket of agent-economy tokens curat
 
 # AgentTokenVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/vaults/AgentTokenVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/vaults/AgentTokenVault.sol)
 
 **Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
 
@@ -101,48 +101,25 @@ uint256 public constant SHORTLIST_REMOVE_DELAY = 24 hours;
 
 ## Functions
 
-<a id="constructor-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+<a id="initialize-initparams-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(
-        IERC20 usdc_,
-        ISwapRouter swapRouter_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    )
-        BasketVault(
-            "Robot Money Agent Tokens",
-            "rmAGENT",
-            usdc_,
-            swapRouter_,
-            tvlCap_,
-            perDepositCap_,
-            exitFeeBps_,
-            _DEFAULT_SLIPPAGE_BPS,
-            feeRecipient_,
-            admin_,
-            emergencyResponder_
-        );
+function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| usdc_ | `IERC20` |  |
-| swapRouter_ | `ISwapRouter` |  |
-| tvlCap_ | `uint256` |  |
-| perDepositCap_ | `uint256` |  |
-| exitFeeBps_ | `uint256` |  |
-| feeRecipient_ | `address` |  |
-| admin_ | `address` |  |
-| emergencyResponder_ | `address` |  |
+| p | `InitParams` | The arguments the constructor took before issue 1808. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="maxassets"></a>
 

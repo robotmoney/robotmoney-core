@@ -5,9 +5,9 @@ description: "Roles. The broadcaster is `admin` and also holds EMERGENCY_ROLE on
 
 # BasketVaultDeployBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/script/BasketVaultDeployBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/BasketVaultDeployBase.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 <i>
 
@@ -31,6 +31,22 @@ fails closed (deposits revert on small drift), never open. A value above 2000 or
 
 ```solidity
 uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+## State Variables
+
+### _vaultUpgrade
+
+<i>
+
+The upgrade authority and release mode `_newVault` initializes the vault proxy with
+(issue 1808). Each entry point sets it before deploying: `run()` from the env
+(`UpgradeAuthority._readUpgradeConfig`), an in-process run from the test seam.
+
+</i>
+
+```solidity
+UpgradeConfig internal _vaultUpgrade;
 ```
 
 ## Functions
@@ -423,9 +439,9 @@ function _deployConfigured(Params memory p, Cfg memory cfg)
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_asserttickmathlinkintegrity-address-uint256"></a>
+<a id="_basketinitparams-params-address"></a>
 
-### _assertTickMathLinkIntegrity
+### _basketInitParams
 
 <i>
 
@@ -435,6 +451,36 @@ the same runtime codehash. Also probes `totalAssets()`: it must not revert and m
 stay far below a sane ceiling (1000 times the TVL cap).
 
 </i>
+
+<i>
+
+The per-instance initializer arguments (what the constructor took before issue 1808).
+
+</i>
+
+```solidity
+function _basketInitParams(Params memory p, address emergencyResponder)
+        internal
+        pure
+        returns (BasketVault.InitParams memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault.InitParams` |  |
+
+<a id="_asserttickmathlinkintegrity-address-uint256"></a>
+
+### _assertTickMathLinkIntegrity
 
 ```solidity
 function _assertTickMathLinkIntegrity(address vault, uint256 tvlCap) internal view;
@@ -746,6 +792,8 @@ struct Deployed {
         address[] tokens;
         bool registered;
         bool paused;
+        address implementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -761,4 +809,6 @@ struct Deployed {
 | tokens | `address[]` |  |
 | registered | `bool` |  |
 | paused | `bool` |  |
+| implementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

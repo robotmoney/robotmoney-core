@@ -206,11 +206,16 @@ fn agent_deposit_routed_topic0() -> alloy_primitives::B256 {
 
 /// Deploy `VaultRegistry` with `admin` as the admin.
 fn deploy_registry(deployer: &rmpc_fork_e2e::Account<'_>, admin: Address) -> Address {
-    let mut code = load_initcode("VaultRegistry.sol", "VaultRegistry").to_vec();
+    let mut code: Vec<u8> = Vec::new();
     code.extend_from_slice(&encode_address_arg(admin));
-    deployer
-        .deploy(Bytes::from(code), 3_000_000)
-        .expect("deploy VaultRegistry")
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &code,
+        3_000_000,
+    )
+    .expect("deploy VaultRegistry")
 }
 
 /// Deploy `MockVault` with `asset_` = USDC address.
@@ -231,16 +236,21 @@ fn deploy_portfolio_router(
     registry: Address,
     admin: Address,
 ) -> Address {
-    let mut code = load_initcode("PortfolioRouter.sol", "PortfolioRouter").to_vec();
+    let mut code: Vec<u8> = Vec::new();
     // 3 × address args
     let mut args = [0u8; 96];
     args[12..32].copy_from_slice(usdc.as_slice());
     args[44..64].copy_from_slice(registry.as_slice());
     args[76..96].copy_from_slice(admin.as_slice());
     code.extend_from_slice(&args);
-    deployer
-        .deploy(Bytes::from(code), 4_000_000)
-        .expect("deploy PortfolioRouter")
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "PortfolioRouter.sol",
+        "PortfolioRouter",
+        &code,
+        4_000_000,
+    )
+    .expect("deploy PortfolioRouter")
 }
 
 /// Deploy `RobotMoneyGateway`.
@@ -256,7 +266,7 @@ fn deploy_gateway(
     pauser: Address,
     router: Address,
 ) -> Address {
-    let mut code = load_initcode("RobotMoneyGateway.sol", "RobotMoneyGateway").to_vec();
+    let mut code: Vec<u8> = Vec::new();
     // 5 × address args
     let mut args = [0u8; 160];
     args[12..32].copy_from_slice(usdc.as_slice());
@@ -267,9 +277,14 @@ fn deploy_gateway(
     code.extend_from_slice(&args);
     // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
     // committee routing additions in issue #1049 (deployment cost ~5.15M).
-    deployer
-        .deploy(Bytes::from(code), 8_000_000)
-        .expect("deploy RobotMoneyGateway")
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "RobotMoneyGateway.sol",
+        "RobotMoneyGateway",
+        &code,
+        8_000_000,
+    )
+    .expect("deploy RobotMoneyGateway")
 }
 
 /// Register `vault_addr` in `registry` with a minimal metadata struct.

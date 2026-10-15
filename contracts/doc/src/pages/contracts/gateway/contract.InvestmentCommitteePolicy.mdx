@@ -5,9 +5,9 @@ description: "Registry of admin-allowlisted committee agents and their signed al
 
 # InvestmentCommitteePolicy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/gateway/InvestmentCommitteePolicy.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/InvestmentCommitteePolicy.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** InvestmentCommitteePolicy
 
@@ -31,6 +31,10 @@ prompt_hash, inputs_digest, timestamp, schema_version.
 
 Emits: `AgentRegistered`, `AgentRevoked`, `VoteSubmitted`.
 
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `gateway` is set once at initialization and has no setter.
+
 ## Constants
 
 ### ADMIN_ROLE
@@ -49,15 +53,15 @@ Held by allowlisted committee agent addresses.
 bytes32 public constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE");
 ```
 
+## State Variables
+
 ### gateway
 
 The RobotMoneyGateway address. All committee writes must originate here.
 
 ```solidity
-address public immutable gateway;
+address public gateway;
 ```
-
-## State Variables
 
 ### agentId
 
@@ -77,12 +81,19 @@ Vote[] private _votes;
 
 ## Functions
 
-<a id="constructor-address-address"></a>
+<a id="initialize-address-address-address-upgrademode"></a>
 
-### constructor
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-constructor(address admin_, address gateway_);
+function initialize(
+        address admin_,
+        address gateway_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
 ```
 
 **Parameters**
@@ -91,6 +102,8 @@ constructor(address admin_, address gateway_);
 | ---- | ---- | ----------- |
 | admin_ | `address` | Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE. |
 | gateway_ | `address` | Address of the deployed RobotMoneyGateway. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="_revokerole-bytes32-address"></a>
 

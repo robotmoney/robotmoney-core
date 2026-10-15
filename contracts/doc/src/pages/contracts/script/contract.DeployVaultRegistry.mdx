@@ -5,9 +5,9 @@ description: "Foundry deploy script for the VaultRegistry contract. Deploys Vaul
 
 # DeployVaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/851b6f6154c5148deb9edad9c16aa038d73ecd19/contracts/script/DeployVaultRegistry.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployVaultRegistry.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployVaultRegistry
 
@@ -27,6 +27,9 @@ script's VAULT_NAME (issue 1705 C9: one registry-name source for all four vaults
 USDC is the canonical Base USDC constant on every chain.
 Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 (mandatory and equal to 8453 on Base mainnet).
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+of the registry proxy (`UpgradeAuthority`, issue 1808). The manifest `registry` is the
+ERC-1967 proxy; `registry_implementation` is its implementation.
 
 ## Constants
 
@@ -95,6 +98,28 @@ function runInProcessWith(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing the deployed registry and key parameters. |
+
+<a id="_deployregistry-deployed-address-upgradeconfig"></a>
+
+### _deployRegistry
+
+<i>
+
+Deploy the registry implementation and its ERC-1967 proxy, initialized atomically.
+
+</i>
+
+```solidity
+function _deployRegistry(Deployed memory d, address admin_, UpgradeConfig memory u) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| admin_ | `address` |  |
+| u | `UpgradeConfig` |  |
 
 <a id="_registerifabsent-vaultregistry-address-address-string"></a>
 
@@ -173,6 +198,8 @@ struct Deployed {
         address vault;
         address asset;
         bool registered;
+        address registryImplementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -185,4 +212,6 @@ struct Deployed {
 | vault | `address` |  |
 | asset | `address` |  |
 | registered | `bool` |  |
+| registryImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

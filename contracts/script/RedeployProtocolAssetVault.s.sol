@@ -31,6 +31,8 @@ interface IVaultRegistryLink {
 ///           NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
 ///           TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
 ///           EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
+///           UPGRADE_MODE       `upgradeable` or `frozen` (issue 1808). The new vault proxy's upgrade authority is TIMELOCK_ADDRESS,
+///                              the deployment's live timelock.
 contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
@@ -42,6 +44,9 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address timelock = _envAddressRequired("TIMELOCK_ADDRESS");
         address emergency = _envAddressRequired("EMERGENCY_ADDRESS");
         Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "assets");
+        _vaultUpgrade = UpgradeConfig({
+            timelock: timelock, mode: parseUpgradeMode(_envStringRequired("UPGRADE_MODE"))
+        });
 
         vm.startBroadcast();
         d = _redeploy(p, cfg, timelock, emergency);
@@ -59,6 +64,7 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address emergency
     ) external returns (Deployed memory d) {
         Cfg memory cfg = _parseCfg(json, "assets");
+        _vaultUpgrade = UpgradeConfig({timelock: timelock, mode: _inProcessUpgradeConfig().mode});
         vm.startPrank(p.admin);
         d = _redeploy(p, cfg, timelock, emergency);
         vm.stopPrank();

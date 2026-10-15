@@ -8,6 +8,10 @@ import {AccessRoles} from "../gateway/AccessRoles.sol";
 
 /// @dev Concrete harness exposing AccessRoles internals for test purposes.
 contract AccessRolesHarness is AccessRoles {
+    /// @dev keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.AccessControl")) - 1)) & ~0xff
+    bytes32 internal constant AC_STORAGE =
+        0x02dd7bc7dec4dceedda775e58dd541e08a116c6c53815c0bd028192f7b626800;
+
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);
@@ -22,11 +26,12 @@ contract AccessRolesHarness is AccessRoles {
     ///      `_assertRoleSeparation` still catches an overlap that somehow
     ///      slipped past the grant-time check (defense-in-depth).
     ///
-    ///      OZ AccessControl stores `mapping(bytes32 => RoleData) _roles`
-    ///      at slot 0; `RoleData.hasRole[address]` lives at
-    ///      `keccak256(account || keccak256(role || 0))`.
+    ///      OZ AccessControlUpgradeable (issue 1808) stores
+    ///      `mapping(bytes32 => RoleData) _roles` at its ERC-7201 namespace
+    ///      `AC_STORAGE`; `RoleData.hasRole[address]` lives at
+    ///      `keccak256(account || keccak256(role || AC_STORAGE))`.
     function unsafe_forgeRole(bytes32 role, address account) external {
-        bytes32 slot = keccak256(abi.encode(account, keccak256(abi.encode(role, uint256(0)))));
+        bytes32 slot = keccak256(abi.encode(account, keccak256(abi.encode(role, AC_STORAGE))));
         // Write `true` (1) into the bool slot.
         assembly {
             sstore(slot, 1)

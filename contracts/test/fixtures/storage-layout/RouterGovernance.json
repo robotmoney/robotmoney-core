@@ -1,0 +1,39 @@
+{
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
+  },
+  "storage": [
+    {
+      "label": "router",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_contract(PortfolioRouter)"
+    },
+    {
+      "label": "receipts",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_contract(IConsensusRecommendationReceipt)"
+    }
+  ],
+  "structs": {}
+}

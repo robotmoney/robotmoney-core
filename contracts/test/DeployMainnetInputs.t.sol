@@ -30,7 +30,7 @@ contract DeployInputsHarness is DeployVault {
     }
 
     function deployWith(Params memory p) external returns (Deployed memory) {
-        return _deploy(p);
+        return _deploy(p, _inProcessUpgradeConfig());
     }
 
     function envUintRequired(string memory key) external view returns (uint256) {

@@ -13,7 +13,10 @@ import { SCRIPT, world, type World } from "./harness.ts";
 
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
-const THREE = [BUILT.get("BasketAssetConfigGuard")!, BUILT.get("TwapTickMath")!, BUILT.get("BasketViews")!];
+const THREE = [BUILT.get("BasketAssetConfigGuard")!, BUILT.get("TwapTickMath")!, BUILT.get("BasketViews")!, BUILT.get("BasketSwaps")!];
+// Issue 1808: the vault stage adopts GovernedUpgrade and RobotMoneyVaultOps, the gateway stage GatewayWindows, proto the basket libraries.
+const VAULT_LIBS = [BUILT.get("GovernedUpgrade")!, BUILT.get("RobotMoneyVaultOps")!], GATE_LIBS = [BUILT.get("GatewayWindows")!];
+const N = THREE.length + VAULT_LIBS.length + GATE_LIBS.length;
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const A = "0x000000000000000000000000000000000000a001";
@@ -27,16 +30,18 @@ const bump = (w: World, by = 1) => w.setNonce(w.state().nonces[A] + by);
 function adoptedWorld(startNonce = START, sheet: Record<string, string> = REH): World {
   const w = world({ startNonce, sheet });
   cpSync(OUT, join(w.coreDir, "out"), { recursive: true });
-  w.cfg.counts[SCRIPT.proto] = COUNTS.proto! - 3;
+  w.cfg.counts[SCRIPT.proto] = COUNTS.proto! - THREE.length;
+  w.cfg.counts[SCRIPT.vault] = COUNTS.vault! - VAULT_LIBS.length;
+  w.cfg.counts[SCRIPT.gateway] = COUNTS.gateway! - GATE_LIBS.length;
   const codeAt: Record<string, string> = { [TICK.toLowerCase()]: `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` };
-  for (const b of THREE) codeAt[b.address.toLowerCase()] = b.runtime;
-  Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [] } });
+  for (const b of [...THREE, ...VAULT_LIBS, ...GATE_LIBS]) codeAt[b.address.toLowerCase()] = b.runtime;
+  Object.assign(w.cfg, { zeroTx: SCRIPT.libs, libsAddress: TICK, codeAt, creates: { [SCRIPT.proto]: [], [SCRIPT.vault]: [], [SCRIPT.gateway]: [] } });
   return w;
 }
 const PRE_PROTO = ["safe", "libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance"];
 
 describe("a rehearsal with a non-zero start and adopted stages", () => {
-  test("libs adopted at 0 and proto at 7: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - 3) + proof", async () => {
+  test("libs adopted at 0 and vault, gateway and proto less their libraries: start recorded at safe, the later stages start where the adopted ones left off, the final nonce is start + (sum - libs - adopted) + proof", async () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", "deploy"])).toBe(0);
     expect(failed(w)).toBeUndefined();
@@ -45,12 +50,12 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
     expect(m.stages.safe.startNonce).toBe(START);
     expect(m.stages.libs).toMatchObject({ adopted: true });
     expect(m.stages.libs.adoption.deployerTxs).toBe(0);
-    expect(m.stages.proto.adoption.deployerTxs).toBe(COUNTS.proto! - 3);
+    expect(m.stages.proto.adoption.deployerTxs).toBe(COUNTS.proto! - THREE.length);
     expect(m.stages.recorder.startNonce).toBe(START + COUNTS.safe!); // libs contributed nothing
-    expect(m.stages.agent.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - 3);
-    const final = START + (sum - COUNTS.libs! - 3) + PROOF_TX_NONCES;
+    expect(m.stages.agent.startNonce).toBe(m.stages.proto.startNonce + COUNTS.proto! - THREE.length);
+    const final = START + (sum - COUNTS.libs! - N) + PROOF_TX_NONCES;
     expect(w.state().nonces[A]).toBe(final);
-    expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.deployer_start_nonce === START && l.summed_frozen_counts === sum - COUNTS.libs! - 3)).toBe(true);
+    expect(w.logs().some((l) => l.event === "run.nonce_ok" && l.deployer_start_nonce === START && l.summed_frozen_counts === sum - COUNTS.libs! - N)).toBe(true);
   });
   test("production on the same chain state and the same start is refused (absolute accounting from 0 is unchanged)", async () => {
     const w = adoptedWorld(START, {});
@@ -82,7 +87,7 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
     const w = adoptedWorld();
     expect(await w.run(["--stage", PRE_PROTO.join(",")])).toBe(0);
     expect(await w.run(["--stage", "proto,agent,rwa,prove-control,timelock", "--resume"])).toBe(0);
-    expect(w.state().nonces[A]).toBe(START + (sum - COUNTS.libs! - 3) + PROOF_TX_NONCES);
+    expect(w.state().nonces[A]).toBe(START + (sum - COUNTS.libs! - N) + PROOF_TX_NONCES);
   });
   test("the end-of-deploy check: start + sum(effective) + proof passes, one stray transaction after the last stage, a missing start and the production reading fail", async () => {
     const { finalNonceCheck } = await import("../src/runner.ts");
@@ -91,8 +96,8 @@ describe("a rehearsal with a non-zero start and adopted stages", () => {
     const { sheetText } = await import("./fixtures.ts");
     const stages: any = Object.fromEntries(DEPLOYER_STAGES.map((s) => [s.name, { status: "done", count: COUNTS[s.countKey!] }]));
     stages.libs = { status: "done", count: COUNTS.libs, adopted: true, adoption: { libraries: [], factory: "0x0", deployerTxs: 0 } };
-    stages.proto = { status: "done", count: COUNTS.proto, adopted: true, adoption: { libraries: [], factory: "0x0", deployerTxs: COUNTS.proto! - 3 } };
-    const want = START + (sum - COUNTS.libs! - 3) + PROOF_TX_NONCES;
+    stages.proto = { status: "done", count: COUNTS.proto, adopted: true, adoption: { libraries: [], factory: "0x0", deployerTxs: COUNTS.proto! - THREE.length } };
+    const want = START + (sum - COUNTS.libs! - THREE.length) + PROOF_TX_NONCES;
     const check = (nonce: number, kind: "rehearsal" | "production", start: number | null = START) => {
       const ctx = { dryRun: false, chainId: 918453, rpc: "http://x", baseEnv: {}, frozen: COUNTS, sheet: parseSheet(sheetText(kind === "rehearsal" ? REH : {})), signer: { address: async () => A }, log: { log() {} }, run: async () => ({ code: 0, stdout: String(nonce), stderr: "" }) } as never;
       return finalNonceCheck(ctx, { stages, ...(start === null ? {} : { deployerStartNonce: start }) } as never);

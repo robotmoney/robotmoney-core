@@ -153,7 +153,14 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,FourVaultInitialState}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
+
+      # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
+      # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
+      # deploy and delayed, queued upgrades after a freeze) and the timelock-last stage order.
+      # Named so the log proves both files ran (22 + 5 tests).
+      - name: forge test (governed upgrades, freeze and the upgrade authority — issue 1808)
+        run: FORGE_TEST_MIN_EXECUTED=27 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{GovernedUpgrade,UpgradeAuthorityStages}.t.sol"
 
       # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
       - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
@@ -170,15 +177,17 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Gateway storage-layout gate (issue 1476)
-        # RobotMoneyGateway state may only be appended. The gate diffs the
-        # AST-id-free (label, slot, offset, type) of every state variable and
-        # storage-struct member from `forge inspect` against the committed
-        # snapshot (taken from dev before issue 1476). The self-test runs first
-        # and proves the gate fails on a mutated snapshot.
+      - name: Core storage-layout gate (issues 1476, 1808)
+        # Every proxied core contract (the four vaults, registry, router, gateway, IC policy,
+        # receipt register, RouterGovernance) keeps its storage across upgrades only if the
+        # layout never moves. The gate diffs, per contract, the AST-id-free (label, slot,
+        # offset, type) of every state variable and storage-struct member from `forge inspect`,
+        # the linked libraries and the ERC-7201 namespaces against the committed snapshots,
+        # plus the pinned OpenZeppelin submodule commits. The self-test runs first and proves
+        # the gate fails on mutated snapshots.
         run: |
-          scripts/ci/check-gateway-storage-layout.sh --selftest
-          scripts/ci/check-gateway-storage-layout.sh
+          scripts/ci/check-core-storage-layout.sh --selftest
+          scripts/ci/check-core-storage-layout.sh
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
@@ -389,6 +398,12 @@ jobs:
           bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
           echo "::endgroup::"
 
+      - name: forge test (every proxy upgraded v1 -> v2 through the real Safe and timelock, state kept, freeze blocks a queued upgrade — issue 1808)
+        run: |
+          echo "::group::contracts/test/UpgradeLifecycleFork.t.sol:"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UpgradeLifecycleFork.t.sol"
+          echo "::endgroup::"
+
       - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
@@ -515,7 +530,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,UpgradeLifecycleFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

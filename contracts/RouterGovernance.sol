@@ -5,7 +5,10 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 import {
     IConsensusRecommendationReceipt
@@ -45,7 +48,13 @@ import {
 ///         `setDefaultWeights` and the emergency `clearVotedWeights`.
 ///
 /// Emits: `ReceiptApplied`.
-contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). This contract's own roles (ADMIN_ROLE, WEIGHT_SETTER_ROLE) carry no
+/// upgrade power, here or on any other proxy. `router` and `receipts` are set once at
+/// initialization and have no setter.
+contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Sets the router's default weights and clears the active vector.
@@ -60,12 +69,12 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Storage ─────────────────────────────────────────────────────────────
 
     /// @notice The Portfolio Router whose `setWeights` `applyReceipt` calls.
-    PortfolioRouter public immutable router;
+    PortfolioRouter public router;
 
     /// @notice The ConsensusRecommendationReceipt register whose receipts this
     ///         contract applies. This contract holds `ADMIN_ROLE` there so it
     ///         can release a receipt in the same call that applies it.
-    IConsensusRecommendationReceipt public immutable receipts;
+    IConsensusRecommendationReceipt public receipts;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -91,14 +100,26 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice The call named `given`, but the receipt's stored digest is `stored`.
     error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param _router   Portfolio Router whose weights this contract sets.
     /// @param _receipts ConsensusRecommendationReceipt register.
     /// @param _admin    Receives `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`. The deploy
     ///                  is the deployer; the timelock stage hands both to the
     ///                  `TimelockController` and drops the deployer's copies.
-    constructor(address _router, address _receipts, address _admin) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        address _router,
+        address _receipts,
+        address _admin,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (_router == address(0) || _receipts == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }

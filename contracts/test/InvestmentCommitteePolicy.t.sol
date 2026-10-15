@@ -7,6 +7,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Minimal gateway stub ────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ contract InvestmentCommitteePolicyTest is Test {
 
     function setUp() public {
         gw = new MockGateway();
-        ic = new InvestmentCommitteePolicy(admin, address(gw));
+        ic = CoreProxies.investmentCommitteePolicy(admin, address(gw));
         gw.setIC(ic);
 
         // Grant COMMITTEE_AGENT_ROLE to agent1 via admin.

@@ -12,6 +12,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice What the governance stage leaves behind, read from the chain: the weight
 ///         setter holds router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the receipt
@@ -30,10 +31,10 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     function setUp() public {
         script = new DeployRouterGovernance();
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(admin, address(this));
-        receipts = new ConsensusRecommendationReceipt(admin, address(this), address(ic));
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
+        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(admin, address(this));
+        receipts = CoreProxies.consensusRecommendationReceipt(admin, address(this), address(ic));
     }
 
     function test_stage_wiresTheWeightSetter() public {
@@ -69,8 +70,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     /// @notice A deployer that does not administer the receipt register cannot wire the
     ///         release grant, and the stage stops instead of leaving applyReceipt dead.
     function test_stage_refusesWithoutReceiptAdmin() public {
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(admin, address(this));
-        ConsensusRecommendationReceipt foreign = new ConsensusRecommendationReceipt(
+        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(admin, address(this));
+        ConsensusRecommendationReceipt foreign = CoreProxies.consensusRecommendationReceipt(
             makeAddr("someone-else"), address(this), address(ic)
         );
         vm.expectRevert();

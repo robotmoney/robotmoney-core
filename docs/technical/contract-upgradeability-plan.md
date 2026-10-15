@@ -1,8 +1,12 @@
 # Contract upgradeability policy and implementation plan
 
-**Status:** target policy and design plan, 2026-10-13. No upgradeable Robot Money
-deployment is implemented by this document. Existing Base mainnet contracts
-remain direct deployments and cannot be upgraded in place.
+**Status:** target policy and design plan, 2026-10-13. Stage 1 (contracts and
+lifecycle tests) is implemented in the source by issue 1808 and recorded in
+[ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) (Proposed).
+No upgradeable Robot Money deployment exists on Base 8453: the existing Base
+mainnet contracts remain direct deployments and cannot be upgraded in place.
+Stages 2 to 4 (release sheet and publish evidence; signing clients, ABI
+consumers, dapp and indexer; Twin rehearsal and cutover) are planned.
 
 ## Decision and scope
 
@@ -158,16 +162,16 @@ This plan is detailed design; the following documents carry policy or
 operational authority. Their present-state claims must remain distinct from
 the target design until code and on-chain evidence exist.
 
-| Document | Required change |
-| --- | --- |
-| `docs/architecture.md` §4, §7.3, §8 | State target proxy/freeze lifecycle, Safe/timelock authority, and compatibility with one codebase; keep current direct deployments labeled as current. |
-| `docs/technical/security-model.md` §2, §4, §13 | Replace blanket proxy prohibition with restricted per-instance UUPS policy, upgrade threat model, freeze evidence, and release gates. |
-| `docs/technical/smart-contracts.md` §2, §5 | Preserve historic direct-address facts; distinguish current state from target, then document actual proxy and implementation addresses after deployment. |
-| `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. |
-| `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. |
-| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. |
-| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. |
-| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. |
+| Document | Required change | State after stage 1 (issue 1808) |
+| --- | --- | --- |
+| `docs/architecture.md` §4, §7.3, §8 | State target proxy/freeze lifecycle, Safe/timelock authority, and compatibility with one codebase; keep current direct deployments labeled as current. | Done: §4.1, §7.3 and §8 say what the source implements and what stays planned. |
+| `docs/technical/security-model.md` §2, §4, §13 | Replace blanket proxy prohibition with restricted per-instance UUPS policy, upgrade threat model, freeze evidence, and release gates. | Done: §2 proxy, delegatecall and initializer rows; §4 upgrade-authority row; §13 release-gate row. |
+| `docs/technical/smart-contracts.md` §2, §5 | Preserve historic direct-address facts; distinguish current state from target, then document actual proxy and implementation addresses after deployment. | Done for the source; the proxy and implementation addresses are added after a proxied deployment. |
+| `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. | Done. |
+| `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure is stage 3. |
+| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Planned (stages 2 and 4). |
+| `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. The release sheet's mode, frozen counts, client and indexer configuration are stages 2 and 3. |
+| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern, Proposed until it is reviewed and accepted. |
 
 ## References
 

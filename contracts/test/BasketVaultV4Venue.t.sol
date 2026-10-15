@@ -18,6 +18,7 @@ import {UniswapV4PriceRecorder} from "../adapters/UniswapV4PriceRecorder.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract BasketVaultV4VenueTest is Test {
     MockV4PoolManager internal pm;
@@ -51,7 +52,7 @@ contract BasketVaultV4VenueTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        vault = new AgentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("router")),
             1_000_000e6,

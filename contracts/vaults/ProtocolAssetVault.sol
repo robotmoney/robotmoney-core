@@ -4,8 +4,6 @@
 // PROTOTYPE — not audited, not for production use.
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {BasketVault} from "./BasketVault.sol";
 import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 
@@ -30,30 +28,17 @@ contract ProtocolAssetVault is BasketVault {
     uint256 private constant _MAX_ASSETS = 10;
     uint256 private constant _DEFAULT_SLIPPAGE_BPS = 100; // 1%
 
-    constructor(
-        IERC20 usdc_,
-        ISwapRouter swapRouter_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    )
-        BasketVault(
-            "Robot Money Protocol",
-            "rmPROTO",
-            usdc_,
-            swapRouter_,
-            tvlCap_,
-            perDepositCap_,
-            exitFeeBps_,
-            _DEFAULT_SLIPPAGE_BPS,
-            feeRecipient_,
-            admin_,
-            emergencyResponder_
-        )
-    {}
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param p The arguments the constructor took before issue 1808.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("Robot Money Protocol", "rmPROTO", _DEFAULT_SLIPPAGE_BPS, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+    }
 
     function maxAssets() public pure override returns (uint256) {
         return _MAX_ASSETS;

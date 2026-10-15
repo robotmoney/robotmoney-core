@@ -22,6 +22,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 ///      a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
@@ -113,7 +114,7 @@ contract AgentTokenVaultTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         router = new RecordingSwapRouter();
-        vault = new AgentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,
@@ -280,7 +281,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
 
         // Deploy the vault with a temporary admin (this contract) so we can
         // transfer ADMIN_ROLE to the timelock during setUp.
-        vault = new AgentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,

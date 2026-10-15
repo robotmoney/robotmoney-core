@@ -31,7 +31,13 @@ import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {InvUSDC} from "../CustodyInvariant.t.sol";
 import {NoYieldTestAdapter} from "../helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
-import {BasketVaultHarness, MockPool, MockSwapRouter} from "../BasketVault.t.sol";
+import {
+    BasketVaultHarness,
+    newBasketVaultHarness,
+    MockPool,
+    MockSwapRouter
+} from "../BasketVault.t.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Intentionally violates SUP-1: one holder can redeem twice the assets.
 ///      This test-only double proves the shared predicate is executed, not vacuous.
@@ -82,7 +88,7 @@ contract CustodyMultiVaultTest is Test {
     ///         in the scout pass so the harness is not vacuous.
     function test_SUP1_robotMoneyVault_redeemableLeqTotalAssets() public {
         InvUSDC usdc = new InvUSDC();
-        RobotMoneyVault vault = new RobotMoneyVault(
+        RobotMoneyVault vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), type(uint256).max, type(uint256).max, 0, admin, admin, admin
         );
 
@@ -118,7 +124,7 @@ contract CustodyMultiVaultTest is Test {
         TestERC20 basketToken = new TestERC20();
         MockSwapRouter router = new MockSwapRouter();
         MockPool pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
-        BasketVaultHarness vault = new BasketVaultHarness(
+        BasketVaultHarness vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, admin
         );
 
@@ -148,7 +154,7 @@ contract CustodyMultiVaultTest is Test {
         MockSwapRouter router = new MockSwapRouter();
         MockPool pool = new MockPool(address(despxa), address(usdc), uint160(1 << 96));
         UniswapV3SwapAdapter adapter = new UniswapV3SwapAdapter(address(router));
-        RwaBasketVault vault = new RwaBasketVault(
+        RwaBasketVault vault = CoreProxies.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             type(uint256).max,

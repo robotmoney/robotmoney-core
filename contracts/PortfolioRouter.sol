@@ -9,7 +9,10 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -43,7 +46,12 @@ interface IMinDelay {
 /// `docs/development/single-production-codebase.md` for the principle.
 ///
 /// Canonical: docs/architecture.md §4.2
-contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). No router role (ADMIN_ROLE, WEIGHT_SETTER_ROLE and the rotation roles)
+/// carries upgrade power. `usdc` and `registry` are set once at initialization, no setter.
+contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS {
     using SafeERC20 for IERC20;
 
     // ─── Roles ───────────────────────────────────────────────────────────────
@@ -56,7 +64,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         active weights move only when the Safe, through the timelock,
     ///         applies a recorded consensus receipt with
     ///         `RouterGovernance.applyReceipt`. The timelock keeps `ADMIN_ROLE` and reaches
-    ///         `setDefaultWeights` and `clearVotedWeights` only. The constructor
+    ///         `setDefaultWeights` and `clearVotedWeights` only. The initializer
     ///         seeds the role to `_admin` so the router deploy stage can write
     ///         the initial weights. The governance deploy stage revokes it. The role is its
     ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
@@ -83,11 +91,11 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Storage ─────────────────────────────────────────────────────────────
 
     /// @notice USDC token used as the deposit asset across all vaults.
-    IERC20 public immutable usdc;
+    IERC20 public usdc;
 
     /// @notice VaultRegistry from which vault addresses, lifecycle status, and
     ///         router-eligibility state are read.
-    VaultRegistry public immutable registry;
+    VaultRegistry public registry;
 
     /// @notice Global ceiling on the total USDC that may flow through a single
     ///         `deposit()` call. 0 means no cap enforced.
@@ -359,12 +367,24 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice The delay has not passed. The rotation can execute from `readyAt`.
     error RotationNotReady(uint256 readyAt);
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param _usdc      USDC token address.
     /// @param _registry  VaultRegistry contract address.
     /// @param _admin     Address that receives `ADMIN_ROLE` at deploy time.
-    constructor(address _usdc, address _registry, address _admin) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        address _usdc,
+        address _registry,
+        address _admin,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (_usdc == address(0) || _registry == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }

@@ -18,6 +18,8 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -233,42 +235,6 @@ contract SafeIntegrationTest is Test {
         script = new DeployTimelock();
         deployer = address(script);
 
-        vault = new RobotMoneyVault(
-            usdc,
-            type(uint256).max, // tvlCap
-            type(uint256).max, // perDepositCap
-            0, // exitFeeBps
-            makeAddr("feeRecipient"),
-            deployer,
-            deployer
-        );
-
-        gateway = new RobotMoneyGateway(
-            usdc,
-            vault,
-            deployer,
-            makeAddr("pauser"),
-            address(0) // no router yet
-        );
-
-        registry = new VaultRegistry(deployer);
-
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
-
-        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
-
-        // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
-        // before the handover: WEIGHT_SETTER_ROLE gates setWeights (applyReceipt)
-        // and ADMIN_ROLE gates the two fallbacks. DeployRouterGovernance performs
-        // this grant for a real deployment; this fixture constructs RouterGovernance
-        // directly, so it must do the same. DeployTimelock's R7 precondition asserts
-        // it below.
-        vm.prank(deployer);
-        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
-        vm.prank(deployer);
-        IAccessControl(address(router))
-            .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
-
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
         // Owners must be sorted ascending for the Safe setup call.
         address[] memory owners = _sortedOwners();
@@ -290,6 +256,47 @@ contract SafeIntegrationTest is Test {
         address safeProxy = ISafeProxyFactory(SAFE_PROXY_FACTORY)
             .createProxyWithNonce(SAFE_SINGLETON_L2, safeSetup, uint256(keccak256("safe-salt-422")));
         safe = ISafe(safeProxy);
+        // Issue 1808: the Safe comes first, so every proxy names the timelock the handover
+        // deploys for it as its upgrade authority.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
+
+        vault = CoreProxies.robotMoneyVault(
+            usdc,
+            type(uint256).max, // tvlCap
+            type(uint256).max, // perDepositCap
+            0, // exitFeeBps
+            makeAddr("feeRecipient"),
+            deployer,
+            deployer
+        );
+
+        gateway = CoreProxies.robotMoneyGateway(
+            usdc,
+            vault,
+            deployer,
+            makeAddr("pauser"),
+            address(0) // no router yet
+        );
+
+        registry = CoreProxies.vaultRegistry(deployer);
+
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
+
+        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
+
+        // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
+        // before the handover: WEIGHT_SETTER_ROLE gates setWeights (applyReceipt)
+        // and ADMIN_ROLE gates the two fallbacks. DeployRouterGovernance performs
+        // this grant for a real deployment; this fixture constructs RouterGovernance
+        // directly, so it must do the same. DeployTimelock's R7 precondition asserts
+        // it below.
+        vm.prank(deployer);
+        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        IAccessControl(address(router))
+            .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // Verify the Safe from the Safe itself, never from what this test asked
         // for (governance-isomorphism.md R12).
@@ -1400,7 +1407,7 @@ contract SafeIntegrationTest is Test {
     }
 
     function _replacementGovernance() internal returns (RouterGovernance) {
-        return new RouterGovernance(address(router), makeAddr("receipts"), address(this));
+        return CoreProxies.routerGovernance(address(router), makeAddr("receipts"), address(this));
     }
 
     /// @notice The stage 11 handover leaves the Safe as the only rotator and the timelock as the only executor.

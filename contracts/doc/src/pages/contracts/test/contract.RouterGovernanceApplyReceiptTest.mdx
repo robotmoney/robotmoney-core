@@ -5,7 +5,7 @@ description: "A recorded consensus receipt is applied the production way: two of
 
 # RouterGovernanceApplyReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/RouterGovernanceApplyReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RouterGovernanceApplyReceipt.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -355,7 +355,8 @@ function test_duplicateVault_revertsOnSettersAndReceiptPath() public;
 ### test_noVotingSurface
 
 The deployed weight setter, router and receipt register expose no voting
-function. Checked two ways on the deployed runtime code: no PUSH4 of any
+function. Checked two ways on the deployed runtime code (each contract is an
+ERC-1967 proxy since issue 1808, so the scan reads the implementation it runs): no PUSH4 of any
 voting selector (the dispatcher pushes every external selector), and each
 zero-argument voting getter reverts with empty data (no such function, no
 fallback).

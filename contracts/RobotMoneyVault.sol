@@ -4,12 +4,17 @@
 //  docs/architecture.md §6 — Data and Trust Boundaries)
 pragma solidity ^0.8.24;
 
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
+import {RobotMoneyVaultOps} from "./lib/RobotMoneyVaultOps.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
@@ -26,7 +31,17 @@ import {AdminFloorAccessControlCounter} from "./lib/AdminFloorAccessControlCount
 /// The v1 vault is the one exception to "withdrawals are never frozen": never call
 /// v1 `pause()` (core 1494). This source is the code every new deployment ships.
 /// Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
-contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). ADMIN_ROLE, EMERGENCY_ROLE and KEEPER_ROLE carry no upgrade power.
+/// Freezing upgrades never pauses or alters withdrawals.
+contract RobotMoneyVault is
+    ERC4626Upgradeable,
+    AdminFloorAccessControlCounter,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS
+{
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -370,17 +385,35 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         if (g < floor) revert InsufficientGas(g, floor);
     }
 
-    // ─── Constructor ──────────────────────────────────────────────────
+    // ─── Initializer ──────────────────────────────────────────────────
 
-    constructor(
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it). Takes the
+    ///         arguments the constructor took, plus the upgrade authority and release mode.
+    /// @param _asset The vault asset (USDC).
+    /// @param _tvlCap Maximum total assets, 6-decimal units (0 = no cap).
+    /// @param _perDepositCap Maximum single deposit; must not exceed a non-zero `_tvlCap`.
+    /// @param _exitFeeBps Exit fee in basis points, at most `MAX_EXIT_FEE_BPS`.
+    /// @param _feeRecipient Receives exit fees. Not zero.
+    /// @param _admin Receives ADMIN_ROLE. Not zero.
+    /// @param _emergencyResponder Receives EMERGENCY_ROLE. Not zero.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
         IERC20 _asset,
         uint256 _tvlCap,
         uint256 _perDepositCap,
         uint256 _exitFeeBps,
         address _feeRecipient,
         address _admin,
-        address _emergencyResponder
-    ) ERC4626(_asset) ERC20("Robot Money USDC", "rmUSDC") {
+        address _emergencyResponder,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __ERC20_init("Robot Money USDC", "rmUSDC");
+        __ERC4626_init(_asset);
+        __AccessControl_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (
             _feeRecipient == address(0) || _admin == address(0) || _emergencyResponder == address(0)
         ) {
@@ -423,7 +456,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     ///      count is what makes donation-based price manipulation economically infeasible.
     ///      Once the vault accumulates real TVL the share price converges to 1 rmUSDC ≈ 1 USDC
     ///      (in 6-decimal terms) and the raw count no longer dominates the display.
-    function decimals() public pure override(ERC4626) returns (uint8) {
+    function decimals() public pure override(ERC4626Upgradeable) returns (uint8) {
         return 6;
     }
 
@@ -541,7 +574,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         if (nav + assets > tvlCap) revert TVLCapExceeded();
         if (_activeAdapterCount() == 0) revert NoActiveAdapters();
 
-        ERC4626._deposit(caller, receiver, assets, shares);
+        ERC4626Upgradeable._deposit(caller, receiver, assets, shares);
         // The only state change since `nav` was read is `assets` of USDC landing
         // idle in the vault (adapters are untouched and the call is nonReentrant),
         // so post-transfer NAV is exactly `nav + assets`. Holds for USDC, which
@@ -1089,18 +1122,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     {
         if (targetBalances.length != adapters.length) revert InvalidParam();
         uint256 len = adapters.length;
-        uint256 totalMoved = 0;
-
-        for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            uint256 current = adapters[i].adapter.totalAssets();
-            if (current > targetBalances[i]) {
-                uint256 excess = current - targetBalances[i];
-                uint256 actual = adapters[i].adapter.withdraw(excess);
-                totalMoved += actual;
-                emit Pulled(i, address(adapters[i].adapter), actual);
-            }
-        }
+        uint256 totalMoved = RobotMoneyVaultOps.pullToTargets(_opsAdapters(), targetBalances);
 
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle > 0) {
@@ -1162,25 +1184,8 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
         // Withdrawals are intentionally left open so existing users can redeem idle USDC.
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            IStrategyAdapter adpt = adapters[i].adapter;
-            address adptAddr = address(adpt);
-            uint256 balance;
-            try adpt.totalAssets() returns (uint256 reported) {
-                balance = reported;
-            } catch {
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
-                continue;
-            }
-            if (balance == 0) continue;
-            try adpt.withdraw(balance) returns (uint256 actual) {
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
-            } catch {
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
-            }
-        }
+        // A failing adapter is logged and skipped (RobotMoneyVaultOps.drainAll).
+        RobotMoneyVaultOps.drainAll(_opsAdapters());
         emit EmergencyWithdrawCalled();
     }
 
@@ -1196,24 +1201,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             revert AdapterNotFound();
         }
         _setDepositsPaused(true);
-        uint256 balance;
-        try adapters[index].adapter.totalAssets() returns (uint256 reported) {
-            balance = reported;
-        } catch {
-            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, false);
-            return;
-        }
-        if (balance == 0) {
-            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, true);
-            return;
-        }
-        try adapters[index].adapter.withdraw(balance) returns (uint256 actual) {
-            emit EmergencyWithdrawAdapterCalled(
-                index, address(adapters[index].adapter), actual, true
-            );
-        } catch {
-            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, false);
-        }
+        RobotMoneyVaultOps.drainOne(_opsAdapters(), index);
     }
 
     /// @notice Force-remove an adapter without withdrawing its assets (last-resort action).
@@ -1402,18 +1390,36 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     function _isAdapterEligible(address adapter_) internal view returns (bool) {
         if (!adapterAllowed[adapter_]) return false;
         if (!adapterCodeHashAllowed[adapter_.codehash]) return false;
+        (uint256 failure,) = _adapterBinding(adapter_);
+        return failure == BINDING_OK;
+    }
+
+    /// @dev `_adapterBinding` results, in check order.
+    uint256 private constant BINDING_OK = 0;
+    uint256 private constant BINDING_CALL_FAILED = 1;
+    uint256 private constant BINDING_ASSET_MISMATCH = 2;
+    uint256 private constant BINDING_VAULT_MISMATCH = 3;
+
+    /// @dev The one reader of an adapter's `USDC()` / `VAULT()` binding, shared by the
+    ///      non-reverting `_isAdapterEligible` and the reverting `_requireAdapterCompatible`.
+    ///      Stops at the first failure: `VAULT()` is not called when `USDC()` fails or names
+    ///      another asset. `reported` is the mismatching address for the two mismatch results.
+    function _adapterBinding(address adapter_)
+        internal
+        view
+        returns (uint256 failure, address reported)
+    {
         (bool usdcOk, bytes memory usdcData) =
             adapter_.staticcall(abi.encodeWithSignature("USDC()"));
-        if (!usdcOk || usdcData.length != 32 || abi.decode(usdcData, (address)) != asset()) {
-            return false;
-        }
+        if (!usdcOk || usdcData.length != 32) return (BINDING_CALL_FAILED, address(0));
+        reported = abi.decode(usdcData, (address));
+        if (reported != asset()) return (BINDING_ASSET_MISMATCH, reported);
         (bool vaultOk, bytes memory vaultData) =
             adapter_.staticcall(abi.encodeWithSignature("VAULT()"));
-        if (!vaultOk || vaultData.length != 32 || abi.decode(vaultData, (address)) != address(this))
-        {
-            return false;
-        }
-        return true;
+        if (!vaultOk || vaultData.length != 32) return (BINDING_CALL_FAILED, address(0));
+        reported = abi.decode(vaultData, (address));
+        if (reported != address(this)) return (BINDING_VAULT_MISMATCH, reported);
+        return (BINDING_OK, address(0));
     }
 
     function _requireAdapterEligible(address adapter_) internal view {
@@ -1426,44 +1432,19 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
     }
 
     function _requireAdapterCompatible(address adapter_) internal view {
-        (bool usdcOk, bytes memory usdcData) =
-            adapter_.staticcall(abi.encodeWithSignature("USDC()"));
-        if (!usdcOk || usdcData.length != 32) revert AdapterCompatibilityCheckFailed(adapter_);
-        address reportedAsset = abi.decode(usdcData, (address));
-        if (reportedAsset != asset()) {
-            revert AdapterAssetMismatch(adapter_, asset(), reportedAsset);
+        (uint256 failure, address reported) = _adapterBinding(adapter_);
+        if (failure == BINDING_CALL_FAILED) revert AdapterCompatibilityCheckFailed(adapter_);
+        if (failure == BINDING_ASSET_MISMATCH) {
+            revert AdapterAssetMismatch(adapter_, asset(), reported);
         }
-
-        (bool vaultOk, bytes memory vaultData) =
-            adapter_.staticcall(abi.encodeWithSignature("VAULT()"));
-        if (!vaultOk || vaultData.length != 32) revert AdapterCompatibilityCheckFailed(adapter_);
-        address reportedVault = abi.decode(vaultData, (address));
-        if (reportedVault != address(this)) {
-            revert AdapterVaultMismatch(adapter_, address(this), reportedVault);
+        if (failure == BINDING_VAULT_MISMATCH) {
+            revert AdapterVaultMismatch(adapter_, address(this), reported);
         }
-    }
-
-    /// @dev Share of `MAX_BPS` owed to the `rank`-th (0-based, registry order) of
-    ///      `active` equally-weighted adapters.
-    ///
-    ///      `MAX_BPS / active` on its own FLOORS: with three active adapters it
-    ///      is 3333, so the per-adapter targets summed to 9999 bps and never to
-    ///      100 %. Pass 1 of `_routeDeposit` could therefore never place the last
-    ///      bps of NAV into a balanced, fully-deployed vault — `remaining` stayed
-    ///      positive and pass 2 ran on EVERY deposit, re-reading every adapter's
-    ///      `totalAssets()` (issue #1391). The `MAX_BPS % active` leftover bps are
-    ///      handed out one each to the lowest ranks, so the target set sums to
-    ///      exactly `MAX_BPS`.
-    ///
-    ///      Callers still take `min(capBps, targetBps)`, so a distributed bps can
-    ///      never lift an adapter above its own cap.
-    function _equalWeightBps(uint256 rank, uint256 active) internal pure returns (uint256) {
-        if (active == 0) return 0;
-        return MAX_BPS / active + (rank < MAX_BPS % active ? 1 : 0);
     }
 
     /// @dev The `rank`-th active adapter's slice of `total` when `active`
-    ///      adapters split it equally — the balance `_equalWeightBps` denotes.
+    ///      adapters split it equally — the balance `RobotMoneyVaultOps.equalWeightBps`
+    ///      denotes.
     ///
     ///      Computed as the DIFFERENCE OF TWO PREFIX SHARES rather than as
     ///      `total * bps / MAX_BPS`, so the slices partition `total` exactly.
@@ -1481,29 +1462,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
         pure
         returns (uint256)
     {
-        if (active == 0) return 0;
-        uint256 base = MAX_BPS / active;
-        uint256 extra = MAX_BPS % active;
-        uint256 cumBefore = base * rank + (rank < extra ? rank : extra);
-        uint256 cumAfter = cumBefore + base + (rank < extra ? 1 : 0);
-        return (total * cumAfter) / MAX_BPS - (total * cumBefore) / MAX_BPS;
-    }
-
-    /// @dev Equal-weight target in bps for the adapter at registry `index`, or 0
-    ///      when it is inactive. The one definition every consumer shares — the
-    ///      allocator, `rebalance()` and the drift views — so the target set can
-    ///      never drift out of summing to `MAX_BPS` in one place but not another.
-    function _targetBpsForIndex(uint256 index) internal view returns (uint256) {
-        if (index >= adapters.length || !adapters[index].active) return 0;
-        uint256 len = adapters.length;
-        uint256 active;
-        uint256 rank;
-        for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            if (i < index) rank++;
-            active++;
-        }
-        return _equalWeightBps(rank, active);
+        return RobotMoneyVaultOps.equalWeightBalance(total, rank, active);
     }
 
     function _activeAdapterCount() internal view returns (uint256) {
@@ -1545,14 +1504,7 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             uint256 targetBps
         )
     {
-        AdapterInfo memory info = adapters[index];
-        return (
-            address(info.adapter),
-            info.capBps,
-            info.active,
-            info.adapter.totalAssets(),
-            _targetBpsForIndex(index)
-        );
+        return RobotMoneyVaultOps.adapterInfo(_opsAdapters(), index);
     }
 
     /// @notice Compute current vs. target balances and signed drift for every adapter.
@@ -1568,21 +1520,17 @@ contract RobotMoneyVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyG
             int256[] memory drifts
         )
     {
-        uint256 len = adapters.length;
-        currentBalances = new uint256[](len);
-        targetBalances = new uint256[](len);
-        drifts = new int256[](len);
+        return RobotMoneyVaultOps.adapterDrift(_opsAdapters(), totalAssets(), _activeAdapterCount());
+    }
 
-        uint256 total = totalAssets();
-        uint256 activeCount = _activeAdapterCount();
-        uint256 rank;
-
-        for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            targetBalances[i] = _equalWeightBalance(total, rank, activeCount);
-            rank++;
-            currentBalances[i] = adapters[i].adapter.totalAssets();
-            drifts[i] = int256(currentBalances[i]) - int256(targetBalances[i]);
+    /// @dev Reinterpret the `adapters` storage array as the layout-identical
+    ///      `RobotMoneyVaultOps.AdapterInfo[]` for the delegatecall-linked library. The two
+    ///      structs share an exact field layout; only the nominal type differs.
+    function _opsAdapters() internal view returns (RobotMoneyVaultOps.AdapterInfo[] storage o) {
+        AdapterInfo[] storage a = adapters;
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            o.slot := a.slot
         }
     }
 
