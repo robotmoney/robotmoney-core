@@ -171,8 +171,9 @@ jobs:
 
       - name: Alert webhook integration test
         env:
-          # Floor = the executed count in the last green dev run (7).
-          CARGO_TEST_MIN_EXECUTED: 7
+          # Floor = the executed count in the last green dev run (7), less the
+          # quorum-floor page test deleted with RouterGovernance voting (issue 1698).
+          CARGO_TEST_MIN_EXECUTED: 6
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
@@ -191,8 +192,9 @@ jobs:
       # naming them — same cause as the indexer pair above.
       - name: Watchdog profiles integration test
         env:
-          # Floor = the executed count in the last green dev run (5).
-          CARGO_TEST_MIN_EXECUTED: 5
+          # Floor = the executed count in the last green dev run (5), less the
+          # quorum-check startup test deleted with RouterGovernance voting (issue 1698).
+          CARGO_TEST_MIN_EXECUTED: 4
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
