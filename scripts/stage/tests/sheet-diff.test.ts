@@ -4,14 +4,14 @@ import { parseSheet, violations } from "../sheet-diff.ts";
 const base = `
 export CHAIN_ID=918453
 export TIMELOCK_MIN_DELAY=60
-export VOTING_PERIOD=60
+export SAFE_THRESHOLD=2
 export USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 export ADMIN_ADDRESS=0xaaa
 `;
 const prod = `
 export CHAIN_ID=8453
 export TIMELOCK_MIN_DELAY=172800
-export VOTING_PERIOD=3600
+export SAFE_THRESHOLD=3
 export USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 export ADMIN_ADDRESS=0xbbb
 export SAFE_OWNERS=0x1,0x2,0x3

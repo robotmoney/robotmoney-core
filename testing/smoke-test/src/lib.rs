@@ -2948,8 +2948,6 @@ fn dapp_compose_env(
         // offer the Portfolio Router deposit path.
         kv("VITE_REGISTRY_ADDRESS", &d.registry),
         kv("VITE_ROUTER_ADDRESS", &d.router),
-        // Issue #364: RouterGovernance address for the Governance tab.
-        kv("VITE_GOVERNANCE_ADDRESS", &d.governance),
         // Core 1544: the timelock and the Safe that proposes to it (the admin tabs build a Safe -> Timelock
         // proposal instead of a wallet transaction).
         kv("VITE_TIMELOCK_ADDRESS", &d.timelock),

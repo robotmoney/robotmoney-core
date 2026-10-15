@@ -274,10 +274,6 @@ services:
         # the smoke-test harness.
         VITE_REGISTRY_ADDRESS: ${VITE_REGISTRY_ADDRESS:-0x0000000000000000000000000000000000000000}
         VITE_ROUTER_ADDRESS: ${VITE_ROUTER_ADDRESS:-0x0000000000000000000000000000000000000000}
-        # Issue #364: RouterGovernance address for the Governance tab.
-        # Default to zero address so the governance panel shows the
-        # config-missing placeholder in standalone builds.
-        VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
         # Core 1544: TimelockController and the Safe that proposes to it. The admin
         # tabs build a Safe -> Timelock proposal for these. Zero address in
         # standalone builds: the proposal is then blocked, with no signing button.

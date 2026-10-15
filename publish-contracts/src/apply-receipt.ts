@@ -11,7 +11,7 @@ import type { VaultKey } from "./sheet.ts";
 
 export const APPLY_ROW = "apply-receipt";
 
-/** Receipt payload bucket to basket vault. The same table as rmpc governance draft-proposal (clients/rust-payment-client governance_draft.rs). */
+/** Receipt payload bucket to basket vault. */
 export const BUCKET_VAULT: Readonly<Record<string, VaultKey>> = {
   conservative_defi_yield: "USDC", protocol_tokens: "PROTO", agent_tokens: "AGENT", real_world_assets: "RWA",
 };

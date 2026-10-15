@@ -315,7 +315,6 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
     VITE_REGISTRY_ADDRESS: a.registry,
     VITE_ROUTER_ADDRESS: a.router,
-    VITE_GOVERNANCE_ADDRESS: a.governance,
     VITE_TIMELOCK_ADDRESS: a.timelock,
     VITE_SAFE_ADDRESS: a.safe,
     VITE_VAULT_ADDRESSES: JSON.stringify(a.vaults),
