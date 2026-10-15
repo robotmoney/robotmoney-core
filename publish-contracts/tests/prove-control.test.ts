@@ -5,10 +5,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeFunctionData, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
+import { createPublicClient, encodeFunctionData, http, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
 import { assertControlProven, inspectProofTx, PROOF_STAGE } from "../src/control-proof.ts";
 import { EXIT_CODES } from "../src/errors.ts";
-import { assertEveryOwnerSigned } from "../src/prove-control.ts";
+import { assertEveryOwnerSigned, LOG_BACKOFF_MAX_MS, LOG_BACKOFF_MS, LOG_TRIES, LOG_WINDOW, proveChain, realProveChain } from "../src/prove-control.ts";
+import { parseCli } from "../src/cli.ts";
+import { logsRpc, type LogsRpcOpts } from "./logs-rpc.ts";
 import { localSafeTxHash, ownerHardwareSigner, signTx, type SafeTxBundle } from "../src/safe/index.ts";
 import { privateKeyToAccount } from "viem/accounts";
 import { ADMIN, PROVE_OWNERS, PROVE_SIGNERS, fakeProveApi, keySigner, world } from "./harness.ts";
@@ -501,23 +503,178 @@ describe("hardware owner signers in prove-control (a simulated cast, no device)"
   });
 });
 
-describe("the real chain reader walks the log range in windows and reads only", () => {
-  test("realProveChain.executions: windows of LOG_WINDOW, ExecutionSuccess and ExecutionFailure of the Safe address only, oldest first", async () => {
-    const { LOG_WINDOW, realProveChain } = await import("../src/prove-control.ts");
-    const calls: any[] = [];
-    const handle: any = { address: SAFE_ADDR, client: {
-      getBlockNumber: async () => 5000n,
-      getLogs: async (a: any) => { calls.push(a); return a.fromBlock === 2000n ? [{ transactionHash: LANDED_TX, blockNumber: 2100n, logIndex: 3, eventName: "ExecutionSuccess", args: { txHash: `0x${"11".repeat(32)}` } }] : []; },
-    } };
-    const out = await realProveChain.executions(handle, 0);
-    expect(calls.map((c) => [c.fromBlock, c.toBlock])).toEqual([[0n, 1999n], [2000n, 3999n], [4000n, 5000n]]);
-    expect(LOG_WINDOW).toBe(2000n);
-    expect(calls.every((c) => c.address === SAFE_ADDR && c.events.length === 2)).toBe(true);
-    expect(out).toEqual([{ txHash: LANDED_TX, safeTxHash: `0x${"11".repeat(32)}`, success: true, block: 2100, logIndex: 3 }]);
+
+// ---- the real chain reader on public RPCs (issue 1724) ----------------------------------------------------------------------------------
+// The chain is a fake JSON-RPC on loopback (tests/logs-rpc.ts) that throttles, caps the eth_getLogs range or refuses like a pruned node.
+// The reader is the real one (proveChain over viem). The backoff clock is injected: `sleep` only records.
+const SELF_HASH = localSafeTxHash(CHAIN, SAFE_ADDR, SAFE_ADDR, "0x", 0);
+const rpcHandle = (url: string): any => ({ address: SAFE_ADDR, chain: { rpcUrl: url, chainId: CHAIN }, client: createPublicClient({ transport: http(url) }), logger: { log() {} } });
+/** The fake Safe tool of the runner tests, with a handle whose client reads `url` (the --rpc of the run). */
+const rpcApi = (w: ReturnType<typeof world>, url: string) => {
+  const api = fakeProveApi(w);
+  return { ...api, connectSafe: async (o: Parameters<typeof api.connectSafe>[0]) => ({ ...(await api.connectSafe(o)), chain: { rpcUrl: url, chainId: CHAIN }, client: createPublicClient({ transport: http(url) }) }) };
+};
+/** A Safe at nonce 1 whose valid proof landed at block 9 (stage block 7), served by fake RPCs. */
+async function landedOnRpc(o: Partial<LogsRpcOpts> = {}, logs?: Partial<LogsRpcOpts>) {
+  const tx = { from: ADMIN as Address, to: SAFE_ADDR, input: await execCalldata(), value: 0n, status: "success" as const, block: 9 };
+  const main = logsRpc({ safe: SAFE_ADDR, latest: 5000, executions: [{ block: 9, txHash: LANDED_TX, safeTxHash: SELF_HASH }], txs: { [LANDED_TX]: tx }, ...o });
+  const side = logs ? logsRpc({ safe: SAFE_ADDR, latest: 5000, executions: [{ block: 9, txHash: LANDED_TX, safeTxHash: SELF_HASH }], ...logs }) : undefined;
+  const w = world({ writeSafeManifest: true });
+  w.safeNonce = 1;
+  const waits: number[] = [];
+  const run = (extra: string[] = []) => w.run(["--stage", PROOF_STAGE, "--resume", ...extra], { prove: { api: rpcApi(w, main.url), logs: { sleep: async (ms: number) => { waits.push(ms); } } } });
+  return { w, main, side, waits, run, stop: () => { main.stop(); side?.stop(); } };
+}
+
+describe("the adoption scan is bounded, retried and diagnosable on public RPCs (issue 1724)", () => {
+  test("HTTP 429 for the first 3 eth_getLogs calls, then the logs: adopted after an exponential backoff, 4 calls in all, nothing sent", async () => {
+    const t = await landedOnRpc({ throttle: 3 });
+    try {
+      expect(await t.run()).toBe(0);
+      expect(t.main.ranges).toEqual([[7, 2006], [7, 2006], [7, 2006], [7, 2006]]);
+      expect(t.waits).toEqual([LOG_BACKOFF_MS, 2 * LOG_BACKOFF_MS, 4 * LOG_BACKOFF_MS]);
+      expect(sends(t.w)).toEqual([]);
+      expect(manifest(t.w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX, block: 9 });
+    } finally { t.stop(); }
   });
-  test("a log read that fails is refused, not treated as an empty range", async () => {
-    const { realProveChain } = await import("../src/prove-control.ts");
-    const handle: any = { address: SAFE_ADDR, client: { getBlockNumber: async () => 10n, getLogs: async () => { throw new Error("range too large"); } } };
-    await expect(realProveChain.executions(handle, 0)).rejects.toThrow(/range too large/);
+
+  test("a Retry-After header sets the wait, capped", async () => {
+    const t = await landedOnRpc({ throttle: 2, retryAfter: "120" });
+    try {
+      expect(await t.run()).toBe(0);
+      expect(t.waits).toEqual([LOG_BACKOFF_MAX_MS, LOG_BACKOFF_MAX_MS]);
+    } finally { t.stop(); }
+  });
+
+  test("an RPC that always answers 429 fails with RPC_REFUSED naming the host, eth_getLogs and the block range, after exactly --logs-tries calls", async () => {
+    const t = await landedOnRpc({ throttle: Infinity });
+    try {
+      expect(await t.run(["--logs-tries", "3"])).toBe(EXIT_CODES.RPC_REFUSED);
+      expect(t.main.ranges).toHaveLength(3);
+      expect(t.waits).toHaveLength(2);
+      const err = lastError(t.w);
+      expect(err.message).toContain("RPC 127.0.0.1 refused eth_getLogs for blocks 7 to 2006");
+      expect(err.message).toContain("HTTP 429");
+      expect(JSON.stringify(err)).not.toContain("secret-key"); // the RPC path may carry an API key: the host only
+      expect(sends(t.w)).toEqual([]);
+      expect(existsSync(manifestPath(t.w)) ? manifest(t.w).stages[PROOF_STAGE] : undefined).toBeUndefined();
+    } finally { t.stop(); }
+  });
+
+  test("the default bound is LOG_TRIES calls of one window", async () => {
+    const t = await landedOnRpc({ throttle: Infinity });
+    try {
+      expect(await t.run()).toBe(EXIT_CODES.RPC_REFUSED);
+      expect(t.main.ranges).toHaveLength(LOG_TRIES);
+      expect(t.waits).toEqual([1, 2, 4, 8, 16].map((x) => Math.min(x * LOG_BACKOFF_MS, LOG_BACKOFF_MAX_MS)));
+    } finally { t.stop(); }
+  });
+
+  test("a range-limit error shrinks the window and the scan still finds the single execution event", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 5000, maxRange: 500, executions: [{ block: 1500, txHash: LANDED_TX, safeTxHash: SELF_HASH }] });
+    try {
+      const out = await proveChain({ sleep: async () => {} }).executions(rpcHandle(rpc.url), 7);
+      expect(out).toEqual([{ txHash: LANDED_TX, safeTxHash: SELF_HASH, success: true, block: 1500, logIndex: 0 }]);
+      expect(rpc.ranges).toEqual([[7, 2006], [7, 1006], [7, 506], [507, 1006], [1007, 1506]]);
+    } finally { rpc.stop(); }
+  });
+
+  test("a range limit even at one block is RPC_REFUSED, not an empty scan", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 5000, maxRange: 0 });
+    try {
+      await expect(proveChain({ window: 4n }).executions(rpcHandle(rpc.url), 7)).rejects.toMatchObject({ kind: "RPC_REFUSED" });
+      expect(rpc.ranges).toEqual([[7, 10], [7, 8], [7, 7]]);
+    } finally { rpc.stop(); }
+  });
+
+  test("a pruned node that refuses eth_getTransactionReceipt fails with RPC_REFUSED naming the RPC and the method, not 'cannot be read'", async () => {
+    const t = await landedOnRpc({ refuse: ["eth_getTransactionReceipt"] });
+    try {
+      expect(await t.run()).toBe(EXIT_CODES.RPC_REFUSED);
+      const err = lastError(t.w);
+      expect(err.message).toContain("RPC 127.0.0.1 refused eth_getTransactionReceipt for transaction " + LANDED_TX);
+      expect(err.message).toContain("code -32000");
+      expect(err.message).not.toContain("cannot be read");
+      expect(sends(t.w)).toEqual([]);
+    } finally { t.stop(); }
+  });
+
+  test("a refused eth_getTransactionByHash is RPC_REFUSED too; a transaction that does not exist is still null ('cannot be read')", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 5000, refuse: ["eth_getTransactionByHash"] });
+    const empty = logsRpc({ safe: SAFE_ADDR, latest: 5000 });
+    try {
+      await expect(proveChain().transaction(rpcHandle(rpc.url), LANDED_TX)).rejects.toThrow(/refused eth_getTransactionByHash/);
+      expect(await proveChain().transaction(rpcHandle(empty.url), LANDED_TX)).toBeNull();
+    } finally { rpc.stop(); empty.stop(); }
+  });
+
+  test("with --logs-rpc, eth_getLogs goes to the logs RPC and every other call stays on --rpc", async () => {
+    const t = await landedOnRpc({ executions: [], refuse: ["eth_getLogs"] }, {});
+    try {
+      expect(await t.run(["--logs-rpc", t.side!.url])).toBe(0);
+      expect(t.side!.calls).toEqual(["eth_getLogs"]);
+      expect(t.main.calls).not.toContain("eth_getLogs");
+      expect(t.main.calls).toEqual(expect.arrayContaining(["eth_blockNumber", "eth_getTransactionByHash", "eth_getTransactionReceipt"]));
+      expect(manifest(t.w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX });
+    } finally { t.stop(); }
+  });
+
+  test("a proof near the Safe stage block costs one eth_getLogs call, even three million blocks behind the latest block", async () => {
+    const t = await landedOnRpc({ latest: 3_000_000 });
+    try {
+      expect(await t.run()).toBe(0);
+      expect(t.main.ranges).toEqual([[7, 2006]]);
+    } finally { t.stop(); }
+  });
+
+  test("--logs-window sets the window", async () => {
+    const t = await landedOnRpc();
+    try {
+      expect(await t.run(["--logs-window", "5"])).toBe(0);
+      expect(t.main.ranges).toEqual([[7, 11]]);
+    } finally { t.stop(); }
+  });
+
+  test("bad --logs-rpc, --logs-window or --logs-tries is a usage error", () => {
+    const base = ["--chain", "918453", "--rpc", "http://rpc.test", "--sheet", "s", "--signer", "keystore:/k", "--core-sha", "a".repeat(40)];
+    expect(parseCli(base).logs).toBeUndefined();
+    expect(parseCli([...base, "--logs-rpc", "http://logs.test"]).logs).toMatchObject({ logsRpc: "http://logs.test" });
+    for (const bad of [["--logs-rpc", "logs.test"], ["--logs-window", "0"], ["--logs-tries", "x"], ["--logs-window", "-5"]]) {
+      expect(() => parseCli([...base, ...bad])).toThrow(expect.objectContaining({ kind: "USAGE" }));
+    }
+  });
+});
+
+describe("the real chain reader walks the log range in windows and reads only", () => {
+  test("windows of LOG_WINDOW from the stage block, ExecutionSuccess and ExecutionFailure of the Safe address only, oldest first, stopping at the first window that holds an event", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 9000, executions: [
+      { block: 2100, txHash: LANDED_TX, safeTxHash: `0x${"11".repeat(32)}`, logIndex: 3, success: false },
+      { block: 2050, txHash: LANDED_TX, safeTxHash: `0x${"22".repeat(32)}`, logIndex: 1 },
+      { block: 4500, txHash: LANDED_TX, safeTxHash: `0x${"33".repeat(32)}` },
+    ] });
+    try {
+      const out = await realProveChain.executions(rpcHandle(rpc.url), 0);
+      expect(LOG_WINDOW).toBe(2000n);
+      expect(rpc.ranges).toEqual([[0, 1999], [2000, 3999]]);
+      expect(out).toEqual([
+        { txHash: LANDED_TX, safeTxHash: `0x${"22".repeat(32)}`, success: true, block: 2050, logIndex: 1 },
+        { txHash: LANDED_TX, safeTxHash: `0x${"11".repeat(32)}`, success: false, block: 2100, logIndex: 3 },
+      ]);
+      expect(rpc.calls.every((m) => m === "eth_blockNumber" || m === "eth_getLogs")).toBe(true);
+    } finally { rpc.stop(); }
+  });
+  test("with no event the scan walks to the latest block and returns nothing", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 5000 });
+    try {
+      expect(await realProveChain.executions(rpcHandle(rpc.url), 0)).toEqual([]);
+      expect(rpc.ranges).toEqual([[0, 1999], [2000, 3999], [4000, 5000]]);
+    } finally { rpc.stop(); }
+  });
+  test("a log read that fails is refused (RPC_REFUSED), not treated as an empty range, and not retried", async () => {
+    const rpc = logsRpc({ safe: SAFE_ADDR, latest: 10, refuse: ["eth_getLogs"] });
+    try {
+      await expect(realProveChain.executions(rpcHandle(rpc.url), 0)).rejects.toThrow(/RPC 127\.0\.0\.1 refused eth_getLogs for blocks 0 to 10/);
+      expect(rpc.calls.filter((m) => m === "eth_getLogs")).toHaveLength(1);
+    } finally { rpc.stop(); }
   });
 });
