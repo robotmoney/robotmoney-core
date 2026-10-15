@@ -5,7 +5,7 @@
 # --------------------
 # Runbook §5.5 said both harnesses raise pages. `submit-receipt-worker.sh` had no
 # alerting code at all — its "ALERT" was an `echo … >&2`, which under `nohup`
-# reaches nobody. `watch-released-drafts.sh` posted only when FUSION_ALERT_WEBHOOK
+# reaches nobody. `watch-released-drafts.sh` (deleted by issue 1698) posted only when FUSION_ALERT_WEBHOOK
 # was set AND curl AND jq happened to be on PATH, with no startup validation and
 # with delivery failure discarded by `|| true`; both of its conditions shared one
 # dedup key, collapsing a quarantined poison range and a wedged cursor into one

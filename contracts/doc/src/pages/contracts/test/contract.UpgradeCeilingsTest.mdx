@@ -1,0 +1,49 @@
+---
+title: "UpgradeCeilingsTest"
+description: "ADR-0014 §7: the fixed ceilings are `constant`s in implementation bytecode. No role, setter or initializer can change one, and an upgrade may keep or tighten a ceiling but never loosen it. Each value of the ADR §7 table is pinned here in its safe direction: a bound on what governance may set can only shrink (`&lt;=`), a floor can only rise (`>=`). Raising a ceiling, or lowering a floor, needs a new ADR, not an edit to this test."
+---
+
+# UpgradeCeilingsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/UpgradeCeilings.t.sol)
+
+**Inherits:** Test
+
+**Title:** UpgradeCeilingsTest
+
+ADR-0014 §7: the fixed ceilings are `constant`s in implementation bytecode. No role,
+setter or initializer can change one, and an upgrade may keep or tighten a ceiling but
+never loosen it. Each value of the ADR §7 table is pinned here in its safe direction: a
+bound on what governance may set can only shrink (`&lt;=`), a floor can only rise (`>=`).
+Raising a ceiling, or lowering a floor, needs a new ADR, not an edit to this test.
+
+<i>
+
+The constants are read from fresh implementations, which is where a new implementation
+would carry a different value. The gas floors are part of the table: lowering one would
+bring back the opaque out-of-gas failures core 1482 / 1513 removed.
+
+</i>
+
+## Functions
+
+<a id="test_ceilingsneverloosened"></a>
+
+### test_ceilingsNeverLoosened
+
+```solidity
+function test_ceilingsNeverLoosened() public;
+```
+
+<a id="test_initializerhonourstheceiling"></a>
+
+### test_initializerHonoursTheCeiling
+
+A ceiling bounds the initializer exactly as it bounds the setter (ADR-0014 §7): an
+initial exit fee above `MAX_EXIT_FEE_BPS` reverts `InvalidFee` inside the proxy's
+deployment, so no deployment can start above a ceiling either.
+
+```solidity
+function test_initializerHonoursTheCeiling() public;
+```
+

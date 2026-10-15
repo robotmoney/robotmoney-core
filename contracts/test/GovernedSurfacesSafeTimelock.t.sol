@@ -21,6 +21,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ShortlistStubSwapRouter} from "./ProtocolAssetVaultShortlist.t.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
@@ -59,15 +60,15 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         timelock = _newGovTimelock(safe, DELAY);
 
         usdc = new MockUsdc();
-        core = new RobotMoneyVault(
+        core = Proxied.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, address(this), address(this)
         );
-        gateway = new RobotMoneyGateway(usdc, core, address(this), pauser, address(0));
-        ic = new InvestmentCommitteePolicy(address(this), address(gateway));
-        registry = new VaultRegistry(address(this));
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        gateway = Proxied.robotMoneyGateway(usdc, core, address(this), pauser, address(0));
+        ic = Proxied.investmentCommitteePolicy(address(this), address(gateway));
+        registry = Proxied.vaultRegistry(address(this));
+        router = Proxied.portfolioRouter(address(usdc), address(registry), address(this));
         gov = new RouterGovernance(address(router), address(this));
-        agentVault = new AgentTokenVault(
+        agentVault = Proxied.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(new ShortlistStubSwapRouter())),
             10_000_000 * ONE_USDC,
@@ -218,7 +219,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     ///         is a Safe-scheduled operation).
     function test_routerGovernance_setReceiptContract_afterHandover_viaSafeThenTimelock() public {
         ConsensusRecommendationReceipt register =
-            new ConsensusRecommendationReceipt(address(this), address(gateway), address(ic));
+            Proxied.consensusRecommendationReceipt(address(this), address(gateway), address(ic));
         assertEq(address(gov.receiptContract()), address(0));
         _runChecked(
             address(gov),

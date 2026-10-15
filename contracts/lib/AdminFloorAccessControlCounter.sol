@@ -8,9 +8,12 @@
 //            that one is not usable here: AccessControlEnumerable's role
 //            membership set pushes the EIP-170-tight vault family past the
 //            24_576-byte runtime code-size cap.)
+// (Upgradeable parents: docs/adr/ADR-0014-governed-upgrades-and-freeze.md §3.)
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /// @title AdminFloorAccessControlCounter
 /// @notice `AccessControl` with a "last-admin floor" — the final holder of the
@@ -39,7 +42,11 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 ///         mutated, so when an `ADMIN_ROLE` revoke is in flight the current
 ///         member count still includes the account being removed; a count of
 ///         exactly 1 therefore means this is the last admin.
-abstract contract AdminFloorAccessControlCounter is AccessControl {
+///
+///         ADR-0014: the parent is OZ `AccessControlUpgradeable` (role data in an ERC-7201
+///         namespace). `adminCount` is this base's only linear slot; `__gap` reserves the
+///         rest of a 50-slot block so a later field here never shifts a derived vault's state.
+abstract contract AdminFloorAccessControlCounter is AccessControlUpgradeable {
     /// @notice The role subject to the last-admin floor. Concrete contracts
     ///         declare their own public `ADMIN_ROLE` constant with the same
     ///         value; this internal mirror is what the floor checks against.
@@ -48,11 +55,15 @@ abstract contract AdminFloorAccessControlCounter is AccessControl {
     /// @notice Number of accounts currently holding the floor-protected role.
     uint256 public adminCount;
 
+    /// @dev Storage gap (ADR-0014 §8): a new field here takes one slot from the gap, so every
+    ///      derived vault's slots stay put. The layout gate allows exactly that and nothing else.
+    uint256[49] private __gap;
+
     /// @notice Revoking the sole `ADMIN_ROLE` holder is forbidden — it would
     ///         leave the contract with zero admins and brick all admin paths.
     error LastAdminFloor();
 
-    /// @inheritdoc AccessControl
+    /// @inheritdoc AccessControlUpgradeable
     /// @dev Track `ADMIN_ROLE` membership so the last-admin floor can be
     ///      enforced without enumeration. Only increments on a real (new) grant.
     function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
@@ -61,7 +72,7 @@ abstract contract AdminFloorAccessControlCounter is AccessControl {
         return granted;
     }
 
-    /// @inheritdoc AccessControl
+    /// @inheritdoc AccessControlUpgradeable
     /// @dev Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
     ///      both public setters route through here. Decrements only on a real
     ///      (effective) revoke.

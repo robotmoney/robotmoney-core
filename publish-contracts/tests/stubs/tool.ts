@@ -20,6 +20,7 @@ interface Cfg {
   chainId: number;
   vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
                                            // and its FIRST broadcast transaction is the deployer's CREATE of it (QA plan v1 C2: the receipt's contractAddress)
+  upgradeMode?: string;                    // the upgrade_mode every stub manifest names (default upgradeable, issue 1809)
   createdOut?: Record<string, string>;     // script file -> the address that CREATE receipt names instead (a manifest that is not the created contract)
   revertedReceipt?: Record<string, number>; // script file -> the index of a broadcast receipt whose status is 0x0 (forge still reported success)
   staleNonceReads?: Record<string, number>; // script file -> how many `cast nonce` reads of the sender after its successful broadcast answer the nonce from BEFORE it
@@ -101,6 +102,13 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
         // issue 1705 C4: the vault stage's three lending adapters (the verify sheet reads them from the vault manifest)
         aave_adapter: addr(0xada1), compound_adapter: addr(0xada2), moonwell_flagship_adapter: addr(0xada3),
+        // issue 1809 (ADR-0014): each proxy stage names the implementation behind its proxy, the authority it was born with (the authority stage's timelock, the
+        // `timelock` above) and the release mode; the libs stage names the ExclusionLedgerFactory the vault stage reads. tests/harness.ts healthyProxyReader answers the read-back.
+        // The authority is the one the script was given, as the real scripts write it: UPGRADE_AUTHORITY on a proxy stage, TIMELOCK_ADDRESS on the single-vault
+        // redeploy (RedeployProtocolAssetVault.s.sol, QA plan v1 L1), the stub timelock otherwise.
+        vault_implementation: addr(0x2001), registry_implementation: addr(0x2002), router_implementation: addr(0x2003), gateway_implementation: addr(0x2004),
+        policy_implementation: addr(0x2006), consensus_receipt_implementation: addr(0x2007), upgrade_authority: process.env.UPGRADE_AUTHORITY || process.env.TIMELOCK_ADDRESS || addr(0x1008), upgrade_mode: cfg.upgradeMode ?? "upgradeable",
+        exclusion_ledger_factory: addr(0x100b),
       }));
     }
   };

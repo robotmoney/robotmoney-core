@@ -56,6 +56,17 @@
 // Refused (GOVERN, nothing scheduled) for a token that is not an active asset or a vault whose ADMIN_ROLE the timelock does not hold; a guard already in effect is recorded as
 // skipped. It reads each guard back. Runs on 8453 in production and in a rehearsal, never in stage 13; the stage 12 verifier requires a non-zero minUsdcOut on every active asset
 // of an OPEN basket, so it runs in the same sitting as the unpauses. unwind-guard.ts has the why. Evidence: the run manifest's `unwind_guards` (a record).
+//   upgrade-proxy                on demand (issue 1809, ADR-0014 §4), `--admin-arg proxy=<name> implementation=0x.. [call=0x..] [build=DIR]`: ONE timelock operation,
+// proxy.upgradeToAndCall(implementation, call) on one governed proxy (the timelock is its upgrade authority, set once; no role and no EOA can upgrade). Refused (GOVERN, nothing
+// scheduled) when the proxy is frozen, its authority is not the timelock, an ERC-1967 admin or beacon slot is set, or the target has no code, is no UUPS implementation, has
+// unlocked initializers or differs from the build artifact (DIR, default the checkout's out/). An implementation the proxy already runs is recorded as skipped. It reads the
+// implementation slot back. Every chain and kind, never in stage 13; the 48 hour delay is the holders' window, withdrawals stay open the whole time (ADR-0014 §6).
+// Evidence: the run manifest's `proxy_upgrades`.
+//   freeze-proxy                 on demand (issue 1809, ADR-0014 §5), `--admin-arg proxy=<name>|all [build=DIR]`: ONE timelock operation, proxy.freezeUpgrades(liveImplementation,
+// liveCodeHash) on one proxy or (all) on every proxy not yet frozen, the arguments read from the chain when the round is planned. One-way: nothing unfreezes. Refused when the live
+// implementation is not the reviewed build, the authority is not the timelock, an admin or beacon slot is set, or an upgrade-proxy round of the proxy is scheduled and not executed.
+// A proxy already frozen (frozen-at-deploy) is skipped. It reads upgradesFrozen() back. Every chain and kind, never in stage 13. Evidence: the run manifest's `proxy_freezes`.
+// upgrade-rows.ts has the checks. The stage 12 verifier then expects each upgraded proxy's slot on the upgrade's target and each frozen proxy frozen.
 //   redeploy-vault              on demand (issue 1796), no arguments: the Safe, through the timelock, replaces ONE vault of the live deployment (rmPROTO) with the one the `redeploy-vault`
 // verb deployed. ONE timelock batch of seven calls (new.setRegistry(registry), registry.registerVault(new), router.setVaultCap(new, vaultCap(old)), registry.migrateEligibility(new, true,
 // five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits()) so no observer sees a router that weights a paused, retired or uncapped vault.
@@ -80,7 +91,7 @@
 // command, and the same command resumes the stage.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, toHex, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiItem, toBytes, toHex, type AbiFunction, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
 import {
   APPLY_ROW, GOVERNANCE_WIRING_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, RECEIPT_ROLE_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, applyWiringProblems, buildApplyCalls, planApply,
@@ -96,6 +107,15 @@ import {
 } from "./redeploy-vault.ts";
 import { PublishError } from "./errors.ts";
 import {
+  FREEZE_KEYS, FREEZE_ROW, UPGRADE_KEYS, UPGRADE_ROW, buildFreezeCall, buildUpgradeCall, freezeArgsText, freezeReadBackProblems, freezeRecordKey, freezeRefusals, freezeTargetOf, parseFreezeArgs,
+  parseUpgradeArgs, upgradeArgsText, upgradeReadBackProblems, upgradeRecordKey, upgradeRefusals, type FreezeArgs, type FreezeWant, type ImplementationRead, type UpgradeArgs, type UpgradeWant,
+} from "./upgrade-rows.ts";
+import { INITIALIZABLE_SLOT, PROXIABLE_UUID_SIG, ZERO_WORD, initializableOf, readProxyState, type ProxyState } from "./proxies.ts";
+import { proxyByName, tableProxies, type TableProxy } from "./stage-table.ts";
+import { compareCodeAndLinks, loadArtifact, type CodeHashResult } from "./verify/codehash.ts";
+import type { ChainReader } from "./verify/types.ts";
+import { join } from "node:path";
+import {
   REGISTER_ROW, COMMIT_EXPIRY_BLOCKS, COMMIT_REVEAL_MARGIN_BLOCKS, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls,
   buildSelfAuthCalls, registerReadBackProblems, registerRecordKey, selfAuthCommitHash, selfAuthCommitmentKey, selfAuthEvidence, selfAuthPolicyProblems, selfAuthStateOf,
   type RegisterCall, type SelfAuthPhase, type SelfAuthRecord,
@@ -107,7 +127,7 @@ import type { DeploymentKind } from "./chains.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
-import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
+import { VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
 import { STAGE13_UNPAUSE_ROWS, UNPAUSE_ROW_NAMES, vaultOfUnpauseRow } from "./vault-rules.ts";
 import {
   cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, proposeTx, roleId, scheduleOnTimelock, signTx, timelockMinDelay,
@@ -180,7 +200,7 @@ export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKi
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW) return undefined;
+  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === UNWIND_GUARD_ROW || row === UPGRADE_ROW || row === FREEZE_ROW) return undefined;
   if (row === REGISTER_ROW) {
     return chainId === BASE_CHAIN_ID && kind !== "rehearsal"
       ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW}, ${APPLY_ROW}, ${CLEAR_ROW} and ${UNWIND_GUARD_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
@@ -465,6 +485,8 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
   if (row === UNWIND_GUARD_ROW) throw new PublishError("USAGE", `--row ${UNWIND_GUARD_ROW} is the on-demand emergency unwind guard of one basket vault: it needs --admin-arg vault=PROTO|AGENT|RWA token=0x..|all min-usdc-out=N max-loss-bps=N`);
+  if (row === UPGRADE_ROW) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} is the on-demand upgrade of one governed proxy (issue 1809): it needs --admin-arg proxy=<name> implementation=0x<address> [call=0x..] [build=DIR]`);
+  if (row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${FREEZE_ROW} is the on-demand permanent freeze of governed proxies (issue 1809): it needs --admin-arg proxy=<name>|all [build=DIR]`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
     const name = GOVERN_ROWS[n - 1];
@@ -472,7 +494,7 @@ export function resolveGovernRow(row: string): PlannedRow {
     return name;
   }
   if ((GOVERN_ROWS as readonly string[]).includes(row)) return row as GovernRowName;
-  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${CLEAR_ROW}, ${UNWIND_GUARD_ROW} --admin-arg K=V)`);
+  throw new PublishError("USAGE", `unknown govern row '${row}' (${GOVERN_ROWS.join(", ")}, or 1 to ${GOVERN_ROWS.length}; on demand: ${RECEIPT_ROW} --receipt-id 0x<bytes32>, ${APPLY_ROW} --receipt-id 0x<bytes32> --payload FILE, ${CLEAR_ROW}, ${UNWIND_GUARD_ROW} --admin-arg K=V, ${UPGRADE_ROW} --admin-arg K=V, ${FREEZE_ROW} --admin-arg K=V)`);
 }
 
 /** The calls of one unpause row. Empty means the sheet does not ask for it (the vault stays paused): the row is skipped. */
@@ -554,6 +576,10 @@ export interface GovernOpts {
   selfAdmin?: SelfAdminArgs;
   /** With `--row set-unwind-guard` only (QA plan v1 D7): the vault, the token (or `all`) and the guard values, as `--admin-arg` gave them. */
   unwindGuard?: UnwindGuardArgs;
+  /** With `--row upgrade-proxy` only (issue 1809): the proxy, the new implementation, the reinitializer calldata and the build, as `--admin-arg` gave them. */
+  proxyUpgrade?: UpgradeArgs;
+  /** With `--row freeze-proxy` only (issue 1809): the proxy (or `all`) and the build, as `--admin-arg` gave them. */
+  proxyFreeze?: FreezeArgs;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -566,7 +592,10 @@ export interface SelfAdminRecord { data?: Hex; nonce: number; want: string }
 /** `observed`: the read-back after the execute. `voted_weights_active` is recorded by the clear and redeploy rows (they prove the active vector is gone); an application records the effective vector only (issue 1698: its vector IS the active one). */
 /** `guard` (QA plan v1 D7): what a set-unwind-guard round sets, written before its schedule so a resume and the evidence entry name the same values. */
 export interface GuardRecord { vault: string; vault_address: string; tokens: string[]; min_usdc_out: string; override_allowed: boolean; max_loss_bps: number }
-export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
+/** Issue 1809: what an upgrade-proxy round sets and a freeze-proxy round fixes, written before its schedule so a resume and the evidence entry name the same values. */
+export interface UpgradeRecord { proxy: string; proxy_address: string; from_implementation: string; implementation: string; implementation_code_hash: string; call_data: string; build_dir: string; core_sha: string }
+export interface FreezeRecord { proxies: { name: string; proxy: string; implementation: string; code_hash: string }[]; build_dirs: Record<string, string>; core_sha: string }
+export interface RowRecord { round?: number; admin?: SelfAdminRecord; guard?: GuardRecord; upgrade?: UpgradeRecord; freeze?: FreezeRecord; apply?: { vaults: string[]; bps: number[]; payload_digest: string }; observed?: { voted_weights_active?: boolean; effective_vaults: string[]; effective_bps: number[] }; skipped?: { at: string; reason: string }; scheduled?: PhaseRecord; executed?: PhaseRecord; cancelled?: PhaseRecord }
 type GovernState = Record<string, RowRecord>;
 /** The `register` part of a register-committee record: what the batch was built from, and (QA plan v1 B6) the private self-authorization with its salt. */
 interface RegisterState { submitter: string; agent_label: string; gateway: string; ic_policy: string; valid_until: string; submitter_safe?: SubmitterSafeEvidence; self_authorization?: SelfAuthRecord }
@@ -610,9 +639,12 @@ const detected = new WeakMap<object, boolean>();
  * The exact command that resumes a pending run. Arguments that carry no secret are spelled out, the rest are the same as this run's. No row: the whole stage.
  * `guard`: the arguments of a set-unwind-guard run (QA plan v1 D7), spelled out as its `--admin-arg` flags.
  */
-export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string, guard?: UnwindGuardWant): string {
+export function resumeCommand(ctx: Pick<RunContext, "chainId" | "coreSha">, row?: string, payload?: string, guard?: UnwindGuardWant, proxyRow?: { upgrade?: UpgradeWant; freeze?: FreezeWant }): string {
   const selfAdmin = row === undefined ? undefined : SELF_ADMIN_ROWS.find((r) => row!.startsWith(`${r}-`));
-  if (row?.startsWith(`${UNWIND_GUARD_ROW}-`)) row = `${UNWIND_GUARD_ROW} ${guard ? unwindGuardArgsText(guard) : "--admin-arg K=V (the same --admin-arg values as this run)"}`;
+  const same = "--admin-arg K=V (the same --admin-arg values as this run)";
+  if (row?.startsWith(`${UNWIND_GUARD_ROW}-`)) row = `${UNWIND_GUARD_ROW} ${guard ? unwindGuardArgsText(guard) : same}`;
+  else if (row?.startsWith(`${UPGRADE_ROW}-`)) row = `${UPGRADE_ROW} ${proxyRow?.upgrade ? upgradeArgsText(proxyRow.upgrade) : same}`;
+  else if (row?.startsWith(`${FREEZE_ROW}-`)) row = `${FREEZE_ROW} ${proxyRow?.freeze ? freezeArgsText(proxyRow.freeze) : same}`;
   else if (row?.startsWith(`${RECEIPT_ROW}-`)) row = `${RECEIPT_ROW} --receipt-id ${row.slice(RECEIPT_ROW.length + 1)}`;
   else if (row?.startsWith(`${REDEPLOY_ROW}-`)) row = REDEPLOY_ROW;
   else if (row?.startsWith(`${APPLY_ROW}-`)) row = `${APPLY_ROW} --receipt-id ${row.slice(APPLY_ROW.length + 1)}${payload === undefined ? " --payload FILE" : ` --payload ${payload}`}`;
@@ -647,7 +679,10 @@ async function waitReady(ctx: RunContext, o: GovernOpts, api: GovernApi, handle:
     }
     if (remaining > maxWait) {
       const guard = resumeRow?.startsWith(`${UNWIND_GUARD_ROW}-`) && o.unwindGuard !== undefined ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
-      const next = resumeCommand(ctx, resumeRow, resumePayload, guard);
+      const names = (): string[] => { try { return tableProxies(getStageTable()).map((x) => x.name); } catch { return []; } };
+      const proxyRow = resumeRow?.startsWith(`${UPGRADE_ROW}-`) && o.proxyUpgrade !== undefined ? { upgrade: parseUpgradeArgs(o.proxyUpgrade, names()) }
+        : resumeRow?.startsWith(`${FREEZE_ROW}-`) && o.proxyFreeze !== undefined ? { freeze: parseFreezeArgs(o.proxyFreeze, names()) } : undefined;
+      const next = resumeCommand(ctx, resumeRow, resumePayload, guard, proxyRow);
       const what = rows.length === 1 ? `govern row ${rows[0]} is scheduled` : `govern rows ${rows.join(", ")} are scheduled`;
       throw new PublishError("GOVERN_PENDING", `${what} and become${rows.length === 1 ? "s" : ""} ready at ${latest} (${new Date(Number(latest) * 1000).toISOString()}, in about ${remaining} s). After that time run: ${next}`,
         { ids: ops.map((x) => x.id), row: rows[0], rows, ready_at: latest.toString(), remaining, next_command: next });
@@ -713,13 +748,21 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const clearing = o.row === CLEAR_ROW;
   const redeploying = o.row === REDEPLOY_ROW;
   const guarding = o.row === UNWIND_GUARD_ROW;
+  const upgrading = o.row === UPGRADE_ROW;
+  const freezing = o.row === FREEZE_ROW;
   if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
   if (o.unwindGuard !== undefined && !guarding) throw new PublishError("USAGE", `--admin-arg vault, token, min-usdc-out, max-loss-bps and override-allowed go with --row ${UNWIND_GUARD_ROW} only`);
+  if (o.proxyUpgrade !== undefined && !upgrading) throw new PublishError("USAGE", `--admin-arg ${UPGRADE_KEYS.join(", ")} go with --row ${UPGRADE_ROW} only`);
+  if (o.proxyFreeze !== undefined && !freezing) throw new PublishError("USAGE", `--admin-arg ${FREEZE_KEYS.join(", ")} go with --row ${FREEZE_ROW} only`);
   // QA plan v1 D7: the row's arguments are checked before the Safe is read or anything is sent
   const guardWant = guarding ? parseUnwindGuardArgs(o.unwindGuard) : undefined;
+  // issue 1809: so are the upgrade and freeze rows', against the stage table's proxies
+  const proxyNames = upgrading || freezing ? tableProxies(getStageTable()).map((x) => x.name) : [];
+  const upgradeWant = upgrading ? parseUpgradeArgs(o.proxyUpgrade, proxyNames) : undefined;
+  const freezeWant = freezing ? parseFreezeArgs(o.proxyFreeze, proxyNames) : undefined;
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || guarding || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || guarding || upgrading || freezing || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
@@ -1320,6 +1363,197 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     save();
     ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: UNWIND_GUARD_ROW, key: name, vault: want.vault });
     return { rows: [name], skipped: state[name]?.skipped && !state[name]?.executed ? [name] : [], opIds };
+  }
+
+  // ---- issue 1809: the governed proxies (ADR-0014 §4-§5) -----------------------------------------------------------------------------------------------------
+
+  /** The read-only surface proxies.ts reads a proxy through, over the Safe handle's client. */
+  const proxyChain: Pick<ChainReader, "getCode" | "getStorageAt" | "read"> = {
+    getCode: async (address) => ((await handle.client.getCode({ address })) ?? "0x") as Hex,
+    getStorageAt: async (address, slot) => ((await handle.client.getStorageAt({ address, slot })) ?? ZERO_WORD) as Hex,
+    read: async (address, signature, args = []) => { const item = parseAbiItem(signature) as AbiFunction; return handle.client.readContract({ address, abi: [item], functionName: item.name, args } as never); },
+  };
+  const proxyAddressOf = (px: TableProxy): Address => readManifestField(ctx, manifestRef(px.stage, px.field)) as Address;
+  /** The build a proxy's implementation is compared with: the row's `build=`, else the build of the proxy's last executed upgrade round, else this checkout's out/. */
+  const buildDirFor = (px: TableProxy, given: string | undefined): string => {
+    if (given !== undefined) return given;
+    const last = [...((manifest as { proxy_upgrades?: { proxy?: string; build_dir?: string; execute_tx?: string }[] }).proxy_upgrades ?? [])].reverse().find((e) => e?.proxy === px.name && typeof e.execute_tx === "string");
+    return last?.build_dir ?? join(ctx.coreDir, "out");
+  };
+  /**
+   * The runtime code at `address` against the build artifact of `artifact` in `dir` (immutables and links masked), then every library it links against that
+   * library's build (ADR-0014 §9: a masked link would otherwise pass unreviewed library code). A missing artifact is a mismatch, never a pass.
+   */
+  const againstBuild = async (code: Hex, dir: string, artifact: string): Promise<CodeHashResult> => {
+    try { return await compareCodeAndLinks(proxyChain.getCode, code, loadArtifact(dir, artifact), dir); } catch (e) { return { ok: false, detail: `no build to compare with: ${(e as Error).message}` }; }
+  };
+  /** Block timestamp of a recorded transaction, for the evidence entries. */
+  const txTime = async (hash: string): Promise<number> => {
+    const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+    return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  };
+  /** A round whose operation the operator cancelled through the Safe is scheduled again under the same round (a cancelled id is free), like set-unwind-guard. */
+  const reopenCancelled = async (name: string, rowName: string): Promise<void> => {
+    const prev = state[name];
+    if (!prev?.scheduled?.operation_id || rowComplete(prev)) return;
+    const st = await api.operationState(handle, a.timelock, prev.scheduled.operation_id as Hex);
+    if (st.exists || st.done) return;
+    const n = prev.round ?? 1;
+    let k = 1;
+    while (state[`${roundKey(name, n)}:cancelled-${k}`]) k++;
+    state[`${roundKey(name, n)}:cancelled-${k}`] = prev;
+    state[name] = { round: n };
+    save();
+    ctx.log.log("info", "govern.round_rescheduled", { row: rowName, key: name, round: n, cancelled_operation: prev.scheduled.operation_id });
+  };
+
+  if (upgrading) {
+    // ONE timelock operation: proxy.upgradeToAndCall(implementation, call). upgrade-rows.ts has every refusal and why.
+    const want = upgradeWant!;
+    const px = proxyByName(getStageTable(), want.proxy);
+    const proxy = proxyAddressOf(px);
+    const name = upgradeRecordKey(want);
+    const call = buildUpgradeCall(px.name, proxy, want);
+    const buildDir = buildDirFor(px, want.build);
+    await reopenCancelled(name, UPGRADE_ROW);
+    if (!rowComplete(state[name])) {
+      const p = { timelock: a.timelock, calls: [{ target: call.target, data: call.data }], salt: salt(labelOf(name)), form: "single" as const };
+      const id = await api.operationId(handle, p);
+      const prior = state[name]?.scheduled?.operation_id;
+      if (prior !== undefined && prior.toLowerCase() !== id.toLowerCase()) throw new PublishError("USAGE", `${name} was already used for a different call (operation ${prior}, this call is ${id})`, { row: UPGRADE_ROW, prior, id });
+      const live = await readProxyState(proxyChain, proxy);
+      if (state[name]?.scheduled === undefined && !(await api.operationState(handle, a.timelock, id)).exists) {
+        // Nothing of this round is on the timelock yet: an implementation already in place is recorded as skipped; anything the contract would revert after the delay is refused.
+        if (live.implementation.toLowerCase() === want.implementation.toLowerCase()) {
+          const reason = `${px.name} ${proxy} already runs ${want.implementation}`;
+          state[name] = { ...(state[name] ?? { round: 1 }), skipped: { at: new Date().toISOString(), reason } };
+          save();
+          ctx.log.log("info", "govern.row_skipped", { row: UPGRADE_ROW, key: name, reason });
+          return { rows: [name], skipped: [name], opIds };
+        }
+        const code = await proxyChain.getCode(want.implementation);
+        let uuid: Hex | null = null;
+        try { uuid = (await proxyChain.read(want.implementation, PROXIABLE_UUID_SIG)) as Hex; } catch { uuid = null; }
+        const target: ImplementationRead = { address: want.implementation, code, initializerVersion: initializableOf(await proxyChain.getStorageAt(want.implementation, INITIALIZABLE_SLOT)).version, proxiableUUID: uuid };
+        const refusals = upgradeRefusals({ name: px.name, live, target, build: await againstBuild(code, buildDir, px.artifact), timelock: a.timelock });
+        if (refusals.length) throw new PublishError("GOVERN", `govern row ${UPGRADE_ROW}: ${refusals.join("; ")}. Nothing was sent`, { row: UPGRADE_ROW, proxy: px.name, problems: refusals });
+        state[name] = {
+          ...(state[name] ?? { round: 1 }),
+          upgrade: { proxy: px.name, proxy_address: proxy, from_implementation: live.implementation, implementation: want.implementation, implementation_code_hash: keccak256(code), call_data: want.call, build_dir: buildDir, core_sha: ctx.coreSha },
+        };
+        save();
+      }
+      const readBack = async () => upgradeReadBackProblems(px.name, await readProxyState(proxyChain, proxy), want, a.timelock);
+      // The Safe transaction names the proxy, the implementation it runs now and the one it will run, so the signers see what changes.
+      await round(name, {
+        id, description: `${px.name} upgrade to ${want.implementation}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${UPGRADE_ROW}: ${px.name} ${proxy} from ${live.implementation} to ${want.implementation}: ${call.label}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${UPGRADE_ROW} execute` }),
+      }, UPGRADE_ROW);
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, UPGRADE_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, UPGRADE_ROW, "executed", r.executed);
+    }
+    // The evidence entry (`proxy_upgrades`): a record. The verifier reads the slot and the code from the chain.
+    const r = state[name];
+    if (r?.executed?.tx_hash && r.scheduled?.tx_hash && r.upgrade) {
+      const entry = {
+        step: UPGRADE_ROW, key: name, round: r.round ?? 1, ...r.upgrade, timelock: a.timelock,
+        operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await txTime(r.scheduled.tx_hash),
+        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await txTime(r.executed.tx_hash),
+      };
+      const list = ((manifest as { proxy_upgrades?: { operation_id?: string }[] }).proxy_upgrades ??= []);
+      const i = list.findIndex((x) => x.operation_id?.toLowerCase() === String(entry.operation_id).toLowerCase());
+      if (i >= 0) list[i] = entry; else list.push(entry);
+    }
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: UPGRADE_ROW, key: name, proxy: px.name });
+    return { rows: [name], skipped: state[name]?.skipped && !state[name]?.executed ? [name] : [], opIds };
+  }
+
+  if (freezing) {
+    // ONE timelock operation: freezeUpgrades(liveImplementation, liveCodeHash) per proxy not yet frozen. upgrade-rows.ts has every refusal and why.
+    const want = freezeWant!;
+    const t = getStageTable();
+    const pxs = want.proxy === "all" ? tableProxies(t) : [proxyByName(t, want.proxy)];
+    const reads: { px: TableProxy; proxy: Address; live: ProxyState }[] = [];
+    for (const px of pxs) { const proxy = proxyAddressOf(px); reads.push({ px, proxy, live: await readProxyState(proxyChain, proxy) }); }
+    const prefix = `${FREEZE_ROW}-${want.proxy}-`;
+    // A round planned earlier and not complete is resumed with ITS targets (the ones the Safe signed), never re-planned from the chain.
+    const open = Object.entries(state).filter(([k, r]) => k.startsWith(prefix) && !k.includes(":") && r?.freeze && !rowComplete(r));
+    let name: string;
+    let targets: FreezeRecord["proxies"];
+    if (open.length > 0) {
+      [name] = open[open.length - 1]!;
+      targets = state[name]!.freeze!.proxies;
+    } else {
+      const toFreeze = reads.filter((r) => r.live.frozen !== true);
+      if (toFreeze.length === 0) {
+        // Every named proxy reads frozen: an executed round is reprinted; a proxy frozen at deploy (or by hand) is recorded as skipped. Nothing is sent.
+        const done = Object.entries(state).filter(([k, r]) => k.startsWith(prefix) && !k.includes(":") && r?.executed).pop();
+        if (done) {
+          name = done[0];
+          const r = done[1];
+          if (r.scheduled) emitPhase(o, FREEZE_ROW, "scheduled", r.scheduled);
+          if (r.executed) emitPhase(o, FREEZE_ROW, "executed", r.executed);
+          targets = r.freeze?.proxies ?? [];
+        } else {
+          name = `${prefix}already-frozen`;
+          const reason = `${pxs.map((x) => x.name).join(", ")} already read${pxs.length === 1 ? "s" : ""} upgradesFrozen() true`;
+          state[name] = { round: 1, skipped: { at: new Date().toISOString(), reason } };
+          save();
+          ctx.log.log("info", "govern.row_skipped", { row: FREEZE_ROW, key: name, reason });
+          return { rows: [name], skipped: [name], opIds };
+        }
+      } else {
+        // Plan now, from the chain: each proxy's live implementation and its code hash. Refused before anything is scheduled when the contract would revert after the delay,
+        // or when the live implementation is not the reviewed build (the freeze would fix it forever).
+        const upgradesPending = (proxyName: string): string | undefined =>
+          Object.entries(state).find(([k, r]) => k.startsWith(`${UPGRADE_ROW}-${proxyName}-`) && !k.includes(":") && r?.scheduled && !rowComplete(r))?.[0];
+        const refusals: string[] = [];
+        const dirs: Record<string, string> = {};
+        for (const r of toFreeze) {
+          dirs[r.px.name] = buildDirFor(r.px, want.build);
+          refusals.push(...freezeRefusals({ name: r.px.name, live: r.live, build: await againstBuild(r.live.implementationCode, dirs[r.px.name]!, r.px.artifact), timelock: a.timelock, pendingUpgrade: upgradesPending(r.px.name) }));
+        }
+        if (refusals.length) throw new PublishError("GOVERN", `govern row ${FREEZE_ROW}: ${refusals.join("; ")}. Nothing was sent`, { row: FREEZE_ROW, proxy: want.proxy, problems: refusals });
+        targets = toFreeze.map((r) => { const f = freezeTargetOf(r.live); return { name: r.px.name, proxy: r.proxy, implementation: f.implementation, code_hash: f.codeHash }; });
+        name = freezeRecordKey(want.proxy, targets.map((x) => buildFreezeCall(x.name, x.proxy as Address, x.implementation as Address, x.code_hash as Hex)));
+        if (!state[name]?.freeze) { state[name] = { ...(state[name] ?? { round: 1 }), freeze: { proxies: targets, build_dirs: dirs, core_sha: ctx.coreSha } }; save(); }
+      }
+    }
+    // a round the operator cancelled through the Safe is scheduled again with the targets it was planned with (the record survives the reopen)
+    const planned = state[name]?.freeze;
+    await reopenCancelled(name, FREEZE_ROW);
+    if (planned && !state[name]?.freeze) { state[name] = { ...state[name]!, freeze: planned }; save(); }
+    if (!rowComplete(state[name])) {
+      const calls = targets.map((x) => buildFreezeCall(x.name, x.proxy as Address, x.implementation as Address, x.code_hash as Hex));
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(labelOf(name)), form: calls.length === 1 ? ("single" as const) : ("batch" as const) };
+      const id = await api.operationId(handle, p);
+      const readBack = async () => freezeReadBackProblems(targets.map((x) => ({ name: x.name, implementation: x.implementation as Address })), await Promise.all(targets.map((x) => readProxyState(proxyChain, x.proxy as Address))));
+      // The Safe transaction names every proxy, the implementation it freezes on and that code hash: the signers see exactly what is fixed forever.
+      await round(name, {
+        id, description: `freeze ${targets.map((x) => x.name).join(", ")}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${FREEZE_ROW}: PERMANENT, no upgrade can ever run again on ${targets.map((x) => `${x.name} ${x.proxy}`).join(", ")}: ${calls.map((c) => c.label).join("; ")}` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${FREEZE_ROW} execute` }),
+      }, FREEZE_ROW);
+    }
+    // The evidence entry (`proxy_freezes`): a record. The verifier reads upgradesFrozen() from the chain.
+    const r = state[name];
+    if (r?.executed?.tx_hash && r.scheduled?.tx_hash && r.freeze) {
+      const entry = {
+        step: FREEZE_ROW, key: name, round: r.round ?? 1, proxies: r.freeze.proxies, build_dirs: r.freeze.build_dirs, core_sha: r.freeze.core_sha, timelock: a.timelock,
+        operation_id: r.scheduled.operation_id, schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await txTime(r.scheduled.tx_hash),
+        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await txTime(r.executed.tx_hash),
+      };
+      const list = ((manifest as { proxy_freezes?: { operation_id?: string }[] }).proxy_freezes ??= []);
+      const i = list.findIndex((x) => x.operation_id?.toLowerCase() === String(entry.operation_id).toLowerCase());
+      if (i >= 0) list[i] = entry; else list.push(entry);
+    }
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: FREEZE_ROW, key: name, proxies: targets.map((x) => x.name) });
+    return { rows: [name], skipped: [], opIds };
   }
 
   /** The evidence entry of an executed redeploy round: the `vault_redeploys` entry the verb started, completed with the operation and the read-back (checked by evidence-check). */

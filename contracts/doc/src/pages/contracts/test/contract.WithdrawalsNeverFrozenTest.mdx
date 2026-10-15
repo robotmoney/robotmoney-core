@@ -5,7 +5,7 @@ description: "Withdrawals are never frozen, by anyone. Every shipped vault (rmUS
 
 # WithdrawalsNeverFrozenTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/WithdrawalsNeverFrozen.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/WithdrawalsNeverFrozen.t.sol)
 
 **Inherits:** Test
 
@@ -174,6 +174,18 @@ PortfolioRouter internal router;
 TimelockController internal timelock;
 ```
 
+### authority
+
+<i>
+
+ADR-0014: the timelock `DeployTimelock.runAuthority` deploys before every proxy.
+
+</i>
+
+```solidity
+address internal authority;
+```
+
 ### safe
 
 ```solidity
@@ -214,6 +226,36 @@ address internal alice = makeAddr("alice");
 
 ```solidity
 address internal bob = makeAddr("bob");
+```
+
+### icPolicy
+
+<i>
+
+The two committee proxies the upgrade test adds to the fixture, and its agent.
+
+</i>
+
+```solidity
+InvestmentCommitteePolicy internal icPolicy;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### upgradeAgent
+
+```solidity
+address internal upgradeAgent = makeAddr("upgrade-agent");
+```
+
+### upgradeRecipient
+
+```solidity
+address internal upgradeRecipient = makeAddr("upgrade-recipient");
 ```
 
 ## Functions
@@ -342,6 +384,289 @@ Gateway deposits revert DepositsArePaused; the Safe resumes them.
 ```solidity
 function test_gateway_withdrawsWhileGatewayAndVaultDepositsPaused() public;
 ```
+
+<a id="test_allvaults_exitsstayopenaftergovernedupgradeandfreeze"></a>
+
+### test_allVaults_exitsStayOpenAfterGovernedUpgradeAndFreeze
+
+Every vault is upgraded to a new implementation through the real Safe and the
+timelock at the Base delay, then frozen the same way. Every exit stays open: rmUSDC
+redeems and withdraws in full, each basket pays `redeemInKind` and the USDC `redeem`,
+with the emergency levers pulled after the freeze.
+
+```solidity
+function test_allVaults_exitsStayOpenAfterGovernedUpgradeAndFreeze() public;
+```
+
+<a id="test_allnineproxies_upgradethroughsafekeepspopulatedstate"></a>
+
+### test_allNineProxies_upgradeThroughSafeKeepsPopulatedState
+
+#1808 test plan: populated v1 proxies upgrade to a v2 through the real Safe and the
+timelock at the Base delay, all nine in one scheduled batch, and every piece of state
+survives: balances, allowances, roles, fees, caps, the gateway policy and windows,
+the router weights, the committee vote, the receipts and their release state, and
+the adapter position. The digests are read at the execute timestamp on both sides, so
+time-relative views (rolling windows) compare like for like. Then every exit runs
+synchronously on v2, and the committee surface still records.
+
+```solidity
+function test_allNineProxies_upgradeThroughSafeKeepsPopulatedState() public;
+```
+
+<a id="_populateforupgrade"></a>
+
+### _populateForUpgrade
+
+<i>
+
+State on every proxy, through the real Safe and timelock where governance owns it.
+
+</i>
+
+```solidity
+function _populateForUpgrade() internal;
+```
+
+<a id="_exitandrecordonv2"></a>
+
+### _exitAndRecordOnV2
+
+<i>
+
+Synchronous redemptions on every exit after the upgrade, and the committee still records.
+
+</i>
+
+```solidity
+function _exitAndRecordOnV2() internal;
+```
+
+<a id="_vote-uint16"></a>
+
+### _vote
+
+```solidity
+function _vote(uint16 weightBps)
+        internal
+        view
+        returns (IInvestmentCommitteePolicy.VoteParams memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| weightBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `IInvestmentCommitteePolicy.VoteParams` |  |
+
+<a id="_nineproxies"></a>
+
+### _nineProxies
+
+```solidity
+function _nineProxies() internal view returns (address[9] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[9]` |  |
+
+<a id="_upgradedigests"></a>
+
+### _upgradeDigests
+
+```solidity
+function _upgradeDigests() internal view returns (bytes32[9] memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `bytes32[9]` |  |
+
+<a id="_rolesdigest-address"></a>
+
+### _rolesDigest
+
+<i>
+
+The role holders the handover set: timelock admin, emergency key, deployer none.
+
+</i>
+
+```solidity
+function _rolesDigest(address p) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_rmusdcdigest"></a>
+
+### _rmUsdcDigest
+
+```solidity
+function _rmUsdcDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_basketdigest-basketvault"></a>
+
+### _basketDigest
+
+```solidity
+function _basketDigest(BasketVault v) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_routerdigest"></a>
+
+### _routerDigest
+
+```solidity
+function _routerDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_registrydigest"></a>
+
+### _registryDigest
+
+```solidity
+function _registryDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_gatewaydigest"></a>
+
+### _gatewayDigest
+
+```solidity
+function _gatewayDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_icdigest"></a>
+
+### _icDigest
+
+```solidity
+function _icDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_receiptdigest"></a>
+
+### _receiptDigest
+
+```solidity
+function _receiptDigest() internal view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_governtargets-address-bytes"></a>
+
+### _governTargets
+
+<i>
+
+The real governance route for a batch over several targets, in order.
+
+</i>
+
+```solidity
+function _governTargets(address[] memory targets, bytes[] memory calls) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| calls | `bytes[]` |  |
+
+<a id="_scheduletargets-address-bytes"></a>
+
+### _scheduleTargets
+
+```solidity
+function _scheduleTargets(address[] memory targets, bytes[] memory calls)
+        internal
+        returns (uint256[] memory values, bytes32 salt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| calls | `bytes[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| salt | `bytes32` |  |
 
 <a id="_buildothervaults-address"></a>
 

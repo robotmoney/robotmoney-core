@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use alloy_primitives::{keccak256, Address, Bytes, U256};
+use alloy_primitives::{keccak256, Address, U256};
 use alloy_sol_types::SolCall;
 use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture, IOnchainVaultRegistry};
 use serde_json::Value;
@@ -54,42 +54,12 @@ fn workspace_root() -> PathBuf {
     p
 }
 
-// ── VaultRegistry bytecode ───────────────────────────────────────────────────
-
-/// Load the VaultRegistry creation bytecode from the Foundry build artefact
-/// (`out/VaultRegistry.sol/VaultRegistry.json`) and append the ABI-encoded
-/// constructor argument `address admin` (left-padded to 32 bytes).
-///
-/// Requires `forge build` to have run first (the CI workflow does this via
-/// the "Install Foundry" and "Build test binaries" steps). In local
-/// development, run `forge build` from the workspace root before executing
-/// the registry tests.
-fn vault_registry_initcode(admin: Address) -> Bytes {
-    let artifact_path = workspace_root()
-        .join("out")
-        .join("VaultRegistry.sol")
-        .join("VaultRegistry.json");
-    let raw = std::fs::read_to_string(&artifact_path).unwrap_or_else(|e| {
-        panic!(
-            "Cannot read Foundry build artefact at {}; run `forge build` first: {e}",
-            artifact_path.display()
-        )
-    });
-    let json: Value = serde_json::from_str(&raw).expect("VaultRegistry.json is valid JSON");
-    let hex_with_prefix = json
-        .get("bytecode")
-        .and_then(|v| v.get("object"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| panic!("VaultRegistry.json missing bytecode.object"));
-    let hex = hex_with_prefix.trim_start_matches("0x");
-    let mut code =
-        hex::decode(hex).unwrap_or_else(|e| panic!("VaultRegistry bytecode is not valid hex: {e}"));
-    // ABI-encode `address admin`: left-pad to 32 bytes.
-    let mut arg = [0u8; 32];
-    arg[12..].copy_from_slice(admin.as_slice());
-    code.extend_from_slice(&arg);
-    Bytes::from(code)
-}
+// ── VaultRegistry deployment ─────────────────────────────────────────────────
+//
+// ADR-0014: VaultRegistry runs behind its own ERC1967Proxy, initialized in the proxy's
+// deployment. `rmpc_fork_e2e::proxied::deploy_vault_registry` deploys the implementation from the
+// Foundry build artefact (`out/VaultRegistry.sol/VaultRegistry.json`, so `forge build` must run
+// first) and the proxy with `initialize(admin, upgradeAuthority, mode)`.
 
 // ── Event signature hashes ───────────────────────────────────────────────────
 
@@ -204,9 +174,7 @@ fn registry_register_list() {
         .expect("fund deployer");
 
     // Deploy VaultRegistry with deployer as admin.
-    let initcode = vault_registry_initcode(deployer.address);
-    let registry_addr = deployer
-        .deploy(initcode, 3_000_000)
+    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
         .expect("deploy VaultRegistry");
     eprintln!("[registry_register_list] registry deployed at {registry_addr:#x}");
 
@@ -384,9 +352,7 @@ fn registry_status_change() {
         .expect("fund deployer");
 
     // Deploy and register.
-    let initcode = vault_registry_initcode(deployer.address);
-    let registry_addr = deployer
-        .deploy(initcode, 3_000_000)
+    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
         .expect("deploy VaultRegistry");
 
     let fake_vault: Address = "0x0000000000000000000000000000000000000002"
@@ -596,9 +562,7 @@ fn registry_empty_list() {
         .expect("fund deployer");
 
     // Deploy a fresh registry — no vaults registered.
-    let initcode = vault_registry_initcode(deployer.address);
-    let registry_addr = deployer
-        .deploy(initcode, 3_000_000)
+    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
         .expect("deploy VaultRegistry");
     eprintln!("[registry_empty_list] registry deployed at {registry_addr:#x}");
 

@@ -94,8 +94,8 @@ to **Base mainnet (chain `8453`)**, record their addresses in
 the run's deploy manifests (`deployments/<chain>/`), then hand the privileged
 roles to the `TimelockController`. `DeployTimelock.s.sol` hands over:
 
-- `ADMIN_ROLE` on the five protocol contracts: Gateway, VaultRegistry,
-  PortfolioRouter, RouterGovernance, and every vault in `VAULT_ADDRESSES`.
+- `ADMIN_ROLE` on the Gateway, VaultRegistry, PortfolioRouter,
+  RouterGovernance, and every vault in `VAULT_ADDRESSES`.
   The basket vaults (rmPROTO, rmAGENT, rmRWA) are in that list alongside rmUSDC.
   The deployer's vault `EMERGENCY_ROLE` moves to the independent
   `EMERGENCY_ADDRESS` key.
@@ -157,8 +157,9 @@ contract-enforced rather than operational convention.
 3. Record the resulting `portfolio_router`, `router_governance`, and
    `timelock_controller` addresses in the run's deploy manifests (`deployments/<chain>/`).
 
-**Verify.** For each of the five protocol contracts, each basket vault, the IC
-policy and the consensus receipt, confirm the timelock holds `ADMIN_ROLE` and no
+**Verify.** For each of the ten protocol contracts of `docs/architecture.md`
+§4.5 (rmUSDC and each basket vault, the gateway, registry, router,
+governance, the IC policy and the consensus receipt), confirm the timelock holds `ADMIN_ROLE` and no
 EOA does:
 
 ```bash

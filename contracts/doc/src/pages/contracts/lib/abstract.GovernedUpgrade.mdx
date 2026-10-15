@@ -1,0 +1,331 @@
+---
+title: "GovernedUpgrade"
+description: "The one upgrade base every proxied Robot Money implementation inherits (ADR-0014 §3). OZ `UUPSUpgradeable` as shipped, with one fixed upgrade authority and a one-way freeze."
+---
+
+# GovernedUpgrade
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/GovernedUpgrade.sol)
+
+**Inherits:** Initializable, UUPSUpgradeable
+
+**Title:** GovernedUpgrade
+
+The one upgrade base every proxied Robot Money implementation inherits (ADR-0014 §3).
+OZ `UUPSUpgradeable` as shipped, with one fixed upgrade authority and a one-way freeze.
+
+- **Authority.** One address, the deployment's `ProposerFloorTimelock`, stored once by
+`__GovernedUpgrade_init`. It must have code. No setter exists and no role confers
+upgrade power: holding `ADMIN_ROLE`, `DEFAULT_ADMIN_ROLE` or any other role grants
+none. The upgrade path is Safe → timelock (delay) → `upgradeToAndCall`.
+- **Freeze.** `freezeUpgrades` sets one bit that nothing clears. From then on
+`_authorizeUpgrade` always reverts, so no later code can ever be installed that could
+clear it. The freeze names the reviewed implementation and its code hash, so a freeze
+queued for implementation A reverts if an upgrade to B executed first.
+- **Withdrawals.** Nothing here reads the frozen bit outside `_authorizeUpgrade` and
+`freezeUpgrades`. There is no pause, no `whenNotFrozen` modifier and no hook on
+transfers or redemptions (ADR-0014 §6): a freeze never touches withdrawal rights.
+
+The two fields live in the ERC-7201 namespace `robotmoney.storage.GovernedUpgrade`, so
+they never collide with the implementation's linear layout. `GovernedUpgradeLifecycle.t.sol`
+recomputes the slot from the namespace string and reads it with `vm.load`.
+
+## Constants
+
+### GOVERNED_UPGRADE_STORAGE_LOCATION
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("robotmoney.storage.GovernedUpgrade")) - 1)) & ~bytes32(uint256(0xff))
+
+</i>
+
+```solidity
+bytes32 private constant GOVERNED_UPGRADE_STORAGE_LOCATION =
+        0x5f8c19f69998101f56563e0013e2ccd167eee33eac647374045191b3bd187600;
+```
+
+## Functions
+
+<a id="_governedupgradestorage"></a>
+
+### _governedUpgradeStorage
+
+```solidity
+function _governedUpgradeStorage() private pure returns (GovernedUpgradeStorage storage $);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `GovernedUpgradeStorage` |  |
+
+<a id="__governedupgrade_init-address-upgrademode"></a>
+
+### __GovernedUpgrade_init
+
+<i>
+
+Store the upgrade authority once and apply the release mode. The only writer of the
+namespace besides `freezeUpgrades`; runs once per proxy, inside its deployment transaction.
+Write-once (UPG-3): a later implementation's `reinitializer(n)` is also `onlyInitializing`,
+so without the zero check it could call this and rotate the authority. A second call
+reverts `InvalidInitialization`, the error `Initializable` already declares, so no ABI grows.
+
+</i>
+
+```solidity
+function __GovernedUpgrade_init(address authority, UpgradeMode mode) internal onlyInitializing;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` | The deployment's `ProposerFloorTimelock`. Must have code. |
+| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`. `Unset` reverts. |
+
+<a id="onlyupgradeauthority"></a>
+
+### onlyUpgradeAuthority
+
+<i>
+
+Pair with every `reinitializer(n)` (ADR-0014 §3): `onlyUpgradeAuthority reinitializer(n)`.
+Inside a timelock-executed `upgradeToAndCall` the reinitializer runs by DELEGATECALL with
+the timelock as `msg.sender`, so it passes. An upgrade installed with empty data leaves the
+reinitializer pending: without this check anyone could call it first. With it, only a later
+timelock operation can. The layout gate (`scripts/ci/storage_layout_gate.py`) fails a
+production `reinitializer(` that lacks it.
+
+</i>
+
+```solidity
+modifier onlyUpgradeAuthority();
+```
+
+<a id="upgradeauthority"></a>
+
+### upgradeAuthority
+
+The one address that may upgrade or freeze this proxy (the deployment's timelock).
+
+```solidity
+function upgradeAuthority() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="upgradesfrozen"></a>
+
+### upgradesFrozen
+
+True once the proxy is frozen. It never becomes false again.
+
+```solidity
+function upgradesFrozen() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="freezeupgrades-address-bytes32"></a>
+
+### freezeUpgrades
+
+Freeze this proxy forever on the live implementation. Upgrade authority only.
+
+<i>
+
+Reverts `FreezeTargetMismatch` unless the live ERC-1967 implementation and its code hash
+equal the arguments, so a freeze scheduled for one reviewed implementation can never lock
+in another. Reverts `UpgradesAreFrozen` when already frozen.
+
+</i>
+
+```solidity
+function freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)
+        external
+        onlyProxy;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expectedImplementation | `address` | The implementation the freeze was reviewed against. |
+| expectedCodeHash | `bytes32` | Its runtime code hash. |
+
+<a id="_freeze-governedupgradestorage"></a>
+
+### _freeze
+
+```solidity
+function _freeze(GovernedUpgradeStorage storage $) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `GovernedUpgradeStorage` |  |
+
+<a id="_authorizeupgrade-address"></a>
+
+### _authorizeUpgrade
+
+<i>
+
+Only the stored authority, and never once frozen.
+
+</i>
+
+```solidity
+function _authorizeUpgrade(address) internal view override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+## Events
+
+### UpgradesFrozen
+
+The proxy froze. No upgrade can run from now on.
+
+```solidity
+event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` | The frozen proxy (`address(this)`). |
+| implementation | `address` | The implementation the proxy is frozen on. |
+| codeHash | `bytes32` | That implementation's runtime code hash. |
+
+## Errors
+
+### UpgradeModeUnset
+
+The initializer was called with `UpgradeMode.Unset`.
+
+```solidity
+error UpgradeModeUnset();
+```
+
+### UpgradeAuthorityNotContract
+
+The named upgrade authority has no code. It must be the deployment's timelock.
+
+```solidity
+error UpgradeAuthorityNotContract(address authority);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` | The address that was refused. |
+
+### UpgradeNotAuthorized
+
+An upgrade or freeze was attempted by an address other than the upgrade authority.
+
+```solidity
+error UpgradeNotAuthorized(address caller);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` | The refused caller. |
+
+### UpgradesAreFrozen
+
+The proxy is frozen: no upgrade can ever run again.
+
+```solidity
+error UpgradesAreFrozen();
+```
+
+### FreezeTargetMismatch
+
+`freezeUpgrades` named an implementation or code hash other than the live one.
+
+```solidity
+error FreezeTargetMismatch(address live, bytes32 liveCodeHash);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| live | `address` | The live ERC-1967 implementation. |
+| liveCodeHash | `bytes32` | Its runtime code hash. |
+
+## Structs
+
+### GovernedUpgradeStorage
+
+**Note:**
+
+- **storage-location:** erc7201:robotmoney.storage.GovernedUpgrade
+
+```solidity
+struct GovernedUpgradeStorage {
+        address authority;
+        bool frozen;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| frozen | `bool` |  |
+
+## Enums
+
+### UpgradeMode
+
+How a proxy is born. Initialized state of one artifact, never a build variant.
+
+<i>
+
+`Unset` makes the initializer revert, so every deployment states its mode.
+`Upgradeable`: upgrades and one freeze, each Safe → timelock.
+`FrozenAtDeploy`: frozen inside the deployment transaction; nothing is allowed later.
+
+</i>
+
+```solidity
+enum UpgradeMode {
+        Unset,
+        Upgradeable,
+        FrozenAtDeploy
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Unset |  |
+| Upgradeable |  |
+| FrozenAtDeploy |  |
+

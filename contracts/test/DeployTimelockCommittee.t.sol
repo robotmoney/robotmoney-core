@@ -20,6 +20,7 @@ import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.so
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title DeployTimelockCommitteeTest
 /// @notice Issue #1319: before this change, `DeployTimelock.s.sol` only handed
@@ -93,16 +94,16 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         // The five core contracts: admin_ == address(script), matching
         // DeployTimelock.t.sol's convention (their revocation is already
         // covered there / in DeployAssertions.t.sol — not re-tested here).
-        vault = new RobotMoneyVault(
+        vault = Proxied.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, address(script), address(script)
         );
-        gateway = new RobotMoneyGateway(usdc, vault, address(script), pauser, address(0));
-        registry = new VaultRegistry(address(script));
+        gateway = Proxied.robotMoneyGateway(usdc, vault, address(script), pauser, address(0));
+        registry = Proxied.vaultRegistry(address(script));
         // The router is built with this test contract as its first admin so the setup below
         // needs no prank of the script (issue #1644): this contract wires governance, then
         // hands every router role to address(script) and drops its own, which leaves the
         // router exactly as a script-built one.
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        router = Proxied.portfolioRouter(address(usdc), address(registry), address(this));
         governance = new RouterGovernance(address(router), address(script));
         // R7: mirror DeployRouterGovernance's router ADMIN_ROLE grant, which
         // DeployTimelock now asserts before completing the handover.
@@ -126,7 +127,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         // holder. address(script) additionally needs the roles because that
         // is the identity every one of DeployTimelock's grant/revoke calls
         // actually executes as (see contract NatSpec above).
-        icPolicy = new InvestmentCommitteePolicy(address(this), address(gateway));
+        icPolicy = Proxied.investmentCommitteePolicy(address(this), address(gateway));
         icPolicy.grantRole(ADMIN_ROLE, address(script));
         icPolicy.grantRole(DEFAULT_ADMIN_ROLE, address(script));
         // Gateway separately holds ADMIN_ROLE on the IC policy so it can
@@ -143,7 +144,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
         internal
         returns (ConsensusRecommendationReceipt receipts)
     {
-        receipts = new ConsensusRecommendationReceipt(
+        receipts = Proxied.consensusRecommendationReceipt(
             receiptConstructedAdmin, address(gateway), address(icPolicy)
         );
         if (receiptConstructedAdmin != address(script)) {
@@ -390,7 +391,7 @@ contract DeployTimelockCommitteeTest is SafeFixture {
     // revert — proving the ceremony never silently no-ops or partially
     // succeeds when misconfigured.
     function test_receiptAdmin_notAuthorized_revertsLoudly() public {
-        ConsensusRecommendationReceipt receipts = new ConsensusRecommendationReceipt(
+        ConsensusRecommendationReceipt receipts = Proxied.consensusRecommendationReceipt(
             independentReceiptAdmin, address(gateway), address(icPolicy)
         );
         vm.expectRevert(

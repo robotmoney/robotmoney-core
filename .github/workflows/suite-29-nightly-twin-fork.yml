@@ -34,9 +34,20 @@
 # service on the stage host) and needs secrets.FUSION_RMPC_CONFIG, so it does not start a fork per
 # run. See docs/development/ci-suites.md §26.
 #
+# THE UPGRADE REHEARSAL (QA plan v1 P4, issue 1811, ADR-0014 stage 4)
+# The `twin-upgrade-rehearsal` job is the governed-proxy lifecycle on its own Twin fork at the run's
+# pin, nightly only (this workflow has no pull_request or push trigger): twin-publish deploys the
+# exact release artifacts of this commit (publish, verify, stage 13 through the real Safe and
+# timelock), then publish-contracts/src/ci/twin-upgrade-rehearsal.ts runs a governed upgrade of one
+# proxy, the freeze of every proxy and a post-freeze upgrade that the tool refuses and that the
+# proxy refuses at execute after the Safe scheduled it on the timelock, verifies again and checks
+# the run manifest and the chain with `evidence-check --proxy-lifecycle`. It uploads
+# upgrade-rehearsal-<sha> (the secret-scanned evidence folder, the verifier labels, the manifests).
+#
 # RESULT
-# The `results` job fails when the pin job or any suite did not succeed (failure, cancelled and
-# skipped all count as not passing). It uploads suite-results (one JSON per suite, with the pin).
+# The `results` job fails when the pin job, any suite or the upgrade rehearsal did not succeed
+# (failure, cancelled and skipped all count as not passing). It uploads suite-results (one JSON
+# per suite and one for the upgrade rehearsal, with the pin).
 # The pin job uploads twin-pin (the pin file: block, run id and time, never the upstream URL).
 # No secret is required. BASE_UPSTREAM_RPC is optional and never printed.
 
@@ -161,10 +172,64 @@ jobs:
     with:
       pin_block: ${{ needs.pin.outputs.block }}
 
+  # QA plan v1 P4 (issue 1811, ADR-0014 stage 4): deploy, governed upgrade, freeze and a rejected
+  # post-freeze upgrade on a Twin fork this job starts at the run's pin. Nightly only.
+  twin-upgrade-rehearsal:
+    name: twin-upgrade-rehearsal
+    needs: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Start the Twin chain at the run pin
+        id: fork
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+      # The exact release artifacts of this commit: publish (the authority stage's timelock before
+      # the nine proxies, UPGRADE_MODE=upgradeable from the committed Twin sheet), verify, stage 13.
+      - name: Deploy the release artifacts, verify and govern on the Twin chain with the one driver
+        uses: ./.github/actions/twin-publish
+        with:
+          rpc-url: ${{ steps.fork.outputs.rpc-url }}
+          verify: "true"
+          govern: "true"
+          predeploy-libs: "true"
+          pin-block: ${{ needs.pin.outputs.block }}
+      - name: Governed upgrade, freeze and rejected post-freeze upgrade through the real Safe and timelock
+        env:
+          RPC_URL: ${{ steps.fork.outputs.rpc-url }}
+        run: bun publish-contracts/src/ci/twin-upgrade-rehearsal.ts
+      - name: Collect the rehearsal evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/upgrade-rehearsal-out"
+          mkdir -p "$out"
+          # Only folders the script wrote for upload (the evidence folder passed its secret scan) and the stage manifests: never the run dir (keys, passphrase).
+          [ -z "${TWIN_UPGRADE_REHEARSAL_DIR:-}" ] || cp -r "$TWIN_UPGRADE_REHEARSAL_DIR" "$out/evidence"
+          [ -z "${TWIN_UPGRADE_REHEARSAL_LABELS_DIR:-}" ] || cp -r "$TWIN_UPGRADE_REHEARSAL_LABELS_DIR" "$out/labels"
+          [ -z "${TWIN_MANIFEST_DIR:-}" ] || cp -r "$TWIN_MANIFEST_DIR" "$out/manifests"
+          [ -z "${TWIN_VERIFY_LABELS_POST_GOVERN:-}" ] || cp "$TWIN_VERIFY_LABELS_POST_GOVERN" "$out/verify-labels-post-govern.txt"
+          ls -R "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-rehearsal-${{ github.sha }}
+          path: ${{ runner.temp }}/upgrade-rehearsal-out
+          if-no-files-found: error
+          retention-days: 90
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   results:
     name: record-results
     if: ${{ always() }}
-    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-28]
+    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-28, twin-upgrade-rehearsal]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -176,17 +241,19 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/suite-results"
           bad=0
+          # Every needed job but the pin: the seven suites (suite-NN.json) and the upgrade rehearsal (twin-upgrade-rehearsal.json).
           while IFS=$'\t' read -r job result; do
             suite="${job#suite-}"
             jq -n --arg suite "$suite" --arg result "$result" --arg run "$GITHUB_RUN_ID" --arg pin "$PIN_BLOCK" \
-              '{suite: $suite, result: $result, run_id: $run, pin_block: $pin}' > "$RUNNER_TEMP/suite-results/suite-${suite}.json"
-            echo "suite $suite: $result" | tee -a "$GITHUB_STEP_SUMMARY"
+              '{suite: $suite, result: $result, run_id: $run, pin_block: $pin}' > "$RUNNER_TEMP/suite-results/${job}.json"
+            echo "$job: $result" | tee -a "$GITHUB_STEP_SUMMARY"
             [ "$result" = "success" ] || bad=1
-          done < <(echo "$NEEDS" | jq -r 'to_entries[] | select(.key | startswith("suite-")) | "\(.key)\t\(.value.result)"')
+          done < <(echo "$NEEDS" | jq -r 'to_entries[] | select(.key != "pin") | "\(.key)\t\(.value.result)"')
           pin_result="$(echo "$NEEDS" | jq -r '.pin.result')"
           echo "pin job: $pin_result (Twin pin block ${PIN_BLOCK:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$pin_result" = "success" ] || bad=1
           [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 7 ] || { echo "::error::fewer than seven suite results were recorded"; bad=1; }
+          [ -f "$RUNNER_TEMP/suite-results/twin-upgrade-rehearsal.json" ] || { echo "::error::the upgrade rehearsal result was not recorded"; bad=1; }
           exit "$bad"
 
       - name: Upload the suite results

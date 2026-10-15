@@ -20,6 +20,13 @@ export const VAULT_RECORDER_FIELD = "recorder";
 /** The build artifacts of the V4 contracts. They are in core's stage table `artifacts` as `recorder` and `v4Adapter` and checked against it. */
 export const RECORDER_ARTIFACT_KEY = "recorder";
 export const V4_ADAPTER_ARTIFACT_KEY = "v4Adapter";
+/**
+ * ADR-0014 §4 (issue 1809): the stage that deploys the timelock every proxy names as its upgrade authority, before the first proxy. Its manifest's `timelock`
+ * feeds UPGRADE_AUTHORITY of every proxy stage and TIMELOCK_ADDRESS of the handover stage, so the role handover and the upgrade authority are one timelock.
+ */
+export const AUTHORITY_STAGE = "authority";
+/** The stage whose script hands every role to the timelock (the last deployer stage). */
+export const HANDOVER_STAGE = "timelock";
 /** Written by this tool's Safe stage, not by a core script. */
 export const SAFE_STAGE = "safe";
 export const SAFE_MANIFEST = "safe.json";
@@ -52,6 +59,18 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
   /** The agent stage registers this permissionless price recorder as RM's pool (core 1676). */
   RECORDER_ADDRESS: { stage: RECORDER_STAGE, field: "recorder" },
+  /** ADR-0014 §4 (issue 1809): every proxy stage names the authority stage's timelock as the upgrade authority of the proxies it deploys. */
+  UPGRADE_AUTHORITY: { stage: AUTHORITY_STAGE, field: "timelock" },
+  /** ADR-0014 §9: the rmUSDC initializer creates its ExclusionLedger through the factory the libs stage deployed (CREATE2, one per chain). */
+  EXCLUSION_LEDGER_FACTORY: { stage: LIBS_STAGE, field: "exclusion_ledger_factory" },
+};
+/**
+ * Per-stage exceptions to MANIFEST_ENV (issue 1809). The handover stage reads TIMELOCK_ADDRESS as the timelock the authority stage deployed: it reuses that
+ * timelock (DeployTimelock refuses unless every proxy names it) and cannot read its own manifest. Every other reader (the single-vault redeploy) keeps the
+ * handover manifest's `timelock`, the same address once the handover ran.
+ */
+export const STAGE_MANIFEST_ENV: Record<string, Record<string, { stage: string; field: string }>> = {
+  [HANDOVER_STAGE]: { TIMELOCK_ADDRESS: { stage: AUTHORITY_STAGE, field: "timelock" } },
 };
 export const VAULT_LIST_ENV = "VAULT_ADDRESSES";
 /**
@@ -73,12 +92,12 @@ export const SHEET_RENAMES: Record<string, string> = {
   FEE_RECIPIENT: "FEE_RECIPIENT_ADDRESS",
 };
 
-/** Where the value of env name `env` comes from for a stage of vault `vault` (null for a non-vault stage). */
-export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
+/** Where the value of env name `env` comes from for a stage of vault `vault` (null for a non-vault stage). `stage` (the stage name) selects a STAGE_MANIFEST_ENV exception. */
+export function resolveEnv(env: string, vault: VaultKey | null, stage?: string): EnvSource {
   if (env === "EXPECTED_CHAIN_ID") return { from: "chain" };
   if (env === "DEPLOYMENT_OUT") return { from: "out" };
   if (env === "AGENT_ADDRESSES") return { from: "literal", value: "none" };
-  const m = MANIFEST_ENV[env];
+  const m = (stage !== undefined ? STAGE_MANIFEST_ENV[stage]?.[env] : undefined) ?? MANIFEST_ENV[env];
   if (m) return { from: "manifest", ...m };
   if (env === ELIGIBILITY_BPS_ENV) return { from: "computed" };
   if (env === VAULT_LIST_ENV) return { from: "vaults", field: VAULT_ADDRESS_FIELD };
@@ -90,10 +109,10 @@ export function resolveEnv(env: string, vault: VaultKey | null): EnvSource {
 }
 
 /** The sheet names a stage's required env needs (for tests and the plan). */
-export function requiredSheetNames(row: Pick<StageRow, "requiredEnv" | "vault">): string[] {
+export function requiredSheetNames(row: Pick<StageRow, "requiredEnv" | "vault"> & { name?: string }): string[] {
   const out: string[] = [];
   for (const e of row.requiredEnv) {
-    const s = resolveEnv(e, row.vault ?? null);
+    const s = resolveEnv(e, row.vault ?? null, row.name);
     if (s.from === "sheet") out.push(s.name);
   }
   return out;
@@ -142,7 +161,11 @@ export const MANIFEST_FIELDS_READ: { stage: string; field: string }[] = [
   { stage: "agent", field: VAULT_RECORDER_FIELD },
   // issue 1705 C4: the verifier reads the rmUSDC lending adapters the vault stage wrote
   ...Object.values(LENDING_ADAPTERS).flatMap((w) => w!.adapters.map((a) => ({ stage: w!.stage, field: a.field }))),
+  // issue 1809: the handover stage reads the authority stage's timelock (the per-stage exception)
+  ...Object.values(STAGE_MANIFEST_ENV).flatMap((m) => Object.values(m)),
 ];
+// The proxies' own manifest fields (proxy, implementation, upgrade_authority, upgrade_mode) come from the stage table's `proxies`: core parity checks them
+// there (src/ci/core-parity.ts, proxyProblems), so a renamed field fails CI.
 
 /**
  * Core's launch asset config, one file per basket or agent vault, identical on every chain. `list` is the key that holds the assets.

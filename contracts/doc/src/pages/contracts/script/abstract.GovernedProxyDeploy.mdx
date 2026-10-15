@@ -1,0 +1,263 @@
+---
+title: "GovernedProxyDeploy"
+description: "Shared proxy deployment for every stage script that deploys a proxied contract (ADR-0014 §1): deploy the implementation, then an `ERC1967Proxy` whose constructor calls `initialize` in the same transaction, so no public call can ever reach an uninitialized proxy. Every proxy names the deployment's timelock as its upgrade authority and states its release mode; the deployer never holds an upgrade path, not even for a moment."
+---
+
+# GovernedProxyDeploy
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/GovernedProxyDeploy.sol)
+
+**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+
+**Title:** GovernedProxyDeploy
+
+Shared proxy deployment for every stage script that deploys a proxied contract
+(ADR-0014 §1): deploy the implementation, then an `ERC1967Proxy` whose constructor calls
+`initialize` in the same transaction, so no public call can ever reach an uninitialized
+proxy. Every proxy names the deployment's timelock as its upgrade authority and states
+its release mode; the deployer never holds an upgrade path, not even for a moment.
+
+<i>
+
+Broadcast entry points read `&lt;prefix>UPGRADE_AUTHORITY` (an address with code: the timelock
+`DeployTimelock.runAuthority` deployed first) and `&lt;prefix>UPGRADE_MODE` (`upgradeable` or
+`frozen-at-deploy`), both required on every chain: a deployment must state its mode.
+In-process entry points (forge tests only, nothing broadcast) use `setInProcessUpgradeConfig`,
+or, when it was never called, this script contract as the authority in `Upgradeable` mode.
+After each proxy is deployed, `_deployProxy` reads it back: implementation slot, zero
+ERC-1967 admin and beacon slots, authority and frozen bit.
+
+</i>
+
+## State Variables
+
+### _upgrade
+
+<i>
+
+The config `_deployProxy` uses. Every entry point sets it before deploying.
+
+</i>
+
+```solidity
+UpgradeConfig internal _upgrade;
+```
+
+### _inProcessUpgrade
+
+<i>
+
+Test seam for in-process entry points. Zero authority means "use the defaults".
+
+</i>
+
+```solidity
+UpgradeConfig private _inProcessUpgrade;
+```
+
+## Functions
+
+<a id="setinprocessupgradeconfig-address-governedupgrade-upgrademode"></a>
+
+### setInProcessUpgradeConfig
+
+Test seam: the upgrade authority and mode the in-process entry points use. Forge
+tests call it before an in-process run; a broadcast run never reads it.
+
+```solidity
+function setInProcessUpgradeConfig(address authority, GovernedUpgrade.UpgradeMode mode)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| mode | `GovernedUpgrade.UpgradeMode` |  |
+
+<a id="_useenvupgradeconfig-string"></a>
+
+### _useEnvUpgradeConfig
+
+<i>
+
+Broadcast runs: read the authority and the mode from the environment, strictly.
+
+</i>
+
+```solidity
+function _useEnvUpgradeConfig(string memory prefix) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+<a id="_useinprocessupgradeconfig"></a>
+
+### _useInProcessUpgradeConfig
+
+<i>
+
+In-process runs (forge tests): the configured seam, else this script as the authority.
+
+</i>
+
+```solidity
+function _useInProcessUpgradeConfig() internal;
+```
+
+<a id="parseupgrademode-string"></a>
+
+### parseUpgradeMode
+
+`upgradeable` or `frozen-at-deploy`; anything else (including `unset`) reverts.
+
+```solidity
+function parseUpgradeMode(string memory raw) public pure returns (GovernedUpgrade.UpgradeMode);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| raw | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `GovernedUpgrade.UpgradeMode` |  |
+
+<a id="upgrademodename-governedupgrade-upgrademode"></a>
+
+### upgradeModeName
+
+Manifest spelling of a mode.
+
+```solidity
+function upgradeModeName(GovernedUpgrade.UpgradeMode mode) public pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode | `GovernedUpgrade.UpgradeMode` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_deployproxy-address-bytes"></a>
+
+### _deployProxy
+
+<i>
+
+Deploy an `ERC1967Proxy` over `implementation` whose constructor runs `initData` (the
+`initialize` call), then read the proxy back. `initData` must name `_upgrade`'s authority
+and mode; the read-back proves it did.
+
+</i>
+
+```solidity
+function _deployProxy(address implementation, bytes memory initData)
+        internal
+        returns (address proxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| implementation | `address` |  |
+| initData | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+<a id="_layoutid-string"></a>
+
+### _layoutId
+
+<i>
+
+ADR-0014 §8: the storage-layout identifier of a proxied contract, the sha256 of its committed
+normalized layout snapshot (`contracts/test/fixtures/storage-layout/&lt;artifact>.json`, the file
+`scripts/ci/check-storage-layout.sh` gates in CI). Written into the stage manifest next to the
+implementation, so the deployment records which layout the implementation it deployed has. The
+verifier compares it with the snapshot of the checkout it runs from. Zero when the file is absent.
+
+</i>
+
+```solidity
+function _layoutId(string memory artifact) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| artifact | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_implementationof-address"></a>
+
+### _implementationOf
+
+<i>
+
+The ERC-1967 implementation of `proxy`, for manifests and logs.
+
+</i>
+
+```solidity
+function _implementationOf(address proxy) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+## Structs
+
+### UpgradeConfig
+
+Upgrade authority and release mode the next proxy is born with.
+
+```solidity
+struct UpgradeConfig {
+        address authority;
+        GovernedUpgrade.UpgradeMode mode;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| mode | `GovernedUpgrade.UpgradeMode` |  |
+

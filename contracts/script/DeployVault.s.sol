@@ -8,11 +8,12 @@ import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {ExclusionLedgerFactory} from "../ExclusionLedgerFactory.sol";
 import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 
 /// @title DeployVault
 /// @notice Stage 2 of the core deploy (libs, vault, registry, router, gateway).
@@ -38,7 +39,12 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
 ///        EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
-contract DeployVault is ExpectedChainGuard {
+///        UPGRADE_AUTHORITY      — the deployment's timelock, deployed first (ADR-0014 §4)
+///        UPGRADE_MODE           — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
+///        EXCLUSION_LEDGER_FACTORY — the libs stage's `ExclusionLedgerFactory` (ADR-0014 §9)
+///      The vault is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+///      `initialize` in its constructor, so the vault is never uninitialized.
+contract DeployVault is GovernedProxyDeploy {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "vault.json";
 
@@ -109,7 +115,13 @@ contract DeployVault is ExpectedChainGuard {
 
     struct Deployed {
         address usdc;
+        /// The proxy: the vault every other contract and holder uses.
         RobotMoneyVault vault;
+        /// The implementation behind `vault` (ADR-0014).
+        address implementation;
+        address exclusionLedgerFactory;
+        address upgradeAuthority;
+        string upgradeMode;
         AaveV3Adapter aaveAdapter;
         CompoundV3Adapter compoundAdapter;
         MorphoAdapter moonwellAdapter;
@@ -121,6 +133,9 @@ contract DeployVault is ExpectedChainGuard {
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
         address seedReceiver = _seedShareReceiver("", p.admin);
+        _useEnvUpgradeConfig("");
+        _ledgerFactory = _envAddressRequired("EXCLUSION_LEDGER_FACTORY");
+        require(_ledgerFactory.code.length > 0, "EXCLUSION_LEDGER_FACTORY has no code");
         vm.startBroadcast();
         d = _deploy(p);
         // The broadcaster IS d.admin: msg.sender holds ADMIN_ROLE. vm.prank is prohibited here.
@@ -137,6 +152,7 @@ contract DeployVault is ExpectedChainGuard {
     /// @notice In-process variant for forge tests, no seed deposit. Env-driven.
     /// @return d The deployed contracts and admin.
     function runInProcess() external returns (Deployed memory d) {
+        _useInProcess();
         d = _deploy(_readEnvParamsFrom(""));
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
@@ -154,6 +170,7 @@ contract DeployVault is ExpectedChainGuard {
         returns (Deployed memory d)
     {
         _requireSeedReceiver(seedReceiver_, p.admin);
+        _useInProcess();
         d = _deploy(p);
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
@@ -166,6 +183,7 @@ contract DeployVault is ExpectedChainGuard {
     /// @param p Deployment parameters (admin, caps, fee, USDC).
     /// @return d The deployed contracts and admin.
     function runInProcessWithParams(Params memory p) external returns (Deployed memory d) {
+        _useInProcess();
         d = _deploy(p);
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
@@ -251,6 +269,16 @@ contract DeployVault is ExpectedChainGuard {
         vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
     }
 
+    /// @dev The `ExclusionLedgerFactory` the vault initializer calls. Broadcast runs read it from the
+    ///      libs stage (`EXCLUSION_LEDGER_FACTORY`); in-process runs deploy one.
+    address internal _ledgerFactory;
+
+    /// @dev In-process upgrade config, and a factory when none was deployed in this run yet.
+    function _useInProcess() internal {
+        _useInProcessUpgradeConfig();
+        if (_ledgerFactory == address(0)) _ledgerFactory = address(new ExclusionLedgerFactory());
+    }
+
     function _deploy(Params memory p) internal returns (Deployed memory d) {
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
@@ -261,14 +289,29 @@ contract DeployVault is ExpectedChainGuard {
         require(p.tvlCap > 0 && p.perDepositCap > 0, "TVL_CAP / PER_DEPOSIT_CAP = 0");
         d.admin = p.admin;
         d.usdc = p.usdcAddress;
-        d.vault = new RobotMoneyVault(
-            IERC20(d.usdc),
-            p.tvlCap,
-            p.perDepositCap,
-            p.exitFeeBps,
-            p.feeRecipient,
-            p.admin, // vaultAdmin — receives ADMIN_ROLE
-            p.admin // emergencyResponder — handed to the emergency key by the timelock stage
+        d.implementation = address(new RobotMoneyVault());
+        d.exclusionLedgerFactory = _ledgerFactory;
+        d.upgradeAuthority = _upgrade.authority;
+        d.upgradeMode = upgradeModeName(_upgrade.mode);
+        d.vault = RobotMoneyVault(
+            _deployProxy(
+                d.implementation,
+                abi.encodeCall(
+                    RobotMoneyVault.initialize,
+                    (
+                        IERC20(d.usdc),
+                        p.tvlCap,
+                        p.perDepositCap,
+                        p.exitFeeBps,
+                        p.feeRecipient,
+                        p.admin, // vaultAdmin — receives ADMIN_ROLE
+                        p.admin, // emergencyResponder — handed to the emergency key by the timelock stage
+                        ExclusionLedgerFactory(_ledgerFactory),
+                        _upgrade.authority,
+                        _upgrade.mode
+                    )
+                )
+            )
         );
         // Registration happens in the callers: the call context differs between broadcast
         // and in-process modes.
@@ -278,14 +321,18 @@ contract DeployVault is ExpectedChainGuard {
 
         console2.log("RobotMoneyVault + Aave V3, Compound V3, Moonwell Flagship adapters deployed");
         console2.log("  usdc               :", d.usdc);
-        console2.log("  vault              :", address(d.vault));
+        console2.log("  vault (proxy)      :", address(d.vault));
+        console2.log("  vault_implementation:", d.implementation);
+        console2.log("  upgrade_authority  :", d.upgradeAuthority);
         console2.log("  aave_adapter       :", address(d.aaveAdapter));
         console2.log("  compound_adapter   :", address(d.compoundAdapter));
         console2.log("  moonwell_adapter   :", address(d.moonwellAdapter));
         console2.log("  admin              :", d.admin);
     }
 
-    /// @notice Manifest keys written by this stage: chain_id, usdc, vault, aave_adapter,
+    /// @notice Manifest keys written by this stage: chain_id, usdc, vault (the proxy),
+    ///         vault_implementation, exclusion_ledger_factory, upgrade_authority, upgrade_mode
+    ///         (ADR-0014), aave_adapter,
     ///         compound_adapter, moonwell_flagship_adapter, admin, and one name/address pair
     ///         per venue: aave_v3_venue_name / aave_v3_venue, compound_v3_venue_name /
     ///         compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
@@ -304,6 +351,11 @@ contract DeployVault is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "usdc", d.usdc);
         vm.serializeAddress(obj, "vault", address(d.vault));
+        vm.serializeAddress(obj, "vault_implementation", d.implementation);
+        vm.serializeBytes32(obj, "vault_layout_id", _layoutId("RobotMoneyVault"));
+        vm.serializeAddress(obj, "exclusion_ledger_factory", d.exclusionLedgerFactory);
+        vm.serializeAddress(obj, "upgrade_authority", d.upgradeAuthority);
+        vm.serializeString(obj, "upgrade_mode", d.upgradeMode);
         vm.serializeAddress(obj, "aave_adapter", address(d.aaveAdapter));
         vm.serializeAddress(obj, "compound_adapter", address(d.compoundAdapter));
         vm.serializeAddress(obj, "moonwell_flagship_adapter", address(d.moonwellAdapter));

@@ -19,6 +19,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ShortlistMockPool, ShortlistStubSwapRouter} from "./ProtocolAssetVaultShortlist.t.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title GovernedVaultSafeTimelockTest
 /// @notice The vault admin setters (retire, setFeeRecipient, addAsset, removeAsset,
@@ -55,7 +57,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
         vm.recordLogs();
         usdc = new TestERC20();
         swapRouter = new ShortlistStubSwapRouter();
-        proto = new ProtocolAssetVault(
+        proto = Proxied.protocolAssetVault(
             IERC20(address(usdc)),
             ISwapRouter(address(swapRouter)),
             10_000_000 * ONE_USDC,
@@ -65,7 +67,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        rwa = new RwaBasketVault(
+        rwa = Proxied.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(swapRouter)),
             10_000_000 * ONE_USDC,
@@ -75,7 +77,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        core = new RobotMoneyVault(
+        core = Proxied.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -84,13 +86,17 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        registry = new VaultRegistry(address(this));
+        registry = Proxied.vaultRegistry(address(this));
 
         // Seed one asset so removeAsset has a real target, then register + link the vault.
         protoToken = new TestERC20();
         protoPool = new ShortlistMockPool(address(protoToken), address(usdc), POOL_FEE);
         proto.addAsset(
-            address(protoToken), address(protoPool), POOL_FEE, address(0), BasketVault.Venue.V3
+            address(protoToken),
+            address(protoPool),
+            POOL_FEE,
+            address(0),
+            BasketAssetConfigGuard.Venue.V3
         );
         proto.setRegistry(address(registry));
         registry.registerVault(
@@ -164,7 +170,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
         ShortlistMockPool pool = new ShortlistMockPool(address(token), address(usdc), POOL_FEE);
         bytes memory data = abi.encodeCall(
             BasketVault.addAsset,
-            (address(token), address(pool), POOL_FEE, address(0), BasketVault.Venue.V3)
+            (address(token), address(pool), POOL_FEE, address(0), BasketAssetConfigGuard.Venue.V3)
         );
         bytes32 salt = keccak256("proto-add-asset");
         _govSchedule(safe, timelock, address(proto), data, salt, DELAY);

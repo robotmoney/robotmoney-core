@@ -40,6 +40,7 @@ import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
 import {SafeFixture} from "../helpers/SafeFixture.sol";
+import {Proxied} from "../helpers/Proxied.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -84,25 +85,28 @@ contract Ora3Pool {
 
 /// @dev Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
 contract Ora3BasketVault is BasketVault {
-    constructor(IERC20 usdc_, ISwapRouter router_, address admin_)
-        BasketVault(
-            "ORA3 Basket",
-            "bORA3",
-            usdc_,
-            router_,
-            type(uint256).max,
-            type(uint256).max,
-            0,
-            30,
-            admin_,
-            admin_,
-            admin_
-        )
-    {}
-
     function maxAssets() public pure override returns (uint256) {
         return 8;
     }
+
+    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
+        return ("ORA3 Basket", "bORA3", 30);
+    }
+}
+
+/// @dev `Ora3BasketVault` behind its own initialized ERC1967Proxy (ADR-0014): uncapped, no exit
+///      fee, `admin_` in every role.
+function deployOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_)
+    returns (Ora3BasketVault)
+{
+    return Ora3BasketVault(
+        Proxied.proxy(
+            address(new Ora3BasketVault()),
+            Proxied.basketInit(
+                usdc_, router_, type(uint256).max, type(uint256).max, 0, admin_, admin_, admin_
+            )
+        )
+    );
 }
 
 /// @dev Stand-in for the deployer EOA. It holds the constructor-granted roles and
@@ -269,10 +273,10 @@ contract DeployAssertionsTest is SafeFixture {
         TestERC20 usdc = new TestERC20();
         address admin = makeAddr("acl7-admin");
         address pauser = makeAddr("acl7-pauser");
-        RobotMoneyVault v = new RobotMoneyVault(
+        RobotMoneyVault v = Proxied.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, makeAddr("acl7-safe"), admin, admin
         );
-        RobotMoneyGateway gw = new RobotMoneyGateway(usdc, v, admin, pauser, address(0));
+        RobotMoneyGateway gw = Proxied.robotMoneyGateway(usdc, v, admin, pauser, address(0));
 
         // An attacker pre-binds an INTENDED future admin address as an AGENT via
         // the permissionless registration surface (modelled here by the
@@ -338,13 +342,14 @@ contract DeployAssertionsTest is SafeFixture {
         // at-risk roles. The gateway also grants the harness DEFAULT_ADMIN_ROLE;
         // the vault grants the harness EMERGENCY_ROLE — the pre-fix EOA-retains-
         // role gap the handover must close.
-        _aclVault = new RobotMoneyVault(
+        _aclVault = Proxied.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, _aclDeployer, _aclDeployer
         );
-        _aclGateway =
-            new RobotMoneyGateway(usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0));
-        _aclRegistry = new VaultRegistry(_aclDeployer);
-        _aclRouter = new PortfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
+        _aclGateway = Proxied.robotMoneyGateway(
+            usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0)
+        );
+        _aclRegistry = Proxied.vaultRegistry(_aclDeployer);
+        _aclRouter = Proxied.portfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
         _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer);
         // R7: DeployRouterGovernance grants this at deploy time and
         // DeployTimelock asserts it before handing over. Without it the
@@ -412,7 +417,7 @@ contract DeployAssertionsTest is SafeFixture {
         TestERC20 usdc = new TestERC20(); // 6-dec USDC stand-in
         address admin = makeAddr("ora3Admin");
         Ora3BasketVault vault =
-            new Ora3BasketVault(IERC20(address(usdc)), ISwapRouter(address(this)), admin);
+            deployOra3BasketVault(IERC20(address(usdc)), ISwapRouter(address(this)), admin);
 
         Ora3Token token = new Ora3Token();
         (address t0, address t1) = address(token) < address(usdc)
@@ -424,13 +429,19 @@ contract DeployAssertionsTest is SafeFixture {
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
         vault.addAsset(
-            address(token), address(mismatchedPool), 500, address(0), BasketVault.Venue.V3
+            address(token),
+            address(mismatchedPool),
+            500,
+            address(0),
+            BasketAssetConfigGuard.Venue.V3
         );
 
         // Match: pool's fee() equals swapFee_ → addAsset succeeds.
         Ora3Pool matchedPool = new Ora3Pool(t0, t1, 500);
         vm.prank(admin);
-        vault.addAsset(address(token), address(matchedPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(token), address(matchedPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
         assertEq(vault.assetCount(), 1, "matched pool/fee registers the asset");
     }
 }

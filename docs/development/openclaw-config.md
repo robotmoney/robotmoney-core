@@ -63,6 +63,12 @@ gateway_address       = "0x000000000000000000000000000000000000dEaD"
 usdc_address          = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 vault_address         = "0x4F83837cC2BB7E5b7DA89cf36c52A7D3F6b49DDD"
 gateway_runtime_hash  = "0x0000000000000000000000000000000000000000000000000000000000000000"
+# Required once the gateway is an ERC-1967 proxy (ADR-0014; the Twin 918453 and every
+# release from this tree). Leave it out for a direct (pre-proxy) gateway: rmpc refuses it there.
+# gateway_implementation_hashes = ["0x<keccak256 of the implementation's code>"]
+# Required once the vault (or the router) is a proxy too: every write checks the logic behind
+# each vault and router it reaches (issue 1810).
+# proxy_implementation_hashes = ["0x<keccak256 of the vault implementation's code>"]
 max_fee_per_gas_cap   = 100000000000
 
 [signer]
@@ -72,6 +78,25 @@ keystore_path           = "/var/lib/openclaw/rmpc/keystore.json"
 # Optional — see §4 (state persistence).
 state_dir = "/var/lib/openclaw/rmpc/state"
 ```
+
+**Proxied gateway.** `gateway_runtime_hash` pins the code at
+`gateway_address`. For a proxied gateway that is the `ERC1967Proxy`, which an
+upgrade does not change, so rmpc also checks the implementation behind it:
+every write and `agent-consent` refuse with `ErrImplementationNotApproved`
+unless the implementation's code hash is listed in
+`gateway_implementation_hashes` (preflight check 2b). Read it from the chain:
+
+```bash
+IMPL=$(cast parse-bytes32-address "$(cast storage "$GATEWAY" \
+  0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url "$RPC")")
+cast keccak "$(cast code "$IMPL" --rpc-url "$RPC")"
+```
+
+or take `gateway_implementation_runtime_hash` from the deployment's
+`gateway.json` stage manifest. `rmpc get-gateway` prints the live
+implementation, its code hash and whether the config approves it. Add the next
+implementation's hash before its timelock upgrade executes
+(`docs/operations/contract-release-runbooks.md` §4.12).
 
 For the bounded long-running test, see the config written by
 `testing/openclaw-config/test_long_running.sh`.

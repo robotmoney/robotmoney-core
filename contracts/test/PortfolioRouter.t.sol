@@ -12,6 +12,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -234,8 +235,8 @@ contract PortfolioRouterTest is SafeGovernance {
 
     function setUp() public {
         usdc = new MockUSDC();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
 
         vaultA = new MockRouterVault(address(usdc));
         vaultB = new MockRouterVault(address(usdc));
@@ -283,19 +284,30 @@ contract PortfolioRouterTest is SafeGovernance {
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
+    // ADR-0014: the former constructor checks run in `initialize`, inside the proxy's deployment.
+    // The implementation is deployed first, so the armed `expectRevert` meets the proxy's CREATE.
+
     function test_constructor_revertsOnZeroUsdc() public {
+        address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        new PortfolioRouter(address(0), address(registry), admin);
+        Proxied.proxy(
+            implementation, Proxied.portfolioRouterInit(address(0), address(registry), admin)
+        );
     }
 
     function test_constructor_revertsOnZeroRegistry() public {
+        address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        new PortfolioRouter(address(usdc), address(0), admin);
+        Proxied.proxy(implementation, Proxied.portfolioRouterInit(address(usdc), address(0), admin));
     }
 
     function test_constructor_revertsOnZeroAdmin() public {
+        address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        new PortfolioRouter(address(usdc), address(registry), address(0));
+        Proxied.proxy(
+            implementation,
+            Proxied.portfolioRouterInit(address(usdc), address(registry), address(0))
+        );
     }
 
     function test_constructor_grantsAdminRole() public view {
@@ -1408,8 +1420,8 @@ contract PortfolioRouterTest is SafeGovernance {
     function test_deposit_revertsWithNamedError_whenUsdcBlacklist() public {
         // Deploy fresh USDC + vault + router for this scenario.
         BlacklistableUSDC bUsdc = new BlacklistableUSDC();
-        VaultRegistry bRegistry = new VaultRegistry(admin);
-        PortfolioRouter bRouter = new PortfolioRouter(address(bUsdc), address(bRegistry), admin);
+        VaultRegistry bRegistry = Proxied.vaultRegistry(admin);
+        PortfolioRouter bRouter = Proxied.portfolioRouter(address(bUsdc), address(bRegistry), admin);
 
         BlacklistableVault bVault = new BlacklistableVault(address(bUsdc));
         VaultRegistry.VaultMetadata memory bMeta = VaultRegistry.VaultMetadata({
@@ -1989,11 +2001,11 @@ contract PortfolioRouterTest is SafeGovernance {
         assertTrue(router.hasRole(adminRole, admin2), "admin2 retains the role");
     }
 
-    /// @notice With no proposal ever passed (voted vector inactive), the router
-    ///         previews and routes by the default weight vector. ADR-0002.
-    function test_previewDeposit_uses_defaultWeights_when_no_proposal() public {
+    /// @notice With no consensus receipt ever applied (applied vector inactive), the
+    ///         router previews and routes by the default weight vector. ADR-0002.
+    function test_previewDeposit_uses_defaultWeights_when_no_receipt_applied() public {
         _setDefaultWeights();
-        assertFalse(router.votedWeightsActive(), "voted vector must be inactive");
+        assertFalse(router.votedWeightsActive(), "applied vector must be inactive");
 
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
         assertEq(legs.length, 2);
@@ -2017,17 +2029,17 @@ contract PortfolioRouterTest is SafeGovernance {
         assertEq(shares[1], 400e6);
     }
 
-    /// @notice After the voted vector is cleared (simulating a fall-back to
-    ///         default after the most recent proposal failed quorum), the
-    ///         router previews by the default vector again. ADR-0002.
-    function test_previewDeposit_uses_defaultWeights_after_failed_quorum() public {
+    /// @notice After the applied vector is cleared (`clearVotedWeights`, the
+    ///         timelock's fall-back to the default vector), the router previews
+    ///         by the default vector again. ADR-0002.
+    function test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared() public {
         _setDefaultWeights();
 
-        // A prior proposal had passed and set a 50/50 voted vector...
+        // A receipt was applied earlier and set a 50/50 vector...
         _setEqualWeights();
         assertTrue(router.votedWeightsActive());
 
-        // ...then governance reverts to default after a failed-quorum window.
+        // ...then the timelock clears it and the router falls back to the default.
         vm.prank(admin);
         router.clearVotedWeights();
         assertFalse(router.votedWeightsActive());
@@ -2037,19 +2049,19 @@ contract PortfolioRouterTest is SafeGovernance {
         assertEq(legs[1].weightBps, 4_000);
     }
 
-    /// @notice A passed vote overrides the default; defaultWeights storage is
-    ///         unchanged; clearing the voted vector reverts to default. ADR-0002.
-    function test_voted_weights_override_defaults_then_revert_to_defaults() public {
+    /// @notice An applied vector overrides the default; defaultWeights storage is
+    ///         unchanged; clearing the applied vector reverts to default. ADR-0002.
+    function test_applied_weights_override_defaults_then_revert_to_defaults() public {
         _setDefaultWeights();
 
-        // Vote passes -> voted 50/50 overrides the default.
+        // A receipt is applied -> its 50/50 vector overrides the default.
         _setEqualWeights();
         assertTrue(router.votedWeightsActive());
         (, uint256[] memory effBps) = router.getEffectiveWeights();
         assertEq(effBps[0], 5_000);
         assertEq(effBps[1], 5_000);
 
-        // defaultWeights storage is untouched by the vote.
+        // defaultWeights storage is untouched by the applied vector.
         (, uint256[] memory defBps) = router.getDefaultWeights();
         assertEq(defBps[0], 6_000);
         assertEq(defBps[1], 4_000);

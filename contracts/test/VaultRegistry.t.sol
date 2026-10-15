@@ -13,6 +13,7 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @notice Minimal stand-in for `PortfolioRouter` exposing only the
 ///         `defaultWeightsLength()` view the registry's stale-length guard
@@ -108,14 +109,17 @@ contract VaultRegistryTest is Test {
     // ─── setUp ────────────────────────────────────────────────────────────────
 
     function setUp() public {
-        registry = new VaultRegistry(admin);
+        registry = Proxied.vaultRegistry(admin);
     }
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
+    /// @dev ADR-0014: the check runs in `initialize`, inside the proxy's deployment. The
+    ///      implementation is deployed first, so the armed `expectRevert` meets the proxy's CREATE.
     function test_constructor_revertsOnZeroAdmin() public {
+        address implementation = address(new VaultRegistry());
         vm.expectRevert(VaultRegistry.ZeroAddress.selector);
-        new VaultRegistry(address(0));
+        Proxied.proxy(implementation, Proxied.vaultRegistryInit(address(0)));
     }
 
     function test_constructor_grantsAdminRole() public view {
@@ -767,10 +771,12 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("retire-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            new RobotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+            Proxied.robotMoneyVault(
+                usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
+            )
         );
         vaults[1] = address(
-            new ProtocolAssetVault(
+            Proxied.protocolAssetVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -782,7 +788,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[2] = address(
-            new AgentTokenVault(
+            Proxied.agentTokenVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -794,7 +800,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[3] = address(
-            new RwaBasketVault(
+            Proxied.rwaBasketVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -832,10 +838,12 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("allExact-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            new RobotMoneyVault(usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin)
+            Proxied.robotMoneyVault(
+                usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
+            )
         );
         vaults[1] = address(
-            new ProtocolAssetVault(
+            Proxied.protocolAssetVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -847,7 +855,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[2] = address(
-            new AgentTokenVault(
+            Proxied.agentTokenVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -859,7 +867,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[3] = address(
-            new RwaBasketVault(
+            Proxied.rwaBasketVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -871,8 +879,10 @@ contract VaultRegistryTest is Test {
             )
         );
 
+        // ADR-0014: the registry and the vaults are ERC1967Proxies; the selectors live in the
+        // implementations, so the scan reads each implementation's runtime.
         assertFalse(
-            _codeContains(address(registry).code, registryView),
+            _codeContains(_implementationOf(address(registry)).code, registryView),
             "registry runtime carries the isVaultAllExact selector"
         );
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -881,10 +891,26 @@ contract VaultRegistryTest is Test {
             (bool regOk,) =
                 address(registry).staticcall(abi.encodeWithSelector(registryView, vaults[i]));
             assertFalse(regOk, "registry answers isVaultAllExact");
-            assertFalse(_codeContains(vaults[i].code, vaultView), "vault runtime carries allExact");
+            assertFalse(
+                _codeContains(_implementationOf(vaults[i]).code, vaultView),
+                "vault runtime carries allExact"
+            );
             (bool vaultOk,) = vaults[i].staticcall(abi.encodeWithSelector(vaultView));
             assertFalse(vaultOk, "vault answers allExact");
         }
+    }
+
+    /// @dev The ERC-1967 implementation behind `proxy`.
+    function _implementationOf(address proxy) internal view returns (address) {
+        return address(
+            uint160(
+                uint256(
+                    vm.load(
+                        proxy, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+                    )
+                )
+            )
+        );
     }
 
     /// @dev True when the 4 bytes of `sel` appear anywhere in `code`. Both selectors checked

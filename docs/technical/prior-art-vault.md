@@ -312,8 +312,8 @@ delegation at all.
 
 ### 3.4 Admin Timelock Requirement
 
-Robot Money requires `ADMIN_ROLE` on all five protocol contracts to be held
-by a `TimelockController`. No EOA may hold `ADMIN_ROLE` in production. This
+Robot Money requires `ADMIN_ROLE` on every protocol contract (the ten in
+`docs/architecture.md` §4.5) to be held by a `TimelockController`. No EOA may hold `ADMIN_ROLE` in production. This
 is a hard architectural constraint, not a post-launch governance aspiration.
 
 Enzyme's protocol admin is held by the Enzyme Council, which is a named
@@ -374,7 +374,7 @@ current architecture supports either path by replacing a custom adapter with an
 | Permissionless vault creation | Not in scope; vaults are protocol-registered | Alvara (permissionless basket launch) |
 | Build-vs-buy for stable-yield strategies | Custom adapters in-house (decided, issue #470); Giza/Zyfai named as alternatives if revisited per strategy | Giza, Zyfai (managed Base aggregators) |
 | Agent-first access control | First-class via gateway; no comparable in this set | None in this comparison |
-| Admin timelock | Required by architecture for all five protocol contracts | None documented at same strictness |
+| Admin timelock | Required by architecture for every protocol contract (architecture §4.5) | None documented at same strictness |
 
 ---
 

@@ -7,7 +7,7 @@ import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { coreContracts } from "../../src/verify/constants.ts";
 import { loadManifests } from "../../src/verify/manifests.ts";
-import { buildWorld, failed, VAULTS } from "./world.ts";
+import { buildWorld, failed, implementationOf, VAULTS } from "./world.ts";
 
 const table = getStageTable();
 const art = (key: "USDC" | "PROTO" | "AGENT" | "RWA") => table.vaults.find((v) => v.key === key)!.artifact;
@@ -26,15 +26,16 @@ describe("verify artifacts come from the core table", () => {
     expect(r.checks.find((c) => c.label === codeLabel("vault[rmUSDC]"))!.detail).toContain("RobotMoneyVault");
   });
 
+  // issue 1809: each vault is a proxy, so the vault's code runs in the implementation its ERC-1967 slot names: that is the code swapped here
   test("rmRWA running ProtocolAssetVault code fails (it must be RwaBasketVault)", async () => {
     const w = buildWorld();
-    w.chain.codes.set(VAULTS.rmRWA.address.toLowerCase(), w.chain.codes.get(VAULTS.rmPROTO.address.toLowerCase())!);
+    w.chain.codes.set(implementationOf(VAULTS.rmRWA.address).toLowerCase(), w.chain.codes.get(implementationOf(VAULTS.rmPROTO.address).toLowerCase())!);
     expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmRWA]")]);
   });
 
   test("rmAGENT running basket code fails", async () => {
     const w = buildWorld();
-    w.chain.codes.set(VAULTS.rmAGENT.address.toLowerCase(), w.chain.codes.get(VAULTS.rmPROTO.address.toLowerCase())!);
+    w.chain.codes.set(implementationOf(VAULTS.rmAGENT.address).toLowerCase(), w.chain.codes.get(implementationOf(VAULTS.rmPROTO.address).toLowerCase())!);
     expect(failed(await verifyDeployment(w.opts))).toEqual([codeLabel("vault[rmAGENT]")]);
   });
 

@@ -46,15 +46,17 @@ use tracing::{error, info};
 
 use watchdog::{
     alert::{
+        dispatch_freeze_deadline_alert, dispatch_freeze_deadline_resolve,
         dispatch_indexer_behind_alert, dispatch_indexer_behind_resolve,
         dispatch_missing_receipt_alert, dispatch_missing_receipt_resolve,
         dispatch_no_baseline_alert, dispatch_no_baseline_resolve,
-        dispatch_quorum_below_floor_alert, dispatch_quorum_below_floor_resolve,
-        indexer_behind_dedup_key, missing_receipt_dedup_key, no_baseline_dedup_key,
-        quorum_below_floor_dedup_key,
+        dispatch_weight_setter_path_alert, dispatch_weight_setter_path_resolve,
+        freeze_deadline_dedup_key, indexer_behind_dedup_key, missing_receipt_dedup_key,
+        no_baseline_dedup_key, weight_setter_path_dedup_key,
     },
     config::Config,
-    governance::{check_quorum_floor, QuorumStatus},
+    freeze_deadline::{check_freeze_deadline, FreezeDeadlineStatus},
+    governance::{check_weight_setter_path, WeightSetterStatus},
     liveness::read_indexer_progress,
     pager_state::{commit_page, ensure_pager_state_table, load_pager_state},
     receipt_liveness::{
@@ -226,11 +228,29 @@ async fn main() {
     let cadence = config.consensus_receipts.expected_cadence_secs;
     let gap_key = missing_receipt_dedup_key(chain_id);
     let baseline_key = no_baseline_dedup_key(chain_id);
-    let quorum_key = quorum_below_floor_dedup_key(chain_id);
+    let weight_setter_key = weight_setter_path_dedup_key(chain_id);
     let mut gap_pager = restore_pager(&pool, chain_id, &gap_key, cadence).await;
     let mut baseline_pager = restore_pager(&pool, chain_id, &baseline_key, cadence).await;
-    let mut quorum_pager =
-        restore_pager(&pool, chain_id, &quorum_key, config.governance.repage_secs).await;
+    let mut weight_setter_pager = restore_pager(
+        &pool,
+        chain_id,
+        &weight_setter_key,
+        config.governance.repage_secs,
+    )
+    .await;
+    // Issue 1809 (ADR-0014 §5): the release's freeze deadline passed with a
+    // proxy still upgradeable. One incident until every proxy reads frozen.
+    let freeze_key = freeze_deadline_dedup_key(chain_id);
+    let mut freeze_pager = restore_pager(
+        &pool,
+        chain_id,
+        &freeze_key,
+        config.freeze_deadline.repage_secs,
+    )
+    .await;
+    // Issue 1810: one page per executed proxy upgrade or freeze. `None` until
+    // the startup cursor has been read (retried every poll until it is).
+    let mut upgrade_cursor: Option<Option<watchdog::upgrade_events::UpgradeCursor>> = None;
     // DI-5: the indexer this daemon reads is behind its budget, so what the
     // daemon evaluates is not current. One incident, resolved once the indexer
     // is back within budget.
@@ -516,31 +536,35 @@ async fn main() {
             }
         }
 
-        // Standing quorum floor (task T22, decision D16). The contract's
-        // MIN_QUORUM_THRESHOLD stops a new deployment from being wired below
-        // the floor; this is the only thing that catches an ADMIN_ROLE holder
-        // lowering the threshold on a router that is already live, after
-        // AC-GOV-03's evidence was collected. Read-only; it never pauses.
+        // Standing weight-setter path (issue 1698). Router weights change only
+        // through RouterGovernance.applyReceipt on a Safe-scheduled timelock
+        // operation. The verifier checks the two role sets that make that true
+        // once, at deploy; this catches a grant executed after it. It replaced
+        // the quorumThreshold() floor check, whose view issue 1698 deleted.
+        // Read-only; it never pauses.
         if config.governance.enabled {
-            match check_quorum_floor(&client, &config.governance, chain_id).await {
-                Ok(QuorumStatus::BelowFloor(breach)) => {
+            match check_weight_setter_path(&client, &config.governance, chain_id).await {
+                Ok(WeightSetterStatus::Drifted(breach)) => {
                     error!(
                         chain_id,
-                        quorum_threshold = breach.threshold,
-                        min_quorum_threshold = breach.min_threshold,
-                        "RouterGovernance quorum threshold is below the floor — one voter is a quorum"
+                        weight_setter_role_count = breach.weight_setter_role.count,
+                        weight_setter_role_holders = ?breach.weight_setter_role.members,
+                        weight_setter_admin_count = breach.weight_setter_admins.count,
+                        weight_setter_admins = ?breach.weight_setter_admins.members,
+                        "router weight-setter path is not the configured one — weights can \
+                         change outside applyReceipt or without the timelock delay"
                     );
                     match config.action.webhook_url.as_deref() {
                         Some(url) => {
-                            let action = quorum_pager.on_firing(now);
+                            let action = weight_setter_pager.on_firing(now);
                             if action == PageAction::Trigger {
                                 let sent =
-                                    dispatch_quorum_below_floor_alert(&client, url, &breach).await;
+                                    dispatch_weight_setter_path_alert(&client, url, &breach).await;
                                 commit_page(
                                     &pool,
-                                    &mut quorum_pager,
+                                    &mut weight_setter_pager,
                                     chain_id,
-                                    &quorum_key,
+                                    &weight_setter_key,
                                     now,
                                     action,
                                     sent,
@@ -549,30 +573,30 @@ async fn main() {
                             }
                         }
                         None => error!(
-                            "quorum threshold is below the floor but action.webhook_url is unset \
+                            "the weight-setter path drifted but action.webhook_url is unset \
                              — the alert had nowhere to go"
                         ),
                     }
                 }
-                Ok(QuorumStatus::Ok { threshold }) => {
+                Ok(WeightSetterStatus::Ok) => {
                     if let Some(url) = config.action.webhook_url.as_deref() {
-                        let action = quorum_pager.on_clear(now);
+                        let action = weight_setter_pager.on_clear(now);
                         if action == PageAction::Resolve {
                             let sent =
-                                dispatch_quorum_below_floor_resolve(&client, url, chain_id).await;
+                                dispatch_weight_setter_path_resolve(&client, url, chain_id).await;
                             let ok = sent.is_ok();
                             commit_page(
                                 &pool,
-                                &mut quorum_pager,
+                                &mut weight_setter_pager,
                                 chain_id,
-                                &quorum_key,
+                                &weight_setter_key,
                                 now,
                                 action,
                                 sent,
                             )
                             .await;
                             if ok {
-                                info!(chain_id, threshold, "quorum-floor alert resolved");
+                                info!(chain_id, "weight-setter path alert resolved");
                             }
                         }
                     }
@@ -580,11 +604,141 @@ async fn main() {
                 // A failed read is not health: it is logged loudly every cycle.
                 // It is deliberately NOT a page of its own — an RPC outage is
                 // already the volume path's problem — but it must never be
-                // mistaken for a threshold that was read and found acceptable.
+                // mistaken for role sets that were read and found correct.
                 Err(e) => error!(
                     chain_id,
-                    "quorum floor check could not read RouterGovernance.quorumThreshold(): {e}"
+                    "weight-setter path check could not read the role sets: {e}"
                 ),
+            }
+        }
+
+        // Missed freeze deadline (issue 1809, ADR-0014 §5). The deadline is an
+        // operational commitment with no on-chain timer; P2 left this alert for
+        // later and QA plan v1 L1 added it. Before the deadline it reads
+        // nothing. Read-only; it never pauses, upgrades or freezes.
+        if config.freeze_deadline.enabled {
+            match check_freeze_deadline(&client, &config.freeze_deadline, chain_id, now).await {
+                Ok(FreezeDeadlineStatus::Missed(breach)) => {
+                    error!(
+                        chain_id,
+                        deadline_unix = breach.deadline_unix,
+                        days_overdue = breach.days_overdue(),
+                        unfrozen = ?breach.unfrozen.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+                        "the freeze deadline passed and a proxy is still upgradeable"
+                    );
+                    match config.action.webhook_url.as_deref() {
+                        Some(url) => {
+                            let action = freeze_pager.on_firing(now);
+                            if action == PageAction::Trigger {
+                                let sent =
+                                    dispatch_freeze_deadline_alert(&client, url, &breach).await;
+                                commit_page(
+                                    &pool,
+                                    &mut freeze_pager,
+                                    chain_id,
+                                    &freeze_key,
+                                    now,
+                                    action,
+                                    sent,
+                                )
+                                .await;
+                            }
+                        }
+                        None => error!(
+                            "the freeze deadline was missed but action.webhook_url is unset \
+                             — the alert had nowhere to go"
+                        ),
+                    }
+                }
+                Ok(FreezeDeadlineStatus::AllFrozen | FreezeDeadlineStatus::BeforeDeadline) => {
+                    if let Some(url) = config.action.webhook_url.as_deref() {
+                        let action = freeze_pager.on_clear(now);
+                        if action == PageAction::Resolve {
+                            let sent =
+                                dispatch_freeze_deadline_resolve(&client, url, chain_id).await;
+                            let ok = sent.is_ok();
+                            commit_page(
+                                &pool,
+                                &mut freeze_pager,
+                                chain_id,
+                                &freeze_key,
+                                now,
+                                action,
+                                sent,
+                            )
+                            .await;
+                            if ok {
+                                info!(chain_id, "freeze-deadline alert resolved");
+                            }
+                        }
+                    }
+                }
+                // A failed read is not a freeze: logged loudly every cycle, never
+                // taken as frozen, and not a page of its own (an RPC outage is
+                // the volume path's problem), as the weight-setter check does.
+                Err(e) => error!(
+                    chain_id,
+                    "freeze-deadline check could not read upgradesFrozen(): {e}"
+                ),
+            }
+        }
+
+        // Executed proxy upgrades and freezes (issue 1810, ADR-0014 §3, §5): one
+        // page per indexed event, oldest first. The cursor moves past an event
+        // only once its page was sent, so a webhook outage retries it.
+        if config.upgrade_events.enabled {
+            if upgrade_cursor.is_none() {
+                match watchdog::upgrade_events::startup_cursor(
+                    &pool,
+                    chain_id,
+                    config.upgrade_events.startup_lookback_secs,
+                )
+                .await
+                {
+                    Ok(c) => upgrade_cursor = Some(c),
+                    Err(e) => error!(
+                        chain_id,
+                        "upgrade-event check could not read its cursor: {e}"
+                    ),
+                }
+            }
+            if let Some(cursor) = upgrade_cursor {
+                match watchdog::upgrade_events::events_after(&pool, chain_id, cursor).await {
+                    Ok(events) => {
+                        for ev in events {
+                            info!(
+                                chain_id,
+                                proxy = %ev.contract,
+                                kind = %ev.kind,
+                                implementation = %ev.implementation,
+                                tx = %ev.tx_hash,
+                                "proxy upgrade event"
+                            );
+                            match config.action.webhook_url.as_deref() {
+                                Some(url) => {
+                                    if let Err(e) =
+                                        watchdog::upgrade_events::dispatch_upgrade_event_alert(
+                                            &client, url, &ev,
+                                        )
+                                        .await
+                                    {
+                                        error!(
+                                            chain_id,
+                                            "upgrade-event page failed, will retry: {e}"
+                                        );
+                                        break;
+                                    }
+                                }
+                                None => error!(
+                                    "a proxy upgrade event was indexed but action.webhook_url is \
+                                     unset — the alert had nowhere to go"
+                                ),
+                            }
+                            upgrade_cursor = Some(Some((ev.block_number, ev.log_index)));
+                        }
+                    }
+                    Err(e) => error!(chain_id, "upgrade-event check could not read events: {e}"),
+                }
             }
         }
 

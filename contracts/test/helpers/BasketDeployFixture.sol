@@ -8,6 +8,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {BasketVaultDeployBase} from "../../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {TestERC20} from "./TestERC20.sol";
+import {Proxied} from "./Proxied.sol";
 
 /// @dev Uniswap V3 pool double whose every field is an immutable or a constant, so its runtime code
 ///      can be etched at a real pool address with no storage. 1:1 TWAP, deep cardinality and
@@ -75,7 +76,7 @@ abstract contract BasketDeployFixture is Test {
 
     function _fixtureSetUp() internal {
         usdc = new TestERC20();
-        registry = new VaultRegistry(deployer);
+        registry = Proxied.vaultRegistry(deployer);
     }
 
     function _params() internal view returns (BasketVaultDeployBase.Params memory p) {

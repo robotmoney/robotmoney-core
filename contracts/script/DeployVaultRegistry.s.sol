@@ -7,7 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 
 /// @title DeployVaultRegistry
 /// @notice Foundry deploy script for the VaultRegistry contract.
@@ -25,8 +25,12 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           VAULT_NAME       — registered vault name, from the frozen sheet (no default)
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
-///         (mandatory and equal to 8453 on Base mainnet).
-contract DeployVaultRegistry is ExpectedChainGuard {
+///         (mandatory and equal to 8453 on Base mainnet), UPGRADE_AUTHORITY (the deployment's
+///         timelock, deployed first) and UPGRADE_MODE (`upgradeable` or `frozen-at-deploy`).
+///
+///         The registry is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+///         `initialize` in its constructor.
+contract DeployVaultRegistry is GovernedProxyDeploy {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "registry.json";
 
@@ -34,11 +38,14 @@ contract DeployVaultRegistry is ExpectedChainGuard {
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
+        /// The proxy.
         VaultRegistry registry;
         address admin;
         address vault;
         address asset;
         bool registered;
+        /// The implementation behind `registry` (ADR-0014).
+        address implementation;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys registry,
@@ -58,9 +65,10 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         // or mistyped address would register a vault with no code behind it.
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(asset.code.length > 0, "USDC_ADDRESS has no code on this chain");
+        _useEnvUpgradeConfig("");
 
         vm.startBroadcast();
-        d.registry = new VaultRegistry(admin);
+        (d.registry, d.implementation) = _deployRegistry(admin);
         d.admin = admin;
         d.vault = vault;
         d.asset = asset;
@@ -87,8 +95,9 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         require(admin_ != address(0), "ADMIN_ADDRESS=0");
         require(vault_ != address(0), "VAULT_ADDRESS=0");
         require(asset_ != address(0), "USDC_ADDRESS=0");
+        _useInProcessUpgradeConfig();
 
-        d.registry = new VaultRegistry(admin_);
+        (d.registry, d.implementation) = _deployRegistry(admin_);
         d.admin = admin_;
         d.vault = vault_;
         d.asset = asset_;
@@ -105,6 +114,22 @@ contract DeployVaultRegistry is ExpectedChainGuard {
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────
+
+    /// @dev The registry implementation and its initialized proxy (ADR-0014).
+    function _deployRegistry(address admin_)
+        internal
+        returns (VaultRegistry registry, address implementation)
+    {
+        implementation = address(new VaultRegistry());
+        registry = VaultRegistry(
+            _deployProxy(
+                implementation,
+                abi.encodeCall(
+                    VaultRegistry.initialize, (admin_, _upgrade.authority, _upgrade.mode)
+                )
+            )
+        );
+    }
 
     /// @dev Register `vault` if it is not already in the registry.
     ///      Returns true if registration happened, false if already present.
@@ -143,6 +168,10 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         string memory obj = "registry_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "registry", address(d.registry));
+        vm.serializeAddress(obj, "registry_implementation", d.implementation);
+        vm.serializeBytes32(obj, "registry_layout_id", _layoutId("VaultRegistry"));
+        vm.serializeAddress(obj, "upgrade_authority", _upgrade.authority);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(_upgrade.mode));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "vault", d.vault);
         vm.serializeAddress(obj, "asset", d.asset);

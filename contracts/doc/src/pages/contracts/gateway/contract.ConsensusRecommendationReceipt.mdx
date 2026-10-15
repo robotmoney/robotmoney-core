@@ -5,9 +5,9 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade), [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
 
 **Title:** ConsensusRecommendationReceipt
 
@@ -49,6 +49,11 @@ Payload contract: `tests/fixtures/consensus-receipt.schema.json` and
 
 Emits: `ReceiptRecorded`, `ReceiptReleased`.
 
+Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
+in the proxy's deployment transaction. Only the timelock named at `initialize`
+can upgrade it, and `freezeUpgrades` ends upgrades forever. Recorded receipts
+and their release state survive every upgrade.
+
 ## Constants
 
 ### ADMIN_ROLE
@@ -81,12 +86,20 @@ Domain separator for the receipt-id preimage, pinned by
 string internal constant RECEIPT_ID_DOMAIN = "robotmoney:consensus-receipt-id:v1\n";
 ```
 
+## State Variables
+
 ### gateway
 
 The RobotMoneyGateway. All receipt writes must originate here.
 
+<i>
+
+Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
+
+</i>
+
 ```solidity
-address public immutable gateway;
+address public gateway;
 ```
 
 **Returns**
@@ -99,8 +112,14 @@ address public immutable gateway;
 
 The InvestmentCommitteePolicy whose `COMMITTEE_AGENT_ROLE` gates submitters.
 
+<i>
+
+Written once by `initialize`; no setter.
+
+</i>
+
 ```solidity
-address public immutable icPolicy;
+address public icPolicy;
 ```
 
 **Returns**
@@ -108,8 +127,6 @@ address public immutable icPolicy;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
-
-## State Variables
 
 ### _receipts
 
@@ -137,12 +154,38 @@ mapping(bytes32 => uint256) private _indexPlusOne;
 
 ## Functions
 
-<a id="constructor-address-address-address"></a>
+<a id="constructor"></a>
 
 ### constructor
 
+<i>
+
+The implementation is never initialized: only a proxy is.
+
+</i>
+
+**Note:**
+
+- **oz-upgrades-unsafe-allow:** constructor
+
 ```solidity
-constructor(address admin_, address gateway_, address icPolicy_);
+constructor();
+```
+
+<a id="initialize-address-address-address-address-upgrademode"></a>
+
+### initialize
+
+Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+
+```solidity
+function initialize(
+        address admin_,
+        address gateway_,
+        address icPolicy_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer;
 ```
 
 **Parameters**
@@ -152,6 +195,8 @@ constructor(address admin_, address gateway_, address icPolicy_);
 | admin_ | `address` | Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.<br/>In every non-test deployment this is the<br/>`TimelockController` (INV-3). |
 | gateway_ | `address` | Deployed `RobotMoneyGateway`; sole permitted writer. |
 | icPolicy_ | `address` | Deployed `InvestmentCommitteePolicy`; the single source<br/>of `COMMITTEE_AGENT_ROLE` membership. |
+| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
+| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
 
 <a id="_revokerole-bytes32-address"></a>
 

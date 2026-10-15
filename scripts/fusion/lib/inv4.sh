@@ -14,10 +14,15 @@
 # only `totalAssets`, no `totalSupply`, and none of the accrual reasoning.
 #
 # THE RULES THIS FILE ENFORCES
-#   1. FOUR quantities, always: RouterGovernance.currentProposalId,
-#      PortfolioRouter.getWeights, and per mapped vault totalAssets AND
-#      totalSupply. AC-CORE-04 names vault balances, router weights and proposal
-#      count; totalSupply is what separates a share-price move from a deposit.
+#   1. FOUR quantities, always: PortfolioRouter.getEffectiveWeights (what
+#      deposits route by: the applied receipt vector when one is active,
+#      otherwise the default), PortfolioRouter.getWeights (the applied vector
+#      itself), and per mapped vault totalAssets AND totalSupply. AC-CORE-04
+#      named vault balances, router weights and proposal count; issue 1698
+#      deleted proposals with the voting path, so the effective vector takes
+#      that slot. A release that moved allocation by any path, including the
+#      applyReceipt path, moves one of the two weight readings. totalSupply is
+#      what separates a share-price move from a deposit.
 #   2. NO `2>&1` anywhere near a compared value. Error text must never be able to
 #      become a witness that compares equal to another error text.
 #   3. Every `cast call`'s exit status is checked. A read that did not answer
@@ -26,7 +31,7 @@
 #
 # Usage:
 #   source lib/inv4.sh
-#   snap="$(inv4_witnesses "$CAST_BIN" "$RPC" "$GOV" "$ROUTER" "${VAULTS[@]}")" || :
+#   snap="$(inv4_witnesses "$CAST_BIN" "$RPC" "$ROUTER" "${VAULTS[@]}")" || :
 #   inv4_unreadable "$snap" && <record a FAILURE>
 
 # A snapshot carrying this token is NOT a reading. It is the absence of one.
@@ -39,7 +44,7 @@ INV4_UNREADABLE_SENTINEL="INV4_WITNESS_UNREADABLE"
 # comparison stays exact equality and the WINDOW is what narrows, to bracket the
 # write stages only.
 # shellcheck disable=SC2034  # consumed by the sourcing harnesses, not by this file
-INV4_ACCRUAL_NOTE="NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY movement is a small totalAssets/totalSupply drift on a yield-bearing vault, attribute it before calling it an INV-4 breach; proposal count and router weights cannot drift and any movement there is real."
+INV4_ACCRUAL_NOTE="NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY movement is a small totalAssets/totalSupply drift on a yield-bearing vault, attribute it before calling it an INV-4 breach; router weights cannot drift and any movement there is real."
 
 # _inv4_read <cast-bin> <rpc-url> <target> <signature>
 # Echoes the whitespace-stripped value on stdout. Returns the failing exit status
@@ -52,21 +57,21 @@ _inv4_read() {
   printf '%s' "$out" | tr -d '[:space:]'
 }
 
-# inv4_witnesses <cast-bin> <rpc-url> <governance> <router> <vault>...
+# inv4_witnesses <cast-bin> <rpc-url> <router> <vault>...
 # stdout: one `key=value` line per witness. Returns 0 only when EVERY read
 # answered; otherwise prints a single sentinel line naming the unreadable
 # witness and returns non-zero.
 inv4_witnesses() {
-  local cast="$1" rpc="$2" gov="$3" router="$4"
-  shift 4
+  local cast="$1" rpc="$2" router="$3"
+  shift 3
   local out="" v val rc
 
-  if ! val="$(_inv4_read "$cast" "$rpc" "$gov" 'currentProposalId()(uint256)')"; then
+  if ! val="$(_inv4_read "$cast" "$rpc" "$router" 'getEffectiveWeights()(address[],uint256[])')"; then
     rc=$?
-    printf '%s witness=proposals target=%s exit=%s\n' "$INV4_UNREADABLE_SENTINEL" "$gov" "$rc"
+    printf '%s witness=effective_weights target=%s exit=%s\n' "$INV4_UNREADABLE_SENTINEL" "$router" "$rc"
     return 1
   fi
-  out+="proposals=$val"$'\n'
+  out+="effective_weights=$val"$'\n'
 
   if ! val="$(_inv4_read "$cast" "$rpc" "$router" 'getWeights()(address[],uint256[])')"; then
     rc=$?

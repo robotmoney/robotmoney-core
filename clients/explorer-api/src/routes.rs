@@ -22,6 +22,7 @@
 //   GET /v1/accounts/:address/history
 //   GET /v1/accounts/:address/policies
 //   GET /v1/accounts/:address/exclusion-claims       (core 1820, QA plan X7)
+//   GET /v1/upgrades?contract=                        (proxy upgrades and freezes, QA plan P3)
 //
 // Consensus recommendation receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
 //   GET /v1/consensus-receipts                        (protocol scope, ?limit=)
@@ -63,11 +64,12 @@ use crate::model::{
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, RegimeFeedResponse,
-    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
-    TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
-    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
-    VaultsResponse, WeightHistoryEntry,
+    DepositsResponse, EventKind, ExclusionClaim, Freshness, Health, ProxyUpgradeEventEntry,
+    ProxyUpgradeState, ProxyUpgradesResponse, RegimeFeedResponse, RegimeSnapshot,
+    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
+    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
+    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
+    WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -236,6 +238,8 @@ pub fn router(state: AppState) -> Router {
         // proposals route: RouterGovernance voting was deleted (issue 1698, migration 0023).
         .route("/v1/router/weights", get(get_router_weights))
         .route("/v1/governance/admin-events", get(list_admin_events))
+        // Proxy upgrades and freezes (ADR-0014) — QA plan P3, core 1810.
+        .route("/v1/upgrades", get(list_proxy_upgrades))
         // Multi-vault protocol stats endpoints (issue #316).
         .route("/v1/stats", get(get_stats))
         .route("/v1/router/state", get(get_router_state))
@@ -985,6 +989,146 @@ async fn list_admin_events(State(state): State<AppState>) -> ApiResult<Json<Admi
         .collect();
     let freshness = latest_freshness(&state).await?;
     Ok(Json(AdminEventsResponse { events, freshness }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpgradesQuery {
+    /// Limit both lists to one proxy. Optional.
+    pub contract: Option<String>,
+}
+
+// (block_number, log_index, tx_hash, contract, kind, implementation, code_hash, indexed_at)
+type ProxyUpgradeRow = (
+    i64,
+    i32,
+    Vec<u8>,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    DateTime<Utc>,
+);
+
+// (contract, contract_kind, implementation, upgraded_block, frozen_block, frozen_code_hash)
+type ProxyStateRow = (
+    Vec<u8>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<i64>,
+    Option<i64>,
+    Option<Vec<u8>>,
+);
+
+/// GET /v1/upgrades?contract=0x… — the indexed upgrade and freeze history of the proxied contracts
+/// (ADR-0014, QA plan P3, core 1810), and each proxy's state folded from it: the implementation of
+/// its newest `Upgraded`, and whether an `UpgradesFrozen` exists (a freeze is one-way).
+///
+/// This is disclosure from the index, never authority: rmpc and the dapp read the ERC-1967 slot from
+/// the chain before they sign or show a vault. A proxy deployed below the indexed range has no
+/// `Upgraded` row until its next upgrade.
+async fn list_proxy_upgrades(
+    State(state): State<AppState>,
+    Query(q): Query<UpgradesQuery>,
+) -> ApiResult<Json<ProxyUpgradesResponse>> {
+    let contract = q
+        .contract
+        .as_deref()
+        .map(decode_address_param)
+        .transpose()?;
+    let chain_id = state.chain_id;
+    let rows: Vec<ProxyUpgradeRow> = sqlx::query_as(
+        "SELECT block_number, log_index, tx_hash, contract, kind, implementation, code_hash, indexed_at \
+         FROM proxy_upgrade_events \
+         WHERE chain_id = $1 AND ($2::bytea IS NULL OR contract = $2) \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT 500",
+    )
+    .bind(chain_id)
+    .bind(contract.as_deref())
+    .fetch_all(&state.pool)
+    .await?;
+    let states: Vec<ProxyStateRow> = sqlx::query_as(
+        "WITH proxies AS ( \
+             SELECT DISTINCT contract FROM proxy_upgrade_events \
+             WHERE chain_id = $1 AND ($2::bytea IS NULL OR contract = $2) \
+         ) \
+         SELECT p.contract, \
+                (SELECT c.kind FROM contracts c WHERE c.chain_id = $1 AND c.address = p.contract), \
+                u.implementation, u.block_number, f.block_number, f.code_hash \
+         FROM proxies p \
+         LEFT JOIN LATERAL ( \
+             SELECT implementation, block_number FROM proxy_upgrade_events \
+             WHERE chain_id = $1 AND contract = p.contract AND kind = 'upgraded' \
+             ORDER BY block_number DESC, log_index DESC LIMIT 1 \
+         ) u ON TRUE \
+         LEFT JOIN LATERAL ( \
+             SELECT block_number, code_hash FROM proxy_upgrade_events \
+             WHERE chain_id = $1 AND contract = p.contract AND kind = 'frozen' \
+             ORDER BY block_number ASC, log_index ASC LIMIT 1 \
+         ) f ON TRUE \
+         ORDER BY p.contract",
+    )
+    .bind(chain_id)
+    .bind(contract.as_deref())
+    .fetch_all(&state.pool)
+    .await?;
+    let contracts = states
+        .into_iter()
+        .map(
+            |(
+                contract,
+                contract_kind,
+                implementation,
+                upgraded_block,
+                frozen_block,
+                frozen_code_hash,
+            )| {
+                ProxyUpgradeState {
+                    chain_id,
+                    contract: addr_to_hex(&contract),
+                    contract_kind,
+                    implementation: implementation.map(|a| addr_to_hex(&a)),
+                    upgraded_block,
+                    upgrades_frozen: frozen_block.is_some(),
+                    frozen_block,
+                    frozen_code_hash: frozen_code_hash.map(|h| hash_to_hex(&h)),
+                }
+            },
+        )
+        .collect();
+    let events = rows
+        .into_iter()
+        .map(
+            |(
+                block_number,
+                log_index,
+                tx_hash,
+                contract,
+                kind,
+                implementation,
+                code_hash,
+                indexed_at,
+            )| {
+                ProxyUpgradeEventEntry {
+                    chain_id,
+                    block_number,
+                    log_index,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    contract: addr_to_hex(&contract),
+                    kind,
+                    implementation: addr_to_hex(&implementation),
+                    code_hash: code_hash.map(|h| hash_to_hex(&h)),
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(ProxyUpgradesResponse {
+        contracts,
+        events,
+        freshness,
+    }))
 }
 
 // ─── Multi-vault protocol stats handlers (issue #316) ─────────────────────

@@ -230,13 +230,13 @@ contract DeployAgentTokenVaultTest is BasketDeployFixture {
             uint24 fee,
             bool active,
             address adapter,
-            BasketVault.Venue venue
+            BasketAssetConfigGuard.Venue venue
         ) = v.assets(0);
         assertEq(t, RM_TOKEN, "asset is RM");
         assertEq(pool, address(recorder), "the registered pool is the price recorder");
         assertEq(uint256(fee), 29100, "fee 29100");
         assertTrue(active, "active");
-        assertEq(uint256(venue), uint256(BasketVault.Venue.V4), "venue V4");
+        assertEq(uint256(venue), uint256(BasketAssetConfigGuard.Venue.V4), "venue V4");
         assertTrue(adapter != address(0), "adapter deployed");
         assertEq(adapter, d.adapterV4, "the V4 adapter is the asset adapter");
         assertEq(d.adapter, address(0), "a vault whose assets are all V4 deploys no V3 adapter");

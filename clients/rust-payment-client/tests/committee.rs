@@ -215,6 +215,7 @@ fn committee_vote_submit_base_mainnet_signs_with_software_keystore() {
 async fn test_committee_vote_submit_happy_path() {
     let mut server = mockito::Server::new_async().await;
     let fix = CommitteeFixture::build(&server.url());
+    common::install_gateway_pin_mocks(&mut server).await;
 
     // eth_chainId
     server
@@ -385,6 +386,7 @@ async fn test_committee_vote_submit_happy_path() {
 async fn test_committee_vote_submit_unauthorized_rejected() {
     let mut server = mockito::Server::new_async().await;
     let fix = CommitteeFixture::build(&server.url());
+    common::install_gateway_pin_mocks(&mut server).await;
 
     // eth_chainId
     server
@@ -633,6 +635,7 @@ fn reverted_receipt_body() -> String {
 /// Install the five RPC mocks a committee write needs, with the receipt the
 /// caller chooses.
 async fn install_committee_mocks(server: &mut mockito::Server, receipt_body: &str) {
+    common::install_gateway_pin_mocks(server).await;
     for (method, body) in [
         ("eth_chainId", jrpc_result(&format!("0x{CHAIN_ID:x}"))),
         ("eth_feeHistory", jrpc_result_raw(&fee_history_body())),
@@ -943,4 +946,96 @@ fn committee_check_agent_without_ic_policy_address_is_unknown() {
 
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(v["error"], "ErrIcContractNotConfigured");
+}
+
+// ─── Issue 1810: the gateway is checked before a committee write signs ──────
+
+/// The gateway is an ERC-1967 proxy and the config pins no implementation.
+/// `vote-submit` refuses with `ErrImplementationNotApproved` (exit 2) after
+/// checks 1 and 2 pass, and no transaction is signed or sent.
+#[tokio::test]
+async fn committee_vote_submit_refuses_an_unpinned_gateway_implementation() {
+    let mut server = mockito::Server::new_async().await;
+    let fix = CommitteeFixture::build(&server.url());
+    let implementation = address!("00000000000000000000000000000000000001a1");
+    install_committee_mocks(&mut server, &simple_receipt_body()).await;
+    // Registered after the direct-gateway set, so these answer.
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!(
+            "0x{}",
+            common::abi_addr_hex(implementation)
+        )))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#"(?i)"params":\["{implementation:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result("0x6001600055"))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let vote_hash = format!("{VOTE_JSON_HASH:#x}");
+    let prompt = format!("{PROMPT_HASH:#x}");
+    let inputs = format!("{INPUTS_DIGEST:#x}");
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "neutral",
+            "--weight-bps",
+            "2500",
+            "--confidence",
+            "50",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/pin",
+            "--vote-json-hash",
+            &vote_hash,
+            "--prompt-hash",
+            &prompt,
+            "--inputs-digest",
+            &inputs,
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    assert_eq!(output.status.code(), Some(2), "a refusal, not a send");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ErrImplementationNotApproved"),
+        "names the refusal: {stdout}"
+    );
+    send.assert_async().await;
 }

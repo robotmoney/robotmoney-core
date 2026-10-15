@@ -6,12 +6,18 @@ old ADR with a new one rather than rewriting history.
 
 File names follow `ADR-NNNN-short-kebab-title.md`.
 
+Number 0003 was given twice on 2026-06-02: to the basket-vault preview ADR
+(PR 572) and to the rebalancing-model ADR (PR 575). Both keep their file
+names, because contract NatSpec, generated pages and other ADRs link them.
+Cite either one by its full file name, never by the number alone. A new
+ADR takes the next number after the highest one in the table.
+
 | # | Title | Status |
 | --- | --- | --- |
 | 0001 | [MVP agent-token shortlist is hand-picked, not quant-filtered](ADR-0001-mvp-agent-token-shortlist.md) | Accepted (amended 2026-10-05) |
 | 0002 | [Router default weights live on-chain, not derived from the front-end](ADR-0002-router-default-weights-on-chain.md) | Accepted (amended 2026-10-05) |
-| 0003 | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
-| 0003 | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
+| 0003 (preview) | [Slippage-adjusted basket-vault previewRedeem/previewDeposit (worst-case floor)](ADR-0003-slippage-adjusted-basket-vault-preview.md) | Accepted |
+| 0003 (rebalancing) | [BasketVault rebalancing model — trigger, target weights, cost disclosure](ADR-0003-basketvault-rebalancing-model.md) | Accepted |
 | 0004 | [Agent-token shortlist governance mechanism enabling rmAGENT router-eligibility](ADR-0004-agent-token-shortlist-governance.md) | Accepted (amended 2026-10-05) |
 | 0005 | [BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4](ADR-0005-basketvault-multi-dex-routing.md) | Accepted (amended 2026-10-05) |
 | 0006 | [deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk](ADR-0006-despxa-rwa-vault-design.md) | Superseded in part (amended 2026-10-05) |
@@ -22,3 +28,4 @@ File names follow `ADR-NNNN-short-kebab-title.md`.
 | 0011 | [Fork tests run against checked-in golden fixtures on every merge](ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) | Superseded by the Twin chain, a pinned lazy fork (core 1495, 1496, 1498) |
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
 | 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |
+| 0014 | [Governed UUPS upgrades and a permanent freeze for the stateful core contracts](ADR-0014-governed-upgrades-and-freeze.md) | Proposed — implemented on qa/test-merge-v1 on the QA plan v1 defaults (Decisions D4), pending owner acceptance |

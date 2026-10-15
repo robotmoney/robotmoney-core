@@ -38,6 +38,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 // ─── Test fixtures ──────────────────────────────────────────────────────────
 
@@ -155,8 +156,8 @@ contract V2MigrationIntegrationTest is Test {
     ///      steady state the migration starts from.
     function setUp() public {
         usdc = new MigUsdc();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
 
         v1a = new MigVault(address(usdc), "V1A");
         v1b = new MigVault(address(usdc), "V1B");
@@ -387,15 +388,16 @@ contract V2MigrationIntegrationTest is Test {
         router.setDefaultWeights(_vaults2(address(v1a), address(v2a)), _bps2(5000, 5000));
     }
 
-    // ─── Router-weight (voted) migration also spans the v2 set ──────────────
+    // ─── Router-weight (applied) migration also spans the v2 set ────────────
 
-    /// @notice Beyond the default (below-quorum) vector, the governance-voted
-    ///         weight vector migrates to the v2 set too: after `setWeights` on
-    ///         the v2 set, the router routes a deposit by the voted weights.
+    /// @notice Beyond the default (fallback) vector, the applied weight vector
+    ///         (the one `RouterGovernance.applyReceipt` writes) migrates to the v2
+    ///         set too: after `setWeights` on the v2 set, the router routes a
+    ///         deposit by the applied weights.
     function test_migration_votedWeightsSpanV2Set() public {
         _migrateToV2();
 
-        // Governance votes an (asymmetric) weight vector over the v2 set.
+        // The weight setter applies an (asymmetric) weight vector over the v2 set.
         vm.prank(admin);
         router.setWeights(_vaults2(address(v2a), address(v2b)), _bps2(3000, 7000));
         assertTrue(router.votedWeightsActive(), "voted vector active");

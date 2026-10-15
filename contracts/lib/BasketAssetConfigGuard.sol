@@ -34,23 +34,41 @@ library BasketAssetConfigGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    /// @dev Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is the Uniswap V4 venue: its "pool"
-    ///      is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`, `liquidity`, `slot0` and `observe`
-    ///      like a V3 pool, so every check below applies to it unchanged (core 1676).
+    /// @notice DEX venue of a basket asset. The one declaration: `BasketVault.addAsset`, its `AssetAdded` event and
+    ///         `assets(i).venue` all use it (ADR-0014 §8). Ordinals are ABI-visible: V3 0, V4 1, Aerodrome 2. V4 is the
+    ///         Uniswap V4 venue: its "pool" is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`,
+    ///         `liquidity`, `slot0` and `observe` like a V3 pool, so every check below applies to it unchanged (core 1676).
     enum Venue {
         V3,
         V4,
         Aerodrome
     }
 
-    /// @dev Layout-compatible mirror of `BasketVault.AssetInfo`. Field order and
-    ///      types MUST match exactly so the delegatecall-linked dedup scan below
-    ///      reads/writes the vault's `assets` storage correctly.
+    /// @notice One basket row. The ONE declaration (ADR-0014 §8): `BasketVault.assets` is an array of this type, and
+    ///         every function below that takes `AssetInfo[] storage` writes the vault's own array through it. There is
+    ///         no mirror and no storage-pointer cast. The storage-layout gate pins this struct
+    ///         (`contracts/test/fixtures/storage-layout/*BasketVault*.json`): any change to it fails the gate, because
+    ///         live proxies hold rows in this exact shape. A new field needs a new struct in a new mapping.
+    /// @param token   ERC-20 basket token.
+    /// @param pool    DEX pool pairing `token` with USDC (venue-specific; the V4 recorder for `Venue.V4`).
+    /// @param swapFee Fee parameter forwarded to the adapter (Uniswap fee tier, or Aerodrome tick spacing).
+    /// @param active  False once removed. Inactive rows are kept and reused on re-add (NC-8).
+    /// @param adapter Swap + TWAP adapter; address(0) is the default Uniswap V3 path via `SWAP_ROUTER`.
+    /// @param venue   DEX venue the row is wired to.
     struct AssetInfo {
         address token;
         address pool;
         uint24 swapFee;
         bool active;
+        address adapter;
+        Venue venue;
+    }
+
+    /// @notice The arguments of `BasketVault.addAsset`, as one memory value for `addAsset` below.
+    struct NewAsset {
+        address token;
+        address pool;
+        uint24 swapFee;
         address adapter;
         Venue venue;
     }
@@ -142,6 +160,39 @@ library BasketAssetConfigGuard {
         catch {
             revert InsufficientObservationHistory(pool, twapWindow);
         }
+    }
+
+    /// @notice The body of `BasketVault.addAsset` after its zero-address and basket-size checks
+    ///         (ADR-0014 §9: one linked call instead of four keeps the vault under EIP-170). Runs, in
+    ///         order: the ADP-2 adapter allowlist (`adapterAllowed` is the vault's codehash verdict),
+    ///         the ORA-3 execution-pool check, pool usability over `twapWindow` with `minLiquidity`,
+    ///         and the NC-8 duplicate rule. Appends a new row unless an inactive row for the token
+    ///         was reactivated in place.
+    /// @return index The registry index of the added or reactivated row.
+    function addAsset(
+        AssetInfo[] storage assets,
+        NewAsset memory a,
+        bool adapterAllowed,
+        address usdc,
+        uint32 twapWindow,
+        uint128 minLiquidity
+    ) public returns (uint256 index) {
+        requireAllowedAdapter(a.adapter, adapterAllowed);
+        requireExecutionPoolMatchesTwap(a.pool, a.swapFee, a.venue);
+        requirePoolUsable(a.pool, a.token, usdc, twapWindow, minLiquidity);
+        index = reuseOrRejectDuplicate(assets, a.token, a.pool, a.swapFee, a.adapter, a.venue);
+        if (index != type(uint256).max) return index;
+        assets.push(
+            AssetInfo({
+                token: a.token,
+                pool: a.pool,
+                swapFee: a.swapFee,
+                active: true,
+                adapter: a.adapter,
+                venue: a.venue
+            })
+        );
+        return assets.length - 1;
     }
 
     /// @notice NC-8 (no duplicate AssetInfo): if `token` already has an entry in

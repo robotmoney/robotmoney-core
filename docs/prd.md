@@ -103,8 +103,7 @@ Access expectations:
 - There is no protocol agent key. An agent belongs to a depositor, runs
   `rmpc` with that depositor's key, and is authorized by that depositor
   through commit and reveal. The protocol deploy authorizes no agent
-  (deploy-time agent removal not yet implemented: tracked in the mainnet
-  plan).
+  (core 1527).
 - Any user can view allocation-weight governance history: the consensus
   receipts the Safe applied through the timelock and the resulting
   weights. There is no voting by token holders or anyone else.
@@ -491,7 +490,8 @@ after the timelock delay, so deposits open on day 2 of the mainnet launch
 table's (`scripts/deploy/stage-table.json` `vaults[]`, issue 1705).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
-48 hours (open executor not yet implemented: core #1521). All products are
+48 hours (core #1521: `DeployTimelock` opens `EXECUTOR_ROLE` to
+`address(0)` and the stage 12 verifier checks it). All products are
 eligible for Portfolio Router allocation — four initially, extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
@@ -513,7 +513,7 @@ the shortfall from the remaining strategies before reverting.
 | Risk label | VOLATILE |
 | Exposure | Basket of protocol assets via Uniswap V3 swaps: wETH and cbBTC at launch; wSOL is added later through the timelock |
 | Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
+| Exit fee | Configurable 0–1% for rmPROTO on its own; the rmUSDC rate does not apply. The rate is set at deploy and changes only through the timelock; its current value must be disclosed before approval |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
@@ -563,15 +563,15 @@ Router allocation.
 | Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (one venue per asset) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
 | MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); RM at launch, BNKR and JUNO added later through the timelock; current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
-| Exit fee | Configurable 0–1%; the live rmUSDC vault charges 25 bps (0.25%) |
+| Exit fee | Configurable 0–1% for rmAGENT on its own; the rmUSDC rate does not apply. The rate is set at deploy and changes only through the timelock; its current value must be disclosed before approval |
 | Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
 | Status | Router-eligible after readiness review (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with an
 equal-weighted target basket drawn from BNKR, JUNO, RM (Base-chain
 only). rmAGENT launches holding RM only: the existing ROBOTMONEY token on
-Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (not yet implemented:
-core #1491). BNKR and JUNO are added later through the timelock. Each token
+Base at `0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3` (core #1491).
+BNKR and JUNO are added later through the timelock. Each token
 routes through one venue under the per-asset venue abstraction in
 [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md). RM's venue is
 decided (owner, 2026-10-08; supersedes 2026-10-06): the Uniswap V4 RM/USDC pool with fee 2.91%

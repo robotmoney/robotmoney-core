@@ -15,6 +15,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @dev Safe 1.4.1 read surface used by the full deploy-time Safe checks.
@@ -154,6 +155,20 @@ interface IRouterGovernanceReceipt {
 ///                                    with CONSENSUS_RECEIPT_ADDRESS; revoked from
 ///                                    here instead of msg.sender. No default.
 ///
+///
+///         ADR-0014 §4 (the timelock is deployed before every proxy): `runAuthority` is the
+///         `authority` stage, the stage right before the first proxy stage (run through
+///         `DeployUpgradeAuthority`). It deploys the ProposerFloorTimelock alone (the Safe as sole proposer and
+///         canceller, open executor, no admin) and writes its address, which every proxy stage
+///         names as UPGRADE_AUTHORITY. This handover stage (`run`) then reuses that timelock:
+///           TIMELOCK_ADDRESS       — the timelock `runAuthority` deployed. Required on every
+///                                    chain. The script checks it is a ProposerFloorTimelock with
+///                                    the Safe as its one proposer and TIMELOCK_MIN_DELAY as its
+///                                    delay, and that every proxied contract handed over names it
+///                                    as `upgradeAuthority()`, so ADMIN_ROLE and upgrade power
+///                                    always land on one timelock. Only the in-process test entry
+///                                    points (nothing broadcast) may still deploy one here.
+///
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
@@ -239,8 +254,76 @@ contract DeployTimelock is ExpectedChainGuard {
     /// @notice Broadcast entrypoint. Reads env vars, deploys timelock, and
     ///         transfers ADMIN_ROLE on all five contracts (plus the optional
     ///         IC policy / consensus receipt handover — issue #1319).
-    function run() external returns (Deployed memory d) {
+    function run() external virtual returns (Deployed memory d) {
         return _runFrom("");
+    }
+
+    /// @notice What `runAuthority` deployed (ADR-0014 §4).
+    struct Authority {
+        ProposerFloorTimelock timelock;
+        address safe;
+        uint256 minDelay;
+        bool rehearsal;
+    }
+
+    /// @notice Body of the `authority` stage (ADR-0014 §4), before every proxy: deploy only the timelock
+    ///         every proxy names as its upgrade authority. Reads SAFE_ADDRESS, SAFE_OWNERS,
+    ///         SAFE_THRESHOLD, TIMELOCK_MIN_DELAY, DEPLOYMENT_KIND, EXPECTED_CHAIN_ID and
+    ///         DEPLOYMENT_OUT, with the same Safe and delay checks as the handover. Grants no role
+    ///         on any Robot Money contract (none exists yet). The stage driver runs it as the
+    ///         `authority` stage through `DeployUpgradeAuthority.run()` (its own script file and
+    ///         broadcast file; manifest `upgrade-authority.json`, issue #1809).
+    function runAuthority() external returns (Authority memory a) {
+        return _runAuthorityFrom("");
+    }
+
+    /// @dev The body of `runAuthority`; `prefix` as in `_runFrom`.
+    function _runAuthorityFrom(string memory prefix) internal returns (Authority memory a) {
+        a.safe = _envAddressRequired(string.concat(prefix, "SAFE_ADDRESS"));
+        a.minDelay = _envUintRequired(string.concat(prefix, "TIMELOCK_MIN_DELAY"));
+        a.rehearsal = _readRehearsal(prefix);
+        uint256 safeThreshold = _envUintRequired(string.concat(prefix, "SAFE_THRESHOLD"));
+        address[] memory safeOwners = _readAddressList(string.concat(prefix, "SAFE_OWNERS"));
+        string memory outPath = _envStringRequired(string.concat(prefix, "DEPLOYMENT_OUT"));
+        _requireExpectedChain(prefix);
+        _validateAuthority(
+            a.safe,
+            a.minDelay,
+            a.rehearsal,
+            SafeSpec({owners: safeOwners, threshold: safeThreshold})
+        );
+
+        vm.startBroadcast();
+        a.timelock = _deployTimelock(a.minDelay, a.safe);
+        vm.stopBroadcast();
+
+        string memory obj = "upgrade_authority";
+        vm.serializeUint(obj, "chain_id", block.chainid);
+        vm.serializeAddress(obj, "safe", a.safe);
+        vm.serializeUint(obj, "min_delay", a.minDelay);
+        vm.serializeString(obj, "deployment_kind", a.rehearsal ? "rehearsal" : "production");
+        vm.serializeBytes32(obj, "timelock_codehash", address(a.timelock).codehash);
+        string memory json = vm.serializeAddress(obj, "timelock", address(a.timelock));
+        vm.writeJson(json, outPath);
+        console2.log("Upgrade authority (timelock) deployed:", address(a.timelock));
+    }
+
+    /// @notice In-process form of `runAuthority` for forge tests. Caller sets up prank context.
+    function runInProcessAuthority(address safe_, uint256 minDelay_, SafeSpec memory safeSpec_)
+        external
+        returns (ProposerFloorTimelock timelock)
+    {
+        _validateAuthority(safe_, minDelay_, false, safeSpec_);
+        timelock = _deployTimelock(minDelay_, safe_);
+    }
+
+    /// @dev Test seam: the in-process handover entry points reuse this timelock instead of
+    ///      deploying one, the in-process form of TIMELOCK_ADDRESS (ADR-0014 §4).
+    address internal _existingTimelock;
+
+    /// @notice Test seam: make the next in-process handover reuse `timelock_` (zero clears it).
+    function useExistingTimelock(address timelock_) external {
+        _existingTimelock = timelock_;
     }
 
     // ─── Internal ──────────────────────────────────────────────────────────────
@@ -272,6 +355,16 @@ contract DeployTimelock is ExpectedChainGuard {
         require(d.consensusReceipt != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
         require(d.receiptAdmin != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         _envStringRequired(string.concat(prefix, "DEPLOYMENT_OUT"));
+        // ADR-0014 §4: the timelock the authority stage deployed, which every proxy names.
+        // Required on every chain (Twin, demo and rehearsal included): a handover that deployed
+        // its own timelock would put ADMIN_ROLE on a timelock that is not the proxies' upgrade
+        // authority. `_deployAndWire` then checks every handed-over proxy names it.
+        address existing = _envAddressRequired(string.concat(prefix, "TIMELOCK_ADDRESS"));
+        require(
+            existing != address(0),
+            "TIMELOCK_ADDRESS must be set: the upgrade authority runAuthority deployed"
+        );
+        d.timelock = TimelockController(payable(existing));
 
         // Strict on 8453 (unset EXPECTED_CHAIN_ID no longer disables it). The delay
         // floor lives in `_validate`, so every entry point enforces it.
@@ -472,9 +565,7 @@ contract DeployTimelock is ExpectedChainGuard {
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
         require(d.router != address(0), "ROUTER_ADDRESS=0");
         require(d.governance != address(0), "GOVERNANCE_ADDRESS=0");
-        require(d.safe != address(0), "SAFE_ADDRESS=0");
         require(d.emergency != address(0), "EMERGENCY_ADDRESS=0");
-        require(d.minDelay > 0, "TIMELOCK_MIN_DELAY=0");
 
         // ACL-1 / F-01: the emergency hot key must be independent of the deployer
         // EOA. After handover the deployer holds NO privileged role; routing the
@@ -482,24 +573,38 @@ contract DeployTimelock is ExpectedChainGuard {
         // EOA-retains-a-privileged-role gap this script closes.
         require(d.emergency != msg.sender, "EMERGENCY_ADDRESS == deployer EOA");
 
+        _validateAuthority(d.safe, d.minDelay, d.rehearsal, spec);
+    }
+
+    /// @dev The Safe and delay checks shared by the handover (`_validate`) and the authority stage
+    ///      (`runAuthority`, ADR-0014 §4).
+    function _validateAuthority(
+        address safe,
+        uint256 minDelay,
+        bool rehearsal,
+        SafeSpec memory spec
+    ) internal view {
+        require(safe != address(0), "SAFE_ADDRESS=0");
+        require(minDelay > 0, "TIMELOCK_MIN_DELAY=0");
+
         // Delay floor, keyed to the chain id (security-model.md §4). A require, never a
         // different code path: 8453 refuses anything under 48 hours, every other chain
         // (the Twin chain 918453, anvil) accepts any non-zero delay. The contract is
         // stock OpenZeppelin and carries no floor of its own.
-        if (d.rehearsal) {
+        if (rehearsal) {
             // Issue 1727: a rehearsal-kind run carries a short delay on any chain, and never a production one.
             require(
-                d.minDelay >= MIN_REHEARSAL_DELAY && d.minDelay < MIN_PRODUCTION_DELAY,
+                minDelay >= MIN_REHEARSAL_DELAY && minDelay < MIN_PRODUCTION_DELAY,
                 "rehearsal TIMELOCK_MIN_DELAY outside 900..172799"
             );
         } else if (block.chainid == BASE_MAINNET_CHAIN_ID) {
             require(
-                d.minDelay >= MIN_PRODUCTION_DELAY,
+                minDelay >= MIN_PRODUCTION_DELAY,
                 "TIMELOCK_MIN_DELAY below 172800 (48h) on Base mainnet"
             );
         }
 
-        _requireRealSafe(d.safe, spec.owners, spec.threshold);
+        _requireRealSafe(safe, spec.owners, spec.threshold);
     }
 
     /// @dev The full Safe check. The address must be a SafeProxy 1.4.1 (code and
@@ -558,28 +663,86 @@ contract DeployTimelock is ExpectedChainGuard {
         );
     }
 
-    function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {
-        // 1. Deploy the timelock: ProposerFloorTimelock, an OZ TimelockController
-        //    whose _revokeRole refuses to drop the last PROPOSER_ROLE holder
-        //    (revokeRole and renounceRole both; issue #1645 question 1, CS-3).
-        //    proposers = [safe], executors = [address(0)], admin = address(0)
-        //    OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
-        //    proposer and canceller. address(0) as executor opens EXECUTOR_ROLE
-        //    to any caller once the delay has elapsed (security-model §4; core 1521).
-        //    admin = address(0) means the timelock is self-administered
-        //    (the safe can change delay/roles only through the timelock). With the
-        //    floor, the Safe can give up PROPOSER_ROLE only after another proposer
-        //    holds it, so the governed contracts can never lose every proposer.
+    /// @dev Deploy the timelock: ProposerFloorTimelock, an OZ TimelockController whose
+    ///      _revokeRole refuses to drop the last PROPOSER_ROLE holder (revokeRole and renounceRole
+    ///      both; issue #1645 question 1, CS-3). proposers = [safe], executors = [address(0)],
+    ///      admin = address(0). OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
+    ///      proposer and canceller. address(0) as executor opens EXECUTOR_ROLE to any caller once
+    ///      the delay has elapsed (security-model §4; core 1521). admin = address(0) means the
+    ///      timelock is self-administered (the safe can change delay/roles only through the
+    ///      timelock). With the floor, the Safe can give up PROPOSER_ROLE only after another
+    ///      proposer holds it, so the governed contracts can never lose every proposer.
+    function _deployTimelock(uint256 minDelay, address safe)
+        internal
+        returns (ProposerFloorTimelock floored)
+    {
         address[] memory proposers = new address[](1);
-        proposers[0] = d.safe;
+        proposers[0] = safe;
         address[] memory executors = new address[](1);
         executors[0] = address(0);
 
-        ProposerFloorTimelock floored =
-            new ProposerFloorTimelock(d.minDelay, proposers, executors, address(0));
+        floored = new ProposerFloorTimelock(minDelay, proposers, executors, address(0));
         // The floor counted the one proposer the constructor granted. A count of 1 is
         // what makes the Safe's own PROPOSER_ROLE irrevocable until a second proposer exists.
         require(floored.proposerCount() == 1, "Timelock proposer floor did not count the Safe");
+    }
+
+    /// @dev ADR-0014 §4: a reused timelock (TIMELOCK_ADDRESS, or the in-process seam) must be the
+    ///      authority stage's ProposerFloorTimelock: the Safe its one proposer and canceller, the
+    ///      executor open, the delay TIMELOCK_MIN_DELAY, and the deployer no admin. Every proxied
+    ///      contract this run hands over must name it as `upgradeAuthority()`, so the role
+    ///      handover and the upgrade authority land on the same timelock.
+    function _requireAuthorityTimelock(ProposerFloorTimelock t, Deployed memory d) internal view {
+        require(address(t).code.length > 0, "TIMELOCK_ADDRESS has no code");
+        require(t.proposerCount() == 1, "TIMELOCK_ADDRESS: proposer count is not 1");
+        require(t.hasRole(t.PROPOSER_ROLE(), d.safe), "TIMELOCK_ADDRESS: Safe is not the proposer");
+        require(
+            t.hasRole(t.CANCELLER_ROLE(), d.safe), "TIMELOCK_ADDRESS: Safe is not the canceller"
+        );
+        require(t.hasRole(t.EXECUTOR_ROLE(), address(0)), "TIMELOCK_ADDRESS: executor is not open");
+        require(
+            !t.hasRole(t.DEFAULT_ADMIN_ROLE(), msg.sender),
+            "TIMELOCK_ADDRESS: deployer is its admin"
+        );
+        require(t.getMinDelay() == d.minDelay, "TIMELOCK_ADDRESS delay != TIMELOCK_MIN_DELAY");
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            _requireUpgradeAuthority(d.vaults[i], address(t), "vault");
+        }
+        _requireUpgradeAuthority(d.gateway, address(t), "gateway");
+        _requireUpgradeAuthority(d.registry, address(t), "registry");
+        _requireUpgradeAuthority(d.router, address(t), "router");
+        if (d.icPolicy != address(0)) {
+            _requireUpgradeAuthority(d.icPolicy, address(t), "ic_policy");
+        }
+        if (d.consensusReceipt != address(0)) {
+            _requireUpgradeAuthority(d.consensusReceipt, address(t), "consensus_receipt");
+        }
+    }
+
+    function _requireUpgradeAuthority(address proxy, address timelock, string memory label)
+        internal
+        view
+    {
+        require(
+            GovernedUpgrade(proxy).upgradeAuthority() == timelock,
+            string.concat(label, ": upgradeAuthority() is not TIMELOCK_ADDRESS")
+        );
+    }
+
+    function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {
+        // 1. The timelock. ADR-0014 §4: the authority stage deployed it before every proxy
+        //    (TIMELOCK_ADDRESS, or the in-process seam); reuse it after checking it. `run()` always
+        //    supplies one. Only the in-process test entry points (nothing broadcast) may arrive
+        //    without one; they deploy it here as before.
+        address existing =
+            address(d.timelock) != address(0) ? address(d.timelock) : _existingTimelock;
+        ProposerFloorTimelock floored;
+        if (existing != address(0)) {
+            floored = ProposerFloorTimelock(payable(existing));
+            _requireAuthorityTimelock(floored, d);
+        } else {
+            floored = _deployTimelock(d.minDelay, d.safe);
+        }
         timelock = floored;
 
         // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is

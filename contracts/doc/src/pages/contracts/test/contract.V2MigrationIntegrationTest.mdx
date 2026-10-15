@@ -149,9 +149,10 @@ function test_retiredV1_blocksNewDeposits() public;
 
 ### test_migration_votedWeightsSpanV2Set
 
-Beyond the default (below-quorum) vector, the governance-voted
-weight vector migrates to the v2 set too: after `setWeights` on
-the v2 set, the router routes a deposit by the voted weights.
+Beyond the default (fallback) vector, the applied weight vector
+(the one `RouterGovernance.applyReceipt` writes) migrates to the v2
+set too: after `setWeights` on the v2 set, the router routes a
+deposit by the applied weights.
 
 ```solidity
 function test_migration_votedWeightsSpanV2Set() public;

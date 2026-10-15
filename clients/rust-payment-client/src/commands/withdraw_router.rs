@@ -392,6 +392,23 @@ pub fn run(args: Args) -> i32 {
         }
     }
 
+    // -- The router the gateway redeems through (ADR-0014) ---------------
+    // `run_withdraw_vault` checked each leg vault's implementation. The
+    // router is a proxy too: refuse unless its implementation is pinned in
+    // `proxy_implementation_hashes`.
+    if let Err(err) = session.rt.block_on(crate::upgrade::verify_gateway_router(
+        &session.rpc,
+        &cfg,
+        gateway_addr,
+    )) {
+        session.record(AuditDecision::Refused, Some(err.name().to_string()));
+        return session
+            .refusal(err.name())
+            .message(format!("{err}"))
+            .checks(ChecksOutput::from_report(&report))
+            .emit(args.pretty);
+    }
+
     // -- Gas floor (QA plan U6) -------------------------------------------
     // The gateway checks `gasleft()` against 400_000 + 1_850_000 per non-zero
     // leg at entry and reverts `InsufficientGas` below it, burning the gas.

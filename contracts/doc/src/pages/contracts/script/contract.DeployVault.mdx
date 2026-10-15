@@ -5,9 +5,9 @@ description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f17dc454551bd2a41cf6b3f2185df435b5d543da/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployVault.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
 
 **Title:** DeployVault
 
@@ -36,6 +36,11 @@ DEPLOYMENT_OUT        — output JSON path
 USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
 EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
+UPGRADE_AUTHORITY      — the deployment's timelock, deployed first (ADR-0014 §4)
+UPGRADE_MODE           — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
+EXCLUSION_LEDGER_FACTORY — the libs stage's `ExclusionLedgerFactory` (ADR-0014 §9)
+The vault is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+`initialize` in its constructor, so the vault is never uninitialized.
 
 </i>
 
@@ -186,6 +191,21 @@ check (3M x the max fee) that the runner's fee guard already covers.
 
 ```solidity
 uint256 public constant SEED_DEPOSIT_GAS = 3_000_000;
+```
+
+## State Variables
+
+### _ledgerFactory
+
+<i>
+
+The `ExclusionLedgerFactory` the vault initializer calls. Broadcast runs read it from the
+libs stage (`EXCLUSION_LEDGER_FACTORY`); in-process runs deploy one.
+
+</i>
+
+```solidity
+address internal _ledgerFactory;
 ```
 
 ## Functions
@@ -468,6 +488,20 @@ function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 | vault_ | `RobotMoneyVault` |  |
 | adapter_ | `address` |  |
 
+<a id="_useinprocess"></a>
+
+### _useInProcess
+
+<i>
+
+In-process upgrade config, and a factory when none was deployed in this run yet.
+
+</i>
+
+```solidity
+function _useInProcess() internal;
+```
+
 <a id="_deploy-params"></a>
 
 ### _deploy
@@ -492,7 +526,9 @@ function _deploy(Params memory p) internal returns (Deployed memory d);
 
 ### _writeDeploymentJsonTo
 
-Manifest keys written by this stage: chain_id, usdc, vault, aave_adapter,
+Manifest keys written by this stage: chain_id, usdc, vault (the proxy),
+vault_implementation, exclusion_ledger_factory, upgrade_authority, upgrade_mode
+(ADR-0014), aave_adapter,
 compound_adapter, moonwell_flagship_adapter, admin, and one name/address pair
 per venue: aave_v3_venue_name / aave_v3_venue, compound_v3_venue_name /
 compound_v3_venue, moonwell_flagship_venue_name / moonwell_flagship_venue.
@@ -551,7 +587,13 @@ struct Params {
 ```solidity
 struct Deployed {
         address usdc;
+        /// The proxy: the vault every other contract and holder uses.
         RobotMoneyVault vault;
+        /// The implementation behind `vault` (ADR-0014).
+        address implementation;
+        address exclusionLedgerFactory;
+        address upgradeAuthority;
+        string upgradeMode;
         AaveV3Adapter aaveAdapter;
         CompoundV3Adapter compoundAdapter;
         MorphoAdapter moonwellAdapter;
@@ -565,6 +607,10 @@ struct Deployed {
 | ---- | ---- | ----------- |
 | usdc | `address` |  |
 | vault | `RobotMoneyVault` |  |
+| implementation | `address` |  |
+| exclusionLedgerFactory | `address` |  |
+| upgradeAuthority | `address` |  |
+| upgradeMode | `string` |  |
 | aaveAdapter | `AaveV3Adapter` |  |
 | compoundAdapter | `CompoundV3Adapter` |  |
 | moonwellAdapter | `MorphoAdapter` |  |

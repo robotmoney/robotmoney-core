@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §6 — Roles
-// (See also: Plan tracking issue #109 §3.1 — AccessRoles.sol)
+// (See also: Plan tracking issue #109 §3.1 — AccessRoles.sol;
+//  docs/adr/ADR-0014-governed-upgrades-and-freeze.md §3 — upgradeable parents)
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /// @title AccessRoles
 /// @notice Role constants and AccessControl wiring for the RobotMoney gateway.
@@ -31,7 +34,10 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 /// `DEPOSIT_PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
 /// holder could renounce `ADMIN_ROLE` and then self-grant `AGENT_ROLE`,
 /// silently bypassing the disjointness invariant.
-abstract contract AccessRoles is AccessControl {
+///
+/// ADR-0014: the parent is OZ `AccessControlUpgradeable` (role data in an
+/// ERC-7201 namespace), so this base adds no linear storage.
+abstract contract AccessRoles is AccessControlUpgradeable {
     /// @notice Reverts when granting a role would cause an account to hold
     ///         any two of {ADMIN, DEPOSIT_PAUSER, AGENT} simultaneously.
     error RoleSeparationViolated();

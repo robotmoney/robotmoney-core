@@ -51,6 +51,7 @@ on:
       - "clients/dapp/scripts/audit-deps.sh"
       - "clients/dapp/scripts/check-csp.sh"
       - "scripts/check-audit-ledger.sh"
+      - "scripts/check_audit_source_cites.py"
       - "scripts/check-seam-map-drift.sh"
       - "scripts/validate-seam-map"
       - "docs/technical/unified-vault-seam-map.json"

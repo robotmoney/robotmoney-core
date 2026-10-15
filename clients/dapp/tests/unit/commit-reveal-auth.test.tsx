@@ -61,6 +61,7 @@ vi.mock("wagmi", async (importOriginal) => {
       // Return a USDC address for gateway.usdc() call; non-zero balance for others.
       if (functionName === "usdc") return { data: "0x4444444444444444444444444444444444444444" };
       if (functionName === "agentConsentNonce") return { data: 0n };
+      if (functionName === "implementationVersion") return { data: "1" };
       return { data: 1000n };
     },
     useBalance: () => ({ data: { value: 1000n } }),
@@ -148,6 +149,7 @@ async function giveConsent(prefix: "wizard" | "authorize") {
     nonce: 0n,
     chainId: 918453,
     gateway: GATEWAY,
+    version: "1",
   });
   await pasteAgentConsent(prefix, signature);
   return signature;

@@ -276,8 +276,10 @@ Therefore:
 - A Portfolio Router weight is a weight across vaults.
 - An adapter cap is a cap inside one vault.
 - RouterGovernance currently controls active Portfolio Router weights only.
-  The timelock may set default weights only (not yet implemented: core
-  #1522).
+  The timelock sets default weights directly. It changes active weights
+  only through `RouterGovernance.applyReceipt`: only RouterGovernance holds
+  `WEIGHT_SETTER_ROLE`, so a direct `setWeights` from the timelock reverts
+  (core #1522).
 - RouterGovernance does not currently control adapter selection,
   adapter caps, or per-vault strategy internals.
 
@@ -287,8 +289,8 @@ ADR-0010 proposed generalizing this layer into a single `Vault` with position
 adapters. It was Rejected and its code is deleted (see
 `docs/adr/ADR-0010-unified-vault-architecture.md`). The adapter layer in this document
 (`IStrategyAdapter` for lending, `IBasketSwapAdapter` for basket swaps) is the shipped
-design. The basket swap adapters on this branch are `UniswapV3SwapAdapter` and
-`AerodromeSwapAdapter`. The deploy scripts wire only venue `UniswapV3`; no deploy script
-registers `AerodromeSwapAdapter`. The Uniswap V4 adapters were deleted on core PR 1505.
-Restoring a V4 swap adapter is a decided option for RM's venue (not yet implemented; core
-issue to be filed).
+design. The basket swap adapters on this branch are `UniswapV3SwapAdapter`,
+`UniswapV4SwapAdapter` and `AerodromeSwapAdapter`. The deploy scripts wire venues `UniswapV3`
+and `UniswapV4` (rmAGENT's RM leg); no deploy script registers `AerodromeSwapAdapter`. The
+first Uniswap V4 adapters were deleted on core PR 1505. Core 1676 restored a rewritten
+`UniswapV4SwapAdapter` for RM's venue (ADR-0005 amendment of 2026-10-08).

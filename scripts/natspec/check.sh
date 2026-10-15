@@ -253,6 +253,7 @@ def check_file(filepath):
     # @return per named return var.
     # -----------------------------------------------------------------------
     # We match function signatures that appear before a '{' or ';'
+    DATA_LOCATIONS = ('memory', 'calldata', 'storage')
     func_pat = re.compile(
         r'^\s*function\s+(\w+)\s*\(([^)]*)\)'
         r'(?:\s+(?:public|external|internal|private|virtual|override|pure|view|payable|'
@@ -298,8 +299,9 @@ def check_file(filepath):
         params = [p.strip() for p in params_raw.split(',') if p.strip()]
         for param in params:
             parts = param.split()
-            # Skip type-only params (unnamed) — e.g. "uint256"
-            if len(parts) >= 2:
+            # Skip type-only params (unnamed) — e.g. "uint256", or "string memory", whose
+            # last token is a data location, not a name.
+            if len(parts) >= 2 and parts[-1] not in DATA_LOCATIONS:
                 pname = parts[-1]
                 # strip trailing comma, parens
                 pname = pname.rstrip(',)')
@@ -312,7 +314,8 @@ def check_file(filepath):
         returns = [r.strip() for r in returns_raw.split(',') if r.strip()]
         for ret in returns:
             parts = ret.split()
-            if len(parts) >= 2:
+            # "string memory" is an unnamed return: its last token is a data location.
+            if len(parts) >= 2 and parts[-1].rstrip(')') not in DATA_LOCATIONS:
                 rname = parts[-1].rstrip(')')
                 if rname and not re.search(r'@return\s+' + re.escape(rname), nat):
                     issues.append(

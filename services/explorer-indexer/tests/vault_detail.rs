@@ -690,6 +690,10 @@ async fn exclusion_balances(pool: &sqlx::PgPool) -> Vec<(Vec<u8>, String, i64)> 
     .unwrap()
 }
 
+/// One `exclusion_records` row: `(ledger_address, exclusion_id, vault_address, adapter_index,
+/// snapshot_supply, block_number)`.
+type ExclusionRecordRow = (Vec<u8>, i64, Vec<u8>, i64, String, i64);
+
 /// Rows of `table` on chain 8453. `table` is a literal from the test, never input.
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
     let q = format!("SELECT COUNT(*)::BIGINT FROM {table} WHERE chain_id = 8453");
@@ -839,7 +843,7 @@ async fn exclusion_record_events_store_each_snapshot_holders_balance() {
         "balanceAt is read for the two depositors at the snapshot and the transferee at its claim"
     );
 
-    let records: Vec<(Vec<u8>, i64, Vec<u8>, i64, String, i64)> = sqlx::query_as(
+    let records: Vec<ExclusionRecordRow> = sqlx::query_as(
         "SELECT ledger_address, exclusion_id, vault_address, adapter_index, \
                 CAST(snapshot_supply AS text), block_number \
          FROM exclusion_records WHERE chain_id = $1",

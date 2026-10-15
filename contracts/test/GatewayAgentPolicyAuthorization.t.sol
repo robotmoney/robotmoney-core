@@ -16,6 +16,7 @@ import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {AgentConsent} from "./helpers/AgentConsent.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Shared fixture: a gateway with two ADMIN_ROLE holders (`admin`, the
 ///      constructor admin, and `adminOwner`, who owns agents in these tests)
@@ -71,7 +72,7 @@ abstract contract GatewayAgentPolicyFixture is Test {
         vm.roll(100);
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         ADMIN_ROLE = gateway.ADMIN_ROLE();
@@ -832,7 +833,18 @@ contract GatewayAgentPolicyCodeSizeGuard is GatewayAgentPolicyFixture {
     uint256 internal constant EIP170_LIMIT = 24_576;
 
     function test_gatewayRuntime_underEip170() public {
-        uint256 deployed = address(gateway).code.length;
+        // ADR-0014: `gateway` is the ERC1967Proxy; the logic is the implementation in its slot.
+        address implementation = address(
+            uint160(
+                uint256(
+                    vm.load(
+                        address(gateway),
+                        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+                    )
+                )
+            )
+        );
+        uint256 deployed = implementation.code.length;
         uint256 artifact = vm.getDeployedCode("RobotMoneyGateway.sol:RobotMoneyGateway").length;
         emit log_named_uint("RobotMoneyGateway deployed runtime bytes", deployed);
         emit log_named_uint("RobotMoneyGateway artifact runtime bytes", artifact);

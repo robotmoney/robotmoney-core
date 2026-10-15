@@ -22,6 +22,8 @@ const GOVERNANCE_FAKE_ABI = [...GOVERNANCE_APPLY_ABI, ...parseAbi(["function set
 import { COMMIT_EXPIRY_BLOCKS, GATEWAY_REGISTER_ABI, selfAuthCommitmentKey } from "../src/committee-register.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
 import { VAULT_UNWIND_GUARD_ABI } from "../src/unwind-guard.ts";
+import { PROXY_GOVERN_ABI } from "../src/upgrade-rows.ts";
+import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -98,6 +100,15 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** QA plan v1 D7: each basket vault's asset rows (assets(i), in order) and the emergency unwind guard per `vault|token` (lowercase). An executed setEmergencyUnwindGuard writes it. */
     assetRows: new Map<string, { token: Address; active: boolean }[]>(),
     guards: new Map<string, readonly [bigint, boolean, bigint]>(),
+    /**
+     * Issue 1809: the governed proxies by lowercase proxy address (GovernedUpgrade as the contract behaves: upgradeToAndCall and freezeUpgrades from the authority only,
+     * nothing after a freeze, a freeze bound to the live implementation and its code hash). Empty until withProxies(tl) registers them. `admin` is the ERC-1967 admin word.
+     */
+    proxies: new Map<string, { implementation: Address; frozen: boolean; authority: Address; admin: Hex }>(),
+    /** Runtime code by lowercase address (getCode). Any other address reads the default stub code. */
+    codes: new Map<string, Hex>(),
+    /** Implementations that answer proxiableUUID() with the ERC-1967 slot (UUPS), and those whose initializers are locked (_disableInitializers). */
+    uups: new Set<string>(), locked: new Set<string>(),
   };
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
@@ -108,7 +119,17 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     get owners(): string[] { return s.owners; }, set owners(v: string[]) { s.owners = [...v]; },
     get threshold(): number { return Number(s.threshold); }, set threshold(v: number) { s.threshold = BigInt(v); },
     client: {
-      getCode: async () => "0x6001600155",
+      getCode: async (a?: { address?: string }) => s.codes.get(String(a?.address ?? "").toLowerCase()) ?? "0x6001600155",
+      // issue 1809: the ERC-1967 and Initializable slots of the proxies and implementations withProxies registered; every other slot reads zero
+      getStorageAt: async ({ address, slot }: { address: string; slot: Hex }) => {
+        const word = (v: bigint) => `0x${v.toString(16).padStart(64, "0")}` as Hex;
+        const px = s.proxies.get(address.toLowerCase());
+        if (slot === ERC1967_IMPLEMENTATION_SLOT) return px ? word(BigInt(px.implementation)) : word(0n);
+        if (slot === ERC1967_ADMIN_SLOT) return px ? px.admin : word(0n);
+        if (slot === ERC1967_BEACON_SLOT) return word(0n);
+        if (slot === INITIALIZABLE_SLOT) return px ? word(1n) : word(s.locked.has(address.toLowerCase()) ? INITIALIZERS_LOCKED : 0n);
+        return word(0n);
+      },
       // the chain head: the fake's clock is also its block number (getTransactionReceipt answers the clock of a transaction as its block)
       getBlockNumber: async () => s.clock,
       getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
@@ -116,6 +137,13 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
         if (functionName in s.reads) return s.reads[functionName];
+        // issue 1809: GovernedUpgrade's views on a registered proxy, and UUPSUpgradeable.proxiableUUID on an implementation (a proxy reverts it: notDelegated)
+        if (functionName === "upgradeAuthority" || functionName === "upgradesFrozen") {
+          const px = s.proxies.get(address.toLowerCase());
+          if (!px) throw new Error(`execution reverted: ${functionName} on a contract that is no governed proxy`);
+          return functionName === "upgradeAuthority" ? px.authority : px.frozen;
+        }
+        if (functionName === "proxiableUUID") { if (!s.uups.has(address.toLowerCase())) throw new Error("execution reverted"); return ERC1967_IMPLEMENTATION_SLOT; }
         switch (functionName) {
           case "tvlCap": return sheet.vaults[key!].tvlCap;
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
@@ -258,6 +286,25 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
+          // issue 1809: GovernedUpgrade as the contract runs it, with the timelock as msg.sender
+          const px = s.proxies.get(c.target.toLowerCase());
+          if (px && (c.data.startsWith(UPGRADE_SELECTOR) || c.data.startsWith(FREEZE_SELECTOR))) {
+            if (px.authority.toLowerCase() !== A.timelock.toLowerCase()) throw new Error(`UpgradeNotAuthorized(${A.timelock})`);
+            if (px.frozen) throw new Error("UpgradesAreFrozen()");
+            const d = decodeFunctionData({ abi: PROXY_GOVERN_ABI, data: c.data });
+            if (d.functionName === "upgradeToAndCall") {
+              const impl = d.args[0] as Address;
+              if (!s.uups.has(impl.toLowerCase())) throw new Error(`ERC1967InvalidImplementation(${impl})`);
+              px.implementation = impl;
+            } else {
+              const [impl, hash] = d.args as [Address, Hex];
+              const live = px.implementation;
+              const liveHash = keccak256((s.codes.get(live.toLowerCase()) ?? "0x6001600155") as Hex);
+              if (live.toLowerCase() !== impl.toLowerCase() || liveHash.toLowerCase() !== hash.toLowerCase()) throw new Error(`FreezeTargetMismatch(${live}, ${liveHash})`);
+              px.frozen = true;
+            }
+            continue;
+          }
           if (c.target === A.timelock) {
             try {
               const d = decodeFunctionData({ abi: ROLE_ABI_FAKE, data: c.data });
@@ -375,6 +422,38 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   return { s, api, handle };
 }
 const ROLE_ABI_FAKE = parseAbi(["function grantRole(bytes32 role, address account)", "function revokeRole(bytes32 role, address account)"]);
+const UPGRADE_SELECTOR = encodeFunctionData({ abi: PROXY_GOVERN_ABI, functionName: "upgradeToAndCall", args: [addr(1), "0x"] }).slice(0, 10);
+const FREEZE_SELECTOR = encodeFunctionData({ abi: PROXY_GOVERN_ABI, functionName: "freezeUpgrades", args: [addr(1), `0x${"00".repeat(32)}`] }).slice(0, 10);
+
+/** Issue 1809: the proxy address each stage table proxy name has in this world (the manifests writeGovernManifests writes). */
+export const PROXY_AT: Record<string, Address> = {
+  rmUSDC: A.vaults.USDC, registry: A.registry, router: A.router, gateway: A.gateway, icpolicy: A.icPolicy, receipt: A.receipt, rmPROTO: A.vaults.PROTO, rmAGENT: A.vaults.AGENT, rmRWA: A.vaults.RWA,
+};
+/** The implementation each proxy names in this world, and the code it runs (a distinct stub per contract). */
+export const IMPL_AT: Record<string, Address> = Object.fromEntries(Object.keys(PROXY_AT).map((n, i) => [n, addr(0x9001 + i)]));
+export const implCode = (n: string): Hex => `0x608060405200${Object.keys(PROXY_AT).indexOf(n).toString(16).padStart(2, "0")}5b00` as Hex;
+
+/**
+ * Issue 1809: registers every proxy of the stage table on the fake chain, as a deploy leaves them: the implementation slot names IMPL_AT, the timelock is the authority,
+ * nothing is frozen, no admin; each implementation is UUPS, runs implCode and has its initializers locked. `frozen` names proxies born frozen (frozen-at-deploy).
+ */
+export function withProxies(tl: ReturnType<typeof fakeTimelock>, o: { frozen?: string[] } = {}): void {
+  for (const [n, proxy] of Object.entries(PROXY_AT)) {
+    tl.s.proxies.set(proxy.toLowerCase(), { implementation: IMPL_AT[n]!, frozen: (o.frozen ?? []).includes(n), authority: A.timelock, admin: `0x${"00".repeat(32)}` as Hex });
+    tl.s.codes.set(IMPL_AT[n]!.toLowerCase(), implCode(n));
+    tl.s.uups.add(IMPL_AT[n]!.toLowerCase());
+    tl.s.locked.add(IMPL_AT[n]!.toLowerCase());
+  }
+}
+
+/** A forge out/ directory with one build artifact per contract: `code` as the runtime, no immutables, no links (verify/codehash.ts loadArtifact reads it). */
+export function writeBuild(dir: string, artifacts: Record<string, Hex>): string {
+  for (const [name, code] of Object.entries(artifacts)) {
+    mkdirSync(join(dir, `${name}.sol`), { recursive: true });
+    writeFileSync(join(dir, `${name}.sol`, `${name}.json`), JSON.stringify({ deployedBytecode: { object: code, immutableReferences: {}, linkReferences: {} } }));
+  }
+  return dir;
+}
 const SET_GUARD_SELECTOR = encodeFunctionData({ abi: VAULT_UNWIND_GUARD_ABI, functionName: "setEmergencyUnwindGuard", args: [addr(1), 1n, true, 0n] }).slice(0, 10);
 /** The timelock role ids the fake seeds for the Safe (keccak256 of the role name, as TimelockController declares them). */
 export const PROPOSER_ROLE_ID: Hex = keccak256(toBytes("PROPOSER_ROLE"));

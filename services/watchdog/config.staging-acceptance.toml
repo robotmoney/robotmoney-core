@@ -57,20 +57,23 @@ enabled = true
 expected_cadence_secs = 300
 grace_secs = 60
 
-# Standing quorum floor (task T22, decision D16). Read-only: one eth_call per
-# poll against the deployed RouterGovernance. The contract's MIN_QUORUM_THRESHOLD
-# stops a NEW deployment from being wired below the floor; this is the only thing
-# that catches an ADMIN_ROLE holder lowering quorumThreshold on the router that is
-# already live, after AC-GOV-03's evidence was collected.
+# Standing weight-setter path (issue 1698). Read-only: a few eth_calls per poll.
+# Router weights change only through RouterGovernance.applyReceipt on a
+# Safe-scheduled timelock operation. The check pages when the router's
+# WEIGHT_SETTER_ROLE is held by anyone but the weight setter, or the weight
+# setter's ADMIN_ROLE by anyone but the timelock: a grant executed after the
+# stage 12 verifier ran. It replaced the quorumThreshold() floor check, whose
+# view issue 1698 deleted with the voting path.
 #
-# router_address is left unset here on purpose: the Deploy phase fills in the
-# address from the run's own deployment manifest (phase2/2.7) rather than this
-# file carrying a stale one. Leaving `enabled = true` with no address is refused
-# at startup, which is the intended failure — a blind check must not be reachable
-# by omission.
+# The three addresses are left unset here on purpose: the Deploy phase fills
+# them in from the run's own deployment manifests (router.json, governance.json,
+# timelock.json) rather than this file carrying stale ones. Leaving
+# `enabled = true` with an address missing is refused at startup, which is the
+# intended failure: a blind check must not be reachable by omission.
 [governance]
 enabled = false
 rpc_url = "http://127.0.0.1:18545"
-# router_address = "0x…"   # supplied by the Deploy phase
-min_quorum_threshold = 2
+# router_address = "0x…"          # PortfolioRouter, supplied by the Deploy phase
+# weight_setter_address = "0x…"   # RouterGovernance, supplied by the Deploy phase
+# timelock_address = "0x…"        # TimelockController, supplied by the Deploy phase
 repage_secs = 300

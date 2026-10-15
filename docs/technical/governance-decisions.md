@@ -8,7 +8,7 @@
 > Closes the open question listed under `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
-Investment Committee signals are advisory only. The gateway signal endpoint does not authenticate the member until core issue 1790 lands. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
+Investment Committee signals are advisory only. The gateway signal endpoint binds the member to the caller: `committeeVoteSubmit` reverts `CommitteeAgentNotCaller` unless the vote's `agent` is `msg.sender` (core issue 1790, PR 1818). The explorer's tilt aggregate counts one signal per member, its latest verified vote. Consensus receipts are caller bound and ADMIN released; receipts are the only rebalance input, applied by the Safe through the timelock.
 
 ---
 

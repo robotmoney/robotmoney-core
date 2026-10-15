@@ -407,6 +407,8 @@ mod tests {
         PreflightReport {
             chain_id: 31337,
             gateway_runtime_hash_ok: true,
+            implementation: None,
+            implementation_code_hash: None,
             deposits_paused: false,
             agent_active: true,
             agent_valid_until: 9_999_999_999,
@@ -428,6 +430,11 @@ mod tests {
         assert_eq!(c.window_gross, "0");
         assert!(c.chain_id_match);
         assert!(c.gateway_code_hash_match);
+        assert!(c.gateway_implementation_approved);
+        assert!(
+            c.gateway_implementation.is_none(),
+            "a direct gateway has none"
+        );
         assert!(!c.deposits_paused);
         assert!(c.agent_active);
     }

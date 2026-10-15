@@ -14,6 +14,7 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title GovernanceSeparationInvariant
 /// @notice Verifies the §3.4 decision that the committee and the weight setter
@@ -69,7 +70,7 @@ contract GovernanceSeparationInvariant is Test {
         // only required non-zero by the constructor; this invariant asserts
         // role membership (not gateway-routed operations), so a dummy gateway
         // address is sufficient.
-        ic = new InvestmentCommitteePolicy(admin, makeAddr("gateway"));
+        ic = Proxied.investmentCommitteePolicy(admin, makeAddr("gateway"));
         bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
         vm.startPrank(admin);
         ic.grantRole(committeeRole, committeeAthena);
@@ -82,8 +83,8 @@ contract GovernanceSeparationInvariant is Test {
         // roles; the timelock holds the weight setter's ADMIN_ROLE and the
         // router's ADMIN_ROLE; the deployer keeps nothing.
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        VaultRegistry registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
         gov = new RouterGovernance(address(router), admin);
         vm.startPrank(admin);
         router.grantRole(ADMIN_ROLE, address(gov));

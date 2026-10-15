@@ -19,7 +19,14 @@
 import { useAccount, useChainId } from "wagmi";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Hex } from "viem";
-import { computeVerificationState, refusedVerification, ZERO_ADDRESS } from "./gatewayVerifier";
+import {
+  computeImplementationVerification,
+  computeVerificationState,
+  parseImplementationPins,
+  refusedVerification,
+  ZERO_ADDRESS,
+} from "./gatewayVerifier";
+import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./upgradeState";
 import type { VerificationState } from "./gatewayVerifier";
 import { resolveTargetChainId } from "./wagmi";
 import { useRuntimeConfig } from "./RuntimeConfigContext";
@@ -45,6 +52,8 @@ export interface UseGatewayVerifier {
 export function useGatewayVerifier(
   gatewayAddress: string,
   expectedCodeHash: string | undefined,
+  /** `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`: reviewed implementation code hashes (issue 1810). */
+  expectedImplementationHashes?: string,
 ): UseGatewayVerifier {
   const [state, setState] = useState<VerificationState>({ status: "idle" });
   const { isConnected } = useAccount();
@@ -110,7 +119,34 @@ export function useGatewayVerifier(
           if (token.cancelled) return;
           const resolvedCode: Hex | null =
             code === undefined || code === null || code === "0x" ? null : code;
-          setState(computeVerificationState(gatewayAddress, expectedCodeHash, resolvedCode));
+          const base = computeVerificationState(gatewayAddress, expectedCodeHash, resolvedCode);
+          if (base.status !== "verified") {
+            setState(base);
+            return;
+          }
+          // Issue 1810: the logic behind a proxied gateway must be a reviewed implementation.
+          const slotWord = (await p.request({
+            method: "eth_getStorageAt",
+            params: [gatewayAddress, ERC1967_IMPLEMENTATION_SLOT, "latest"],
+          })) as Hex;
+          if (token.cancelled) return;
+          const implementation = implementationFromSlot(slotWord);
+          const implementationCode =
+            implementation === null
+              ? null
+              : ((await p.request({
+                  method: "eth_getCode",
+                  params: [implementation, "latest"],
+                })) as Hex | null | undefined);
+          if (token.cancelled) return;
+          setState(
+            computeImplementationVerification(
+              base,
+              parseImplementationPins(expectedImplementationHashes),
+              slotWord,
+              implementationCode === undefined ? null : implementationCode,
+            ),
+          );
           return;
         } catch (err) {
           void err; // error captured but not forwarded — product reason is always "unknown_revert"
@@ -128,7 +164,15 @@ export function useGatewayVerifier(
     return () => {
       token.cancelled = true;
     };
-  }, [gatewayAddress, expectedCodeHash, isConnected, chainId, targetChainId, refreshTick]);
+  }, [
+    gatewayAddress,
+    expectedCodeHash,
+    expectedImplementationHashes,
+    isConnected,
+    chainId,
+    targetChainId,
+    refreshTick,
+  ]);
 
   return { state, refresh };
 }

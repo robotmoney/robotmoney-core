@@ -342,6 +342,96 @@ async fn the_safe_and_the_timelock_are_listed_and_their_events_are_served() {
     assert_eq!(ev["block_number"], 1000);
 }
 
+/// QA plan P3 (core 1810): `/v1/upgrades` serves each proxy's indexed implementation and freeze state and
+/// the events behind them, newest first; `?contract=` narrows both lists; a malformed address is a 400.
+#[tokio::test]
+async fn upgrades_endpoint_serves_implementation_and_freeze_state() {
+    let s = boot().await;
+    run(&s.pool, true, None, Some(1000), Some(1005)).await;
+    let gateway = vec![0x11u8; 20];
+    let vault = vec![0x22u8; 20];
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'gateway', 1)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&gateway)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    // gateway: born on A1, upgraded to A2, frozen on A2. vault: born on B1, still upgradeable.
+    for (block, idx, contract, kind, implementation, code_hash) in [
+        (100i64, 0i32, &gateway, "upgraded", vec![0xA1u8; 20], None),
+        (100, 1, &vault, "upgraded", vec![0xB1u8; 20], None),
+        (700, 0, &gateway, "upgraded", vec![0xA2u8; 20], None),
+        (
+            800,
+            0,
+            &gateway,
+            "frozen",
+            vec![0xA2u8; 20],
+            Some(vec![0xC0u8; 32]),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO proxy_upgrade_events (chain_id, block_number, log_index, tx_hash, contract, kind, \
+                                               implementation, code_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(PRIMARY_CHAIN_ID)
+        .bind(block)
+        .bind(idx)
+        .bind(vec![0x01u8; 32])
+        .bind(contract)
+        .bind(kind)
+        .bind(implementation)
+        .bind(code_hash)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    }
+
+    let all = get(&s, "/v1/upgrades").await;
+    let contracts = all["contracts"].as_array().unwrap();
+    assert_eq!(contracts.len(), 2, "{all}");
+    let g = &contracts[0];
+    assert_eq!(g["contract"], format!("0x{}", "11".repeat(20)));
+    assert_eq!(g["contract_kind"], "gateway");
+    assert_eq!(
+        g["implementation"],
+        format!("0x{}", "a2".repeat(20)),
+        "newest upgrade"
+    );
+    assert_eq!(g["upgraded_block"], 700);
+    assert_eq!(g["upgrades_frozen"], true);
+    assert_eq!(g["frozen_block"], 800);
+    assert_eq!(g["frozen_code_hash"], format!("0x{}", "c0".repeat(32)));
+    let v = &contracts[1];
+    assert_eq!(v["implementation"], format!("0x{}", "b1".repeat(20)));
+    assert!(
+        v["contract_kind"].is_null(),
+        "a registry vault has no contracts row"
+    );
+    assert_eq!(v["upgrades_frozen"], false);
+    assert!(v["frozen_block"].is_null());
+    let events = all["events"].as_array().unwrap();
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0]["kind"], "frozen", "newest first: {all}");
+    assert_eq!(events[0]["code_hash"], format!("0x{}", "c0".repeat(32)));
+    assert!(events[3]["code_hash"].is_null());
+    assert_eq!(all["block_number"], 1000);
+
+    let one = get(&s, &format!("/v1/upgrades?contract=0x{}", "22".repeat(20))).await;
+    assert_eq!(one["contracts"].as_array().unwrap().len(), 1, "{one}");
+    assert_eq!(one["events"].as_array().unwrap().len(), 1, "{one}");
+
+    let bad = http()
+        .get(format!("http://{}/v1/upgrades?contract=0x1234", s.addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+}
+
 /// Seed one registered vault with an optional snapshot at block 900:
 /// (total_assets, tvl_cap, per_deposit_cap). Registry `deposit_cap` is 0, as the indexer writes it.
 async fn seed_vault(

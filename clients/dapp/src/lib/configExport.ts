@@ -27,6 +27,20 @@
  * receives the agent's shares unnoticed. The panel always passes them once a
  * wallet is connected.
  *
+ * Implementation pin (QA plan P3, issue 1810): when the gateway is an ERC-1967
+ * proxy, rmpc refuses every write and every agent consent unless the live
+ * implementation's code hash is in `gateway_implementation_hashes`. The panel
+ * passes that hash only after the dapp verified it against the build's
+ * reviewed pin (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`), so the export
+ * never pins whatever is live at export time. A later upgrade is refused until
+ * the operator approves the new code. A direct gateway gets no such line
+ * (rmpc refuses a pin for one).
+ *
+ * A proxied vault needs `proxy_implementation_hashes` in rmpc too. The dapp
+ * holds no reviewed pin for the vault's logic, so the export writes the key
+ * commented out with how to fill it from the release record, instead of
+ * copying the live hash.
+ *
  * Encrypted-keystore exports sign on every chain. `rmpc deposit`, `withdraw`
  * and `withdraw-router` sign with the software keystore on Base mainnet too,
  * after a production warning (owner decision 2026-10-06, issue #1545). A
@@ -77,6 +91,13 @@ interface RmpcExportInputs {
   vault_address: string;
   /** keccak256(eth_getCode(gateway_address)) — must be non-zero */
   gateway_runtime_hash: string;
+  /**
+   * keccak256 of the code of each approved gateway implementation (QA plan P3).
+   * Only for a proxied gateway; omitted or empty for a direct one.
+   */
+  gateway_implementation_hashes?: readonly string[];
+  /** The vault is an ERC-1967 proxy: write the commented `proxy_implementation_hashes` line. */
+  vault_is_proxy?: boolean;
   /** The share receiver the depositor authorized: rmpc refuses a binding with another (QA plan D2). */
   share_receiver?: string;
   /** The wallet that revealed the authorization: rmpc refuses a binding owned by another. */
@@ -100,6 +121,24 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
     `usdc_address         = ${tomlStr(inputs.usdc_address)}`,
     `vault_address        = ${tomlStr(inputs.vault_address)}`,
     `gateway_runtime_hash = ${tomlStr(inputs.gateway_runtime_hash)}`,
+    ...(inputs.gateway_implementation_hashes !== undefined &&
+    inputs.gateway_implementation_hashes.length > 0
+      ? [
+          `# The reviewed gateway implementation this dapp build pins, verified live at export.`,
+          `# rmpc refuses to sign against any other: approve a reviewed upgrade by adding its hash.`,
+          `gateway_implementation_hashes = [${inputs.gateway_implementation_hashes
+            .map(tomlStr)
+            .join(", ")}]`,
+        ]
+      : []),
+    ...(inputs.vault_is_proxy === true
+      ? [
+          `# The vault is an upgradeable proxy. rmpc refuses to deposit or withdraw until the`,
+          `# reviewed vault implementation's code hash (from the release record) is listed here:`,
+          `#   cast keccak $(cast code $(cast implementation ${inputs.vault_address}))`,
+          `# proxy_implementation_hashes = ["0x<reviewed vault implementation code hash>"]`,
+        ]
+      : []),
     ...(inputs.share_receiver !== undefined
       ? [`share_receiver       = ${tomlStr(inputs.share_receiver)}`]
       : []),

@@ -25,6 +25,9 @@ import type { FetchLike, VaultDetailResponse } from "../../src/lib/explorerApi";
 vi.mock("wagmi", () => ({
   // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
   useReadContracts: () => ({ data: undefined }),
+  // QA plan P3: the vault page's upgrade reads; no live chain in this test.
+  useStorageAt: () => ({ data: undefined, isError: false }),
+  useBytecode: () => ({ data: undefined }),
   useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
   useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
@@ -181,5 +184,20 @@ describe("VaultDetail issuer freeze-control disclosure (issue 1765)", () => {
     await waitFor(() => expect(getByTestId("vault-detail-composition")).toBeTruthy());
     const el = queryByTestId("vault-detail-issuer-freeze-disclosure");
     expect(el !== null).toBe(shown);
+  });
+});
+
+describe("VaultDetail upgrades section (QA plan P3, core 1810)", () => {
+  it("renders the upgrade disclosure from chain reads (loading while they are in flight)", async () => {
+    const { getByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_ADDR}
+        fetchImpl={makeFetch(makeVaultDetailFixture({ risk_label: "STABLE_YIELD" }))}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-upgrade")).toBeTruthy());
+    // The wagmi mock answers no read, so the panel claims nothing yet.
+    expect(getByTestId("vault-detail-upgrade").getAttribute("data-upgrade-state")).toBe("loading");
   });
 });

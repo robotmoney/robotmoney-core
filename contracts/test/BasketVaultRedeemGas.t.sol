@@ -14,6 +14,7 @@ import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {TwapTickMath} from "../lib/TwapTickMath.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @notice Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redeem estimated in one
 ///         block must execute at exactly that limit in a later block. Estimation is the smallest
@@ -37,7 +38,7 @@ contract BasketVaultRedeemGasForkTest is Test {
     }
 
     function _params() internal returns (BasketVaultDeployBase.Params memory) {
-        VaultRegistry registry = new VaultRegistry(admin);
+        VaultRegistry registry = Proxied.vaultRegistry(admin);
         return BasketVaultDeployBase.Params({
             admin: admin,
             swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,

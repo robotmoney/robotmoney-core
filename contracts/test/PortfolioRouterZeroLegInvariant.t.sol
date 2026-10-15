@@ -21,6 +21,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {MockUSDC} from "./PortfolioRouter.t.sol";
 import {StrictZeroRevertVault} from "./PortfolioRouterZeroLeg.t.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 contract ZeroLegHandler is Test {
     MockUSDC public immutable usdc;
@@ -140,8 +141,8 @@ contract PortfolioRouterZeroLegInvariantTest is StdInvariant, Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
         for (uint256 i = 0; i < 4; i++) {
             v[i] = new StrictZeroRevertVault(address(usdc));
             vm.startPrank(admin);

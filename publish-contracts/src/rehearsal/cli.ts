@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * rehearsal helpers.
- *   keys  --dir D (--password-file F | prompts hidden, kept in memory only: no passphrase file) [--voters N] [--chain-id C]   makes keystores, prints the sheet fragment
+ *   keys  --dir D (--password-file F | prompts hidden, kept in memory only: no passphrase file) [--chain-id C]   makes keystores, prints the sheet fragment (no voter key: issue 1698)
  *   fund  --rpc R --chain-id C --sheet S [--eth-wei N] [--usdc A --usdc-units N]      needs CHAIN_FUNDER_KEYSTORE and CHAIN_FUNDER_PASSWORD from the caller's credential tool
  *   fund-gas  --rpc R --sheet S [--wei N]     Twin fork only (anvil_setBalance): sets the gas balance of the deployer, pauser, emergency key and Safe owners
  *   fund-usdc --rpc R --sheet S --usdc-units N  Twin fork only: sets the real FiatToken balance of the deployer through its balance storage slot
@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { hidden } from "../keystore/prompt.ts";
 import { realCast } from "./cast.ts";
 import { rehearsalArgs, TWIN_CHAIN_ID } from "./args.ts";
-import { assertPassword, defaultKeyNames, makeRehearsalKeys, sheetFragment } from "./keys.ts";
+import { assertPassword, defaultKeyNames, makeRehearsalKeys, sheetFragment, VOTERS_FLAG_GONE } from "./keys.ts";
 import { checkEnvCredentialRule, fund, stageFunderKeystore, type Recipient } from "./fund.ts";
 import { runRehearsal } from "./run.ts";
 import { TWIN_GAS_WEI, fundGas, fundRmPool, fundUsdc, httpRpc, isTwinFork, readRmPoolFacts, warpBy } from "./twin.ts";
@@ -52,12 +52,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
   const log = (s: string) => console.error(`[rehearsal] ${s}`);
   switch (cmd) {
     case "keys": {
+      if (f.voters !== undefined) throw new Error(VOTERS_FLAG_GONE);
       const dir = need(f, "dir");
       const pwFile = f["password-file"];
       // Hidden prompt (the owner path): the passphrase stays in memory. It is never an argument, never in the environment and never written to a file.
       let password: string | undefined;
       if (!pwFile) { password = await (io.hidden ?? hidden)("Rehearsal key passphrase (16+ chars): "); assertPassword(password); }
-      const keys = makeRehearsalKeys({ dir, ...(pwFile ? { passwordFile: pwFile } : { password }), voters: f.voters ? Number(f.voters) : undefined });
+      const keys = makeRehearsalKeys({ dir, ...(pwFile ? { passwordFile: pwFile } : { password }) });
       process.stdout.write(sheetFragment(keys, f["chain-id"] ? Number(f["chain-id"]) : undefined));
       return 0;
     }
@@ -110,8 +111,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       return 0;
     }
     case "run": {
+      if (f.voters !== undefined) throw new Error(VOTERS_FLAG_GONE);
       const dir = need(f, "dir");
-      const names = defaultKeyNames(f.voters ? Number(f.voters) : undefined);
+      const names = defaultKeyNames();
       const addresses: Record<string, string> = {};
       for (const n of names) addresses[n] = "0x" + (JSON.parse(readFileSync(join(dir, n), "utf8")).address as string);
       // On a Twin fork the keys were funded by anvil, so there is nothing real to return and no funder: no sweep.

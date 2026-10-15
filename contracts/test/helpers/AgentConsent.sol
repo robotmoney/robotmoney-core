@@ -24,9 +24,27 @@ library AgentConsent {
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
 
+    /// @notice The domain version of the gateway implementation these tests deploy
+    ///         (`RobotMoneyGateway.implementationVersion()`, ADR-0014 §10).
+    string internal constant VERSION = "1";
+
     /// @notice EIP-712 digest of `AgentConsent(agent, owner, shareReceiver, nonce)`
     ///         in the domain (`RobotMoneyGateway`, `1`, `chainId`, `gateway`).
     function digest(
+        address gateway,
+        uint256 chainId,
+        address agent,
+        address owner,
+        address shareReceiver,
+        uint256 nonce
+    ) internal pure returns (bytes32) {
+        return digestAt(VERSION, gateway, chainId, agent, owner, shareReceiver, nonce);
+    }
+
+    /// @notice `digest` in the domain of an explicit gateway implementation version
+    ///         (QA plan Decisions D5: the version binds the consent to the implementation).
+    function digestAt(
+        string memory version,
         address gateway,
         uint256 chainId,
         address agent,
@@ -38,7 +56,7 @@ library AgentConsent {
             abi.encode(
                 DOMAIN_TYPEHASH,
                 keccak256(bytes("RobotMoneyGateway")),
-                keccak256(bytes("1")),
+                keccak256(bytes(version)),
                 chainId,
                 gateway
             )

@@ -75,7 +75,8 @@ use std::fmt;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-use crate::governance::QuorumMonitorConfig;
+use crate::freeze_deadline::FreezeDeadlineConfig;
+use crate::governance::WeightSetterMonitorConfig;
 use crate::liveness::IndexerLagBudget;
 use crate::pause::PauserSigningKey;
 use crate::receipt_liveness::ReceiptLivenessConfig;
@@ -145,11 +146,24 @@ pub struct Config {
     /// Absent means disabled, so pre-existing configs keep parsing unchanged.
     #[serde(default)]
     pub consensus_receipts: ReceiptLivenessConfig,
-    /// Standing `RouterGovernance.quorumThreshold()` floor check (task T22,
-    /// decision D16). Absent means disabled, so pre-existing configs keep
+    /// Standing weight-setter-path check (issue 1698): the router's
+    /// `WEIGHT_SETTER_ROLE` and the weight setter's `ADMIN_ROLE` each have
+    /// exactly the configured holder. It replaced the deleted
+    /// `quorumThreshold()` floor check. Absent means disabled, so pre-existing
+    /// configs keep parsing unchanged.
+    #[serde(default)]
+    pub governance: WeightSetterMonitorConfig,
+    /// Missed freeze-deadline alert (issue 1809, ADR-0014 §5): after the
+    /// release's freeze deadline, every configured proxy must read
+    /// `upgradesFrozen()`. Absent means disabled, so pre-existing configs keep
     /// parsing unchanged.
     #[serde(default)]
-    pub governance: QuorumMonitorConfig,
+    pub freeze_deadline: FreezeDeadlineConfig,
+    /// One page per executed proxy upgrade or freeze (issue 1810, ADR-0014 §3,
+    /// §5). Absent means enabled with the defaults: every deployment has
+    /// proxies, so an executed upgrade pages unless an operator turns it off.
+    #[serde(default)]
+    pub upgrade_events: crate::upgrade_events::UpgradeEventsConfig,
     /// How far the explorer indexer may trail before a poll with no new block
     /// stops counting as watching (DI-5). Absent means the defaults in
     /// [`IndexerLagBudget`], so pre-existing configs keep parsing unchanged.
@@ -326,9 +340,13 @@ impl Config {
         // than silently disable the control (issue #1247 task 4.13).
         self.consensus_receipts.validate()?;
 
-        // An enabled quorum-floor check with nowhere to read from would log an
-        // error every cycle and page never (task T22 / decision D16).
+        // An enabled weight-setter-path check with nowhere to read from would
+        // log an error every cycle and page never (issue 1698).
         self.governance.validate()?;
+
+        // An enabled freeze-deadline check with no deadline, no RPC or no proxy
+        // would watch nothing and page never (issue 1809).
+        self.freeze_deadline.validate()?;
 
         // A zero indexer-lag budget would page on every poll (DI-5).
         self.indexer_lag.validate()?;

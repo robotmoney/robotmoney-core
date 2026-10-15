@@ -207,15 +207,29 @@ export interface RouterWeightsResponse {
 }
 
 /**
+ * The kinds of event in the per-account history feed, as the API serializes
+ * `EventKind` (clients/explorer-api/src/model.rs). There is no governance-vote
+ * kind: issue 1698 deleted RouterGovernance voting and migration 0023 removed
+ * the old `governance_vote` rows.
+ */
+export type AccountEventKind = "deposit" | "withdrawal" | "fee_charged" | "policy_change";
+
+/**
  * A single event in a watched address's history from
- * `GET /v1/accounts/:address/history`.
+ * `GET /v1/accounts/:address/history`. The field names are the API's
+ * `AccountHistoryEntry` (clients/explorer-api/src/model.rs).
  */
 export interface AccountEvent {
-  /** "deposit" | "withdrawal" | "governance_vote" */
-  readonly event_type: string;
+  readonly kind: AccountEventKind;
+  readonly chain_id: number;
   readonly block_number: number;
+  readonly log_index: number;
   readonly tx_hash: string;
-  readonly vault_address: string | null;
+  /** Vault for deposit, withdrawal and fee_charged events; null for policy_change. */
+  readonly vault: string | null;
+  /** Agent for deposit and policy_change events; null for withdrawal and fee_charged. */
+  readonly agent: string | null;
+  /** USDC base units for deposit, withdrawal and fee_charged; null for policy_change. */
   readonly amount: string | null;
   readonly indexed_at: string;
 }
@@ -301,6 +315,44 @@ export async function fetchStats(
   const res = await fetchImpl(url, { signal: options.signal });
   if (!res.ok) throw new Error(`explorer API ${res.status}`);
   return (await res.json()) as StatsResponse;
+}
+
+// ─── Proxy upgrades (ADR-0014, issue 1810) ──────────────────────────────────
+
+/** One proxy's indexed upgrade state (`ProxyUpgradeState` in clients/explorer-api/src/model.rs). */
+export interface ProxyUpgradeRow {
+  readonly chain_id: number;
+  readonly contract: string;
+  /** `gateway`, `vault`, `portfolio_router`, `vault_registry`, `investment_committee`, `consensus_receipt`; null for a registry-discovered vault. */
+  readonly contract_kind: string | null;
+  readonly implementation: string | null;
+  readonly upgraded_block: number | null;
+  readonly upgrades_frozen: boolean;
+  readonly frozen_block: number | null;
+  readonly frozen_code_hash: string | null;
+}
+
+/** Response of GET /v1/upgrades. `events` is not read by the dapp. */
+export interface UpgradesResponse {
+  readonly contracts: readonly ProxyUpgradeRow[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+/**
+ * GET /v1/upgrades — the indexed implementation and freeze state of every proxy with an indexed
+ * `Upgraded` or `UpgradesFrozen` event. Disclosure only: the dapp shows it when it cannot read the
+ * chain (no wallet on the mainnet class), labelled as indexed, and never gates a write on it.
+ */
+export async function fetchUpgrades(
+  baseUrl: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<UpgradesResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/upgrades`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as UpgradesResponse;
 }
 
 // ─── Fetch helpers (issue #319) ─────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {UniswapV4PriceRecorder} from "../adapters/UniswapV4PriceRecorder.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 contract BasketVaultV4VenueTest is Test {
     MockV4PoolManager internal pm;
@@ -52,7 +53,7 @@ contract BasketVaultV4VenueTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        vault = new AgentTokenVault(
+        vault = Proxied.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("router")),
             1_000_000e6,
@@ -83,7 +84,9 @@ contract BasketVaultV4VenueTest is Test {
     function _addRm() internal {
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         // the 2.91 percent pool fee leaves the vault default 300 bps no room: raise to the 500 bps ceiling
         vault.setMaxSlippageBps(500);
         vm.stopPrank();
@@ -107,20 +110,24 @@ contract BasketVaultV4VenueTest is Test {
         _warmRecorder();
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.AdapterCodeHashNotAllowed.selector);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
 
         vm.prank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vm.prank(admin);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
-        (address t, address p, uint24 f, bool active, address a, BasketVault.Venue v) =
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
+        (address t, address p, uint24 f, bool active, address a, BasketAssetConfigGuard.Venue v) =
             vault.assets(0);
         assertEq(t, address(rm));
         assertEq(p, address(rec), "the registered pool is the recorder");
         assertEq(uint256(f), uint256(FEE));
         assertTrue(active);
         assertEq(a, address(adapter));
-        assertEq(uint256(v), uint256(BasketVault.Venue.V4));
+        assertEq(uint256(v), uint256(BasketAssetConfigGuard.Venue.V4));
     }
 
     function test_addAsset_revertsWhileTheRecorderRingIsBelow901Slots() public {
@@ -135,7 +142,9 @@ contract BasketVaultV4VenueTest is Test {
                 uint16(1)
             )
         );
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.stopPrank();
 
         // grown to 900 and recorded: cardinality 900, still one short
@@ -151,7 +160,9 @@ contract BasketVaultV4VenueTest is Test {
                 uint16(900)
             )
         );
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
     }
 
     function test_addAsset_revertsWhileTheRecorderHoldsLessThan1800sOfHistory() public {
@@ -167,7 +178,9 @@ contract BasketVaultV4VenueTest is Test {
                 uint32(1800)
             )
         );
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.stopPrank();
         // 1790 s of history is still short, 1800 s is enough
         for (uint256 i = 0; i < 29; i++) {
@@ -182,11 +195,15 @@ contract BasketVaultV4VenueTest is Test {
                 uint32(1800)
             )
         );
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.warp(block.timestamp + 60);
         rec.record();
         vm.prank(admin);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
     }
 
     function test_addAsset_revertsWhenTheRegisteredFeeIsNotThePoolFee() public {
@@ -194,7 +211,9 @@ contract BasketVaultV4VenueTest is Test {
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
-        vault.addAsset(address(rm), address(rec), 10_000, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), 10_000, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.stopPrank();
     }
 
@@ -204,7 +223,7 @@ contract BasketVaultV4VenueTest is Test {
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vm.expectRevert(BasketAssetConfigGuard.PoolTokenMismatch.selector);
-        vault.addAsset(other, address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(other, address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4);
         vm.stopPrank();
     }
 
@@ -221,7 +240,9 @@ contract BasketVaultV4VenueTest is Test {
                 uint128(10)
             )
         );
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.stopPrank();
     }
 
@@ -337,7 +358,9 @@ contract BasketVaultV4VenueTest is Test {
         _warmRecorder();
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vm.stopPrank();
         assertEq(vault.maxSlippageBps(), 300);
         pm.setImpactTicks(0); // quote at the TWAP price: the fee alone fits inside 300 bps

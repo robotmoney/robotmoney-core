@@ -26,6 +26,7 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Mimics the per-vault `tickMathLibrary()` accessor the deploy assertion
 ///      reads, but returns a caller-chosen address — used to prove the deploy
@@ -428,7 +429,7 @@ contract DeployTest is Test {
     function _deployBasketVault() internal returns (BasketVault) {
         return BasketVault(
             address(
-                new AgentTokenVault(
+                Proxied.agentTokenVault(
                     IERC20(address(usdc)),
                     ISwapRouter(makeAddr("swapRouter")),
                     10_000_000 * 1e6, // tvlCap

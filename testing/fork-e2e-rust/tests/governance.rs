@@ -156,13 +156,9 @@ fn admin_role() -> B256 {
 
 // ── Contract deployment helpers ──────────────────────────────────────────────
 
-/// Deploy `VaultRegistry` with `admin` as the admin.
+/// Deploy `VaultRegistry` behind its proxy (ADR-0014) with `admin` as the admin.
 fn deploy_registry(deployer: &rmpc_fork_e2e::Account<'_>, admin: Address) -> Address {
-    let mut code = load_initcode("VaultRegistry.sol", "VaultRegistry").to_vec();
-    code.extend_from_slice(&encode_address_arg(admin));
-    deployer
-        .deploy(Bytes::from(code), 3_000_000)
-        .expect("deploy VaultRegistry")
+    rmpc_fork_e2e::proxied::deploy_vault_registry(deployer, admin).expect("deploy VaultRegistry")
 }
 
 /// Deploy `MockVault` with `asset_` = USDC address.
@@ -174,21 +170,14 @@ fn deploy_mock_vault(deployer: &rmpc_fork_e2e::Account<'_>, usdc: Address) -> Ad
         .expect("deploy MockVault")
 }
 
-/// Deploy `PortfolioRouter` with the given usdc, registry, and admin.
+/// Deploy `PortfolioRouter` behind its proxy (ADR-0014) with the given usdc, registry, and admin.
 fn deploy_portfolio_router(
     deployer: &rmpc_fork_e2e::Account<'_>,
     usdc: Address,
     registry: Address,
     admin: Address,
 ) -> Address {
-    let mut code = load_initcode("PortfolioRouter.sol", "PortfolioRouter").to_vec();
-    let mut args = [0u8; 96];
-    args[12..32].copy_from_slice(usdc.as_slice());
-    args[44..64].copy_from_slice(registry.as_slice());
-    args[76..96].copy_from_slice(admin.as_slice());
-    code.extend_from_slice(&args);
-    deployer
-        .deploy(Bytes::from(code), 4_000_000)
+    rmpc_fork_e2e::proxied::deploy_portfolio_router(deployer, usdc, registry, admin)
         .expect("deploy PortfolioRouter")
 }
 
@@ -206,39 +195,28 @@ fn deploy_router_governance(
         .expect("deploy RouterGovernance")
 }
 
-/// Deploy `InvestmentCommitteePolicy(admin, gateway)`.
+/// Deploy `InvestmentCommitteePolicy` behind its proxy (ADR-0014): `initialize(admin, gateway, ...)`.
 fn deploy_ic_policy(
     deployer: &rmpc_fork_e2e::Account<'_>,
     admin: Address,
     gateway: Address,
 ) -> Address {
-    let mut code =
-        load_initcode("InvestmentCommitteePolicy.sol", "InvestmentCommitteePolicy").to_vec();
-    code.extend_from_slice(&encode_address_arg(admin));
-    code.extend_from_slice(&encode_address_arg(gateway));
-    deployer
-        .deploy(Bytes::from(code), 5_000_000)
+    rmpc_fork_e2e::proxied::deploy_investment_committee_policy(deployer, admin, gateway)
         .expect("deploy InvestmentCommitteePolicy")
 }
 
-/// Deploy `ConsensusRecommendationReceipt(admin, gateway, icPolicy)`.
+/// Deploy `ConsensusRecommendationReceipt` behind its proxy (ADR-0014):
+/// `initialize(admin, gateway, icPolicy, ...)`.
 fn deploy_receipt_register(
     deployer: &rmpc_fork_e2e::Account<'_>,
     admin: Address,
     gateway: Address,
     ic_policy: Address,
 ) -> Address {
-    let mut code = load_initcode(
-        "ConsensusRecommendationReceipt.sol",
-        "ConsensusRecommendationReceipt",
+    rmpc_fork_e2e::proxied::deploy_consensus_recommendation_receipt(
+        deployer, admin, gateway, ic_policy,
     )
-    .to_vec();
-    code.extend_from_slice(&encode_address_arg(admin));
-    code.extend_from_slice(&encode_address_arg(gateway));
-    code.extend_from_slice(&encode_address_arg(ic_policy));
-    deployer
-        .deploy(Bytes::from(code), 5_000_000)
-        .expect("deploy ConsensusRecommendationReceipt")
+    .expect("deploy ConsensusRecommendationReceipt")
 }
 
 /// Register `vault_addr` in `registry` with a minimal metadata struct.

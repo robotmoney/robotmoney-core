@@ -11,7 +11,11 @@
 //! ## Test structure
 //!
 //! For each basket vault:
-//!  1. Deploy the vault contract on the fork with the test account as admin.
+//!  1. Deploy the vault on the fork with the test account as admin: the
+//!     kind's implementation (its CREATE2 libraries linked) behind an
+//!     `ERC1967Proxy` whose constructor runs `BasketVault.initialize`
+//!     (ADR-0014 §3, `rmpc_fork_e2e::proxied::deploy_basket_vault`). The
+//!     former eight-argument constructor is gone.
 //!  2. Add one confirmed Base asset (cbBTC for ProtocolAssetVault, JUNO
 //!     for AgentTokenVault) so the basket is non-empty.
 //!  3. Approve USDC → deposit → assert shares > 0.
@@ -34,76 +38,13 @@
 //! when `RMPC_FORK_RPC_URL` is unset so contributors without an archive RPC
 //! can still run `cargo test`.
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, U256};
 use rmpc_fork_e2e::{
     addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IBasketVault, IERC20,
 };
 
 // 50 USDC (6 decimals).
 const DEPOSIT_USDC: u64 = 50_000_000;
-
-// ── Bytecode loading ──────────────────────────────────────────────────────────
-
-/// Read the Forge-compiled creation bytecode for `contract_name` from the
-/// `out/` artifact directory under the workspace root.
-///
-/// Returns `None` when the workspace root or the artifact file cannot be
-/// located. The caller skips the test in that case with a clear message.
-fn load_bytecode(contract_name: &str) -> Option<Vec<u8>> {
-    let root = test_utils::find_workspace_root()?;
-    let path = root
-        .join("out")
-        .join(format!("{contract_name}.sol"))
-        .join(format!("{contract_name}.json"));
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let hex_str = parsed["bytecode"]["object"].as_str()?;
-    let hex_str = hex_str.trim_start_matches("0x");
-    hex::decode(hex_str).ok()
-}
-
-// ── ABI-encode constructor arguments ─────────────────────────────────────────
-
-/// ABI-encode the eight constructor arguments shared by both basket vault
-/// subclasses. Each `address` is left-padded to 32 bytes; each `uint256`
-/// is 32 bytes big-endian.
-///
-/// Constructor signature (BasketVault subclasses):
-///   `(address usdc_, address swapRouter_, uint256 tvlCap_,
-///     uint256 perDepositCap_, uint256 exitFeeBps_, address feeRecipient_,
-///     address admin_, address emergencyResponder_)`
-#[allow(clippy::too_many_arguments)]
-fn encode_basket_constructor(
-    usdc: Address,
-    swap_router: Address,
-    tvl_cap: U256,
-    per_deposit_cap: U256,
-    exit_fee_bps: U256,
-    fee_recipient: Address,
-    admin: Address,
-    emergency_responder: Address,
-) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(8 * 32);
-
-    fn push_addr(buf: &mut Vec<u8>, a: Address) {
-        buf.extend_from_slice(&[0u8; 12]);
-        buf.extend_from_slice(a.as_slice());
-    }
-    fn push_u256(buf: &mut Vec<u8>, v: U256) {
-        buf.extend_from_slice(&v.to_be_bytes::<32>());
-    }
-
-    push_addr(&mut buf, usdc);
-    push_addr(&mut buf, swap_router);
-    push_u256(&mut buf, tvl_cap);
-    push_u256(&mut buf, per_deposit_cap);
-    push_u256(&mut buf, exit_fee_bps);
-    push_addr(&mut buf, fee_recipient);
-    push_addr(&mut buf, admin);
-    push_addr(&mut buf, emergency_responder);
-
-    buf
-}
 
 // ── Generic basket vault round-trip helper ─────────────────────────────────────
 
@@ -129,18 +70,6 @@ fn basket_round_trip(
     asset_fee: u32,
     label: &str,
 ) {
-    // ── Load bytecode ──────────────────────────────────────────────────
-    let bytecode = match load_bytecode(contract_name) {
-        Some(b) => b,
-        None => {
-            eprintln!(
-                "[basket_vault_round_trip/{label}] SKIP: could not load bytecode for \
-                 {contract_name} — run `forge build` from the workspace root first"
-            );
-            return;
-        }
-    };
-
     // ── Fund test account ──────────────────────────────────────────────
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit = U256::from(DEPOSIT_USDC);
@@ -169,14 +98,16 @@ fn basket_round_trip(
         "[{label}] USDC funding failed: {usdc_before} < {deposit}"
     );
 
-    // ── Build initcode: bytecode + ABI-encoded constructor args ────────
+    // ── Deploy the vault behind its proxy (ADR-0014) ───────────────────
     // Caps: 10M USDC TVL, 1M USDC per-deposit, 0 exit fee (simplifies
     // tolerance arithmetic). Admin = test account so it can call addAsset.
+    // A missing `out/` artifact is a failure, never a silent skip.
     let tvl_cap = U256::from(10_000_000u64) * U256::from(1_000_000u64); // 10M USDC
     let per_deposit_cap = U256::from(1_000_000u64) * U256::from(1_000_000u64); // 1M USDC
     let exit_fee_bps = U256::ZERO;
-
-    let ctor_args = encode_basket_constructor(
+    let vault_addr = rmpc_fork_e2e::proxied::deploy_basket_vault(
+        &admin,
+        contract_name,
         addresses::USDC,
         addresses::UNISWAP_V3_SWAP_ROUTER,
         tvl_cap,
@@ -185,16 +116,8 @@ fn basket_round_trip(
         admin.address, // fee recipient
         admin.address, // admin — receives ADMIN_ROLE, can call addAsset
         admin.address, // emergency responder
-    );
-
-    let mut initcode = bytecode;
-    initcode.extend_from_slice(&ctor_args);
-
-    // ── Deploy vault ───────────────────────────────────────────────────
-    // 6M gas: covers CREATE + BasketVault constructor storage writes.
-    let vault_addr = admin
-        .deploy(Bytes::from(initcode), 6_000_000)
-        .expect("deploy basket vault");
+    )
+    .expect("deploy basket vault behind its proxy (run `forge build` first)");
     eprintln!("[basket_vault_round_trip/{label}] vault deployed at {vault_addr:#x}");
 
     // ── Verify: vault.asset() == USDC ──────────────────────────────────

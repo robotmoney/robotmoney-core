@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/code-review/20260618-code-review-internal-claude.md (L-10)
-// (See also: docs/architecture.md §2.3 — Governance Boundary)
+// (See also: docs/architecture.md §2.3 — Governance Boundary;
+//            docs/adr/ADR-0014-governed-upgrades-and-freeze.md §3 — upgradeable parents)
 pragma solidity ^0.8.24;
 
 import {
-    AccessControlEnumerable
-} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
 /// @title AdminFloorAccessControl
 /// @notice `AccessControlEnumerable` with a "last-admin floor": the final
@@ -31,7 +32,14 @@ import {
 ///         mutated, so when an `ADMIN_ROLE` revoke is in flight the current
 ///         member count still includes the account being removed; a count of
 ///         exactly 1 therefore means this is the last admin.
-abstract contract AdminFloorAccessControl is AccessControlEnumerable {
+///
+///         ADR-0014: the parent is OZ `AccessControlEnumerableUpgradeable`, whose role
+///         sets live in an ERC-7201 namespace, so this base adds no linear storage and
+///         needs no gap. The proxied PortfolioRouter, VaultRegistry,
+///         InvestmentCommitteePolicy and ConsensusRecommendationReceipt use it behind
+///         their initializers. RouterGovernance stays a direct deployment (ADR-0014 §2)
+///         and grants its roles in its constructor; the parent needs no initializer for that.
+abstract contract AdminFloorAccessControl is AccessControlEnumerableUpgradeable {
     /// @notice The role subject to the last-admin floor. Concrete contracts
     ///         declare their own public `ADMIN_ROLE` constant with the same
     ///         value; this internal mirror is what the floor checks against.
@@ -41,7 +49,7 @@ abstract contract AdminFloorAccessControl is AccessControlEnumerable {
     ///         leave the contract with zero admins and brick all admin paths.
     error LastAdminFloor();
 
-    /// @inheritdoc AccessControlEnumerable
+    /// @inheritdoc AccessControlEnumerableUpgradeable
     /// @dev Reverts when the revoke would remove the final `ADMIN_ROLE` holder.
     ///      Covers both `revokeRole` and `renounceRole`, which both route here.
     function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {

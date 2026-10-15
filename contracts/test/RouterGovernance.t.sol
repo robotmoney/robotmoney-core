@@ -19,6 +19,7 @@ import {
     IConsensusRecommendationReceipt
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -127,7 +128,7 @@ abstract contract RouterGovernanceFixture is SafeGovernance {
 
     function _buildTopology(address govAdmin) internal {
         usdc = new MockUsdc();
-        registry = new VaultRegistry(registryAdmin);
+        registry = Proxied.vaultRegistry(registryAdmin);
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
         vm.startPrank(registryAdmin);
@@ -143,7 +144,7 @@ abstract contract RouterGovernanceFixture is SafeGovernance {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), routerAdmin);
         gov = new RouterGovernance(address(router), govAdmin);
 
         // Stage 7 (DeployRouterGovernance): the weight setter gets both router
@@ -158,7 +159,8 @@ abstract contract RouterGovernanceFixture is SafeGovernance {
         // straight into it; the committee read goes to the mock policy.
         policy = new MockCommitteePolicy();
         policy.setMember(submitter, true);
-        register = new ConsensusRecommendationReceipt(receiptAdmin, address(this), address(policy));
+        register =
+            Proxied.consensusRecommendationReceipt(receiptAdmin, address(this), address(policy));
 
         // Stage 11: the weight setter can release (ADMIN_ROLE on the register)
         // and knows the register.

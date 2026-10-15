@@ -1,0 +1,137 @@
+---
+title: "GovernedUpgradeLifecycleConsensusRecommendationReceiptTest"
+---
+
+# GovernedUpgradeLifecycleConsensusRecommendationReceiptTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/GovernedUpgradeLifecycle.t.sol)
+
+**Inherits:** [GovernedUpgradeLifecycleBase](/contracts/test/abstract.GovernedUpgradeLifecycleBase)
+
+## State Variables
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("submitter");
+```
+
+## Functions
+
+<a id="_newimplementation"></a>
+
+### _newImplementation
+
+<i>
+
+A fresh implementation of the kind (no constructor arguments).
+
+</i>
+
+```solidity
+function _newImplementation() internal override returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_initdata-address-governedupgrade-upgrademode"></a>
+
+### _initData
+
+<i>
+
+The kind's `initialize` call data, naming `authority` and `mode`.
+
+</i>
+
+```solidity
+function _initData(address authority, GovernedUpgrade.UpgradeMode mode)
+        internal
+        view
+        override
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| mode | `GovernedUpgrade.UpgradeMode` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_privileged"></a>
+
+### _privileged
+
+<i>
+
+Business-role holders of the kind. None of them may upgrade or freeze.
+
+</i>
+
+```solidity
+function _privileged() internal view override returns (address[] memory a);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address[]` |  |
+
+<a id="_populate"></a>
+
+### _populate
+
+<i>
+
+Two recorded receipts, one released (#1808 test plan "receipts"). The IC policy is a
+stand-in whose `hasRole` answers true for the submitter.
+
+</i>
+
+```solidity
+function _populate() internal override;
+```
+
+<a id="_state"></a>
+
+### _state
+
+<i>
+
+Digest of the business state an upgrade must keep.
+
+</i>
+
+```solidity
+function _state() internal view override returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="test_receipts_survivegovernedupgrade"></a>
+
+### test_receipts_surviveGovernedUpgrade
+
+#1808 test plan "receipts survive": both records and the release state read the same
+after a governed upgrade, and the new implementation still records and releases.
+
+```solidity
+function test_receipts_surviveGovernedUpgrade() public;
+```
+

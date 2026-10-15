@@ -360,6 +360,19 @@ describe("record", () => {
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe(join(OUT, "record.json"));
   });
+  test("issue 1698: a record without the legacy voters passes, and voters that are present must be addresses", async () => {
+    expect(RECORD_REQUIRED_FIELDS).not.toContain(".ephemeral.voters");
+    expect(SCHEMA.properties.ephemeral.required).not.toContain("voters");
+    const none: any = good();
+    delete none.ephemeral.voters;
+    expect((await run("record", "show", "--record", put(none))).code).toBe(0);
+    const zero: any = good();
+    zero.ephemeral.voters = [a(18), a(0)];
+    expect((await run("record", "show", "--record", put(zero))).out).toContain("record-field-malformed");
+    const notList: any = good();
+    notList.ephemeral.voters = a(18);
+    expect((await run("record", "show", "--record", put(notList))).out).toContain("record-field-malformed");
+  });
   test("a record without the timelock is refused (65) with a classed line", async () => {
     const rec: any = good();
     delete rec.addresses.timelock;

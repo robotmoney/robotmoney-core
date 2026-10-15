@@ -5,10 +5,12 @@ Harness self-tests: [`.github/workflows/suite-25-fusion-harness-selftests.yml`](
 
 ## Why there are two workflows
 
-`scripts/fusion/` carries the only executing proof of two acceptance clauses:
-`AC-CORE-09`'s "retryable/idempotent" submitter and `AC-GOV-01`'s draft-only
-watcher. Those properties live in shell, so they are exactly the kind of claim
-that gets asserted in a comment and never executed.
+`scripts/fusion/` carries the only executing proof of `AC-CORE-09`'s
+"retryable/idempotent" submitter and of the acceptance harnesses' own verdicts.
+It also carried `AC-GOV-01`'s draft-only watcher until issue 1698 deleted the
+draft path; the govern stage now proves the `applyReceipt` path instead. Those
+properties live in shell, so they are exactly the kind of claim that gets
+asserted in a comment and never executed.
 
 | | suite-25 `fusion-harness-selftests` | suite-26 `fusion-devnet-acceptance` |
 |---|---|---|
@@ -31,13 +33,15 @@ Neither workflow trusts an exit code.
 `-e`, so a truncated file or a block that aborts early still prints
 "42 passed, 0 failed" and exits 0. It therefore:
 
-- declares `MIN_EXPECTED_ASSERTIONS` (currently **55**) and ends at
+- declares `MIN_EXPECTED_ASSERTIONS` (currently **135**, after issue 1698 took
+  the 41 draft-watcher assertions with the watcher) and ends at
   `[[ "$FAIL" -eq 0 && "$PASS" -ge "$MIN_EXPECTED_ASSERTIONS" ]]`;
 - prints a machine-readable `FUSION_SELFTESTS_EXECUTED=$PASS` line;
-- asserts, as one of its own assertions, that suite-25's independent floor
+- asserts, as one of its own assertions, that suite-27's independent floor
   literal **equals** `MIN_EXPECTED_ASSERTIONS`.
 
-suite-25 re-derives the count from that contract line against its own literal.
+suite-27 re-derives the count from that contract line against its own literal;
+suite-25 keeps its older, lower literal as a true lower bound.
 The two numbers move together, in one commit; lowering one alone is red. This is
 the `suite-17` / `plugins/robotmoney-swarm` convention.
 
@@ -66,14 +70,14 @@ no workflow creates a key.**
 | `FUSION_RECEIPT_URL` | default receipt URL the nightly run accepts |
 | `FUSION_GATEWAY_ADDRESS` | `RobotMoneyGateway` |
 | `FUSION_RECEIPT_ADDRESS` | `ConsensusRecommendationReceipt` |
-| `FUSION_GOVERNANCE_ADDRESS` | `RouterGovernance` (INV-4 witness) |
+| `FUSION_GOVERNANCE_ADDRESS` | `RouterGovernance`, the weight setter (govern stage: `receiptContract()` binding and the `applyReceipt` probes) |
 | `FUSION_ROUTER_ADDRESS` | `PortfolioRouter` (INV-4 witness) |
 | `FUSION_VAULT_ADDRESSES` | `rmUSDC,rmPROTO,rmAGENT,rmRWA` in canonical bucket order |
 | `FUSION_SUBMITTER_ADDRESS` | the authorized submitter (positive control) |
-| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) |
+| `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract and on the weight setter after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) and for the govern stage's one-shot probe (`cast call applyReceipt` on a released receipt, which must revert `ReceiptAlreadyReleased`) |
 | `FUSION_GOVERN_CMD` | the govern release command, `bun scripts/stage/core-stack.ts governance release`; the script appends `--receipt-id ID` and it runs publish contracts govern row `release-receipt` (`--row release-receipt --receipt-id ID`) through the real Safe and the `TimelockController` |
 | `FUSION_UNAUTHORIZED_SUBMITTER` | EOA with neither `AGENT_ROLE` nor submit rights |
-| `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt |
+| `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt or on the weight setter; the govern stage sends its `applyReceipt` authority probe from it |
 
 The two `UNAUTHORIZED_*` entries are the negative controls. Without them the
 negative stage proves nothing, so suite-26 refuses to run rather than skipping

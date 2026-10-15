@@ -247,7 +247,7 @@ export function FaucetTabView(props: Props) {
         <form onSubmit={onDripEth} style={{ marginTop: "1rem" }}>
           <p>
             Get <strong>{FAUCET_DRIP_AMOUNT_ETH_LABEL}</strong> of native Base ETH for gas so a
-            fresh account can broadcast governance votes.
+            fresh account can send its own transactions (approve, deposit, redeem).
           </p>
           <button
             type="submit"

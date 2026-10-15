@@ -150,7 +150,33 @@ pub struct Config {
     #[serde(default)]
     pub agent_owner: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
+    /// For a gateway behind an ERC-1967 proxy (ADR-0014) this is the proxy's
+    /// code, which an upgrade does not change; `gateway_implementation_hashes`
+    /// pins the logic behind it.
     pub gateway_runtime_hash: String,
+    /// Runtime code hashes of the gateway implementations the operator
+    /// approved (0x-prefixed hex, `keccak256(eth_getCode(implementation))`),
+    /// QA plan P3. Required when the gateway is a proxy: every write and
+    /// `agent-consent` read the ERC-1967 implementation slot and that
+    /// implementation's code at one block and refuse with
+    /// `ErrImplementationNotApproved` unless its hash is listed. List the
+    /// next reviewed implementation before its timelock upgrade executes to
+    /// keep signing through the upgrade. Leave it out for a direct
+    /// (pre-proxy) gateway; set for one, it is refused.
+    #[serde(default)]
+    pub gateway_implementation_hashes: Option<Vec<String>>,
+    /// Runtime code hashes of the implementations the operator approved for
+    /// the other proxies a write reaches through the gateway: the vault a
+    /// deposit lands in or a withdraw redeems from, every router leg, and the
+    /// router itself (0x-prefixed hex, `keccak256(eth_getCode(implementation))`).
+    /// Required as soon as one of them is an ERC-1967 proxy (ADR-0014): the
+    /// address pins (`vault_address`, `gateway.vault()`, `gateway.router()`)
+    /// do not pin the logic behind a proxy. A write reads each one's
+    /// implementation slot and code at one block and refuses with
+    /// `ErrImplementationNotApproved` unless the hash is listed. A direct
+    /// (pre-proxy) contract needs no entry.
+    #[serde(default)]
+    pub proxy_implementation_hashes: Option<Vec<String>>,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.
     ///
     /// `u64` (max ≈ 1.8 × 10^19 wei = 18 ETH/gas) is far above any plausible

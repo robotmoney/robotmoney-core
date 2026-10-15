@@ -15,6 +15,11 @@
  *   - Inactive SPECULATIVE (RWA placeholder): static label
  *     ("Deposit: deSPXA → Receipt: vault receipt token").
  *
+ * Upgrades section (QA plan P3, core issue 1810): the implementation behind
+ * the vault's proxy, whether the timelock can still replace it or it is
+ * frozen, and the upgrade authority, read from the chain
+ * (`UpgradeStatePanel`). A direct deployment says it cannot change.
+ *
  * Works without a connected wallet.
  *
  * issue #318 — protocol layer.
@@ -44,6 +49,7 @@ import {
   resolveDepositState,
 } from "../lib/vaultDepositState";
 import { IndexFreshness } from "./IndexFreshness";
+import { UpgradeStatePanel } from "./UpgradeStatePanel";
 
 /** Render the last 6 hex chars of an address as 0x...XXXXXX. */
 function shortAddr(addr: string): string {
@@ -306,6 +312,8 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
         riskLabel={vault.risk_label}
         status={vault.status}
       />
+
+      <UpgradeStatePanel address={vault.address} />
 
       <h3>TVL History</h3>
       {vault.tvl_history.length === 0 ? (

@@ -33,6 +33,7 @@ import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
+import { FREEZE_KEYS, FREEZE_ROW, UPGRADE_KEYS, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, isSelfAdminRow, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
@@ -97,6 +98,14 @@ export const USAGE = `publish contracts
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
                      above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
                      recorded as skipped. Production and rehearsal, never part of stage 13. The stage 12 verifier requires it on every active asset of an open basket: run it with the unpauses.
+                     --row upgrade-proxy --admin-arg proxy=<name> --admin-arg implementation=0x<address> [--admin-arg call=0x<reinitializer calldata>] [--admin-arg build=DIR]
+                     (issue 1809, ADR-0014 §4) upgrades ONE governed proxy (the stage table's proxies: rmUSDC, registry, router, gateway, icpolicy, receipt, rmPROTO, rmAGENT, rmRWA):
+                     ONE timelock operation, proxy.upgradeToAndCall(implementation, call). Refused (GOVERN, nothing scheduled) when the proxy is frozen, its upgradeAuthority() is not the
+                     timelock, an ERC-1967 admin or beacon slot is set, or the implementation has no code, is no UUPS implementation, has unlocked initializers or differs from the build
+                     artifact of the proxy's contract in DIR (default: the checkout's out/). Every chain and kind, never part of stage 13; the same command executes it after the delay.
+                     --row freeze-proxy --admin-arg proxy=<name>|all [--admin-arg build=DIR] (issue 1809, ADR-0014 §5) freezes governed proxies FOREVER: ONE timelock operation,
+                     freezeUpgrades(liveImplementation, liveCodeHash) per proxy not yet frozen (all: one batch). Refused when the live implementation is not the reviewed build, the
+                     authority is not the timelock, an admin or beacon slot is set, or an upgrade-proxy round of the proxy is scheduled and not executed. A frozen proxy is skipped.
                      --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727, QA plan v1 B6): first, in
                      private, the submitter Safe authorizes itself on the gateway (commitAuthorization, a block later revealAuthorization, then transferAgentOwnership to the
                      timelock; its owners sign through --owner-signer), then ONE timelock batch, gateway.setPolicy (the 1-unit signalling-only policy, shares to the timelock)
@@ -177,6 +186,8 @@ export interface CliDeps {
   pauseAll?: typeof pauseAll;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
   chainReader?: RunContext["chainReader"];
+  /** Test seam (issue 1809): the chain reader behind the proxy read-back after each proxy stage. Default: viem over --rpc. */
+  proxyReader?: RunContext["proxyReader"];
   /** Injected for tests: the poll and the longest wait of the recorder gate before the agent stage (core 1676). */
   recorderWait?: RunContext["recorderWait"];
   /** Test seam (issue 1723, QA plan v1 E6): the sleep and the bound of the reads after a landed transaction. Default: 5 reads, 1 s apart. */
@@ -212,7 +223,7 @@ export interface Parsed {
   verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
-  /** With a self-administration row or --row set-unwind-guard (QA plan v1 D7) only: the key=value pairs of --admin-arg. */
+  /** With a self-administration row, --row set-unwind-guard (QA plan v1 D7), --row upgrade-proxy or --row freeze-proxy (issue 1809) only: the key=value pairs of --admin-arg. */
   adminArgs?: Record<string, string>;
   /** With --row apply-receipt only: the receipt payload file. */
   payload?: string;
@@ -262,7 +273,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== UPGRADE_ROW && row !== FREEZE_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {
@@ -301,8 +312,20 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
     parseUnwindGuardArgs(adminArgs);
+  } else if (adminRaw !== undefined && (row === UPGRADE_ROW || row === FREEZE_ROW)) {
+    // issue 1809: the rows' own keys, checked for shape here, before any signer; runGovern checks the values against the core stage table's proxies before the Safe is read
+    const keys: readonly string[] = row === UPGRADE_ROW ? UPGRADE_KEYS : FREEZE_KEYS;
+    adminArgs = {};
+    for (const kv of adminRaw) {
+      const m = /^([a-z-]+)=(.+)$/.exec(kv);
+      if (!m || !keys.includes(m[1]!)) throw new PublishError("USAGE", `--row ${row}: --admin-arg takes key=value with key ${keys.join(", ")}, got '${kv}'`);
+      if (m[1]! in adminArgs) throw new PublishError("USAGE", `--row ${row}: --admin-arg ${m[1]} is given twice`);
+      adminArgs[m[1]!] = m[2]!;
+    }
+    if (adminArgs.proxy === undefined) throw new PublishError("USAGE", `--row ${row} needs --admin-arg proxy=<name>${row === FREEZE_ROW ? "|all" : ""}`);
+    if (row === UPGRADE_ROW && adminArgs.implementation === undefined) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --admin-arg implementation=0x<address>`);
   } else if (adminRaw !== undefined) {
-    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}) or --row ${UNWIND_GUARD_ROW} only\n${USAGE}`);
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}), --row ${UNWIND_GUARD_ROW}, --row ${UPGRADE_ROW} or --row ${FREEZE_ROW} only\n${USAGE}`);
     adminArgs = {};
     for (const kv of adminRaw) {
       const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
@@ -310,6 +333,7 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
   } else if (row === UNWIND_GUARD_ROW) parseUnwindGuardArgs(undefined); // USAGE: the row needs its --admin-arg values
+  else if (row === UPGRADE_ROW || row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${row} needs --admin-arg proxy=<name>${row === UPGRADE_ROW ? " --admin-arg implementation=0x<address>" : "|all"}\n${USAGE}`);
   const payload = v.payload as string | undefined;
   if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
   if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
@@ -512,7 +536,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, logsRpc: a.logsRpc, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, proxyReader: deps.proxyReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, logsRpc: a.logsRpc, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
       };
     };
@@ -664,7 +688,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === UPGRADE_ROW ? { proxyUpgrade: a.adminArgs } : a.adminArgs && a.row === FREEZE_ROW ? { proxyFreeze: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

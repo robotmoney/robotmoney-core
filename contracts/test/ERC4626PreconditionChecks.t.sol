@@ -10,6 +10,7 @@ import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title Minimal ERC-4626 Morpho-vault stand-in.
 /// @notice Only the surface `MorphoAdapter.totalAssets()` touches —
@@ -157,7 +158,7 @@ contract ERC4626PreconditionChecks is Test {
         usdc = new TestERC20();
         // This test contract holds ADMIN_ROLE / feeRecipient / emergencyResponder,
         // so adapter onboarding below needs no prank.
-        vault = new RobotMoneyVault(
+        vault = Proxied.robotMoneyVault(
             IERC20(address(usdc)),
             type(uint256).max, // tvlCap — unbounded
             type(uint256).max, // perDepositCap — unbounded

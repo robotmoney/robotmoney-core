@@ -14,6 +14,12 @@
 //! - `usdc()` and `vault()` → addresses the gateway will route deposits to.
 //! - `depositsPaused()` → deposit-pause flag. It stops new deposits only;
 //!   withdrawals stay open while it is set (core 1494).
+//! - `eth_getStorageAt(gateway, ERC-1967 implementation slot)` and
+//!   `eth_getCode(implementation)` → the logic behind a proxied gateway
+//!   (ADR-0014) and its code hash, with whether `gateway_implementation_hashes`
+//!   approves it; for a proxy also `upgradeAuthority()`, `upgradesFrozen()` and
+//!   `implementationVersion()` (QA plan P3). A direct gateway (empty slot)
+//!   reports `implementation: null` and reads none of the three.
 //! - `eth_chainId` → the §9 `chain_id` envelope field.
 //!
 //! Output is the §9 envelope from `crate::read_output`. Per-field failures
@@ -41,6 +47,7 @@ use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, FailoverRpcClient};
+use crate::upgrade;
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -67,6 +74,24 @@ pub struct GatewayData {
     /// `gateway.depositsPaused()` boolean. True stops new deposits only;
     /// withdrawals stay open (core 1494).
     pub deposits_paused: bool,
+    /// The ERC-1967 implementation the gateway proxy delegates to; `null`
+    /// for a direct gateway or a failed read (QA plan P3).
+    pub implementation: Option<String>,
+    /// `keccak256(eth_getCode(implementation))` at the same block; `null`
+    /// when there is no implementation.
+    pub implementation_code_hash: Option<String>,
+    /// `gateway_implementation_hashes` from operator TOML.
+    pub configured_implementation_hashes: Vec<String>,
+    /// True when a write would pass the implementation check at this block:
+    /// a direct gateway with no pin, or a proxy whose implementation code
+    /// hash is pinned. False otherwise, and on a failed read.
+    pub implementation_approved: bool,
+    /// `implementationVersion()`: the domain version agent consents bind.
+    pub implementation_version: Option<String>,
+    /// `upgradeAuthority()`: the timelock that alone may upgrade or freeze.
+    pub upgrade_authority: Option<String>,
+    /// `upgradesFrozen()`: true once no upgrade can ever run again.
+    pub upgrades_frozen: Option<bool>,
 }
 
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
@@ -139,6 +164,10 @@ async fn read_gateway(
     let data = GatewayData {
         address: format!("{gateway_addr:#x}"),
         configured_code_hash: cfg.gateway_runtime_hash.clone(),
+        configured_implementation_hashes: cfg
+            .gateway_implementation_hashes
+            .clone()
+            .unwrap_or_default(),
         ..Default::default()
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
@@ -187,6 +216,28 @@ async fn read_gateway(
     match call_view_deposits_paused(rpc, gateway_addr, &block_tag).await {
         Ok(p) => b.data_mut().deposits_paused = p,
         Err(e) => b.record_err("deposits_paused", e),
+    }
+
+    // Implementation and freeze state (QA plan P3), at the same block.
+    match upgrade::read_implementation(rpc, gateway_addr, block_number).await {
+        Ok(read) => {
+            let d = b.data_mut();
+            d.implementation = read.implementation.map(|a| format!("{a:#x}"));
+            d.implementation_code_hash = read.code_hash.map(|h| format!("{h:#x}"));
+            d.implementation_approved = upgrade::check_approved(&read, cfg).is_ok();
+            if read.implementation.is_some() {
+                let (views, errors) =
+                    upgrade::read_upgrade_views(rpc, gateway_addr, &block_tag).await;
+                let d = b.data_mut();
+                d.implementation_version = views.implementation_version;
+                d.upgrade_authority = views.upgrade_authority;
+                d.upgrades_frozen = views.upgrades_frozen;
+                for (field, message) in errors {
+                    b.record_err(field, message);
+                }
+            }
+        }
+        Err(e) => b.record_err("implementation", format!("implementation read failed: {e}")),
     }
 
     Ok(b.finish())

@@ -279,8 +279,9 @@ Key invariants:
   precede the external call to the router; `nonReentrant` guards the entry.
 
 Stack-depth management: the outer function collects policy inputs into a
-`RouterWithdrawArgs` struct; external calls are delegated to a separate
-`_executeRouterWithdraw` internal helper.
+`GatewayWithdrawOps.RouterWithdraw` struct; external calls are delegated to
+the linked library function `GatewayWithdrawOps.executeRouterWithdraw`
+(`contracts/lib/GatewayWithdrawOps.sol`, ADR-0014 §9).
 
 The `AgentWithdrawalRouted` event captures `paymentId`, `orderId`,
 `agent`, `router`, `shareHolder`, `sharesPerLeg[]`, `assetsPerLeg[]`,

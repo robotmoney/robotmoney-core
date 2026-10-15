@@ -174,8 +174,10 @@ contract DeploySeedDeposit is Test {
     function test_fork_deploySeed_depositUsesFixedGas() public {
         _setUp();
 
-        // The vault is the first contract the script creates.
-        address vaultAt = vm.computeCreateAddress(address(script), vm.getNonce(address(script)));
+        // ADR-0014: the script first creates the ExclusionLedgerFactory (in process, none is
+        // deployed yet), then the vault implementation, then the vault proxy, which is the
+        // address every holder and the seed deposit use.
+        address vaultAt = vm.computeCreateAddress(address(script), vm.getNonce(address(script)) + 2);
         vm.expectCall(
             vaultAt,
             0,
@@ -187,7 +189,7 @@ contract DeploySeedDeposit is Test {
 
         DeployVault.Deployed memory d = _runDeploy();
 
-        assertEq(address(d.vault), vaultAt, "the vault is the script's first creation");
+        assertEq(address(d.vault), vaultAt, "the vault proxy is the script's third creation");
         assertGt(d.vault.totalSupply(), 0, "the seed deposit landed with the fixed gas");
     }
 

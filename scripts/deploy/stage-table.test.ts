@@ -10,15 +10,20 @@ const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-/** Source of a script plus the shared bases it inherits env readers and manifest names from. */
+/**
+ * Source of a script plus the shared bases it inherits env readers and manifest names from: the basket base, the proxy base (issue 1809: UPGRADE_AUTHORITY and
+ * UPGRADE_MODE are read in GovernedProxyDeploy) and the handover script the authority stage inherits (DeployUpgradeAuthority is DeployTimelock).
+ */
 function scriptSource(path: string): string {
   const own = read(path);
   const base = path.replace(/[^/]+$/, "");
-  const extra = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
-  return own + extra + read(`${base}ExpectedChainGuard.sol`);
+  const basket = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
+  const proxy = /GovernedProxyDeploy/.test(own + basket) ? read(`${base}GovernedProxyDeploy.sol`) : "";
+  const handover = /\bis DeployTimelock\b/.test(own) ? read(`${base}DeployTimelock.s.sol`) : "";
+  return own + basket + proxy + handover + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "authority", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -160,7 +165,8 @@ describe("stage-table.json", () => {
       });
       test(`${r.vault}: the redeploy reads the same sheet inputs as the vault's launch stage, plus the timelock and the emergency key`, () => {
         const stage = table.stages.find((s) => s.vault === r.vault)!;
-        const launch = stage.requiredEnv.filter((n) => n !== "ROUTER_DEFAULT_BPS");
+        // issue 1809: the redeployed vault's upgrade authority is TIMELOCK_ADDRESS itself, so the redeploy reads no UPGRADE_AUTHORITY (it reads UPGRADE_MODE like the launch stage)
+        const launch = stage.requiredEnv.filter((n) => n !== "ROUTER_DEFAULT_BPS" && n !== "UPGRADE_AUTHORITY");
         expect([...r.requiredEnv].sort()).toEqual([...launch, "TIMELOCK_ADDRESS", "EMERGENCY_ADDRESS"].sort());
         expect(r.libraries).toEqual(stage.libraries);
         expect(r.create2Libraries).toEqual(stage.create2Libraries);
@@ -262,5 +268,56 @@ describe("stage-table.json", () => {
     const cli = cliLoadStageTable(ROOT);
     expect(cli.stages.map((s) => s.name)).toEqual(EXPECTED);
     expect(cli.stages.map((s) => s.script)).toEqual(table.stages.map((s) => s.script));
+  });
+  // Issue 1809 (ADR-0014): the stage table deploys the timelock before every proxy, each proxy stage states the authority and the release mode it deploys with, and the
+  // proxies the deploy tooling verifies are exactly the contracts the storage-layout gate snapshots.
+  describe("proxies (issue 1809)", () => {
+    const t = table as unknown as { proxies?: { name: string; stage: string; field: string; implementationField: string; artifact: string }[]; proxyArtifact?: string };
+    const proxies = t.proxies ?? [];
+    const names = table.stages.map((s) => s.name);
+
+    test("the nine proxied contracts are the layout gate's proxied.txt, with ERC1967Proxy as the proxy build", () => {
+      const listed = read("contracts/test/fixtures/storage-layout/proxied.txt").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      expect(proxies.map((p) => p.artifact).sort()).toEqual([...listed].sort());
+      expect(proxies.map((p) => p.name)).toEqual(["rmUSDC", "registry", "router", "gateway", "icpolicy", "receipt", "rmPROTO", "rmAGENT", "rmRWA"]);
+      expect(t.proxyArtifact).toBe("ERC1967Proxy");
+      for (const v of table.vaults) expect(proxies.find((p) => p.stage === v.stage)?.artifact).toBe(v.artifact);
+    });
+
+    test("the authority stage deploys the upgrade-authority timelock before every proxy stage, and the handover reuses it", () => {
+      const auth = table.stages.find((s) => s.name === "authority")!;
+      expect(auth.script).toBe("contracts/script/DeployUpgradeAuthority.s.sol:DeployUpgradeAuthority");
+      expect(auth.manifest).toBe("deployments/<chain>/upgrade-authority.json");
+      for (const p of proxies) expect([p.name, names.indexOf(auth.name) < names.indexOf(p.stage)]).toEqual([p.name, true]);
+      expect(read("contracts/script/DeployUpgradeAuthority.s.sol")).toMatch(/_runAuthorityFrom\(""\)/);
+      expect(scriptSource("contracts/script/DeployUpgradeAuthority.s.sol")).toContain('vm.serializeAddress(obj, "timelock"');
+      expect(table.stages.find((s) => s.name === "timelock")!.requiredEnv).toContain("TIMELOCK_ADDRESS");
+    });
+
+    test("every proxy stage requires UPGRADE_AUTHORITY and UPGRADE_MODE, and its script writes the proxy, the implementation, the authority and the mode", () => {
+      for (const p of proxies) {
+        const st = table.stages.find((s) => s.name === p.stage)!;
+        expect([p.name, st.requiredEnv.includes("UPGRADE_AUTHORITY"), st.requiredEnv.includes("UPGRADE_MODE")]).toEqual([p.name, true, true]);
+        const src = scriptSource(st.script.split(":")[0]!);
+        for (const f of [p.field, p.implementationField, "upgrade_authority", "upgrade_mode"]) expect([p.name, f, src.includes(`"${f}"`)]).toEqual([p.name, f, true]);
+      }
+      expect(table.stages.find((s) => s.name === "vault")!.requiredEnv).toContain("EXCLUSION_LEDGER_FACTORY");
+      expect(read("contracts/script/DeployLibs.s.sol")).toContain('"exclusion_ledger_factory"');
+    });
+
+    test("the parser refuses a proxy whose stage could deploy it with an undeclared mode or authority", () => {
+      for (const env of ["UPGRADE_MODE", "UPGRADE_AUTHORITY"]) {
+        const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
+        const st = raw.stages.find((s: { name: string }) => s.name === "gateway");
+        st.requiredEnv = st.requiredEnv.filter((e: string) => e !== env);
+        expect(() => parseStageTable(raw)).toThrow(`proxy gateway: stage gateway must require ${env}`);
+      }
+      const noArtifact = JSON.parse(read("scripts/deploy/stage-table.json"));
+      delete noArtifact.proxyArtifact;
+      expect(() => parseStageTable(noArtifact)).toThrow("proxies need proxyArtifact");
+      const twice = JSON.parse(read("scripts/deploy/stage-table.json"));
+      twice.proxies.push({ ...twice.proxies[0] });
+      expect(() => parseStageTable(twice)).toThrow("is listed twice");
+    });
   });
 });

@@ -3,7 +3,8 @@
 // Sourcify must report an exact match (a partial match no longer passes). The Twin chain has no explorer: this runs on 8453 only.
 import { Collector } from "./collector.ts";
 import { loadManifests } from "./manifests.ts";
-import { coreContracts } from "./constants.ts";
+import { coreContracts, stageManifestName } from "./constants.ts";
+import { manifestProxies } from "../proxies.ts";
 import type { StageTable } from "../stage-table.ts";
 import type { Address, VerifyReport } from "./types.ts";
 import { MAINNET_CHAIN_ID } from "../chains.ts";
@@ -30,6 +31,8 @@ export function contractsFromManifests(dir: string, table: StageTable): Record<s
   }
   for (const v of m.vaults) out[`vault[${v.key}]`] = v.address;
   for (const [n, a] of Object.entries(m.libraries)) out[`library[${n}]`] = a;
+  // issue 1809: a proxy's source is the ERC1967Proxy's; the logic is the implementation's, so both are verified (the proxy above, its implementation here)
+  for (const p of manifestProxies(table, m.files, (st) => stageManifestName(table, st))) if (p.implementation) out[`implementation[${p.name}]`] = p.implementation;
   return out;
 }
 

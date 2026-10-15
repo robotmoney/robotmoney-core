@@ -4,14 +4,15 @@ title: "ReceiptRoleStub"
 
 # ReceiptRoleStub
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** AccessControl
 
 <i>
 
 Stands in for ConsensusRecommendationReceipt's role surface: the
-handover only needs `hasRole` / `grantRole` / `revokeRole`.
+handover only needs `hasRole` / `grantRole` / `revokeRole`, and the
+TIMELOCK_ADDRESS check reads `upgradeAuthority()` (ADR-0014 §4).
 
 </i>
 
@@ -23,14 +24,20 @@ handover only needs `hasRole` / `grantRole` / `revokeRole`.
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 ```
 
+### upgradeAuthority
+
+```solidity
+address public immutable upgradeAuthority;
+```
+
 ## Functions
 
-<a id="constructor-address"></a>
+<a id="constructor-address-address"></a>
 
 ### constructor
 
 ```solidity
-constructor(address admin);
+constructor(address admin, address authority);
 ```
 
 **Parameters**
@@ -38,4 +45,5 @@ constructor(address admin);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | admin | `address` |  |
+| authority | `address` |  |
 

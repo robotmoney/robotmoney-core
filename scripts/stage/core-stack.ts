@@ -97,14 +97,18 @@ export const SAFE_SET: [string, string][] = [
   ["CompatibilityFallbackHandler", "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"],
 ];
 
-/** The exhaustive required-field set. The schema's `required` array must equal it (drift guard). */
+/**
+ * The exhaustive required-field set. The schema's `required` array must equal it (drift guard). `.ephemeral.voters` is not in it: issue 1698
+ * deleted router voting, so no stage needs a voter set. The record copies a legacy VOTER_ADDRESSES sheet line into the optional `.ephemeral.voters`
+ * when the sheet still carries one (schemas/fusion-stage-record.schema.json says why).
+ */
 export const RECORD_REQUIRED_FIELDS = [
   ".chain_id", ".run_id", ".core_tag", ".core_sha", ".generated_at", ".min_delay", ".deployer",
   ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
   ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
   ".code_hashes.gateway",
   ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-  ".ephemeral.approver", ".ephemeral.voters", ".ephemeral.emergency",
+  ".ephemeral.approver", ".ephemeral.emergency",
   ".ephemeral.keystore_dir", ".ephemeral.safe_signers",
 ];
 
@@ -1019,6 +1023,8 @@ async function recordWrite(s: Stack): Promise<void> {
   const sheet = parseSheet(readFileSync(sheetPath, "utf8"));
   const sg = (k: string): string => (sheet.get(k) ?? "").replaceAll(" ", "");
   const owners = sg("SAFE_OWNERS").split(",");
+  // Legacy (issue 1698): voting is deleted and the rehearsal keys mint no voter. A sheet that still carries VOTER_ADDRESSES is copied into the optional
+  // `.ephemeral.voters`; a sheet without it gives a record without it.
   const voters = sg("VOTER_ADDRESSES").split(",").filter(Boolean);
   const emergency = sg("EMERGENCY_ADDRESS");
   const stamp = new Date(s.deps.nowMs()).toISOString().replace(/\.\d+Z$/, "Z");
@@ -1047,7 +1053,7 @@ async function recordWrite(s: Stack): Promise<void> {
     vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
     ephemeral: {
       approver: owners[0],
-      voters,
+      ...(voters.length > 0 ? { voters } : {}),
       emergency,
       keystore_dir: s.sv("key_dir"),
       safe_signers: [
@@ -1083,8 +1089,14 @@ export function validateRecord(rec: Json, recordPath: string): void {
     ".deployer", ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
     ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
     ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-    ".ephemeral.approver", ".ephemeral.emergency", ".ephemeral.voters[0]", ".ephemeral.voters[1]",
+    ".ephemeral.approver", ".ephemeral.emergency",
   ]) addr(f);
+  // `.ephemeral.voters` is optional (issue 1698). When present it is a list of non-zero addresses, nothing more.
+  const voters: unknown = rec.ephemeral?.voters;
+  if (voters !== undefined) {
+    if (!Array.isArray(voters)) throw recordBad("record-field-malformed", ".ephemeral.voters is not a list of addresses");
+    voters.forEach((_, i) => addr(`.ephemeral.voters[${i}]`));
+  }
   const hash = get(".code_hashes.gateway");
   if (!BYTES32.test(hash) || /^0x0{64}$/.test(hash)) throw recordBad("record-field-malformed", `.code_hashes.gateway is not a non-zero bytes32 ('${hash}')`);
   // The real 2-of-3 Safe: the three owner keys, each an address, with the approver (the relayer

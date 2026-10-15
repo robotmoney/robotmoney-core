@@ -43,6 +43,7 @@ import {InvariantRegistry} from "./InvariantRegistry.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
+import {Proxied} from "../helpers/Proxied.sol";
 
 /// @dev Minimal USDC for the router-deposit FV harness.
 contract FvUSDC is ERC20 {
@@ -636,8 +637,8 @@ contract FvInvariantsTest is Test {
         )
     {
         usdc = new FvUSDC();
-        registry = new VaultRegistry(address(this));
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        registry = Proxied.vaultRegistry(address(this));
+        router = Proxied.portfolioRouter(address(usdc), address(registry), address(this));
         vault = _addEligibleVault(registry, router, usdc);
     }
 

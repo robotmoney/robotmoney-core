@@ -470,6 +470,18 @@ sol! {
         event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint256 amount);
     }
 
+    /// Event surface every proxied Robot Money contract emits (ADR-0014 §3,
+    /// QA plan P3, core issue 1810). `Upgraded` is OpenZeppelin's
+    /// (`ERC1967Utils`, emitted by the proxy's constructor and by each
+    /// `upgradeToAndCall`); `UpgradesFrozen` is `contracts/lib/GovernedUpgrade.sol`'s
+    /// one-way freeze. Both come from the proxy's own address.
+    #[sol(abi)]
+    #[allow(missing_docs)]
+    interface IUpgradeEvents {
+        event Upgraded(address indexed implementation);
+        event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+    }
+
     /// The one `ExclusionLedger` read the indexer makes: a holder's vault
     /// shares at a record's snapshot. The value is fixed once the record
     /// exists, so any block at or after the record answers the same.
@@ -559,6 +571,10 @@ pub struct Topics {
     pub exclusion_recovery_credited: B256,
     pub exclusion_finalized: B256,
     pub exclusion_claimed: B256,
+    // Proxy upgrade and freeze — ADR-0014, QA plan P3 (core issue 1810). Emitted by every
+    // proxied contract the indexer watches (gateway, vaults, registry, router, IC policy, receipt).
+    pub proxy_upgraded: B256,
+    pub proxy_upgrades_frozen: B256,
 }
 
 impl Topics {
@@ -637,6 +653,9 @@ impl Topics {
             ),
             exclusion_finalized: keccak256(b"ExclusionFinalized(uint256,uint8,uint256)"),
             exclusion_claimed: keccak256(b"ExclusionClaimed(uint256,address,uint256)"),
+            // ADR-0014 — QA plan P3.
+            proxy_upgraded: keccak256(b"Upgraded(address)"),
+            proxy_upgrades_frozen: keccak256(b"UpgradesFrozen(address,address,bytes32)"),
         }
     }
 
@@ -694,6 +713,9 @@ impl Topics {
             self.exclusion_recovery_credited,
             self.exclusion_finalized,
             self.exclusion_claimed,
+            // Proxy upgrade and freeze — ADR-0014, QA plan P3.
+            self.proxy_upgraded,
+            self.proxy_upgrades_frozen,
         ]
     }
 }
@@ -842,6 +864,7 @@ mod tests {
             IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
             IExclusionLedgerEvents,
+            IUpgradeEvents,
         );
         out
     }
@@ -1204,6 +1227,32 @@ mod tests {
                 "ExclusionClaimed",
                 t.exclusion_claimed,
             ),
+            // Proxy upgrade and freeze — ADR-0014, QA plan P3. Taken from two proxied kinds:
+            // `Upgraded` comes from OpenZeppelin's ERC1967Utils, `UpgradesFrozen` from GovernedUpgrade.
+            (
+                "RobotMoneyGateway.sol",
+                "RobotMoneyGateway",
+                "Upgraded",
+                t.proxy_upgraded,
+            ),
+            (
+                "RobotMoneyGateway.sol",
+                "RobotMoneyGateway",
+                "UpgradesFrozen",
+                t.proxy_upgrades_frozen,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "Upgraded",
+                t.proxy_upgraded,
+            ),
+            (
+                "RobotMoneyVault.sol",
+                "RobotMoneyVault",
+                "UpgradesFrozen",
+                t.proxy_upgrades_frozen,
+            ),
         ];
 
         // The `sol!` declarations' own view of themselves, keyed by topic-0.
@@ -1416,6 +1465,17 @@ mod tests {
         assert_eq!(
             t.consensus_receipt_released,
             IConsensusRecommendationReceiptEvents::ReceiptReleased::SIGNATURE_HASH
+        );
+        // Proxy upgrade and freeze — ADR-0014, QA plan P3.
+        assert_eq!(t.proxy_upgraded, IUpgradeEvents::Upgraded::SIGNATURE_HASH);
+        assert_eq!(
+            t.proxy_upgrades_frozen,
+            IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH
+        );
+        let all = t.all_topic0();
+        assert!(
+            all.contains(&t.proxy_upgraded) && all.contains(&t.proxy_upgrades_frozen),
+            "the upgrade and freeze topics must be in the eth_getLogs filter"
         );
     }
 
@@ -1637,6 +1697,17 @@ mod tests {
                 "ExclusionClaimed",
                 b"ExclusionClaimed(uint256,address,uint256)",
                 IExclusionLedgerEvents::ExclusionClaimed::SIGNATURE_HASH,
+            ),
+            // ADR-0014 — QA plan P3 (core issue 1810).
+            (
+                "Upgraded",
+                b"Upgraded(address)",
+                IUpgradeEvents::Upgraded::SIGNATURE_HASH,
+            ),
+            (
+                "UpgradesFrozen",
+                b"UpgradesFrozen(address,address,bytes32)",
+                IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH,
             ),
         ];
 

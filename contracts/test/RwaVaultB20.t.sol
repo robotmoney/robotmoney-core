@@ -13,6 +13,7 @@ import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Slipstream pool double: every field is an immutable or a constant.
 contract B20ConstPool {
@@ -59,7 +60,7 @@ contract RwaVaultB20Test is Test {
 
     function setUp() public {
         usdc = new TestERC20();
-        vault = new RwaBasketVault(
+        vault = Proxied.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("router02")),
             100_000e6,
@@ -82,7 +83,11 @@ contract RwaVaultB20Test is Test {
     function _add(address token, address pool) internal {
         vm.prank(admin);
         vault.addAsset(
-            token, pool, uint24(uint24(TICK_SPACING)), address(adapter), BasketVault.Venue.Aerodrome
+            token,
+            pool,
+            uint24(uint24(TICK_SPACING)),
+            address(adapter),
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
     }
 

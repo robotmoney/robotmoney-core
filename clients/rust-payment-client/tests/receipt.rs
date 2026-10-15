@@ -222,6 +222,9 @@ fn simple_receipt_body() -> String {
 /// `eth_sendRawTransaction` mock is registered by the caller, because the
 /// refusal tests need it pinned at `expect(0)`.
 async fn mock_write_preamble(server: &mut mockito::ServerGuard) {
+    // Checks 2 and 2b (issue 1810): the gateway code and an empty
+    // implementation slot.
+    common::install_gateway_pin_mocks(server).await;
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
@@ -735,6 +738,7 @@ async fn receipt_submit_refuses_when_the_anchor_transaction_reverts_on_chain() {
 
     // Everything the happy path needs EXCEPT the receipt mock, which is
     // replaced below by the reverted one.
+    common::install_gateway_pin_mocks(&mut server).await;
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))

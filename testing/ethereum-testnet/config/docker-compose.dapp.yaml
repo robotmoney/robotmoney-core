@@ -169,9 +169,10 @@ services:
       # this the explorer /v1/router/weights endpoint returns an empty weight list
       # even when the deploy script called setWeights() before the dapp stack booted.
       INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
-      # Issue 1647: INDEXER_ROUTER_GOVERNANCE enables ProposalCreated / VoteCast /
-      # ProposalExecuted ingestion from RouterGovernance. Without it /v1/governance/proposals
-      # stays empty however many proposals the Safe and timelock created on chain.
+      # INDEXER_ROUTER_GOVERNANCE registers the weight setter (RouterGovernance) in
+      # /v1/chains/{id}/contracts and bounds deploy-block detection. Issue 1698 deleted
+      # its voting path, so it emits no event the indexer stores: an applied receipt
+      # arrives as the router's WeightsSet (INDEXER_PORTFOLIO_ROUTER above).
       INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
       # Issue 1731: INDEXER_TIMELOCK and INDEXER_SAFE put the TimelockController and the Safe in the
       # watched set. The explorer then lists both in /v1/chains/{id}/contracts and serves their
@@ -258,6 +259,8 @@ services:
         VITE_GATEWAY_ADDRESS: ${VITE_GATEWAY_ADDRESS:?VITE_GATEWAY_ADDRESS must be set}
         VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:?VITE_VAULT_ADDRESS must be set}
         VITE_GATEWAY_EXPECTED_CODE_HASH: ${VITE_GATEWAY_EXPECTED_CODE_HASH:?VITE_GATEWAY_EXPECTED_CODE_HASH must be set to enable admin writes}
+        # Issue 1810: the reviewed implementation behind the gateway proxy. Empty refuses a proxy.
+        VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: ${VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH:-}
         # QA plan U5 (issue 1737): vault and router code-hash pins, set by the 8453
         # stack builder (scripts/stage/mainnet-dapp.ts). Single-quoted: the vault pin
         # is a raw JSON object. Empty elsewhere; only the mainnet class enforces them.

@@ -239,6 +239,13 @@ pub struct Fixture {
     published: publish::Published,
     /// keccak256 of the gateway's runtime code on this chain.
     gateway_runtime_hash: String,
+    /// keccak256 of the code of the implementation behind the gateway proxy (ADR-0014); `None` for a
+    /// direct gateway. rmpc refuses to sign against a proxy without it (QA plan P3).
+    gateway_implementation_hash: Option<String>,
+    /// keccak256 of the implementation code behind every other proxy an rmpc write reaches through
+    /// the gateway (the four vaults and the router), deduplicated, for rmpc's
+    /// `proxy_implementation_hashes` (issue 1810). Empty when none of them is a proxy.
+    proxy_implementation_hashes: Vec<String>,
     repo_root: PathBuf,
     /// Harness-owned nonce source of truth for every EOA this devnet sends
     /// from (issue #1241, extended to the funding path by issue #1374).
@@ -598,7 +605,6 @@ impl Fixture {
             twin.set_usdc_balance(&deployer_hex, DEPLOYER_USDC_GRANT)?;
             let mut gas_only: Vec<String> = Vec::new();
             gas_only.extend(keys.address_list("SAFE_OWNERS"));
-            gas_only.extend(keys.address_list("VOTER_ADDRESSES"));
             gas_only.push(keys.address("EMERGENCY_ADDRESS")?.to_string());
             gas_only.push(agent_hex.clone());
             gas_only.push(PAUSER_ADDRESS_HEX.to_string());
@@ -638,6 +644,19 @@ impl Fixture {
             logging::error("smoke-test", format!("manifest read failed: {err}"));
         })?;
         let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
+        let gateway_implementation_hash = implementation_code_hash(&rpc_url, &topology.gateway)?;
+        let mut proxy_implementation_hashes = Vec::new();
+        for addr in topology
+            .vaults
+            .values()
+            .chain(std::iter::once(&topology.router))
+        {
+            if let Some(h) = implementation_code_hash(&rpc_url, addr)? {
+                if !proxy_implementation_hashes.contains(&h) {
+                    proxy_implementation_hashes.push(h);
+                }
+            }
+        }
         let chain_id = publish::TWIN_CHAIN_ID;
 
         let work_dir = tmp.path().to_path_buf();
@@ -651,6 +670,8 @@ impl Fixture {
             topology,
             published,
             gateway_runtime_hash,
+            gateway_implementation_hash,
+            proxy_implementation_hashes,
             repo_root,
             nonce_tracker,
         };
@@ -745,6 +766,16 @@ impl Fixture {
     }
     pub fn gateway_runtime_hash(&self) -> &str {
         &self.gateway_runtime_hash
+    }
+    /// keccak256 of the gateway implementation's code, for rmpc's `gateway_implementation_hashes`
+    /// (QA plan P3). `None` when the gateway is not a proxy.
+    pub fn gateway_implementation_hash(&self) -> Option<&str> {
+        self.gateway_implementation_hash.as_deref()
+    }
+    /// keccak256 of the implementations behind the vaults and the router, for rmpc's
+    /// `proxy_implementation_hashes` (issue 1810). Empty when none of them is a proxy.
+    pub fn proxy_implementation_hashes(&self) -> &[String] {
+        &self.proxy_implementation_hashes
     }
     /// Raw string form of the gateway address (for TOML/config templating).
     pub fn gateway_hex(&self) -> &str {
@@ -2448,6 +2479,42 @@ fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> 
     Ok(format!("0x{}", hex::encode(keccak256(&bytes).0)))
 }
 
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
+const ERC1967_IMPLEMENTATION_SLOT: &str =
+    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+/// keccak256 of the code of the implementation the proxy at `addr` delegates to (ADR-0014), or
+/// `None` when its ERC-1967 implementation slot is empty (a direct deployment).
+fn implementation_code_hash(rpc_url: &str, addr: &str) -> Result<Option<String>, HarnessError> {
+    let out = Command::new("cast")
+        .args([
+            "storage",
+            addr,
+            ERC1967_IMPLEMENTATION_SLOT,
+            "--rpc-url",
+            rpc_url,
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast storage {addr} (ERC-1967 implementation slot) failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let word = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let hex_word = word.trim_start_matches("0x");
+    if hex_word.len() != 64 || !hex_word.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(HarnessError::other(format!(
+            "cast storage {addr} returned {word:?}, not one 32-byte word"
+        )));
+    }
+    let implementation = &hex_word[24..];
+    if implementation.chars().all(|c| c == '0') {
+        return Ok(None);
+    }
+    runtime_code_hash(rpc_url, &format!("0x{implementation}")).map(Some)
+}
+
 /// Delays before the 2nd, 3rd and 4th attempt of a
 /// [`SendFailureClass::SafeRetry`] send. The first attempt is immediate.
 const NONCE_RETRY_DELAYS: [Duration; 4] = [
@@ -3004,6 +3071,11 @@ fn dapp_compose_env(
         kv("VITE_GATEWAY_ADDRESS", &d.gateway),
         kv("VITE_VAULT_ADDRESS", &d.vault),
         kv("VITE_GATEWAY_EXPECTED_CODE_HASH", &d.gateway_runtime_hash),
+        // Issue 1810: the dapp verifies the implementation behind the gateway proxy too.
+        kv(
+            "VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH",
+            &d.gateway_implementation_hash,
+        ),
         // Issue #320: registry and router addresses so the DestinationSelector can list registered vaults and
         // offer the Portfolio Router deposit path.
         kv("VITE_REGISTRY_ADDRESS", &d.registry),
@@ -3023,8 +3095,8 @@ fn dapp_compose_env(
         kv("INDEXER_REGISTRY", &d.registry),
         // WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
         kv("INDEXER_PORTFOLIO_ROUTER", &d.router),
-        // Issue 1647: ProposalCreated/VoteCast/ProposalExecuted from RouterGovernance, so the dapp governance e2e
-        // reads proposals the real Safe and timelock created.
+        // The weight setter, registered in the explorer's contracts list. Issue 1698 deleted its
+        // voting path, so it emits no event the indexer stores (an applied receipt is a WeightsSet).
         kv("INDEXER_ROUTER_GOVERNANCE", &d.governance),
         // Issue #1294: ReceiptRecorded/ReceiptReleased events from ConsensusRebalanceReceipt.
         kv("INDEXER_CONSENSUS_RECEIPT", &d.consensus_receipt),
@@ -3052,6 +3124,9 @@ struct DappDeployed {
     gateway: String,
     vault: String,
     gateway_runtime_hash: String,
+    /// Issue 1810: the gateway implementation's code hash, the dapp's build-time implementation
+    /// pin. Empty for a direct gateway.
+    gateway_implementation_hash: String,
     registry: String,
     router: String,
     governance: String,
@@ -3067,6 +3142,10 @@ impl DappDeployed {
             gateway: fixture.gateway_hex().to_string(),
             vault: fixture.vault_hex().to_string(),
             gateway_runtime_hash: fixture.gateway_runtime_hash().to_string(),
+            gateway_implementation_hash: fixture
+                .gateway_implementation_hash()
+                .unwrap_or("")
+                .to_string(),
             registry: fixture.registry_hex().to_string(),
             router: fixture.router_hex().to_string(),
             governance: fixture.governance_hex().to_string(),
@@ -4182,6 +4261,7 @@ ccc333\t\teth-beacon
             gateway: a(1),
             vault: a(2),
             gateway_runtime_hash: format!("0x{:064x}", 3),
+            gateway_implementation_hash: format!("0x{:064x}", 10),
             registry: a(4),
             router: a(5),
             governance: a(6),

@@ -10,13 +10,16 @@ fail() { echo "fusion-cross-repo: $*" >&2; exit 1; }
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RECEIPT_ADDRESS:?set FUSION_RECEIPT_ADDRESS}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
+# The weight setter. Required: the apply-path stage reads which register it
+# applies receipts from (issue 1698).
+: "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance, the weight setter)}"
 # INV-4 witnesses. Required, not optional: "release changed no allocation state"
 # is an assertion this test makes, and an unset address would turn it into a
-# silent skip (AC-CORE-04, AC-E2E-03, AC-E2E-04).
-: "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance)}"
+# silent skip (AC-CORE-04, AC-E2E-03).
 : "${FUSION_ROUTER_ADDRESS:?set FUSION_ROUTER_ADDRESS (PortfolioRouter)}"
 # AC-CORE-04 names three witnesses — "vault balances, router weights, and
-# proposal count" — and AC-E2E-03 repeats them. Weights and proposal count alone
+# proposal count" — and AC-E2E-03 repeats them. Issue 1698 deleted proposals, so
+# the router's effective weights take that slot (lib/inv4.sh). Weights alone
 # would miss an asset movement, so the mapped vaults are required too:
 # comma-separated rmUSDC,rmPROTO,rmAGENT,rmRWA addresses from the 2.7 manifest.
 : "${FUSION_VAULT_ADDRESSES:?set FUSION_VAULT_ADDRESSES (comma-separated mapped vault addresses)}"
@@ -73,12 +76,21 @@ url_digest="$(jq -er '.payload_digest' <<<"$verify_url")"
 [[ "$url_receipt_id" == "$receipt_id" ]] \
   || fail "the URL being anchored derives receipt_id $url_receipt_id, file derives $receipt_id"
 
+# T15, AC-FMT-03. THE WEIGHTS ARE THE ALLOCATION. A receipt with no weights
+# array, or one that does not total 10000 bps over the four buckets, cannot
+# carry a recommendation, and runbook §5.5 says an absent `weights` array is a
+# FAILED assertion, never a skipped one. Checked on the bytes being submitted,
+# before anything is anchored.
+jq -e '[.weights[]?.weight_bps] | length == 4 and add == 10000' \
+  "$FUSION_FRONTEND_RECEIPT_FILE" >/dev/null 2>&1 \
+  || fail "the receipt must carry four bucket weights totalling exactly 10000 bps: \
+$(jq -c '[.weights[]?.weight_bps]' "$FUSION_FRONTEND_RECEIPT_FILE" 2>/dev/null || echo '<no weights array>')"
+
 IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
 (( ${#VAULTS[@]} > 0 )) || fail "FUSION_VAULT_ADDRESSES is empty"
 
 witnesses() {
-  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
-    "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
+  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
 }
 
 # THE INV-4 WINDOW BRACKETS THE WRITE STAGES, and opens here rather than at
@@ -113,7 +125,7 @@ printf '%s\n' "$worker_out" >&2
 # T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
 # `releaseReceipt` is a one-shot state transition: a second `cast send` reverts
 # ReceiptAlreadyReleased, and under `set -euo pipefail` that aborts the script at
-# this line — so the INV-4 comparison, the draft assertion and the evidence JSON
+# this line — so the INV-4 comparison, the apply-path read and the evidence JSON
 # after it never execute, and a real INV-4 regression between the two runs would
 # be invisible behind the false failure. Read the state first, which is also what
 # an operator does. The post-condition read below stays the actual assertion.
@@ -140,38 +152,26 @@ released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool
   "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
 [[ "$released" == "true" ]] || fail "receipt is anchored but not released"
 
-draft="$("$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal \
-  --receipt-id "$receipt_id" --receipt-file "$FUSION_FRONTEND_RECEIPT_FILE")" \
-  || fail "released frontend receipt did not produce a governance handoff result"
-# T15. `skipped_no_weights` is NOT an accepted outcome: runbook §5.5 already says
-# an absent `weights` array is a FAILED assertion, never a skipped one — a receipt
-# with no allocation vector cannot carry a recommendation. A ready_for_review
-# draft must additionally name four vaults whose bps total 10000 and carry the
-# calldata a human reviews, and those bps must be the RECEIPT's own weights in
-# canonical bucket order: the weights are the one field that becomes treasury
-# calldata and the one the analyst signature check cannot cover.
-jq -e --arg id "$receipt_id" \
-  '.ok == true and (.drafts | length == 1) and .drafts[0].receipt_id == $id and
-   (.drafts[0].status == "ready_for_review" or .drafts[0].status == "blocked_active_proposal")' \
-  <<<"$draft" >/dev/null || fail "unexpected governance draft output: $(jq -c '{ok,n:(.drafts|length),status:[.drafts[]?.status]}' <<<"$draft" 2>/dev/null)"
-
-if jq -e '.drafts[0].status == "ready_for_review"' <<<"$draft" >/dev/null 2>&1; then
-  jq -e '(.drafts[0].vaults | length) == 4
-         and ([.drafts[0].vaults[].weight_bps] | add) == 10000
-         and (.drafts[0].propose_calldata | type) == "string"
-         and (.drafts[0].propose_calldata | length) > 0' <<<"$draft" >/dev/null \
-    || fail "a ready_for_review draft must name four vaults whose bps total 10000 and carry propose_calldata: \
-$(jq -c '{vaults:(.drafts[0].vaults|length?),bps:[.drafts[0].vaults[]?.weight_bps],calldata:(.drafts[0].propose_calldata|type?)}' <<<"$draft" 2>/dev/null)"
-  draft_bps="$(jq -c '[.drafts[0].vaults[].weight_bps]' <<<"$draft")"
-  receipt_bps="$(jq -c '[.weights[]?.weight_bps]' "$FUSION_FRONTEND_RECEIPT_FILE" 2>/dev/null)"
-  [[ -n "$receipt_bps" && "$receipt_bps" != "[]" && "$draft_bps" == "$receipt_bps" ]] \
-    || fail "the drafted bps do not equal the receipt's weights in canonical bucket order \
-(draft: $draft_bps, receipt: ${receipt_bps:-<none>})"
-fi
+# THE APPLY PATH (issue 1698). `rmpc governance draft-proposal` is deleted with
+# RouterGovernance's proposal, vote and execute functions, so a release no
+# longer produces a draft. A receipt moves router weights only through
+# RouterGovernance.applyReceipt, one call the Safe schedules through the
+# timelock (govern row apply-receipt), which releases the receipt and writes its
+# vector together. This seam never applies: it releases (signalling only) and
+# asserts INV-4 below. What it does assert is that the weight setter applies
+# receipts from the register that holds this receipt, so the receipt it just
+# anchored is one the apply path can act on.
+bound="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'receiptContract()(address)' \
+  --rpc-url "$FUSION_RPC_URL")" || fail "could not read receiptContract() on the weight setter $FUSION_GOVERNANCE_ADDRESS"
+bound="$(tr -d '[:space:]' <<<"$bound")"
+[[ "${bound,,}" == "${FUSION_RECEIPT_ADDRESS,,}" ]] \
+  || fail "the weight setter applies receipts from $bound, not from the receipt contract \
+$FUSION_RECEIPT_ADDRESS that holds this receipt"
+record "apply-path-receipt-contract.txt" "$bound"
 
 # INV-4 "after" witnesses, closing the window opened before the submit. Record
-# and release are signalling-only: a drafted proposal is a JSON document for a
-# human, so nothing here may have moved.
+# and release are signalling-only, and the apply-path read above is an eth_call,
+# so nothing here may have moved.
 witnesses_after="$(witnesses)"
 record "inv4-witnesses-after.txt" "$witnesses_after"
 inv4_unreadable "$witnesses_after" \
@@ -191,17 +191,18 @@ witnesses_json() { # `key=value` lines -> {"key":"value"}
 
 jq -n --arg receipt_id "$receipt_id" --arg payload_digest "$digest" \
   --arg receipt_url "$FUSION_FRONTEND_RECEIPT_URL" --arg url_digest "$url_digest" \
-  --arg release_action "$release_action" \
+  --arg release_action "$release_action" --arg receipt_contract "$bound" \
   --argjson witnesses_before "$(witnesses_json <<<"$witnesses_before")" \
   --argjson witnesses_after "$(witnesses_json <<<"$witnesses_after")" \
   '{ok:true,
-    stages:["frontend_artifact","core_verify_file","core_verify_url","submit",
-            ("release:" + $release_action),"proposal_drafted","inv4_unchanged"],
+    stages:["frontend_artifact","core_verify_file","core_verify_url","receipt_weights","submit",
+            ("release:" + $release_action),"apply_path_bound","inv4_unchanged"],
     release:{action:$release_action,
              broadcast:($release_action == "sent")},
+    apply_path:{weight_setter_receipt_contract:$receipt_contract},
     receipt_id:$receipt_id,payload_digest:$payload_digest,
     anchored_url:{url:$receipt_url,payload_digest:$url_digest,matches_submitted_bytes:true},
     inv4:{witnesses_before:$witnesses_before,
           witnesses_after:$witnesses_after,
-          window:"immediately before submit .. immediately after release and draft",
+          window:"immediately before submit .. immediately after release and the apply-path read",
           unchanged:true}}'

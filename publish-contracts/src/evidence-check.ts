@@ -2,6 +2,7 @@
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
 // Usage: bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
 //        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
+//        bun src/evidence-check.ts --proxy-lifecycle RUN_MANIFEST --timelock ADDR [--rejected-upgrade LABEL] [--delay-floor SECONDS] [--rpc URL]   (the governed upgrade, the freeze and the refused post-freeze upgrade of a Twin rehearsal, QA plan v1 P4, issue 1811)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
@@ -11,11 +12,13 @@
 // A rehearsal reads the 900 s floor, accepts the rehearsal-only `rehearsal_rows` (update-delay, batch, cancel) and counts the deployer nonce from `deployer_start_nonce`.
 // Offline mode (no --rpc) checks the recorded JSON shape only. Online mode (--rpc URL, chain 8453) reads the chain with viem and
 // does not trust the recorded numbers: deployer nonce, every receipt status, the timelock events and block timestamps of each
-// govern step, registry.listVaults() against the recorded manifests, and depositsPaused() of the basket vaults against the unpause govern rows.
+// govern step, registry.listVaults() against the recorded manifests, and depositsPaused() of the basket vaults against the unpause govern rows,
+// and every governed proxy of the stage table against its `proxies` entry (issue 1809, QA plan v1 L1: implementation slot, empty admin and beacon slots,
+// implementation code hash, upgradeAuthority(), upgradesFrozen(), initialized proxy, locked implementation).
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
-import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, toBytes, type Hex } from "viem";
+import { decodeEventLog, decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -28,8 +31,10 @@ import { REDEPLOY_ROW, asVaultCap, buildRedeployCalls, createdVaultProblems, vec
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
-import { loadStageTable } from "./stage-table.ts";
-import { VAULT_NAME } from "./sheet.ts";
+import { loadStageTable, tableProxies } from "./stage-table.ts";
+import { FREEZE_ROW, PROXY_GOVERN_ABI, UPGRADE_ROW, buildFreezeCall, buildUpgradeCall } from "./upgrade-rows.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, INITIALIZERS_LOCKED, proxyRecordOf, readProxyState, wordAddress, type ProxyState } from "./proxies.ts";
+import { UPGRADE_MODES, VAULT_NAME } from "./sheet.ts";
 import { STAGE13_UNPAUSE_ROWS, UNPAUSE_ROW_NAMES, VAULT_RULES, vaultOfUnpauseRow } from "./vault-rules.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -182,6 +187,137 @@ export function checkVotedWeightsClears(ev: any, floor: number = MAINNET_DELAY_F
   const clears = clearShapeProblems(ev, (m) => p.push(m));
   forbidCancelFields(clears, (e) => String(e?.step ?? "entry"), (m) => p.push(m));
   operationProblems(clears.map((r) => ({ ...r, step: clearLabel(r) })), (m) => p.push(m), floor);
+  return p;
+}
+
+/**
+ * Issue 1809 (ADR-0014): the governed proxies of the deployment, recorded under `proxies` (one entry per name of the stage table's `proxies`): the proxy address, the
+ * implementation behind it, the implementation's runtime code hash (the hash a freeze binds to), the authority (the timelock), the mode and the frozen flag, plus the
+ * deployment-wide `upgrade_mode`. A mode other than upgradeable or frozen-at-deploy is refused (an undeclared mode), and so is an entry whose ERC-1967 admin or beacon
+ * slot is not recorded empty (`admin_slot_empty`, `beacon_slot_empty`). Every vault address must be its proxy. The verifier read all of it from the chain (the verify stage record's `proxies`); this checks the record.
+ */
+function proxyEvidenceProblems(ev: any, names: readonly string[] | undefined, bad: (m: string) => void): void {
+  if (!names || names.length === 0) return;
+  const mode = ev?.upgrade_mode;
+  if (!(UPGRADE_MODES as readonly string[]).includes(mode)) bad(`upgrade_mode is ${JSON.stringify(mode ?? null)}: a deployment states upgradeable or frozen-at-deploy (ADR-0014 §5), an undeclared mode is refused`);
+  const px = ev?.proxies;
+  if (!px || typeof px !== "object" || Array.isArray(px)) { bad("proxies is missing: the evidence records each governed proxy, its implementation, the implementation code hash, the authority, the mode and the frozen flag (issue 1809)"); return; }
+  for (const n of names) {
+    const e = px[n];
+    const w = `proxies.${n}`;
+    if (!e || typeof e !== "object") { bad(`${w} is missing`); continue; }
+    if (!ADDR.test(e.proxy ?? "")) bad(`${w}.proxy is not an address`);
+    if (!ADDR.test(e.implementation ?? "")) bad(`${w}.implementation is not an address`);
+    else if (lc(e.implementation) === lc(e.proxy ?? "")) bad(`${w}.implementation is the proxy itself`);
+    if (!TX.test(e.implementation_code_hash ?? "")) bad(`${w}.implementation_code_hash is not a bytes32 (keccak256 of the implementation's runtime code)`);
+    if (lc(e.authority ?? "") !== lc(ev?.timelock?.address ?? "-")) bad(`${w}.authority ${e.authority} is not the timelock ${ev?.timelock?.address}: the timelock is the only upgrade authority (ADR-0014 §4)`);
+    if (e.mode !== mode) bad(`${w}.mode ${JSON.stringify(e.mode ?? null)} differs from upgrade_mode ${JSON.stringify(mode ?? null)}`);
+    if (typeof e.frozen !== "boolean") bad(`${w}.frozen is not true or false`);
+    else if (mode === "frozen-at-deploy" && e.frozen !== true) bad(`${w}.frozen is false although the mode is frozen-at-deploy`);
+    for (const k of ["admin_slot_empty", "beacon_slot_empty"]) if (e[k] !== true) bad(`${w}.${k} is ${JSON.stringify(e[k] ?? null)}, not true: a Robot Money proxy has no ERC-1967 admin or beacon (ADR-0014 §3), an unexpected slot is refused`);
+  }
+  for (const n of Object.keys(px)) if (!names.includes(n)) bad(`proxies.${n} is not a proxy of the stage table (${names.join(", ")})`);
+  for (const [k, v] of Object.entries(ev?.vaults ?? {})) if (px[k] && ADDR.test((v as any)?.address ?? "") && lc((v as any).address) !== lc(px[k].proxy ?? "")) bad(`vaults.${k}.address ${(v as any).address} is not its proxy ${px[k].proxy}`);
+  const frozenByRow = new Set((Array.isArray(ev?.proxy_freezes) ? ev.proxy_freezes : []).flatMap((f: any) => (Array.isArray(f?.proxies) ? f.proxies.map((x: any) => x?.name) : [])));
+  for (const n of names) if (px[n]?.frozen === true && mode !== "frozen-at-deploy" && !frozenByRow.has(n)) bad(`proxies.${n}.frozen is true but the mode is upgradeable and no proxy_freezes entry froze it`);
+  for (const n of frozenByRow) if (typeof n === "string" && px[n] && px[n].frozen !== true) bad(`proxies.${n}.frozen is false but a proxy_freezes entry froze it`);
+  // ADR-0014 §8: the layout identifier the deploy manifest recorded must equal the checkout's snapshot the verify compared with.
+  for (const n of names) {
+    const e = px[n];
+    if (e?.layout_source === "deploy-manifest" && typeof e.checkout_layout_hash === "string" && lc(e.layout_hash ?? "") !== lc(e.checkout_layout_hash)) {
+      bad(`proxies.${n}.layout_hash ${e.layout_hash} (recorded at deploy) differs from checkout_layout_hash ${e.checkout_layout_hash}: the storage layout the verify checked is not the deployed one`);
+    }
+  }
+  // ADR-0014 §5: a release may call its core logic immutable only when every proxy reads frozen. Governed parameters, adapter choice and upstream contracts stay
+  // mutable after a freeze, so a claim must also carry the still_mutable list the verify record writes (immutability.still_mutable).
+  const claim = ev?.immutability_claim;
+  if (claim !== undefined && claim !== null && claim !== false && claim !== "none") {
+    const unfrozen = names.filter((n) => px[n]?.frozen !== true);
+    if (unfrozen.length > 0) bad(`immutability_claim ${JSON.stringify(claim)} is refused: ${unfrozen.join(", ")} still read upgradeable, and core logic is immutable only when all ${names.length} proxies read frozen (ADR-0014 §5)`);
+    const sm = ev?.immutability?.still_mutable;
+    if (!sm || !Array.isArray(sm.governed_parameters) || sm.governed_parameters.length === 0 || !Array.isArray(sm.upstream_dependencies) || sm.upstream_dependencies.length === 0) {
+      bad(`immutability_claim ${JSON.stringify(claim)} is refused: the evidence carries no immutability.still_mutable list of the governed parameters and upstream dependencies that stay mutable after a freeze (ADR-0014 §5)`);
+    }
+  }
+}
+
+/**
+ * Issue 1809: the upgrade and freeze rounds (`govern --row upgrade-proxy`, `govern --row freeze-proxy`), recorded under `proxy_upgrades` and `proxy_freezes`, never in `govern`
+ * (stage 13 stays the four unpauses). Each entry is ONE timelock operation, both transactions status 1 and at least the delay apart (checked with the other operations). An
+ * upgrade names the proxy, the implementation it ran before and the one it runs after; a freeze names each proxy, the implementation and the code hash it froze on.
+ */
+const proxyRowLabel = (r: any): string => `${r?.step ?? "proxy row"} ${r?.proxy ?? (Array.isArray(r?.proxies) ? r.proxies.map((x: any) => x?.name).join(",") : "?")} round ${r?.round ?? 1}`;
+function proxyRowShapeProblems(ev: any, bad: (m: string) => void): any[] {
+  const list = (k: string): any[] => (ev?.[k] === undefined ? [] : Array.isArray(ev[k]) ? ev[k] : (bad(`${k} is not a list`), []));
+  const ups = list("proxy_upgrades"), frs = list("proxy_freezes");
+  for (const r of ups) {
+    const w = proxyRowLabel(r);
+    if (r?.step !== UPGRADE_ROW) bad(`${w}: step '${r?.step}' is not ${UPGRADE_ROW}`);
+    if (typeof r?.proxy !== "string") bad(`${w}: proxy names no proxy`);
+    for (const k of ["proxy_address", "from_implementation", "implementation"]) if (!ADDR.test(r?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+    if (ADDR.test(r?.implementation ?? "") && lc(r.implementation) === lc(r?.from_implementation ?? "")) bad(`${w}: implementation equals from_implementation: nothing was upgraded`);
+    if (!TX.test(r?.implementation_code_hash ?? "")) bad(`${w}: implementation_code_hash is not a bytes32`);
+    if (lc(r?.timelock ?? "") !== lc(ev?.timelock?.address ?? "-")) bad(`${w}: timelock ${r?.timelock} is not the timelock ${ev?.timelock?.address}`);
+  }
+  for (const r of frs) {
+    const w = proxyRowLabel(r);
+    if (r?.step !== FREEZE_ROW) bad(`${w}: step '${r?.step}' is not ${FREEZE_ROW}`);
+    const ps: any[] = Array.isArray(r?.proxies) ? r.proxies : [];
+    if (ps.length === 0) bad(`${w}: proxies names no frozen proxy`);
+    for (const x of ps) if (typeof x?.name !== "string" || !ADDR.test(x?.proxy ?? "") || !ADDR.test(x?.implementation ?? "") || !TX.test(x?.code_hash ?? "")) bad(`${w}: a frozen proxy needs name, proxy, implementation and code_hash`);
+    if (lc(r?.timelock ?? "") !== lc(ev?.timelock?.address ?? "-")) bad(`${w}: timelock ${r?.timelock} is not the timelock ${ev?.timelock?.address}`);
+  }
+  return [...ups, ...frs];
+}
+
+/**
+ * QA plan v1 P4 (issue 1811, ADR-0014 stage 4): the governed-proxy lifecycle of a Twin rehearsal, read from its run manifest (`--proxy-lifecycle RUN_MANIFEST`).
+ * The rehearsal (publish-contracts/src/ci/twin-upgrade-rehearsal.ts) deploys the exact release artifacts, upgrades one proxy through the real Safe and timelock
+ * (`proxy_upgrades`), freezes every proxy (`proxy_freezes`), then has the Safe schedule one more upgrade of a frozen proxy on the timelock as the generic Twin call
+ * `govern --call-label LABEL` (run-manifest record `call-<LABEL>`, named by `--rejected-upgrade LABEL`), which the proxy must refuse.
+ * Offline: both lists have an entry with the shape and the delay `--evidence` checks; at least one proxy was upgraded and frozen after that upgrade executed; the
+ * freeze of an upgraded proxy names the implementation its last upgrade installed (so the reviewed upgrade is what is fixed forever); no upgrade of a frozen proxy
+ * executed after its freeze was scheduled; the rejected upgrade was scheduled and neither executed nor cancelled. The chain check is checkProxyLifecycleOnChain.
+ */
+export interface LifecycleOpts { timelock: string; floor: number; rejectedUpgrade?: string }
+/** The run-manifest key of the generic Twin call the rehearsal uses for the post-freeze upgrade (govern.ts names a generic call `call-<label>`). */
+export const rejectedUpgradeKey = (label: string): string => `call-${label}`;
+const tsOf = (r: any, k: "schedule_block_timestamp" | "execute_block_timestamp"): number => Number(r?.[k]);
+export function checkProxyLifecycle(m: any, o: LifecycleOpts): string[] {
+  const p: string[] = [];
+  const bad = (x: string) => p.push(x);
+  const ops = proxyRowShapeProblems({ timelock: { address: o.timelock }, proxy_upgrades: m?.proxy_upgrades, proxy_freezes: m?.proxy_freezes }, bad);
+  const ups = ops.filter((r) => r?.step === UPGRADE_ROW);
+  const frs = ops.filter((r) => r?.step === FREEZE_ROW);
+  if (ups.length === 0) bad(`the run manifest has no proxy_upgrades entry: the lifecycle starts with one governed upgrade (govern --row ${UPGRADE_ROW}) executed through the Safe and the timelock`);
+  if (frs.length === 0) bad(`the run manifest has no proxy_freezes entry: the lifecycle freezes the proxies (govern --row ${FREEZE_ROW}) after the upgrade`);
+  forbidCancelFields(ops, proxyRowLabel, bad);
+  operationProblems(ops.map((r) => ({ ...r, step: proxyRowLabel(r) })), bad, o.floor);
+  let upgradedThenFrozen = 0;
+  for (const f of frs) {
+    for (const x of Array.isArray(f?.proxies) ? f.proxies : []) {
+      const mine = ups.filter((u) => u?.proxy === x?.name).sort((a, b) => tsOf(a, "execute_block_timestamp") - tsOf(b, "execute_block_timestamp"));
+      for (const u of mine.filter((u) => !(tsOf(u, "execute_block_timestamp") <= tsOf(f, "schedule_block_timestamp")))) {
+        bad(`${proxyRowLabel(u)}: executed at ${u.execute_block_timestamp}, after ${proxyRowLabel(f)} was scheduled at ${f.schedule_block_timestamp}: the freeze names the implementation live when it was planned, and nothing upgrades a proxy once it is frozen (ADR-0014 §5)`);
+      }
+      const last = mine.filter((u) => tsOf(u, "execute_block_timestamp") <= tsOf(f, "schedule_block_timestamp")).pop();
+      if (last === undefined) continue;
+      upgradedThenFrozen++;
+      if (lc(String(x?.implementation ?? "")) !== lc(String(last.implementation ?? ""))) bad(`${proxyRowLabel(f)}: froze ${x?.name} on ${x?.implementation}, but its last upgrade (${proxyRowLabel(last)}) installed ${last.implementation}: the freeze must fix the reviewed upgrade`);
+    }
+  }
+  if (ups.length > 0 && frs.length > 0 && upgradedThenFrozen === 0) bad("no proxy was upgraded and then frozen: the rehearsal takes one proxy through a governed upgrade, then the freeze, so the frozen implementation is the upgraded one");
+  if (o.rejectedUpgrade !== undefined) {
+    const k = rejectedUpgradeKey(o.rejectedUpgrade);
+    const r = m?.govern?.[k];
+    if (!r || typeof r !== "object") bad(`the run manifest records no ${k}: the post-freeze upgrade was never scheduled through the Safe and the timelock (govern --call-label ${o.rejectedUpgrade})`);
+    else {
+      if (!TX.test(r.scheduled?.tx_hash ?? "")) bad(`${k}: no schedule transaction: the post-freeze upgrade must be scheduled through the Safe on the timelock before its execute is refused`);
+      if (!TX.test(r.scheduled?.operation_id ?? "")) bad(`${k}: no timelock operation id`);
+      if (r.executed) bad(`${k}: executed: an upgrade of a frozen proxy ran (ADR-0014 §5: once frozen, no upgrade can ever execute)`);
+      if (r.cancelled) bad(`${k}: cancelled: the rejected upgrade is one the proxy refused at execute time, not one the Safe withdrew`);
+    }
+  }
   return p;
 }
 
@@ -367,7 +503,15 @@ function receiptPathProblems(ev: any, kind: DeploymentKind, applications: any[],
 const registrationOperations = (regs: any[]): any[] => regs.map((r) => ({ ...r, step: regLabel(r) }));
 
 /** How the evidence is read (issue 1727). `kind` is the deployment kind the caller expects: production unless the operator passed --deployment-kind rehearsal. */
-export interface EvidenceOpts { kind?: DeploymentKind }
+export interface EvidenceOpts {
+  kind?: DeploymentKind;
+  /**
+   * Issue 1809: the proxy names of core's stage table (ADR-0014 §1). When given and not empty, the evidence must carry `upgrade_mode` and a `proxies` entry per name (proxy and
+   * implementation addresses, the implementation code hash, authority, mode, frozen), and every vault address must be its proxy. checkEvidenceOnChain then reads each
+   * of those proxies from the chain (checkProxyEvidenceOnChain). Absent: a deployment before the proxies.
+   */
+  proxies?: readonly string[];
+}
 const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
 /** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
 function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
@@ -530,11 +674,13 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const applications = applicationShapeProblems(ev, bad);
   const clears = clearShapeProblems(ev, bad);
   const redeploys = redeployShapeProblems(ev, kind, bad);
+  proxyEvidenceProblems(ev, opts?.proxies, bad);
+  const proxyOps = proxyRowShapeProblems(ev, bad);
   // one operation per unpause, release or application: no schedule or execute transaction, and no timelock operation id, is shared by two operations
-  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
+  forbidCancelFields([...govern, ...releases, ...applications, ...clears, ...redeploys, ...proxyOps, ...(Array.isArray(ev?.committee_registrations) ? ev.committee_registrations : [])], (e) => String(e?.step ?? "entry"), bad);
   const rrows = rehearsalRowProblems(ev, kind, bad);
   const regs = receiptPathProblems(ev, kind, applications, bad);
-  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
+  operationProblems([...govern.map((g) => ({ ...g, step: stepLabel(g) })), ...releases.map((r) => ({ ...r, step: releaseLabel(r) })), ...applications.map((r) => ({ ...r, step: applyLabel(r) })), ...clears.map((r) => ({ ...r, step: clearLabel(r) })), ...redeploys.map((r) => ({ ...r, step: redeployLabel(r) })), ...proxyOps.map((r) => ({ ...r, step: proxyRowLabel(r) })), ...rowOperations(rrows), ...registrationOperations(regs)], bad, floor);
   if (!ADDR.test(ev?.deployer ?? "")) bad("deployer address is missing");
   if (!ADDR.test(ev?.registry?.address ?? "")) bad("registry address is missing");
   if (!Number.isInteger(ev?.deployer_nonce_final)) bad("deployer_nonce_final is missing");
@@ -555,13 +701,19 @@ export interface ChainReader {
   getBlock(a: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
   /** Runtime code at an address (viem getCode). Needed only when the evidence records an adopted stage. */
   getCode?(a: { address: `0x${string}` }): Promise<Hex | undefined>;
-  readContract(a: { address: `0x${string}`; abi: any; functionName: string }): Promise<unknown>;
+  /** `args`: read by the proxy lifecycle check only (the timelock's isOperationDone / isOperationReady of one operation id, QA plan v1 P4). */
+  readContract(a: { address: `0x${string}`; abi: any; functionName: string; args?: readonly unknown[] }): Promise<unknown>;
+  /** A storage word (viem getStorageAt). Needed only by the proxy lifecycle check (the ERC-1967 implementation slot of a frozen proxy, QA plan v1 P4). */
+  getStorageAt?(a: { address: `0x${string}`; slot: Hex }): Promise<Hex | undefined>;
+  /** An eth_call at the latest block (viem call). Needed only by the proxy lifecycle check: the simulated execute of the post-freeze upgrade must revert UpgradesAreFrozen (QA plan v1 P4). */
+  call?(a: { to: `0x${string}`; data: Hex; account?: `0x${string}` }): Promise<{ data?: Hex }>;
 }
 
 const TIMELOCK_ABI = parseAbi([
   "event CallScheduled(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data, bytes32 predecessor, uint256 delay)",
   "event CallExecuted(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data)",
   "event Cancelled(bytes32 indexed id)",
+  "event CallSalt(bytes32 indexed id, bytes32 salt)",
 ]);
 /** QA plan v1 C2 (issue 1701): the event RouterGovernance.applyReceipt emits. An application's entry must be what the chain applied, not only what the timelock called. */
 const GOVERNANCE_EVENTS_ABI = parseAbi(["event ReceiptApplied(bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
@@ -704,6 +856,50 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
     if (executed && paused !== false) bad(`govern ${step} executed with receipt status 1, but ${name}.depositsPaused() reads ${String(paused)} on chain, want false`);
     if (!executed && paused === false && v.deployPaused) bad(`${name}.depositsPaused() reads false on chain, but govern ${step} has no executed receipt`);
+  }
+  // Issue 1809 (ADR-0014): the governed proxies, read from the chain, never taken from the record (QA plan v1 L1 closed this P2 "left for later" item).
+  if (opts?.proxies && opts.proxies.length > 0) p.push(...(await checkProxyEvidenceOnChain(ev, chain, opts.proxies)));
+  return p;
+}
+
+/** The read-only surface proxies.ts readProxyState takes, over this module's ChainReader (getCode and getStorageAt must exist: the caller checks). */
+const proxyReaderOf = (chain: ChainReader) => ({
+  getCode: async (address: Address): Promise<Hex> => ((await chain.getCode!({ address })) ?? "0x") as Hex,
+  getStorageAt: async (address: Address, slot: Hex): Promise<Hex> => ((await chain.getStorageAt!({ address, slot })) ?? "0x") as Hex,
+  read: async (address: Address, signature: string): Promise<unknown> => chain.readContract({ address, abi: parseAbi([signature]), functionName: /function (\w+)/.exec(signature)![1]! }),
+});
+
+/**
+ * Chain re-read of the `proxies` evidence (issue 1809, ADR-0014; P2 left it for later, QA plan v1 L1 closes it). The record is not trusted. For each proxy name of
+ * the stage table that has an entry, it reads the proxy through proxies.ts readProxyState (the reads the runner's gate and the verifier make) and requires:
+ * the ERC-1967 implementation slot names the recorded implementation; the admin and beacon slots are empty; the live implementation has code and its keccak256 is
+ * the recorded implementation_code_hash; upgradeAuthority() is the evidence timelock; upgradesFrozen() is the recorded frozen flag; the proxy is initialized and
+ * not initializing; the implementation's initializers are locked (_disableInitializers). A reader that cannot read code or storage proves nothing, which is a
+ * problem, never a pass. An entry the offline check already refused (no proxy or implementation address) is skipped here.
+ */
+export async function checkProxyEvidenceOnChain(ev: any, chain: ChainReader, names: readonly string[]): Promise<string[]> {
+  const p: string[] = [];
+  const px = ev?.proxies;
+  if (names.length === 0 || !px || typeof px !== "object" || Array.isArray(px)) return p; // no proxies, or the offline check already named the missing record
+  if (!chain.getCode || !chain.getStorageAt) return ["proxies: this chain reader cannot read code or storage, so no proxy is proven on chain"];
+  const reader = proxyReaderOf(chain);
+  for (const n of names) {
+    const e = px[n];
+    const w = `proxies.${n}`;
+    if (!e || typeof e !== "object" || !ADDR.test(e.proxy ?? "") || !ADDR.test(e.implementation ?? "")) continue;
+    let s: ProxyState;
+    try { s = await readProxyState(reader, e.proxy as Address); }
+    catch (x) { p.push(`${w}: ${e.proxy} not readable on chain (${(x as Error).message})`); continue; }
+    const live = proxyRecordOf(n, s, ev?.upgrade_mode);
+    if (lc(live.implementation) !== lc(e.implementation)) p.push(`${w}: the ERC-1967 implementation slot of ${e.proxy} reads ${live.implementation} on chain, the evidence says ${e.implementation}`);
+    if (!live.admin_slot_empty) p.push(`${w}: the ERC-1967 admin slot of ${e.proxy} is not empty on chain (it names ${wordAddress(s.adminSlot)}): a Robot Money proxy has no admin (ADR-0014 §3)`);
+    if (!live.beacon_slot_empty) p.push(`${w}: the ERC-1967 beacon slot of ${e.proxy} is not empty on chain (it names ${wordAddress(s.beaconSlot)}): a Robot Money proxy has no beacon (ADR-0014 §3)`);
+    if (s.implementationCode === "0x") p.push(`${w}: the implementation ${live.implementation} has no code on chain`);
+    else if (lc(live.implementation_code_hash) !== lc(e.implementation_code_hash ?? "")) p.push(`${w}: the implementation code hash on chain is ${live.implementation_code_hash}, the evidence says ${e.implementation_code_hash}`);
+    if (live.authority === null || lc(live.authority) !== lc(ev?.timelock?.address ?? "-")) p.push(`${w}: upgradeAuthority() of ${e.proxy} reads ${live.authority ?? "nothing (the call reverted: no GovernedUpgrade)"} on chain, want the timelock ${ev?.timelock?.address}`);
+    if (live.frozen === null || live.frozen !== e.frozen) p.push(`${w}: upgradesFrozen() of ${e.proxy} reads ${live.frozen ?? "nothing (the call reverted)"} on chain, the evidence says ${String(e.frozen)}`);
+    if (s.initialized.version === 0n || s.initialized.initializing) p.push(`${w}: ${e.proxy} reads Initializable version ${s.initialized.version}${s.initialized.initializing ? ", initializing" : ""} on chain: it is not initialized`);
+    if (s.implementationInitialized.version !== INITIALIZERS_LOCKED) p.push(`${w}: the implementation ${live.implementation} reads Initializable version ${s.implementationInitialized.version} on chain, not ${INITIALIZERS_LOCKED} (_disableInitializers): its initializers are not locked`);
   }
   return p;
 }
@@ -866,6 +1062,183 @@ export async function checkVaultRedeploysOnChain(ev: any, chain: ChainReader, fl
   return p;
 }
 
+/** The two events a governed proxy emits from its own address (ADR-0014 §3): OZ's Upgraded on every upgrade, GovernedUpgrade's UpgradesFrozen on the freeze. */
+const PROXY_EVENTS_ABI = parseAbi([
+  "event Upgraded(address indexed implementation)",
+  "event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash)",
+]);
+const LIFECYCLE_READ_ABI = parseAbi([
+  "function upgradesFrozen() view returns (bool)",
+  "function isOperationDone(bytes32 id) view returns (bool)",
+  "function isOperationReady(bytes32 id) view returns (bool)",
+  "function execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 salt) payable",
+]);
+/** GovernedUpgrade.UpgradesAreFrozen(): what `_authorizeUpgrade` reverts with once the proxy is frozen, bubbled up unchanged by TimelockController.execute. */
+export const UPGRADES_ARE_FROZEN_SELECTOR: Hex = keccak256(toBytes("UpgradesAreFrozen()")).slice(0, 10) as Hex;
+
+/** The revert data an eth_call failure carries. viem nests it in the error's cause chain (`data`, or `data.data` on some nodes); undefined when none is found. */
+export function revertDataOf(e: unknown): Hex | undefined {
+  let cur: any = e;
+  for (let i = 0; cur && i < 12; i++, cur = cur.cause) {
+    const d = cur?.data !== null && typeof cur?.data === "object" ? cur.data?.data : cur?.data;
+    if (typeof d === "string" && /^0x([0-9a-fA-F]{2})+$/.test(d)) return d as Hex;
+  }
+  return undefined;
+}
+
+/** Each log of `rc` from `address` that decodes as `name` of `abi`, with its decoded arguments. */
+function eventsOf(rc: { logs: readonly { address: string; topics: readonly Hex[]; data: Hex }[] }, address: string, abi: readonly unknown[], name: string): Record<string, any>[] {
+  const out: Record<string, any>[] = [];
+  for (const l of rc.logs) {
+    if (lc(l.address) !== lc(address)) continue;
+    try {
+      const d: any = decodeEventLog({ abi: abi as any, data: l.data, topics: l.topics as [Hex, ...Hex[]] });
+      if (d.eventName === name) out.push(d.args);
+    } catch { /* another event of that contract */ }
+  }
+  return out;
+}
+
+/**
+ * Chain check of the proxy lifecycle (QA plan v1 P4, issue 1811). It does not trust the run manifest:
+ *   - each `proxy_upgrades` entry: the schedule tx carries ONE CallScheduled of the timelock whose target and calldata are rebuilt from the entry
+ *     (proxy.upgradeToAndCall(implementation, call_data)), with at least the floor as its delay and the recorded operation id; the execute tx carries the matching
+ *     CallExecuted and the proxy's own Upgraded(implementation) event; the block gap is at least the floor;
+ *   - each `proxy_freezes` entry: one CallScheduled per frozen proxy (freezeUpgrades(implementation, code_hash), one operation id), the matching CallExecuted and each
+ *     proxy's UpgradesFrozen(proxy, implementation, code_hash); and NOW each frozen proxy reads upgradesFrozen() true, its ERC-1967 slot still names the frozen
+ *     implementation and that implementation's code still hashes to code_hash;
+ *   - the rejected post-freeze upgrade (`--rejected-upgrade LABEL`): its schedule tx succeeded in a block after the freeze of its target executed, carries ONE
+ *     CallScheduled of upgradeToAndCall on a frozen proxy with the recorded operation id; the timelock reads the operation ready (the delay passed) and not done (it
+ *     never executed); and executing it now, simulated with eth_call through the timelock's open executor, reverts with UpgradesAreFrozen(), the proxy's own refusal
+ *     bubbled up by the timelock, not a Safe or timing error.
+ * It does not read the chain id: a Twin run uses it, and so can a Base mainnet rehearsal without --rejected-upgrade (the generic call is Twin-only).
+ */
+export async function checkProxyLifecycleOnChain(m: any, chain: ChainReader, o: LifecycleOpts): Promise<string[]> {
+  const p: string[] = [];
+  const bad = (x: string) => p.push(x);
+  const ts = async (rc: { blockNumber: bigint }) => Number((await chain.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  const status = async (what: string, hash: string) => {
+    try {
+      const rc = await chain.getTransactionReceipt({ hash: hash as Hex });
+      if (rc.status !== "success") bad(`${what}: receipt on chain is ${rc.status}`);
+      return rc;
+    } catch (e) { bad(`${what}: receipt not readable on chain (${(e as Error).message})`); return undefined; }
+  };
+  /** One operation: the scheduled calls equal `want` in order, one id, the delay; the execute carries them; the gap. Returns the execute receipt. */
+  const operation = async (w: string, r: any, want: readonly { target: string; data: Hex; label: string }[]) => {
+    const sc = await status(`${w} schedule`, r.schedule_tx);
+    if (!sc) return undefined;
+    const scheduled = timelockEvents(sc, o.timelock, "CallScheduled").sort((x, y) => Number(x.index - y.index));
+    if (scheduled.length === 0) { bad(`${w}: the schedule tx has no CallScheduled event from the timelock ${o.timelock}`); return undefined; }
+    if (scheduled.length !== want.length) bad(`${w}: the schedule tx has ${scheduled.length} CallScheduled events, the entry names ${want.length} call(s)`);
+    scheduled.forEach((e, i) => {
+      const c = want[i];
+      if (c === undefined) { bad(`${w}: CallScheduled call ${i} is not a call of this entry`); return; }
+      if (lc(e.target) !== lc(c.target)) bad(`${w}: CallScheduled call ${i} target ${e.target} is not ${c.target} (${c.label})`);
+      else if (lc(e.data) !== lc(c.data)) bad(`${w}: CallScheduled call ${i} calldata is not ${c.label}`);
+      if (!(e.delay !== undefined && e.delay >= BigInt(o.floor))) bad(`${w}: CallScheduled delay ${e.delay} is under ${o.floor} s`);
+      if (lc(e.id) !== lc(scheduled[0]!.id)) bad(`${w}: the calls are not one operation (${e.id} and ${scheduled[0]!.id})`);
+    });
+    if (typeof r.operation_id === "string" && lc(r.operation_id) !== lc(scheduled[0]!.id)) bad(`${w}: operation_id ${r.operation_id} is not the scheduled operation ${scheduled[0]!.id}`);
+    const schedTs = await ts(sc);
+    const ex = await status(`${w} execute`, r.execute_tx);
+    if (!ex) return undefined;
+    const executed = timelockEvents(ex, o.timelock, "CallExecuted").filter((e) => lc(e.id) === lc(scheduled[0]!.id)).sort((x, y) => Number(x.index - y.index));
+    if (executed.length !== want.length || !executed.every((e, i) => lc(e.target) === lc(want[i]!.target) && lc(e.data) === lc(want[i]!.data))) bad(`${w}: the execute tx has no CallExecuted events for the ${want.length} scheduled call(s)`);
+    const gap = (await ts(ex)) - schedTs;
+    if (!(gap >= o.floor)) bad(`${w}: on-chain schedule-to-execute gap ${gap} s is under ${o.floor} s`);
+    return ex;
+  };
+
+  const ups: any[] = Array.isArray(m?.proxy_upgrades) ? m.proxy_upgrades : [];
+  const frs: any[] = Array.isArray(m?.proxy_freezes) ? m.proxy_freezes : [];
+  for (const r of ups) {
+    const w = proxyRowLabel(r);
+    if (!ADDR.test(r?.proxy_address ?? "") || !ADDR.test(r?.implementation ?? "") || !TX.test(r?.schedule_tx ?? "") || !TX.test(r?.execute_tx ?? "")) continue; // the offline check already named it
+    const callData = typeof r.call_data === "string" && /^0x([0-9a-fA-F]{2})*$/.test(r.call_data) ? (r.call_data as Hex) : ("0x" as Hex);
+    const call = buildUpgradeCall(String(r.proxy), r.proxy_address as Address, { proxy: String(r.proxy), implementation: r.implementation as Address, call: callData });
+    const ex = await operation(w, r, [call]);
+    if (ex && !eventsOf(ex, r.proxy_address, PROXY_EVENTS_ABI, "Upgraded").some((a) => lc(String(a.implementation)) === lc(r.implementation))) bad(`${w}: the execute tx has no Upgraded(${r.implementation}) event from the proxy ${r.proxy_address}: the timelock call ran, the proxy did not upgrade`);
+  }
+
+  /** proxy address -> the freeze that froze it and the block its execute landed in. */
+  const frozenBy = new Map<string, { name: string; implementation: string; block: bigint; label: string }>();
+  for (const f of frs) {
+    const w = proxyRowLabel(f);
+    const xs: any[] = Array.isArray(f?.proxies) ? f.proxies : [];
+    if (xs.length === 0 || !xs.every((x) => typeof x?.name === "string" && ADDR.test(x?.proxy ?? "") && ADDR.test(x?.implementation ?? "") && TX.test(x?.code_hash ?? "")) || !TX.test(f?.schedule_tx ?? "") || !TX.test(f?.execute_tx ?? "")) continue; // the offline check already named it
+    const calls = xs.map((x) => buildFreezeCall(x.name, x.proxy as Address, x.implementation as Address, x.code_hash as Hex));
+    const ex = await operation(w, f, calls);
+    for (const x of xs) {
+      if (ex) {
+        frozenBy.set(lc(x.proxy), { name: x.name, implementation: x.implementation, block: ex.blockNumber, label: w });
+        if (!eventsOf(ex, x.proxy, PROXY_EVENTS_ABI, "UpgradesFrozen").some((a) => lc(String(a.proxy)) === lc(x.proxy) && lc(String(a.implementation)) === lc(x.implementation) && lc(String(a.codeHash)) === lc(x.code_hash))) {
+          bad(`${w}: the execute tx has no UpgradesFrozen(${x.proxy}, ${x.implementation}, ${x.code_hash}) event from ${x.name}: the timelock call ran, the proxy did not freeze on the named implementation`);
+        }
+      }
+      // the state now: frozen, on the frozen implementation, whose code is still the code the freeze bound to
+      let frozen: unknown;
+      try { frozen = await chain.readContract({ address: x.proxy as Address, abi: LIFECYCLE_READ_ABI, functionName: "upgradesFrozen" }); } catch (e) { frozen = `a revert (${(e as Error).message})`; }
+      if (frozen !== true) bad(`${x.name} ${x.proxy}: upgradesFrozen() reads ${String(frozen)} after ${w}, want true (a freeze is permanent)`);
+      if (!chain.getStorageAt) bad(`${x.name}: the chain reader cannot read storage, so the frozen implementation slot is not checked`);
+      else {
+        const word = await chain.getStorageAt({ address: x.proxy as Address, slot: ERC1967_IMPLEMENTATION_SLOT });
+        const live = wordAddress((word ?? "0x") as Hex);
+        if (lc(live) !== lc(x.implementation)) bad(`${x.name} ${x.proxy}: the ERC-1967 implementation slot names ${live}, but ${w} froze it on ${x.implementation}: a frozen proxy changed implementation`);
+      }
+      if (!chain.getCode) bad(`${x.name}: the chain reader cannot read code, so the frozen implementation's code hash is not checked`);
+      else {
+        const code = await chain.getCode({ address: x.implementation as Address });
+        if (!code || code === "0x" || lc(keccak256(code)) !== lc(x.code_hash)) bad(`${x.name}: the code at the frozen implementation ${x.implementation} does not hash to ${x.code_hash}`);
+      }
+    }
+  }
+
+  if (o.rejectedUpgrade !== undefined) {
+    const k = rejectedUpgradeKey(o.rejectedUpgrade);
+    const r = m?.govern?.[k];
+    if (!TX.test(r?.scheduled?.tx_hash ?? "")) return p; // the offline check already named it
+    const sc = await status(`${k} schedule`, r.scheduled.tx_hash);
+    if (!sc) return p;
+    const scheduled = timelockEvents(sc, o.timelock, "CallScheduled");
+    if (scheduled.length !== 1) { bad(`${k}: the schedule tx has ${scheduled.length} CallScheduled events from the timelock, the post-freeze upgrade is ONE call`); return p; }
+    const e = scheduled[0]!;
+    if (typeof r.scheduled.operation_id === "string" && lc(r.scheduled.operation_id) !== lc(e.id)) bad(`${k}: operation_id ${r.scheduled.operation_id} is not the scheduled operation ${e.id}`);
+    let newImplementation: string | undefined;
+    try {
+      const d = decodeFunctionData({ abi: PROXY_GOVERN_ABI, data: e.data as Hex });
+      if (d.functionName === "upgradeToAndCall") newImplementation = String(d.args[0]);
+    } catch { /* not a proxy governance call */ }
+    if (newImplementation === undefined) bad(`${k}: the scheduled call is not upgradeToAndCall(address,bytes): the rejected operation must be an upgrade`);
+    const fz = frozenBy.get(lc(e.target));
+    if (!fz) bad(`${k}: the scheduled call targets ${e.target}, which no executed proxy_freezes entry froze: the rejected upgrade must target a frozen proxy`);
+    else if (!(sc.blockNumber > fz.block)) bad(`${k}: scheduled in block ${sc.blockNumber}, not after ${fz.label} executed in block ${fz.block}: the upgrade must be scheduled after the freeze`);
+    // execute() takes the operation's value, predecessor and salt: the CallScheduled and CallSalt events of the same schedule tx carry them (no CallSalt: salt zero)
+    const zero: Hex = `0x${"00".repeat(32)}`;
+    const salt = (eventsOf(sc, o.timelock, TIMELOCK_ABI, "CallSalt").find((a) => lc(String(a.id)) === lc(e.id))?.salt ?? zero) as Hex;
+    const full = eventsOf(sc, o.timelock, TIMELOCK_ABI, "CallScheduled").find((a) => lc(String(a.id)) === lc(e.id));
+    const predecessor = (full?.predecessor ?? zero) as Hex;
+    const value = (full?.value ?? 0n) as bigint;
+    const opRead = async (fn: "isOperationDone" | "isOperationReady"): Promise<unknown> => {
+      try { return await chain.readContract({ address: o.timelock as Address, abi: LIFECYCLE_READ_ABI, functionName: fn, args: [e.id as Hex] }); } catch (x) { return `a revert (${(x as Error).message})`; }
+    };
+    const done = await opRead("isOperationDone");
+    if (done !== false) bad(`${k}: the timelock reads isOperationDone ${String(done)}: the upgrade of a frozen proxy executed (ADR-0014 §5)`);
+    const ready = await opRead("isOperationReady");
+    if (ready !== true) bad(`${k}: the timelock reads isOperationReady ${String(ready)}: the delay has not passed (or the operation is gone), so the refusal below would prove nothing about the freeze`);
+    if (!chain.call) bad(`${k}: the chain reader cannot eth_call, so the refused execute is not checked`);
+    else {
+      const data = encodeFunctionData({ abi: LIFECYCLE_READ_ABI, functionName: "execute", args: [e.target as Address, value, e.data as Hex, predecessor, salt] });
+      let revert: Hex | undefined;
+      let ran = false;
+      try { await chain.call({ to: o.timelock as Address, data }); ran = true; } catch (x) { revert = revertDataOf(x); }
+      if (ran) bad(`${k}: executing the scheduled upgrade now succeeds (eth_call of timelock.execute): ${e.target} accepts an upgrade, it is not frozen`);
+      else if (!revert || !lc(revert).startsWith(UPGRADES_ARE_FROZEN_SELECTOR)) bad(`${k}: executing the scheduled upgrade reverts with ${revert ?? "no revert data"}, not UpgradesAreFrozen() (${UPGRADES_ARE_FROZEN_SELECTOR}): the refusal must be the frozen proxy's own`);
+    }
+  }
+  return p;
+}
+
 /**
  * Chain check of `committee_registrations` and `recorded_receipts` (issue 1727). A registration is ONE batch: the schedule tx has exactly two CallScheduled events with one operation id,
  * setPolicy then committeeRegister on the gateway with the calldata rebuilt from the recorded submitter, label and validUntil; the execute tx has the two CallExecuted events;
@@ -994,9 +1367,16 @@ export interface ChainFixture {
   receipts: { hash: string; status: "success" | "reverted"; blockNumber: string; logs: { address: string; topics: Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }[];
   blocks: Record<string, number>;
   reads: Record<string, unknown>;
-  /** Runtime code by lower-case address, recorded for the adopted libraries only (issue 1721). Optional: older fixtures have none. */
+  /** Runtime code by lower-case address, recorded for the adopted libraries and the proxies' implementations (issues 1721, 1809). Optional: older fixtures have none. */
   codes?: Record<string, string>;
+  /**
+   * Storage words the proxy re-read made (issue 1809, QA plan v1 L1). A list, and each word a DECIMAL string, never a 0x bytes32: the evidence secret scan reads a
+   * bare 64-hex value as key material, while `slot_hash` is a public hash name (an ERC-1967 or ERC-7201 slot is a keccak-derived constant). Optional: older fixtures have none.
+   */
+  storage?: { address: string; slot_hash: string; value: string }[];
 }
+
+const storageWord = (decimal: string): Hex => `0x${BigInt(decimal).toString(16).padStart(64, "0")}` as Hex;
 
 const readKey = (address: string, fn: string) => `${lc(address)}:${fn}`;
 
@@ -1012,6 +1392,10 @@ export function chainReaderFromFixture(fx: ChainFixture): ChainReader {
     },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(fx.blocks[blockNumber.toString()] ?? miss(`block ${blockNumber}`)) }),
     getCode: async ({ address }) => (fx.codes?.[lc(address)] ?? miss(`code of ${address}`)) as Hex,
+    getStorageAt: async ({ address, slot }) => {
+      const s = fx.storage?.find((x) => lc(x.address) === lc(address) && lc(x.slot_hash) === lc(slot)) ?? miss(`storage ${slot} of ${address}`);
+      return storageWord(s.value);
+    },
     readContract: async ({ address, functionName }) => {
       const k = readKey(address, functionName);
       return k in fx.reads ? fx.reads[k] : miss(`read ${k}`);
@@ -1041,6 +1425,14 @@ export function recordingChainReader(inner: ChainReader): { reader: ChainReader;
       (fixture.codes ??= {})[lc(a.address)] = c ?? "0x";
       return c;
     },
+    ...(inner.getStorageAt ? {
+      getStorageAt: async (a: { address: `0x${string}`; slot: Hex }) => {
+        const wd = await inner.getStorageAt!(a);
+        const value = BigInt(!wd || wd === "0x" ? 0 : wd).toString();
+        fixture.storage = [...(fixture.storage ?? []).filter((x) => !(lc(x.address) === lc(a.address) && lc(x.slot_hash) === lc(a.slot))), { address: lc(a.address), slot_hash: lc(a.slot), value }];
+        return wd;
+      },
+    } : {}),
     readContract: async (a) => {
       const v = await inner.readContract(a);
       fixture.reads[readKey(a.address, a.functionName)] = typeof v === "bigint" ? v.toString() : v;
@@ -1266,6 +1658,36 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/**
+ * `--proxy-lifecycle RUN_MANIFEST --timelock ADDR [--rejected-upgrade LABEL]` (QA plan v1 P4, issue 1811): checks the `proxy_upgrades` and `proxy_freezes` entries and the
+ * refused post-freeze upgrade a Twin upgrade rehearsal wrote to its run manifest (shape, the lifecycle order, the delay floor), then with --rpc the chain
+ * (checkProxyLifecycleOnChain). publish-contracts/src/ci/twin-upgrade-rehearsal.ts runs it as its last step.
+ */
+async function checkProxyLifecycleMain(values: Record<string, string | boolean | undefined>, kind: DeploymentKind): Promise<void> {
+  if (typeof values.timelock !== "string" || !ADDR.test(values.timelock)) { console.error("evidence: --proxy-lifecycle needs --timelock ADDR (the upgrade authority every proxy names)"); process.exit(2); }
+  const m = JSON.parse(readFileSync(values["proxy-lifecycle"] as string, "utf8"));
+  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
+  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const label = values["rejected-upgrade"];
+  if (label !== undefined && (typeof label !== "string" || !/^[A-Za-z0-9._-]+$/.test(label))) { console.error("evidence: --rejected-upgrade names the govern --call-label of the post-freeze upgrade (letters, digits, . _ -)"); process.exit(2); }
+  const o: LifecycleOpts = { timelock: values.timelock, floor, ...(typeof label === "string" ? { rejectedUpgrade: label } : {}) };
+  const problems = checkProxyLifecycle(m, o);
+  if (typeof values.rpc === "string") {
+    const { createPublicClient, http } = await import("viem");
+    const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
+    await refuseDelayFloorOnMainnet(reader, floor, kind);
+    problems.push(...(await checkProxyLifecycleOnChain(m, reader, o)));
+  }
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  const n = (k: string) => (Array.isArray(m[k]) ? m[k].length : 0);
+  console.log(`evidence ok (${n("proxy_upgrades")} proxy upgrade(s), ${n("proxy_freezes")} freeze(s)${o.rejectedUpgrade ? ", 1 post-freeze upgrade refused by the proxy" : ""}${values.rpc ? ", chain read" : ", offline shape only"})`);
+}
+
+/** Issue 1809: the proxy names of core's stage table in this checkout (ADR-0014 §1). */
+function proxiesFromTable(): string[] {
+  return tableProxies(loadStageTable(new URL("../../", import.meta.url).pathname)).map((p) => p.name);
+}
+
 /** The per-stage cap from core's stage table in this checkout. */
 function adoptableFromTable(): AdoptableLibraries {
   const t = loadStageTable(new URL("../../", import.meta.url).pathname);
@@ -1273,12 +1695,13 @@ function adoptableFromTable(): AdoptableLibraries {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" }, "proxy-lifecycle": { type: "string" }, "rejected-upgrade": { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
   if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
   const kind = kindArg as DeploymentKind;
   if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
   if (values["vault-redeploys"]) return checkRedeploysMain(values, kind);
+  if (values["proxy-lifecycle"]) return checkProxyLifecycleMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }
   const ev = JSON.parse(readFileSync(values.evidence, "utf8"));
   let counts: Record<string, number> | undefined;
@@ -1287,7 +1710,7 @@ async function main() {
     if (values["deploy-sha"] && j.deploySha !== values["deploy-sha"]) { console.error(`evidence: frozen file is for ${j.deploySha}, not ${values["deploy-sha"]}`); process.exit(1); }
     counts = j.counts ?? j;
   }
-  const problems = [...checkEvidence(ev, counts, adoptableFromTable(), { kind }), ...scanEvidenceFolder(join(values.evidence, ".."))];
+  const problems = [...checkEvidence(ev, counts, adoptableFromTable(), { kind, proxies: proxiesFromTable() }), ...scanEvidenceFolder(join(values.evidence, ".."))];
   if (values.rpc && values["chain-fixture"]) { console.error("evidence: give --rpc or --chain-fixture, not both"); process.exit(2); }
   if (values["record-chain-fixture"] && !values.rpc) { console.error("evidence: --record-chain-fixture needs --rpc"); process.exit(2); }
   if ((values.rpc || values["chain-fixture"]) && !counts) { console.error("evidence: reading the chain needs --frozen FILE (and --deploy-sha SHA): the nonce is checked against the frozen counts"); process.exit(2); }
@@ -1296,10 +1719,10 @@ async function main() {
     const { createPublicClient, http } = await import("viem");
     const live = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
     const rec = values["record-chain-fixture"] ? recordingChainReader(live) : undefined;
-    problems.push(...(await checkEvidenceOnChain(ev, rec?.reader ?? live, counts!, { kind })));
+    problems.push(...(await checkEvidenceOnChain(ev, rec?.reader ?? live, counts!, { kind, proxies: proxiesFromTable() })));
     if (rec && problems.length === 0) { writeFileSync(values["record-chain-fixture"]!, JSON.stringify(rec.fixture, null, 2) + "\n"); console.error(`evidence: chain fixture written to ${values["record-chain-fixture"]}`); }
   } else if (values["chain-fixture"]) {
-    problems.push(...(await checkEvidenceOnChain(ev, chainReaderFromFixture(JSON.parse(readFileSync(values["chain-fixture"], "utf8"))), counts!, { kind })));
+    problems.push(...(await checkEvidenceOnChain(ev, chainReaderFromFixture(JSON.parse(readFileSync(values["chain-fixture"], "utf8"))), counts!, { kind, proxies: proxiesFromTable() })));
   }
   if (problems.length) { for (const m of problems) console.error(`evidence: ${m}`); process.exit(1); }
   console.log(values.rpc ? "evidence ok (chain read)" : values["chain-fixture"] ? "evidence ok (recorded chain fixture, offline)" : "evidence ok (offline shape only)");

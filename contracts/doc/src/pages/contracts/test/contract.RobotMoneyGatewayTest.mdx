@@ -4,7 +4,7 @@ title: "RobotMoneyGatewayTest"
 
 # RobotMoneyGatewayTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:** Test
 
@@ -268,6 +268,14 @@ function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public;
 <a id="test_constructor_revertsonzeroaddresses"></a>
 
 ### test_constructor_revertsOnZeroAddresses
+
+<i>
+
+ADR-0014: the former constructor checks run in `initialize`, inside the proxy's
+deployment. The implementation is deployed first, so the armed `expectRevert` meets
+the proxy's CREATE.
+
+</i>
 
 ```solidity
 function test_constructor_revertsOnZeroAddresses() public;

@@ -30,6 +30,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
 ///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -169,25 +170,41 @@ contract MockSwapRouter is ISwapRouter {
 }
 
 contract BasketVaultHarness is BasketVault {
-    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_)
-        BasketVault(
-            "Basket Harness",
-            "bTEST",
-            usdc_,
-            swapRouter_,
-            1_000_000e6,
-            100_000e6,
-            0,
-            100,
-            admin_,
-            admin_,
-            emergencyResponder_
-        )
-    {}
-
     function maxAssets() public pure override returns (uint256) {
         return 4;
     }
+
+    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
+        return ("Basket Harness", "bTEST", 100);
+    }
+}
+
+/// @dev The harness behind its own initialized ERC1967Proxy (ADR-0014): TVL cap 1M USDC,
+///      per-deposit cap 100k USDC, no exit fee, `admin_` as fee recipient and admin.
+function deployBasketVaultHarness(
+    IERC20 usdc_,
+    ISwapRouter swapRouter_,
+    address admin_,
+    address emergencyResponder_
+) returns (BasketVaultHarness) {
+    return BasketVaultHarness(
+        Proxied.proxy(
+            address(new BasketVaultHarness()),
+            basketVaultHarnessInit(usdc_, swapRouter_, admin_, emergencyResponder_)
+        )
+    );
+}
+
+/// @dev The harness's `initialize` call data (ADR-0014).
+function basketVaultHarnessInit(
+    IERC20 usdc_,
+    ISwapRouter swapRouter_,
+    address admin_,
+    address emergencyResponder_
+) view returns (bytes memory) {
+    return Proxied.basketInit(
+        usdc_, swapRouter_, 1_000_000e6, 100_000e6, 0, admin_, admin_, emergencyResponder_
+    );
 }
 
 /// @dev Basket token that calls back into the vault while the vault pays out (an ERC-777 style hook).
@@ -250,12 +267,14 @@ contract BasketVaultTest is Test {
         basketToken = new TestERC20();
         router = new MockSwapRouter();
         pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
-        vault = new BasketVaultHarness(
+        vault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
         vm.prank(admin);
-        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     function test_emergencyUnwind_revertsWhenRouterOutputBelowConfiguredMinimum() public {
@@ -351,7 +370,9 @@ contract BasketVaultTest is Test {
 
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(badPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     /// @notice ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
@@ -364,7 +385,9 @@ contract BasketVaultTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.AdapterCodeHashNotAllowed.selector);
-        vault.addAsset(address(newAsset), address(newPool), 500, unvetted, BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(newPool), 500, unvetted, BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     /// @notice ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
@@ -376,7 +399,9 @@ contract BasketVaultTest is Test {
 
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(vetted.codehash, true);
-        vault.addAsset(address(newAsset), address(newPool), 500, vetted, BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(newPool), 500, vetted, BasketAssetConfigGuard.Venue.V3
+        );
         vm.stopPrank();
         assertTrue(vault.adapterCodeHashAllowed(vetted.codehash), "codehash approved");
     }
@@ -391,7 +416,9 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
         // ...but addAsset is told swapFee_ = 500 → mismatch.
-        vault.addAsset(address(newAsset), address(newPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(newPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     /// @notice ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
@@ -665,7 +692,9 @@ contract BasketVaultTest is Test {
         // basketToken is already active at index 0 (added in setUp).
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.AssetAlreadyActive.selector);
-        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     /// @notice NC-8: re-adding a previously REMOVED token reuses its inactive
@@ -681,7 +710,11 @@ contract BasketVaultTest is Test {
         MockPool freshPool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
         vm.prank(admin);
         vault.addAsset(
-            address(basketToken), address(freshPool), 500, address(0), BasketVault.Venue.V3
+            address(basketToken),
+            address(freshPool),
+            500,
+            address(0),
+            BasketAssetConfigGuard.Venue.V3
         );
 
         // No new slot appended: the inactive entry was reused in place.
@@ -700,7 +733,7 @@ contract BasketVaultTest is Test {
     function _assetsLen() internal view returns (uint256 n) {
         while (true) {
             try vault.assets(n) returns (
-                address, address, uint24, bool, address, BasketVault.Venue
+                address, address, uint24, bool, address, BasketAssetConfigGuard.Venue
             ) {
                 n++;
             } catch {
@@ -1312,17 +1345,25 @@ contract BasketVaultTest is Test {
 
     /// @notice Constructor reverts when admin_ is address(0).
     function test_constructor_revertsWhenAdminIsZero() public {
+        address implementation = address(new BasketVaultHarness());
         vm.expectRevert(BasketVault.ZeroAddress.selector);
-        new BasketVaultHarness(
-            IERC20(address(usdc)), ISwapRouter(address(router)), address(0), emergencyResponder
+        Proxied.proxy(
+            implementation,
+            basketVaultHarnessInit(
+                IERC20(address(usdc)), ISwapRouter(address(router)), address(0), emergencyResponder
+            )
         );
     }
 
     /// @notice Constructor reverts when emergencyResponder_ is address(0).
     function test_constructor_revertsWhenEmergencyResponderIsZero() public {
+        address implementation = address(new BasketVaultHarness());
         vm.expectRevert(BasketVault.ZeroAddress.selector);
-        new BasketVaultHarness(
-            IERC20(address(usdc)), ISwapRouter(address(router)), admin, address(0)
+        Proxied.proxy(
+            implementation,
+            basketVaultHarnessInit(
+                IERC20(address(usdc)), ISwapRouter(address(router)), admin, address(0)
+            )
         );
     }
 
@@ -1495,7 +1536,11 @@ contract BasketVaultTest is Test {
         );
         vm.prank(admin);
         vault.addAsset(
-            address(newAsset), address(lowCardPool), 500, address(0), BasketVault.Venue.V3
+            address(newAsset),
+            address(lowCardPool),
+            500,
+            address(0),
+            BasketAssetConfigGuard.Venue.V3
         );
     }
 
@@ -1512,7 +1557,9 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(youngPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(youngPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     function test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable() public {
@@ -1567,7 +1614,9 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(901);
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(goodPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         assertEq(vault.assetCount(), 2, "asset registered");
     }
@@ -1580,7 +1629,9 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(1000);
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(goodPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         // totalAssets() must not revert after valid addAsset().
         uint256 nav = vault.totalAssets();
@@ -1606,7 +1657,9 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(thinPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(thinPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
     }
 
     /// @notice addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
@@ -1617,7 +1670,9 @@ contract BasketVaultTest is Test {
         deepPool.setLiquidity(vault.MIN_POOL_LIQUIDITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(deepPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(deepPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         assertEq(vault.assetCount(), 2, "asset registered when liquidity sufficient");
     }
@@ -1626,7 +1681,7 @@ contract BasketVaultTest is Test {
     ///         the window floor (901) and succeeds at or above it.
     function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
         // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
-        BasketVaultHarness freshVault = new BasketVaultHarness(
+        BasketVaultHarness freshVault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
@@ -1647,12 +1702,20 @@ contract BasketVaultTest is Test {
             );
             vm.prank(admin);
             freshVault.addAsset(
-                address(newAsset), address(fuzzPool), 500, address(0), BasketVault.Venue.V3
+                address(newAsset),
+                address(fuzzPool),
+                500,
+                address(0),
+                BasketAssetConfigGuard.Venue.V3
             );
         } else {
             vm.prank(admin);
             freshVault.addAsset(
-                address(newAsset), address(fuzzPool), 500, address(0), BasketVault.Venue.V3
+                address(newAsset),
+                address(fuzzPool),
+                500,
+                address(0),
+                BasketAssetConfigGuard.Venue.V3
             );
             assertEq(freshVault.assetCount(), 1, "asset registered when cardinality sufficient");
         }
@@ -2679,11 +2742,15 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(p), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         p.setCardinality(901);
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(p), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(newAsset), address(p), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
         assertEq(vault.assetCount(), 2, "registered at exactly the floor");
     }
 
@@ -2724,7 +2791,7 @@ contract BasketVaultTest is Test {
         t2 = new TestERC20();
         MockPool p2 = new MockPool(address(t2), address(usdc), uint160(1 << 96));
         vm.prank(admin);
-        vault.addAsset(address(t2), address(p2), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(address(t2), address(p2), 500, address(0), BasketAssetConfigGuard.Venue.V3);
         t2.mint(address(vault), amount);
     }
 
@@ -2824,7 +2891,7 @@ contract BasketVaultTest is Test {
         TestERC20 t3 = new TestERC20();
         MockPool p3 = new MockPool(address(t3), address(usdc), uint160(1 << 96));
         vm.startPrank(admin);
-        vault.addAsset(address(t3), address(p3), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(address(t3), address(p3), 500, address(0), BasketAssetConfigGuard.Venue.V3);
         vault.removeAsset(2);
         vm.stopPrank();
         t3.mint(address(vault), 999_999);
@@ -2868,11 +2935,11 @@ contract BasketVaultTest is Test {
     function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public {
         ReentrantHookToken hook = new ReentrantHookToken();
         MockPool hp = new MockPool(address(hook), address(usdc), uint160(1 << 96));
-        BasketVaultHarness v = new BasketVaultHarness(
+        BasketVaultHarness v = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
         vm.prank(admin);
-        v.addAsset(address(hook), address(hp), 500, address(0), BasketVault.Venue.V3);
+        v.addAsset(address(hook), address(hp), 500, address(0), BasketAssetConfigGuard.Venue.V3);
         address alice = makeAddr("alice");
         // Mint shares by seeding the vault through a deposit at 1:1.
         hook.mint(address(router), 1_000 * ONE_USDC);
@@ -2965,13 +3032,17 @@ contract BasketVaultRebalanceTest is Test {
         poolA = new MockPool(address(tokenA), address(usdc), uint160(1 << 96));
         poolB = new MockPool(address(tokenB), address(usdc), uint160(1 << 96));
 
-        vault = new BasketVaultHarness(
+        vault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
         vm.startPrank(admin);
-        vault.addAsset(address(tokenA), address(poolA), 500, address(0), BasketVault.Venue.V3);
-        vault.addAsset(address(tokenB), address(poolB), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(tokenA), address(poolA), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
+        vault.addAsset(
+            address(tokenB), address(poolB), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
         vm.stopPrank();
     }
 
@@ -3267,7 +3338,7 @@ contract BasketVaultAerodromeTest is Test {
         aeroPool = new MockAerodromePool(t0, t1);
 
         v3Router = new MockSwapRouter();
-        vault = new BasketVaultHarness(
+        vault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3285,7 +3356,7 @@ contract BasketVaultAerodromeTest is Test {
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
     }
 
@@ -3360,7 +3431,9 @@ contract BasketVaultAerodromeTest is Test {
         MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
 
         vm.prank(admin);
-        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(v3Token), address(v3Pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         uint256 depositAmount = 2_000 * ONE_USDC; // 2 assets → 1000 each
         uint256 routerOut = 990 * ONE_USDC;
@@ -3572,7 +3645,7 @@ contract BasketVaultVenueSelectorTest is Test {
         address pool,
         uint24 swapFee,
         address adapter,
-        BasketVault.Venue venue
+        BasketAssetConfigGuard.Venue venue
     );
 
     TestERC20 internal usdc;
@@ -3591,7 +3664,7 @@ contract BasketVaultVenueSelectorTest is Test {
         v3Router = new MockSwapRouter();
         aeroRouter = new MockAerodromeRouter();
 
-        vault = new BasketVaultHarness(
+        vault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3615,10 +3688,14 @@ contract BasketVaultVenueSelectorTest is Test {
         MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
 
         vm.expectEmit(true, true, false, true, address(vault));
-        emit AssetAdded(0, address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+        emit AssetAdded(
+            0, address(token), address(mockPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         vm.prank(admin);
-        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(token), address(mockPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         (
             address storedToken,
@@ -3626,14 +3703,16 @@ contract BasketVaultVenueSelectorTest is Test {
             uint24 storedFee,
             bool storedActive,
             address storedAdapter,
-            BasketVault.Venue storedVenue
+            BasketAssetConfigGuard.Venue storedVenue
         ) = vault.assets(0);
         assertEq(storedToken, address(token), "V3: token stored");
         assertEq(storedPool, address(mockPool), "V3: pool stored");
         assertEq(storedFee, 500, "V3: fee stored");
         assertTrue(storedActive, "V3: active");
         assertEq(storedAdapter, address(0), "V3: adapter is zero");
-        assertEq(uint8(storedVenue), uint8(BasketVault.Venue.V3), "V3: venue stored as V3");
+        assertEq(
+            uint8(storedVenue), uint8(BasketAssetConfigGuard.Venue.V3), "V3: venue stored as V3"
+        );
     }
 
     /// @notice addAsset with Venue.Aerodrome stores Venue.Aerodrome on AssetInfo and emits AssetAdded.
@@ -3653,7 +3732,7 @@ contract BasketVaultVenueSelectorTest is Test {
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
 
         vm.prank(admin);
@@ -3662,13 +3741,13 @@ contract BasketVaultVenueSelectorTest is Test {
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
 
-        (,,,,, BasketVault.Venue storedVenue) = vault.assets(0);
+        (,,,,, BasketAssetConfigGuard.Venue storedVenue) = vault.assets(0);
         assertEq(
             uint8(storedVenue),
-            uint8(BasketVault.Venue.Aerodrome),
+            uint8(BasketAssetConfigGuard.Venue.Aerodrome),
             "Aerodrome: venue stored as Aerodrome"
         );
     }
@@ -3681,7 +3760,9 @@ contract BasketVaultVenueSelectorTest is Test {
         MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
 
         vm.prank(admin);
-        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(token), address(mockPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         uint256 depositAmount = 1_000 * ONE_USDC;
         uint256 routerOut = 995 * ONE_USDC;
@@ -3706,7 +3787,9 @@ contract BasketVaultVenueSelectorTest is Test {
         MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
 
         vm.prank(admin);
-        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(
+            address(token), address(mockPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
+        );
 
         uint256 tokenAmount = 1_000 * ONE_USDC;
         uint256 amountOut = 995 * ONE_USDC;
@@ -3740,7 +3823,7 @@ contract BasketVaultVenueSelectorTest is Test {
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
 
         uint256 depositAmount = 1_000 * ONE_USDC;
@@ -3782,7 +3865,7 @@ contract BasketVaultVenueSelectorTest is Test {
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
 
         uint256 tokenAmount = 1_000 * ONE_USDC;
@@ -3815,13 +3898,19 @@ contract BasketVaultVenueSelectorTest is Test {
     ///         values correctly on AssetInfo.
     function test_mixedVenue_allVenueValuesStoredCorrectly() public {
         BasketVaultHarness freshVault = _buildMixedVenueVault();
-        (,,,,, BasketVault.Venue venue0) = freshVault.assets(0);
-        (,,,,, BasketVault.Venue venue1) = freshVault.assets(1);
-        (,,,,, BasketVault.Venue venue2) = freshVault.assets(2);
-        assertEq(uint8(venue0), uint8(BasketVault.Venue.V3), "mixed: asset[0] venue is V3");
-        assertEq(uint8(venue1), uint8(BasketVault.Venue.V3), "mixed: asset[1] venue is V3");
+        (,,,,, BasketAssetConfigGuard.Venue venue0) = freshVault.assets(0);
+        (,,,,, BasketAssetConfigGuard.Venue venue1) = freshVault.assets(1);
+        (,,,,, BasketAssetConfigGuard.Venue venue2) = freshVault.assets(2);
         assertEq(
-            uint8(venue2), uint8(BasketVault.Venue.Aerodrome), "mixed: asset[2] venue is Aerodrome"
+            uint8(venue0), uint8(BasketAssetConfigGuard.Venue.V3), "mixed: asset[0] venue is V3"
+        );
+        assertEq(
+            uint8(venue1), uint8(BasketAssetConfigGuard.Venue.V3), "mixed: asset[1] venue is V3"
+        );
+        assertEq(
+            uint8(venue2),
+            uint8(BasketAssetConfigGuard.Venue.Aerodrome),
+            "mixed: asset[2] venue is Aerodrome"
         );
     }
 
@@ -3834,7 +3923,7 @@ contract BasketVaultVenueSelectorTest is Test {
     /// @dev Builds a fresh vault wired with V3 + V4 + Aerodrome assets.
     ///      Extracted to avoid stack-too-deep in the deposit test.
     function _buildMixedVenueVault() internal returns (BasketVaultHarness freshVault) {
-        freshVault = new BasketVaultHarness(
+        freshVault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3861,17 +3950,21 @@ contract BasketVaultVenueSelectorTest is Test {
         freshVault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
         freshVault.setAdapterCodeHashAllowed(address(aeroAdapter).codehash, true);
         freshVault.addAsset(
-            address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3
+            address(v3Token), address(v3Pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
         );
         freshVault.addAsset(
-            address(v4Token), address(v4Pool), 500, address(v4Adapter), BasketVault.Venue.V3
+            address(v4Token),
+            address(v4Pool),
+            500,
+            address(v4Adapter),
+            BasketAssetConfigGuard.Venue.V3
         );
         freshVault.addAsset(
             address(aeroToken),
             address(aeroPool),
             100,
             address(aeroAdapter),
-            BasketVault.Venue.Aerodrome
+            BasketAssetConfigGuard.Venue.Aerodrome
         );
         vm.stopPrank();
     }
@@ -3950,7 +4043,7 @@ contract BasketVaultTimelockTest is SafeGovernance {
     function setUp() public {
         usdc = new TestERC20();
         swapRouter = new MockSwapRouter();
-        vault = new BasketVaultHarness(
+        vault = deployBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
         );
         _installSafeSet();

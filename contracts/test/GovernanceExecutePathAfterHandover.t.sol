@@ -32,6 +32,7 @@ import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title GovernanceExecutePathAfterHandover
 /// @notice R7's two halves, proved on one topology built the way the deploy
@@ -124,7 +125,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         safe = _createSafe();
         usdc = new MockUsdc();
 
-        vault = new RobotMoneyVault(
+        vault = Proxied.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -133,9 +134,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             deployer, // admin
             deployer // emergencyResponder
         );
-        gateway = new RobotMoneyGateway(usdc, vault, deployer, pauser, address(0));
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        gateway = Proxied.robotMoneyGateway(usdc, vault, deployer, pauser, address(0));
+        registry = Proxied.vaultRegistry(deployer);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
 
         // Two weightable vaults, registered and router-eligible.
         vaultA = new MockGovVault(address(usdc));
@@ -156,8 +157,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // The committee body and its receipt register, wired through the gateway
         // the way the ic-policy stage wires them. Separately administered; no
         // weight authority.
-        icPolicy = new InvestmentCommitteePolicy(deployer, address(gateway));
-        register = new ConsensusRecommendationReceipt(deployer, address(gateway), address(icPolicy));
+        icPolicy = Proxied.investmentCommitteePolicy(deployer, address(gateway));
+        register =
+            Proxied.consensusRecommendationReceipt(deployer, address(gateway), address(icPolicy));
         vm.startPrank(deployer);
         icPolicy.grantRole(icPolicy.ADMIN_ROLE(), address(gateway));
         gateway.setICPolicy(address(icPolicy));

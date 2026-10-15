@@ -53,6 +53,14 @@ const GATEWAY_READ_ABI = [
     inputs: [{ name: "", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  // The consent's domain version (QA plan Decisions D5).
+  {
+    type: "function",
+    name: "implementationVersion",
+    stateMutability: "pure",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
   {
     type: "function",
     name: "agentOwner",
@@ -233,6 +241,11 @@ export async function signAgentConsent(
     functionName: "agentConsentNonce",
     args: [agent.address],
   });
+  const version = await client(endpoints).readContract({
+    address: endpoints.gateway_addr as Address,
+    abi: GATEWAY_READ_ABI,
+    functionName: "implementationVersion",
+  });
   return privateKeyToAccount(agent.privateKey).signTypedData(
     agentConsentTypedData({
       agent: agent.address,
@@ -241,6 +254,7 @@ export async function signAgentConsent(
       nonce,
       chainId: endpoints.chain_id,
       gateway: endpoints.gateway_addr as Address,
+      version,
     }),
   );
 }

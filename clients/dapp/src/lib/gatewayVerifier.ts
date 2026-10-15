@@ -14,6 +14,16 @@
  * client (see useGatewayVerifier.ts). Keeping this layer pure makes it
  * straightforward to unit-test without any React or wagmi machinery.
  *
+ * Implementation pin (issue 1810, ADR-0014 §10): behind an ERC-1967 proxy the
+ * gateway's own code never changes across an upgrade, so the code-hash pin
+ * alone would let the dapp sign against any implementation the timelock
+ * installs. `computeImplementationVerification` adds a second, build-time pin
+ * (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`, one or more comma-separated
+ * reviewed code hashes): a proxied gateway is verified only when its live
+ * implementation's code hash is listed. A proxy with no pin, an implementation
+ * with no code, and an unlisted hash each refuse. A pin for a gateway that is
+ * not a proxy refuses too: the build expected a proxy.
+ *
  * Every refusal carries a `cause` (QA plan U5, finding DR-9). The product
  * reason code stays `unknown_revert` for all of them, but the banner prints
  * one sentence per cause (`describeVerificationCause`), so a missing pin, a
@@ -23,6 +33,7 @@
 import { keccak256 } from "viem";
 import type { Hex } from "viem";
 import type { ProductReasonCode } from "./productReasonCode";
+import { implementationFromSlot } from "./upgradeState";
 
 /** Why the gateway was not verified. One cause, one banner sentence. */
 export type VerificationCause =
@@ -32,12 +43,23 @@ export type VerificationCause =
   | "hash-mismatch"
   | "wrong-chain"
   | "no-wallet"
-  | "rpc-failed";
+  | "rpc-failed"
+  | "implementation-pin-missing"
+  | "implementation-mismatch"
+  | "implementation-unexpected";
 
 export type VerificationState =
   | { status: "idle" }
   | { status: "pending" }
-  | { status: "verified"; computedHash: Hex }
+  | {
+      status: "verified";
+      computedHash: Hex;
+      /**
+       * The live implementation's code hash when the gateway is a proxy and that hash is one of
+       * the build-time implementation pins. Absent for a direct gateway.
+       */
+      implementationHash?: Hex;
+    }
   | {
       status: "refused";
       /**
@@ -71,7 +93,52 @@ export function describeVerificationCause(cause: VerificationCause): string {
       return "No browser wallet was found to read the gateway code through.";
     case "rpc-failed":
       return "Your wallet's RPC did not answer the gateway code read after several tries. Re-verify, or check the wallet's network.";
+    case "implementation-pin-missing":
+      return "The gateway is an upgradeable proxy and this build carries no implementation pin (VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH), so the logic behind it cannot be verified.";
+    case "implementation-mismatch":
+      return "The implementation behind the gateway proxy is not a reviewed one this build pins. It may have been upgraded. Do not sign anything against it.";
+    case "implementation-unexpected":
+      return "This build pins a gateway implementation, but the gateway is not a proxy. Do not sign anything against it.";
   }
+}
+
+/** The build-time implementation pins: a comma-separated list of 32-byte hex hashes. Malformed entries are dropped. */
+export function parseImplementationPins(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^0x[0-9a-f]{64}$/.test(s) && !/^0x0{64}$/.test(s));
+}
+
+/**
+ * Apply the implementation pin to a verified gateway (pure). `slotWord` is the gateway's ERC-1967
+ * implementation slot (`undefined` while unread); `implementationCode` the implementation's code
+ * (`undefined` while unread, `null` or "0x" when it has none). Any state that is not `verified` is
+ * returned unchanged: the code-hash pin decides first.
+ */
+export function computeImplementationVerification(
+  base: VerificationState,
+  pins: readonly string[],
+  slotWord: Hex | undefined,
+  implementationCode: Hex | null | undefined,
+): VerificationState {
+  if (base.status !== "verified") return base;
+  if (slotWord === undefined) return { status: "pending" };
+  const implementation = implementationFromSlot(slotWord);
+  if (implementation === null) {
+    return pins.length > 0 ? refusedVerification("implementation-unexpected") : base;
+  }
+  if (pins.length === 0) return refusedVerification("implementation-pin-missing");
+  if (implementationCode === undefined) return { status: "pending" };
+  if (implementationCode === null || implementationCode === "0x") {
+    return refusedVerification("implementation-mismatch");
+  }
+  const implementationHash = keccak256(implementationCode);
+  if (!pins.includes(implementationHash.toLowerCase())) {
+    return refusedVerification("implementation-mismatch");
+  }
+  return { ...base, implementationHash };
 }
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

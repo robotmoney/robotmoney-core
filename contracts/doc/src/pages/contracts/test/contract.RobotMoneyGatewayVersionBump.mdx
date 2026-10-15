@@ -1,0 +1,48 @@
+---
+title: "RobotMoneyGatewayVersionBump"
+---
+
+# RobotMoneyGatewayVersionBump
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/GatewayImplementationVersion.t.sol)
+
+**Inherits:** [RobotMoneyGateway](/contracts/gateway/contract.RobotMoneyGateway)
+
+<i>
+
+A v2 that changes what a signed consent means, so it bumps the version (ADR-0014 §10).
+
+</i>
+
+## Functions
+
+<a id="implementationversion"></a>
+
+### implementationVersion
+
+The gateway implementation version: the EIP-712 domain `version`
+of every `AgentConsent` (ADR-0014 §10, QA plan Decisions D5). An
+implementation that changes what a signed consent means returns a
+new value, so every consent signed under the old one stops
+verifying after the upgrade; a pure fix keeps it. Clients read it
+before they sign and never assume a value.
+
+<i>
+
+The one source of the domain version: `_domainSeparator` hashes this
+return value, so the getter clients read and the digest the gateway
+checks cannot disagree. Bump it in an implementation that changes what
+a signed consent means (ADR-0014 §10); a pure fix keeps it.
+
+</i>
+
+```solidity
+function implementationVersion() public pure override returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+

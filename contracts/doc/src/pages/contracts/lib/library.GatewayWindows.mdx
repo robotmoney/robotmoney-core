@@ -1,0 +1,300 @@
+---
+title: "GatewayWindows"
+description: "The per-agent rolling-window accounting of `RobotMoneyGateway`: a bounded ring buffer of `(timestamp, amount)` entries whose live sum is capped over any `WINDOW_SECONDS`-wide interval. A CREATE2-linked library: `public` functions run as the gateway through `DELEGATECALL` and operate on the gateway's own `RollingWindow` storage."
+---
+
+# GatewayWindows
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/GatewayWindows.sol)
+
+**Title:** GatewayWindows
+
+The per-agent rolling-window accounting of `RobotMoneyGateway`: a bounded ring buffer of
+`(timestamp, amount)` entries whose live sum is capped over any `WINDOW_SECONDS`-wide
+interval. A CREATE2-linked library: `public` functions run as the gateway through
+`DELEGATECALL` and operate on the gateway's own `RollingWindow` storage.
+
+<i>
+
+Why it exists (ADR-0014 §9): behind a UUPS proxy the gateway also carries the upgrade code
+and its former constructor as an initializer; moving the ring buffer out keeps it under
+EIP-170 with the 1,024-byte margin the ADR requires. The types and the window constants are
+declared once, here; the gateway's public `WINDOW_SECONDS` and `MAX_WINDOW_ENTRIES` read
+these. Errors mirror the gateway's declarations (same selectors).
+
+</i>
+
+## Constants
+
+### WINDOW_SECONDS
+
+Window length in seconds for per-window gross caps.
+
+```solidity
+uint64 internal constant WINDOW_SECONDS = 86400;
+```
+
+### MAX_WINDOW_ENTRIES
+
+Hard cap on the number of distinct live ring-buffer entries per agent per side.
+Same-second operations coalesce, so the live count can never exceed the number of
+distinct seconds in the window; this pins the storage footprint regardless.
+
+```solidity
+uint256 internal constant MAX_WINDOW_ENTRIES = WINDOW_SECONDS;
+```
+
+## Functions
+
+<a id="accrue-rollingwindow-uint256-uint256-bool"></a>
+
+### accrue
+
+Apply `amount` against a rolling-window budget of `cap`. Prunes expired entries,
+reverts when the projected live sum would breach `cap` (`WithdrawWindowCapExceeded`
+when `withdrawSide`, else `WindowCapExceeded`), then records the entry.
+
+```solidity
+function accrue(RollingWindow storage w, uint256 amount, uint256 cap, bool withdrawSide)
+        public
+        returns (uint64 windowStart, uint256 total);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+| amount | `uint256` |  |
+| cap | `uint256` |  |
+| withdrawSide | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| windowStart | `uint64` | Timestamp of the oldest live entry after the append. |
+| total | `uint256` |       Live sum after the append. |
+
+<a id="effectivetotal-rollingwindow"></a>
+
+### effectiveTotal
+
+View-only effective live total after notionally pruning expired entries. Mirrors
+`_pruneWindow`'s arithmetic without mutating storage.
+
+```solidity
+function effectiveTotal(RollingWindow storage w) public view returns (uint256 total);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+
+<a id="_prunewindow-rollingwindow"></a>
+
+### _pruneWindow
+
+<i>
+
+Drop every live entry whose timestamp has aged past the rolling window
+`(t-WINDOW_SECONDS, t]`, reclaiming its ring slot and decrementing `total`. Strictly
+bounded: it scans at most `count` entries, which can never exceed `MAX_WINDOW_ENTRIES`.
+
+</i>
+
+```solidity
+function _pruneWindow(RollingWindow storage w) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+
+<a id="_appendwindowentry-rollingwindow-uint256"></a>
+
+### _appendWindowEntry
+
+<i>
+
+Record `amount` at the current `block.timestamp`. Operations within the same second
+COALESCE into the newest live entry (no new slot), which is what bounds the live entry
+count. Otherwise a freed slot is reused (ring wrap) or, only while the buffer has not
+yet reached its high-water mark, a new slot is `push`ed, capped at `MAX_WINDOW_ENTRIES`.
+
+</i>
+
+```solidity
+function _appendWindowEntry(RollingWindow storage w, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+| amount | `uint256` |  |
+
+<a id="_relinearize-rollingwindow"></a>
+
+### _relinearize
+
+<i>
+
+Rotate the full ring buffer so the oldest live entry sits at index 0. Precondition: the
+buffer is completely full, so a rotation by `head` re-linearizes the live region. Used
+only on the rare grow path. Three in-place reversals, no scratch array.
+
+</i>
+
+```solidity
+function _relinearize(RollingWindow storage w) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+
+<a id="_reverserange-rollingwindow-uint256-uint256"></a>
+
+### _reverseRange
+
+<i>
+
+Reverse `slots[lo:hi)` in place.
+
+</i>
+
+```solidity
+function _reverseRange(RollingWindow storage w, uint256 lo, uint256 hi) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+| lo | `uint256` |  |
+| hi | `uint256` |  |
+
+<a id="_oldesttimestamp-rollingwindow"></a>
+
+### _oldestTimestamp
+
+<i>
+
+Timestamp of the oldest live entry, or 0 when the window is empty. Only called right
+after an append, so the empty branch is defensive.
+
+</i>
+
+```solidity
+function _oldestTimestamp(RollingWindow storage w) private view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RollingWindow` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+## Errors
+
+### WindowCapExceeded
+
+<i>
+
+Mirror of `RobotMoneyGateway.WindowCapExceeded` (deposit side, #497).
+
+</i>
+
+```solidity
+error WindowCapExceeded();
+```
+
+### WithdrawWindowCapExceeded
+
+<i>
+
+Mirror of `RobotMoneyGateway.WithdrawWindowCapExceeded` (withdraw side, #449).
+
+</i>
+
+```solidity
+error WithdrawWindowCapExceeded();
+```
+
+### WindowBufferFull
+
+<i>
+
+Mirror of `RobotMoneyGateway.WindowBufferFull`. Unreachable through the gateway API.
+
+</i>
+
+```solidity
+error WindowBufferFull();
+```
+
+## Structs
+
+### WindowEntry
+
+```solidity
+struct WindowEntry {
+        uint64 timestamp;
+        uint256 amount;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timestamp | `uint64` |  |
+| amount | `uint256` |  |
+
+### RollingWindow
+
+Bounded ring buffer backing one agent's rolling-window accounting (NC-7 / GW-4).
+SAME-SECOND COALESCING keeps the live entry count at most the number of distinct
+seconds in the window (`MAX_WINDOW_ENTRIES`), and SLOT REUSE wraps `head`/`count`
+around the fixed-capacity `slots`, so storage plateaus at the high-water mark of
+concurrently-live entries. Exact `(t-WINDOW_SECONDS, t]` expiry per entry.
+
+```solidity
+struct RollingWindow {
+        WindowEntry[] slots;
+        uint256 head;
+        uint256 count;
+        uint256 total;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slots | `WindowEntry[]` | Ring storage; length == live capacity (≤ MAX_WINDOW_ENTRIES). |
+| head | `uint256` | Index of the oldest live entry. |
+| count | `uint256` | Number of live entries. |
+| total | `uint256` | Cumulative amount across the live entries. |
+

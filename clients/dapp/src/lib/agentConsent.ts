@@ -6,12 +6,16 @@
  * `RobotMoneyGateway.revealAuthorization(agent, salt, policy, agentConsent)`
  * binds an agent other than the revealer only with the agent's signature over
  *
- *   domain  EIP712Domain("RobotMoneyGateway", "1", chainId, gateway)
+ *   domain  EIP712Domain("RobotMoneyGateway", version, chainId, gateway)
  *   message AgentConsent(agent, owner, shareReceiver, nonce)
  *
- * where `owner` is the revealing wallet and `nonce` is
- * `agentConsentNonce(agent)`. A wallet that reveals for itself passes empty
- * bytes. Without this the old 3-argument reveal hits an unknown selector.
+ * where `owner` is the revealing wallet, `nonce` is
+ * `agentConsentNonce(agent)` and `version` is the gateway's
+ * `implementationVersion()` (ADR-0014 §10, QA plan Decisions D5). A consent
+ * signed under one version never verifies after an upgrade that bumps it, so
+ * the check reads the live version and never assumes "1". A wallet that
+ * reveals for itself passes empty bytes. Without this the old 3-argument
+ * reveal hits an unknown selector.
  *
  * The dapp never holds an agent key. The agent signs with
  * `rmpc agent-consent --owner <wallet>` and the depositor pastes the
@@ -33,6 +37,10 @@ import {
 } from "viem";
 
 export const AGENT_CONSENT_DOMAIN_NAME = "RobotMoneyGateway";
+/**
+ * The domain version of the first gateway release (`implementationVersion()`
+ * returns "1"). Only the golden vector uses it: a live check reads the version.
+ */
 export const AGENT_CONSENT_DOMAIN_VERSION = "1";
 
 /** The EIP-712 type. Its type hash is the gateway's `AGENT_CONSENT_TYPEHASH`. */
@@ -61,6 +69,8 @@ export interface AgentConsentFields {
   nonce: bigint;
   chainId: number;
   gateway: Address;
+  /** `implementationVersion()` of the live gateway implementation (the domain version). */
+  version: string;
 }
 
 /** The typed data the agent signs, in viem's `signTypedData` shape. */
@@ -68,7 +78,7 @@ export function agentConsentTypedData(f: AgentConsentFields) {
   return {
     domain: {
       name: AGENT_CONSENT_DOMAIN_NAME,
-      version: AGENT_CONSENT_DOMAIN_VERSION,
+      version: f.version,
       chainId: f.chainId,
       verifyingContract: getAddress(f.gateway),
     },

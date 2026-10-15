@@ -5,9 +5,9 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/PortfolioRouter.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
 
 **Title:** PortfolioRouter
 
@@ -30,6 +30,11 @@ contract path live across test, demo, and mainnet — environments differ
 only by which vaults the operator has opted in. See
 `docs/development/single-production-codebase.md` for the principle.
 
+Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and
+initialized in the proxy's deployment transaction. Only the timelock named at
+`initialize` can upgrade it, and `freezeUpgrades` ends upgrades forever.
+`redeemFor` has no upgrade- or freeze-dependent branch.
+
 Canonical: docs/architecture.md §4.2
 
 ## Constants
@@ -46,9 +51,10 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 Sole gate on `setWeights`, the active weight setter. After the
 deploy ceremony only the RouterGovernance contract holds it, so
-active weights move only through propose, vote, quorum and the
-execution delay. The timelock keeps `ADMIN_ROLE` and reaches
-`setDefaultWeights` and `clearVotedWeights` only. The constructor
+active weights move only through `RouterGovernance.applyReceipt`,
+one Safe-scheduled call after the timelock delay (issue 1698).
+The timelock keeps `ADMIN_ROLE` and reaches
+`setDefaultWeights` and `clearVotedWeights` only. The initializer
 seeds the role to `_admin` so the router deploy stage can write
 the initial weights. The governance deploy stage revokes it. The role is its
 own role admin, so no `ADMIN_ROLE` holder can grant it.
@@ -88,23 +94,6 @@ shared `BpsMath.BPS_DENOMINATOR` so fee/weight math cannot drift.
 uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 ```
 
-### usdc
-
-USDC token used as the deposit asset across all vaults.
-
-```solidity
-IERC20 public immutable usdc;
-```
-
-### registry
-
-VaultRegistry from which vault addresses, lifecycle status, and
-router-eligibility state are read.
-
-```solidity
-VaultRegistry public immutable registry;
-```
-
 ### REDEEM_GAS_PER_LEG
 
 <i>
@@ -140,6 +129,24 @@ uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 ```
 
 ## State Variables
+
+### usdc
+
+USDC token used as the deposit asset across all vaults. Written once by
+`initialize` (a constructor immutable before ADR-0014); no setter exists.
+
+```solidity
+IERC20 public usdc;
+```
+
+### registry
+
+VaultRegistry from which vault addresses, lifecycle status, and
+router-eligibility state are read. Written once by `initialize`; no setter exists.
+
+```solidity
+VaultRegistry public registry;
+```
 
 ### routerCap
 
@@ -255,12 +262,38 @@ WeightSetterRotation public pendingWeightSetterRotation;
 
 ## Functions
 
-<a id="constructor-address-address-address"></a>
+<a id="constructor"></a>
 
 ### constructor
 
+<i>
+
+The implementation is never initialized: only a proxy is.
+
+</i>
+
+**Note:**
+
+- **oz-upgrades-unsafe-allow:** constructor
+
 ```solidity
-constructor(address _usdc, address _registry, address _admin);
+constructor();
+```
+
+<a id="initialize-address-address-address-address-upgrademode"></a>
+
+### initialize
+
+Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+
+```solidity
+function initialize(
+        address _usdc,
+        address _registry,
+        address _admin,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer;
 ```
 
 **Parameters**
@@ -270,6 +303,8 @@ constructor(address _usdc, address _registry, address _admin);
 | _usdc | `address` | USDC token address. |
 | _registry | `address` | VaultRegistry contract address. |
 | _admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
+| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
+| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
 
 <a id="proposeweightsetterrotation-address"></a>
 
@@ -1002,10 +1037,10 @@ function _executeLeg(address receiver, address vault, uint256 legAmount, uint256
 
 ### getWeights
 
-Return the voted (active) weight vector (vault list and bps).
-This is the raw voted vector and is empty until a proposal has
-passed; use `getEffectiveWeights` for the vector the router
-actually routes by.
+Return the applied (active) weight vector (vault list and bps).
+This is the raw applied vector and is empty until the first
+consensus receipt is applied; use `getEffectiveWeights` for the
+vector the router actually routes by.
 
 ```solidity
 function getWeights() external view returns (address[] memory vaults, uint256[] memory bps);
@@ -1022,7 +1057,7 @@ function getWeights() external view returns (address[] memory vaults, uint256[] 
 
 ### getDefaultWeights
 
-Return the default (below-quorum fallback) weight vector.
+Return the default (fallback) weight vector.
 
 ```solidity
 function getDefaultWeights()
@@ -1043,7 +1078,7 @@ function getDefaultWeights()
 ### getEffectiveWeights
 
 Return the effective weight vector the router actually routes
-by: the voted vector when active, otherwise the default vector.
+by: the applied vector when active, otherwise the default vector.
 This is the single source of truth the public allocation surface
 (robotmoney.net/allocation) renders. ADR-0002.
 
@@ -1085,7 +1120,7 @@ function defaultWeightsLength() external view returns (uint256);
 
 <i>
 
-Return the storage vectors the router routes by: the voted vector
+Return the storage vectors the router routes by: the applied vector
 when `votedWeightsActive`, otherwise the default vector.
 
 </i>
@@ -1288,7 +1323,7 @@ event RouterDeposit(
 
 ### WeightsSet
 
-Emitted when the voted weight vector is updated.
+Emitted when the applied (active) weight vector is updated.
 
 ```solidity
 event WeightsSet(address[] vaults, uint256[] bps);
@@ -1349,8 +1384,8 @@ event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
 
 ### DefaultWeightsSet
 
-Emitted when the default (below-quorum fallback) weight vector
-is updated by ADMIN_ROLE.
+Emitted when the default (fallback) weight vector is updated
+by ADMIN_ROLE.
 
 ```solidity
 event DefaultWeightsSet(address[] vaults, uint256[] bps);
@@ -1365,7 +1400,7 @@ event DefaultWeightsSet(address[] vaults, uint256[] bps);
 
 ### VotedWeightsCleared
 
-Emitted when the voted weight vector is cleared and the router
+Emitted when the applied weight vector is cleared and the router
 reverts to the default weight vector.
 
 ```solidity
@@ -1504,7 +1539,7 @@ error VaultCapExceeded();
 ### NoWeightsSet
 
 No weight vector has been set; cannot deposit. Raised when the
-voted vector is inactive AND no default weight vector has been
+applied vector is inactive AND no default weight vector has been
 configured, so there is no effective allocation to route by.
 
 ```solidity

@@ -49,6 +49,7 @@ vi.mock("wagmi", async (importOriginal) => {
       if (functionName === "hasRole") return { data: false };
       if (functionName === "agentOwner") return { data: ZERO };
       if (functionName === "agentConsentNonce") return { data: 0n };
+      if (functionName === "implementationVersion") return { data: "1" };
       return { data: undefined };
     },
     useBlockNumber: () => ({ data: state.block }),
@@ -183,6 +184,7 @@ describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
       nonce: 0n,
       chainId: 918453,
       gateway: GATEWAY,
+      version: "1",
     });
     await pasteAgentConsent("rotation", signature);
   }

@@ -117,6 +117,48 @@ describe("exportRmpcConfig", () => {
     expect(parsed.usdc_address).toBe("0x2222222222222222222222222222222222222222");
   });
 
+  // QA plan P3: a proxied gateway's export pins the implementation's code hash, which rmpc
+  // requires before it signs. A direct gateway's export carries no such key.
+  it("pins gateway_implementation_hashes for a proxied gateway, and nothing for a direct one", () => {
+    const implHash = "0x" + "cd".repeat(32);
+    const proxied = parse(
+      exportRmpcConfig({
+        ...baseInputs,
+        gateway_implementation_hashes: [implHash],
+        signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+      }),
+    ) as Record<string, unknown>;
+    expect(proxied.gateway_implementation_hashes).toEqual([implHash]);
+    const direct = parse(
+      exportRmpcConfig({
+        ...baseInputs,
+        gateway_implementation_hashes: [],
+        signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+      }),
+    ) as Record<string, unknown>;
+    expect(direct.gateway_implementation_hashes).toBeUndefined();
+  });
+
+  // Issue 1810: a proxied vault needs proxy_implementation_hashes in rmpc. The dapp holds no
+  // reviewed pin for the vault's logic, so the export names the key commented out (with how to
+  // fill it from the release record) instead of copying the live hash: no trust on first use.
+  it("names proxy_implementation_hashes for a proxied vault without pinning the live hash", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      vault_is_proxy: true,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    expect(toml).toContain("# proxy_implementation_hashes = ");
+    expect(toml).toContain(`cast implementation ${baseInputs.vault_address}`);
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.proxy_implementation_hashes).toBeUndefined();
+    const direct = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
+    });
+    expect(direct).not.toContain("proxy_implementation_hashes");
+  });
+
   it("hardware signer: emits a TOML file with no allow_software_fallback", () => {
     const toml = exportRmpcConfig({
       ...baseInputs,

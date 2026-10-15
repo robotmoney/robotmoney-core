@@ -4,7 +4,7 @@ title: "DeployTimelockRehearsalKindTest"
 
 # DeployTimelockRehearsalKindTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/619570ee0a3da501ae46fccdb4e307b8b11b0f2c/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [DeployTimelockKindBase](/contracts/test/abstract.DeployTimelockKindBase)
 
@@ -30,6 +30,27 @@ function _prefix() internal pure override returns (string memory);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
+
+<a id="_authoritydelay"></a>
+
+### _authorityDelay
+
+<i>
+
+The authority timelock's delay. It must equal the TIMELOCK_MIN_DELAY the passing run
+uses, so a test that runs at another delay overrides this.
+
+</i>
+
+```solidity
+function _authorityDelay() internal pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="test_rehearsalkind_boundariesonbase"></a>
 

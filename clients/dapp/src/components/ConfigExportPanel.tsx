@@ -22,6 +22,14 @@ interface Props {
   usdcAddress: Address;
   /** keccak256(eth_getCode(gateway)) — non-zero for production deployments */
   gatewayRuntimeHash: string;
+  /**
+   * Code hash of the implementation behind a proxied gateway (QA plan P3),
+   * set only when it matched one of the build's reviewed implementation pins
+   * (issue 1810). Absent for a direct gateway or before verification.
+   */
+  gatewayImplementationHash?: string;
+  /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes`. */
+  vaultIsProxy?: boolean;
   chainId: number;
   agent: Address;
   /**
@@ -70,6 +78,9 @@ export function ConfigExportPanel(props: Props) {
     usdc_address: props.usdcAddress,
     vault_address: props.vault,
     gateway_runtime_hash: props.gatewayRuntimeHash,
+    gateway_implementation_hashes:
+      props.gatewayImplementationHash !== undefined ? [props.gatewayImplementationHash] : undefined,
+    vault_is_proxy: props.vaultIsProxy === true,
     share_receiver: props.agentOwner ? shareReceiver : undefined,
     agent_owner: props.agentOwner,
     signer,

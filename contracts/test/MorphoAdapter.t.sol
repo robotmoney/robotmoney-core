@@ -11,6 +11,7 @@ import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Minimal ERC-4626 mock vault that supports both deposit and withdraw.
 ///      withdraw() sends `assets` USDC directly to `receiver` (normal behaviour).
@@ -403,7 +404,7 @@ contract MorphoAdapterTest is Test {
     ///         non-admin caller, an unknown index and a removed entry are refused.
     function test_maxExposure_settableThroughVault() public {
         address vaultAdmin = makeAddr("vaultAdmin");
-        RobotMoneyVault rmVault = new RobotMoneyVault(
+        RobotMoneyVault rmVault = Proxied.robotMoneyVault(
             IERC20(address(usdc)),
             1_000_000 * ONE_USDC,
             1_000_000 * ONE_USDC,

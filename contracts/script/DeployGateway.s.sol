@@ -9,7 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 
 /// @title DeployGateway
 /// @notice Stage 5 of the core deploy (libs, vault, registry, router, gateway).
@@ -30,8 +30,14 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
 ///        ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
 ///        DEPLOYMENT_OUT        — output JSON path
+///        UPGRADE_AUTHORITY     — the deployment's timelock, deployed first (ADR-0014 §4)
+///        UPGRADE_MODE          — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
 ///      USDC is the canonical Base USDC constant on every chain.
-contract DeployGateway is ExpectedChainGuard {
+///      The gateway is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+///      `initialize` in its constructor. `gateway_runtime_hash` stays the code hash AT the gateway
+///      address (the proxy, which clients compare with `eth_getCode`); the implementation and its
+///      code hash are recorded next to it.
+contract DeployGateway is GovernedProxyDeploy {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "gateway.json";
 
@@ -52,13 +58,18 @@ contract DeployGateway is ExpectedChainGuard {
         address admin;
         address pauser;
         address shareReceiver;
+        /// keccak256 of the runtime code AT the gateway address: the ERC1967Proxy (ADR-0014).
         bytes32 gatewayRuntimeHash;
+        /// The implementation behind the gateway proxy and its runtime code hash (ADR-0014).
+        address implementation;
+        bytes32 implementationRuntimeHash;
     }
 
     /// @notice Forge broadcast entrypoint.
     /// @return d The deployed gateway and its wiring.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
+        _useEnvUpgradeConfig("");
         vm.startBroadcast();
         d = _deployGateway(p);
         vm.stopBroadcast();
@@ -69,6 +80,7 @@ contract DeployGateway is ExpectedChainGuard {
     /// @return d The deployed gateway and its wiring.
     function runInProcess() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
+        _useInProcessUpgradeConfig();
         d = _deployGateway(p);
     }
 
@@ -95,6 +107,7 @@ contract DeployGateway is ExpectedChainGuard {
         p.vault = vault_;
         p.router = router_;
         p.usdcAddress = usdc_;
+        _useInProcessUpgradeConfig();
         d = _deployGateway(p);
     }
 
@@ -132,19 +145,37 @@ contract DeployGateway is ExpectedChainGuard {
         d.vault = p.vault;
         d.router = p.router;
 
-        d.gateway =
-            new RobotMoneyGateway(IERC20(d.usdc), IERC4626(d.vault), d.admin, d.pauser, d.router);
+        d.implementation = address(new RobotMoneyGateway());
+        d.gateway = RobotMoneyGateway(
+            _deployProxy(
+                d.implementation,
+                abi.encodeCall(
+                    RobotMoneyGateway.initialize,
+                    (
+                        IERC20(d.usdc),
+                        IERC4626(d.vault),
+                        d.admin,
+                        d.pauser,
+                        d.router,
+                        _upgrade.authority,
+                        _upgrade.mode
+                    )
+                )
+            )
+        );
+        d.implementationRuntimeHash = keccak256(d.implementation.code);
 
         // The core 1493 defect, closed: the immutable router must be the one the router
         // stage deployed, and never zero.
         require(d.gateway.router() != address(0), "gateway.router is zero");
         require(d.gateway.router() == d.router, "gateway.router != ROUTER_ADDRESS");
 
-        // Pin the gateway runtime hash.
+        // Pin the runtime hash at the gateway address (the proxy).
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
 
         console2.log("RobotMoneyGateway deployed with the router");
-        console2.log("  gateway          :", address(d.gateway));
+        console2.log("  gateway (proxy)  :", address(d.gateway));
+        console2.log("  implementation   :", d.implementation);
         console2.log("  router           :", d.router);
         console2.log("  vault            :", d.vault);
         console2.log("  admin            :", d.admin);
@@ -164,6 +195,11 @@ contract DeployGateway is ExpectedChainGuard {
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "pauser", d.pauser);
         vm.serializeAddress(obj, "share_receiver", d.shareReceiver);
+        vm.serializeAddress(obj, "gateway_implementation", d.implementation);
+        vm.serializeBytes32(obj, "gateway_layout_id", _layoutId("RobotMoneyGateway"));
+        vm.serializeBytes32(obj, "gateway_implementation_runtime_hash", d.implementationRuntimeHash);
+        vm.serializeAddress(obj, "upgrade_authority", _upgrade.authority);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(_upgrade.mode));
         string memory json = vm.serializeBytes32(obj, "gateway_runtime_hash", d.gatewayRuntimeHash);
 
         vm.writeJson(json, outPath);

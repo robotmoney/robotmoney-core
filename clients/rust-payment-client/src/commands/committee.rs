@@ -30,6 +30,13 @@
 //! role, not a governance role. `ic_policy_address` is still required so the
 //! command fails closed before signing when the committee is not configured.
 //!
+//! Before it signs, `vote-submit` runs checks 1, 2 and 2b of the write
+//! preflight (issue 1810, `crate::upgrade::verify_gateway_before_signing`):
+//! the RPC serves `chain_id`, the gateway's code hashes to
+//! `gateway_runtime_hash`, and a proxied gateway runs an implementation pinned
+//! in `gateway_implementation_hashes`. A mismatch exits 2, a failed read 3;
+//! neither signs.
+//!
 //! Exit codes:
 //! - 0 — success (`check-agent`: the agent holds `COMMITTEE_AGENT_ROLE`).
 //! - 2 — refusal (unauthorized, non-allowlisted agent, bad input;
@@ -294,6 +301,28 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
+    // Checks 1, 2 and 2b before anything is signed (issue 1810): the RPC
+    // serves `chain_id`, the gateway's code is `gateway_runtime_hash`, and a
+    // proxied gateway runs an implementation pinned in
+    // `gateway_implementation_hashes`. A failed read refuses too.
+    if let Err(err) = rt.block_on(crate::upgrade::verify_gateway_before_signing(
+        &rpc,
+        &cfg,
+        gateway_addr,
+    )) {
+        log::error!("rmpc committee vote-submit: gateway check refused: {err}");
+        emit_failure(
+            &CommitteeFailure {
+                ok: false,
+                error: err.name().to_string(),
+                message: Some(format!("{err}")),
+                tx_hash: None,
+            },
+            args.pretty,
+        );
+        return gateway_check_exit_code(&err);
+    }
+
     let fees = match fetch_fees(
         &rt,
         &rpc,
@@ -440,6 +469,18 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         args.pretty,
     );
     EXIT_OK
+}
+
+/// Exit code of a failed gateway check: a mismatch the chain answered is a
+/// refusal (2); a read that did not complete is a startup failure (3).
+/// Neither signs anything.
+fn gateway_check_exit_code(err: &RmpcError) -> i32 {
+    match err {
+        RmpcError::ErrChainIdMismatch
+        | RmpcError::ErrCodeHashMismatch
+        | RmpcError::ErrImplementationNotApproved { .. } => EXIT_REFUSAL,
+        _ => EXIT_STARTUP_FAIL,
+    }
 }
 
 /// Run `rmpc committee check-agent`. Returns the process exit code.

@@ -5,9 +5,9 @@ description: "Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 
 # BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/vaults/BasketVault.sol)
 
-**Inherits:** ERC4626, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuard
+**Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
 
 **Title:** BasketVault
 
@@ -18,6 +18,12 @@ NAV is denominated in USDC using a Uniswap V3 TWAP (time-weighted
 arithmetic-mean tick) over a per-asset, admin-configurable window.
 
 Subclasses set the vault name/symbol, max basket size, and default slippage.
+
+Upgradeability (ADR-0014): each concrete kind is an implementation behind its own
+ERC1967Proxy, initialized in the proxy's deployment transaction (`initialize`, here
+once for all three kinds). Only the timelock named at `initialize` can upgrade it, and
+`freezeUpgrades` ends upgrades forever. `redeem` and `redeemInKind` have no upgrade- or
+freeze-dependent branch.
 
 ## Constants
 
@@ -81,18 +87,6 @@ ADMIN_ROLE has set an explicit per-asset window.
 
 ```solidity
 uint32 public constant DEFAULT_TWAP_WINDOW = 1_800;
-```
-
-### SWAP_ROUTER
-
-```solidity
-ISwapRouter public immutable SWAP_ROUTER;
-```
-
-### _USDC
-
-```solidity
-IERC20 internal immutable _USDC;
 ```
 
 ### MAX_NAV_DEVIATION_BPS
@@ -164,7 +158,27 @@ uint128 public constant MIN_POOL_LIQUIDITY = 1e6;
 ### assets
 
 ```solidity
-AssetInfo[] public assets;
+BasketAssetConfigGuard.AssetInfo[] public assets;
+```
+
+### SWAP_ROUTER
+
+Uniswap V3 router of the default venue. Written once by `initialize`; no setter.
+
+```solidity
+ISwapRouter public SWAP_ROUTER;
+```
+
+### _USDC
+
+<i>
+
+USDC, the vault asset. Written once by `initialize`; no setter.
+
+</i>
+
+```solidity
+IERC20 internal _USDC;
 ```
 
 ### tvlCap
@@ -242,8 +256,11 @@ address public registry;
 
 ### emergencyUnwindGuard
 
+Per-token emergency unwind configuration (`BasketSwapOps.EmergencyUnwindGuard`: the
+reference floor, override access, and the override path's upper-loss cap).
+
 ```solidity
-mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
+mapping(address => BasketSwapOps.EmergencyUnwindGuard) public emergencyUnwindGuard;
 ```
 
 ### twapWindow
@@ -311,43 +328,117 @@ uint256 internal _lastMintedShares;
 uint256 internal _lastWithdrawnAssets;
 ```
 
+### __gap
+
+<i>
+
+Storage gap (ADR-0014 §8). The three kinds derive from this base. A new base field takes
+slots from the gap, so a kind's own fields never shift. The layout gate allows exactly that.
+
+</i>
+
+```solidity
+uint256[50] private __gap;
+```
+
 ## Functions
 
-<a id="constructor-string-string-ierc20-iswaprouter-uint256-uint256-uint256-uint256-address-address-address"></a>
+<a id="constructor"></a>
 
 ### constructor
 
+<i>
+
+The implementation is never initialized: only a proxy is.
+
+</i>
+
+**Note:**
+
+- **oz-upgrades-unsafe-allow:** constructor
+
 ```solidity
-constructor(
-        string memory name_,
-        string memory symbol_,
+constructor();
+```
+
+<a id="initialize-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address-address-upgrademode"></a>
+
+### initialize
+
+Initialize the proxy. Runs once, inside the proxy's deployment transaction. One
+initializer serves the three kinds; each kind supplies its share-token name, symbol
+and starting slippage through `_kindConfig`.
+
+```solidity
+function initialize(
         IERC20 usdc_,
         ISwapRouter swapRouter_,
         uint256 tvlCap_,
         uint256 perDepositCap_,
         uint256 exitFeeBps_,
-        uint256 initialSlippageBps_,
         address feeRecipient_,
         address admin_,
-        address emergencyResponder_
-    ) ERC4626(usdc_) ERC20(name_, symbol_);
+        address emergencyResponder_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| name_ | `string` |  |
-| symbol_ | `string` |  |
-| usdc_ | `IERC20` |  |
-| swapRouter_ | `ISwapRouter` |  |
-| tvlCap_ | `uint256` |  |
-| perDepositCap_ | `uint256` |  |
-| exitFeeBps_ | `uint256` |  |
-| initialSlippageBps_ | `uint256` |  |
-| feeRecipient_ | `address` |  |
+| usdc_ | `IERC20` | USDC, the vault asset. Must not be address(0). |
+| swapRouter_ | `ISwapRouter` | Uniswap V3 router of the default venue. Must not be address(0). |
+| tvlCap_ | `uint256` | Initial TVL cap. |
+| perDepositCap_ | `uint256` | Initial per-deposit cap. |
+| exitFeeBps_ | `uint256` | Initial exit fee, bounded by `MAX_EXIT_FEE_BPS` as in `setExitFeeBps`. |
+| feeRecipient_ | `address` | Exit-fee recipient. Must not be address(0). |
 | admin_ | `address` | Receives ADMIN_ROLE (cold/multisig key for<br/>parameter changes). Must not be address(0). |
 | emergencyResponder_ | `address` | Receives EMERGENCY_ROLE (hot key for rapid<br/>unwind/shutdown). Must not be address(0).<br/>May equal admin_ as a conscious choice<br/>(e.g. in test environments), but operators<br/>SHOULD use distinct addresses in production<br/>so a single key compromise cannot both alter<br/>parameters and trigger an emergency unwind. |
+| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
+| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
+
+<a id="_initkind"></a>
+
+### _initKind
+
+<i>
+
+Share-token name and symbol and the starting `maxSlippageBps`, from the kind. A helper of its own keeps
+the initializer's ten arguments within the legacy code generator's stack reach.
+
+</i>
+
+```solidity
+function _initKind() private;
+```
+
+<a id="_kindconfig"></a>
+
+### _kindConfig
+
+<i>
+
+The kind's share-token name and symbol and its starting `maxSlippageBps`.
+
+</i>
+
+```solidity
+function _kindConfig()
+        internal
+        pure
+        virtual
+        returns (string memory name_, string memory symbol_, uint256 initialSlippageBps_);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name_ | `string` |  |
+| symbol_ | `string` |  |
+| initialSlippageBps_ | `uint256` |  |
 
 <a id="maxassets"></a>
 
@@ -365,29 +456,6 @@ function maxAssets() public view virtual returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="_guardassets"></a>
-
-### _guardAssets
-
-<i>
-
-Reinterpret the `assets` storage array as the layout-identical
-`BasketAssetConfigGuard.AssetInfo[]` so the delegatecall-linked dedup
-scan can read/write it. The two structs share an exact field layout;
-only the nominal type differs, so the storage-pointer cast is sound.
-
-</i>
-
-```solidity
-function _guardAssets() internal view returns (BasketAssetConfigGuard.AssetInfo[] storage g);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| g | `BasketAssetConfigGuard.AssetInfo[]` |  |
-
 <a id="decimals"></a>
 
 ### decimals
@@ -403,7 +471,7 @@ See `IERC20Metadata`.
 </i>
 
 ```solidity
-function decimals() public pure override(ERC4626) returns (uint8);
+function decimals() public pure override(ERC4626Upgradeable) returns (uint8);
 ```
 
 **Returns**
@@ -574,9 +642,10 @@ function _deposit(
 <i>
 
 Splits usdcAmount equally across active assets, swapping each portion via the
-per-asset swap adapter (Aerodrome or Uniswap V3 default).
-The first active asset absorbs any indivisible remainder.
-Emits a WeightSnapshot event recording the equal-weight allocation applied.
+per-asset swap adapter (Aerodrome or Uniswap V3 default). The first active asset
+absorbs any indivisible remainder; each leg's minimum is its TWAP token value less
+`maxSlippageBps`. Emits `Swapped` per leg and one `WeightSnapshot`. The loop runs in the
+linked `BasketSwapOps.routeDeposit` (ADR-0014 §9).
 
 </i>
 
@@ -590,6 +659,27 @@ function _routeDeposit(address caller, uint256 usdcAmount) internal;
 | ---- | ---- | ----------- |
 | caller | `address` |  |
 | usdcAmount | `uint256` |  |
+
+<a id="_venue"></a>
+
+### _venue
+
+<i>
+
+The vault values every `BasketSwapOps` swap needs: USDC, the default V3 router and the
+slippage haircut applied to each TWAP floor.
+
+</i>
+
+```solidity
+function _venue() internal view returns (BasketSwapOps.Venue memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketSwapOps.Venue` |  |
 
 <a id="redeem-uint256-address-address"></a>
 
@@ -935,7 +1025,10 @@ function _withdraw(
 <i>
 
 Sells `shares / supplyBefore` fraction of each active asset and any idle USDC.
-Returns total USDC collected (swap proceeds + idle USDC proportion).
+Returns total USDC collected (swap proceeds + idle USDC proportion). The loop runs in the
+linked `BasketSwapOps.sellProportional` (ADR-0014 §9): each leg is priced one input unit
+short (core 1778) and a leg whose TWAP floor rounds to zero is dust and is skipped (QA
+plan D6, SR-L12), staying with the remaining holders.
 
 </i>
 
@@ -1148,7 +1241,7 @@ function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
 | codeHash_ | `bytes32` | Runtime-bytecode hash (`adapter.codehash`) to approve/revoke. |
 | allowed_ | `bool` | True to approve, false to revoke. |
 
-<a id="addasset-address-address-uint24-address-venue"></a>
+<a id="addasset-address-address-uint24-address-basketassetconfigguard-venue"></a>
 
 ### addAsset
 
@@ -1169,7 +1262,7 @@ function addAsset(
         address pool_,
         uint24 swapFee_,
         address adapter_,
-        Venue venue_
+        BasketAssetConfigGuard.Venue venue_
     ) external onlyRole(ADMIN_ROLE);
 ```
 
@@ -1181,7 +1274,7 @@ function addAsset(
 | pool_ | `address` | DEX pool pairing `token_` with USDC (either token0 or token1).<br/>For the Uniswap V3 default path, this is the V3 pool address.<br/>For Aerodrome, this is the CL pool address used for TWAP reads. |
 | swapFee_ | `uint24` | Venue parameter forwarded to execution: Uniswap fee tier<br/>for V3/V4, or signed tick spacing for Aerodrome Slipstream. |
 | adapter_ | `address` | Swap+TWAP adapter address implementing `IBasketSwapAdapter`.<br/>Pass `address(0)` to use the built-in Uniswap V3 default path<br/>(venue = V3). For V4 or Aerodrome, pass the deployed adapter<br/>address and the corresponding `venue_`. |
-| venue_ | `Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` with a `UniswapV4SwapAdapter` and `pool_` = its `UniswapV4PriceRecorder`,<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
+| venue_ | `BasketAssetConfigGuard.Venue` | DEX venue selector. Must match the adapter type:<br/>`Venue.V3` with `adapter_=address(0)`,<br/>`Venue.V4` with a `UniswapV4SwapAdapter` and `pool_` = its `UniswapV4PriceRecorder`,<br/>`Venue.Aerodrome` with an `AerodromeSwapAdapter`.<br/>Stored on `AssetInfo` so governance tooling can inspect<br/>the venue without decoding the adapter address. |
 
 <a id="removeasset-uint256"></a>
 
@@ -1250,64 +1343,6 @@ function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonRee
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index of an inactive (removed) basket asset. |
 | minUsdcOut | `uint256` | Caller-supplied slippage floor (in USDC raw units).<br/>Reverts with SlippageExceeded when the swap output is<br/>below this floor, preventing MEV sandwich attacks on<br/>NAV recovery. Pass 0 to use only the TWAP-derived<br/>floor. Only enforced on the pool-healthy path; the<br/>degraded-pool path quarantines instead of swapping. |
-
-<a id="_slippagefloor-assetinfo-uint256"></a>
-
-### _slippageFloor
-
-<i>
-
-TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
-basket asset. Shared by the proportional-withdraw sell leg and the
-removed-asset re-absorption path.
-
-</i>
-
-```solidity
-function _slippageFloor(AssetInfo memory assetInfo, uint256 amount)
-        internal
-        view
-        returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| amount | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="_applyslippage-uint256"></a>
-
-### _applySlippage
-
-<i>
-
-Apply the configured max-slippage haircut to a USDC value.
-
-</i>
-
-```solidity
-function _applySlippage(uint256 usdcValue) internal view returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| usdcValue | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
 
 <a id="setregistry-address"></a>
 
@@ -1415,30 +1450,6 @@ cannot block the unwind.
 function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant;
 ```
 
-<a id="emergencytwapusdcvalue-assetinfo-uint256"></a>
-
-### emergencyTwapUsdcValue
-
-```solidity
-function emergencyTwapUsdcValue(AssetInfo calldata assetInfo, uint256 amount)
-        external
-        view
-        returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| amount | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
 <a id="emergencyunwindwithoverride-address"></a>
 
 ### emergencyUnwindWithOverride
@@ -1538,31 +1549,6 @@ function sweepForeignToken(address token) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | token | `address` | Foreign ERC-20 to quarantine. Must not be USDC, the share<br/>token, or any active/configured basket asset. |
-
-<a id="_sweeptoquarantine-address"></a>
-
-### _sweepToQuarantine
-
-<i>
-
-Single inlining site for the permissionless quarantine sweep so the
-`ForeignTokenQuarantine.sweep` body is emitted into the
-EIP-170-tight basket-vault bytecode only once, shared by
-`sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
-fallback. Moves the caller's full balance of `token` to the fixed
-quarantine address; no caller-supplied recipient (INV-1).
-
-</i>
-
-```solidity
-function _sweepToQuarantine(address token) private;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
 
 <a id="settvlcap-uint256"></a>
 
@@ -1939,117 +1925,6 @@ function _activeAssetCount() internal view returns (uint256 count);
 | ---- | ---- | ----------- |
 | count | `uint256` |  |
 
-<a id="_activeassetfortoken-address"></a>
-
-### _activeAssetForToken
-
-```solidity
-function _activeAssetForToken(address token) internal view returns (AssetInfo memory);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `AssetInfo` |  |
-
-<a id="_emergencyunwindasset-assetinfo-uint256"></a>
-
-### _emergencyUnwindAsset
-
-```solidity
-function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| minUsdcOut | `uint256` |  |
-
-<a id="_emergencyunwindassetwithcap-assetinfo-uint256"></a>
-
-### _emergencyUnwindAssetWithCap
-
-<i>
-
-Override-path swap helper. Passes `appliedFloor` as the router-level
-`amountOutMinimum` and additionally enforces the cap with a typed
-`EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
-a stable error surface regardless of the underlying router's
-slippage revert format.
-
-</i>
-
-```solidity
-function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
-        internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| assetInfo | `AssetInfo` |  |
-| appliedFloor | `uint256` |  |
-
-<a id="_executeswap-address-address-address-uint24-uint256-uint256-address"></a>
-
-### _executeSwap
-
-<i>
-
-Routes a swap through the per-asset adapter when set, or falls back
-to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
-management: forceApprove before the call, clear after.
-
-</i>
-
-Deadline note (audit 2026-06-09, L-5): adapters take an explicit
-caller-chosen `deadline` instead of hardcoding `block.timestamp`.
-This vault's entry points are standard ERC-4626 (no deadline
-parameter), and every swap executes synchronously inside the
-caller's transaction, so the vault pins the deadline to the current
-block — equivalent protection to a tx-level deadline. External
-integrators calling adapters directly MUST supply a real deadline.
-
-```solidity
-function _executeSwap(
-        address adapter,
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
-    ) internal returns (uint256 amountOut);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| adapter | `address` |  |
-| tokenIn | `address` |  |
-| tokenOut | `address` |  |
-| fee | `uint24` |  |
-| amountIn | `uint256` |  |
-| minAmountOut | `uint256` |  |
-| recipient | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| amountOut | `uint256` |  |
-
 ## Events
 
 ### RegistrySet
@@ -2104,7 +1979,7 @@ event AssetAdded(
         address pool,
         uint24 swapFee,
         address adapter,
-        Venue venue
+        BasketAssetConfigGuard.Venue venue
     );
 ```
 
@@ -2117,7 +1992,7 @@ event AssetAdded(
 | pool | `address` |  |
 | swapFee | `uint24` |  |
 | adapter | `address` |  |
-| venue | `Venue` |  |
+| venue | `BasketAssetConfigGuard.Venue` |  |
 
 ### AssetRemoved
 
@@ -2832,91 +2707,4 @@ AZ-BSK-5: raised when the caller-supplied `minUsdcOut` floor on
 ```solidity
 error SlippageExceeded();
 ```
-
-## Structs
-
-### AssetInfo
-
-```solidity
-struct AssetInfo {
-        address token;
-        address pool; // DEX pool pairing token with USDC (venue-specific)
-        uint24 swapFee; // Fee parameter forwarded to the adapter (e.g. Uniswap V3 fee tier)
-        bool active;
-        /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
-        ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
-        address adapter;
-        /// @notice DEX venue this asset is wired to.
-        ///         Mirrors the adapter choice in a human-readable form so governance
-        ///         and monitoring tooling can inspect the venue without decoding the
-        ///         adapter address.
-        Venue venue;
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| token | `address` |  |
-| pool | `address` |  |
-| swapFee | `uint24` |  |
-| active | `bool` |  |
-| adapter | `address` |  |
-| venue | `Venue` |  |
-
-### EmergencyUnwindGuard
-
-```solidity
-struct EmergencyUnwindGuard {
-        uint256 minUsdcOut;
-        bool overrideAllowed;
-        // Maximum acceptable loss (in basis points) versus `minUsdcOut` when the
-        // override path is used. The override floor is computed as
-        // `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`. A `maxLossBps` of
-        // `MAX_BPS` reproduces the legacy zero-floor behaviour; a value of `0`
-        // forbids any loss versus the reference floor.
-        uint256 maxLossBps;
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| minUsdcOut | `uint256` |  |
-| overrideAllowed | `bool` |  |
-| maxLossBps | `uint256` |  |
-
-## Enums
-
-### Venue
-
-DEX venue selector for a basket asset.
-Recorded on AssetInfo so off-chain tooling and governance can
-inspect which DEX each asset is wired to without parsing the
-opaque adapter address.
-V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-V4       — Uniswap V4 via a `UniswapV4SwapAdapter` (core 1676). The asset's `pool` is the
-`UniswapV4PriceRecorder` (V4 has no pool address and a hookless pool records no
-observations). `Venue` is ABI-visible (`addAsset(..., uint8 venue_)`,
-`AssetInfo.venue`, the fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue`
-and the tests all use the ordinals): V3 0, V4 1, Aerodrome 2.
-Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
-
-```solidity
-enum Venue {
-        V3,
-        V4,
-        Aerodrome
-    }
-```
-
-**Variants**
-
-| Name | Description |
-| ---- | ----------- |
-| V3 |  |
-| V4 |  |
-| Aerodrome |  |
 

@@ -374,7 +374,8 @@ interface IGateway {
     ///         `AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)`
     ///         with `owner = msg.sender`, `shareReceiver = p.shareReceiver`
     ///         and `nonce = agentConsentNonce(agent)`, in the domain
-    ///         (`RobotMoneyGateway`, `1`, `block.chainid`, this gateway).
+    ///         (`RobotMoneyGateway`, `implementationVersion()`, `block.chainid`,
+    ///         this gateway).
     ///         Anything else reverts `InvalidAgentConsent`. A successful use
     ///         advances the nonce, so a consent authorizes once. An agent
     ///         revealing for itself, and an `ADMIN_ROLE` caller, pass empty
@@ -538,6 +539,14 @@ interface IGateway {
     ///         consent signature authorizes the agent.
     /// @param agent The agent address to look up.
     function agentConsentNonce(address agent) external view returns (uint256);
+
+    /// @notice The gateway implementation version: the EIP-712 domain `version`
+    ///         of every `AgentConsent` (ADR-0014 §10, QA plan Decisions D5). An
+    ///         implementation that changes what a signed consent means returns a
+    ///         new value, so every consent signed under the old one stops
+    ///         verifying after the upgrade; a pure fix keeps it. Clients read it
+    ///         before they sign and never assume a value.
+    function implementationVersion() external pure returns (string memory);
 
     /// @notice True when the agent's current binding carries its consent: a
     ///         consent signature, or the agent revealed for itself. False for

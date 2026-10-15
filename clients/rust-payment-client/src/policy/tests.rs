@@ -48,6 +48,8 @@ fn config() -> Config {
         vault_addresses: None,
         share_receiver: None,
         agent_owner: None,
+        gateway_implementation_hashes: None,
+        proxy_implementation_hashes: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: PathBuf::from("/tmp/ks.enc"),
@@ -153,9 +155,34 @@ fn match_eth_call_selector(selector: &str) -> Matcher {
     ])
 }
 
+/// Block the implementation reads of check 2b are pinned to in these tests.
+const PIN_BLOCK: u64 = 0x2a;
+
+/// Check 2b for a direct (pre-proxy) gateway: `eth_blockNumber` and an
+/// empty ERC-1967 implementation slot (QA plan P3).
+async fn install_direct_gateway_slot_mocks(server: &mut mockito::ServerGuard) {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{PIN_BLOCK:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", "00".repeat(32))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
 /// Wire up the full happy-path response set. Tests then override one stub
 /// to flip a single rule into a refusal.
 async fn install_happy_path_mocks(server: &mut mockito::ServerGuard, cfg: &Config) {
+    install_direct_gateway_slot_mocks(server).await;
     // chain_id
     server
         .mock("POST", "/")
@@ -633,6 +660,7 @@ async fn install_withdraw_gateway_mocks(
     max_withdraw_per_window: U256,
     withdraw_window_gross: U256,
 ) {
+    install_direct_gateway_slot_mocks(server).await;
     // chain_id
     server
         .mock("POST", "/")
@@ -1050,6 +1078,8 @@ fn parse_b256_hex_rejects_wrong_length() {
 /// allowance/balance reads, plain ERC-20 calls against the vault. It never
 /// reads `depositsPaused()` (core 1494).
 async fn install_vault_mocks(server: &mut mockito::ServerGuard, allowance: U256, balance: U256) {
+    // The vault's ERC-1967 slot read (ADR-0014): empty, a direct vault.
+    install_direct_gateway_slot_mocks(server).await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
@@ -1146,4 +1176,370 @@ async fn withdraw_vault_preflight_happy_path() {
         .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64))
         .await;
     assert!(result.is_ok(), "expected ok, got {result:?}");
+}
+
+// ─── QA plan P3: the implementation behind a proxied gateway ────────────────
+//
+// A proxy keeps its own runtime code across an upgrade, so these fixtures keep
+// `eth_getCode(GATEWAY)` = `GATEWAY_CODE` (the pinned `gateway_runtime_hash`)
+// and change only what the ERC-1967 slot names. Check 2b must refuse an
+// implementation the config does not list, and any failed read, before a
+// signature exists.
+
+const IMPL_V1: Address = address!("00000000000000000000000000000000000001a1");
+const IMPL_V2: Address = address!("00000000000000000000000000000000000001a2");
+const IMPL_CODE_V1: &[u8] = &[0x60, 0x01, 0x60, 0x00, 0xfe];
+const IMPL_CODE_V2: &[u8] = &[0x60, 0x02, 0x60, 0x00, 0xfe];
+
+/// `config()` that approves the implementations whose code is `approved`.
+fn proxied_config(approved: &[&[u8]]) -> Config {
+    let mut cfg = config();
+    cfg.gateway_implementation_hashes = Some(
+        approved
+            .iter()
+            .map(|c| format!("0x{}", ahex::encode(keccak256(c))))
+            .collect(),
+    );
+    cfg
+}
+
+/// The slot of GATEWAY names `implementation`, whose code is `code`. Both
+/// mocks answer only a read at `PIN_BLOCK`, so a preflight that read the slot
+/// and the code at different blocks (or at `latest`) would miss them. Install
+/// after the happy-path set: the last matching mock answers.
+async fn install_proxy_mocks(
+    server: &mut mockito::ServerGuard,
+    implementation: Address,
+    code: &[u8],
+) -> (mockito::Mock, mockito::Mock) {
+    install_proxy_mocks_for(server, GATEWAY, implementation, code).await
+}
+
+/// `install_proxy_mocks` for any proxy: the slot of `proxy` names
+/// `implementation`, whose code is `code`, both read at `PIN_BLOCK`.
+async fn install_proxy_mocks_for(
+    server: &mut mockito::ServerGuard,
+    proxy: Address,
+    implementation: Address,
+    code: &[u8],
+) -> (mockito::Mock, mockito::Mock) {
+    let slot = crate::upgrade::ERC1967_IMPLEMENTATION_SLOT;
+    let storage = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getStorageAt"})),
+            Matcher::Regex(format!(
+                r#"(?i)"params":\["{proxy:#x}","{slot:#x}","0x{PIN_BLOCK:x}"\]"#
+            )),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(implementation)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let code_mock = server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(
+                r#"(?i)"params":\["{implementation:#x}","0x{PIN_BLOCK:x}"\]"#
+            )),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(code))))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    (storage, code_mock)
+}
+
+fn rpc_error_body() -> String {
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"header not found"}}"#.into()
+}
+
+fn not_approved_reason(err: RmpcError) -> (String, String) {
+    match err {
+        RmpcError::ErrImplementationNotApproved {
+            code_hash, reason, ..
+        } => (code_hash, reason),
+        other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+    }
+}
+
+/// An approved implementation passes, and the report names it. Both reads
+/// were made at one block.
+#[tokio::test]
+async fn proxy_with_approved_implementation_passes_and_reports_it() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = proxied_config(&[IMPL_CODE_V1]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    let (storage, code) = install_proxy_mocks(&mut server, IMPL_V1, IMPL_CODE_V1).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let report = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .expect("an approved implementation passes");
+    assert_eq!(report.implementation, Some(IMPL_V1));
+    assert_eq!(
+        report.implementation_code_hash,
+        Some(keccak256(IMPL_CODE_V1))
+    );
+    storage.assert_async().await;
+    code.assert_async().await;
+}
+
+/// The issue #1810 fixture: the proxy's code (and so `gateway_runtime_hash`)
+/// is unchanged, but the slot now names an implementation nobody approved.
+/// The deposit preflight refuses before anything is signed.
+#[tokio::test]
+async fn swapped_implementation_refuses_while_proxy_hash_is_unchanged() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = proxied_config(&[IMPL_CODE_V1]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_mocks(&mut server, IMPL_V2, IMPL_CODE_V2).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    let (code_hash, reason) = not_approved_reason(err);
+    assert_eq!(code_hash, format!("{:#x}", keccak256(IMPL_CODE_V2)));
+    assert!(
+        reason.contains("not in gateway_implementation_hashes"),
+        "{reason}"
+    );
+}
+
+/// The withdraw preflight runs the same check: an exit is signed only
+/// against an approved implementation too.
+#[tokio::test]
+async fn withdraw_preflight_refuses_a_swapped_implementation() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = proxied_config(&[IMPL_CODE_V1]);
+    install_withdraw_gateway_mocks(
+        &mut server,
+        &cfg,
+        U256::from(1_000_000u64),
+        U256::from(100_000_000u64),
+        U256::from(1_000u64),
+        U256::from(10_000u64),
+        U256::ZERO,
+    )
+    .await;
+    install_proxy_mocks(&mut server, IMPL_V2, IMPL_CODE_V2).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run_withdraw_gateway(inputs(100))
+        .await
+        .unwrap_err();
+    not_approved_reason(err);
+}
+
+/// A proxied gateway with no `gateway_implementation_hashes` is refused: the
+/// proxy pin alone approves any logic.
+#[tokio::test]
+async fn proxy_without_implementation_pin_refuses() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = config();
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_mocks(&mut server, IMPL_V1, IMPL_CODE_V1).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    let (_, reason) = not_approved_reason(err);
+    assert!(reason.contains("not set"), "{reason}");
+}
+
+/// A failed slot read is a refusal, never read as "not a proxy".
+#[tokio::test]
+async fn failed_implementation_slot_read_refuses() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = proxied_config(&[IMPL_CODE_V1]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(rpc_error_body())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RmpcError::ErrRpcServer { .. }), "got {err:?}");
+}
+
+/// A failed read of the implementation's code is a refusal too.
+#[tokio::test]
+async fn failed_implementation_code_read_refuses() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = proxied_config(&[IMPL_CODE_V1]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(IMPL_V1)))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#"(?i)"params":\["{IMPL_V1:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(rpc_error_body())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RmpcError::ErrRpcServer { .. }), "got {err:?}");
+}
+
+/// Issue 1810: a refusal that can come from check 2b itself (an RPC error on
+/// the slot or code read, a malformed `gateway_implementation_hashes` entry)
+/// never reports `gateway_implementation_approved: true` in the JSON
+/// `checks` block. Only errors raised after 2b passed may claim it.
+#[test]
+fn partial_checks_never_claim_an_approved_implementation_on_a_2b_failure() {
+    for err in [
+        RmpcError::ErrRpcServer {
+            code: -32000,
+            message: "header not found".into(),
+        },
+        RmpcError::ErrRpcTransport("connection reset".into()),
+        RmpcError::ErrRpcDecode("bad word".into()),
+        RmpcError::ErrConfig("gateway_implementation_hashes[0]: odd length".into()),
+        RmpcError::ErrImplementationNotApproved {
+            proxy: crate::upgrade::GATEWAY.into(),
+            implementation: format!("{IMPL_V2:#x}"),
+            code_hash: format!("{:#x}", keccak256(IMPL_CODE_V2)),
+            reason: "its code hash is not in gateway_implementation_hashes".into(),
+        },
+    ] {
+        let c = ChecksOutput::from_err_partial(&err);
+        assert!(
+            !c.gateway_implementation_approved,
+            "{err:?} must not report an approved implementation"
+        );
+    }
+    for err in [
+        RmpcError::ErrDepositsPaused,
+        RmpcError::ErrAgentNotAuthorized,
+        RmpcError::ErrPolicyExpired,
+        RmpcError::ErrAllowanceInsufficient,
+        RmpcError::ErrBalanceInsufficient,
+        RmpcError::ErrShareAllowanceInsufficient,
+        RmpcError::ErrShareBalanceInsufficient,
+        RmpcError::ErrDepositCapExceeded("cap".into()),
+        RmpcError::ErrWithdrawCapExceeded("cap".into()),
+    ] {
+        let c = ChecksOutput::from_err_partial(&err);
+        assert!(
+            c.gateway_implementation_approved,
+            "{err:?} is raised only after check 2b passed"
+        );
+    }
+}
+
+// ─── ADR-0014: the vault behind the gateway is a proxy too ──────────────────
+//
+// `vault_address` and `gateway.vault()` pin the vault's address, not the logic
+// behind it. Check 5c (deposit) and the withdraw vault preflight read the
+// vault's implementation at one block and refuse unless its code hash is in
+// `proxy_implementation_hashes`.
+
+const VAULT_IMPL: Address = address!("00000000000000000000000000000000000002b1");
+const VAULT_IMPL_CODE: &[u8] = &[0x60, 0x03, 0x60, 0x00, 0xfe];
+
+fn vault_pinned(cfg: Config, approved: &[&[u8]]) -> Config {
+    Config {
+        proxy_implementation_hashes: Some(
+            approved
+                .iter()
+                .map(|c| format!("0x{}", ahex::encode(keccak256(c))))
+                .collect(),
+        ),
+        ..cfg
+    }
+}
+
+#[tokio::test]
+async fn deposit_refuses_a_proxied_vault_whose_implementation_is_not_pinned() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = vault_pinned(config(), &[IMPL_CODE_V1]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    install_proxy_mocks_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let err = Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .unwrap_err();
+    match &err {
+        RmpcError::ErrImplementationNotApproved { proxy, reason, .. } => {
+            assert_eq!(proxy, &format!("vault {VAULT:#x}"));
+            assert!(reason.contains("proxy_implementation_hashes"), "{reason}");
+        }
+        other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+    }
+    let c = ChecksOutput::from_err_partial(&err);
+    assert!(c.gateway_implementation_approved, "the gateway passed 2b");
+    assert!(
+        c.gateway_implementation.is_none(),
+        "a vault is not the gateway"
+    );
+}
+
+#[tokio::test]
+async fn deposit_passes_with_the_vault_implementation_pinned() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = vault_pinned(config(), &[VAULT_IMPL_CODE]);
+    install_happy_path_mocks(&mut server, &cfg).await;
+    let (storage, code) =
+        install_proxy_mocks_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    Preflight::new(&rpc, &cfg)
+        .run(inputs(100))
+        .await
+        .expect("a pinned vault implementation passes");
+    storage.assert_async().await;
+    code.assert_async().await;
+}
+
+#[tokio::test]
+async fn withdraw_vault_refuses_a_proxied_vault_without_a_pin() {
+    let mut server = mockito::Server::new_async().await;
+    install_vault_mocks(&mut server, U256::from(u128::MAX), U256::from(u128::MAX)).await;
+    install_proxy_mocks_for(&mut server, VAULT, VAULT_IMPL, VAULT_IMPL_CODE).await;
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+    let cfg = config();
+    let err = Preflight::new(&rpc, &cfg)
+        .run_withdraw_vault(VAULT, GATEWAY, SIGNER, U256::from(100u64))
+        .await
+        .unwrap_err();
+    match err {
+        RmpcError::ErrImplementationNotApproved { reason, .. } => {
+            assert!(reason.contains("not set"), "{reason}")
+        }
+        other => panic!("expected ErrImplementationNotApproved, got {other:?}"),
+    }
 }

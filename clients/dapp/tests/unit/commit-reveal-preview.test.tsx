@@ -73,6 +73,7 @@ vi.mock("wagmi", async (importOriginal) => {
       if (functionName === "hasRole") return { data: false };
       if (functionName === "agentOwner") return { data: ZERO };
       if (functionName === "agentConsentNonce") return { data: 0n };
+      if (functionName === "implementationVersion") return { data: "1" };
       return { data: 1000n };
     },
     useBalance: () => ({ data: { value: 1000n } }),
@@ -154,6 +155,7 @@ function consentForDepositor(owner: `0x${string}` = DEPOSITOR) {
     nonce: CONSENT_NONCE,
     chainId: CHAIN_ID,
     gateway: GATEWAY,
+    version: "1",
   });
 }
 

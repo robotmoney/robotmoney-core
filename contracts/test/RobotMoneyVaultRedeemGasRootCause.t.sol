@@ -179,8 +179,21 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
 
     /// @dev Replace the vault's runtime code with the same code, gas floors zeroed as asked.
     ///      Storage and immutables are unchanged (the floors are constants, not storage).
+    ///      ADR-0014: `vault` is an ERC1967Proxy, so the code patched is the implementation's.
+    ///      The adapter floor reaches the linked `VaultAdapterOps` as an argument pushed by the
+    ///      vault, so zeroing the vault's constant zeroes the floor the library checks.
     function _zeroFloors(bool entry, bool midPath) internal {
-        bytes memory code = address(vault).code;
+        address implementation = address(
+            uint160(
+                uint256(
+                    vm.load(
+                        address(vault),
+                        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+                    )
+                )
+            )
+        );
+        bytes memory code = implementation.code;
         if (entry) {
             assertGt(BytecodePatch.patchPush3(code, ENTRY_FLOOR, 0), 0, "entry floor not found");
         }
@@ -188,7 +201,7 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
             assertGt(BytecodePatch.patchPush3(code, ADAPTER_FLOOR, 0), 0, "adapter floor not found");
             assertGt(BytecodePatch.patchPush3(code, TAIL_FLOOR, 0), 0, "tail floor not found");
         }
-        vm.etch(address(vault), code);
+        vm.etch(implementation, code);
     }
 
     function _laterBlock() internal {

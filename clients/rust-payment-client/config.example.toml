@@ -45,7 +45,25 @@ vault_address = "0xYOUR_VAULT_ADDRESS"
 
 # keccak256(eth_getCode(gateway_address)) pinned at deploy time (0x-hex).
 # Obtain with: cast keccak $(cast code $GATEWAY_ADDRESS)
+# Behind an ERC-1967 proxy (ADR-0014) this is the proxy's code, which an
+# upgrade does not change: gateway.json's `gateway_runtime_hash`.
 gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
+
+# ── Implementation pins (ADR-0014, issue 1810) ────────────────────────────────
+# Every Robot Money core contract is deployed behind an ERC-1967 proxy. The
+# address and runtime-hash pins above do not pin the logic behind a proxy, so
+# every write reads the live implementation and refuses with
+# `ErrImplementationNotApproved` unless its code hash is listed here. Leave a
+# key out only when no contract it covers is a proxy.
+#
+# The gateway's implementation: gateway.json's `gateway_implementation_runtime_hash`,
+# or: cast keccak $(cast code $(cast implementation $GATEWAY_ADDRESS))
+gateway_implementation_hashes = ["0xYOUR_GATEWAY_IMPLEMENTATION_HASH"]
+#
+# The vault(s) a deposit lands in or a withdraw redeems from, every router leg,
+# and the router itself. For each: cast keccak $(cast code $(cast implementation $ADDR))
+# List the next reviewed implementation before its timelock upgrade executes.
+proxy_implementation_hashes = ["0xYOUR_VAULT_IMPLEMENTATION_HASH"]
 
 # ── Optional contract addresses ───────────────────────────────────────────────
 

@@ -5,9 +5,9 @@ description: "Foundry deploy script for the InvestmentCommitteePolicy contract."
 
 # DeployInvestmentCommitteePolicy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
 
 **Title:** DeployInvestmentCommitteePolicy
 
@@ -41,6 +41,11 @@ RECEIPT_ADMIN_ADDRESS — sole holder of ADMIN_ROLE on the receipt
 contract (the deployer until DeployTimelock hands it over).
 DEPLOYMENT_OUT   — path for the output JSON
 EXPECTED_CHAIN_ID — mandatory and equal to 8453 on Base mainnet
+UPGRADE_AUTHORITY — the deployment's timelock, deployed first (ADR-0014 §4)
+UPGRADE_MODE     — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
+
+Both contracts are proxies (ADR-0014): each an implementation and an ERC1967Proxy that
+runs `initialize` in its constructor.
 
 ## Constants
 
@@ -230,11 +235,15 @@ Result struct returned to in-process callers (e.g. forge tests).
 
 ```solidity
 struct Deployed {
+        /// The proxies.
         InvestmentCommitteePolicy policy;
         ConsensusRecommendationReceipt receipts;
         address admin;
         address receiptAdmin;
         address gateway;
+        /// The implementations behind the two proxies (ADR-0014).
+        address policyImplementation;
+        address receiptsImplementation;
     }
 ```
 
@@ -247,4 +256,6 @@ struct Deployed {
 | admin | `address` |  |
 | receiptAdmin | `address` |  |
 | gateway | `address` |  |
+| policyImplementation | `address` |  |
+| receiptsImplementation | `address` |  |
 

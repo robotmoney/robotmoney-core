@@ -9,6 +9,10 @@ optimizer_runs = 100
 evm_version = "cancun"
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    # ADR-0014: the upgradeable twins (ERC20/ERC4626/AccessControl/ReentrancyGuard, UUPS,
+    # Initializable) at the same v5.0.2 release. Its own `@openzeppelin/contracts` imports
+    # resolve to the pinned lib above, so both packages share one copy of every interface.
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
     "forge-std/=lib/forge-std/src/",
     "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
 ]

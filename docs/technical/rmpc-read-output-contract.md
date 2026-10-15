@@ -120,6 +120,19 @@ DR-7). Two refusals that are not reason codes were added with them:
 QA plan D2) and `ErrMinAssetsPerLegRequired` (`withdraw-router` without a
 floor).
 
+QA plan P3 (issue 1810) added `ErrImplementationNotApproved`. Every write
+preflight and `rmpc agent-consent` read the gateway's ERC-1967
+implementation slot and that implementation's code at one block. They refuse
+unless its code hash is in the config's `gateway_implementation_hashes`. A
+proxy keeps its own code hash across an upgrade, so `ErrCodeHashMismatch`
+cannot see a new implementation. A failed read of either is a refusal, never
+"not a proxy". `rmpc get-gateway` adds `implementation`,
+`implementation_code_hash`, `configured_implementation_hashes`,
+`implementation_approved`, `implementation_version`, `upgrade_authority` and
+`upgrades_frozen` to its `data`, all read at the envelope's block; a direct
+gateway reports `implementation: null`. The `checks` object of every write
+gains `gateway_implementation_approved` and `gateway_implementation`.
+
 ### 5.0 Where the simulated names come from
 
 `WriteSession::submit` runs the exact calldata as an `eth_call` from the agent

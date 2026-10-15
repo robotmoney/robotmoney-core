@@ -13,6 +13,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Registry and router only read `asset()` from a vault that is just a weight leg.
 contract RedeployLegVault is ERC20 {
@@ -56,7 +57,7 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture {
         vm.etch(timelock, hex"00");
         script = new RedeployProtocolAssetVault();
         launch = new DeployProtocolAssetVault();
-        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), routerAdmin);
 
         json = _etchConfigPools("config/protocol-assets.json", "assets");
         BasketVaultDeployBase.Params memory p = _params();

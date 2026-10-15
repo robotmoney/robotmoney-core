@@ -20,6 +20,8 @@ import {UniswapV4PriceRecorder} from "../adapters/UniswapV4PriceRecorder.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @notice rmAGENT as deployed: AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder over the mock PoolManager,
 ///         `maxSlippageBps` 500 and the D10 guard of 400 bps. A keeper records every 300 s. The mock quotes at the live tick
@@ -67,7 +69,7 @@ contract RecorderSellAnchorTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        vault = new AgentTokenVault(
+        vault = Proxied.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("swapRouter02")),
             1_000_000e6,
@@ -84,7 +86,9 @@ contract RecorderSellAnchorTest is Test {
 
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        vault.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         vault.setMaxSlippageBps(500);
         vault.setNavDeviationGuardBps(GUARD_BPS);
         vm.stopPrank();

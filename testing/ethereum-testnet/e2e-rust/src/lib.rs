@@ -144,6 +144,14 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         self.devnet.gateway_runtime_hash()
     }
+    /// The gateway implementation's code hash rmpc pins (QA plan P3); `None` for a direct gateway.
+    pub fn gateway_implementation_hash(&self) -> Option<&str> {
+        self.devnet.gateway_implementation_hash()
+    }
+    /// The vault and router implementation code hashes rmpc pins (issue 1810).
+    pub fn proxy_implementation_hashes(&self) -> &[String] {
+        self.devnet.proxy_implementation_hashes()
+    }
     pub fn tempdir(&self) -> &Path {
         self.devnet.tempdir()
     }
@@ -338,7 +346,7 @@ gateway_address       = "{gateway}"
 usdc_address          = "{usdc}"
 vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
-max_fee_per_gas_cap   = 100000000000
+{implementation_pin}{proxy_pin}max_fee_per_gas_cap   = 100000000000
 gateway_from_block    = {from_block}
 
 [signer]
@@ -352,6 +360,25 @@ keystore_path           = "{keystore}"
         usdc = devnet.usdc_hex(),
         vault = devnet.vault_hex(),
         hash = devnet.gateway_runtime_hash(),
+        // QA plan P3: rmpc signs against a proxied gateway only with its implementation pinned.
+        implementation_pin = devnet
+            .gateway_implementation_hash()
+            .map(|h| format!("gateway_implementation_hashes = [\"{h}\"]\n"))
+            .unwrap_or_default(),
+        // Issue 1810: the vaults and the router are proxies too; rmpc pins their logic as well.
+        proxy_pin = if devnet.proxy_implementation_hashes().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "proxy_implementation_hashes = [{}]\n",
+                devnet
+                    .proxy_implementation_hashes()
+                    .iter()
+                    .map(|h| format!("\"{h}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
         keystore = keystore_path.display(),
     );
     std::fs::write(&config_path, toml)?;

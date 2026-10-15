@@ -17,6 +17,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev ERC-4626-shaped stub whose `redeem` burns `redeemCost` gas (a stand-in for the adapter
 ///      fan-out) and records `gasleft()` at entry. 1:1 shares to assets.
@@ -110,14 +111,14 @@ contract RedeemGasGuardsTest is Test {
         vault.setRedeemCost(STUB_COST);
         usdc.mint(address(vault), 1_000_000 * ONE);
 
-        registry = new VaultRegistry(admin);
+        registry = Proxied.vaultRegistry(admin);
         vm.prank(admin);
         registry.registerVault(
             address(vault),
             VaultRegistry.VaultMetadata({name: "Stub", asset: address(usdc), registeredAt: 0})
         );
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
-        gateway = new RobotMoneyGateway(
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        gateway = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(router)
         );
 

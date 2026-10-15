@@ -1,5 +1,7 @@
 // Stage 12 verify: the one verifier (src/verify). The CLI builds the verifier's sheet from the frozen sheet, reads the expected
 // asset config from the core config file (never from the chain it is checking) and fails the run on any failed check.
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
@@ -13,7 +15,8 @@ import { LENDING_ADAPTERS, RECORDER_STAGE, VAULT_RECORDER_FIELD, VENUE_V4, adapt
 import { ROUTER_STAGE_ELIGIBLE, STAGE13_UNPAUSE_VAULTS, expectPausedAfter, isSeeded, routerEligibleAtDeploy, vaultRule } from "./vault-rules.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { expectedMaxSlippageBps, loadConfigAssets } from "./asset-config.ts";
-import { manifestBase } from "./stage-table.ts";
+import { manifestBase, tableProxies } from "./stage-table.ts";
+import { immutabilityOf, layoutIdFieldOf, type ProxyRecord } from "./proxies.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
 import { verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
@@ -117,7 +120,64 @@ export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "ch
     timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), deploymentKind: s.kind, vaults,
     // issue 1698: no governance block. The weight setter has no voting surface; the verifier reads its receipt register and router wiring instead.
     defaultWeights: ([...ROUTER_STAGE_ELIGIBLE, ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
+    // issue 1809: the release mode every proxy must carry (ADR-0014 §5)
+    upgradeMode: s.upgradeMode,
   };
+}
+
+/**
+ * Issue 1809: the implementation each proxy names since the last EXECUTED `govern --row upgrade-proxy` round, from the run manifest's `proxy_upgrades` (later entries
+ * win), with the forge out/ the round compared it with. A record only picks which implementation and build the verifier expects; the chain is read for both.
+ */
+export function upgradesOf(manifest: Pick<RunManifest, "proxy_upgrades">): NonNullable<VerifyOptions["upgrades"]> {
+  const last = new Map<string, { proxy: string; implementation: `0x${string}`; buildDir?: string }>();
+  for (const e of (Array.isArray(manifest.proxy_upgrades) ? manifest.proxy_upgrades : []) as { proxy?: unknown; implementation?: unknown; build_dir?: unknown; execute_tx?: unknown }[]) {
+    if (typeof e?.proxy !== "string" || typeof e.implementation !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(e.implementation) || typeof e.execute_tx !== "string") continue;
+    last.set(e.proxy, { proxy: e.proxy, implementation: e.implementation as `0x${string}`, ...(typeof e.build_dir === "string" ? { buildDir: e.build_dir } : {}) });
+  }
+  return [...last.values()];
+}
+
+/** Issue 1809: the proxies an EXECUTED `govern --row freeze-proxy` round froze, from the run manifest's `proxy_freezes`. */
+export function freezesOf(manifest: Pick<RunManifest, "proxy_freezes">): string[] {
+  const out = new Set<string>();
+  for (const e of (Array.isArray(manifest.proxy_freezes) ? manifest.proxy_freezes : []) as { proxies?: unknown; execute_tx?: unknown }[]) {
+    if (typeof e?.execute_tx !== "string" || !Array.isArray(e.proxies)) continue;
+    for (const p of e.proxies as { name?: unknown }[]) if (typeof p?.name === "string") out.add(p.name);
+  }
+  return [...out];
+}
+
+/** ADR-0014 §8 (issue 1809): the storage-layout identifier of a proxied contract, 0x + the sha256 of its normalized snapshot in the checkout. Undefined: no snapshot. */
+export function layoutHashOf(coreDir: string, artifact: string): `0x${string}` | undefined {
+  const p = join(coreDir, "contracts", "test", "fixtures", "storage-layout", `${artifact}.json`);
+  return existsSync(p) ? `0x${createHash("sha256").update(readFileSync(p)).digest("hex")}` : undefined;
+}
+
+/**
+ * The verify stage's evidence of the proxies (issue 1809): what the verifier read, each with the storage-layout identifier of its implementation (ADR-0014 §8).
+ * `layout_hash` is the identifier the proxy's stage wrote into its deploy manifest (`<field>_layout_id`) when there is one and no executed upgrade replaced that
+ * implementation since; else the checkout's snapshot. `checkout_layout_hash` is the checkout's snapshot either way. `layoutManifest` reads one stage manifest field
+ * (undefined when absent); `upgraded` names the proxies an executed upgrade-proxy round moved.
+ */
+export function proxyEvidence(
+  ctx: Pick<RunContext, "coreDir">,
+  records: readonly ProxyRecord[],
+  layoutManifest: (stage: string, field: string) => string | undefined = () => undefined,
+  upgraded: ReadonlySet<string> = new Set(),
+): ProxyRecord[] {
+  const byName = new Map(tableProxies(getStageTable()).map((p) => [p.name, p]));
+  return records.map((r) => {
+    const p = byName.get(r.name);
+    const checkout = p ? layoutHashOf(ctx.coreDir, p.artifact) : undefined;
+    const recorded = p && !upgraded.has(r.name) ? layoutManifest(p.stage, layoutIdFieldOf(p)) : undefined;
+    const deployId = recorded !== undefined && /^0x[0-9a-fA-F]{64}$/.test(recorded) && !/^0x0{64}$/.test(recorded) ? (recorded.toLowerCase() as `0x${string}`) : undefined;
+    const out: ProxyRecord = { ...r };
+    if (deployId) Object.assign(out, { layout_hash: deployId, layout_source: "deploy-manifest" });
+    else if (checkout) Object.assign(out, { layout_hash: checkout, layout_source: "checkout" });
+    if (checkout) out.checkout_layout_hash = checkout;
+    return out;
+  });
 }
 
 /** The deployer nonce recorded at the end of the last deployer stage, only when govern has started (its gas moves the live nonce). */
@@ -208,6 +268,9 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     handoverBlock: handoverBlock(manifest),
     controlProof: controlProofOf(manifest),
     appliedReceipt: appliedReceiptOf(manifest),
+    // issue 1809: which implementation each upgraded proxy names and which proxies a freeze row froze; the verifier reads the slots and upgradesFrozen() from the chain
+    upgrades: upgradesOf(manifest),
+    freezes: freezesOf(manifest),
     // QA plan v1 E1 (DT-2): artifactsDir is the build of this checkout. After a round at another sha that is the redeploy sha (cli.ts accepts it with --prior-out only):
     // the replacing vault is compared with it, every contract the original deployment created with priorArtifactsDir (--prior-out, a build of the original sha).
     ...(governedRedeploys.length > 0 ? {
@@ -232,6 +295,24 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     report.checks.push(...s.checks);
     report.ok = report.ok && s.ok;
   }
+  // issue 1809: the proxies as the verifier read them (proxy and implementation addresses, code hashes, admin and beacon slots, authority, mode, frozen, layout identifier)
+  const layoutManifest = (stage: string, field: string): string | undefined => { try { return readManifestField(ctx, manifestRef(stage, field)); } catch { return undefined; } };
+  // With --prior-out the checkout is not the build of the original contracts, so its snapshot hash is not recorded next to their deploy identifiers.
+  const proxies = report.proxies
+    ? proxyEvidence(ctx, report.proxies, layoutManifest, new Set(upgradesOf(manifest).map((u) => u.proxy))).map((p): ProxyRecord => {
+      if (!ctx.priorArtifactsDir) return p;
+      const { checkout_layout_hash: _skipped, ...rest } = p;
+      return rest;
+    })
+    : undefined;
+  if (proxies) ctx.log.log("info", "verify.proxies", { proxies });
+  // ADR-0014 §8: the layout identifier the deployment recorded must be the layout of the checkout this verify compared its code with (the CI gate pins the
+  // checkout's). Only a mismatch adds a label (failed), like the mainnet depositsPaused disagreements above, so a healthy run keeps the shared label set.
+  // A run with --prior-out (a redeploy at another sha) compares the original contracts with the original build, not this checkout: no checkout hash, no label.
+  for (const p of (proxies ?? []).filter((x) => x.layout_source === "deploy-manifest" && x.checkout_layout_hash !== undefined && x.layout_hash !== x.checkout_layout_hash)) {
+    report.checks.push({ label: `proxy[${p.name}]: deploy layout identifier equals the checkout's layout snapshot`, ok: false, detail: `the ${p.name} stage recorded layout ${p.layout_hash}, the checkout's snapshot hashes to ${p.checkout_layout_hash}: verify from the release's own checkout, or record the upgrade that moved it` });
+    report.ok = false;
+  }
   // Issue 1727: the kind and the delay go to the log (stderr), never to stdout: stdout is the label contract core's harness parses and the Twin and mainnet label sets must compare equal.
   ctx.log.log("info", "verify.deployment_kind", { deployment_kind: ctx.sheet.kind, label: kindLabel(ctx.sheet.kind, expectedTimelockDelay(manifest, ctx.sheet)) });
   // QA plan v1 C3 (CS-6): the gating of the router's weight setter goes to the log and to the stage record below, so the run says whether every weight change
@@ -248,7 +329,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   // QA plan v1 E1: the builds the code hashes were compared with go into the evidence: the stage record names --prior-out and the sha of its checkout, and a verify that
   // passed writes onto each governed redeploy entry the sha it ran at and that prior-out sha (evidence-check requires it to be the deployment's core_sha).
   const priorOut = ctx.priorArtifactsDir ? { prior_out: { dir: ctx.priorArtifactsDir, sha: ctx.priorArtifactsSha ?? null }, core_sha: ctx.coreSha } : {};
-  manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length, ...(gating ? { weightSetterGating: gating } : {}), ...priorOut };
+  // ADR-0014 §5: core logic is immutable only when every proxy reads frozen; governed parameters and upstream contracts stay mutable regardless. Recorded, never claimed here.
+  const immutability = proxies ? immutabilityOf(proxies, tableProxies(getStageTable()).map((p) => p.name)) : undefined;
+  if (immutability) ctx.log.log("info", "verify.immutability", { core_logic_immutable: immutability.core_logic_immutable, upgradeable: immutability.upgradeable });
+  manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length, ...(gating ? { weightSetterGating: gating } : {}), ...(proxies ? { proxies } : {}), ...(immutability ? { immutability } : {}), ...priorOut };
   if (report.ok && ctx.priorArtifactsSha) for (const r of governedRedeploys) Object.assign(r, { verified_at_sha: ctx.coreSha, prior_out_sha: ctx.priorArtifactsSha });
   saveRunManifest(ctx.evidenceDir, manifest);
   if (!report.ok) throw new PublishError("VERIFY", `the verifier reports ${failed.length} failure(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { failed: failed.map((c) => c.label) });

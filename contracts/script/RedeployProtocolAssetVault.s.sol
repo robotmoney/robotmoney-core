@@ -20,6 +20,7 @@ pragma solidity ^0.8.24;
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {DeployProtocolAssetVault} from "./DeployProtocolAssetVault.s.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 
 /// @dev Read side of a vault's registry link. The link itself is set by the timelock in the govern batch, never here.
 interface IVaultRegistryView {
@@ -34,6 +35,8 @@ interface IVaultRegistryView {
 ///           NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
 ///           TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
 ///           EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
+///           UPGRADE_MODE       `upgradeable` or `frozen-at-deploy` (ADR-0014 §5). The new vault's upgrade authority is
+///                              TIMELOCK_ADDRESS itself (ADR-0014 §4), so no separate UPGRADE_AUTHORITY is read.
 ///         REGISTRY_ADDRESS is read and checked for code only: the vault is left unlinked for the govern batch.
 contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -46,6 +49,9 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address timelock = _envAddressRequired("TIMELOCK_ADDRESS");
         address emergency = _envAddressRequired("EMERGENCY_ADDRESS");
         Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "assets");
+        _upgrade = UpgradeConfig({
+            authority: timelock, mode: parseUpgradeMode(_envStringRequired("UPGRADE_MODE"))
+        });
 
         vm.startBroadcast();
         d = _redeploy(p, cfg, timelock, emergency);
@@ -63,6 +69,8 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address emergency
     ) external returns (Deployed memory d) {
         Cfg memory cfg = _parseCfg(json, "assets");
+        _upgrade =
+            UpgradeConfig({authority: timelock, mode: GovernedUpgrade.UpgradeMode.Upgradeable});
         vm.startPrank(p.admin);
         d = _redeploy(p, cfg, timelock, emergency);
         vm.stopPrank();

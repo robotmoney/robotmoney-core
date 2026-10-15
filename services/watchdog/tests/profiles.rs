@@ -111,10 +111,10 @@ fn the_acceptance_profile_header_declares_itself_as_the_acceptance_profile() {
 }
 
 #[test]
-fn an_enabled_quorum_check_without_a_router_address_is_refused_at_startup() {
+fn an_enabled_weight_setter_check_without_its_addresses_is_refused_at_startup() {
     // The acceptance profile ships `[governance] enabled = false` with the
-    // address left for the Deploy phase. Flipping `enabled` without supplying
-    // the address must fail loudly rather than run a blind check.
+    // addresses left for the Deploy phase. Flipping `enabled` without supplying
+    // them must fail loudly rather than run a blind check (issue 1698).
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("config.staging-acceptance.toml"),
     )
@@ -123,7 +123,7 @@ fn an_enabled_quorum_check_without_a_router_address_is_refused_at_startup() {
     let cfg: Config = toml::from_str(&flipped).expect("parses");
     let err = cfg
         .validate()
-        .expect_err("an enabled quorum check with no router address must be refused");
+        .expect_err("an enabled weight-setter check with no router address must be refused");
     assert!(
         format!("{err}").contains("router_address"),
         "unexpected error: {err}"

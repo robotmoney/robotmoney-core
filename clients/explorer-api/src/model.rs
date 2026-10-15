@@ -66,6 +66,57 @@ pub struct AdminEventsResponse {
     pub freshness: Freshness,
 }
 
+/// One proxy `Upgraded` or `UpgradesFrozen` event (`proxy_upgrade_events`, migration 0024,
+/// QA plan P3).
+#[derive(Debug, Serialize)]
+pub struct ProxyUpgradeEventEntry {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: String,
+    /// The proxy that emitted it.
+    pub contract: String,
+    /// `upgraded` or `frozen`.
+    pub kind: String,
+    /// The implementation the proxy runs from this event on, or the one it froze on.
+    pub implementation: String,
+    /// `frozen` only: the implementation's runtime code hash.
+    pub code_hash: Option<String>,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// The indexed upgrade state of one proxy, folded from its events.
+#[derive(Debug, Serialize)]
+pub struct ProxyUpgradeState {
+    pub chain_id: i64,
+    /// The proxy address.
+    pub contract: String,
+    /// `contracts.kind` when the proxy is a configured contract (`gateway`, `vault`, ...); null for a
+    /// registry-discovered vault.
+    pub contract_kind: Option<String>,
+    /// The implementation of its newest `Upgraded` event.
+    pub implementation: Option<String>,
+    /// The block of that event.
+    pub upgraded_block: Option<i64>,
+    /// True once any `UpgradesFrozen` event is indexed. A freeze is one-way.
+    pub upgrades_frozen: bool,
+    /// The block of the freeze; null while upgradeable.
+    pub frozen_block: Option<i64>,
+    /// The runtime code hash the freeze named; null while upgradeable.
+    pub frozen_code_hash: Option<String>,
+}
+
+/// Response for GET /v1/upgrades.
+#[derive(Debug, Serialize)]
+pub struct ProxyUpgradesResponse {
+    /// One entry per proxy with an indexed upgrade event, ordered by address.
+    pub contracts: Vec<ProxyUpgradeState>,
+    /// The events themselves, newest first, at most 500.
+    pub events: Vec<ProxyUpgradeEventEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Contract {
     pub chain_id: i64,

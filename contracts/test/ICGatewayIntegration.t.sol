@@ -13,6 +13,7 @@ import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommi
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title ICGatewayIntegration
 /// @notice Integration tests verifying the full on-chain path:
@@ -56,13 +57,13 @@ contract ICGatewayIntegration is Test {
 
         // 2. Deploy gateway (admin holds ADMIN_ROLE + DEFAULT_ADMIN_ROLE;
         //    pauser holds DEPOSIT_PAUSER_ROLE; no router).
-        gateway = new RobotMoneyGateway(
+        gateway = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
         // 3. Deploy IC policy pointing at the gateway as the sole permitted caller
         //    for `submitVote`. The IC admin is set to `admin`.
-        ic = new InvestmentCommitteePolicy(admin, address(gateway));
+        ic = Proxied.investmentCommitteePolicy(admin, address(gateway));
 
         // 4. Grant IC's ADMIN_ROLE to the gateway so the gateway can forward
         //    `registerAgent` calls to the IC contract on behalf of the admin.
@@ -262,7 +263,7 @@ contract ICGatewayIntegration is Test {
     ///      with no `setICPolicy` call has `icPolicy == address(0)`.
     function test_committeeRegister_revertsWhenICPolicyNotSet() public {
         // Fresh gateway — icPolicy is address(0).
-        RobotMoneyGateway gw2 = new RobotMoneyGateway(
+        RobotMoneyGateway gw2 = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
@@ -275,7 +276,7 @@ contract ICGatewayIntegration is Test {
     ///      the gateway's `icPolicy` slot is empty.
     function test_committeeVoteSubmit_revertsWhenICPolicyNotSet() public {
         // Fresh gateway — icPolicy is address(0).
-        RobotMoneyGateway gw2 = new RobotMoneyGateway(
+        RobotMoneyGateway gw2 = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 

@@ -2,6 +2,7 @@
 // Spec: the one-deployment-scheme plan, "Stage 12 verifier" (devops issue 53); issues devops 57 (S8) and 61.
 
 import type { StageTable } from "../stage-table.ts";
+import type { ProxyRecord } from "../proxies.ts";
 
 export type Address = `0x${string}`;
 export type Hex = `0x${string}`;
@@ -17,6 +18,11 @@ export interface Check {
 export interface VerifyReport {
   ok: boolean;
   checks: Check[];
+  /**
+   * Issue 1809 (ADR-0014): every proxy of the stage table as the chain read it (proxy, implementation, code hashes, ERC-1967 admin and beacon slots, authority, mode,
+   * frozen). The verify stage record keeps it as evidence. Absent when the table lists no proxies or the run stopped before they were read.
+   */
+  proxies?: ProxyRecord[];
   /** QA plan v1 C3 (CS-6): what gates the router's weight setter, as the chain reads it. Absent when the run stopped before the router was read. */
   weightSetter?: WeightSetterGating;
 }
@@ -116,6 +122,11 @@ export interface VerifySheet {
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];
+  /**
+   * Issue 1809 (ADR-0014 §5): the release mode the sheet states (UPGRADE_MODE). Every proxy's manifest must name it and upgradesFrozen() must read true exactly when
+   * it is frozen-at-deploy or a freeze row froze the proxy. Absent: the sheet states none, and every proxy's mode label fails (an undeclared mode is refused).
+   */
+  upgradeMode?: "upgradeable" | "frozen-at-deploy";
 }
 
 export interface VerifyOptions {
@@ -176,6 +187,14 @@ export interface VerifyOptions {
   priorArtifactsDir?: string;
   /** Issue 1796: the deployer transactions the redeploys sent (the sum of their deploy counts). They are outside every frozen stage count and move the deployer nonce. */
   redeployDeployerTxs?: number;
+  /**
+   * Issue 1809: per proxy (the stage table's proxy name), the implementation the last EXECUTED `govern --row upgrade-proxy` round installed, from the run manifest's
+   * `proxy_upgrades`, and the forge out/ that round compared it with (`build_dir`). The proxy's implementation slot must then name it and its code is compared with that
+   * build (absent or missing on disk: `artifactsDir`). A record only picks WHICH implementation and build: the slot and the code are read from the chain.
+   */
+  upgrades?: { proxy: string; implementation: Address; buildDir?: string }[];
+  /** Issue 1809: the proxies an executed `govern --row freeze-proxy` round froze (the run manifest's `proxy_freezes`): upgradesFrozen() must read true on each. */
+  freezes?: string[];
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */

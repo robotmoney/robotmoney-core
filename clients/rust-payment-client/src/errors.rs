@@ -31,6 +31,27 @@ pub enum RmpcError {
     #[error("ErrChainIdMismatch: RPC eth_chainId does not match configured chain_id")]
     ErrChainIdMismatch,
 
+    /// A proxy the write reaches runs an implementation the operator did not
+    /// approve. For the gateway (`proxy` = `"gateway"`): its runtime code hash
+    /// is not in `gateway_implementation_hashes`, the key is missing, or the
+    /// implementation has no code; a config that pins implementation hashes
+    /// for a gateway that is not a proxy is refused the same way. For a vault
+    /// or the router the write reaches through the gateway (`proxy` names it,
+    /// e.g. `"vault 0x…"`): the same rules against `proxy_implementation_hashes`.
+    /// A proxy's own code hash is unchanged across an upgrade, so the address
+    /// and runtime-hash pins alone cannot catch this. Nothing is signed
+    /// (ADR-0014 §10, QA plan P3).
+    #[error(
+        "ErrImplementationNotApproved: {proxy} implementation {implementation} \
+         (code hash {code_hash}) is not approved: {reason}"
+    )]
+    ErrImplementationNotApproved {
+        proxy: String,
+        implementation: String,
+        code_hash: String,
+        reason: String,
+    },
+
     /// Deposits are paused: the gateway or its vault reports
     /// `depositsPaused() == true`. Deposit-only refusal: a deposit pause
     /// never blocks a withdrawal, so no withdraw path raises it (core 1494).
@@ -235,6 +256,7 @@ impl RmpcError {
             RmpcError::ErrConcurrentInvocation => "ErrConcurrentInvocation",
             RmpcError::ErrCodeHashMismatch => "ErrCodeHashMismatch",
             RmpcError::ErrChainIdMismatch => "ErrChainIdMismatch",
+            RmpcError::ErrImplementationNotApproved { .. } => "ErrImplementationNotApproved",
             RmpcError::ErrDepositsPaused => "ErrDepositsPaused",
             RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
             RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
@@ -286,6 +308,12 @@ mod tests {
             RmpcError::ErrConcurrentInvocation,
             RmpcError::ErrCodeHashMismatch,
             RmpcError::ErrChainIdMismatch,
+            RmpcError::ErrImplementationNotApproved {
+                proxy: "gateway".into(),
+                implementation: "0x01".into(),
+                code_hash: "0x02".into(),
+                reason: "not in gateway_implementation_hashes".into(),
+            },
             RmpcError::ErrDepositsPaused,
             RmpcError::ErrAllowanceInsufficient,
             RmpcError::ErrBalanceInsufficient,

@@ -7,11 +7,13 @@
 // `UniswapV3SwapAdapter`. There is no chain-id branch and no devnet-only input.
 pragma solidity ^0.8.24;
 
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
@@ -19,6 +21,7 @@ import {TickMath} from "../lib/TickMath.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 import {IUniswapV4PriceRecorder} from "../interfaces/IUniswapV4PriceRecorder.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 
 /// @dev Shared flow: validate sheet inputs, deploy the vault, check each configured pool,
 ///      add each configured asset, pause, register, write the manifest.
@@ -27,7 +30,11 @@ import {IUniswapV4PriceRecorder} from "../interfaces/IUniswapV4PriceRecorder.sol
 ///      deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
 ///      EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
 ///      deployer (core 1487). This script never grants a role to anyone else.
-abstract contract BasketVaultDeployBase is ExpectedChainGuard {
+///
+///      Proxy (ADR-0014). The vault is the kind's implementation behind an ERC1967Proxy whose
+///      constructor runs `BasketVault.initialize`, naming `UPGRADE_AUTHORITY` (the timelock deployed
+///      first) and `UPGRADE_MODE`. The broadcast run reads both, required on every chain.
+abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
     using stdJson for string;
 
     /// @notice Sheet inputs for one deploy.
@@ -81,7 +88,10 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
     /// @notice Result returned to in-process callers (forge tests, stage driver).
     struct Deployed {
+        /// @dev The proxy.
         address vault;
+        /// @dev The implementation behind `vault` (ADR-0014).
+        address implementation;
         address registry;
         address adapter;
         /// @dev The V4 swap adapter, zero when the config lists no V4 asset (issue 1676).
@@ -95,17 +105,18 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
     // ─── Per-vault hooks ──────────────────────────────────────────────────────
 
-    /// @dev Construct the concrete vault. `emergencyResponder` is the deployer for this run.
-    function _newVault(Params memory p, address emergencyResponder)
-        internal
-        virtual
-        returns (BasketVault);
+    /// @dev Construct the concrete kind's implementation (ADR-0014: no constructor arguments). The
+    ///      base deploys the proxy over it and runs `BasketVault.initialize`.
+    function _newImplementation() internal virtual returns (BasketVault);
 
     /// @dev Name stored in the registry.
     function _registryName() internal pure virtual returns (string memory);
 
     /// @dev Manifest object key and log label.
     function _label() internal pure virtual returns (string memory);
+
+    /// @dev The kind's build artifact, whose storage-layout snapshot names its layout (ADR-0014 §8).
+    function _layoutArtifact() internal pure virtual returns (string memory);
 
     /// @dev True when assets route through a deployed `UniswapV3SwapAdapter`. False uses the
     ///      built-in SwapRouter02 path (adapter address 0).
@@ -144,6 +155,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         _requireExpectedChain(prefix);
         Params memory p = _readParamsFrom(prefix);
         uint256[] memory eligibilityBps = _readEligibilityBps(prefix);
+        _useEnvUpgradeConfig(prefix);
         Cfg memory cfg = _parseCfg(vm.readFile(configFile), arrayKey);
 
         vm.startBroadcast();
@@ -339,6 +351,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
         BasketVault vault = _newVault(p, p.admin);
         d.vault = address(vault);
+        d.implementation = _implementationOf(address(vault));
         d.registry = p.registry;
         d.tokens = new address[](cfg.assets.length);
 
@@ -368,6 +381,32 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         // Deployed paused. The govern stage unpauses after the checks pass.
         if (!pauseBeforeAssets) vault.pauseDeposits();
         d.paused = true;
+    }
+
+    /// @dev The kind's implementation and its initialized proxy. `emergencyResponder` is the deployer for
+    ///      this run (the timelock stage hands EMERGENCY_ROLE to the emergency key).
+    function _newVault(Params memory p, address emergencyResponder) internal returns (BasketVault) {
+        BasketVault implementation = _newImplementation();
+        return BasketVault(
+            _deployProxy(
+                address(implementation),
+                abi.encodeCall(
+                    BasketVault.initialize,
+                    (
+                        IERC20(p.usdc),
+                        ISwapRouter(p.swapRouter),
+                        p.tvlCap,
+                        p.perDepositCap,
+                        p.exitFeeBps,
+                        p.feeRecipient,
+                        p.admin,
+                        emergencyResponder,
+                        _upgrade.authority,
+                        _upgrade.mode
+                    )
+                )
+            )
+        );
     }
 
     /// @dev QA plan D4 (E6): the ORA-4 guard must sit above the fee of every configured pool. Spot can rest anywhere inside the fee
@@ -423,7 +462,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
                     d.adapter = adapter;
                 }
                 _checkPool(a, p.minPoolLiquidity);
-                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
+                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketAssetConfigGuard.Venue.V3);
             }
             d.tokens[i] = a.token;
         }
@@ -449,7 +488,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         address adapterV4 =
             address(new UniswapV4SwapAdapter(a.poolManager, a.key, p.recorder, p.usdc));
         vault.setAdapterCodeHashAllowed(adapterV4.codehash, true);
-        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketVault.Venue.V4);
+        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketAssetConfigGuard.Venue.V4);
         d.adapterV4 = adapterV4;
         d.recorder = p.recorder;
     }
@@ -557,6 +596,12 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             vm.toString(block.chainid),
             ',"vault":"',
             vm.toString(d.vault),
+            '","vault_implementation":"',
+            vm.toString(d.implementation),
+            '","upgrade_authority":"',
+            vm.toString(_upgrade.authority),
+            '","upgrade_mode":"',
+            upgradeModeName(_upgrade.mode),
             '","registry":"',
             vm.toString(d.registry),
             '","adapter":"',
@@ -571,9 +616,16 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             d.paused ? "true" : "false",
             ',"assets":',
             assetsJson,
-            "}"
+            ',"vault_layout_id":"0x0000000000000000000000000000000000000000000000000000000000000000"}'
         );
         vm.writeFile(outPath, json);
+        // ADR-0014 §8: the implementation's storage-layout identifier. Written into the placeholder
+        // above in a second step: one more argument in the concat is one stack slot too deep.
+        vm.writeJson(
+            string.concat('"', vm.toString(_layoutId(_layoutArtifact())), '"'),
+            outPath,
+            ".vault_layout_id"
+        );
         console2.log(string.concat("Wrote ", _label(), " manifest to"), outPath);
     }
 }

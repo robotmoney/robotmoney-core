@@ -1,0 +1,43 @@
+---
+title: "deployBasketVaultHarness"
+---
+
+# deployBasketVaultHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/BasketVault.t.sol)
+
+<a id="deploybasketvaultharness-ierc20-iswaprouter-address-address"></a>
+
+### deployBasketVaultHarness
+
+<i>
+
+The harness behind its own initialized ERC1967Proxy (ADR-0014): TVL cap 1M USDC,
+per-deposit cap 100k USDC, no exit fee, `admin_` as fee recipient and admin.
+
+</i>
+
+```solidity
+function deployBasketVaultHarness(
+    IERC20 usdc_,
+    ISwapRouter swapRouter_,
+    address admin_,
+    address emergencyResponder_
+) returns (BasketVaultHarness);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| swapRouter_ | `ISwapRouter` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultHarness` |  |
+

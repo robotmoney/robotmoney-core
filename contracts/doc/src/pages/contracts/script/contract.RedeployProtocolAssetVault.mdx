@@ -5,7 +5,7 @@ description: "Single-vault redeploy of rmPROTO into a live deployment (issue 179
 
 # RedeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/script/RedeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/RedeployProtocolAssetVault.s.sol)
 
 **Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
 
@@ -18,6 +18,8 @@ ADMIN_ADDRESS, SWAP_ROUTER, REGISTRY_ADDRESS, TVL_CAP, PER_DEPOSIT_CAP, EXIT_FEE
 NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
 TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
 EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
+UPGRADE_MODE       `upgradeable` or `frozen-at-deploy` (ADR-0014 §5). The new vault's upgrade authority is
+TIMELOCK_ADDRESS itself (ADR-0014 §4), so no separate UPGRADE_AUTHORITY is read.
 REGISTRY_ADDRESS is read and checked for code only: the vault is left unlinked for the govern batch.
 
 ## Constants

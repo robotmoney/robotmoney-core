@@ -13,11 +13,9 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {BasketVaultDeployBase} from "./BasketVaultDeployBase.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
-import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
 /// @title DeployProtocolAssetVault
 /// @notice Production deploy script for `ProtocolAssetVault` (rmPROTO). One path on every chain.
@@ -55,26 +53,18 @@ contract DeployProtocolAssetVault is BasketVaultDeployBase {
         returns (Deployed memory d)
     {
         Cfg memory cfg = _parseCfg(json, "assets");
+        _useInProcessUpgradeConfig();
         vm.startPrank(p.admin);
         d = _deployAll(p, cfg);
         vm.stopPrank();
     }
 
-    function _newVault(Params memory p, address emergencyResponder)
-        internal
-        override
-        returns (BasketVault)
-    {
-        return new ProtocolAssetVault(
-            IERC20(p.usdc),
-            ISwapRouter(p.swapRouter),
-            p.tvlCap,
-            p.perDepositCap,
-            p.exitFeeBps,
-            p.feeRecipient,
-            p.admin,
-            emergencyResponder
-        );
+    function _newImplementation() internal override returns (BasketVault) {
+        return new ProtocolAssetVault();
+    }
+
+    function _layoutArtifact() internal pure override returns (string memory) {
+        return "ProtocolAssetVault";
     }
 
     function _registryName() internal pure override returns (string memory) {

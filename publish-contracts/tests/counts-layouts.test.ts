@@ -25,7 +25,9 @@ import { world, type World } from "./harness.ts";
 
 const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
 const REF_PATH = join(REPO, "deployments", "frozen-counts", `${PREV}.json`);
-const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
+// Issue 1809 added the authority stage after that release: the reference carries it at 0, so its stage set is the table's, and every copy of the anchor is that file.
+const REF = { ...(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>), authority: 0 } as Record<string, number>;
+const writeRef = (to: string): void => writeFileSync(to, JSON.stringify({ ...JSON.parse(readFileSync(REF_PATH, "utf8")), counts: REF }, null, 2));
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
@@ -58,7 +60,7 @@ function coreAtX(): Layout {
   rmSync(join(core, ".git"), { recursive: true, force: true });
   git(core, "init", "-q"); git(core, "config", "commit.gpgsign", "false");
   mkdirSync(join(core, FROZEN), { recursive: true });
-  copyFileSync(REF_PATH, join(core, FROZEN, `${PREV}.json`));
+  writeRef(join(core, FROZEN, `${PREV}.json`));
   git(core, "add", "-A"); git(core, "commit", "-q", "-m", "release sha X");
   return { w, x: git(core, "rev-parse", "HEAD"), core };
 }
@@ -200,7 +202,7 @@ describe("L2 refusals: the counts checkout must be the same repository, a descen
     const other = join(tmp("pc-other-"), "o");
     mkdirSync(join(other, FROZEN), { recursive: true });
     git(other, "init", "-q"); git(other, "config", "commit.gpgsign", "false");
-    copyFileSync(REF_PATH, join(other, FROZEN, `${PREV}.json`));
+    writeRef(join(other, FROZEN, `${PREV}.json`));
     await freeze(l.x, join(other, FROZEN));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "forged");
     await fails(l, join(other, FROZEN), "is not a descendant of");
@@ -208,7 +210,7 @@ describe("L2 refusals: the counts checkout must be the same repository, a descen
   test("a counts dir that is no git work tree at all is refused", async () => {
     const l = coreAtX();
     const dir = join(tmp("pc-plain-"), "frozen");
-    copyFileSync(REF_PATH, (mkdirSync(dir, { recursive: true }), join(dir, `${PREV}.json`)));
+    writeRef((mkdirSync(dir, { recursive: true }), join(dir, `${PREV}.json`)));
     await freeze(l.x, dir);
     await fails(l, dir, "not inside a git work tree");
   });
@@ -279,7 +281,7 @@ describe("the git children are hermetic (issue 1740 review)", () => {
     const other = join(tmp("pc-rep-"), "o");
     mkdirSync(join(other, FROZEN), { recursive: true });
     git(other, "init", "-q"); git(other, "config", "commit.gpgsign", "false");
-    copyFileSync(REF_PATH, join(other, FROZEN, `${PREV}.json`));
+    writeRef(join(other, FROZEN, `${PREV}.json`));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "unrelated root");
     await freeze(l.x, join(other, FROZEN));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "forged data");
@@ -336,7 +338,7 @@ describe("the default counts dir cannot satisfy the layout and the error says wh
     const l = coreAtX();
     const cwdCounts = join(l.w.dir, FROZEN); // the default: deployments/frozen-counts under the working directory
     mkdirSync(cwdCounts, { recursive: true });
-    copyFileSync(REF_PATH, join(cwdCounts, `${PREV}.json`));
+    writeRef(join(cwdCounts, `${PREV}.json`));
     await freeze(l.x, cwdCounts);
     const env = { PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: l.w.statePath, STUB_CONFIG: l.w.cfgPath, GITHUB_TOKEN: "t" };
     const args = ["--chain", "8453", "--rpc", "http://rpc.test:8545", "--sheet", l.w.sheetPath, "--signer", "keystore:/dev/shm/stub/DEPLOYER", "--environment", "base-mainnet", "--core-sha", l.x, "--core-dir", l.core, "--evidence", l.w.evidence, "--stage", "plan"];

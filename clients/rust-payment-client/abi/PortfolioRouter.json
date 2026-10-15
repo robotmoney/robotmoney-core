@@ -1,23 +1,7 @@
 [
   {
     "type": "constructor",
-    "inputs": [
-      {
-        "name": "_usdc",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "_registry",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "_admin",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "inputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -55,6 +39,19 @@
         "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "UPGRADE_INTERFACE_VERSION",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "stateMutability": "view"
@@ -204,6 +201,24 @@
         "name": "expectedNewHolder",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "freezeUpgrades",
+    "inputs": [
+      {
+        "name": "expectedImplementation",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "expectedCodeHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "outputs": [],
@@ -369,6 +384,39 @@
   },
   {
     "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "_usdc",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_registry",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_admin",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "upgradeAuthority",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "mode",
+        "type": "uint8",
+        "internalType": "enum GovernedUpgrade.UpgradeMode"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "isRouterEligible",
     "inputs": [
       {
@@ -481,6 +529,19 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "proxiableUUID",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -715,6 +776,50 @@
   },
   {
     "type": "function",
+    "name": "upgradeAuthority",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "upgradeToAndCall",
+    "inputs": [
+      {
+        "name": "newImplementation",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "upgradesFrozen",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "usdc",
     "inputs": [],
     "outputs": [
@@ -798,6 +903,19 @@
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
       }
     ],
     "anonymous": false
@@ -948,6 +1066,44 @@
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Upgraded",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "UpgradesFrozen",
+    "inputs": [
+      {
+        "name": "proxy",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "implementation",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "codeHash",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
       }
     ],
     "anonymous": false
@@ -1120,8 +1276,40 @@
   },
   {
     "type": "error",
+    "name": "ERC1967InvalidImplementation",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ERC1967NonPayable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "FailedInnerCall",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FreezeTargetMismatch",
+    "inputs": [
+      {
+        "name": "live",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "liveCodeHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
   },
   {
     "type": "error",
@@ -1138,6 +1326,11 @@
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1177,6 +1370,11 @@
   {
     "type": "error",
     "name": "NoWeightsSet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
     "inputs": []
   },
   {
@@ -1293,6 +1491,22 @@
   },
   {
     "type": "error",
+    "name": "UUPSUnauthorizedCallContext",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UUPSUnsupportedProxiableUUID",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "UnauthorizedRedeemer",
     "inputs": [
       {
@@ -1306,6 +1520,38 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "UpgradeAuthorityNotContract",
+    "inputs": [
+      {
+        "name": "authority",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "UpgradeModeUnset",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UpgradeNotAuthorized",
+    "inputs": [
+      {
+        "name": "caller",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "UpgradesAreFrozen",
+    "inputs": []
   },
   {
     "type": "error",

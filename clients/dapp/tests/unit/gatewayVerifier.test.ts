@@ -12,8 +12,10 @@
 import { describe, it, expect } from "vitest";
 import { keccak256 } from "viem";
 import {
+  computeImplementationVerification,
   computeVerificationState,
   describeVerificationCause,
+  parseImplementationPins,
   ZERO_ADDRESS,
   type VerificationCause,
 } from "../../src/lib/gatewayVerifier";
@@ -175,5 +177,79 @@ describe("a vault or router preview refused on the gateway names the cause", () 
       { ...bare, vault },
     );
     expect(!p.ok && p.detail).toBeUndefined();
+  });
+});
+
+// Issue 1810 (ADR-0014 §10): behind a proxy the gateway's own code never changes across an
+// upgrade, so the code-hash pin alone would sign against any implementation. The dapp verifies the
+// live implementation against the build's reviewed pins (VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH).
+describe("computeImplementationVerification", () => {
+  const IMPL = "0x00000000000000000000000000000000000001a1";
+  const SLOT = `0x${"00".repeat(12)}${IMPL.slice(2)}` as `0x${string}`;
+  const ZERO_SLOT = `0x${"00".repeat(32)}` as `0x${string}`;
+  const IMPL_CODE = "0x6001600055" as const;
+  const IMPL_HASH = keccak256(IMPL_CODE);
+  const verified = computeVerificationState(GATEWAY, CODE_HASH, CODE);
+  const causeOf = (r: ReturnType<typeof computeImplementationVerification>) =>
+    r.status === "refused" ? r.cause : `not refused: ${r.status}`;
+
+  it("verifies a proxy whose implementation is a reviewed pin, and carries its hash", () => {
+    const r = computeImplementationVerification(verified, [IMPL_HASH], SLOT, IMPL_CODE);
+    expect(r.status).toBe("verified");
+    expect(r.status === "verified" && r.implementationHash).toBe(IMPL_HASH);
+  });
+
+  it("refuses a swapped implementation while the proxy's own code still matches", () => {
+    const pins = parseImplementationPins(`${WRONG_HASH}`);
+    expect(causeOf(computeImplementationVerification(verified, pins, SLOT, IMPL_CODE))).toBe(
+      "implementation-mismatch",
+    );
+  });
+
+  it("refuses a proxy when the build carries no implementation pin", () => {
+    expect(causeOf(computeImplementationVerification(verified, [], SLOT, IMPL_CODE))).toBe(
+      "implementation-pin-missing",
+    );
+  });
+
+  it("refuses an implementation with no code, and a pin for a gateway that is not a proxy", () => {
+    expect(causeOf(computeImplementationVerification(verified, [IMPL_HASH], SLOT, null))).toBe(
+      "implementation-mismatch",
+    );
+    expect(causeOf(computeImplementationVerification(verified, [IMPL_HASH], ZERO_SLOT, null))).toBe(
+      "implementation-unexpected",
+    );
+  });
+
+  it("keeps a direct gateway verified with no pin, and never overrides an earlier refusal", () => {
+    expect(computeImplementationVerification(verified, [], ZERO_SLOT, null)).toEqual(verified);
+    const refused = computeVerificationState(GATEWAY, WRONG_HASH, CODE);
+    expect(computeImplementationVerification(refused, [IMPL_HASH], SLOT, IMPL_CODE)).toEqual(
+      refused,
+    );
+    expect(computeImplementationVerification(verified, [IMPL_HASH], undefined, undefined)).toEqual({
+      status: "pending",
+    });
+  });
+
+  it("parses a comma-separated pin list and drops malformed and zero entries", () => {
+    expect(
+      parseImplementationPins(
+        ` ${IMPL_HASH.toUpperCase().replace("0X", "0x")} , 0x12, 0x${"00".repeat(32)}`,
+      ),
+    ).toEqual([IMPL_HASH.toLowerCase()]);
+    expect(parseImplementationPins(undefined)).toEqual([]);
+  });
+
+  it("describes the three implementation causes with their own sentences", () => {
+    const s = (
+      [
+        "implementation-pin-missing",
+        "implementation-mismatch",
+        "implementation-unexpected",
+      ] as const
+    ).map(describeVerificationCause);
+    expect(new Set(s).size).toBe(3);
+    expect(s[1]).toMatch(/not a reviewed one/);
   });
 });

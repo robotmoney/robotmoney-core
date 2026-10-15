@@ -418,6 +418,8 @@ pub enum CountTable {
     /// commitments (issue #1247, docs/architecture.md §4.9).
     ConsensusReceipts,
     AdminEvents,
+    /// Migration 0024 — QA plan P3 (core 1810).
+    ProxyUpgradeEvents,
 }
 
 impl CountTable {
@@ -446,6 +448,7 @@ impl CountTable {
             CountTable::RegimeSnapshots => "regime_snapshots",
             CountTable::ConsensusReceipts => "consensus_receipts",
             CountTable::AdminEvents => "admin_events",
+            CountTable::ProxyUpgradeEvents => "proxy_upgrade_events",
         }
     }
 }
@@ -487,6 +490,7 @@ impl TryFrom<&str> for CountTable {
             "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
             "consensus_receipts" => Ok(CountTable::ConsensusReceipts),
             "admin_events" => Ok(CountTable::AdminEvents),
+            "proxy_upgrade_events" => Ok(CountTable::ProxyUpgradeEvents),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -1782,6 +1786,37 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Insert a proxy's `Upgraded` or `UpgradesFrozen` event into `proxy_upgrade_events`
+    /// (migration 0024, QA plan P3). Idempotent on the log position.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_proxy_upgrade_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        contract: [u8; 20],
+        ev: &crate::indexer::ProxyUpgradeEvent,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO proxy_upgrade_events \
+                 (chain_id, block_number, log_index, tx_hash, contract, kind, implementation, code_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&contract[..])
+        .bind(ev.kind)
+        .bind(&ev.implementation.into_array()[..])
+        .bind(ev.code_hash.as_ref().map(|h| &h[..]))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Record the chain head a run saw (`indexer_runs.chain_head_block`, migration 0017).
     pub async fn set_run_chain_head(&self, run_id: i64, head: i64) -> Result<(), DbError> {
         sqlx::query("UPDATE indexer_runs SET chain_head_block = $2 WHERE run_id = $1")
@@ -2942,6 +2977,8 @@ mod count_guard_tests {
             "consensus_receipts",
             // Migration 0017 — issue #1731.
             "admin_events",
+            // Migration 0024 — QA plan P3.
+            "proxy_upgrade_events",
         ];
         for name in known {
             let variant = CountTable::try_from(name)

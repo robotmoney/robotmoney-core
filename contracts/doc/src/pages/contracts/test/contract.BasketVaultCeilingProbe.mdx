@@ -1,0 +1,98 @@
+---
+title: "BasketVaultCeilingProbe"
+---
+
+# BasketVaultCeilingProbe
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/UpgradeCeilings.t.sol)
+
+**Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
+
+<i>
+
+Probe for the `internal` basket ceilings, shared by the three kinds through `BasketVault`.
+
+</i>
+
+## Functions
+
+<a id="maxassets"></a>
+
+### maxAssets
+
+Subclasses declare the maximum number of assets in the basket.
+
+```solidity
+function maxAssets() public pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_kindconfig"></a>
+
+### _kindConfig
+
+<i>
+
+The kind's share-token name and symbol and its starting `maxSlippageBps`.
+
+</i>
+
+```solidity
+function _kindConfig() internal pure override returns (string memory, string memory, uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+| &lt;none&gt; | `string` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxnavdeviationbps"></a>
+
+### maxNavDeviationBps
+
+```solidity
+function maxNavDeviationBps() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="redeembasegas"></a>
+
+### redeemBaseGas
+
+```solidity
+function redeemBaseGas() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="redeemgasperasset"></a>
+
+### redeemGasPerAsset
+
+```solidity
+function redeemGasPerAsset() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

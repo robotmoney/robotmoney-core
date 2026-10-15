@@ -17,6 +17,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title ConsensusReceiptSafeSubmitterTest
 /// @notice The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds
@@ -41,16 +42,17 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
-        ic = new InvestmentCommitteePolicy(admin, address(gateway));
+        ic = Proxied.investmentCommitteePolicy(admin, address(gateway));
         _installSafeSet();
         governingSafe = _newDefaultSafe();
         submitterSafe = _newDefaultSafe(); // a SECOND Safe: same owner keys, a different address and its own nonce
         timelock = _newGovTimelock(governingSafe, 1 hours);
-        receipts =
-            new ConsensusRecommendationReceipt(address(timelock), address(gateway), address(ic));
+        receipts = Proxied.consensusRecommendationReceipt(
+            address(timelock), address(gateway), address(ic)
+        );
 
         bytes32 icAdmin = ic.ADMIN_ROLE();
         vm.prank(admin);

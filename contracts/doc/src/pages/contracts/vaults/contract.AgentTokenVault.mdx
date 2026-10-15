@@ -5,7 +5,7 @@ description: "ERC-4626 USDC vault holding a basket of agent-economy tokens curat
 
 # AgentTokenVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/vaults/AgentTokenVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/vaults/AgentTokenVault.sol)
 
 **Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
 
@@ -101,48 +101,28 @@ uint256 public constant SHORTLIST_REMOVE_DELAY = 24 hours;
 
 ## Functions
 
-<a id="constructor-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+<a id="_kindconfig"></a>
 
-### constructor
+### _kindConfig
+
+<i>
+
+ADR-0014: no constructor arguments. `BasketVault.initialize` runs once on the proxy and
+takes this kind's name, symbol and starting slippage from here.
+
+</i>
 
 ```solidity
-constructor(
-        IERC20 usdc_,
-        ISwapRouter swapRouter_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    )
-        BasketVault(
-            "Robot Money Agent Tokens",
-            "rmAGENT",
-            usdc_,
-            swapRouter_,
-            tvlCap_,
-            perDepositCap_,
-            exitFeeBps_,
-            _DEFAULT_SLIPPAGE_BPS,
-            feeRecipient_,
-            admin_,
-            emergencyResponder_
-        );
+function _kindConfig() internal pure override returns (string memory, string memory, uint256);
 ```
 
-**Parameters**
+**Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| usdc_ | `IERC20` |  |
-| swapRouter_ | `ISwapRouter` |  |
-| tvlCap_ | `uint256` |  |
-| perDepositCap_ | `uint256` |  |
-| exitFeeBps_ | `uint256` |  |
-| feeRecipient_ | `address` |  |
-| admin_ | `address` |  |
-| emergencyResponder_ | `address` |  |
+| &lt;none&gt; | `string` |  |
+| &lt;none&gt; | `string` |  |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="maxassets"></a>
 

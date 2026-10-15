@@ -202,6 +202,64 @@ pub fn abi_addr_hex(a: Address) -> String {
     ahex::encode(w)
 }
 
+/// An empty ERC-1967 implementation slot: the gateway is a direct deployment,
+/// so the preflight's implementation check (QA plan P3) passes with no
+/// `gateway_implementation_hashes`. A test of a proxied gateway registers its
+/// own `eth_getStorageAt` mock after this one.
+pub async fn install_direct_gateway_slot_mock(server: &mut mockito::ServerGuard) {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", "00".repeat(32))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
+/// Checks 2 and 2b of a gateway write for the commands that run them without
+/// the depositor preflight (`committee vote-submit`, `receipt submit`): the
+/// gateway's code is `GATEWAY_CODE` (the fixtures' `gateway_runtime_hash`),
+/// and its ERC-1967 implementation slot is empty, a direct gateway.
+#[allow(dead_code)]
+pub async fn install_gateway_pin_mocks(server: &mut mockito::Server) {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getCode"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(GATEWAY_CODE))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result("0x2a"))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", "00".repeat(32))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
+/// ABI encoding of one `string` return value.
+pub fn enc_string(v: &str) -> String {
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&U256::from(32u64).to_be_bytes::<32>());
+    blob.extend_from_slice(&U256::from(v.len()).to_be_bytes::<32>());
+    let mut data = v.as_bytes().to_vec();
+    data.resize(v.len().div_ceil(32) * 32, 0);
+    blob.extend_from_slice(&data);
+    format!("0x{}", ahex::encode(blob))
+}
+
 /// Wire the full happy-path JSON-RPC response set for the preflight.
 /// `agent_address` controls which address the `agents()` view appears to
 /// be keyed on — all callers happen to use the same software-signer
@@ -227,6 +285,7 @@ pub async fn install_happy_path_mocks(
         .expect_at_least(0)
         .create_async()
         .await;
+    install_direct_gateway_slot_mock(server).await;
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
@@ -375,6 +434,22 @@ pub async fn install_withdraw_preflight_mocks(
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(withdraw_window_gross)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // gateway.router(): `withdraw-router` checks the router it redeems
+    // through (ADR-0014). Its ERC-1967 slot reads empty (the shared storage
+    // mock), so it is a direct router and needs no pin.
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::routerCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&format!(
+            "0x{}",
+            abi_addr_hex(Address::with_last_byte(0xf0))
+        )))
         .expect_at_least(0)
         .create_async()
         .await;

@@ -25,6 +25,9 @@ import { VaultDetail } from "../../src/components/VaultDetail";
 vi.mock("wagmi", () => ({
   // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
   useReadContracts: () => ({ data: undefined }),
+  // QA plan P3: the vault page's upgrade reads; no live chain in this test.
+  useStorageAt: () => ({ data: undefined, isError: false }),
+  useBytecode: () => ({ data: undefined }),
   useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
   useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),

@@ -71,6 +71,12 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
+  /**
+   * ADR-0014 §5 (issue 1809): the release mode every proxy is initialized with (core env UPGRADE_MODE of each proxy stage): `upgradeable` (Twin, demo, rehearsal,
+   * contained mainnet test, and a final release with a proving period) or `frozen-at-deploy` (a final release fixed at launch). Required, no default: a deployment
+   * must state its mode, and the initializer reverts on an unset one. The verifier compares every proxy's upgradesFrozen() with it.
+   */
+  UPGRADE_MODE: { kind: "string" },
 };
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
@@ -101,6 +107,10 @@ export interface SheetVault {
   /** Baskets only: the floor for the in-range liquidity (uint128 L) of every configured pool. Above 0. */
   minPoolLiquidity?: bigint;
 }
+
+/** ADR-0014 §5: the two release modes a deployment may state (`unset` reverts in every initializer). */
+export const UPGRADE_MODES = ["upgradeable", "frozen-at-deploy"] as const;
+export type UpgradeMode = (typeof UPGRADE_MODES)[number];
 
 export interface Sheet {
   /** Normalised raw values by name, exactly what the sheet said (addresses checksummed). */
@@ -134,6 +144,8 @@ export interface Sheet {
     /** Twin-only update-delay demonstration target. */
     newDelay: bigint;
   };
+  /** ADR-0014 §5 (issue 1809): the release mode every proxy is born with (UPGRADE_MODE). */
+  upgradeMode: UpgradeMode;
 }
 
 const err = (message: string, details: Record<string, unknown> = {}) => new PublishError("SHEET", message, details);
@@ -331,13 +343,17 @@ export function parseSheet(text: string): Sheet {
     if (why) throw err(`GOVERN_NEW_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "GOVERN_NEW_DELAY" });
   }
 
+  // ADR-0014 §5 (issue 1809): every proxy is born in the mode the sheet states. Anything else (unset included) is refused before any stage runs.
+  const upgradeMode = v.UPGRADE_MODE!;
+  if (!(UPGRADE_MODES as readonly string[]).includes(upgradeMode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")} (ADR-0014 §5), got '${upgradeMode}'. A deployment states its mode: there is no default and no unset mode`, { name: "UPGRADE_MODE" });
+
   const values: Record<string, string> = {};
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
     safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, vaults,
-    eligibleVaults, weights, govern: { unpauseVaults, newDelay },
+    eligibleVaults, weights, govern: { unpauseVaults, newDelay }, upgradeMode: upgradeMode as UpgradeMode,
   };
 }
 

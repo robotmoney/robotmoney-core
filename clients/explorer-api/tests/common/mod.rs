@@ -123,6 +123,11 @@ pub const DROP_GOVERNANCE_VOTING_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0023_drop_governance_voting.sql"
 );
 
+/// Migration 0024 (QA plan P3, core issue 1810): `proxy_upgrade_events`, the
+/// `Upgraded` and `UpgradesFrozen` history `/v1/upgrades` serves.
+pub const PROXY_UPGRADE_EVENTS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0024_proxy_upgrade_events.sql");
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).
@@ -243,6 +248,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply drop governance voting migration (0023)");
+    sqlx::raw_sql(PROXY_UPGRADE_EVENTS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply proxy upgrade events migration (0024)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.

@@ -49,6 +49,8 @@ fn config(max_fee_cap: u64) -> Config {
         vault_addresses: None,
         share_receiver: None,
         agent_owner: None,
+        gateway_implementation_hashes: None,
+        proxy_implementation_hashes: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: std::path::PathBuf::from("/tmp/unused.enc"),

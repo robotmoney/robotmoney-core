@@ -695,6 +695,7 @@ fn safety_doc_lists_every_named_write_refusal() {
     let missing: Vec<&str> = [
         "ErrChainIdMismatch",
         "ErrCodeHashMismatch",
+        "ErrImplementationNotApproved",
         "ErrDepositsPaused",
         "ErrAgentNotAuthorized",
         "ErrAgentBindingMismatch",

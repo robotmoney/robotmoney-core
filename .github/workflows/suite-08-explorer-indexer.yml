@@ -187,7 +187,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ --nocapture
@@ -399,7 +399,7 @@ jobs:
       # listed. Testcontainer Postgres, same Docker check as above.
       - name: explorer-api index cursor, chain head, deposits_paused, admin events (issue 1731)
         run: |
-          CARGO_TEST_MIN_EXECUTED=8 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=9 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test progress_and_admin -- --test-threads=1 --nocapture
 

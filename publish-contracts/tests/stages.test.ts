@@ -64,7 +64,7 @@ describe("stage list built from core's stage table", () => {
     STAGES.forEach((s, i) => { if (s.manifest) written.set(manifestBase(s.manifest), i); });
     STAGES.forEach((s, i) => {
       for (const e of [...s.requiredEnv]) {
-        const src = resolveEnv(e, s.vault ?? null);
+        const src = resolveEnv(e, s.vault ?? null, s.name);
         const stages = src.from === "manifest" ? [src.stage] : src.from === "vaults" ? table.vaults.map((v) => v.stage) : [];
         for (const st of stages) {
           const file = manifestRef(st, "x").split(":")[0]!;

@@ -17,12 +17,13 @@ import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
 import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
-import { LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
+import { AUTHORITY_STAGE, LIBS_STAGE, RECORDER_STAGE, VAULT_KIND, VENUE_V4, resolveEnv } from "./core-wiring.ts";
+import { manifestProxies, proxyChecks, proxyProblems, proxyRecordOf, readProxyState, type ProxyRecord, type ProxyWant } from "./proxies.ts";
 import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts";
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
-import { manifestBase, manifestPathFor } from "./stage-table.ts";
+import { manifestBase, manifestPathFor, proxiesOfStage } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
@@ -87,6 +88,10 @@ export interface StageRecord {
   created?: string[];
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
   safe?: string;
+  /** Issue 1809: a stage that deploys proxies records each one as the chain read it right after the broadcast (proxy, implementation, code hashes, authority, mode, frozen). */
+  proxies?: ProxyRecord[];
+  /** Issue 1809: the outcome of that read-back. `ok: false` stops the run: no later forge stage starts while any earlier stage carries it. */
+  proxy_gate?: { ok: boolean; problems: string[] };
   [k: string]: unknown;
 }
 
@@ -109,6 +114,10 @@ export interface RunManifest {
   govern?: Record<string, unknown>;
   /** One entry per executed `govern --row apply-receipt` round (issue 1696, issue 1698: one applyReceipt call): the evidence-check `receipt_applications` shape. */
   receipt_applications?: unknown[];
+  /** Issue 1809: one entry per executed `govern --row upgrade-proxy` round (the evidence `proxy_upgrades` shape). The verifier reads the implementation slot from the chain. */
+  proxy_upgrades?: unknown[];
+  /** Issue 1809: one entry per executed `govern --row freeze-proxy` round (the evidence `proxy_freezes` shape). The verifier reads upgradesFrozen() from the chain. */
+  proxy_freezes?: unknown[];
   /** One entry per executed `govern --row clear-voted-weights` round (issue 1743): the active (applied receipt) vector dropped, routing back on the default. */
   voted_weights_clears?: unknown[];
   /** QA plan v1 D7: one entry per executed `govern --row set-unwind-guard` round (a basket vault's emergency unwind guard). A record: the verifier reads the guards from the chain. */
@@ -292,6 +301,8 @@ export interface RunContext {
   startChain?: ChainStarter;
   /** Injected for tests: the read-only chain reader behind the config-check that runs before each vault stage. Defaults to viem over `rpc`. */
   chainReader?: (rpc: string) => ChainReader;
+  /** Injected for tests: the read-only chain reader behind the proxy read-back after each proxy stage (issue 1809, proxyStageGate). Defaults to viem over `rpc`. */
+  proxyReader?: (rpc: string) => ChainReader;
   /** Injected for tests: the sleep, the poll and the longest wait of the recorder gate (core 1676). Defaults to a 15 s poll for up to 40 minutes. */
   recorderWait?: RecorderWaitDeps;
   /**
@@ -514,7 +525,7 @@ export function readManifestField(ctx: ManifestCtx, ref: string): string {
 
 /** One env value, from the source the single mapping module (core-wiring.ts) names for it. Undefined when the sheet does not carry it. */
 function envValue(ctx: RunContext, row: StageRow, name: string): string | undefined {
-  const src = resolveEnv(name, row.vault ?? null);
+  const src = resolveEnv(name, row.vault ?? null, row.name);
   let v: string | undefined;
   if (src.from === "chain") v = String(ctx.chainId);
   else if (src.from === "literal") v = src.value;
@@ -535,14 +546,14 @@ export function stageEnv(ctx: RunContext, row: StageRow): Record<string, string>
   // DEPLOYMENT_KIND (issue 1727) reaches every stage script from the sheet alone: the timelock stage script applies the rehearsal floor only when it reads "rehearsal"
   const e: Record<string, string> = { CHAIN_ID: String(ctx.chainId), DEPLOY_SHA: ctx.coreSha, DEPLOYMENT_KIND: ctx.sheet.kind };
   for (const name of row.requiredEnv) {
-    const src = resolveEnv(name, row.vault ?? null);
+    const src = resolveEnv(name, row.vault ?? null, row.name);
     if (src.from === "unmapped") throw new PublishError("INPUT_MISSING", `stage ${row.name}: core reads ${name} and publish contracts has no mapping for it (core-wiring.ts)`, { stage: row.name, name });
     const v = envValue(ctx, row, name);
     if (v === undefined || v === "") throw new PublishError("INPUT_MISSING", `stage ${row.name} needs sheet name ${src.from === "sheet" ? src.name : name}`, { stage: row.name, name });
     e[name] = v;
   }
   for (const name of row.optionalEnv) {
-    const src = resolveEnv(name, row.vault ?? null);
+    const src = resolveEnv(name, row.vault ?? null, row.name);
     if (src.from !== "sheet" && src.from !== "chain") continue; // a default in the script, or a manifest value only a required name takes
     const v = envValue(ctx, row, name);
     if (v !== undefined && v !== "") e[name] = v;
@@ -767,7 +778,45 @@ async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: R
   return libs;
 }
 
+/**
+ * Issue 1809 (ADR-0014 §3-§5): right after a stage that deploys proxies (the stage table's `proxies`), each proxy the stage manifest names is read back on the chain
+ * the stage went to: the ERC-1967 implementation slot names the manifest's implementation, the admin and beacon slots are empty, upgradeAuthority() is the authority
+ * stage's timelock, the manifest's upgrade_mode is the sheet's UPGRADE_MODE and upgradesFrozen() agrees with it, the proxy is initialized and the implementation's
+ * initializers are locked. The forge script asserts most of this itself (GovernedProxyDeploy._deployProxy); this is the tool's own read of the chain, so a script
+ * or a build that skipped it still cannot carry an undeclared mode or an admin slot into the next stage. Returns what it read and every problem; it sends nothing.
+ */
+export async function proxyStageGate(ctx: RunContext, row: StageRow): Promise<{ records: ProxyRecord[]; problems: string[] }> {
+  const t = getStageTable();
+  if (!row.manifest || proxiesOfStage(t, row.name).length === 0) return { records: [], problems: [] };
+  const base = manifestBase(row.manifest);
+  let own: Record<string, unknown>;
+  try { own = JSON.parse(readFileSync(manifestFilePath(ctx, row.manifest), "utf8")); } catch (e) { throw new PublishError("MANIFEST", `stage ${row.name}: the manifest ${row.manifest} cannot be read for the proxy read-back: ${(e as Error).message}`, { stage: row.name }); }
+  const authority = readManifestField(ctx, `${stageManifestBase(AUTHORITY_STAGE)}:timelock`) as Address;
+  const chain = (ctx.proxyReader ?? viemReader)(ctx.rpc);
+  const records: ProxyRecord[] = [];
+  const problems: string[] = [];
+  for (const p of manifestProxies(t, { [base]: own }, (st) => (st === row.name ? base : "")).filter((x) => x.stage === row.name)) {
+    if (!p.proxy || !p.implementation) { problems.push(`${p.name}: the stage manifest ${row.manifest} names no ${!p.proxy ? "proxy" : "implementation"} address`); continue; }
+    const want: ProxyWant = { name: p.name, implementation: p.implementation, authority, mode: ctx.sheet.upgradeMode, frozenByRow: false };
+    // issue 1723 (QA plan v1 E6): a load-balanced RPC may answer from a node a block behind the broadcast, so a read-back that differs is read again (bounded,
+    // ctx.readRetry) before it counts. A proxy that stays wrong after the last read is refused exactly as with one read.
+    const proxy = p.proxy;
+    const st = await readUntil(() => readProxyState(chain, proxy), (x) => proxyProblems(proxyChecks(x, want, p)).length === 0, ctx.readRetry);
+    const checks = proxyChecks(st, want, p);
+    problems.push(...proxyProblems(checks).map((x) => `${p.name}: ${x}`));
+    records.push(proxyRecordOf(p.name, st, p.manifestMode));
+  }
+  return { records, problems };
+}
+
+/** Refuses to start a forge stage while an earlier stage of this run carries a failed proxy read-back (issue 1809): the run never builds on a proxy nobody declared. */
+function refuseAfterFailedProxyGate(row: StageRow, manifest: RunManifest): void {
+  const bad = Object.entries(manifest.stages).find(([, r]) => r?.proxy_gate?.ok === false);
+  if (bad) throw new PublishError("VERIFY", `stage ${row.name} will not start: stage ${bad[0]} deployed a proxy that is not what the deploy declared (${bad[1].proxy_gate!.problems.slice(0, 3).join("; ")}). Nothing was sent. Read the chain and the stage manifest; a deployment with such a proxy is not continued.`, { stage: row.name, failed_stage: bad[0], problems: bad[1].proxy_gate!.problems });
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
+  refuseAfterFailedProxyGate(row, manifest);
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
   const script = row.script!;
@@ -831,7 +880,13 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
     // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
     // reads VAULT_ADDRESS code). That sends to the local anvil only (the sender is impersonated there), never to the target RPC.
     createdInDryRun.set(manifest, new Set([...(createdInDryRun.get(manifest) ?? []), ...dry.creates, ...adoptedLibs.map((l) => l.address.toLowerCase())]));
-    if (real.simRpc) await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
+    if (real.simRpc) {
+      await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
+      // issue 1809: the proxies this stage put on the local chain are read back like a real run's, so a dry run fails where the real run would stop
+      const gate = await proxyStageGate(ctx, row);
+      if (gate.problems.length) throw new PublishError("VERIFY", `stage ${row.name}: the proxies it deployed on the local preflight chain are not what the deploy declared: ${gate.problems.join("; ")}. Nothing reached the target.`, { stage: row.name, problems: gate.problems });
+      if (gate.records.length) ctx.log.log("info", "stage.proxy_ok", { stage: row.name, proxies: gate.records, local_only: true });
+    } else if (proxiesOfStage(getStageTable(), row.name).length) ctx.log.log("warn", "stage.proxy_gate_skipped", { stage: row.name, reason: "dry run without a local chain: the proxies exist nowhere to read back" });
     ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: real.simRpc ? "local-anvil" : "target-rpc" });
     return;
   }
@@ -887,6 +942,19 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
   manifest.stages[row.name] = rec;
   saveRunManifest(ctx.evidenceDir, manifest);
+  // issue 1809: the stage's transactions are real and counted (done), and its proxies are read back. A proxy that is not what the deploy declared is recorded
+  // on the stage (proxy_gate) and stops the run here; no later forge stage starts while the record says so (refuseAfterFailedProxyGate).
+  const gate = await proxyStageGate(ctx, row);
+  if (gate.records.length || gate.problems.length) {
+    rec.proxies = gate.records;
+    rec.proxy_gate = { ok: gate.problems.length === 0, problems: gate.problems };
+    saveRunManifest(ctx.evidenceDir, manifest);
+    if (gate.problems.length) {
+      ctx.log.log("error", "stage.proxy_refused", { stage: row.name, problems: gate.problems });
+      throw new PublishError("VERIFY", `stage ${row.name} broadcast, but its proxies are not what the deploy declared: ${gate.problems.join("; ")}. The run stops here and no later stage will start.`, { stage: row.name, problems: gate.problems });
+    }
+    ctx.log.log("info", "stage.proxy_ok", { stage: row.name, proxies: gate.records });
+  }
   ctx.log.log("info", "stage.done", { stage: row.name, start_nonce: startNonce, end_nonce: nonce1, count: rec.count });
 }
 

@@ -15,7 +15,7 @@
 | Recorder clamp | 10 ticks per elapsed second, elapsed capped at 60 s: at most 600 ticks (6.2 percent) per record | `UniswapV4PriceRecorder.sol:59-62,293-302` |
 | Lagged tick, staleness | an interval is weighted by the previous recorded tick; `observe` reverts after 1800 s without a record | `UniswapV4PriceRecorder.sol:160-162,211` |
 | NAV and sell floor window | 1800 s (`DEFAULT_TWAP_WINDOW`) | `BasketVault.sol` |
-| Sell floor | TWAP value x (1 - `maxSlippageBps`), with `maxSlippageBps` 500 | `BasketVault._slippageFloor` |
+| Sell floor | TWAP value x (1 - `maxSlippageBps`), with `maxSlippageBps` 500 | `BasketSwapOps._sellLeg`, priced by `BasketVault.assetUsdcValue` |
 | ORA-4 guard | `navDeviationGuardBps` 400 (pool fee 291 plus a lag budget) | QA plan decision D10, twin sheet |
 | Single swap limit | about 18 USDC at the 5 percent bound | ADR-0005 amendment |
 | Keeper cadence | one `record()` every 300 s | core 1779, `scripts/ops/recorder-keeper.sh` |

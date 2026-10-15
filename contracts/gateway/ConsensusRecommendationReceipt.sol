@@ -2,10 +2,14 @@
 // Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
+// (See also: docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -49,9 +53,15 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 /// `contract/src/__fixtures__/` in `robotmoney-frontend`.
 ///
 /// Emits: `ReceiptRecorded`, `ReceiptReleased`.
+///
+/// Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
+/// in the proxy's deployment transaction. Only the timelock named at `initialize`
+/// can upgrade it, and `freezeUpgrades` ends upgrades forever. Recorded receipts
+/// and their release state survive every upgrade.
 contract ConsensusRecommendationReceipt is
     AdminFloorAccessControl,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
+    GovernedUpgrade,
     IConsensusRecommendationReceipt
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
@@ -76,10 +86,12 @@ contract ConsensusRecommendationReceipt is
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    address public immutable gateway;
+    /// @dev Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
+    address public gateway;
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    address public immutable icPolicy;
+    /// @dev Written once by `initialize`; no setter.
+    address public icPolicy;
 
     /// @dev Append-only receipt log.
     Receipt[] private _receipts;
@@ -87,23 +99,40 @@ contract ConsensusRecommendationReceipt is
     /// @dev `receiptId` → 1-based index into `_receipts` (0 means absent).
     mapping(bytes32 => uint256) private _indexPlusOne;
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
 
-    /// @param admin_     Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
-    ///                   In every non-test deployment this is the
-    ///                   `TimelockController` (INV-3).
-    /// @param gateway_   Deployed `RobotMoneyGateway`; sole permitted writer.
-    /// @param icPolicy_  Deployed `InvestmentCommitteePolicy`; the single source
-    ///                   of `COMMITTEE_AGENT_ROLE` membership.
-    constructor(address admin_, address gateway_, address icPolicy_) {
+    /// @dev The implementation is never initialized: only a proxy is.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+    /// @param admin_           Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    ///                         In every non-test deployment this is the
+    ///                         `TimelockController` (INV-3).
+    /// @param gateway_         Deployed `RobotMoneyGateway`; sole permitted writer.
+    /// @param icPolicy_        Deployed `InvestmentCommitteePolicy`; the single source
+    ///                         of `COMMITTEE_AGENT_ROLE` membership.
+    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
+    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    function initialize(
+        address admin_,
+        address gateway_,
+        address icPolicy_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer {
         if (admin_ == address(0) || gateway_ == address(0) || icPolicy_ == address(0)) {
             revert ZeroAddress();
         }
+        __ReentrancyGuard_init();
         gateway = gateway_;
         icPolicy = icPolicy_;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
+        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by

@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BASKET_DEFAULT_SLIPPAGE_BPS, LENDING_ADAPTERS, MANIFEST_ENV, MANIFEST_FIELDS_READ, SAFE_STAGE, VAULT_ADDRESS_FIELD, resolveEnv } from "../core-wiring.ts";
 import type { VaultKey } from "../sheet.ts";
-import { loadStageTable, manifestFile, type StageTable, type TableStage } from "../stage-table.ts";
+import { PROXY_MANIFEST_FIELDS, loadStageTable, manifestFile, tableProxies, type StageTable, type TableStage } from "../stage-table.ts";
 import { SHEET_SPEC } from "../sheet.ts";
 
 const read = (coreDir: string, rel: string): string => readFileSync(join(coreDir, rel), "utf8");
@@ -72,7 +72,7 @@ export function stageProblems(table: StageTable, coreDir: string, s: TableStage)
   const written = manifestWritten(coreDir, s);
   if (written !== manifestFile(s.manifest)) bad(`manifest ${manifestFile(s.manifest)} is not the file ${file} writes (${written ?? "none found"})`);
   for (const e of s.requiredEnv) {
-    if (resolveEnv(e, s.vault).from === "unmapped") bad(`publish contracts has no mapping for required env ${e} (core-wiring.ts)`);
+    if (resolveEnv(e, s.vault, s.name).from === "unmapped") bad(`publish contracts has no mapping for required env ${e} (core-wiring.ts)`);
   }
   for (const n of s.libraries) {
     const l = table.libraries.find((x) => x.name === n);
@@ -99,6 +99,7 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
     return src.split("\n").some((l) => l.includes(`"${field}"`) && /serialize/i.test(l)) || src.includes(`"${field}":`);
   };
   for (const v of table.vaults) if (!fieldWritten(v.stage, VAULT_ADDRESS_FIELD)) out.push(`vault ${v.key}: manifest field ${VAULT_ADDRESS_FIELD} is not written by the ${v.stage} stage script`);
+  out.push(...proxyProblems(table, coreDir, fieldWritten));
   for (const { stage: st, field } of MANIFEST_FIELDS_READ) {
     if (st === SAFE_STAGE) continue;
     if (!stage(st)) out.push(`wiring reads manifest field ${field} of stage ${st}, which the table does not list`);
@@ -111,7 +112,7 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
   for (const [env, m] of Object.entries(MANIFEST_ENV)) if (m.stage !== SAFE_STAGE && !stage(m.stage)) out.push(`env ${env} reads stage ${m.stage}, which the table does not list`);
   for (const s of table.stages) {
     for (const e of s.requiredEnv) {
-      const src = resolveEnv(e, s.vault);
+      const src = resolveEnv(e, s.vault, s.name);
       if (src.from === "sheet" && !(src.name in SHEET_SPEC)) out.push(`stage ${s.name}: env ${e} maps to sheet name ${src.name}, which is not a sheet name`);
     }
   }
@@ -122,6 +123,35 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
     seen.add(f);
   }
   out.push(...vaultWiringProblems(table, coreDir));
+  return out;
+}
+
+/** The storage-layout gate's list of proxied contracts (ADR-0014 §8), or undefined when this core checkout has none. */
+export function proxiedList(coreDir: string): string[] | undefined {
+  const p = join(coreDir, "contracts", "test", "fixtures", "storage-layout", "proxied.txt");
+  if (!existsSync(p)) return undefined;
+  return readFileSync(p, "utf8").split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+}
+
+/**
+ * Issue 1809: every proxy of the table is written by its stage script (the proxy, its implementation, the authority and the mode), its implementation artifact and the
+ * proxy artifact exist in core, and the table's proxies are exactly the storage-layout gate's list (proxied.txt): the deploy tooling and the layout gate name the same contracts.
+ */
+export function proxyProblems(table: StageTable, coreDir: string, fieldWritten: (stage: string, field: string) => boolean): string[] {
+  const out: string[] = [];
+  const pxs = tableProxies(table);
+  if (pxs.length === 0) return out;
+  for (const px of pxs) {
+    for (const f of [px.field, px.implementationField, PROXY_MANIFEST_FIELDS.authority, PROXY_MANIFEST_FIELDS.mode]) if (!fieldWritten(px.stage, f)) out.push(`proxy ${px.name}: manifest field ${f} is not written by the ${px.stage} stage script`);
+    if (!artifactExists(coreDir, px.artifact)) out.push(`proxy ${px.name}: artifact ${px.artifact} does not exist in core contracts`);
+  }
+  if (!table.proxyArtifact || !artifactExists(coreDir, table.proxyArtifact)) out.push(`proxyArtifact ${table.proxyArtifact ?? "(none)"} is not declared or imported under core contracts`);
+  const listed = proxiedList(coreDir);
+  if (listed === undefined) out.push("the table lists proxies but core has no contracts/test/fixtures/storage-layout/proxied.txt (the layout gate's list)");
+  else {
+    const a = pxs.map((p) => p.artifact).sort().join(", "), b = [...listed].sort().join(", ");
+    if (a !== b) out.push(`the stage table's proxies [${a}] differ from the layout gate's proxied.txt [${b}]`);
+  }
   return out;
 }
 

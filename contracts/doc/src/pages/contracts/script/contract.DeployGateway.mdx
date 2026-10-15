@@ -5,9 +5,9 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployGateway.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
 
 **Title:** DeployGateway
 
@@ -31,7 +31,13 @@ SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
 VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
 ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
 DEPLOYMENT_OUT        — output JSON path
+UPGRADE_AUTHORITY     — the deployment's timelock, deployed first (ADR-0014 §4)
+UPGRADE_MODE          — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
 USDC is the canonical Base USDC constant on every chain.
+The gateway is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+`initialize` in its constructor. `gateway_runtime_hash` stays the code hash AT the gateway
+address (the proxy, which clients compare with `eth_getCode`); the implementation and its
+code hash are recorded next to it.
 
 </i>
 
@@ -211,7 +217,11 @@ struct Deployed {
         address admin;
         address pauser;
         address shareReceiver;
+        /// keccak256 of the runtime code AT the gateway address: the ERC1967Proxy (ADR-0014).
         bytes32 gatewayRuntimeHash;
+        /// The implementation behind the gateway proxy and its runtime code hash (ADR-0014).
+        address implementation;
+        bytes32 implementationRuntimeHash;
     }
 ```
 
@@ -227,4 +237,6 @@ struct Deployed {
 | pauser | `address` |  |
 | shareReceiver | `address` |  |
 | gatewayRuntimeHash | `bytes32` |  |
+| implementation | `address` |  |
+| implementationRuntimeHash | `bytes32` |  |
 

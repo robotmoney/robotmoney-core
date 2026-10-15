@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/adr/ADR-0002-router-default-weights-on-chain.md (Amendment 2026-10-07)
-// Canonical: docs/technical/security-model.md — Timelock overriding voted router weights
+// Canonical: docs/technical/security-model.md §7 — Router weights changed outside the timelock; `WEIGHT_SETTER_ROLE` replacement
 // Implements: core 1616 — bounded rotation path for WEIGHT_SETTER_ROLE
 pragma solidity ^0.8.24;
 
@@ -11,6 +11,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Any contract: a rotation target needs code, nothing else.
 contract RotationStubGovernance {}
@@ -41,8 +42,8 @@ contract WeightSetterRotationTest is SafeGovernance {
 
     function setUp() public {
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        VaultRegistry registry = Proxied.vaultRegistry(deployer);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
 
         _installSafeSet();
         safe = _newDefaultSafe();

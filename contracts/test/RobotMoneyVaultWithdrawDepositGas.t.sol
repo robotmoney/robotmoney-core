@@ -9,6 +9,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {GasUSDC, GasBurningAdapter} from "./RobotMoneyVaultRedeemGas.t.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 contract RobotMoneyVaultWithdrawDepositGasTest is Test {
     uint256 internal constant ONE = 1e6;
@@ -23,7 +24,7 @@ contract RobotMoneyVaultWithdrawDepositGasTest is Test {
 
     function setUp() public {
         usdc = new GasUSDC();
-        vault = new RobotMoneyVault(
+        vault = Proxied.robotMoneyVault(
             IERC20(address(usdc)), 1_000_000_000 * ONE, 100_000_000 * ONE, 0, admin, admin, admin
         );
         uint16[3] memory caps = [uint16(3334), uint16(3333), uint16(3333)];

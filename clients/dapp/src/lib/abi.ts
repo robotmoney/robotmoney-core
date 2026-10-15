@@ -191,6 +191,16 @@ export const gatewayAbi = [
     inputs: [{ name: "", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  // The consent's EIP-712 domain version: the live gateway implementation's
+  // version (ADR-0014 §10, QA plan Decisions D5). An upgrade that bumps it
+  // voids every consent signed before it.
+  {
+    type: "function",
+    name: "implementationVersion",
+    stateMutability: "pure",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
   // True for a binding the agent consented to (or made itself). Only an
   // unconsented binding (made by an ADMIN_ROLE holder) can be released.
   {
@@ -730,5 +740,54 @@ export const EXCLUSION_LEDGER_ABI = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+/**
+ * The upgrade views every proxied contract inherits from `GovernedUpgrade`
+ * (ADR-0014 §3, QA plan P3): the one upgrade authority (the timelock) and the
+ * one-way freeze bit. The vault page reads them next to the ERC-1967
+ * implementation slot (`upgradeState.ts`). A direct deployment has neither
+ * function, so both reads revert there. `tests/unit/abi-parity.test.ts`
+ * checks this fragment against the RobotMoneyVault and gateway artifacts.
+ */
+export const GOVERNED_UPGRADE_ABI = [
+  {
+    type: "function",
+    name: "upgradeAuthority",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "upgradesFrozen",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+/**
+ * The gateway's pointers to the committee contracts (`icPolicy()`,
+ * `consensusReceipt()`). `ProtocolUpgradesPanel` reads them to find the IC
+ * policy and receipt proxies whose upgrade state it shows (issue 1810).
+ * `tests/unit/abi-parity.test.ts` checks this fragment against the gateway
+ * artifact.
+ */
+export const GATEWAY_COMMITTEE_ABI = [
+  {
+    type: "function",
+    name: "icPolicy",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "consensusReceipt",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
   },
 ] as const;

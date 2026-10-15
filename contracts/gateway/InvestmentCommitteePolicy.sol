@@ -2,10 +2,14 @@
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3 — New contract + refactor
 // Canonical: docs/architecture.md — Investment Committee Policy
 // Implements: issue #1044 — Investment Committee v0
+// (See also: docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 /// @title InvestmentCommitteePolicy
 /// @notice Registry of admin-allowlisted committee agents and their signed
@@ -27,7 +31,15 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///   prompt_hash, inputs_digest, timestamp, schema_version.
 ///
 /// Emits: `AgentRegistered`, `AgentRevoked`, `VoteSubmitted`.
-contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
+///
+/// Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
+/// in the proxy's deployment transaction. Only the timelock named at `initialize`
+/// can upgrade it, and `freezeUpgrades` ends upgrades forever.
+contract InvestmentCommitteePolicy is
+    AdminFloorAccessControl,
+    ReentrancyGuardUpgradeable,
+    GovernedUpgrade
+{
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants/revokes COMMITTEE_AGENT_ROLE; revokeAgent; addGateway.
@@ -122,7 +134,8 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @notice The RobotMoneyGateway address. All committee writes must originate here.
-    address public immutable gateway;
+    ///         Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
+    address public gateway;
 
     /// @notice Human-readable label for each registered agent.
     mapping(address => string) public agentId;
@@ -130,12 +143,27 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Ordered list of all submitted votes (append-only).
     Vote[] private _votes;
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
 
-    /// @param admin_    Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE.
-    /// @param gateway_  Address of the deployed RobotMoneyGateway.
-    constructor(address admin_, address gateway_) {
+    /// @dev The implementation is never initialized: only a proxy is.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+    /// @param admin_           Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE.
+    /// @param gateway_         Address of the deployed RobotMoneyGateway.
+    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
+    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    function initialize(
+        address admin_,
+        address gateway_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer {
         if (admin_ == address(0) || gateway_ == address(0)) revert ZeroAddress();
+        __ReentrancyGuard_init();
         gateway = gateway_;
 
         // Pin COMMITTEE_AGENT_ROLE administration to ADMIN_ROLE so it survives
@@ -144,6 +172,7 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
+        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by

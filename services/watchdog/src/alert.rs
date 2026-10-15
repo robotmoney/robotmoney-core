@@ -304,9 +304,16 @@ pub fn no_baseline_dedup_key(chain_id: i64) -> String {
     format!("consensus_receipt_monitor_no_baseline:{chain_id}")
 }
 
-/// Stable incident key for "the router's quorum threshold is below the floor".
-pub fn quorum_below_floor_dedup_key(chain_id: i64) -> String {
-    format!("router_quorum_below_floor:{chain_id}")
+/// Stable incident key for "the router's weight-setter path is not the
+/// configured one" (issue 1698).
+pub fn weight_setter_path_dedup_key(chain_id: i64) -> String {
+    format!("weight_setter_path_drift:{chain_id}")
+}
+
+/// Stable incident key for "the release's freeze deadline passed with a proxy
+/// still upgradeable" (issue 1809, ADR-0014 §5).
+pub fn freeze_deadline_dedup_key(chain_id: i64) -> String {
+    format!("freeze_deadline_missed:{chain_id}")
 }
 
 /// Stable incident key for "the explorer indexer the watchdog reads is behind
@@ -347,70 +354,95 @@ struct NoBaselineAlertInner {
     custom_details: NoBaselineDetails,
 }
 
-/// Details for the router quorum-floor page (task T22, decision D16).
+/// Details for the weight-setter-path page (issue 1698).
 #[derive(Debug, Serialize)]
-pub struct QuorumBelowFloorDetails {
-    /// Always `"router_quorum_below_floor"`.
+pub struct WeightSetterPathDetails {
+    /// Always `"weight_setter_path_drift"`.
     pub alert_kind: &'static str,
     /// Chain the router lives on.
     pub chain_id: i64,
-    /// Router address that was read.
+    /// `PortfolioRouter` address that was read.
     pub router_address: String,
-    /// The threshold read from the chain.
-    pub quorum_threshold: u64,
-    /// The configured floor.
-    pub min_quorum_threshold: u64,
+    /// The configured sole `WEIGHT_SETTER_ROLE` holder (`RouterGovernance`).
+    pub expected_weight_setter: String,
+    /// The configured sole `ADMIN_ROLE` holder on the weight setter.
+    pub expected_timelock: String,
+    /// `getRoleMemberCount(WEIGHT_SETTER_ROLE)` on the router.
+    pub weight_setter_role_count: u64,
+    /// The router's `WEIGHT_SETTER_ROLE` members as read (capped listing).
+    pub weight_setter_role_holders: Vec<String>,
+    /// `getRoleMemberCount(ADMIN_ROLE)` on the weight setter.
+    pub weight_setter_admin_count: u64,
+    /// The weight setter's `ADMIN_ROLE` members as read (capped listing).
+    pub weight_setter_admins: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct QuorumAlertPayload {
+struct WeightSetterAlertPayload {
     event_action: &'static str,
     routing_key: &'static str,
     dedup_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<QuorumAlertInner>,
+    payload: Option<WeightSetterAlertInner>,
 }
 
 #[derive(Debug, Serialize)]
-struct QuorumAlertInner {
+struct WeightSetterAlertInner {
     summary: String,
     severity: &'static str,
     source: &'static str,
-    custom_details: QuorumBelowFloorDetails,
+    custom_details: WeightSetterPathDetails,
 }
 
-/// Page because `RouterGovernance.quorumThreshold()` is at or below the floor.
+/// Page because the router's weight-setter path is not the configured one.
 ///
-/// Decision D16: the contract floor stops a *new* deployment from being wired
-/// this way; this stops an already-deployed router from being quietly lowered
-/// by an `ADMIN_ROLE` holder after `AC-GOV-03`'s evidence was collected.
-pub async fn dispatch_quorum_below_floor_alert(
+/// Issue 1698: router weights change only through `RouterGovernance.applyReceipt`
+/// on a Safe-scheduled timelock operation. A second `WEIGHT_SETTER_ROLE` holder
+/// can set weights with no receipt and no delay; an `ADMIN_ROLE` holder on the
+/// weight setter other than the timelock can apply without the delay. The
+/// verifier checks both once at deploy; this catches a grant executed later.
+pub async fn dispatch_weight_setter_path_alert(
     client: &Client,
     webhook_url: &str,
-    breach: &crate::governance::QuorumBreach,
+    breach: &crate::governance::WeightSetterBreach,
 ) -> Result<(), WatchdogError> {
+    let role = &breach.weight_setter_role;
+    let admins = &breach.weight_setter_admins;
     post_event(
         client,
         webhook_url,
-        &QuorumAlertPayload {
+        &WeightSetterAlertPayload {
             event_action: "trigger",
             routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(breach.chain_id),
-            payload: Some(QuorumAlertInner {
+            dedup_key: weight_setter_path_dedup_key(breach.chain_id),
+            payload: Some(WeightSetterAlertInner {
                 summary: format!(
-                    "RobotMoney watchdog: RouterGovernance.quorumThreshold() is {} on chain {} \
-                     (floor {}) — one voter is a quorum. AC-GOV-03 was accepted on two-of-two; \
-                     check who called setQuorumThreshold and restore the threshold.",
-                    breach.threshold, breach.chain_id, breach.min_threshold,
+                    "RobotMoney watchdog: the router weight-setter path changed on chain {}. \
+                     WEIGHT_SETTER_ROLE has {} holder(s) [{}], expected only {}; the weight \
+                     setter's ADMIN_ROLE has {} holder(s) [{}], expected only the timelock {}. \
+                     A holder outside that path can change router weights without a consensus \
+                     receipt or without the timelock delay. Find the grant and revoke it through \
+                     the Safe, or update the watchdog config after a deliberate rotation (ADR-0002).",
+                    breach.chain_id,
+                    role.count,
+                    role.members.join(", "),
+                    breach.weight_setter_address,
+                    admins.count,
+                    admins.members.join(", "),
+                    breach.timelock_address,
                 ),
                 severity: "critical",
                 source: "watchdog",
-                custom_details: QuorumBelowFloorDetails {
-                    alert_kind: "router_quorum_below_floor",
+                custom_details: WeightSetterPathDetails {
+                    alert_kind: "weight_setter_path_drift",
                     chain_id: breach.chain_id,
                     router_address: breach.router_address.clone(),
-                    quorum_threshold: breach.threshold,
-                    min_quorum_threshold: breach.min_threshold,
+                    expected_weight_setter: breach.weight_setter_address.clone(),
+                    expected_timelock: breach.timelock_address.clone(),
+                    weight_setter_role_count: role.count,
+                    weight_setter_role_holders: role.members.clone(),
+                    weight_setter_admin_count: admins.count,
+                    weight_setter_admins: admins.members.clone(),
                 },
             }),
         },
@@ -418,8 +450,8 @@ pub async fn dispatch_quorum_below_floor_alert(
     .await
 }
 
-/// Resolve the quorum-floor page once the threshold is back at or above it.
-pub async fn dispatch_quorum_below_floor_resolve(
+/// Resolve the weight-setter-path page once both role sets match again.
+pub async fn dispatch_weight_setter_path_resolve(
     client: &Client,
     webhook_url: &str,
     chain_id: i64,
@@ -427,10 +459,119 @@ pub async fn dispatch_quorum_below_floor_resolve(
     post_event(
         client,
         webhook_url,
-        &QuorumAlertPayload {
+        &WeightSetterAlertPayload {
             event_action: "resolve",
             routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(chain_id),
+            dedup_key: weight_setter_path_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
+}
+
+/// Details for the missed freeze-deadline page (issue 1809).
+#[derive(Debug, Serialize)]
+pub struct FreezeDeadlineDetails {
+    /// Always `"freeze_deadline_missed"`.
+    pub alert_kind: &'static str,
+    /// Chain the proxies live on.
+    pub chain_id: i64,
+    /// The configured freeze deadline, Unix seconds.
+    pub deadline_unix: i64,
+    /// When the proxies were read, Unix seconds.
+    pub observed_at_unix: i64,
+    /// Whole days since the deadline.
+    pub days_overdue: i64,
+    /// `name=address` of every proxy that reads `upgradesFrozen() == false`.
+    pub unfrozen_proxies: Vec<String>,
+    /// How many proxies the check reads in total.
+    pub proxy_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FreezeDeadlineAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<FreezeDeadlineAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct FreezeDeadlineAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: FreezeDeadlineDetails,
+}
+
+/// Page because the release's freeze deadline passed with a proxy still
+/// upgradeable (issue 1809, ADR-0014 §5).
+///
+/// The deadline is an operational commitment, not an on-chain timer, so this
+/// page is the only signal that it was missed. Severity `warning`, not
+/// `critical`: nothing is at risk that was not already at risk the day before,
+/// and withdrawals are untouched either way (ADR-0014 §6). The runbook step is
+/// an incident on the release issue that names the Safe owners and records the
+/// new date or the decision not to freeze.
+pub async fn dispatch_freeze_deadline_alert(
+    client: &Client,
+    webhook_url: &str,
+    breach: &crate::freeze_deadline::FreezeDeadlineBreach,
+) -> Result<(), WatchdogError> {
+    let unfrozen: Vec<String> = breach
+        .unfrozen
+        .iter()
+        .map(|p| format!("{}={}", p.name, p.address))
+        .collect();
+    post_event(
+        client,
+        webhook_url,
+        &FreezeDeadlineAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: freeze_deadline_dedup_key(breach.chain_id),
+            payload: Some(FreezeDeadlineAlertInner {
+                summary: format!(
+                    "RobotMoney watchdog: the freeze deadline (Unix {}) passed {} day(s) ago on                      chain {} and {} of {} proxies still read upgradesFrozen() false: {}. The                      deployment is still upgradeable. Open an incident on the release issue, tag                      every Safe owner, and schedule govern --row freeze-proxy or record the new                      date (contract-release-runbooks.md §4.12).",
+                    breach.deadline_unix,
+                    breach.days_overdue(),
+                    breach.chain_id,
+                    unfrozen.len(),
+                    breach.proxy_count,
+                    unfrozen.join(", "),
+                ),
+                severity: "warning",
+                source: "watchdog",
+                custom_details: FreezeDeadlineDetails {
+                    alert_kind: "freeze_deadline_missed",
+                    chain_id: breach.chain_id,
+                    deadline_unix: breach.deadline_unix,
+                    observed_at_unix: breach.observed_at_unix,
+                    days_overdue: breach.days_overdue(),
+                    unfrozen_proxies: unfrozen,
+                    proxy_count: breach.proxy_count,
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the missed freeze-deadline page once every proxy reads frozen (or
+/// the configured deadline moved past now).
+pub async fn dispatch_freeze_deadline_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &FreezeDeadlineAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: freeze_deadline_dedup_key(chain_id),
             payload: None,
         },
     )
@@ -733,32 +874,57 @@ mod tests {
     }
 
     #[test]
-    fn quorum_dedup_key_is_its_own_incident_per_chain() {
+    fn weight_setter_dedup_key_is_its_own_incident_per_chain() {
         assert_eq!(
-            quorum_below_floor_dedup_key(918_453),
-            "router_quorum_below_floor:918453"
+            weight_setter_path_dedup_key(918_453),
+            "weight_setter_path_drift:918453"
         );
         assert_ne!(
-            quorum_below_floor_dedup_key(918_453),
+            weight_setter_path_dedup_key(918_453),
             missing_receipt_dedup_key(918_453)
         );
         assert_ne!(
-            quorum_below_floor_dedup_key(918_453),
-            quorum_below_floor_dedup_key(8_453)
+            weight_setter_path_dedup_key(918_453),
+            weight_setter_path_dedup_key(8_453)
         );
     }
 
     #[test]
-    fn a_quorum_resolve_carries_the_key_and_no_payload() {
-        let v = serde_json::to_value(QuorumAlertPayload {
+    fn freeze_deadline_key_is_its_own_incident_per_chain_and_a_resolve_has_no_payload() {
+        assert_eq!(
+            freeze_deadline_dedup_key(8_453),
+            "freeze_deadline_missed:8453"
+        );
+        assert_ne!(
+            freeze_deadline_dedup_key(8_453),
+            weight_setter_path_dedup_key(8_453)
+        );
+        assert_ne!(
+            freeze_deadline_dedup_key(8_453),
+            freeze_deadline_dedup_key(918_453)
+        );
+        let v = serde_json::to_value(FreezeDeadlineAlertPayload {
             event_action: "resolve",
             routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(918_453),
+            dedup_key: freeze_deadline_dedup_key(8_453),
+            payload: None,
+        })
+        .unwrap();
+        assert_eq!(v["dedup_key"], "freeze_deadline_missed:8453");
+        assert!(v.get("payload").is_none());
+    }
+
+    #[test]
+    fn a_weight_setter_resolve_carries_the_key_and_no_payload() {
+        let v = serde_json::to_value(WeightSetterAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: weight_setter_path_dedup_key(918_453),
             payload: None,
         })
         .unwrap();
         assert_eq!(v["event_action"], "resolve");
-        assert_eq!(v["dedup_key"], "router_quorum_below_floor:918453");
+        assert_eq!(v["dedup_key"], "weight_setter_path_drift:918453");
         assert!(v.get("payload").is_none());
     }
 

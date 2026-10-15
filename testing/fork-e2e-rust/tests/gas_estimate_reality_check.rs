@@ -14,12 +14,19 @@
 //! regression above about 10% is red.
 //!
 //! Each leg prints `[gas_estimate_reality_check] <leg> gasUsed=N
-//! budget=M` after its assertion passes. Suite 05 lists the deposit
+//! budget=M` after its assertion passes.
+//!
+//! ADR-0014 (Consequences: "P1 re-measures the deposit and redeem gas
+//! budgets"): rmUSDC runs behind an `ERC1967Proxy` and calls the linked
+//! `VaultAdapterOps` library by DELEGATECALL. The test first proves the vault
+//! it measures is that proxy (a non-zero ERC-1967 implementation slot), so the
+//! 920,000 ceiling is enforced on the proxied path, the proxy hop and the
+//! library calls included, and never on a direct vault. Suite 05 lists the deposit
 //! line in `required_markers` (QA plan T3), so a run where the deposit
 //! assertion never executed is red even when the slot's other tests
 //! keep the executed count up.
 
-use alloy_primitives::U256;
+use alloy_primitives::{b256, Address, B256, U256};
 use rmpc_fork_e2e::{scenarios, skip_if_no_devnet_fork, ForkFixture};
 
 const DEPOSIT_USDC: u64 = 50_000_000;
@@ -39,11 +46,33 @@ const MAX_GAS_DEPOSIT: u64 = 920_000;
 /// Conservative ceiling for the vault redeem gas.
 const MAX_GAS_REDEEM: u64 = 1_100_000;
 
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
+const ERC1967_IMPLEMENTATION_SLOT: B256 =
+    b256!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
+
 #[test]
 fn gas_estimate_reality_check() {
     skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[gas_estimate_reality_check] {}", fx.summary_line());
+
+    // ADR-0014: the budgets are measured on the proxied vault, never on a direct one.
+    let slot = fx
+        .rpc()
+        .get_storage_at(fx.vault(), ERC1967_IMPLEMENTATION_SLOT)
+        .expect("eth_getStorageAt vault implementation slot");
+    let implementation = Address::from_word(slot);
+    assert_ne!(
+        implementation,
+        Address::ZERO,
+        "the measured vault {:#x} is not an ERC-1967 proxy: the gas budgets must be measured on the \
+         proxied path (ADR-0014)",
+        fx.vault()
+    );
+    eprintln!(
+        "[gas_estimate_reality_check] vault {:#x} is a proxy over implementation {implementation:#x}",
+        fx.vault()
+    );
 
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let amount = U256::from(DEPOSIT_USDC);

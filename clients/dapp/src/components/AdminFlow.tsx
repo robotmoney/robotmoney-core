@@ -14,6 +14,7 @@ import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
 import { useVerifiedCodeTargets } from "../lib/useVerifiedCodeTargets";
 import { describeVerificationCause } from "../lib/gatewayVerifier";
+import { useUpgradeState } from "../lib/useUpgradeState";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -73,6 +74,19 @@ export function AdminFlow(props: Props) {
           : "The gateway's code has not been verified yet.",
   };
 
+  // QA plan P3, issue 1810: the implementation behind a proxied gateway, for the rmpc export's
+  // pin. The verifier sets it only when the live implementation is one of this build's reviewed
+  // pins (VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH), so the export never pins whatever happens to
+  // be live (no trust on first use).
+  const gatewayImplementationHash =
+    gatewayVerificationState.status === "verified"
+      ? gatewayVerificationState.implementationHash
+      : undefined;
+  // The vault is a proxy too: rmpc then needs `proxy_implementation_hashes`. The dapp holds no
+  // reviewed pin for the vault's logic, so the export names the key and leaves it to the release
+  // record instead of copying the live hash.
+  const vaultUpgrade = useUpgradeState(props.vaultAddress);
+
   const tabs = buildAdminTabs({
     gatewayAddress: props.gatewayAddress,
     vaultAddress: props.vaultAddress,
@@ -101,6 +115,8 @@ export function AdminFlow(props: Props) {
       gatewayVerificationState.status === "verified"
         ? gatewayVerificationState.computedHash
         : undefined,
+    gatewayImplementationHash,
+    vaultIsProxy: vaultUpgrade.kind === "proxy" || vaultUpgrade.kind === "indexed",
   });
 
   return (

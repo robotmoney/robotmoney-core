@@ -5,7 +5,7 @@ description: "Test helper for the agent consent that `revealAuthorization` takes
 
 # AgentConsent
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/helpers/AgentConsent.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/helpers/AgentConsent.sol)
 
 **Title:** AgentConsent
 
@@ -38,6 +38,15 @@ bytes32 internal constant DOMAIN_TYPEHASH = keccak256(
     );
 ```
 
+### VERSION
+
+The domain version of the gateway implementation these tests deploy
+(`RobotMoneyGateway.implementationVersion()`, ADR-0014 §10).
+
+```solidity
+string internal constant VERSION = "1";
+```
+
 ## Functions
 
 <a id="digest-address-uint256-address-address-address-uint256"></a>
@@ -62,6 +71,43 @@ function digest(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| gateway | `address` |  |
+| chainId | `uint256` |  |
+| agent | `address` |  |
+| owner | `address` |  |
+| shareReceiver | `address` |  |
+| nonce | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="digestat-string-address-uint256-address-address-address-uint256"></a>
+
+### digestAt
+
+`digest` in the domain of an explicit gateway implementation version
+(QA plan Decisions D5: the version binds the consent to the implementation).
+
+```solidity
+function digestAt(
+        string memory version,
+        address gateway,
+        uint256 chainId,
+        address agent,
+        address owner,
+        address shareReceiver,
+        uint256 nonce
+    ) internal pure returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| version | `string` |  |
 | gateway | `address` |  |
 | chainId | `uint256` |  |
 | agent | `address` |  |

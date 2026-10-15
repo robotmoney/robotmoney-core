@@ -189,14 +189,15 @@ jobs:
 
       # Two more targets that landed on fusion/deployment-workflow with no job
       # naming them — same cause as the indexer pair above.
-      - name: Governance quorum RPC integration test
+      - name: Weight-setter path RPC integration test
         env:
-          # Floor = the executed count in the last green dev run (4).
-          CARGO_TEST_MIN_EXECUTED: 4
+          # Floor = the target's test count (5). Issue 1698 replaced the
+          # quorumThreshold() check (governance_quorum_rpc, 4) with this one.
+          CARGO_TEST_MIN_EXECUTED: 5
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
-            --test governance_quorum_rpc -- --nocapture
+            --test governance_weight_setter_rpc -- --nocapture
 
       - name: Watchdog profiles integration test
         env:

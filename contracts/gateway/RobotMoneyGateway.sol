@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §5 — On-Chain Gateway
-// (See also: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol)
+// (See also: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol;
+//  docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
+import {GatewayWindows} from "../lib/GatewayWindows.sol";
+import {GatewayAuth} from "../lib/GatewayAuth.sol";
+import {GatewayWithdrawOps} from "../lib/GatewayWithdrawOps.sol";
 
 import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
@@ -23,7 +29,14 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 /// @dev Implements `Plan tracking issue #109` §2.2. Custom errors only;
 ///      OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 ///      hash deliberately excludes `deadline`.
-contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
+///
+///      Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and
+///      initialized in the proxy's deployment transaction. Only the timelock named
+///      at `initialize` can upgrade it, and `freezeUpgrades` ends upgrades forever.
+///      The withdraw paths have no upgrade- or freeze-dependent branch. The
+///      EIP-712 domain uses `address(this)`, the proxy, so a consent stays bound
+///      to the proxy address across upgrades (ADR-0014 §10).
+contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, GovernedUpgrade, IGateway {
     using SafeERC20 for IERC20;
 
     // -------------------------------------------------------------------
@@ -172,7 +185,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Window length in seconds for per-window gross caps. Unix-epoch
     ///         aligned: `windowId = block.timestamp / WINDOW_SECONDS`.
-    uint64 public constant WINDOW_SECONDS = 86400;
+    uint64 public constant WINDOW_SECONDS = GatewayWindows.WINDOW_SECONDS;
 
     /// @notice Maximum future skew permitted on `deadline` arguments.
     uint256 public constant MAX_DEADLINE_SKEW = 600;
@@ -194,54 +207,42 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice EIP-712 type of the agent's consent to a binding (issue #1791).
     ///         Signed by the agent; `owner` is the revealer, `nonce` is
     ///         `agentConsentNonce(agent)`.
-    bytes32 public constant AGENT_CONSENT_TYPEHASH =
-        keccak256("AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)");
+    bytes32 public constant AGENT_CONSENT_TYPEHASH = GatewayAuth.AGENT_CONSENT_TYPEHASH;
     /// @dev EIP-712 domain parts. The separator is derived per call from
-    ///      `block.chainid` and `address(this)`, so a consent never verifies on
-    ///      another chain or another gateway.
+    ///      `block.chainid` and `address(this)` (the proxy), so a consent never
+    ///      verifies on another chain or another gateway. The domain `version` is
+    ///      `implementationVersion()` (ADR-0014 §10, QA plan Decisions D5).
     bytes32 private constant _EIP712_DOMAIN_TYPEHASH = keccak256(
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
     bytes32 private constant _EIP712_NAME_HASH = keccak256("RobotMoneyGateway");
-    bytes32 private constant _EIP712_VERSION_HASH = keccak256("1");
-    /// @dev secp256k1 order / 2. A signature with `s` above it is the
-    ///      malleable twin of a low-s one and is refused (EIP-2).
-    uint256 private constant _SECP256K1_HALF_ORDER =
-        0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     // -------------------------------------------------------------------
-    // Immutables
+    // Write-once addresses (constructor immutables before ADR-0014)
     // -------------------------------------------------------------------
 
-    /// @notice Pinned USDC token.
-    IERC20 public immutable usdcToken;
+    /// @notice Pinned USDC token. Written once by `initialize`; no setter.
+    IERC20 public usdcToken;
 
-    /// @notice Pinned ERC-4626 vault.
-    IERC4626 public immutable vaultContract;
+    /// @notice Pinned ERC-4626 vault. Written once by `initialize`; no setter.
+    IERC4626 public vaultContract;
 
     /// @notice Portfolio Router for multi-vault agent deposits. May be `address(0)`
-    ///         if the gateway was deployed without router support.
-    IPortfolioRouter public immutable routerContract;
+    ///         if the gateway was deployed without router support. Written once
+    ///         by `initialize`; no setter.
+    IPortfolioRouter public routerContract;
 
     // -------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------
 
-    /// @notice Pending authorization commitment. Stored by commitHash to allow
-    ///         the depositor to reveal in a subsequent block, defeating
-    ///         mempool front-running of `authorizeAgent`.
-    /// @param committer   EOA that submitted the commitment (`msg.sender` at commit time).
-    /// @param blockNumber Block number at which the commitment was submitted.
-    struct Commitment {
-        address committer;
-        uint64 blockNumber;
-    }
-
     /// @notice Pending commitments keyed by
     ///         `keccak256(abi.encode(commitHash, committer))`. Caller scoping
     ///         prevents another account from overwriting a commitment observed
-    ///         in the mempool or on-chain.
-    mapping(bytes32 => Commitment) public commitments;
+    ///         in the mempool or on-chain. A commitment (`GatewayAuth.Commitment`:
+    ///         committer, block number) lets the depositor reveal in a later
+    ///         block, defeating mempool front-running of the authorization.
+    mapping(bytes32 => GatewayAuth.Commitment) public commitments;
 
     /// @notice Per-agent policy. Keyed on the agent's signing address.
     mapping(address => AgentPolicy) public agents;
@@ -296,38 +297,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Per-agent rolling withdrawal window state. See `WithdrawWindow`.
     mapping(address => WithdrawWindow) public agentWithdrawWindow;
 
-    struct WindowEntry {
-        uint64 timestamp;
-        uint256 amount;
-    }
-
-    /// @notice Bounded ring buffer backing one agent's rolling-window accounting
-    ///         (NC-7 / GW-4). The previous design `.push`ed a fresh `WindowEntry`
-    ///         for every operation and only advanced a `head` cursor on prune, so
-    ///         the underlying dynamic array grew without bound for the life of the
-    ///         agent — eventually making every windowed op (and the linear prune
-    ///         scan) cost so much gas that the agent gas-bricks itself out of the
-    ///         gateway permanently.
-    ///
-    ///         The ring buffer fixes this in two ways:
-    ///           1. SAME-SECOND COALESCING — operations sharing a `block.timestamp`
-    ///              merge into the single newest entry instead of appending. The
-    ///              count of distinct live entries can therefore never exceed the
-    ///              number of distinct seconds in the rolling window, which is
-    ///              hard-capped at `MAX_WINDOW_ENTRIES`.
-    ///           2. SLOT REUSE — pruned (expired) slots are reclaimed by wrapping
-    ///              `head`/`count` around the fixed-capacity `slots` array, so the
-    ///              array's storage footprint plateaus at the high-water mark of
-    ///              concurrently-live entries and never grows monotonically.
-    ///
-    ///         Exact rolling-window semantics (strict `(t-WINDOW_SECONDS, t]`
-    ///         expiry) are preserved per-entry; only the storage shape changed.
-    struct RollingWindow {
-        WindowEntry[] slots; // ring storage; length == live capacity (≤ MAX_WINDOW_ENTRIES)
-        uint256 head; // index of the oldest live entry
-        uint256 count; // number of live entries
-        uint256 total; // cumulative amount across the live entries
-    }
+    // Rolling windows (NC-7 / GW-4): one bounded ring buffer per agent per side,
+    // `GatewayWindows.RollingWindow`, maintained by the linked `GatewayWindows`
+    // library (ADR-0014 §9). Same-second operations coalesce and freed slots are
+    // reused, so the storage footprint plateaus and every windowed op stays O(1)
+    // in storage while keeping exact `(t-WINDOW_SECONDS, t]` expiry per entry.
 
     /// @notice Hard cap on the number of distinct live ring-buffer entries per
     ///         agent per side. Because same-second operations coalesce, the live
@@ -336,7 +310,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         and makes the bound explicit. `WINDOW_SECONDS` distinct seconds is
     ///         the theoretical ceiling, but no real agent approaches it — the cap
     ///         exists purely so the worst case is provably O(1) in storage.
-    uint256 public constant MAX_WINDOW_ENTRIES = WINDOW_SECONDS;
+    uint256 public constant MAX_WINDOW_ENTRIES = GatewayWindows.MAX_WINDOW_ENTRIES;
 
     /// @notice Raised when an agent's live window-entry count would exceed
     ///         `MAX_WINDOW_ENTRIES`. Unreachable in practice (same-second
@@ -344,8 +318,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         the ring buffer can never silently overflow its bound.
     error WindowBufferFull();
 
-    mapping(address => RollingWindow) private _depositWindow;
-    mapping(address => RollingWindow) private _withdrawWindow;
+    mapping(address => GatewayWindows.RollingWindow) private _depositWindow;
+    mapping(address => GatewayWindows.RollingWindow) private _withdrawWindow;
 
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
@@ -362,9 +336,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
     //
     // Appended at the END of storage so the layout of every preceding slot
-    // (notably `agents` at slot 3 and `commitments` at slot 2) is unchanged —
-    // a plain manual counter, not AccessControlEnumerable, to avoid both a
-    // storage-layout shift and the extra bytecode. The two privileged admin
+    // stayed unchanged in the direct-deployment series — a plain manual
+    // counter, not AccessControlEnumerable, to avoid both a storage-layout
+    // shift and the extra bytecode. (ADR-0014 started a new proxy layout
+    // series; `contracts/test/fixtures/storage-layout/RobotMoneyGateway.json`
+    // pins it, and new fields append after `agentConsented`.) The two privileged admin
     // tiers (`ADMIN_ROLE`, `DEFAULT_ADMIN_ROLE`) each get a counter; revoking
     // or renouncing the sole holder of either is forbidden, so governance can
     // never be permanently bricked.
@@ -420,22 +396,40 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     // -------------------------------------------------------------------
-    // Constructor
+    // Initializer (ADR-0014)
     // -------------------------------------------------------------------
 
-    /// @param usdc_    USDC (or 6-decimal stand-in) token address.
-    /// @param vault_   ERC-4626 vault whose `asset()` MUST equal `usdc_`.
-    /// @param admin_   Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
-    /// @param pauser_  Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents.
-    /// @param router_  Portfolio Router address, or `address(0)` to deploy without
-    ///                 router support (single-vault mode).
-    constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_) {
+    /// @dev The implementation is never initialized: only a proxy is.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+    /// @param usdc_            USDC (or 6-decimal stand-in) token address.
+    /// @param vault_           ERC-4626 vault whose `asset()` MUST equal `usdc_`.
+    /// @param admin_           Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    /// @param pauser_          Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents.
+    /// @param router_          Portfolio Router address, or `address(0)` to deploy without
+    ///                         router support (single-vault mode).
+    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
+    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    function initialize(
+        IERC20 usdc_,
+        IERC4626 vault_,
+        address admin_,
+        address pauser_,
+        address router_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer {
         if (address(usdc_) == address(0)) revert ZeroAddress();
         if (address(vault_) == address(0)) revert ZeroAddress();
         if (admin_ == address(0)) revert ZeroAddress();
         if (pauser_ == address(0)) revert ZeroAddress();
         if (vault_.asset() != address(usdc_)) revert AssetMismatch();
 
+        __ReentrancyGuard_init();
         usdcToken = usdc_;
         vaultContract = vault_;
         routerContract = IPortfolioRouter(router_);
@@ -453,6 +447,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
         _grantRole(DEPOSIT_PAUSER_ROLE, pauser_);
+        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     // -------------------------------------------------------------------
@@ -481,27 +476,23 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @inheritdoc IGateway
     function effectiveWithdrawWindowGross(address agent) external view returns (uint256) {
-        return _effectiveWindowTotal(_withdrawWindow[agent]);
+        return GatewayWindows.effectiveTotal(_withdrawWindow[agent]);
     }
 
     /// @inheritdoc IGateway
     function effectiveDepositWindowGross(address agent) external view returns (uint256) {
-        return _effectiveWindowTotal(_depositWindow[agent]);
+        return GatewayWindows.effectiveTotal(_depositWindow[agent]);
     }
 
     /// @dev Apply a `shares` redemption against the agent's rolling-window
     ///      withdrawal budget (#449). Reverts with `WithdrawWindowCapExceeded`
     ///      when the projected cumulative draw would breach `cap`. On success
-    ///      writes the updated `WithdrawWindow` to storage. Extracted from
-    ///      `withdraw` to keep the entrypoint within EVM stack-depth limits.
+    ///      writes the updated `WithdrawWindow` to storage. The ring buffer runs
+    ///      in the linked `GatewayWindows` (ADR-0014 §9).
     function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal {
-        RollingWindow storage w = _withdrawWindow[agent];
-        _pruneWindow(w);
-        uint256 projected = w.total + shares;
-        if (projected > cap) revert WithdrawWindowCapExceeded();
-        _appendWindowEntry(w, shares);
-        agentWithdrawWindow[agent] =
-            WithdrawWindow({windowStart: _oldestTimestamp(w), gross: w.total});
+        (uint64 windowStart, uint256 gross) =
+            GatewayWindows.accrue(_withdrawWindow[agent], shares, cap, true);
+        agentWithdrawWindow[agent] = WithdrawWindow({windowStart: windowStart, gross: gross});
     }
 
     /// @dev Apply an `amount` deposit against the agent's rolling-window deposit
@@ -510,145 +501,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      `DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
     ///      the deposit side is equally hardened against calendar-boundary bursts.
     function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal {
-        RollingWindow storage w = _depositWindow[agent];
-        _pruneWindow(w);
-        uint256 projected = w.total + amount;
-        if (projected > cap) revert WindowCapExceeded();
-        _appendWindowEntry(w, amount);
-        agentDepositWindow[agent] =
-            DepositWindow({windowStart: _oldestTimestamp(w), gross: w.total});
-    }
-
-    /// @dev Drop every live entry whose timestamp has aged past the rolling
-    ///      window `(t-WINDOW_SECONDS, t]`, reclaiming its ring slot and
-    ///      decrementing `total`. Strictly bounded: it scans at most `count`
-    ///      entries, which can never exceed `MAX_WINDOW_ENTRIES` (NC-7).
-    function _pruneWindow(RollingWindow storage w) internal {
-        uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
-        uint256 head = w.head;
-        uint256 count = w.count;
-        uint256 total = w.total;
-        uint256 cap = w.slots.length;
-        while (count > 0 && w.slots[head].timestamp <= cutoff) {
-            total -= w.slots[head].amount;
-            head = head + 1 == cap ? 0 : head + 1;
-            count--;
-        }
-        w.head = count == 0 ? 0 : head;
-        w.count = count;
-        w.total = total;
-    }
-
-    /// @dev Record `amount` at the current `block.timestamp` in the ring buffer.
-    ///      Operations within the same second COALESCE into the newest live entry
-    ///      (no new slot), which is what bounds the live entry count. Otherwise a
-    ///      freed slot is reused (ring wrap) or, only while the buffer has not yet
-    ///      reached its high-water mark, a new slot is `push`ed — capped at
-    ///      `MAX_WINDOW_ENTRIES`. `total` always tracks the live sum.
-    function _appendWindowEntry(RollingWindow storage w, uint256 amount) internal {
-        uint256 count = w.count;
-        uint256 cap = w.slots.length;
-        // Same-second coalescing: fold into the newest live entry if present.
-        if (count > 0) {
-            uint256 newest = w.head + count - 1;
-            if (newest >= cap) newest -= cap;
-            if (w.slots[newest].timestamp == uint64(block.timestamp)) {
-                w.slots[newest].amount += amount;
-                w.total += amount;
-                return;
-            }
-        }
-        // Distinct second: claim the next ring slot after the newest live entry.
-        if (count == cap) {
-            // Buffer is completely full — every slot is live, so there is no freed
-            // slot to reuse. Grow capacity by one (hard-capped at
-            // MAX_WINDOW_ENTRIES), re-linearizing the live region to start at
-            // index 0 first so the wrapped layout cannot corrupt ordering. The
-            // re-pack is O(count) and only ever runs when the high-water mark
-            // actually increases, which is rare in practice.
-            //
-            // The `count >= MAX_WINDOW_ENTRIES` revert cannot be reached through
-            // the public deposit/withdraw API. Live entries each occupy a
-            // distinct second (same-second deposits coalesce), and the window is
-            // exactly WINDOW_SECONDS == MAX_WINDOW_ENTRIES seconds wide. Filling
-            // every distinct second reaches count == MAX_WINDOW_ENTRIES, but
-            // adding one more distinct second advances past the oldest entry's
-            // expiry, so `_pruneWindow` evicts it before the append ever observes
-            // a full buffer. The guard is a defensive overflow bound, never
-            // triggerable externally. See
-            // test_rollingWindow_liveCountBoundedAcrossDistinctSeconds.
-            // coverage:unreachable
-            if (count >= MAX_WINDOW_ENTRIES) revert WindowBufferFull();
-            _relinearize(w);
-            w.slots.push(WindowEntry({timestamp: uint64(block.timestamp), amount: amount}));
-            w.head = 0;
-            w.count = count + 1;
-            w.total += amount;
-            return;
-        }
-        uint256 tail = w.head + count;
-        if (tail >= cap) tail -= cap;
-        w.slots[tail] = WindowEntry({timestamp: uint64(block.timestamp), amount: amount});
-        w.count = count + 1;
-        w.total += amount;
-    }
-
-    /// @dev Rotate the full ring buffer so the oldest live entry sits at index 0.
-    ///      Precondition: the buffer is completely full (`count == slots.length`),
-    ///      so every slot is live and a simple rotation by `head` re-linearizes
-    ///      the live region. Used only on the rare grow path. Implemented as a
-    ///      sequence of in-place reversals (reverse[0,head), reverse[head,len),
-    ///      reverse[0,len)) so it needs no scratch array.
-    function _relinearize(RollingWindow storage w) internal {
-        uint256 head = w.head;
-        if (head == 0) return;
-        uint256 len = w.slots.length;
-        _reverseRange(w, 0, head);
-        _reverseRange(w, head, len);
-        _reverseRange(w, 0, len);
-        w.head = 0;
-    }
-
-    /// @dev Reverse `slots[lo:hi)` in place.
-    function _reverseRange(RollingWindow storage w, uint256 lo, uint256 hi) internal {
-        while (lo + 1 < hi) {
-            hi--;
-            WindowEntry memory tmp = w.slots[lo];
-            w.slots[lo] = w.slots[hi];
-            w.slots[hi] = tmp;
-            lo++;
-        }
-    }
-
-    /// @dev Timestamp of the oldest live entry, or 0 when the window is empty.
-    function _oldestTimestamp(RollingWindow storage w) internal view returns (uint64) {
-        // The empty-window early return is dead through the public API.
-        // `_oldestTimestamp` is only called in
-        // `_accrueRollingWithdraw`/`_accrueRollingDeposit`, immediately after
-        // `_appendWindowEntry` has added an entry, so `w.count` is always >= 1
-        // at the call site. The guard is defensive for internal reuse only.
-        // coverage:unreachable
-        if (w.count == 0) return 0;
-        return w.slots[w.head].timestamp;
-    }
-
-    /// @dev View-only effective live total after notionally pruning expired
-    ///      entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
-    function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256 total) {
-        uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
-        uint256 head = w.head;
-        uint256 count = w.count;
-        total = w.total;
-        uint256 cap = w.slots.length;
-        while (count > 0 && w.slots[head].timestamp <= cutoff) {
-            total -= w.slots[head].amount;
-            head = head + 1 == cap ? 0 : head + 1;
-            count--;
-        }
-    }
-
-    function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32) {
-        return keccak256(abi.encode(commitHash, committer));
+        (uint64 windowStart, uint256 gross) =
+            GatewayWindows.accrue(_depositWindow[agent], amount, cap, false);
+        agentDepositWindow[agent] = DepositWindow({windowStart: windowStart, gross: gross});
     }
 
     // -------------------------------------------------------------------
@@ -675,9 +530,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @inheritdoc IGateway
     function commitAuthorization(bytes32 commitHash) external {
-        bytes32 storageKey = _commitmentKey(commitHash, msg.sender);
+        bytes32 storageKey = GatewayAuth.commitmentKey(commitHash, msg.sender);
         commitments[storageKey] =
-            Commitment({committer: msg.sender, blockNumber: uint64(block.number)});
+            GatewayAuth.Commitment({committer: msg.sender, blockNumber: uint64(block.number)});
         emit CommitSubmitted(msg.sender, commitHash, uint64(block.number));
     }
 
@@ -688,37 +543,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         AgentPolicy calldata p,
         bytes calldata agentConsent
     ) external {
-        bytes32 commitHash = keccak256(abi.encode(agent, msg.sender, salt));
-        bytes32 storageKey = _commitmentKey(commitHash, msg.sender);
-        Commitment memory c = commitments[storageKey];
-
-        // 1. Commitment must exist.
-        if (c.committer == address(0)) revert CommitmentNotFound();
-
-        // 2. Revealer must be the original committer.
-        //
-        // Note: this branch is defense-in-depth only. Because the commit hash
-        // is computed as `keccak256(abi.encode(agent, msg.sender, salt))` at
-        // commit time, a caller with a different `msg.sender` would produce a
-        // different hash. The lookup above returns a zero-committer entry for
-        // that hash (no matching commitment), which already reverts at step 1.
-        // The `CommitmentOwnerMismatch` check here is therefore unreachable
-        // through the current API surface.
-        // coverage:unreachable
-        if (c.committer != msg.sender) revert CommitmentOwnerMismatch();
-
-        // 3. Must wait at least one block (front-running protection).
-        if (block.number <= uint256(c.blockNumber)) revert CommitmentTooRecent();
-
-        // 4. Commitment must not be expired.
-        if (block.number > uint256(c.blockNumber) + COMMIT_EXPIRY_BLOCKS) {
-            revert CommitmentExpired();
-        }
-
-        // 5. Clear the commitment before the authorization logic (CEI).
-        delete commitments[storageKey];
-
-        emit CommitRevealed(msg.sender, commitHash, agent);
+        // 1–5. The revealer's own commitment exists, is at least one block old
+        //      and at most COMMIT_EXPIRY_BLOCKS old; it is deleted before the
+        //      authorization (CEI) and `CommitRevealed` is emitted. Runs in the
+        //      linked `GatewayAuth.consumeCommitment` (ADR-0014 §9).
+        GatewayAuth.consumeCommitment(commitments, agent, salt, COMMIT_EXPIRY_BLOCKS);
 
         // 6. Perform the authorization (same logic as authorizeAgent), with
         //    the agent's consent checked for a caller without ADMIN_ROLE.
@@ -740,7 +569,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      caller; or claim a published address first and block its real
     ///      owner (`AgentAlreadyOwned`). A caller without ADMIN_ROLE therefore
     ///      binds an agent other than itself only with the agent's signature
-    ///      (`_requireAgentConsent`). Revealing for itself is consent by the
+    ///      (`GatewayAuth.requireAgentConsent`). Revealing for itself is consent by the
     ///      call. An ADMIN_ROLE caller takes no consent; that binding is
     ///      recorded as unconsented, and the agent may undo it with
     ///      `releaseAgent`.
@@ -751,7 +580,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
         _validatePolicy(msg.sender, p);
         if (!hasRole(ADMIN_ROLE, msg.sender)) {
-            if (agent != msg.sender) _requireAgentConsent(agent, p.shareReceiver, consent);
+            if (agent != msg.sender) {
+                GatewayAuth.requireAgentConsent(
+                    agentConsentNonce, _domainSeparator(), agent, p.shareReceiver, consent
+                );
+            }
             agentConsented[agent] = true;
         }
 
@@ -823,45 +656,29 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         emit AgentRevoked(agent, owner);
     }
 
-    /// @dev Require `consent` to be `agent`'s EIP-712 `AgentConsent` signature
-    ///      for this revealer (`msg.sender`) and `shareReceiver` at the agent's
-    ///      current nonce, then advance the nonce so the signature authorizes
-    ///      once (issue #1791). Layout is `r ‖ s ‖ v` (65 bytes). A high-s
-    ///      signature is refused (EIP-2), so a consent has one valid encoding.
-    ///      `agent` is non-zero here, so a failed recovery (zero signer) never
-    ///      matches. A contract agent (no ECDSA key) consents by revealing for
-    ///      itself instead. Hand-rolled rather than OZ `ECDSA.tryRecover` and
-    ///      `EIP712` to stay under EIP-170 and to add no storage.
-    function _requireAgentConsent(address agent, address shareReceiver, bytes calldata consent)
-        internal
-    {
-        if (consent.length != 65) revert InvalidAgentConsent();
-        uint256 nonce = agentConsentNonce[agent];
-        bytes32 domainSeparator = keccak256(
+    /// @inheritdoc IGateway
+    /// @dev The one source of the domain version: `_domainSeparator` hashes this
+    ///      return value, so the getter clients read and the digest the gateway
+    ///      checks cannot disagree. Bump it in an implementation that changes what
+    ///      a signed consent means (ADR-0014 §10); a pure fix keeps it.
+    function implementationVersion() public pure virtual returns (string memory) {
+        return "1";
+    }
+
+    /// @dev The EIP-712 domain separator of agent consents (issue #1791): this
+    ///      gateway's name, `implementationVersion()` (ADR-0014 §10), the chain,
+    ///      and `address(this)`, the proxy. The signature check itself runs in the
+    ///      linked `GatewayAuth.requireAgentConsent` (ADR-0014 §9).
+    function _domainSeparator() internal view returns (bytes32) {
+        return keccak256(
             abi.encode(
                 _EIP712_DOMAIN_TYPEHASH,
                 _EIP712_NAME_HASH,
-                _EIP712_VERSION_HASH,
+                keccak256(bytes(implementationVersion())),
                 block.chainid,
                 address(this)
             )
         );
-        bytes32 structHash =
-            keccak256(abi.encode(AGENT_CONSENT_TYPEHASH, agent, msg.sender, shareReceiver, nonce));
-        bytes32 digest = MessageHashUtils.toTypedDataHash(domainSeparator, structHash);
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        // The length is exactly 65, so the three loads stay inside `consent`.
-        assembly ("memory-safe") {
-            r := calldataload(consent.offset)
-            s := calldataload(add(consent.offset, 0x20))
-            v := byte(0, calldataload(add(consent.offset, 0x40)))
-        }
-        if (uint256(s) > _SECP256K1_HALF_ORDER || ecrecover(digest, v, r, s) != agent) {
-            revert InvalidAgentConsent();
-        }
-        agentConsentNonce[agent] = nonce + 1;
     }
 
     /// @dev The one policy validator every writer of `agents[...]` calls, so
@@ -1278,51 +1095,35 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (gasleft() < WITHDRAW_GAS_FLOOR) revert InsufficientGas(gasleft(), WITHDRAW_GAS_FLOOR);
         // core 1494: no pause applies. Withdrawals stay open while deposits are paused.
 
-        AgentPolicy memory p = agents[msg.sender];
-
-        // 1. Withdrawal must be enabled for this agent.
-        if (p.maxWithdrawPerPayment == 0) revert WithdrawalNotEnabled();
-
-        // 2. shares > 0 && shares <= maxWithdrawPerPayment
-        if (shares == 0) revert InvalidAmount();
-        if (shares > p.maxWithdrawPerPayment) revert SharesExceedWithdrawPerPaymentCap();
-
-        // 3. deadline window
-        if (block.timestamp > deadline) revert DeadlineExpired();
-        if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
-
-        // 4. policy active and not expired.
-        // coverage:unreachable
-        if (!p.active) revert AgentNotAuthorized();
-        if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
-
-        // 5. sourceVault validation: must be the pinned vault, and must pass
-        //    the allowedSourceVaults whitelist when non-empty.
-        if (sourceVault != address(vaultContract)) revert InvalidSourceVault();
+        // 1–5. Withdrawal enabled, shares within (0, maxWithdrawPerPayment],
+        //      deadline window, policy active and not expired, sourceVault the
+        //      pinned vault and in the allowlist when that is non-empty. Runs in
+        //      the linked `GatewayWithdrawOps.checkWithdraw` (ADR-0014 §9).
+        address assetRecipient;
         {
-            uint256 len = p.allowedSourceVaults.length;
-            if (len > 0) {
-                bool found;
-                for (uint256 i = 0; i < len && !found; i++) {
-                    found = p.allowedSourceVaults[i] == sourceVault;
-                }
-                if (!found) revert InvalidSourceVault();
-            }
+            uint256 maxWithdrawPerWindow;
+            (maxWithdrawPerWindow, assetRecipient) = GatewayWithdrawOps.checkWithdraw(
+                agents[msg.sender],
+                address(vaultContract),
+                sourceVault,
+                shares,
+                deadline,
+                MAX_DEADLINE_SKEW
+            );
+
+            // 6. windowId — informational only, echoed in the event below. The
+            //    on-chain cap is enforced on a strict rolling window (#449), not
+            //    on this calendar-aligned id.
+
+            // 7. rolling-window cap (issue #449).
+            //    Anchored on the agent's first withdrawal of each rolling window.
+            //    The anchor advances to `block.timestamp` only when a full
+            //    WINDOW_SECONDS has elapsed since the last anchor — so cumulative
+            //    redemptions in any WINDOW_SECONDS-wide interval are bounded by
+            //    `maxWithdrawPerWindow`. Eliminates the fixed-window boundary
+            //    burst.
+            _accrueRollingWithdraw(msg.sender, shares, maxWithdrawPerWindow);
         }
-
-        // 6. windowId — informational only (echoed in event). The on-chain
-        //    cap is enforced on a strict rolling window (#449), not on this
-        //    calendar-aligned id.
-        uint64 windowId = uint64(block.timestamp / WINDOW_SECONDS);
-
-        // 7. rolling-window cap (issue #449).
-        //    Anchored on the agent's first withdrawal of each rolling window.
-        //    The anchor advances to `block.timestamp` only when a full
-        //    WINDOW_SECONDS has elapsed since the last anchor — so cumulative
-        //    redemptions in any WINDOW_SECONDS-wide interval are bounded by
-        //    `maxWithdrawPerWindow`. Eliminates the fixed-window boundary
-        //    burst.
-        _accrueRollingWithdraw(msg.sender, shares, p.maxWithdrawPerWindow);
 
         // 8. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
         //    OP_WITHDRAW prefix namespaces withdrawal ids away from deposit ids.
@@ -1360,7 +1161,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint256 usdcBefore = usdcToken.balanceOf(address(this));
 
         // 12. Call vault.redeem — sends USDC to assetRecipient directly.
-        assetsOut = IERC4626(sourceVault).redeem(shares, p.assetRecipient, address(this));
+        assetsOut = IERC4626(sourceVault).redeem(shares, assetRecipient, address(this));
 
         // 13. Verify the vault did not leave unexpected USDC in the gateway.
         //     The gateway balance must not have increased (USDC went to assetRecipient).
@@ -1382,8 +1183,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             sourceVault,
             shares,
             assetsOut,
-            p.assetRecipient,
-            windowId
+            assetRecipient,
+            uint64(block.timestamp / WINDOW_SECONDS) // 6. windowId
         );
     }
 
@@ -1398,19 +1199,6 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Error: `sharesPerLeg` length does not match the router's current
     ///         effective weight vector length.
     error RouterLegLengthMismatch();
-
-    /// @dev Internal args struct to avoid stack-too-deep in `withdrawFromRouter`.
-    struct RouterWithdrawArgs {
-        bytes32 paymentId;
-        bytes32 orderId;
-        address shareHolder;
-        address assetRecipient;
-        uint256 totalShares;
-        uint64 windowId;
-        uint64 deadline;
-        address[] vaultList;
-        uint256[] shareBalancesBefore;
-    }
 
     /// @inheritdoc IGateway
     /// @dev Proportional multi-vault redemption through the Portfolio Router.
@@ -1452,155 +1240,57 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
         }
 
-        // Build args struct early to collapse locals onto the heap.
-        RouterWithdrawArgs memory args;
-        args.orderId = orderId;
-        // F-03/NC-5 (issue #967): redeem legs are driven by the caller-supplied
-        // explicit `vaults[]`, not the router's live weight vector, so a holder
-        // can exit a reweighted-out or retired position. The array is identity-
-        // bound to `sharesPerLeg` and committed to the intent hash (paymentId).
-        args.vaultList = vaults;
-        // F-11 (issue #969): forward the real agent deadline to the router too.
-        args.deadline = deadline;
-
-        {
-            AgentPolicy memory p = agents[msg.sender];
-
-            // 2. Withdrawal must be enabled for this agent.
-            if (p.maxWithdrawPerPayment == 0) revert WithdrawalNotEnabled();
-
-            // 3. deadline window.
-            if (block.timestamp > deadline) revert DeadlineExpired();
-            if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
-
-            // 4. policy active and not expired.
-            // coverage:unreachable
-            if (!p.active) revert AgentNotAuthorized();
-            if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
-
-            // 5. Validate the leg arrays are parallel. The vault set is the
-            //    caller-supplied `vaults[]` (issue #967, F-03) — NOT the router's
-            //    live weight vector — so a holder can redeem a position the router
-            //    has reweighted away from. The router re-validates each named vault
-            //    against the registry (registered, any status) in `redeemFor`.
-            if (args.vaultList.length == 0) revert RouterLegLengthMismatch();
-            if (sharesPerLeg.length != args.vaultList.length) revert RouterLegLengthMismatch();
-
-            // 5a. allowedSourceVaults check: every vault with non-zero shares
-            //     must be in the policy allowlist when non-empty, or must be
-            //     the pinned vault (vaultContract) when the list is empty.
-            //     AZ-GW-3: an empty list is NOT an open allowlist — it is a
-            //     pinned-vault-only restriction (matching the single-vault
-            //     withdraw path and the IGateway.AgentPolicy natspec).
-            uint256 slen = p.allowedSourceVaults.length;
-            if (slen > 0) {
-                for (uint256 i = 0; i < args.vaultList.length; i++) {
-                    if (sharesPerLeg[i] == 0) continue;
-                    address vaultAddr = args.vaultList[i];
-                    bool found;
-                    for (uint256 j = 0; j < slen && !found; j++) {
-                        found = p.allowedSourceVaults[j] == vaultAddr;
-                    }
-                    if (!found) revert InvalidSourceVault();
-                }
-            } else {
-                // Empty allowlist → pinned-vault only.
-                address pinned = address(vaultContract);
-                for (uint256 i = 0; i < args.vaultList.length; i++) {
-                    if (sharesPerLeg[i] == 0) continue;
-                    if (args.vaultList[i] != pinned) revert InvalidSourceVault();
-                }
-            }
-
-            // 6. Compute totalShares for cap accounting.
-            for (uint256 i = 0; i < sharesPerLeg.length; i++) {
-                args.totalShares += sharesPerLeg[i];
-            }
-            if (args.totalShares == 0) revert InvalidAmount();
-            if (args.totalShares > p.maxWithdrawPerPayment) {
-                revert SharesExceedWithdrawPerPaymentCap();
-            }
-
-            // 7. Rolling-window cap (#449).
-            _accrueRollingWithdraw(msg.sender, args.totalShares, p.maxWithdrawPerWindow);
-
-            // Capture policy fields into args to avoid p being live across
-            // external calls (stack frame shrinks, helps viaIR codegen).
-            args.shareHolder = p.shareReceiver;
-            args.assetRecipient = p.assetRecipient;
-        }
-
-        // 8. windowId — informational only.
-        args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
-
-        // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED (a deadline is liveness,
-        //    not intent). `minAssetsPerLeg` IS bound (GW-5 / F-11): the per-leg
-        //    slippage floor is part of the redemption intent, so a replay can
-        //    never re-execute the same order under a weaker (e.g. zeroed) floor.
-        //    OP_WITHDRAW_ROUTER prefix namespaces router-withdrawal ids away
-        //    from the three sibling op kinds (audit 2026-06-09, L-12).
-        //    The explicit `vaults[]` and `sharesPerLeg` are committed to the
-        //    intent hash (issue #967, NC-5): the redeemed leg set is part of the
-        //    signed intent, so two withdrawals that name different vaults or
-        //    per-leg shares can never collide on the same paymentId.
-        args.paymentId = _routerWithdrawPaymentId(
-            orderId, args.totalShares, vaults, sharesPerLeg, minAssetsPerLeg, idempotencyKey
+        // 2–6. Withdrawal enabled, deadline window, policy active and not
+        //      expired, leg arrays parallel and non-empty, every non-zero leg
+        //      allowed (F-03/NC-5: the explicit caller-supplied `vaults[]`, not the
+        //      router's live weights, so a holder can exit a reweighted-out or
+        //      retired position; AZ-GW-3: an empty allowlist means the pinned
+        //      vault only), total within the per-payment cap. Runs in the linked
+        //      `GatewayWithdrawOps.checkRouterWithdraw` (ADR-0014 §9).
+        GatewayWithdrawOps.RouterWithdraw memory w = GatewayWithdrawOps.checkRouterWithdraw(
+            agents[msg.sender],
+            address(vaultContract),
+            vaults,
+            sharesPerLeg,
+            deadline,
+            MAX_DEADLINE_SKEW
         );
-        if (usedPaymentIds[args.paymentId]) revert PaymentIdAlreadyUsed();
+
+        // 7. Rolling-window cap (#449).
+        _accrueRollingWithdraw(msg.sender, w.totalShares, w.maxWithdrawPerWindow);
+
+        // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED; the explicit legs and
+        //    `minAssetsPerLeg` are bound (#967 NC-5, GW-5 / F-11), and the
+        //    OP_WITHDRAW_ROUTER prefix namespaces it (L-12). See
+        //    `GatewayWithdrawOps.routerWithdrawPaymentId`.
+        paymentId = GatewayWithdrawOps.routerWithdrawPaymentId(
+            orderId, w.totalShares, vaults, sharesPerLeg, minAssetsPerLeg, idempotencyKey
+        );
+        if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
         // 10. EFFECTS: paymentId reservation.
-        usedPaymentIds[args.paymentId] = true;
+        usedPaymentIds[paymentId] = true;
 
-        // 11–14. Execute the multi-leg redemption in a separate frame to
-        //        stay within EVM stack-depth limits.
-        assetsPerLeg = _executeRouterWithdraw(args, sharesPerLeg, minAssetsPerLeg);
+        // 11–14. Pull each leg's shares from the share holder, approve the router,
+        //        `router.redeemFor` with the caller's per-leg floors and real
+        //        deadline (F-11; USDC goes straight to the asset recipient), clear
+        //        the approvals, and check share custody. Runs in the linked
+        //        `GatewayWithdrawOps.executeRouterWithdraw`.
+        assetsPerLeg = GatewayWithdrawOps.executeRouterWithdraw(
+            routerContract, w, vaults, sharesPerLeg, minAssetsPerLeg
+        );
 
-        paymentId = args.paymentId;
-
-        // 15. Event — emit from the outer frame so indexed args are available.
+        // 15. Event.
         emit AgentWithdrawalRouted(
-            args.paymentId,
-            args.orderId,
+            paymentId,
+            orderId,
             msg.sender,
             address(routerContract),
-            args.shareHolder,
+            w.shareHolder,
             sharesPerLeg,
             assetsPerLeg,
-            args.assetRecipient,
-            args.windowId
-        );
-    }
-
-    /// @dev Compute the router-withdrawal paymentId. DEADLINE INTENTIONALLY
-    ///      EXCLUDED (a deadline is liveness, not intent). `OP_WITHDRAW_ROUTER`
-    ///      prefix namespaces these ids from the three sibling op kinds (L-12).
-    ///      The explicit `vaults`/`sharesPerLeg` are committed so two withdrawals
-    ///      that name different vaults or per-leg shares can never collide (#967,
-    ///      NC-5), and `minAssetsPerLeg` is bound so a replay can never re-execute
-    ///      the same order under a weaker (e.g. zeroed) slippage floor (GW-5 /
-    ///      F-11). Extracted to a helper to keep `withdrawFromRouter` under the
-    ///      EVM stack-depth limit.
-    function _routerWithdrawPaymentId(
-        bytes32 orderId,
-        uint256 totalShares,
-        address[] calldata vaults,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg,
-        bytes32 idempotencyKey
-    ) internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                OP_WITHDRAW_ROUTER,
-                block.chainid,
-                address(this),
-                msg.sender,
-                orderId,
-                totalShares,
-                vaults,
-                sharesPerLeg,
-                keccak256(abi.encode(minAssetsPerLeg)),
-                idempotencyKey
-            )
+            w.assetRecipient,
+            uint64(block.timestamp / WINDOW_SECONDS) // 8. windowId — informational only.
         );
     }
 
@@ -1718,64 +1408,5 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             revert ConsensusReceiptNotSet();
         }
         index = consensusReceipt.recordReceipt(msg.sender, receiptId, payloadDigest, payloadUri);
-    }
-
-    /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,
-    ///      approve router, call redeemFor, clear allowances, verify custody.
-    ///      Separated to avoid stack-too-deep in `withdrawFromRouter`.
-    function _executeRouterWithdraw(
-        RouterWithdrawArgs memory args,
-        uint256[] calldata sharesPerLeg,
-        uint256[] calldata minAssetsPerLeg
-    ) internal returns (uint256[] memory assetsPerLeg) {
-        // slither-disable-start reentrancy-balance
-        // Justification: all state effects (paymentId, rolling window) are written
-        // in the calling frame before this function is called (CEI). `nonReentrant`
-        // on the outer function provides defense-in-depth. AGENT_ROLE gate limits
-        // callers. The share-pull loop below temporarily custodies shares within the
-        // call frame and passes them through to the router within the same frame.
-
-        // 11. Pull each vault's shares from shareHolder into the gateway,
-        //     then approve the router to spend them on behalf of the gateway.
-        args.shareBalancesBefore = new uint256[](args.vaultList.length);
-        for (uint256 i = 0; i < sharesPerLeg.length; i++) {
-            args.shareBalancesBefore[i] = IERC20(args.vaultList[i]).balanceOf(address(this));
-            if (sharesPerLeg[i] == 0) continue;
-            IERC20(args.vaultList[i])
-                .safeTransferFrom(args.shareHolder, address(this), sharesPerLeg[i]);
-            IERC20(args.vaultList[i]).forceApprove(address(routerContract), sharesPerLeg[i]);
-        }
-
-        // 12. Call router.redeemFor — router calls vault.redeem per leg with
-        //     the gateway as `owner`. USDC goes directly to assetRecipient.
-        //     The agent's `deadline` is enforced upstream in `withdrawFromRouter`
-        //     (step 3) before any state effects AND forwarded here so the router's
-        //     own deadline guard also bites (no `type(uint256).max` bypass — F-11).
-        //     The caller-supplied per-leg slippage floor (`minAssetsPerLeg`) is
-        //     forwarded verbatim: each non-zero leg reverts `SlippageExceeded`
-        //     when realized USDC proceeds fall below the floor. The gateway no
-        //     longer fabricates an all-zero floor vector (GW-5 / F-11).
-        assetsPerLeg = routerContract.redeemFor(
-            address(this),
-            args.assetRecipient,
-            args.vaultList,
-            sharesPerLeg,
-            minAssetsPerLeg,
-            uint256(args.deadline)
-        );
-
-        // 13. Clear residual vault share approvals (defense-in-depth).
-        for (uint256 i = 0; i < sharesPerLeg.length; i++) {
-            if (sharesPerLeg[i] == 0) continue;
-            IERC20(args.vaultList[i]).forceApprove(address(routerContract), 0);
-        }
-
-        // 14. Post-call custody invariant: gateway must hold zero vault shares.
-        for (uint256 i = 0; i < args.vaultList.length; i++) {
-            if (IERC20(args.vaultList[i]).balanceOf(address(this)) != args.shareBalancesBefore[i]) {
-                revert ShareCustodyInvariantViolated();
-            }
-        }
-        // slither-disable-end reentrancy-balance
     }
 }

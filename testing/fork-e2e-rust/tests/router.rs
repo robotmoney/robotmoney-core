@@ -213,13 +213,9 @@ fn agent_deposit_routed_topic0() -> alloy_primitives::B256 {
 
 // ── Contract deployment helpers ──────────────────────────────────────────────
 
-/// Deploy `VaultRegistry` with `admin` as the admin.
+/// Deploy `VaultRegistry` behind its proxy (ADR-0014) with `admin` as the admin.
 fn deploy_registry(deployer: &rmpc_fork_e2e::Account<'_>, admin: Address) -> Address {
-    let mut code = load_initcode("VaultRegistry.sol", "VaultRegistry").to_vec();
-    code.extend_from_slice(&encode_address_arg(admin));
-    deployer
-        .deploy(Bytes::from(code), 3_000_000)
-        .expect("deploy VaultRegistry")
+    rmpc_fork_e2e::proxied::deploy_vault_registry(deployer, admin).expect("deploy VaultRegistry")
 }
 
 /// Deploy `MockVault` with `asset_` = USDC address.
@@ -231,31 +227,21 @@ fn deploy_mock_vault(deployer: &rmpc_fork_e2e::Account<'_>, usdc: Address) -> Ad
         .expect("deploy MockVault")
 }
 
-/// Deploy `PortfolioRouter` with the given usdc, registry, and admin.
-///
-/// Constructor: `(address _usdc, address _registry, address _admin)` — 3 × 32 bytes.
+/// Deploy `PortfolioRouter` behind its proxy (ADR-0014) with the given usdc, registry, and
+/// admin: `initialize(usdc, registry, admin, upgradeAuthority, mode)`.
 fn deploy_portfolio_router(
     deployer: &rmpc_fork_e2e::Account<'_>,
     usdc: Address,
     registry: Address,
     admin: Address,
 ) -> Address {
-    let mut code = load_initcode("PortfolioRouter.sol", "PortfolioRouter").to_vec();
-    // 3 × address args
-    let mut args = [0u8; 96];
-    args[12..32].copy_from_slice(usdc.as_slice());
-    args[44..64].copy_from_slice(registry.as_slice());
-    args[76..96].copy_from_slice(admin.as_slice());
-    code.extend_from_slice(&args);
-    deployer
-        .deploy(Bytes::from(code), 4_000_000)
+    rmpc_fork_e2e::proxied::deploy_portfolio_router(deployer, usdc, registry, admin)
         .expect("deploy PortfolioRouter")
 }
 
-/// Deploy `RobotMoneyGateway`.
-///
-/// Constructor: `(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_)`.
-/// `pauser_` receives DEPOSIT_PAUSER_ROLE: it pauses deposits only.
+/// Deploy `RobotMoneyGateway` behind its proxy (ADR-0014), its linked libraries first:
+/// `initialize(usdc, vault, admin, pauser, router, upgradeAuthority, mode)`.
+/// `pauser` receives DEPOSIT_PAUSER_ROLE: it pauses deposits only.
 #[allow(clippy::too_many_arguments)]
 fn deploy_gateway(
     deployer: &rmpc_fork_e2e::Account<'_>,
@@ -265,19 +251,7 @@ fn deploy_gateway(
     pauser: Address,
     router: Address,
 ) -> Address {
-    let mut code = load_initcode("RobotMoneyGateway.sol", "RobotMoneyGateway").to_vec();
-    // 5 × address args
-    let mut args = [0u8; 160];
-    args[12..32].copy_from_slice(usdc.as_slice());
-    args[44..64].copy_from_slice(vault.as_slice());
-    args[76..96].copy_from_slice(admin.as_slice());
-    args[108..128].copy_from_slice(pauser.as_slice());
-    args[140..160].copy_from_slice(router.as_slice());
-    code.extend_from_slice(&args);
-    // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
-    // committee routing additions in issue #1049 (deployment cost ~5.15M).
-    deployer
-        .deploy(Bytes::from(code), 8_000_000)
+    rmpc_fork_e2e::proxied::deploy_robot_money_gateway(deployer, usdc, vault, admin, pauser, router)
         .expect("deploy RobotMoneyGateway")
 }
 
@@ -1006,6 +980,9 @@ const ROUTER_DEPOSIT_BASE_GAS: u64 = 400_000;
 const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 1_850_000;
 /// The passphrase of the throwaway agent keystore.
 const RMPC_PASSPHRASE: &str = "fork-e2e-router-gas";
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
+const ERC1967_IMPLEMENTATION_SLOT: alloy_primitives::B256 =
+    alloy_primitives::b256!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
 
 /// An operator config for `rmpc deposit` against this test's own gateway.
 fn write_rmpc_deposit_config(
@@ -1013,10 +990,64 @@ fn write_rmpc_deposit_config(
     fx: &ForkFixture,
     gateway: Address,
     gateway_vault: Address,
+    proxy_targets: &[Address],
     keystore: &Path,
 ) -> PathBuf {
     let code = fx.rpc().get_code(gateway).expect("eth_getCode gateway");
     assert!(!code.is_empty(), "the gateway must have code");
+    // QA plan P3: rmpc signs against a proxied gateway only when its implementation's code hash
+    // is pinned. A direct gateway (empty ERC-1967 slot) takes no pin.
+    let slot = fx
+        .rpc()
+        .get_storage_at(gateway, ERC1967_IMPLEMENTATION_SLOT)
+        .expect("eth_getStorageAt gateway implementation slot");
+    let implementation = Address::from_word(slot);
+    let implementation_pin = if implementation == Address::ZERO {
+        String::new()
+    } else {
+        let impl_code = fx
+            .rpc()
+            .get_code(implementation)
+            .expect("eth_getCode gateway implementation");
+        format!(
+            "gateway_implementation_hashes = [\"{:#x}\"]\n",
+            keccak256(&impl_code)
+        )
+    };
+    // Issue 1810: rmpc also pins the logic behind every other proxy the deposit reaches: the
+    // gateway's vault, the router (`gateway.router()`, read from the slot of each candidate) and
+    // each leg vault. Pin every implementation found behind the gateway's vault and the router's
+    // effective legs; a direct contract (empty slot) takes no pin.
+    let mut proxy_hashes: Vec<String> = Vec::new();
+    let mut pin = |addr: Address| {
+        let slot = fx
+            .rpc()
+            .get_storage_at(addr, ERC1967_IMPLEMENTATION_SLOT)
+            .expect("eth_getStorageAt implementation slot");
+        let implementation = Address::from_word(slot);
+        if implementation != Address::ZERO {
+            let code = fx
+                .rpc()
+                .get_code(implementation)
+                .expect("eth_getCode implementation");
+            let h = format!("\"{:#x}\"", keccak256(&code));
+            if !proxy_hashes.contains(&h) {
+                proxy_hashes.push(h);
+            }
+        }
+    };
+    pin(gateway_vault);
+    for addr in proxy_targets {
+        pin(*addr);
+    }
+    let proxy_pin = if proxy_hashes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "proxy_implementation_hashes = [{}]\n",
+            proxy_hashes.join(", ")
+        )
+    };
     let path = dir.join("rmpc.toml");
     let toml = format!(
         r#"chain_id              = {chain_id}
@@ -1025,7 +1056,7 @@ gateway_address       = "{gateway:#x}"
 usdc_address          = "{usdc:#x}"
 vault_address         = "{gateway_vault:#x}"
 gateway_runtime_hash  = "{hash:#x}"
-max_fee_per_gas_cap   = 100000000000
+{implementation_pin}{proxy_pin}max_fee_per_gas_cap   = 100000000000
 
 [signer]
 allow_software_fallback = true
@@ -1189,7 +1220,16 @@ fn deposit_router_default_gas_clears_gateway_floor() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let keystore = tmp.path().join("keystore.json");
     rmpc_bin::write_keystore(&keystore, &agent.private_key_hex(), RMPC_PASSPHRASE);
-    let config = write_rmpc_deposit_config(tmp.path(), &fx, gateway, gateway_vault, &keystore);
+    let mut proxy_targets = vec![router];
+    proxy_targets.extend(legs.iter().copied());
+    let config = write_rmpc_deposit_config(
+        tmp.path(),
+        &fx,
+        gateway,
+        gateway_vault,
+        &proxy_targets,
+        &keystore,
+    );
     let state_dir = tmp.path().join("state");
     std::fs::create_dir_all(&state_dir).expect("state dir");
 

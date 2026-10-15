@@ -328,7 +328,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let raise_arg = format!("threshold={owner_count}");
     let raised = fx
         .published()
-        .govern("safe-change-threshold", &["--admin-arg", raise_arg.as_str()])
+        .govern(
+            "safe-change-threshold",
+            &["--admin-arg", raise_arg.as_str()],
+        )
         .expect("the Safe raises its own threshold through the real SafeL2");
     assert_eq!(
         raised.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
@@ -343,7 +346,10 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     let restore_arg = format!("threshold={sheet_threshold}");
     let restored = fx
         .published()
-        .govern("safe-change-threshold", &["--admin-arg", restore_arg.as_str()])
+        .govern(
+            "safe-change-threshold",
+            &["--admin-arg", restore_arg.as_str()],
+        )
         .expect("every owner signs the restore of the sheet's threshold");
     assert_eq!(
         restored.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
@@ -560,10 +566,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             before,
             "effective is the launch vector again"
         );
-        assert!(
-            c_released(&fx),
-            "the clear does not un-release receipt C"
-        );
+        assert!(c_released(&fx), "the clear does not un-release receipt C");
     }
     // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain
     // (one batch of exactly the release and the weight change, one real delay apart).

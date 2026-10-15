@@ -11,6 +11,7 @@ import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 contract EligibilityHarness is DeployProtocolAssetVault {
     function makeEligible(VaultRegistry registry, address vault, uint256[] memory bps) external {
@@ -33,7 +34,7 @@ contract DeployTimeEligibilityTest is BasketDeployFixture {
     function setUp() public {
         _fixtureSetUp();
         h = new EligibilityHarness();
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
         string memory empty =
             string.concat('{"swapRouter02":"', vm.toString(router02), '","assets":[]}');
         protoVault = new DeployProtocolAssetVault().runInProcess(_params(), empty).vault;

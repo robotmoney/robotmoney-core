@@ -13,14 +13,20 @@
 // docs/technical/security-model.md §5. Multi-DEX venue abstraction added per
 // docs/technical/real-four-vault-demo-seams.md §3 (issue #553). Per-asset
 // venue selector (Venue enum) added per issue #555.
+// Upgradeability: docs/adr/ADR-0014-governed-upgrades-and-freeze.md (UUPS proxy, timelock upgrades,
+// freeze; the single `AssetInfo` declaration in `BasketAssetConfigGuard`, §8).
 pragma solidity ^0.8.24;
 
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
@@ -30,6 +36,7 @@ import {BpsMath} from "../lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
+import {BasketSwapOps} from "../lib/BasketSwapOps.sol";
 import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
 
 /// @title BasketVault
@@ -40,7 +47,18 @@ import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCoun
 ///         arithmetic-mean tick) over a per-asset, admin-configurable window.
 ///
 ///         Subclasses set the vault name/symbol, max basket size, and default slippage.
-abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, ReentrancyGuard {
+///
+///         Upgradeability (ADR-0014): each concrete kind is an implementation behind its own
+///         ERC1967Proxy, initialized in the proxy's deployment transaction (`initialize`, here
+///         once for all three kinds). Only the timelock named at `initialize` can upgrade it, and
+///         `freezeUpgrades` ends upgrades forever. `redeem` and `redeemInKind` have no upgrade- or
+///         freeze-dependent branch.
+abstract contract BasketVault is
+    ERC4626Upgradeable,
+    AdminFloorAccessControlCounter,
+    ReentrancyGuardUpgradeable,
+    GovernedUpgrade
+{
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -91,55 +109,23 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     // ─── Asset registry ───────────────────────────────────────────────
 
-    /// @notice DEX venue selector for a basket asset.
-    ///         Recorded on AssetInfo so off-chain tooling and governance can
-    ///         inspect which DEX each asset is wired to without parsing the
-    ///         opaque adapter address.
-    ///         V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
-    ///         V4       — Uniswap V4 via a `UniswapV4SwapAdapter` (core 1676). The asset's `pool` is the
-    ///                    `UniswapV4PriceRecorder` (V4 has no pool address and a hookless pool records no
-    ///                    observations). `Venue` is ABI-visible (`addAsset(..., uint8 venue_)`,
-    ///                    `AssetInfo.venue`, the fork-e2e Rust bindings, `BasketAssetConfigGuard.Venue`
-    ///                    and the tests all use the ordinals): V3 0, V4 1, Aerodrome 2.
-    ///         Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
-    enum Venue {
-        V3,
-        V4,
-        Aerodrome
-    }
+    // ─── Asset registry types ─────────────────────────────────────────
+    //
+    // `BasketAssetConfigGuard.Venue` and `BasketAssetConfigGuard.AssetInfo` are the ONE declaration of a
+    // basket row (ADR-0014 §8). The vault's `assets` array and the delegatecall-linked library that writes
+    // it use the same type, so the storage-layout gate pins the exact struct the library writes through.
+    // Venue ordinals are ABI-visible (`addAsset(..., uint8 venue_)`, `AssetInfo.venue`, the fork-e2e Rust
+    // bindings): V3 0 (Uniswap V3 via SWAP_ROUTER, adapter = address(0)), V4 1 (a `UniswapV4SwapAdapter`
+    // whose `pool` is the `UniswapV4PriceRecorder`, core 1676), Aerodrome 2 (an `AerodromeSwapAdapter`).
 
-    struct AssetInfo {
-        address token;
-        address pool; // DEX pool pairing token with USDC (venue-specific)
-        uint24 swapFee; // Fee parameter forwarded to the adapter (e.g. Uniswap V3 fee tier)
-        bool active;
-        /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
-        ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
-        address adapter;
-        /// @notice DEX venue this asset is wired to.
-        ///         Mirrors the adapter choice in a human-readable form so governance
-        ///         and monitoring tooling can inspect the venue without decoding the
-        ///         adapter address.
-        Venue venue;
-    }
+    BasketAssetConfigGuard.AssetInfo[] public assets;
 
-    struct EmergencyUnwindGuard {
-        uint256 minUsdcOut;
-        bool overrideAllowed;
-        // Maximum acceptable loss (in basis points) versus `minUsdcOut` when the
-        // override path is used. The override floor is computed as
-        // `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`. A `maxLossBps` of
-        // `MAX_BPS` reproduces the legacy zero-floor behaviour; a value of `0`
-        // forbids any loss versus the reference floor.
-        uint256 maxLossBps;
-    }
+    // ─── Write-once addresses (constructor immutables before ADR-0014) ─
 
-    AssetInfo[] public assets;
-
-    // ─── Immutables ───────────────────────────────────────────────────
-
-    ISwapRouter public immutable SWAP_ROUTER;
-    IERC20 internal immutable _USDC;
+    /// @notice Uniswap V3 router of the default venue. Written once by `initialize`; no setter.
+    ISwapRouter public SWAP_ROUTER;
+    /// @dev USDC, the vault asset. Written once by `initialize`; no setter.
+    IERC20 internal _USDC;
 
     // ─── Config ───────────────────────────────────────────────────────
 
@@ -170,7 +156,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///         FS-VLT-19).
     address public registry;
 
-    mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
+    /// @notice Per-token emergency unwind configuration (`BasketSwapOps.EmergencyUnwindGuard`: the
+    ///         reference floor, override access, and the override path's upper-loss cap).
+    mapping(address => BasketSwapOps.EmergencyUnwindGuard) public emergencyUnwindGuard;
     /// @notice Per-asset TWAP window in seconds. `0` falls back to
     ///         `DEFAULT_TWAP_WINDOW` so newly registered assets are
     ///         immediately manipulation-resistant; ADMIN_ROLE may raise the
@@ -213,6 +201,10 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     uint256 internal _lastMintedShares;
     uint256 internal _lastWithdrawnAssets;
 
+    /// @dev Storage gap (ADR-0014 §8). The three kinds derive from this base. A new base field takes
+    ///      slots from the gap, so a kind's own fields never shift. The layout gate allows exactly that.
+    uint256[50] private __gap;
+
     // ─── Events ───────────────────────────────────────────────────────
 
     /// @dev Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
@@ -228,7 +220,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         address pool,
         uint24 swapFee,
         address adapter,
-        Venue venue
+        BasketAssetConfigGuard.Venue venue
     );
     event AssetRemoved(uint256 indexed index, address indexed token);
     event Swapped(
@@ -401,8 +393,23 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      `reabsorbRemovedAsset` is not met by the swap output.
     error SlippageExceeded();
 
-    // ─── Constructor ─────────────────────────────────────────────────
+    // ─── Initializer (ADR-0014) ───────────────────────────────────────
 
+    /// @dev The implementation is never initialized: only a proxy is.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction. One
+    ///         initializer serves the three kinds; each kind supplies its share-token name, symbol
+    ///         and starting slippage through `_kindConfig`.
+    /// @param usdc_               USDC, the vault asset. Must not be address(0).
+    /// @param swapRouter_         Uniswap V3 router of the default venue. Must not be address(0).
+    /// @param tvlCap_             Initial TVL cap.
+    /// @param perDepositCap_      Initial per-deposit cap.
+    /// @param exitFeeBps_         Initial exit fee, bounded by `MAX_EXIT_FEE_BPS` as in `setExitFeeBps`.
+    /// @param feeRecipient_       Exit-fee recipient. Must not be address(0).
     /// @param admin_              Receives ADMIN_ROLE (cold/multisig key for
     ///                            parameter changes). Must not be address(0).
     /// @param emergencyResponder_ Receives EMERGENCY_ROLE (hot key for rapid
@@ -412,55 +419,64 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///                            SHOULD use distinct addresses in production
     ///                            so a single key compromise cannot both alter
     ///                            parameters and trigger an emergency unwind.
-    constructor(
-        string memory name_,
-        string memory symbol_,
+    /// @param upgradeAuthority    The deployment's timelock: the only address that may upgrade or freeze.
+    /// @param mode                `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    function initialize(
         IERC20 usdc_,
         ISwapRouter swapRouter_,
         uint256 tvlCap_,
         uint256 perDepositCap_,
         uint256 exitFeeBps_,
-        uint256 initialSlippageBps_,
         address feeRecipient_,
         address admin_,
-        address emergencyResponder_
-    ) ERC4626(usdc_) ERC20(name_, symbol_) {
+        address emergencyResponder_,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer {
         if (
             address(usdc_) == address(0) || address(swapRouter_) == address(0)
                 || feeRecipient_ == address(0) || admin_ == address(0)
                 || emergencyResponder_ == address(0)
         ) revert ZeroAddress();
         if (exitFeeBps_ > MAX_EXIT_FEE_BPS) revert InvalidFee();
-        if (initialSlippageBps_ > MAX_SLIPPAGE_BPS) revert InvalidParam();
+
+        __ERC4626_init(usdc_);
+        __ReentrancyGuard_init();
+        _initKind();
 
         _USDC = usdc_;
         SWAP_ROUTER = swapRouter_;
         tvlCap = tvlCap_;
         perDepositCap = perDepositCap_;
         exitFeeBps = exitFeeBps_;
-        maxSlippageBps = initialSlippageBps_;
         feeRecipient = feeRecipient_;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, admin_);
         _grantRole(EMERGENCY_ROLE, emergencyResponder_);
+
+        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
+
+    /// @dev Share-token name and symbol and the starting `maxSlippageBps`, from the kind. A helper of its own keeps
+    ///      the initializer's ten arguments within the legacy code generator's stack reach.
+    function _initKind() private {
+        (string memory name_, string memory symbol_, uint256 initialSlippageBps_) = _kindConfig();
+        if (initialSlippageBps_ > MAX_SLIPPAGE_BPS) revert InvalidParam();
+        __ERC20_init(name_, symbol_);
+        maxSlippageBps = initialSlippageBps_;
+    }
+
+    /// @dev The kind's share-token name and symbol and its starting `maxSlippageBps`.
+    function _kindConfig()
+        internal
+        pure
+        virtual
+        returns (string memory name_, string memory symbol_, uint256 initialSlippageBps_);
 
     /// @notice Subclasses declare the maximum number of assets in the basket.
     function maxAssets() public view virtual returns (uint256);
-
-    /// @dev Reinterpret the `assets` storage array as the layout-identical
-    ///      `BasketAssetConfigGuard.AssetInfo[]` so the delegatecall-linked dedup
-    ///      scan can read/write it. The two structs share an exact field layout;
-    ///      only the nominal type differs, so the storage-pointer cast is sound.
-    function _guardAssets() internal view returns (BasketAssetConfigGuard.AssetInfo[] storage g) {
-        AssetInfo[] storage a = assets;
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            g.slot := a.slot
-        }
-    }
 
     // ─── Production-readiness gate ────────────────────────────────────
     //
@@ -482,7 +498,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
 
     // ─── ERC-4626 share scale ─────────────────────────────────────────
 
-    function decimals() public pure override(ERC4626) returns (uint8) {
+    function decimals() public pure override(ERC4626Upgradeable) returns (uint8) {
         return 6;
     }
 
@@ -634,52 +650,20 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     }
 
     /// @dev Splits usdcAmount equally across active assets, swapping each portion via the
-    ///      per-asset swap adapter (Aerodrome or Uniswap V3 default).
-    ///      The first active asset absorbs any indivisible remainder.
-    ///      Emits a WeightSnapshot event recording the equal-weight allocation applied.
+    ///      per-asset swap adapter (Aerodrome or Uniswap V3 default). The first active asset
+    ///      absorbs any indivisible remainder; each leg's minimum is its TWAP token value less
+    ///      `maxSlippageBps`. Emits `Swapped` per leg and one `WeightSnapshot`. The loop runs in the
+    ///      linked `BasketSwapOps.routeDeposit` (ADR-0014 §9).
     function _routeDeposit(address caller, uint256 usdcAmount) internal {
-        uint256 n = _activeAssetCount();
-        if (n == 0 || usdcAmount == 0) return;
+        BasketSwapOps.routeDeposit(assets, _venue(), caller, usdcAmount);
+    }
 
-        uint256 perAsset = usdcAmount / n;
-        uint256 remainder = usdcAmount - perAsset * n;
-        uint256 len = assets.length;
-        bool firstActive = true;
-
-        // Build WeightSnapshot arrays for the active asset set.
-        address[] memory snapshotAssets = new address[](n);
-        uint256[] memory snapshotWeights = new uint256[](n);
-        uint256 baseWeightBps = MAX_BPS / n;
-        uint256 remainderWeightBps = MAX_BPS - baseWeightBps * n;
-        uint256 snapshotIdx = 0;
-
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
-            snapshotAssets[snapshotIdx] = assets[i].token;
-            snapshotWeights[snapshotIdx] =
-                firstActive ? baseWeightBps + remainderWeightBps : baseWeightBps;
-            snapshotIdx++;
-            firstActive = false;
-            if (swapIn == 0) continue;
-
-            uint256 minOut = _applySlippage(
-                _twapTokenValue(assets[i].pool, assets[i].token, assets[i].adapter, swapIn)
-            );
-
-            uint256 amountOut = _executeSwap(
-                assets[i].adapter,
-                address(_USDC),
-                assets[i].token,
-                assets[i].swapFee,
-                swapIn,
-                minOut,
-                address(this)
-            );
-            emit Swapped(address(_USDC), assets[i].token, swapIn, amountOut);
-        }
-
-        emit WeightSnapshot(caller, snapshotAssets, snapshotWeights, block.timestamp);
+    /// @dev The vault values every `BasketSwapOps` swap needs: USDC, the default V3 router and the
+    ///      slippage haircut applied to each TWAP floor.
+    function _venue() internal view returns (BasketSwapOps.Venue memory) {
+        return BasketSwapOps.Venue({
+            usdc: address(_USDC), router: SWAP_ROUTER, maxSlippageBps: maxSlippageBps
+        });
     }
 
     // ─── Withdraw / redeem ────────────────────────────────────────────
@@ -733,7 +717,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         uint256 supplyBefore = totalSupply();
         _burn(owner, shares);
 
-        BasketAssetConfigGuard.payInKind(_guardAssets(), receiver, shares, supplyBefore);
+        BasketAssetConfigGuard.payInKind(assets, receiver, shares, supplyBefore);
         emit RedeemedInKind(owner, receiver, shares);
     }
 
@@ -886,48 +870,15 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     }
 
     /// @dev Sells `shares / supplyBefore` fraction of each active asset and any idle USDC.
-    ///      Returns total USDC collected (swap proceeds + idle USDC proportion).
+    ///      Returns total USDC collected (swap proceeds + idle USDC proportion). The loop runs in the
+    ///      linked `BasketSwapOps.sellProportional` (ADR-0014 §9): each leg is priced one input unit
+    ///      short (core 1778) and a leg whose TWAP floor rounds to zero is dust and is skipped (QA
+    ///      plan D6, SR-L12), staying with the remaining holders.
     function _sellProportional(uint256 shares, uint256 supplyBefore)
         internal
         returns (uint256 usdcOut)
     {
-        // Idle USDC proportion owed to this redeemer (captured before swaps change balances).
-        uint256 idleBefore = _USDC.balanceOf(address(this));
-        if (idleBefore > 0) {
-            usdcOut += idleBefore.mulDiv(shares, supplyBefore);
-        }
-
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
-            if (bal == 0) continue;
-
-            uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
-            if (sellAmount == 0) continue;
-
-            // Core 1778: price one input unit less. A V3 pool rounds the fee-adjusted input down
-            // by one unit, which is a few percent of a dust leg (31 cbBTC units) and failed the
-            // 1% floor with "Too little received". For a normal leg one unit is below 1e-6 of it.
-            // A one-unit leg floors at zero (adapters return 0 for a zero amount).
-            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount - 1);
-            // QA plan D6 (E4, SR-L12): a zero floor means the leg is worth about one USDC unit or
-            // less. Its sale can pay zero, which the V4 adapter refuses, so one donated wei would
-            // revert the redeem. The leg is skipped and stays with the remaining holders.
-            if (minUsdcOut == 0) continue;
-
-            uint256 received = _executeSwap(
-                assets[i].adapter,
-                assets[i].token,
-                address(_USDC),
-                assets[i].swapFee,
-                sellAmount,
-                minUsdcOut,
-                address(this)
-            );
-            emit Swapped(assets[i].token, address(_USDC), sellAmount, received);
-            usdcOut += received;
-        }
+        return BasketSwapOps.sellProportional(assets, _venue(), shares, supplyBefore);
     }
 
     // ─── TWAP pricing ─────────────────────────────────────────────────
@@ -1067,76 +1018,36 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         address pool_,
         uint24 swapFee_,
         address adapter_,
-        Venue venue_
+        BasketAssetConfigGuard.Venue venue_
     ) external onlyRole(ADMIN_ROLE) {
         if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
         if (assets.length >= maxAssets()) revert MaxAssetsReached();
-        // ADP-2 / NC-2: vet any external adapter before it can both price NAV and
-        // receive token approvals. The on-chain control is the codehash allowlist —
-        // ADMIN_ROLE must have pre-approved the exact runtime bytecode, which pins
-        // every address baked into the adapter (including its linked TickMath
-        // library), so an attacker-controlled or hot-swappable adapter is rejected.
-        //
-        // The default Uniswap V3 path (adapter == 0) routes through the immutable
-        // audited SWAP_ROUTER and needs no vetting.
-        //
-        // NOTE: unlike RobotMoneyVault's delegatecall-free strategy adapters, the
-        // basket swap adapters (UniswapV3/Aerodrome) legitimately DELEGATECALL the
-        // shared, linked `TickMath` library on the TWAP path, so a blanket runtime
-        // DELEGATECALL scan is inapplicable here; codehash pinning subsumes the
-        // no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a
-        // deploy-time invariant (`AdapterBytecodeGuard`, run by the basket vault deploy scripts).
-        BasketAssetConfigGuard.requireAllowedAdapter(
-            adapter_, adapter_ == address(0) || adapterCodeHashAllowed[adapter_.codehash]
+        // The checks and the write run in the delegatecall-linked `BasketAssetConfigGuard.addAsset`
+        // (EIP-170, ADR-0014 §9), in this order:
+        // - ADP-2 / NC-2: a non-zero adapter's runtime code hash must be on the ADMIN allowlist,
+        //   which pins every address baked into the adapter (including its linked TickMath), so an
+        //   attacker-controlled or hot-swappable adapter is rejected. The default Uniswap V3 path
+        //   (adapter == 0) routes through the audited SWAP_ROUTER and needs no vetting. Basket swap
+        //   adapters legitimately DELEGATECALL TickMath, so a runtime DELEGATECALL scan does not
+        //   apply; the no-proxy bytecode scan stays a deploy-time invariant (`AdapterBytecodeGuard`).
+        // - ORA-3 / F-09: the execution pool resolved from `swapFee_` must be the registered TWAP
+        //   `pool_` (fee tier for V3/V4, tickSpacing for Aerodrome), so a deep honest TWAP pool
+        //   cannot coexist with a thin execution pool (mint-cheap/redeem-dear).
+        // - Pool usability: pairs token/USDC, enough TWAP cardinality and history, enough in-range
+        //   liquidity for synchronous redemption.
+        // - NC-8: an ACTIVE re-add is rejected; an INACTIVE entry for the token is refreshed and
+        //   re-activated in place, so `assets` never holds two entries for one token.
+        uint256 index = BasketAssetConfigGuard.addAsset(
+            assets,
+            BasketAssetConfigGuard.NewAsset({
+                token: token_, pool: pool_, swapFee: swapFee_, adapter: adapter_, venue: venue_
+            }),
+            adapter_ == address(0) || adapterCodeHashAllowed[adapter_.codehash],
+            address(_USDC),
+            DEFAULT_TWAP_WINDOW,
+            MIN_POOL_LIQUIDITY
         );
-        // ORA-3 / F-09: the pool the NAV TWAP is read from must be the SAME pool
-        // trades execute against. The guard asserts the execution pool resolved
-        // from `swapFee_` matches the registered TWAP `pool_` (fee tier for V3/V4,
-        // tickSpacing for Aerodrome). Without this a deep-honest TWAP pool can
-        // coexist with a thin execution pool (mint-cheap/redeem-dear).
-        BasketAssetConfigGuard.requireExecutionPoolMatchesTwap(
-            pool_, swapFee_, BasketAssetConfigGuard.Venue(uint8(venue_))
-        );
-        // Pool usability: pairs token/USDC, enough TWAP cardinality + history, and
-        // enough in-range liquidity for synchronous redemption. Extracted to the
-        // delegatecall-linked guard to keep the EIP-170-tight vault bytecode small.
-        BasketAssetConfigGuard.requirePoolUsable(
-            pool_, token_, address(_USDC), DEFAULT_TWAP_WINDOW, MIN_POOL_LIQUIDITY
-        );
-
-        // NC-8 (no duplicate AssetInfo): an ACTIVE re-add is rejected; an INACTIVE
-        // (previously removed) entry is reused/re-activated in place rather than
-        // appending a second AssetInfo for the same token. Without this, `assets`
-        // could hold two entries for one token, double-counting it in NAV
-        // (`totalAssets` sums every active entry) and corrupting the equal-weight
-        // split. The scan/write lives in the delegatecall-linked guard to keep the
-        // EIP-170-tight basket-vault bytecode small. `assets` and the guard's
-        // mirror `AssetInfo` share an identical storage layout.
-        uint256 reusedIndex = BasketAssetConfigGuard.reuseOrRejectDuplicate(
-            _guardAssets(),
-            token_,
-            pool_,
-            swapFee_,
-            adapter_,
-            BasketAssetConfigGuard.Venue(uint8(venue_))
-        );
-        if (reusedIndex != type(uint256).max) {
-            // The guard refreshed an inactive entry in place; emit and return.
-            emit AssetAdded(reusedIndex, token_, pool_, swapFee_, adapter_, venue_);
-            return;
-        }
-
-        assets.push(
-            AssetInfo({
-                token: token_,
-                pool: pool_,
-                swapFee: swapFee_,
-                active: true,
-                adapter: adapter_,
-                venue: venue_
-            })
-        );
-        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_, venue_);
+        emit AssetAdded(index, token_, pool_, swapFee_, adapter_, venue_);
     }
 
     /// @notice Deactivate a basket asset. Restricted to ADMIN_ROLE. The vault must hold none of the token, or only dust:
@@ -1147,7 +1058,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      `AssetStillHeld` forever, because the Uniswap V4 adapter refuses a sale that pays zero. The checks and the
     ///      write run in the delegatecall-linked `BasketAssetConfigGuard.deactivateAsset` (EIP-170).
     function removeAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
-        emit AssetRemoved(index, BasketAssetConfigGuard.deactivateAsset(_guardAssets(), index));
+        emit AssetRemoved(index, BasketAssetConfigGuard.deactivateAsset(assets, index));
     }
 
     /// @notice Re-absorb a balance that has reappeared on a removed (inactive)
@@ -1178,63 +1089,16 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///                   floor. Only enforced on the pool-healthy path; the
     ///                   degraded-pool path quarantines instead of swapping.
     function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant {
-        AssetInfo memory assetInfo = assets[index]; // reverts on OOB index
-        // Only inactive (removed) entries qualify: active assets are already
-        // counted in NAV and are sold proportionally on withdrawal.
-        if (assetInfo.active) revert AssetInBasket();
-
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-
-        // LIFE-6 / NC-8: the happy path is a TWAP-derived, slippage-bounded swap
-        // back to USDC into NAV (same construction as the proportional-withdraw
-        // sell leg), crediting all holders pro-rata with no caller-supplied
-        // recipient. But a removed asset's pool can be DEGRADED (e.g. its TWAP
-        // observation history is gone, so `observe()` reverts "OLD") — in which
-        // case the swap floor cannot be priced and a naive call would
-        // revert-and-strand the reappeared balance on the vault forever.
-        //
-        // The quarantine fallback removes that liveness cliff: when the TWAP read
-        // reverts, the balance is permissionlessly swept to the governed
-        // quarantine address instead of being stranded. Quarantine is the
-        // reversible safety valve (an offline multisig can later recover it), so
-        // the reappeared balance is always actionable — `reabsorbRemovedAsset`
-        // can never revert-and-strand (LIFE-6). The floor read reuses the existing
-        // self-only `emergencyTwapUsdcValue` so its revert is catchable.
-        //
-        // AZ-BSK-5: enforce the caller-supplied minUsdcOut with a stable
-        // SlippageExceeded error so off-chain consumers get a consistent
-        // revert surface. The TWAP-derived floor is the worst-case bound on
-        // the swap output; if it falls below the caller's floor the swap
-        // cannot be guaranteed to satisfy minUsdcOut, so we revert early.
-        try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-            // Pool healthy: reject early if TWAP floor undercuts caller's minimum,
-            // then swap to USDC into NAV under the TWAP-derived floor.
-            uint256 floor = _applySlippage(twapValue);
-            if (floor < minUsdcOut) revert SlippageExceeded();
-            _emergencyUnwindAsset(assetInfo, floor);
-        } catch {
-            // Pool degraded: TWAP unavailable. Sweep rather than strand (INV-1);
-            // `sweep` emits ForeignTokenQuarantined(token, amount, caller).
-            _sweepToQuarantine(assetInfo.token);
-        }
-    }
-
-    /// @dev TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
-    ///      basket asset. Shared by the proportional-withdraw sell leg and the
-    ///      removed-asset re-absorption path.
-    function _slippageFloor(AssetInfo memory assetInfo, uint256 amount)
-        internal
-        view
-        returns (uint256)
-    {
-        return _applySlippage(
-            _twapUsdcValue(assetInfo.pool, assetInfo.token, assetInfo.adapter, amount)
-        );
-    }
-
-    /// @dev Apply the configured max-slippage haircut to a USDC value.
-    function _applySlippage(uint256 usdcValue) internal view returns (uint256) {
-        return usdcValue * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+        // LIFE-6 / NC-8: the happy path is a TWAP-derived, slippage-bounded swap back to USDC into
+        // NAV (same construction as the proportional-withdraw sell leg), crediting all holders
+        // pro-rata with no caller-supplied recipient. A removed asset's pool can be DEGRADED (its
+        // TWAP observation history gone, so `observe()` reverts "OLD"); then the floor cannot be
+        // priced, and the balance is permissionlessly swept to the governed quarantine address
+        // instead of being stranded, so `reabsorbRemovedAsset` can never revert-and-strand. The
+        // floor read is a self-call to `assetUsdcValue`, so its revert is catchable. AZ-BSK-5: the
+        // caller's `minUsdcOut` is enforced with a stable `SlippageExceeded`. The body runs in the
+        // linked `BasketSwapOps.reabsorbRemovedAsset` (ADR-0014 §9).
+        BasketSwapOps.reabsorbRemovedAsset(assets, _venue(), index, minUsdcOut);
     }
 
     // ─── Unified governance retire (DI-2 / FS-VLT-19) ────────────────
@@ -1307,35 +1171,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///      cannot block the unwind.
     function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _setDepositsPaused(true);
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            AssetInfo memory assetInfo = assets[i];
-            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-            if (bal == 0) continue;
-            uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
-            uint256 effectiveFloor;
-            try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-                uint256 twapFloor = _applySlippage(twapValue);
-                // QA plan D6: dust (a floor that rounds to zero) stays put whatever the configured
-                // minimum. Its sale can pay zero, which the V4 adapter refuses. `removeAsset` accepts it.
-                if (twapFloor == 0) continue;
-                effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
-            } catch {
-                if (configuredMin == 0) revert EmergencyFloorUnavailable(assetInfo.token);
-                effectiveFloor = configuredMin;
-            }
-            _emergencyUnwindAsset(assetInfo, effectiveFloor);
-        }
-    }
-
-    function emergencyTwapUsdcValue(AssetInfo calldata assetInfo, uint256 amount)
-        external
-        view
-        returns (uint256)
-    {
-        if (msg.sender != address(this)) revert InvalidParam();
-        return _twapUsdcValue(assetInfo.pool, assetInfo.token, assetInfo.adapter, amount);
+        BasketSwapOps.emergencyUnwind(assets, emergencyUnwindGuard, _venue());
     }
 
     /// @notice Explicit high-risk emergency unwind for tokens whose guard permits overrides.
@@ -1352,19 +1188,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         nonReentrant
     {
         _setDepositsPaused(true);
-        uint256 len = tokens.length;
-        for (uint256 i = 0; i < len; i++) {
-            EmergencyUnwindGuard memory guard = emergencyUnwindGuard[tokens[i]];
-            if (!guard.overrideAllowed) revert EmergencyUnwindOverrideDisabled();
-            AssetInfo memory assetInfo = _activeAssetForToken(tokens[i]);
-            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-            if (bal == 0) continue;
-            uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
-            emit EmergencyUnwindOverrideUsed(
-                assetInfo.token, bal, guard.minUsdcOut, appliedFloor, msg.sender
-            );
-            _emergencyUnwindAssetWithCap(assetInfo, appliedFloor);
-        }
+        BasketSwapOps.emergencyUnwindWithOverride(assets, emergencyUnwindGuard, _venue(), tokens);
     }
 
     function shutdownVault() external onlyRole(EMERGENCY_ROLE) {
@@ -1424,16 +1248,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
             if (token == assets[i].token) protected_ = true;
         }
         if (protected_) revert ForeignTokenQuarantine.TokenIsProtected(token);
-        _sweepToQuarantine(token);
-    }
-
-    /// @dev Single inlining site for the permissionless quarantine sweep so the
-    ///      `ForeignTokenQuarantine.sweep` body is emitted into the
-    ///      EIP-170-tight basket-vault bytecode only once, shared by
-    ///      `sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
-    ///      fallback. Moves the caller's full balance of `token` to the fixed
-    ///      quarantine address; no caller-supplied recipient (INV-1).
-    function _sweepToQuarantine(address token) private {
+        // Moves the vault's full balance of `token` to the fixed quarantine address; no
+        // caller-supplied recipient (INV-1). The `reabsorbRemovedAsset` degraded-pool fallback
+        // makes the same sweep from the linked `BasketSwapOps` (ADR-0014 §9).
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
@@ -1524,13 +1341,9 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         bool overrideAllowed,
         uint256 maxLossBps
     ) external onlyRole(ADMIN_ROLE) {
-        if (maxLossBps > MAX_BPS) revert InvalidParam();
-        _activeAssetForToken(token);
-        uint256 oldMin = emergencyUnwindGuard[token].minUsdcOut;
-        emergencyUnwindGuard[token] = EmergencyUnwindGuard({
-            minUsdcOut: minUsdcOut, overrideAllowed: overrideAllowed, maxLossBps: maxLossBps
-        });
-        emit EmergencyUnwindGuardSet(token, oldMin, minUsdcOut, overrideAllowed, maxLossBps);
+        BasketSwapOps.setEmergencyUnwindGuard(
+            assets, emergencyUnwindGuard, token, minUsdcOut, overrideAllowed, maxLossBps
+        );
     }
 
     /// @notice Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
@@ -1545,10 +1358,7 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         if (window < MIN_TWAP_WINDOW || window > MAX_TWAP_WINDOW) {
             revert InvalidTwapWindow(window);
         }
-        BasketAssetConfigGuard.requireObservationHistory(_activeAssetForToken(token).pool, window);
-        uint32 old = twapWindow[token];
-        twapWindow[token] = window;
-        emit TwapWindowUpdated(token, old, window);
+        BasketSwapOps.setTwapWindow(assets, twapWindow, token, window);
     }
 
     // ─── Rebalancing (ADR-0003) ───────────────────────────────────────
@@ -1600,14 +1410,14 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
     ///         externally-linked `BasketViews` weight-preview library, and by the dust checks in
     ///         `BasketAssetConfigGuard.deactivateAsset` and `BasketViews.checkSellAnchor` (QA plan D6).
     function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256) {
-        AssetInfo memory a = assets[index];
+        BasketAssetConfigGuard.AssetInfo memory a = assets[index];
         return _twapUsdcValue(a.pool, a.token, a.adapter, amount);
     }
 
     /// @notice Estimated token amount for `usdcAmount` of the active asset at
     ///         registry `index`. Used by the `BasketViews` weight-preview library.
     function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256) {
-        AssetInfo memory a = assets[index];
+        BasketAssetConfigGuard.AssetInfo memory a = assets[index];
         return _twapTokenValue(a.pool, a.token, a.adapter, usdcAmount);
     }
 
@@ -1631,119 +1441,6 @@ abstract contract BasketVault is ERC4626, AdminFloorAccessControlCounter, Reentr
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (assets[i].active) count++;
-        }
-    }
-
-    function _activeAssetForToken(address token) internal view returns (AssetInfo memory) {
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (assets[i].active && assets[i].token == token) return assets[i];
-        }
-        revert AssetNotFound();
-    }
-
-    // slither-disable-start reentrancy-balance
-    // The caller (`emergencyUnwind`) holds the contract-level `nonReentrant`
-    // guard, so the pre-call `balanceOf` read cannot be observed by a
-    // reentrant call before the swap completes. The emitted `Swapped` event
-    // uses the freshly-returned `received` amount, not the stale balance.
-    function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        // QA plan D6: a zero floor marks dust. Leave it rather than send a sale that can pay zero,
-        // which the V4 adapter refuses. `emergencyUnwind` never passes zero; `reabsorbRemovedAsset`
-        // passes zero only for dust, so its dust call is a no-op like its zero-balance call (LIFE-6).
-        if (bal == 0 || minUsdcOut == 0) return;
-        uint256 received = _executeSwap(
-            assetInfo.adapter,
-            assetInfo.token,
-            address(_USDC),
-            assetInfo.swapFee,
-            bal,
-            minUsdcOut,
-            address(this)
-        );
-        emit Swapped(assetInfo.token, address(_USDC), bal, received);
-    }
-
-    // slither-disable-end reentrancy-balance
-
-    /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
-    ///      `amountOutMinimum` and additionally enforces the cap with a typed
-    ///      `EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
-    ///      a stable error surface regardless of the underlying router's
-    ///      slippage revert format.
-    // slither-disable-start reentrancy-balance
-    // The caller (`emergencyUnwindWithOverride`) holds the contract-level
-    // `nonReentrant` guard, so the pre-call `balanceOf` read cannot be observed
-    // by a reentrant call before the swap completes. The post-call comparison
-    // against `appliedFloor` uses the router's freshly-returned `received`
-    // amount, not the stale `bal`, so the "stale balance used after the call"
-    // pattern flagged by slither is a false positive here.
-    function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
-        internal
-    {
-        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        if (bal == 0) return;
-        uint256 received = _executeSwap(
-            assetInfo.adapter,
-            assetInfo.token,
-            address(_USDC),
-            assetInfo.swapFee,
-            bal,
-            appliedFloor,
-            address(this)
-        );
-        if (received < appliedFloor) {
-            revert EmergencyUnwindLossCapExceeded(assetInfo.token, received, appliedFloor);
-        }
-        emit Swapped(assetInfo.token, address(_USDC), bal, received);
-    }
-
-    // slither-disable-end reentrancy-balance
-
-    // ─── Swap execution helper ────────────────────────────────────────
-
-    /// @dev Routes a swap through the per-asset adapter when set, or falls back
-    ///      to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
-    ///      management: forceApprove before the call, clear after.
-    ///
-    ///      Deadline note (audit 2026-06-09, L-5): adapters take an explicit
-    ///      caller-chosen `deadline` instead of hardcoding `block.timestamp`.
-    ///      This vault's entry points are standard ERC-4626 (no deadline
-    ///      parameter), and every swap executes synchronously inside the
-    ///      caller's transaction, so the vault pins the deadline to the current
-    ///      block — equivalent protection to a tx-level deadline. External
-    ///      integrators calling adapters directly MUST supply a real deadline.
-    function _executeSwap(
-        address adapter,
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
-    ) internal returns (uint256 amountOut) {
-        if (adapter != address(0)) {
-            // Adapter pulls `tokenIn` from this contract via transferFrom.
-            IERC20(tokenIn).forceApprove(adapter, amountIn);
-            amountOut = IBasketSwapAdapter(adapter)
-                .swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient, block.timestamp);
-            IERC20(tokenIn).forceApprove(adapter, 0);
-        } else {
-            // Default Uniswap V3 path (backward-compatible).
-            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), amountIn);
-            amountOut = SWAP_ROUTER.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: tokenIn,
-                    tokenOut: tokenOut,
-                    fee: fee,
-                    recipient: recipient,
-                    amountIn: amountIn,
-                    amountOutMinimum: minAmountOut,
-                    sqrtPriceLimitX96: 0
-                })
-            );
-            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), 0);
         }
     }
 }

@@ -5,13 +5,15 @@ import { decodeAbiParameters, encodeAbiParameters, encodeFunctionData, keccak256
 import { Collector } from "./collector.ts";
 import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
-import { compareCode, loadArtifact } from "./codehash.ts";
+import { compareCode, compareCodeAndLinks, loadArtifact } from "./codehash.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   KEEPER_ROLE, RM_TOKEN, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, SIG_AGENT_OWNERSHIP, SIG_RECEIPT_APPLIED, SIG_ROLE_GRANTED, SIG_VOTED_WEIGHTS_CLEARED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
-import { manifestBase } from "../stage-table.ts";
-import { SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
+import { existsSync } from "node:fs";
+import { manifestBase, type StageTable } from "../stage-table.ts";
+import { AUTHORITY_STAGE, SAFE_MANIFEST, VAULT_ADAPTER_V4_FIELD, V4_ADAPTER_ARTIFACT_KEY, VENUE_V4 } from "../core-wiring.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, manifestProxies, proxyChecks, proxyRecordOf, readProxyState, wordAddress, type ManifestProxy, type ProxyRecord, type ProxyState } from "../proxies.ts";
 import { isAddress, loadManifests, lc, type ManifestVault } from "./manifests.ts";
 import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
@@ -231,15 +233,28 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]!, dir: redeployed.has(a.vault) ? undefined : originalDir, original: !redeployed.has(a.vault) })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]!, dir: originalDir, original: true })),
   ];
+  // Issue 1809 (ADR-0014): a proxied contract's address holds the ERC1967Proxy, and the code that runs there is the implementation its ERC-1967 slot names: that is
+  // what the label compares with the build. A proxy the run upgraded (govern --row upgrade-proxy, executed) is compared with the build that round was checked against.
+  const proxied = new Map(manifestProxies(table, man.files, (st) => stageManifestName(table, st)).filter((x) => x.proxy !== undefined).map((x) => [lc(x.proxy!), x]));
+  const upgradeOf = new Map((opts.upgrades ?? []).map((u) => [u.proxy, u]));
   for (const t of codeTargets) {
     await c.run(`${t.label}: runtime code equals build artifact (masked)`, async () => {
-      const r = compareCode(await chain.getCode(t.address), loadArtifact(t.dir ?? opts.artifactsDir, t.artifact));
-      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.original && originalDir === undefined ? " (after a redeploy at another sha the contracts it did not replace run the original build: pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
+      const px = proxied.get(lc(t.address));
+      const at = px ? wordAddress(await chain.getStorageAt(t.address, ERC1967_IMPLEMENTATION_SLOT)) : t.address;
+      const up = px ? upgradeOf.get(px.name) : undefined;
+      const dir = up ? (up.buildDir && existsSync(up.buildDir) ? up.buildDir : opts.artifactsDir) : (t.dir ?? opts.artifactsDir);
+      // ADR-0014 §9: the masked compare blanks every library link, so the linked libraries are followed and compared with their builds too.
+      const r = await compareCodeAndLinks((a) => chain.getCode(a), await chain.getCode(at), loadArtifact(dir, t.artifact), dir);
+      const where = px ? ` (the implementation ${at} behind the proxy${up ? ", installed by govern upgrade-proxy" : ""})` : "";
+      return { ok: r.ok, detail: `${t.artifact}${where}: ${r.detail}${!r.ok && redeploys.length > 0 && t.original && originalDir === undefined ? " (after a redeploy at another sha the contracts it did not replace run the original build: pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
     });
   }
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
-  for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });
+  for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact, proxyArtifact: table.proxyArtifact });
+
+  // ---- governed proxies (issue 1809, ADR-0014 §3-§5): only for a table that lists them, so an older deployment keeps its label set
+  const proxyRecords = await proxyLabels(c, chain, { table, files: man.files, timelock: tl, sheet, upgrades: opts.upgrades ?? [], freezes: opts.freezes ?? [], proxyArtifactDir: originalDir ?? opts.artifactsDir });
 
   // ---- deployer nonce equals the sum of the frozen counts
   await c.run("deployer: nonce equals sum of frozen counts", async () => {
@@ -257,7 +272,67 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
     return { ok: frozen && got === wantNow, detail: `nonce ${got}, frozen sum plus the prove-control transaction ${want}${wantNow !== want ? ` plus ${wantNow - want} redeploy transaction(s)` : ""}` };
   });
 
-  return { ...c.report(), weightSetter };
+  return { ...c.report(), weightSetter, ...(proxyRecords.length ? { proxies: proxyRecords } : {}) };
+}
+
+/** Issue 1809: the labels of each governed proxy, after `proxy[<name>]: `. The same eight for every proxy, on every chain. */
+export const PROXY_LABELS = [
+  "runtime code equals the ERC1967Proxy build (masked)",
+  "implementation slot equals the deployed or last upgraded implementation",
+  "ERC-1967 admin slot is empty",
+  "ERC-1967 beacon slot is empty",
+  "initialized, and the implementation's initializers are locked",
+  "upgradeAuthority is the timelock",
+  "upgrade mode is declared and equals the sheet",
+  "upgradesFrozen matches the mode and the executed freezes",
+] as const;
+export const AUTHORITY_LABEL = "upgrade authority: the authority stage's timelock is the handover timelock";
+
+/**
+ * Issue 1809 (ADR-0014 §3-§5): one label per property of each proxy the stage table lists (proxies.ts reads and judges; this only names the outcome). The ERC-1967 admin
+ * and beacon slots must be empty, the implementation slot must name the manifest's implementation (or the last executed upgrade's), upgradeAuthority() must be the
+ * authority stage's timelock, which must be the handover's timelock, the manifest's upgrade_mode must be the sheet's UPGRADE_MODE (an undeclared mode fails), and
+ * upgradesFrozen() must read true exactly when that mode is frozen-at-deploy or an executed freeze row froze the proxy. Returns the evidence record of each proxy read.
+ */
+async function proxyLabels(
+  c: Collector, chain: ChainReader,
+  o: { table: StageTable; files: Record<string, any>; timelock: Address; sheet: VerifyOptions["sheet"]; upgrades: NonNullable<VerifyOptions["upgrades"]>; freezes: string[]; proxyArtifactDir: string },
+): Promise<ProxyRecord[]> {
+  const list: ManifestProxy[] = manifestProxies(o.table, o.files, (st) => stageManifestName(o.table, st));
+  if (list.length === 0) return [];
+  const hasAuthorityStage = o.table.stages.some((s) => s.name === AUTHORITY_STAGE);
+  const authorityRaw = hasAuthorityStage ? o.files[stageManifestName(o.table, AUTHORITY_STAGE)]?.timelock : undefined;
+  const authority = (isAddress(authorityRaw) ? authorityRaw : o.timelock) as Address;
+  if (hasAuthorityStage) c.push(AUTHORITY_LABEL, isAddress(authorityRaw) && lc(authorityRaw) === lc(o.timelock), isAddress(authorityRaw) ? `authority stage ${authorityRaw}, handover ${o.timelock}` : `the ${stageManifestName(o.table, AUTHORITY_STAGE)}.json manifest names no timelock`);
+  const lastUpgrade = new Map(o.upgrades.map((u) => [u.proxy, u.implementation]));
+  const frozenByRow = new Set(o.freezes);
+  const out: ProxyRecord[] = [];
+  for (const mp of list) {
+    const p = `proxy[${mp.name}]`;
+    if (!mp.proxy || !mp.implementation) {
+      for (const l of PROXY_LABELS) c.fail(`${p}: ${l}`, `the ${stageManifestName(o.table, mp.stage)}.json manifest names no ${!mp.proxy ? "proxy" : "implementation"} address`);
+      continue;
+    }
+    let st: ProxyState | undefined;
+    await c.run(`${p}: ${PROXY_LABELS[0]}`, async () => {
+      st = await readProxyState(chain, mp.proxy!);
+      const r = compareCode(st.proxyCode, loadArtifact(o.proxyArtifactDir, o.table.proxyArtifact!));
+      return { ok: r.ok, detail: `${o.table.proxyArtifact}: ${r.detail}` };
+    });
+    if (!st) { for (const l of PROXY_LABELS.slice(1)) c.fail(`${p}: ${l}`, "the proxy could not be read"); continue; }
+    const upgraded = lastUpgrade.get(mp.name);
+    const ch = proxyChecks(st, { name: mp.name, implementation: upgraded ?? mp.implementation, authority, mode: o.sheet.upgradeMode, frozenByRow: frozenByRow.has(mp.name) }, mp);
+    const s = st as ProxyState;
+    c.push(`${p}: ${PROXY_LABELS[1]}`, !ch.implementationSlot, ch.implementationSlot ?? `${s.implementation}${upgraded ? " (installed by govern upgrade-proxy)" : " (the stage manifest's)"}`);
+    c.push(`${p}: ${PROXY_LABELS[2]}`, !ch.adminSlot, ch.adminSlot ?? "zero");
+    c.push(`${p}: ${PROXY_LABELS[3]}`, !ch.beaconSlot, ch.beaconSlot ?? "zero");
+    c.push(`${p}: ${PROXY_LABELS[4]}`, !ch.initialized, ch.initialized ?? `proxy version ${s.initialized.version}, implementation locked`);
+    c.push(`${p}: ${PROXY_LABELS[5]}`, !ch.authority, ch.authority ?? `${s.authority}`);
+    c.push(`${p}: ${PROXY_LABELS[6]}`, !ch.mode, ch.mode ?? `${mp.manifestMode}`);
+    c.push(`${p}: ${PROXY_LABELS[7]}`, !ch.frozen, ch.frozen ?? `upgradesFrozen ${s.frozen} (UPGRADE_MODE ${o.sheet.upgradeMode}${frozenByRow.has(mp.name) ? ", frozen by govern freeze-proxy" : ""})`);
+    out.push(proxyRecordOf(mp.name, s, mp.manifestMode));
+  }
+  return out;
 }
 
 export const WEIGHT_SETTER_GATING_LABEL = "router: every WEIGHT_SETTER_ROLE holder is timelock-gated";
@@ -893,9 +968,18 @@ async function roleScan(c: Collector, chain: ChainReader, deployer: Address, s: 
  */
 async function redeployChecks(
   c: Collector, chain: ChainReader, r: NonNullable<VerifyOptions["redeploys"]>[number],
-  ctx: { registry: Address; router: Address; tl: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string },
+  ctx: { registry: Address; router: Address; tl: Address; vaults: ManifestVault[]; priorDir?: string; artifactsDir: string; artifact?: string; proxyArtifact?: string },
 ): Promise<void> {
   const p = `retired[${r.vault}]`;
+  /**
+   * Issue 1809: a vault deployed as a proxy (ADR-0014) runs its implementation. A non-zero ERC-1967 implementation slot is followed, and then the code AT the address must
+   * be the proxy build too, so a contract that only writes the slot cannot borrow another's code. A direct (pre-proxy) vault reads a zero slot and is read as before.
+   */
+  const running = async (a: Address): Promise<{ code: Hex; proxyCode?: Hex; implementation?: Address }> => {
+    const impl = wordAddress(await chain.getStorageAt(a, ERC1967_IMPLEMENTATION_SLOT));
+    if (BigInt(impl) === 0n) return { code: await chain.getCode(a) };
+    return { code: await chain.getCode(impl), proxyCode: await chain.getCode(a), implementation: impl };
+  };
   const status = async (v: Address): Promise<number> => Number(((await chain.read(ctx.registry, "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)", [v])) as [unknown, number])[1]);
   await c.run(`${p}: has code`, async () => (await chain.getCode(r.oldVault)).length > 2);
   await c.runEq(`${p}: registry status is Retired`, () => status(r.oldVault), 2);
@@ -904,15 +988,24 @@ async function redeployChecks(
   await c.runEq(`${p}: registry link`, () => chain.read(r.oldVault, "function registry() view returns (address)"), ctx.registry);
   await c.run(`${p}: runtime code serves redeemInKind`, async () => {
     const sel = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
-    const code = (await chain.getCode(r.oldVault)).toLowerCase();
-    return { ok: code.includes(sel), detail: `selector ${sel}` };
+    const run = await running(r.oldVault);
+    return { ok: run.code.toLowerCase().includes(sel), detail: `selector ${sel}${run.implementation ? ` in the implementation ${run.implementation} behind the proxy` : ""}` };
   });
   await c.run(`${p}: runtime code equals the original build artifact (masked)`, async () => {
     if (!ctx.artifact) return { ok: false, detail: "no artifact name for the vault" };
     // QA plan v1 E1: the build that created this vault. A first round's old vault is the original deployment's (--prior-out); a later round's was deployed by the round before.
     const fromRedeploy = r.oldBuild === "redeploy";
-    const res = compareCode(await chain.getCode(r.oldVault), loadArtifact(fromRedeploy ? ctx.artifactsDir : ctx.priorDir ?? ctx.artifactsDir, ctx.artifact));
-    return { ok: res.ok, detail: `${ctx.artifact} (${fromRedeploy ? "the redeploy build" : "the original build"}): ${res.detail}${!res.ok && !fromRedeploy && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
+    const dir = fromRedeploy ? ctx.artifactsDir : ctx.priorDir ?? ctx.artifactsDir;
+    const run = await running(r.oldVault);
+    const res = compareCode(run.code, loadArtifact(dir, ctx.artifact));
+    let proxyNote = "";
+    if (run.proxyCode !== undefined) {
+      if (!ctx.proxyArtifact) return { ok: false, detail: `${r.oldVault} is a proxy (its ERC-1967 implementation slot names ${run.implementation}) but the stage table names no proxy build` };
+      const px = compareCode(run.proxyCode, loadArtifact(dir, ctx.proxyArtifact));
+      if (!px.ok) return { ok: false, detail: `${r.oldVault} names the implementation ${run.implementation} but does not run the ${ctx.proxyArtifact} build: ${px.detail}` };
+      proxyNote = ` (the implementation ${run.implementation} behind the ${ctx.proxyArtifact} proxy)`;
+    }
+    return { ok: res.ok, detail: `${ctx.artifact}${proxyNote} (${fromRedeploy ? "the redeploy build" : "the original build"}): ${res.detail}${!res.ok && !fromRedeploy && ctx.priorDir === undefined ? " (pass --prior-out <forge out/ of a checkout at the original sha>)" : ""}` };
   });
   const q = `redeploy[${r.vault}]`;
   await c.run(`${q}: the vault manifest names the replacing vault`, async () => {

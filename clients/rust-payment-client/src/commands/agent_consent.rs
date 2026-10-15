@@ -17,26 +17,36 @@
 //! 2. print the production warning on Base mainnet, then decrypt the agent
 //!    keystore (passphrase from `RMPC_KEYSTORE_PASSPHRASE`; never prompted);
 //! 3. read `eth_chainId` (must equal `chain_id`, else `ErrChainIdMismatch`),
-//!    then `agentConsentNonce(agent)` and `agentOwner(agent)` at one block;
+//!    then, all at one block: the gateway's code (refused with
+//!    `ErrCodeHashMismatch` unless it hashes to `gateway_runtime_hash`), its
+//!    ERC-1967 implementation and that code (refused with
+//!    `ErrImplementationNotApproved` unless approved, QA plan P3),
+//!    `implementationVersion()`, `agentConsentNonce(agent)` and
+//!    `agentOwner(agent)`;
 //! 4. sign `AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
-//!    (`RobotMoneyGateway`, `1`, chain id, gateway) and print it.
+//!    (`RobotMoneyGateway`, the live `implementationVersion()`, chain id,
+//!    gateway) and print it.
 //!
 //! It sends no transaction and takes no nonce lock. The signature authorizes
 //! one reveal: the gateway advances `agentConsentNonce(agent)` on use, and a
 //! consent for another owner, share receiver, chain or gateway never
-//! verifies. When the agent is already bound (`current_owner` is set) the
+//! verifies. It is bound to the implementation version too (QA plan
+//! Decisions D5): if the timelock upgrades the gateway to an implementation
+//! that bumps `implementationVersion()` before the reveal lands, the reveal
+//! reverts `InvalidAgentConsent` and the agent signs again. When the agent is already bound (`current_owner` is set) the
 //! reveal reverts `AgentAlreadyOwned` until that binding is revoked, or
 //! released with `releaseAgent` if it was made without consent.
 //!
 //! Exit codes:
 //! - 0 — signature printed.
-//! - 2 — refusal (`ErrChainIdMismatch`, `ErrSoftwareSignerDisallowed`).
+//! - 2 — refusal (`ErrChainIdMismatch`, `ErrCodeHashMismatch`,
+//!   `ErrImplementationNotApproved`, `ErrSoftwareSignerDisallowed`).
 //! - 3 — startup failure (config, flag parse, keystore, RPC).
 
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use alloy_primitives::{hex, Address, U256};
+use alloy_primitives::{hex, keccak256, Address, B256, U256};
 use alloy_sol_types::SolCall;
 use serde::Serialize;
 
@@ -49,6 +59,7 @@ use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::consent::encode_rsv;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{AgentConsent, AgentSigner};
+use crate::upgrade::{self, ImplementationRead};
 
 const EXIT_OK: i32 = 0;
 const EXIT_REFUSAL: i32 = 2;
@@ -86,7 +97,14 @@ pub struct AgentConsentOutput {
     pub chain_id: u64,
     /// The domain's verifying contract (the configured gateway).
     pub gateway: String,
-    /// The block the nonce and owner were read at.
+    /// The domain's version: `implementationVersion()` at `block_number`.
+    pub implementation_version: String,
+    /// The ERC-1967 implementation behind the gateway at `block_number`;
+    /// `null` for a direct gateway.
+    pub implementation: Option<String>,
+    /// That implementation's runtime code hash; `null` for a direct gateway.
+    pub implementation_code_hash: Option<String>,
+    /// The block the implementation, version, nonce and owner were read at.
     pub block_number: u64,
     /// `agentOwner(agent)` at that block; `null` when the agent is unbound.
     pub current_owner: Option<String>,
@@ -197,14 +215,51 @@ pub fn run(args: Args) -> i32 {
         return EXIT_REFUSAL;
     }
 
-    let (block_number, nonce, current_owner) =
-        match rt.block_on(read_consent_state(&rpc, gateway, agent)) {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("rmpc agent-consent: gateway read failed: {e}");
-                return EXIT_STARTUP_FAIL;
-            }
-        };
+    let state = match rt.block_on(read_consent_state(&rpc, gateway, agent)) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("rmpc agent-consent: gateway read failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    // Sign only against the pinned proxy code and an implementation the
+    // operator approved (QA plan P3), both as read at the signing block.
+    let pinned = match B256::from_str(&cfg.gateway_runtime_hash) {
+        Ok(h) => h,
+        Err(e) => {
+            log::error!("rmpc agent-consent: gateway_runtime_hash parse error: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    let checked = if state.gateway_code_hash == Some(pinned) {
+        upgrade::check_approved(&state.implementation, &cfg)
+    } else {
+        Err(RmpcError::ErrCodeHashMismatch)
+    };
+    if let Err(err) = checked {
+        if let RmpcError::ErrConfig(_) = err {
+            log::error!("rmpc agent-consent: {err}");
+            return EXIT_STARTUP_FAIL;
+        }
+        log::error!("rmpc agent-consent: {err}");
+        emit(
+            &AgentConsentFailure {
+                ok: false,
+                error: err.name().to_string(),
+                message: Some(err.to_string()),
+            },
+            pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+    let ConsentState {
+        block_number,
+        nonce,
+        current_owner,
+        version,
+        implementation,
+        ..
+    } = state;
     if current_owner != Address::ZERO {
         log::warn!(
             "rmpc agent-consent: agent {agent:#x} is already bound to {current_owner:#x}; \
@@ -218,6 +273,7 @@ pub fn run(args: Args) -> i32 {
         nonce,
         chain_id,
         gateway,
+        version: version.clone(),
     };
     let signature = match signer.sign_agent_consent(&consent) {
         Ok(s) => s,
@@ -229,7 +285,8 @@ pub fn run(args: Args) -> i32 {
     let digest = consent.digest(agent);
     log::info!(
         "rmpc agent-consent: agent={agent:#x} owner={owner:#x} share_receiver={share_receiver:#x} \
-         nonce={nonce} chain_id={chain_id} gateway={gateway:#x} block={block_number}"
+         nonce={nonce} chain_id={chain_id} gateway={gateway:#x} version={version} \
+         block={block_number}"
     );
 
     emit(
@@ -242,6 +299,9 @@ pub fn run(args: Args) -> i32 {
             nonce: nonce.to_string(),
             chain_id,
             gateway: format!("{gateway:#x}"),
+            implementation_version: version,
+            implementation: implementation.implementation.map(|a| format!("{a:#x}")),
+            implementation_code_hash: implementation.code_hash.map(|h| format!("{h:#x}")),
             block_number,
             current_owner: (current_owner != Address::ZERO).then(|| format!("{current_owner:#x}")),
             digest: format!("{digest:#x}"),
@@ -252,14 +312,33 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
-/// `agentConsentNonce(agent)` and `agentOwner(agent)`, both at one block.
+/// Everything the consent binds that is read from the gateway, at one block.
+struct ConsentState {
+    block_number: u64,
+    /// `keccak256(eth_getCode(gateway))`; `None` when the gateway has no code.
+    gateway_code_hash: Option<B256>,
+    nonce: U256,
+    current_owner: Address,
+    /// `implementationVersion()`: the domain version (QA plan Decisions D5).
+    version: String,
+    /// The ERC-1967 implementation and its code hash (QA plan P3).
+    implementation: ImplementationRead,
+}
+
+/// The gateway's implementation, `implementationVersion()`,
+/// `agentConsentNonce(agent)` and `agentOwner(agent)`, all at one block, so
+/// the version signed is the version of the implementation checked.
 async fn read_consent_state(
     rpc: &FailoverRpcClient,
     gateway: Address,
     agent: Address,
-) -> crate::errors::Result<(u64, U256, Address)> {
+) -> crate::errors::Result<ConsentState> {
     let block_number = rpc.block_number().await?;
-    let tag = format!("0x{block_number:x}");
+    let tag = upgrade::block_tag(block_number);
+    let code = rpc.get_code(gateway, Some(&tag)).await?;
+    let gateway_code_hash = (!code.is_empty()).then(|| keccak256(code.as_ref()));
+    let implementation = upgrade::read_implementation(rpc, gateway, block_number).await?;
+    let version = upgrade::implementation_version(rpc, gateway, &tag).await?;
 
     let out = rpc
         .eth_call(
@@ -293,7 +372,14 @@ async fn read_consent_state(
         .map_err(|e| RmpcError::ErrRpcDecode(format!("agentOwner() decode: {e}")))?
         ._0;
 
-    Ok((block_number, nonce, owner))
+    Ok(ConsentState {
+        block_number,
+        gateway_code_hash,
+        nonce,
+        current_owner: owner,
+        version,
+        implementation,
+    })
 }
 
 fn parse_address(s: &str, flag: &str) -> Result<Address, i32> {

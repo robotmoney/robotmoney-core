@@ -13,6 +13,7 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev What the governance stage (DeployRouterGovernance) leaves on a fresh
 ///      router: the weight setter holds both router roles, the deployer keeps
@@ -27,8 +28,8 @@ contract DeployRouterGovernanceDefaultsTest is Test {
     function setUp() public {
         script = new DeployRouterGovernance();
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        VaultRegistry registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
     }
 
     // ─── Stage 7 wires the weight setter ─────────────────────────────────────

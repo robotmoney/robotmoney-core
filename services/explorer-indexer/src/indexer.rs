@@ -58,7 +58,7 @@
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
     IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents, ITimelockEvents,
-    IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
+    IUpgradeEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -1736,6 +1736,57 @@ pub fn admin_event_of(
     Ok(None)
 }
 
+/// One proxy upgrade or freeze, ready for `Db::insert_proxy_upgrade_event` (QA plan P3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyUpgradeEvent {
+    /// `upgraded` or `frozen` (the `kind` column of migration 0024).
+    pub kind: &'static str,
+    /// The implementation the proxy runs from this event on, or the one it froze on.
+    pub implementation: Address,
+    /// `UpgradesFrozen` only: that implementation's runtime code hash.
+    pub code_hash: Option<[u8; 32]>,
+}
+
+/// Decode an `Upgraded` or `UpgradesFrozen` log (ADR-0014, QA plan P3). `None` for any other
+/// log, and for an `UpgradesFrozen` whose `proxy` is not the emitter: `GovernedUpgrade` always
+/// names itself, so a mismatch is not one of ours and is not recorded.
+pub fn proxy_upgrade_event_of(
+    topics: &Topics,
+    log: &LogEntry,
+) -> Result<Option<ProxyUpgradeEvent>, IndexerError> {
+    let Some(&topic0) = log.topics.first() else {
+        return Ok(None);
+    };
+    if topic0 == topics.proxy_upgraded {
+        let d = IUpgradeEvents::Upgraded::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Upgraded: {e}")))?;
+        return Ok(Some(ProxyUpgradeEvent {
+            kind: "upgraded",
+            implementation: d.implementation,
+            code_hash: None,
+        }));
+    }
+    if topic0 == topics.proxy_upgrades_frozen {
+        let d = IUpgradeEvents::UpgradesFrozen::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("UpgradesFrozen: {e}")))?;
+        if d.proxy != log.address {
+            tracing::warn!(
+                log_address = %log.address,
+                named_proxy = %d.proxy,
+                block_number = log.block_number,
+                "ignoring an UpgradesFrozen log that names another proxy than its emitter"
+            );
+            return Ok(None);
+        }
+        return Ok(Some(ProxyUpgradeEvent {
+            kind: "frozen",
+            implementation: d.implementation,
+            code_hash: Some(d.codeHash.0),
+        }));
+    }
+    Ok(None)
+}
+
 /// One Timelock or Safe event, ready for `Db::insert_admin_event`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdminEvent {
@@ -2632,6 +2683,25 @@ pub async fn handle_log(
     // Timelock and Safe governance events (issue #1731). The topic-0s are generic hashes, so the emitter
     // must be the configured Timelock or Safe before anything is written.
     if let Some(n) = handle_admin_log(db, cfg, topics, log).await? {
+        return Ok(n);
+    }
+
+    // Proxy upgrades and freezes (ADR-0014, QA plan P3, core 1810). Every watched address is a
+    // configured or registered Robot Money contract, so an emitter here is a proxy of ours.
+    if topic0 == topics.proxy_upgraded || topic0 == topics.proxy_upgrades_frozen {
+        let Some(ev) = proxy_upgrade_event_of(topics, log)? else {
+            return Ok(0);
+        };
+        let n = db
+            .insert_proxy_upgrade_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                &ev,
+            )
+            .await?;
         return Ok(n);
     }
 

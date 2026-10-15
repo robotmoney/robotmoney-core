@@ -22,6 +22,8 @@ import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev 1:1 router leg whose `previewDeposit` and `deposit` revert above `ceiling` while `maxDeposit` stays open, so only the
 ///      router's quote check can drop it. Counts `deposit` calls so a test can prove a dropped leg was never called.
@@ -115,7 +117,7 @@ contract PortfolioRouterLegAvailabilityTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        agent = new AgentTokenVault(
+        agent = Proxied.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("swapRouter02")),
             1_000_000e6,
@@ -126,8 +128,8 @@ contract PortfolioRouterLegAvailabilityTest is Test {
             admin
         );
         other = new MockVault(address(usdc));
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = Proxied.vaultRegistry(admin);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
 
         // Ring at the 901-slot floor and one full 1800 s window of history before `addAsset`.
         rec.grow(901);
@@ -138,7 +140,9 @@ contract PortfolioRouterLegAvailabilityTest is Test {
 
         vm.startPrank(admin);
         agent.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        agent.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
+        agent.addAsset(
+            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
+        );
         // The 2.91 percent fee leaves the 300 bps default no room: the deploy script raises it to the 500 bps ceiling.
         agent.setMaxSlippageBps(500);
         agent.setNavDeviationGuardBps(SHEET_NAV_DEVIATION_BPS);
@@ -257,8 +261,8 @@ contract PortfolioRouterLegAvailabilityTest is Test {
     ///         1,000 USDC: Y never quotes, Z quotes 300 but not the 429 it gets once Y is gone, X takes everything.
     ///         Preview and execute agree on each round's result, and neither dropped leg is ever called.
     function test_RTR5_quoteRevertDropsLegAndResplitsUntilStable() public {
-        VaultRegistry reg = new VaultRegistry(admin);
-        PortfolioRouter r = new PortfolioRouter(address(usdc), address(reg), admin);
+        VaultRegistry reg = Proxied.vaultRegistry(admin);
+        PortfolioRouter r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
         QuoteCeilingVault x = new QuoteCeilingVault(address(usdc));
         QuoteCeilingVault y = new QuoteCeilingVault(address(usdc));
         QuoteCeilingVault z = new QuoteCeilingVault(address(usdc));

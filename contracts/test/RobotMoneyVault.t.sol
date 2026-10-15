@@ -21,6 +21,8 @@ import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {AdminFloorAccessControlCounter} from "../lib/AdminFloorAccessControlCounter.sol";
+import {Proxied} from "./helpers/Proxied.sol";
+import {ExclusionLedgerFactory} from "../ExclusionLedgerFactory.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
 
@@ -161,23 +163,37 @@ contract ShortfallAdapter is IStrategyAdapter {
 
 /// @dev Exposes internal helpers for tests.
 contract VaultHarness is RobotMoneyVault {
-    constructor(
-        IERC20 asset_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        uint256 exitFeeBps_,
-        address feeRecipient_,
-        address admin_,
-        address emergencyResponder_
-    )
-        RobotMoneyVault(
-            asset_, tvlCap_, perDepositCap_, exitFeeBps_, feeRecipient_, admin_, emergencyResponder_
-        )
-    {}
-
     function exposed_decimalsOffset() external pure returns (uint8) {
         return _decimalsOffset();
     }
+}
+
+/// @dev The harness behind its own initialized ERC1967Proxy (ADR-0014), with the former
+///      constructor arguments.
+function deployVaultHarness(
+    IERC20 asset_,
+    uint256 tvlCap_,
+    uint256 perDepositCap_,
+    uint256 exitFeeBps_,
+    address feeRecipient_,
+    address admin_,
+    address emergencyResponder_
+) returns (VaultHarness) {
+    return VaultHarness(
+        Proxied.proxy(
+            address(new VaultHarness()),
+            Proxied.robotMoneyVaultInit(
+                asset_,
+                tvlCap_,
+                perDepositCap_,
+                exitFeeBps_,
+                feeRecipient_,
+                admin_,
+                emergencyResponder_,
+                new ExclusionLedgerFactory()
+            )
+        )
+    );
 }
 
 // ─── Main test contract ──────────────────────────────────────────────────────
@@ -204,7 +220,7 @@ contract RobotMoneyVaultTest is Test {
 
     function setUp() public {
         usdc = new TestUSDC();
-        vault = new VaultHarness(
+        vault = deployVaultHarness(
             IERC20(address(usdc)),
             TVL_CAP,
             PER_DEPOSIT_CAP,
@@ -431,7 +447,7 @@ contract RobotMoneyVaultTest is Test {
     }
 
     function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public {
-        VaultHarness typedVault = new VaultHarness(
+        VaultHarness typedVault = deployVaultHarness(
             IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         address pool = makeAddr("aavePool");
@@ -698,7 +714,7 @@ contract RobotMoneyVaultTest is Test {
     ///         equals the share-implied gross, so the fee and net payout match
     ///         `previewRedeem`.
     function test_FEE2_exitFeeOnRealizedProceeds() public {
-        VaultHarness feeVault = new VaultHarness(
+        VaultHarness feeVault = deployVaultHarness(
             IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 100, feeRecipient, admin, admin
         ); // 100 bps = 1% exit fee
         MockAdapter feeAdapter = new MockAdapter(address(usdc), address(feeVault));
@@ -734,7 +750,7 @@ contract RobotMoneyVaultTest is Test {
     ///         the withdrawal reverts (`InsufficientAdapterLiquidity`) rather than
     ///         silently paying the inflated gross from another holder's idle USDC.
     function test_FEE2_overReportingAdapterCannotSocializeLoss() public {
-        VaultHarness feeVault = new VaultHarness(
+        VaultHarness feeVault = deployVaultHarness(
             IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 100, feeRecipient, admin, admin
         );
         ShortfallAdapter liar = new ShortfallAdapter(address(usdc), address(feeVault));
@@ -1378,7 +1394,7 @@ contract RobotMoneyVaultTest is Test {
     function test_tvlCap_enforcedIncludingIdleBalance() public {
         // Deploy a vault with a tight TVL cap: 20 000 USDC.
         uint256 cap = 20_000 * ONE_USDC;
-        VaultHarness tightVault = new VaultHarness(
+        VaultHarness tightVault = deployVaultHarness(
             IERC20(address(usdc)),
             cap,
             cap, // perDepositCap matches tvlCap
@@ -1422,7 +1438,7 @@ contract RobotMoneyVaultTest is Test {
         // so pass 2 also finds no headroom and remaining > 0.
 
         // Use a cap-capped adapter: capBps = 5000 (50%)
-        VaultHarness capVault = new VaultHarness(
+        VaultHarness capVault = deployVaultHarness(
             IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MockAdapter capAdapter = new MockAdapter(address(usdc), address(capVault));

@@ -1167,37 +1167,37 @@ dropped (floor only blocks the LAST admin).
 function test_lastAdminFloor_router_cannotDropSoleAdmin() public;
 ```
 
-<a id="test_previewdeposit_uses_defaultweights_when_no_proposal"></a>
+<a id="test_previewdeposit_uses_defaultweights_when_no_receipt_applied"></a>
 
-### test_previewDeposit_uses_defaultWeights_when_no_proposal
+### test_previewDeposit_uses_defaultWeights_when_no_receipt_applied
 
-With no proposal ever passed (voted vector inactive), the router
-previews and routes by the default weight vector. ADR-0002.
+With no consensus receipt ever applied (applied vector inactive), the
+router previews and routes by the default weight vector. ADR-0002.
 
 ```solidity
-function test_previewDeposit_uses_defaultWeights_when_no_proposal() public;
+function test_previewDeposit_uses_defaultWeights_when_no_receipt_applied() public;
 ```
 
-<a id="test_previewdeposit_uses_defaultweights_after_failed_quorum"></a>
+<a id="test_previewdeposit_uses_defaultweights_after_applied_weights_cleared"></a>
 
-### test_previewDeposit_uses_defaultWeights_after_failed_quorum
+### test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared
 
-After the voted vector is cleared (simulating a fall-back to
-default after the most recent proposal failed quorum), the
-router previews by the default vector again. ADR-0002.
+After the applied vector is cleared (`clearVotedWeights`, the
+timelock's fall-back to the default vector), the router previews
+by the default vector again. ADR-0002.
 
 ```solidity
-function test_previewDeposit_uses_defaultWeights_after_failed_quorum() public;
+function test_previewDeposit_uses_defaultWeights_after_applied_weights_cleared() public;
 ```
 
-<a id="test_voted_weights_override_defaults_then_revert_to_defaults"></a>
+<a id="test_applied_weights_override_defaults_then_revert_to_defaults"></a>
 
-### test_voted_weights_override_defaults_then_revert_to_defaults
+### test_applied_weights_override_defaults_then_revert_to_defaults
 
-A passed vote overrides the default; defaultWeights storage is
-unchanged; clearing the voted vector reverts to default. ADR-0002.
+An applied vector overrides the default; defaultWeights storage is
+unchanged; clearing the applied vector reverts to default. ADR-0002.
 
 ```solidity
-function test_voted_weights_override_defaults_then_revert_to_defaults() public;
+function test_applied_weights_override_defaults_then_revert_to_defaults() public;
 ```
 

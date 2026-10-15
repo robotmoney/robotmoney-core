@@ -28,7 +28,6 @@
     ".vault_addresses.rmAGENT",
     ".vault_addresses.rmRWA",
     ".ephemeral.approver",
-    ".ephemeral.voters",
     ".ephemeral.emergency",
     ".ephemeral.keystore_dir",
     ".ephemeral.safe_signers"
@@ -108,7 +107,7 @@
     "ephemeral": {
       "type": "object",
       "description": "The throwaway ceremony keys and Safe signer roster (2026-09-24 decision: staging is throwaway, no key outlives the run that minted it).",
-      "required": ["approver", "voters", "emergency", "keystore_dir", "safe_signers"],
+      "required": ["approver", "emergency", "keystore_dir", "safe_signers"],
       "properties": {
         "approver": {
           "allOf": [{ "$ref": "#/$defs/address" }],
@@ -116,8 +115,8 @@
         },
         "voters": {
           "type": "array",
-          "minItems": 2,
-          "items": { "$ref": "#/$defs/address" }
+          "items": { "$ref": "#/$defs/address" },
+          "description": "OPTIONAL and legacy (issue 1698, decision 2026-10-15): router voting is deleted, the rehearsal keys mint no voter and no stage reads a voter set, so core no longer requires this field. `core-stack.ts record write` copies the sheet's legacy VOTER_ADDRESSES line here only when the sheet still carries one (the committed Twin sheet does, for this consumer). fusion-qa's src/phases/core-e2e.ts parseRecord still requires voters[0] and uses it only as an address that holds no submitter role (FUSION_UNAUTHORIZED_SUBMITTER). That consumer must stop reading it before the Twin sheet drops the line."
         },
         "emergency": { "$ref": "#/$defs/address" },
         "keystore_dir": {

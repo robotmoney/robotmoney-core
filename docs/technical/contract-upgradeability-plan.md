@@ -1,8 +1,10 @@
 # Contract upgradeability policy and implementation plan
 
-**Status:** target policy and design plan, 2026-10-13. No upgradeable Robot Money
-deployment is implemented by this document. Existing Base mainnet contracts
-remain direct deployments and cannot be upgraded in place.
+**Status:** policy and design plan, 2026-10-13. ADR-0014 turns it into one
+pattern, and QA plan P1 to P4 implemented that pattern on qa/test-merge-v1
+(the ADR's implementation records). Where this plan and ADR-0014 differ, the
+ADR wins. Existing Base mainnet contracts remain direct deployments and cannot
+be upgraded in place.
 
 ## Decision and scope
 
@@ -30,7 +32,9 @@ Candidates for per-instance proxies are `RobotMoneyVault`, the three concrete
 `RobotMoneyGateway`, `RouterGovernance`, `InvestmentCommitteePolicy`, and
 `ConsensusRecommendationReceipt`. Inventory each deployment stage before
 implementation; make the decision per contract and record exclusions in the
-release manifest. The strategy and swap adapters, linked libraries,
+release manifest. ADR-0014 §1 pins nine of them and §2 keeps `RouterGovernance`
+direct: after #1698 it holds a role set and one receipt pointer, and a fix is a
+timelock rotation of `WEIGHT_SETTER_ROLE`. The strategy and swap adapters, linked libraries,
 `UniswapV4PriceRecorder`, and `TimelockController` remain direct
 deployments in this plan. Safe retains its existing canonical SafeProxy 1.4.1
 and verified SafeL2 singleton topology; it is not converted to a Robot Money
@@ -66,11 +70,14 @@ sets the flag during atomic proxy initialization, before any public call.
 Timelock ownership/role handover and the absence of residual deployer powers
 must be checked before opening deposits.
 
-The current stage table deploys the timelock last. Before proxy deployment,
+The stage table used to deploy the timelock last. Before proxy deployment,
 either move the timelock/Safe setup ahead of every proxy stage or use a
 deterministically precomputed timelock address whose code and Safe ownership
 are verified before opening deposits. The deployment plan must prove the
 authority exists and cannot leave an interim deployer-controlled upgrade path.
+P2 chose the first option: the `authority` stage
+(`DeployUpgradeAuthority.s.sol`) deploys the timelock before the first proxy,
+and the handover stage reuses it (ADR-0014 "Implementation record (P2)").
 
 Before freeze, governance can still install malicious or broken logic; the
 timelock gives inspection time but does not make an upgrade safe. Review the
@@ -111,14 +118,27 @@ Verification must read the ERC-1967 slot and `upgradesFrozen()` on chain, verify
 both proxy and implementation source, and record the evidence in manifests.
 Signing clients must verify both proxy code and the live ERC-1967 implementation
 address/code hash against the approved release before authorizing writes; an
-unknown implementation or failed read must refuse signing. The current
+unknown implementation or failed read must refuse signing. The
 `clients/rust-payment-client/src/policy/mod.rs` gateway runtime-code hash check
-alone cannot detect a proxy implementation change. Update its configuration,
-checks, and refusal tests as a release prerequisite. State reads should use a
+alone cannot detect a proxy implementation change, so QA plan P3 added check 2b:
+rmpc reads the implementation slot and its code at one block and refuses
+(`ErrImplementationNotApproved`) unless the code hash is in the config's
+`gateway_implementation_hashes` (ADR-0014 "Implementation record (P3)"). Every
+gateway write runs it (the committee and receipt writes included), and the
+vaults and the router a write reaches are checked the same way against
+`proxy_implementation_hashes`. The dapp checks the gateway's implementation
+against its build-time pin `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`. State reads should use a
 consistent block; pre-sign verification does not prevent an upgrade before
-transaction execution. Specify how queued user transactions and signed gateway
-authorizations are handled across upgrades, including version binding or
-invalidation where their semantics change. The indexer must track implementation
+transaction execution. The handling of queued user transactions and signed
+gateway authorizations across upgrades is decided in ADR-0014 §10 and its
+"Implementation record (P3)": an `AgentConsent` is bound to
+`RobotMoneyGateway.implementationVersion()` (the EIP-712 domain version), an
+implementation that changes what a consent means bumps it and so voids every
+older consent, a pure fix keeps it, and a transaction already in flight runs
+against whatever implementation is live when it lands. The public timelock
+delay is the warning; rmpc and the dapp do not scan the queue. The release
+runbook records the version decision for every gateway upgrade
+(`docs/operations/contract-release-runbooks.md` §4.12). The indexer must track implementation
 changes and freeze events without treating its cache as signing authority. Public contract
 metadata should show whether upgrades remain possible.
 
@@ -146,6 +166,11 @@ metadata should show whether upgrades remain possible.
    Twin fork, then a freeze and a failed upgrade attempt. Require the same
    checks in the mainnet plan and post-deploy verifier. Update ABI consumers,
    indexer, dapp, and monitors to track proxy implementation and freeze state.
+   The rehearsal is the nightly job `twin-upgrade-rehearsal`
+   (`publish-contracts/src/ci/twin-upgrade-rehearsal.ts`, checked by
+   `evidence-check --proxy-lifecycle`; ADR-0014 "Implementation record (P4)").
+   A final mainnet release needs it green at the release SHA and an external
+   security review (`docs/operations/contract-release-runbooks.md` §4.1).
 5. For already deployed direct contracts, plan new addresses and an explicit
    cutover. Existing share balances and permissions do **not** move merely by
    pointing a proxy at an implementation. Respect ADR-0009's no assisted
@@ -167,7 +192,7 @@ the target design until code and on-chain evidence exist.
 | `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. |
 | `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. |
 | `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. |
-| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. |
+| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. Written as [ADR-0014](../adr/ADR-0014-governed-upgrades-and-freeze.md) (Proposed, pending owner acceptance): it pins the proxied list, the layout gate, the constant ceilings, the freeze rules and the EIP-170 budget. |
 
 ## References
 

@@ -30,6 +30,12 @@
 //! `cfg.gateway_address`; the caller must hold `AGENT_ROLE` on the gateway and
 //! `COMMITTEE_AGENT_ROLE` on the IC policy (docs/architecture.md §4.9.2).
 //!
+//! Before it signs, `submit` runs checks 1, 2 and 2b of the write preflight
+//! (issue 1810, `crate::upgrade::verify_gateway_before_signing`): the RPC
+//! serves `chain_id`, the gateway's code hashes to `gateway_runtime_hash`, and
+//! a proxied gateway runs an implementation pinned in
+//! `gateway_implementation_hashes`. A mismatch exits 2, a failed read 3.
+//!
 //! Exit codes:
 //! - 0 — success.
 //! - 2 — refusal (bad receipt, digest mismatch, failed signature, revert).
@@ -340,6 +346,32 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
+
+    // Checks 1, 2 and 2b before anything is signed (issue 1810): the RPC
+    // serves `chain_id`, the gateway's code is `gateway_runtime_hash`, and a
+    // proxied gateway runs an implementation pinned in
+    // `gateway_implementation_hashes`. A failed read refuses too.
+    if let Err(err) = rt.block_on(crate::upgrade::verify_gateway_before_signing(
+        &rpc,
+        &cfg,
+        gateway_addr,
+    )) {
+        log::error!("rmpc receipt submit: gateway check refused: {err}");
+        emit_failure(
+            &ReceiptFailure {
+                ok: false,
+                error: err.name().to_string(),
+                message: Some(format!("{err}")),
+            },
+            args.pretty,
+        );
+        return match err {
+            RmpcError::ErrChainIdMismatch
+            | RmpcError::ErrCodeHashMismatch
+            | RmpcError::ErrImplementationNotApproved { .. } => EXIT_REFUSAL,
+            _ => EXIT_STARTUP_FAIL,
+        };
+    }
 
     let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "submit") {
         Ok(f) => f,

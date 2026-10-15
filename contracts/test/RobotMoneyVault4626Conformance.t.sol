@@ -7,6 +7,7 @@ import {IERC20 as OZIERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title RobotMoneyVault4626Conformance
 /// @notice Property-based ERC-4626 conformance tests for RobotMoneyVault, built on
@@ -29,7 +30,7 @@ contract RobotMoneyVault4626Conformance is ERC4626Test {
     function setUp() public override {
         TestERC20 underlying = new TestERC20();
 
-        RobotMoneyVault vault = new RobotMoneyVault(
+        RobotMoneyVault vault = Proxied.robotMoneyVault(
             OZIERC20(address(underlying)),
             type(uint256).max, // tvlCap — unbounded for fuzzing
             type(uint256).max, // perDepositCap — unbounded for fuzzing
@@ -59,7 +60,7 @@ contract RobotMoneyVault4626ConformanceWithFee is ERC4626Test {
     function setUp() public override {
         TestERC20 underlying = new TestERC20();
 
-        RobotMoneyVault vault = new RobotMoneyVault(
+        RobotMoneyVault vault = Proxied.robotMoneyVault(
             OZIERC20(address(underlying)),
             type(uint256).max, // tvlCap — unbounded for fuzzing
             type(uint256).max, // perDepositCap — unbounded for fuzzing

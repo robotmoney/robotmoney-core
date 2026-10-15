@@ -31,7 +31,8 @@ import {
 } from "./runner.ts";
 import { VAULT_NAME } from "./sheet.ts";
 import { getStageTable, type StageRow } from "./stages.ts";
-import { manifestBase, manifestFile, redeployRow as tableRedeployRow } from "./stage-table.ts";
+import { PROXY_MANIFEST_FIELDS, manifestBase, manifestFile, redeployRow as tableRedeployRow, tableProxies } from "./stage-table.ts";
+import { proxyChecks, proxyProblems, proxyRecordOf, readProxyState, type ProxyRecord, type ProxyState, type ProxyWant } from "./proxies.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { ADMIN_ROLE } from "./verify/constants.ts";
@@ -123,6 +124,11 @@ export interface RedeployRecord {
   deploy_last_block?: number;
   /** The file the old vault's manifest was kept as (a name in the manifest directory). */
   retired_manifest?: string;
+  /**
+   * Issue 1809 (ADR-0014), QA plan v1 L1: the new vault's proxy as the verb read it back after the deploy (implementation slot, admin and beacon slots, authority,
+   * mode, frozen flag, the implementation code hash). The same record the runner's proxy gate keeps per proxy stage.
+   */
+  proxy?: ProxyRecord;
   started_at: string;
   deployed_at?: string;
   // ---- govern half
@@ -631,6 +637,20 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   // its transactions (the deployer's role not yet renounced, the vault not yet paused). So the checks are read again, bounded, until they all pass. What still fails after
   // the last read is refused as before, and a read that still throws is refused the same way, never passed through as a raw RPC error.
   const rd = async <T,>(sig: string, args: unknown[] = []): Promise<T> => chain.read(newVault, sig, args) as Promise<T>;
+  // Issue 1809 (ADR-0014), left for later by P2 and closed by QA plan v1 L1: the new vault is a governed proxy, read back the way the runner's gate reads a proxy
+  // stage (runner.ts proxyStageGate): the ERC-1967 slot names the manifest's implementation, no admin and no beacon, upgradeAuthority() is the timelock the script
+  // was given (TIMELOCK_ADDRESS, ADR-0014 §4), the manifest's mode is the sheet's UPGRADE_MODE, upgradesFrozen() matches it, the proxy is initialized and the
+  // implementation's initializers are locked. The verify after the round reads it again.
+  const tableProxy = tableProxies(t).find((x) => x.name === VAULT_NAME[key]);
+  if (!tableProxy) throw new PublishError("MANIFEST", `the stage table lists no proxy named ${VAULT_NAME[key]}: the redeployed vault cannot be read back as a governed proxy`, { stage: row.name });
+  const newImplementation = written[tableProxy.implementationField];
+  if (typeof newImplementation !== "string" || !ADDR.test(newImplementation)) throw new PublishError("MANIFEST", `${tmpPath} names no ${tableProxy.implementationField}: the implementation behind the new ${VAULT_NAME[key]} proxy. The old vault was not touched. Do not run the govern row.`, { stage: row.name });
+  const proxyWant: ProxyWant = { name: VAULT_NAME[key], implementation: newImplementation as Address, authority: timelock, mode: ctx.sheet.upgradeMode, frozenByRow: false };
+  const manifestProxy = {
+    manifestMode: typeof written[PROXY_MANIFEST_FIELDS.mode] === "string" ? (written[PROXY_MANIFEST_FIELDS.mode] as string) : undefined,
+    manifestAuthority: typeof written[PROXY_MANIFEST_FIELDS.authority] === "string" ? (written[PROXY_MANIFEST_FIELDS.authority] as string) : undefined,
+  };
+  let proxyState: ProxyState | undefined;
   const deployLeft = async (): Promise<string[]> => {
     const bad: string[] = [];
     if (!(await rd<boolean>("function depositsPaused() view returns (bool)"))) bad.push("the new vault is not deposit-paused");
@@ -639,6 +659,8 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
     const link = await rd<string>("function registry() view returns (address)");
     if (lc(link) !== lc(ZERO)) bad.push(`the new vault is already linked to ${link}: the govern batch links the registry (set-once), the deploy must leave it unlinked`);
     if ((await chain.read(registry, "function listVaults() view returns (address[])") as string[]).some((v) => lc(v) === lc(newVault))) bad.push("the registry already lists the new vault");
+    proxyState = await readProxyState(chain, newVault);
+    bad.push(...proxyProblems(proxyChecks(proxyState, proxyWant, manifestProxy)).map((x) => `proxy: ${x}`));
     return bad;
   };
   const left = await awaitRead(deployLeft, (b) => b.length === 0, ctx.readRetry);
@@ -654,6 +676,7 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   Object.assign(rec, {
     status: "deployed" as const, new_vault: newVault, deploy_end_nonce: nonce1, deploy_count: sent.count, deploy_tx_hashes: sent.hashes, deploy_receipt_statuses: deployReceipts.map((r) => deployReceiptStatus(r.status)),
     deploy_first_block: sent.firstBlock, deploy_last_block: sent.lastBlock, retired_manifest: retiredName, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
+    proxy: proxyRecordOf(VAULT_NAME[key], proxyState!, manifestProxy.manifestMode),
   });
   saveRunManifest(ctx.evidenceDir, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, new_vault: newVault, old_vault: oldVault, start_nonce: startNonce, end_nonce: nonce1, count: sent.count });

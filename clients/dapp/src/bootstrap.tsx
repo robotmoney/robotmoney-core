@@ -71,6 +71,7 @@ import { VerificationBanner } from "./components/VerificationBanner";
 import { VaultList } from "./components/VaultList";
 import { VaultDetail } from "./components/VaultDetail";
 import { RouterView } from "./components/RouterView";
+import { ProtocolUpgradesPanel } from "./components/ProtocolUpgradesPanel";
 import { ProtocolStats } from "./components/ProtocolStats";
 import { AboutModal } from "./components/AboutModal";
 import { DebugPage } from "./components/DebugPage";
@@ -114,6 +115,8 @@ export interface DappConfig {
   readonly safe?: Address;
   readonly rmToken?: Address;
   readonly expectedCodeHash?: string;
+  /** Issue 1810: reviewed gateway implementation code hashes (build-time, comma-separated). */
+  readonly expectedImplementationHashes?: string;
   readonly envClass: "fork" | "devnet" | "testnet" | "mainnet";
   readonly explorerApiUrl: string;
   readonly vaultAddressBySymbol: ReturnType<typeof parseVaultAddressMap>;
@@ -139,6 +142,7 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     // ROBOTMONEY token on Base; nothing deploys RM, core 1489).
     rmToken: env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined,
     expectedCodeHash: env.VITE_GATEWAY_EXPECTED_CODE_HASH,
+    expectedImplementationHashes: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH,
     envClass: (env.VITE_ENV_CLASS as DappConfig["envClass"]) ?? "fork",
     explorerApiUrl: resolveExplorerApiUrl(env),
     // Issue #1247 task 4.14: the per-deployment vault-symbol map that
@@ -154,6 +158,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
     cfg.gateway,
     cfg.expectedCodeHash,
+    cfg.expectedImplementationHashes,
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState("my-account");
@@ -267,6 +272,12 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                         router. The Consensus Receipts tab shows each receipt.
                       </p>
                     </section>
+                    {/* Issue 1810: implementation and freeze state of the non-vault proxies. */}
+                    <ProtocolUpgradesPanel
+                      gatewayAddress={cfg.gateway}
+                      routerAddress={cfg.router}
+                      registryAddress={cfg.registry}
+                    />
                   </div>
                 ),
               },

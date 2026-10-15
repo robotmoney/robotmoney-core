@@ -2,7 +2,7 @@
 // stage table, the build and the chain, and marked `measured.reconstructed`. Every refusal below has a mutation check in the PR description.
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { MAX_ANCHOR_DEPTH, anchorChainOf, fileHashOf, loadFrozen, loadFrozenFile, resolveCounts, frozenPath, sumCounts } from "../src/counts.ts";
@@ -25,7 +25,8 @@ const msg = async (f: () => unknown): Promise<string> => { try { await f(); } ca
 
 // The frozen counts of the first real release (9a768bb9), read from the repo: the reference a rebuilt baseline must equal.
 const REF_PATH = join(REPO, "deployments", "frozen-counts", "9a768bb9cc66d4485470a99a068ba7477604501a.json");
-const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
+// Issue 1809 added the authority stage (the timelock before every proxy) after that release: the reference carries it at 0, so its stage set is the table's.
+const REF = { ...(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>), authority: 0 } as Record<string, number>;
 
 // Build artifacts and what the chain holds, derived with the code under test's own inputs but compared with hand-built values below.
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
@@ -314,7 +315,8 @@ describe("the Twin job's counts.json carries the adoption records, so the recons
     const run = adoptedRun();
     const cj = join(dir, "counts.json");
     writeFileSync(cj, JSON.stringify(run));
-    mkdirSync(join(dir, "f")); copyFileSync(REF_PATH, join(dir, "f", "9a768bb9cc66d4485470a99a068ba7477604501a.json"));
+    // the first release's file with the authority stage at 0 (issue 1809), the stage set of this table
+    mkdirSync(join(dir, "f")); writeFileSync(join(dir, "f", "9a768bb9cc66d4485470a99a068ba7477604501a.json"), JSON.stringify({ ...JSON.parse(readFileSync(REF_PATH, "utf8")), counts: REF }, null, 2));
     const p = await freezeFromAdoptedRun({ countsJsonPath: cj, sha: SHA, countsDir: join(dir, "f"), table, getCode: chain(), build: () => ({ ...OUTS, linked: [], create2: [] }), crossCheckPath: join(dir, "f", "9a768bb9cc66d4485470a99a068ba7477604501a.json") });
     const f = loadFrozenFile(p, SHA);
     expect(f.counts).toEqual(REF);

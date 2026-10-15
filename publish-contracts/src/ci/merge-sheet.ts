@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Rehearsal sheet: a template sheet (default: the committed example, which is Twin chain data) with the lines of a fragment
-// (`bun src/rehearsal/cli.ts keys` output: roles, voters and Safe owners from throwaway keystores) replacing the same names.
+// (`bun src/rehearsal/cli.ts keys` output: roles and Safe owners from throwaway keystores, no voter: issue 1698) replacing the same names.
 // The result goes through the real sheet parser before it is written, so a bad merge fails here and not in a stage.
 // bun src/ci/merge-sheet.ts --template FILE --fragment FILE --out FILE
 import { readFileSync, writeFileSync } from "node:fs";

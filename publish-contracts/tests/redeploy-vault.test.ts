@@ -25,8 +25,9 @@ import { WEIGHT_SETTER_GATING_LABEL, verifyDeployment } from "../src/verify/inde
 import { A, addr, fakeTimelock, sender, setup, signers, writeGovernManifests } from "./govern-world.ts";
 import { LENDING_ADAPTERS } from "../src/core-wiring.ts";
 import { ADMIN, typedPrompt, world } from "./harness.ts";
-import { COUNTS, MANIFEST_ADAPTER, SHA, SHA2, healthyPoolReader, tmp, writeCounts } from "./fixtures.ts";
-import { DEPLOYER as WORLD_DEPLOYER, REGISTRY as WORLD_REGISTRY, ROUTER as WORLD_ROUTER, VAULTS as WORLD_VAULTS, buildWorld, failed as failedLabels } from "./verify/world.ts";
+import { COUNTS, MANIFEST_ADAPTER, SHA, SHA2, healthyPoolReader, healthyProxyReader, tmp, writeCounts } from "./fixtures.ts";
+import { DEPLOYER as WORLD_DEPLOYER, IMPLEMENTATIONS as WORLD_IMPLEMENTATIONS, REGISTRY as WORLD_REGISTRY, ROUTER as WORLD_ROUTER, TIMELOCK as WORLD_TIMELOCK, VAULTS as WORLD_VAULTS, buildWorld, failed as failedLabels } from "./verify/world.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
 import type { ChainReader, VerifyOptions } from "../src/verify/types.ts";
 import { ADMIN_ROLE } from "../src/verify/constants.ts";
 
@@ -210,15 +211,23 @@ describe("the command line", () => {
 const SCRIPT = "RedeployProtocolAssetVault.s.sol";
 const TL = A.timelock, REG = A.registry, ROUTER = A.router;
 
-/** A read-only chain that answers the deployment's state, and the new vault's, on top of the healthy pool chain the config-check reads. */
-function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean; routerAdmin?: boolean } = {}): ChainReader {
+/**
+ * A read-only chain that answers the deployment's state, and the new vault's, on top of the healthy pool chain the config-check reads. The new vault is a governed
+ * proxy (issue 1809): its storage is healthyProxyReader's (the implementation slot names the stub manifest's vault_implementation, no admin or beacon, initialized,
+ * the implementation locked), its upgradeAuthority() is the timelock unless `newAuthority` says otherwise (QA plan v1 L1).
+ */
+function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean; routerAdmin?: boolean; newAuthority?: Address; newFrozen?: boolean; newAdminSlot?: Hex } = {}): ChainReader {
   const listed = o.listed ?? [USDC, OLD, AGENT, RWA];
   const base = healthyPoolReader();
+  const proxyStorage = healthyProxyReader(o.newAdminSlot ? { adminSlot: o.newAdminSlot } : {}).getStorageAt;
   return {
     ...base,
+    getStorageAt: proxyStorage,
     read: async (at: string, sig: string, args: unknown[] = []) => {
       const fn = /function (\w+)/.exec(sig)![1]!;
       switch (fn) {
+        case "upgradeAuthority": return o.newAuthority ?? TL;
+        case "upgradesFrozen": return o.newFrozen ?? false;
         case "listVaults": return listed;
         case "getVault": return [{ name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 1n }, o.oldStatus ?? 0];
         case "isRouterEligible": return o.oldEligible ?? true;
@@ -344,6 +353,22 @@ describe("the redeploy-vault verb", () => {
       const code = await t.run([], { chainReader: reader });
       expect([EXIT_CODES.VERIFY, EXIT_CODES.REFUSED]).toContain(code);
       expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    }
+  });
+  test("issue 1809 (QA plan v1 L1): the new vault is read back as a governed proxy, and the round's record keeps what was read", async () => {
+    const t = verbWorld();
+    expect(await t.run()).toBe(0);
+    const rec = redeploysOf(t.manifest())[0]!;
+    expect(rec.status).toBe("deployed");
+    // the stub manifest names vault_implementation 0x…2001 and the authority the script was given (TIMELOCK_ADDRESS); the chain answers the same
+    expect(rec.proxy).toMatchObject({ name: "rmPROTO", proxy: NEW, implementation: addr(0x2001), authority: TL, mode: "upgradeable", frozen: false, admin_slot_empty: true, beacon_slot_empty: true });
+  });
+  test("issue 1809 (QA plan v1 L1): a new vault whose proxy names another authority, carries an admin slot or reads frozen is refused VERIFY, and the old manifest stays", async () => {
+    for (const bad of [{ newAuthority: addr(0xbad) }, { newAdminSlot: `0x${"0".repeat(24)}${"ad".repeat(20)}` as Hex }, { newFrozen: true }]) {
+      const t = verbWorld();
+      expect(await t.run([], { chainReader: () => chainOf(bad) })).toBe(EXIT_CODES.VERIFY);
+      expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+      expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
     }
   });
   test("a broadcast count that differs from the simulation stops the run before the manifest moves", async () => {
@@ -1102,6 +1127,10 @@ describe("the sha model (QA plan v1 E1): the verifier compares each contract wit
     const l = (x: string) => x.toLowerCase();
     const OLDV = WORLD_VAULTS.rmPROTO!.address;
     const NEWV = addr(0xb0012);
+    // issue 1809: both vaults are proxies (ADR-0014). The retired vault's build runs in its implementation OLDI; the replacing vault NEWV runs NEWI. The ERC1967Proxy
+    // build is the same at both shas (one OpenZeppelin pin), so NEWV holds the same proxy code as OLDV.
+    const OLDI = WORLD_IMPLEMENTATIONS.rmPROTO!;
+    const NEWI = addr(0xc0b0012);
     // the retired vault must still serve redeemInKind: its build and its code carry the selector
     const SEL = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
     const prior = v.artifactsDir;
@@ -1109,7 +1138,7 @@ describe("the sha model (QA plan v1 E1): the verifier compares each contract wit
     const art = JSON.parse(readFileSync(protoArt, "utf8"));
     art.deployedBytecode.object += SEL;
     writeFileSync(protoArt, JSON.stringify(art));
-    ch.codes.set(l(OLDV), `${ch.codes.get(l(OLDV))!}${SEL}` as Hex);
+    ch.codes.set(l(OLDI), `${ch.codes.get(l(OLDI))!}${SEL}` as Hex);
     // the redeploy sha's build: one byte right after the immutable range differs, in every artifact
     const flip = (hex: string): string => `${hex.slice(0, 82)}${hex.slice(82, 84) === "ee" ? "dd" : "ee"}${hex.slice(84)}`;
     const current = join(v.dir, "out-redeploy");
@@ -1120,8 +1149,12 @@ describe("the sha model (QA plan v1 E1): the verifier compares each contract wit
       mkdirSync(join(current, d), { recursive: true });
       writeFileSync(join(current, d, `${n}.json`), JSON.stringify(j));
     }
-    // the replacing vault runs the redeploy build, with the configuration, roles and asset rows of the vault it replaced
-    ch.codes.set(l(NEWV), flip(ch.codes.get(l(OLDV))!) as Hex);
+    // the replacing vault runs the redeploy build (in its implementation, behind the same proxy build), with the configuration, roles and asset rows of the vault it replaced
+    ch.codes.set(l(NEWI), flip(ch.codes.get(l(OLDI))!) as Hex);
+    ch.codes.set(l(NEWV), ch.codes.get(l(OLDV))!);
+    ch.storage.set(`${l(NEWV)}|${ERC1967_IMPLEMENTATION_SLOT}`, `0x${"0".repeat(24)}${NEWI.slice(2).toLowerCase()}` as Hex);
+    ch.storage.set(`${l(NEWV)}|${INITIALIZABLE_SLOT}`, `0x${"0".repeat(63)}1` as Hex);
+    ch.storage.set(`${l(NEWI)}|${INITIALIZABLE_SLOT}`, `0x${INITIALIZERS_LOCKED.toString(16).padStart(64, "0")}` as Hex);
     for (const [k, h] of [...ch.handlers]) if (k.startsWith(`${l(OLDV)}:`)) ch.handlers.set(`${l(NEWV)}:${k.slice(l(OLDV).length + 1)}`, h);
     for (const k of [...ch.roles]) if (k.startsWith(`${l(OLDV)}|`)) ch.roles.add(`${l(NEWV)}|${k.slice(l(OLDV).length + 1)}`);
     // and its role history: the redeploy script's constructor grants (issue 1705 C5 counts the emergency key from the RoleGranted logs)
@@ -1134,17 +1167,18 @@ describe("the sha model (QA plan v1 E1): the verifier compares each contract wit
     ch.set(WORLD_REGISTRY, "getVault", (a: unknown[]) => [{ name: "Robot Money Protocol", asset: USDC_ADDRESS, registeredAt: 1n }, l(String(a[0])) === l(OLDV) ? 2 : 0]);
     // QA plan v1 E3: the batch's setVaultCap gave the new vault the old vault's router cap
     ch.set(WORLD_ROUTER, "vaultCap", CAP);
-    return { v, ch, OLDV, NEWV, prior, current, l };
+    return { v, ch, OLDV, NEWV, NEWI, prior, current, l };
   }
 
   /** The verify options after the round executed: the router vectors hold the new vault in the old one's slot, the vault manifest names it, the deployer nonce counts the verb's transactions. */
   async function governedOpts(w: ReturnType<typeof redeployedWorld>): Promise<VerifyOptions> {
-    const { v, ch, OLDV, NEWV, prior, current, l } = w;
+    const { v, ch, OLDV, NEWV, NEWI, prior, current, l } = w;
     const [dv, db] = (await ch.read(WORLD_ROUTER, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [Address[], bigint[]];
     const moved = dv.map((x) => (l(x) === l(OLDV) ? NEWV : x));
     ch.set(WORLD_ROUTER, "getDefaultWeights", [moved, db]);
     ch.set(WORLD_ROUTER, "getEffectiveWeights", [moved, db]);
-    writeFileSync(join(v.manifestDir, "protocol-asset-vault.json"), JSON.stringify({ chain_id: 8453, vault: NEWV }));
+    // issue 1809: the vault manifest names the replacing proxy, its implementation, the authority (the live timelock) and the release mode, as the redeploy script writes them
+    writeFileSync(join(v.manifestDir, "protocol-asset-vault.json"), JSON.stringify({ chain_id: 8453, vault: NEWV, vault_implementation: NEWI, upgrade_authority: WORLD_TIMELOCK, upgrade_mode: "upgradeable" }));
     ch.noncesMap.set(l(WORLD_DEPLOYER), (ch.noncesMap.get(l(WORLD_DEPLOYER)) ?? 0) + 3); // the verb's three deploy transactions
     return { ...v.opts, artifactsDir: current, priorArtifactsDir: prior, redeploys: [{ vault: "rmPROTO", oldVault: OLDV, newVault: NEWV, oldBuild: "original" }], redeployDeployerTxs: 3 };
   }

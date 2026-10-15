@@ -4,7 +4,7 @@ title: "RobotMoneyVaultRedeemGasRootCauseTest"
 
 # RobotMoneyVaultRedeemGasRootCauseTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/43c7fdd6cd2df0b047667397347ead508f651d1b/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/RobotMoneyVaultRedeemGasRootCause.t.sol)
 
 **Inherits:** Test
 
@@ -196,6 +196,9 @@ function test_rootCause_limitAtSameBlockCostRevertsTyped() public;
 
 Replace the vault's runtime code with the same code, gas floors zeroed as asked.
 Storage and immutables are unchanged (the floors are constants, not storage).
+ADR-0014: `vault` is an ERC1967Proxy, so the code patched is the implementation's.
+The adapter floor reaches the linked `VaultAdapterOps` as an argument pushed by the
+vault, so zeroing the vault's constant zeroes the floor the library checks.
 
 </i>
 

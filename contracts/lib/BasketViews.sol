@@ -10,7 +10,7 @@ import {TwapTickMath} from "./TwapTickMath.sol";
 import {IObservablePool} from "../interfaces/IObservablePool.sol";
 
 /// @dev The one recorder-only read the sell anchor needs. A V4 asset's `pool` is always the
-///      `UniswapV4PriceRecorder` (BasketVault.Venue.V4), which answers it.
+///      `UniswapV4PriceRecorder` (BasketAssetConfigGuard.Venue.V4), which answers it.
 interface IRecorderHistory {
     function oldestObservation() external view returns (uint32);
 }
@@ -59,7 +59,7 @@ library BasketViews {
     ///      per 2 s block (14_400 / 2 + 1 = 7_201 slots, `DeployUniswapV4PriceRecorder.RING_SLOTS`), or a spammer could
     ///      evict the history and shorten the anchor to the NAV window.
     uint32 internal constant SELL_ANCHOR_WINDOW = 14_400;
-    /// @dev `BasketVault.Venue.V4`: the only venue whose TWAP is the in-protocol recorder (core 1676).
+    /// @dev `BasketAssetConfigGuard.Venue.V4`: the only venue whose TWAP is the in-protocol recorder (core 1676).
     uint8 internal constant VENUE_V4 = 1;
     /// @dev USDC amount priced both ways by the sell anchor: 1,000,000 USDC, so the token amount carries enough digits for a
     ///      basis-point compare even for a high-priced 8-decimal token. Decimals cancel in the ratio.
@@ -148,7 +148,7 @@ library BasketViews {
     ///      redeemer more, and deposits keep the ORA-4 guard (`checkNavDeviation`). Only V4 legs are gated: V3 and
     ///      Aerodrome pools write their own per-block observations and are deeper. A leg the vault holds none of is
     ///      skipped, because the redeem sells none of it. So is a leg the vault holds only dust of (QA plan D6): a balance
-    ///      whose TWAP sale floor rounds to zero USDC units, which `BasketVault._sellProportional` never sells. Without
+    ///      whose TWAP sale floor rounds to zero USDC units, which `BasketSwapOps.sellProportional` (`_sellLeg`) never sells. Without
     ///      that, one donated wei after an unwind would refuse every USDC redeem while the price sits below the anchor.
     ///      The dust test prices the balance only on the refusal path, so a normal redeem pays no extra TWAP read.
     ///      `redeemInKind` never calls this, so the holder's oracle-free exit stays open (ADR-0007, core 1665).

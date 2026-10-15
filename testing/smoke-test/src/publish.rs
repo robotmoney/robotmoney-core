@@ -8,8 +8,8 @@
 //!
 //! Plan: core issue 1499 (S9, core 1488).
 //!
-//! Secrets: this module never holds a private key. The deployer, Safe owners,
-//! emergency and voters are encrypted Foundry keystores minted by the
+//! Secrets: this module never holds a private key. The deployer, pauser, Safe
+//! owners and emergency key are encrypted Foundry keystores minted by the
 //! rehearsal key helper (`publish-contracts/src/rehearsal`) in a fresh 0700 directory per run (a
 //! redeploy gets a fresh keystore from the new SHA). The keystore passphrase is random, lives
 //! in a 0600 file next to the keystores, and is never an argument or an
@@ -44,16 +44,12 @@ pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
 pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
 
 /// Sheet keys the harness may add to the stage sheet from its caller (for
-/// example a quorum or voting period). Anything else
+/// example a cap or the timelock delay). Anything else
 /// is refused, so a test can only change a parameter, never the scheme.
-pub const OVERRIDABLE_SHEET_KEYS: &[&str] = &[
-    "TVL_CAP",
-    "PER_DEPOSIT_CAP",
-    "QUORUM_THRESHOLD",
-    "VOTING_PERIOD",
-    "EXECUTION_DELAY",
-    "TIMELOCK_MIN_DELAY",
-];
+/// The legacy voting names (`QUORUM_THRESHOLD`, `VOTING_PERIOD`,
+/// `EXECUTION_DELAY`) are not here: issue 1698 deleted the voting path, the
+/// sheet parser accepts and ignores them, so an override of one changes nothing.
+pub const OVERRIDABLE_SHEET_KEYS: &[&str] = &["TVL_CAP", "PER_DEPOSIT_CAP", "TIMELOCK_MIN_DELAY"];
 
 #[derive(Debug, Clone)]
 pub struct PublishConfig {
@@ -119,7 +115,7 @@ pub struct RehearsalKeys {
     pub root: PathBuf,
     pub key_dir: PathBuf,
     pub password_file: PathBuf,
-    /// `ADMIN_ADDRESS`, `EMERGENCY_ADDRESS`, `VOTER_ADDRESSES`, `SAFE_OWNERS`, ...
+    /// `ADMIN_ADDRESS`, `EMERGENCY_ADDRESS`, `SAFE_OWNERS`, ...
     pub fragment: BTreeMap<String, String>,
 }
 
@@ -855,14 +851,31 @@ mod tests {
         let s = render_sheet(
             "export ADMIN_ADDRESS=0xold\nexport TIMELOCK_MIN_DELAY=60\n",
             &id,
-            &[("QUORUM_THRESHOLD", "5")],
+            &[("TVL_CAP", "5")],
         )
         .unwrap();
         assert!(!s.contains("0xold"));
         assert!(s.contains("export ADMIN_ADDRESS=0xnew"));
         assert!(s.contains("export TIMELOCK_MIN_DELAY=60"));
-        assert!(s.contains("export QUORUM_THRESHOLD=5"));
+        assert!(s.contains("export TVL_CAP=5"));
         assert!(render_sheet("", &id, &[("REHEARSAL", "1")]).is_err());
+    }
+
+    #[test]
+    fn legacy_voting_names_are_not_overridable() {
+        // Issue 1698 deleted the voting path. An override of a name nothing
+        // reads would change nothing, so the harness refuses it by name.
+        let id = BTreeMap::new();
+        for k in ["QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"] {
+            assert!(
+                !OVERRIDABLE_SHEET_KEYS.contains(&k),
+                "{k} is still overridable"
+            );
+            assert!(
+                render_sheet("", &id, &[(k, "1")]).is_err(),
+                "{k} override was accepted"
+            );
+        }
     }
 
     #[test]

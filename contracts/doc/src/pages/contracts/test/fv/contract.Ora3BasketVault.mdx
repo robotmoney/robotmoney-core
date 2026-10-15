@@ -4,7 +4,7 @@ title: "Ora3BasketVault"
 
 # Ora3BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/fv/DeployAssertions.t.sol)
 
 **Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
 
@@ -15,35 +15,6 @@ Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
 </i>
 
 ## Functions
-
-<a id="constructor-ierc20-iswaprouter-address"></a>
-
-### constructor
-
-```solidity
-constructor(IERC20 usdc_, ISwapRouter router_, address admin_)
-        BasketVault(
-            "ORA3 Basket",
-            "bORA3",
-            usdc_,
-            router_,
-            type(uint256).max,
-            type(uint256).max,
-            0,
-            30,
-            admin_,
-            admin_,
-            admin_
-        );
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| usdc_ | `IERC20` |  |
-| router_ | `ISwapRouter` |  |
-| admin_ | `address` |  |
 
 <a id="maxassets"></a>
 
@@ -59,5 +30,27 @@ function maxAssets() public pure override returns (uint256);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_kindconfig"></a>
+
+### _kindConfig
+
+<i>
+
+The kind's share-token name and symbol and its starting `maxSlippageBps`.
+
+</i>
+
+```solidity
+function _kindConfig() internal pure override returns (string memory, string memory, uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+| &lt;none&gt; | `string` |  |
 | &lt;none&gt; | `uint256` |  |
 

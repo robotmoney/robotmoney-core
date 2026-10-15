@@ -18,11 +18,20 @@
 //!
 //! 1. `eth_chainId` matches `config.chain_id`
 //! 2. `keccak256(eth_getCode(gateway))` matches `config.gateway_runtime_hash`
-//!    (eth_getCode returning empty bytecode is itself a refusal)
+//!    (eth_getCode returning empty bytecode is itself a refusal). Check 2b:
+//!    when the gateway is an ERC-1967 proxy, the implementation it delegates
+//!    to has a code hash listed in `config.gateway_implementation_hashes`,
+//!    both read at one block (`ErrImplementationNotApproved`, QA plan P3). An
+//!    upgrade leaves the proxy's own code hash unchanged, so check 2 alone
+//!    would sign against logic nobody approved. See [`crate::upgrade`].
 //! 3. `gateway.depositsPaused() == false`
 //! 4. `gateway.usdc()` matches `config.usdc_address`
 //! 5. `gateway.vault()` matches `config.vault_address`, and
-//!    `vault.depositsPaused() == false`
+//!    `vault.depositsPaused() == false`. 5c: when that vault is an ERC-1967
+//!    proxy, its implementation's code hash is in
+//!    `config.proxy_implementation_hashes` (the same rule runs on every vault
+//!    a withdraw redeems from, and on the router and its legs for a router
+//!    deposit or withdraw).
 //! 6. `gateway.agents(self).active && validUntil >= now`
 //!    (`ErrAgentNotAuthorized`, then `ErrPolicyExpired`); and (6b) when the
 //!    config pins them, `agents(self).shareReceiver == config.share_receiver`
@@ -56,7 +65,7 @@
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::{keccak256, Address, U256};
+use alloy_primitives::{keccak256, Address, B256, U256};
 use alloy_sol_types::SolCall;
 
 use crate::config::Config;
@@ -90,6 +99,11 @@ pub struct PreflightInputs {
 pub struct PreflightReport {
     pub chain_id: u64,
     pub gateway_runtime_hash_ok: bool,
+    /// The approved ERC-1967 implementation behind the gateway (check 2b);
+    /// `None` for a direct gateway.
+    pub implementation: Option<Address>,
+    /// That implementation's runtime code hash; `None` for a direct gateway.
+    pub implementation_code_hash: Option<B256>,
     /// `gateway.depositsPaused()`. Refuses a deposit; information only on
     /// a withdrawal.
     pub deposits_paused: bool,
@@ -181,6 +195,11 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrCodeHashMismatch);
         }
 
+        // 2b. implementation pin (QA plan P3): the logic behind a proxy.
+        let implementation =
+            crate::upgrade::verify_gateway_implementation(self.rpc, self.config, gateway_addr)
+                .await?;
+
         // 3. depositsPaused() — information only. A deposit pause never
         //    blocks a withdrawal (core 1494), so neither the flag nor a
         //    failed read of it refuses here.
@@ -237,6 +256,8 @@ impl<'a> Preflight<'a> {
         Ok(PreflightReport {
             chain_id,
             gateway_runtime_hash_ok: true,
+            implementation: implementation.implementation,
+            implementation_code_hash: implementation.code_hash,
             deposits_paused,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
@@ -274,6 +295,11 @@ impl<'a> Preflight<'a> {
             return Err(RmpcError::ErrCodeHashMismatch);
         }
 
+        // 2b. implementation pin (QA plan P3): the logic behind a proxy.
+        let implementation =
+            crate::upgrade::verify_gateway_implementation(self.rpc, self.config, gateway_addr)
+                .await?;
+
         // 3. depositsPaused() on the gateway — a deposit refusal.
         if self.call_view_deposits_paused(gateway_addr).await? {
             return Err(RmpcError::ErrDepositsPaused);
@@ -299,6 +325,10 @@ impl<'a> Preflight<'a> {
         if self.call_view_deposits_paused(vault_addr_cfg).await? {
             return Err(RmpcError::ErrDepositsPaused);
         }
+        // 5c. The vault behind the address pin (ADR-0014): when it is a
+        //     proxy, its implementation must be in proxy_implementation_hashes.
+        crate::upgrade::verify_reached_proxy(self.rpc, self.config, "vault", vault_addr_cfg)
+            .await?;
 
         // 6. agents(self) — active, binding, validUntil
         let agent = self
@@ -353,6 +383,8 @@ impl<'a> Preflight<'a> {
         Ok(PreflightReport {
             chain_id,
             gateway_runtime_hash_ok: true,
+            implementation: implementation.implementation,
+            implementation_code_hash: implementation.code_hash,
             deposits_paused: false,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
@@ -391,6 +423,9 @@ impl<'a> Preflight<'a> {
         agent: Address,
         shares: U256,
     ) -> Result<()> {
+        // The vault the gateway redeems from (ADR-0014): when it is a proxy,
+        // its implementation must be in proxy_implementation_hashes.
+        crate::upgrade::verify_reached_proxy(self.rpc, self.config, "vault", vault).await?;
         if self.call_view_allowance(vault, agent, gateway).await? < shares {
             return Err(RmpcError::ErrShareAllowanceInsufficient);
         }
@@ -683,6 +718,12 @@ impl<'a> Preflight<'a> {
 pub struct ChecksOutput {
     pub chain_id_match: bool,
     pub gateway_code_hash_match: bool,
+    /// Check 2b passed: the gateway is a direct deployment, or a proxy whose
+    /// implementation code hash is in `gateway_implementation_hashes`.
+    pub gateway_implementation_approved: bool,
+    /// The ERC-1967 implementation behind the gateway; `null` for a direct
+    /// gateway or when the preflight stopped before reading it.
+    pub gateway_implementation: Option<String>,
     /// `depositsPaused()` was observed true. A refusal on a deposit;
     /// information only on a withdrawal, which proceeds regardless.
     pub deposits_paused: bool,
@@ -700,6 +741,8 @@ impl ChecksOutput {
         Self {
             chain_id_match: true,
             gateway_code_hash_match: r.gateway_runtime_hash_ok,
+            gateway_implementation_approved: true,
+            gateway_implementation: r.implementation.map(|a| format!("{a:#x}")),
             deposits_paused: r.deposits_paused,
             agent_active: r.agent_active,
             agent_valid_until: r.agent_valid_until,
@@ -721,9 +764,28 @@ impl ChecksOutput {
             RmpcError::ErrCodeHashMismatch => {
                 c.chain_id_match = true;
             }
+            RmpcError::ErrImplementationNotApproved {
+                proxy,
+                implementation,
+                ..
+            } if proxy == crate::upgrade::GATEWAY => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+                c.gateway_implementation = implementation
+                    .starts_with("0x")
+                    .then(|| implementation.clone());
+            }
+            // A vault or the router refused (check 5c, or a withdraw leg): it
+            // runs after check 2b passed on the gateway.
+            RmpcError::ErrImplementationNotApproved { .. } => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+                c.gateway_implementation_approved = true;
+            }
             RmpcError::ErrDepositsPaused => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
+                c.gateway_implementation_approved = true;
                 c.deposits_paused = true;
             }
             // Raised after `agents(self)` read an active record.
@@ -733,8 +795,23 @@ impl ChecksOutput {
             | RmpcError::ErrWithdrawCapExceeded(_) => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
+                c.gateway_implementation_approved = true;
                 c.agent_active = true;
             }
+            // Raised only after check 2b passed: the agent read, the USDC
+            // and share checks.
+            RmpcError::ErrAgentNotAuthorized
+            | RmpcError::ErrAllowanceInsufficient
+            | RmpcError::ErrBalanceInsufficient
+            | RmpcError::ErrShareAllowanceInsufficient
+            | RmpcError::ErrShareBalanceInsufficient => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+                c.gateway_implementation_approved = true;
+            }
+            // Anything else (an RPC transport or server error, a decode
+            // error, a config error such as a malformed implementation pin)
+            // can come from check 2b itself, so it never proves 2b passed.
             _ => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
@@ -747,6 +824,8 @@ impl ChecksOutput {
         Self {
             chain_id_match: false,
             gateway_code_hash_match: false,
+            gateway_implementation_approved: false,
+            gateway_implementation: None,
             deposits_paused: false,
             agent_active: false,
             agent_valid_until: 0,

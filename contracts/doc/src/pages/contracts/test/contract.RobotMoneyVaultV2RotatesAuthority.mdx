@@ -1,0 +1,34 @@
+---
+title: "RobotMoneyVaultV2RotatesAuthority"
+---
+
+# RobotMoneyVaultV2RotatesAuthority
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/GovernedUpgradeLifecycle.t.sol)
+
+**Inherits:** [RobotMoneyVault](/contracts/contract.RobotMoneyVault)
+
+<i>
+
+A hostile-shaped v2 whose reinitializer tries to re-run `__GovernedUpgrade_init` with a new
+authority. UPG-3: the authority is write-once, so even a timelock-executed reinitializer
+cannot rotate it.
+
+</i>
+
+## Functions
+
+<a id="rotateauthority-address"></a>
+
+### rotateAuthority
+
+```solidity
+function rotateAuthority(address newAuthority) external onlyUpgradeAuthority reinitializer(2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newAuthority | `address` |  |
+

@@ -31,12 +31,12 @@
         │  (USDC → yield    │ │  (USDC → basket) │ │  (split USDC   │
         │  strategy)        │ │                  │ │   by weights)  │
         │                   │ │ • ProtocolAsset  │ │                │
-        │ • Morpho Adapter  │ │   Vault          │ │ • Reads weights│
-        │ • Aave Adapter    │ │ • AgentToken     │ │   from Registry│
-        │ • Compound Adapter│ │   Vault          │ │ • Reads votes  │
-        │                   │ │ • RwaBasketVault │ │   from Router- │
-        │ ERC-4626 shares   │ │                  │ │   Governance   │
-        │ (rmUSDC)          │ │ ERC-4626 shares  │ │                │
+        │ • Morpho Adapter  │ │   Vault          │ │ • Holds weights│
+        │ • Aave Adapter    │ │ • AgentToken     │ │ • Eligibility  │
+        │ • Compound Adapter│ │   Vault          │ │   from Registry│
+        │                   │ │ • RwaBasketVault │ │ • Weights set  │
+        │ ERC-4626 shares   │ │                  │ │   by Router-   │
+        │ (rmUSDC)          │ │ ERC-4626 shares  │ │   Governance   │
         │                   │ │ (rmPROTO / rmAGT │ │ USDC → Vaults  │
         │ ADMIN_ROLE        │ │  / rmRWA)        │ │ (ERC-4626      │
         │ EMERGENCY_ROLE    │ │                  │ │  shares)       │
@@ -114,7 +114,8 @@
 | Admin / fee recipient (Safe) | [`0x88bA7364cC6cE5054981d571b33f8fb3E91475A0`](https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0) |
 
 **Notes:**
-- RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not.
+- The retired v1 RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not.
+- A release built from this tree deploys the nine stateful core contracts (RobotMoneyVault, the three basket kinds, PortfolioRouter, VaultRegistry, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt) each behind its own `ERC1967Proxy` (ADR-0014, §3.11). The address a client calls is the proxy; the code that runs is the implementation in its ERC-1967 slot. Adapters, `RouterGovernance`, `ExclusionLedger` and the libraries stay direct.
 - VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
@@ -126,10 +127,13 @@
 
 ```
 RobotMoneyVault
-  ├── ERC4626   (OpenZeppelin v5 — ERC-20 shares + ERC-4626 accounting)
-  ├── AccessControl (three roles: ADMIN, EMERGENCY, KEEPER)
-  └── ReentrancyGuard
+  ├── ERC4626Upgradeable   (OpenZeppelin v5.0.2 upgradeable — ERC-20 shares + ERC-4626 accounting)
+  ├── AdminFloorAccessControlCounter (AccessControlUpgradeable; three roles: ADMIN, EMERGENCY, KEEPER)
+  ├── ReentrancyGuardUpgradeable
+  └── GovernedUpgrade      (UUPSUpgradeable + one timelock authority + one-way freeze, §3.11)
 ```
+
+The vault runs behind an `ERC1967Proxy`. Its constructor only calls `_disableInitializers()`; `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, ledgerFactory, upgradeAuthority, mode)` runs once, inside the proxy's deployment transaction (ADR-0014 §3). The retired v1 vault is a direct deployment with a constructor.
 
 The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (core 1494). The deployed v1 vault predates this and still inherits OZ Pausable.
 
@@ -137,13 +141,15 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
-| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
-| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
+| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` initializer arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController on the launch vaults; the retired v1 vault is the exception, see §2), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
+| `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_emergencyResponder` initializer arg | `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. `unpauseDeposits` is `ADMIN_ROLE` only. |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
 `ADMIN_ROLE` is its own admin (can grant/revoke itself). For the retired v1 vault, the constructor arg is the Safe multisig `0x88bA…75A0`. For the launch vaults, stage 11 moves `ADMIN_ROLE` to the timelock and `EMERGENCY_ROLE` to the independent emergency key.
 
-### 3.3 Immutable constants (cannot be changed by any role)
+### 3.3 Fixed constants (cannot be changed by any role)
+
+These are `constant`s in the implementation's bytecode: never storage, never an initializer argument, never behind a setter. Behind a proxy the ADR-0014 §7 rule holds: no role, setter or initializer can change one; an upgrade may keep or tighten a ceiling and may never loosen one; every upgrade sits in public view for the full timelock delay with withdrawals open; after a freeze the ceiling is fixed forever. `contracts/test/UpgradeCeilings.t.sol::test_ceilingsNeverLoosened` pins each value.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -157,10 +163,10 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 
 | Variable | Initial | Setter | Notes |
 |---|---|---|---|
-| `tvlCap` | constructor arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
-| `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
-| `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
-| `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
+| `tvlCap` | initializer arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
+| `perDepositCap` | initializer arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
+| `exitFeeBps` | initializer arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
+| `feeRecipient` | initializer arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
 | `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved. Setting `false` on an active adapter quarantines it: its balance leaves `totalAssets`, deposits and mints close, and keeper `rebalance` skips it (core 1788) |
 | `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
 | `shutdown` | `false` | `shutdownVault` (EMERGENCY), `restoreVault` (ADMIN) | While true, `deposit` reverts; recoverable — `restoreVault(newTvlCap)` (ADMIN) clears it and re-opens deposits |
@@ -183,13 +189,21 @@ ineligible, `maxDeposit` and `maxMint` return zero and `deposit` and `mint`
 revert, so no one mints against the reduced NAV. Keeper `rebalance` never
 pulls from a quarantined adapter. It also reverts while deposits are paused or
 the vault is shut down, so it cannot re-deploy funds an emergency drain parked
-idle. Withdrawals stay open and pay from eligible adapters and idle USDC. A
-holder who exits during the exclusion is paid at the reduced NAV and forfeits
-any claim on the excluded balance. Holders who stay keep their full claim when
-eligibility is restored or the funds are recovered. Recovery is explicit:
-`emergencyWithdrawAdapter` (EMERGENCY) drains the adapter, `adminRebalance`
-(ADMIN) re-allocates, and `removeAdapter` or `forceRemoveAdapter` deactivates
-the entry.
+idle. Withdrawals stay open and pay from eligible adapters and idle USDC.
+
+Revoking approval also opens a record in the vault's `ExclusionLedger`
+(`exclusionLedger()`) with a snapshot of every holder's shares (core 1820).
+Every USDC later recovered from that adapter goes to the record, never to idle
+NAV. The recovery paths are `emergencyWithdrawAdapter` and `emergencyWithdraw`
+(EMERGENCY), `adminRebalance` (ADMIN), and restored eligibility, which first
+drains the adapter into the record. The holders at the snapshot claim it pro
+rata through `ExclusionLedger.claim`, which anyone may call for a holder. A
+holder who exits during the exclusion is paid at the reduced NAV and keeps that
+claim. Shares minted or bought later carry none, and the share price never
+rises from a recovery. A redeem that would pay 0 USDC during the exclusion
+reverts `ZeroPayoutDuringExclusion`. `removeAdapter` or `forceRemoveAdapter`
+deactivates the entry and closes its record, and a closed record stays
+claimable.
 
 ### 3.5 Adapter routing — deposit
 
@@ -279,6 +293,21 @@ Additional read-only helpers: `getAdapterDrift()`, `isRebalanceAvailable()`, `ne
 
 **There is no management fee in the vault contract.** The source contains no fee accrual, no `harvest()`, no `accrueFees()`, no timestamp-based skim. The only fee is the exit fee charged at redeem/withdraw time. The 2% annual management fee advertised on robotmoney.net is off-chain — likely via admin-initiated periodic USDC transfers from `feeRecipient` or from protocol revenue, not from the vault contract itself.
 
+### 3.11 Upgrade and freeze (every proxied contract)
+
+RobotMoneyVault, the three basket kinds, PortfolioRouter, VaultRegistry, RobotMoneyGateway, InvestmentCommitteePolicy and ConsensusRecommendationReceipt each inherit `contracts/lib/GovernedUpgrade.sol` (OZ `UUPSUpgradeable` 5.0.2) and run behind their own `ERC1967Proxy` (ADR-0014). The list is pinned in `contracts/test/fixtures/storage-layout/proxied.txt`. The surface is the same on all nine:
+
+| Function | Caller | Notes |
+|---|---|---|
+| `initialize(…, upgradeAuthority, mode)` | the proxy constructor, once | Every former constructor argument, then the upgrade authority (the deployment's `ProposerFloorTimelock`, must have code, else `UpgradeAuthorityNotContract`) and the `UpgradeMode` (`Upgradeable` or `FrozenAtDeploy`; `Unset` reverts `UpgradeModeUnset`). A second call reverts. The implementation's own initializers are disabled in its constructor. |
+| `upgradeAuthority()` | view | The one address that may upgrade or freeze. Stored once; no setter; no role changes it. |
+| `upgradesFrozen()` | view | True once frozen. It never becomes false again. |
+| `upgradeToAndCall(address newImplementation, bytes data)` | upgrade authority only | OZ UUPS upgrade, with an optional reinitializer as `data`, in one transaction. Every reinitializer carries `onlyUpgradeAuthority`, so one left pending by an upgrade without `data` runs only through a later timelock operation, and none can rotate the authority (`__GovernedUpgrade_init` is write-once, UPG-3). Reverts `UpgradeNotAuthorized(caller)` for anyone else (any role holder included) and `UpgradesAreFrozen()` once frozen. Govern row `upgrade-proxy` (Safe → timelock). |
+| `freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)` | upgrade authority only | Sets the frozen bit forever and emits `UpgradesFrozen(proxy, implementation, codeHash)`. Reverts `FreezeTargetMismatch(live, liveCodeHash)` unless the live implementation and its code hash equal the arguments, and `UpgradesAreFrozen()` when already frozen. Govern row `freeze-proxy` (Safe → timelock). |
+| `proxiableUUID()` | view | OZ UUPS: the ERC-1967 implementation slot. An upgrade to a non-UUPS implementation is refused. |
+
+`RobotMoneyGateway` also exposes `implementationVersion()` (`"1"`), the EIP-712 domain version of every `AgentConsent`; an implementation that changes what a consent means bumps it (ADR-0014 P3 record, invariant UPG-8). A freeze never pauses or alters `redeem`, `withdraw`, `redeemInKind` or the gateway withdraw paths (ADR-0014 §6, invariants UPG-1..UPG-8 in `smart-contract-invariants.md`).
+
 ---
 
 ## 4. Adapter contracts
@@ -338,14 +367,14 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 
 | Risk | Mitigation (confirmed from source) |
 |---|---|
-| Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is a Safe multisig. `MAX_EXIT_FEE_BPS = 100` is an immutable ceiling — admin cannot set fees above 1% |
-| Emergency misuse | `EMERGENCY_ROLE` is separate from `ADMIN_ROLE` and initially held by the same Safe multisig (both granted in constructor). Both roles can be revoked |
+| Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is the Safe-run timelock. `MAX_EXIT_FEE_BPS = 100` is a `constant` ceiling (§3.3) — admin cannot set fees above 1%, and no role holds upgrade power (§3.11) |
+| Emergency misuse | `EMERGENCY_ROLE` is separate from `ADMIN_ROLE`: the initializer grants `ADMIN_ROLE` to `_admin` and `EMERGENCY_ROLE` to `_emergencyResponder` (the retired v1 vault granted both to the same Safe in its constructor). Both roles can be revoked |
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | Current deployed contracts are direct and have no in-place upgrade path. Target policy calls for per-instance UUPS proxies on approved stateful core contracts, upgradeable during test/demo/rehearsal and optionally during a bounded mainnet proving period, then permanently frozen; final mainnet may be frozen at deployment. This is a plan, not deployed behavior. See `docs/technical/contract-upgradeability-plan.md` |
-| Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
-| Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
+| Upgradeability | The nine stateful core contracts run behind per-instance `ERC1967Proxy`s with UUPS logic from `GovernedUpgrade` (ADR-0014, §3.11). The one upgrade authority is the Safe-run timelock, upgrades and freezes go Safe → timelock (delay) → execute, and the freeze is one-way and bound to the reviewed implementation. Test, demo and rehearsal deploy `Upgradeable`; a final mainnet release deploys `FrozenAtDeploy` or freezes after a bounded proving period. Contracts deployed before ADR-0014 (the retired v1 vault, Deploy 2) are direct and have no in-place upgrade path. See ADR-0014 and `docs/technical/contract-upgradeability-plan.md` |
+| Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` under the ADR-0014 §7 rule (§3.3). `setExitFeeBps` and `initialize` revert above this |
+| Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are `constant` floors/ceilings (§3.3) |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
 
 ---
@@ -356,7 +385,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. Future proxy deployment is planned, not live |
+| "Whether the vault is upgradeable is unknown" | The retired v1 vault and Deploy 2: no proxy — direct deployment confirmed. A release from this tree deploys the vault behind a governed UUPS proxy (ADR-0014, §3.11) |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |
@@ -677,7 +706,7 @@ All three subclasses inherit BasketVault behavior and are configured with:
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.
 - **Equal-weight deposit split** (current): Each deposit splits equally across active assets. Future versions may allow weight vectors (not yet shipped).
 - **No oracle-based frontrunning**: TWAP is arithmetic-mean tick over a window (not spot price), making it resistant to single-block manipulation on slow-moving assets.
-- **Exit fee immutable ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is immutable; setters revert above this.
+- **Exit fee fixed ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` under the ADR-0014 §7 rule; setters and `initialize` revert above this.
 
 ### 9.3.8 Deployed basket vaults
 

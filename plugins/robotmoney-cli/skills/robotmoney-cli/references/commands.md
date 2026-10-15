@@ -75,7 +75,15 @@ rmpc get-timelock --config <CONFIG> [--pretty]
 
 ### `rmpc get-gateway`
 
-Read gateway state directly from chain.
+Read gateway state directly from chain. For a proxied gateway (ADR-0014) the
+`data` also carries the live `implementation` and its `implementation_code_hash`,
+`implementation_approved` (false means every write refuses with
+`ErrImplementationNotApproved` until the operator adds that hash to
+`gateway_implementation_hashes`), `implementation_version`, `upgrade_authority`
+and `upgrades_frozen`, all at the envelope's block. Every write, the committee
+`vote-submit` and `receipt submit` included, checks the gateway's
+implementation before it signs. Writes also check the vault, the router and
+each router leg they reach against `proxy_implementation_hashes`.
 
 ```
 rmpc get-gateway --config <CONFIG> [--pretty]
@@ -352,17 +360,22 @@ rmpc agent-consent --config <CONFIG> --owner <0xDEPOSITOR>
 must name itself, so leave it out. The agent is the keystore's address, and
 the passphrase comes from `RMPC_KEYSTORE_PASSPHRASE` (never a prompt).
 
-The command reads `agentConsentNonce(agent)` and `agentOwner(agent)` from
-the gateway at one block, signs
+The command reads, at one block, the gateway's code and its ERC-1967
+implementation (refusing `ErrCodeHashMismatch` or `ErrImplementationNotApproved`
+as a write does), `implementationVersion()`, `agentConsentNonce(agent)` and
+`agentOwner(agent)`. It signs
 `AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
-(`RobotMoneyGateway`, `1`, chain id, gateway address), and prints `agent`,
-`owner`, `share_receiver`, `nonce`, `chain_id`, `gateway`, `block_number`,
+(`RobotMoneyGateway`, the live `implementationVersion()`, chain id, gateway
+address), and prints `agent`, `owner`, `share_receiver`, `nonce`, `chain_id`,
+`gateway`, `implementation_version`, `implementation` and
+`implementation_code_hash` (`null` for a direct gateway), `block_number`,
 `current_owner` (`null` when unbound), `digest` and `signature` (65 bytes,
 `r ‖ s ‖ v`). It sends no transaction.
 
 One signature authorizes one reveal: the gateway advances the nonce on use,
-and the consent never verifies for another owner, share receiver, chain or
-gateway. A non-null `current_owner` means the reveal reverts
+and the consent never verifies for another owner, share receiver, chain,
+gateway or implementation version: an upgrade that bumps
+`implementationVersion()` voids it, and the agent signs again. A non-null `current_owner` means the reveal reverts
 `AgentAlreadyOwned` until that binding is revoked by its owner, or released
 by the agent with `releaseAgent` when it was made without consent.
 

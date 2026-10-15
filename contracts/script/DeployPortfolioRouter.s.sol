@@ -8,7 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
@@ -27,10 +27,16 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///           REGISTRY_ADDRESS   — deployed VaultRegistry address
 ///           VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
 ///
+///           UPGRADE_AUTHORITY  — the deployment's timelock, deployed first (ADR-0014 §4)
+///           UPGRADE_MODE       — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
+///
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
-contract DeployPortfolioRouter is ExpectedChainGuard {
+///
+///         The router is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
+///         `initialize` in its constructor.
+contract DeployPortfolioRouter is GovernedProxyDeploy {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "router.json";
 
@@ -41,11 +47,14 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
+        /// The proxy.
         PortfolioRouter router;
         VaultRegistry registry;
         address admin;
         address vault;
         address usdc;
+        /// The implementation behind `router` (ADR-0014).
+        address implementation;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys the router,
@@ -64,6 +73,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
+        _useEnvUpgradeConfig("");
 
         vm.startBroadcast();
         d = _deploy(admin, registry, vault, usdc);
@@ -87,6 +97,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         require(registry_ != address(0), "REGISTRY_ADDRESS=0");
         require(vault_ != address(0), "VAULT_ADDRESS=0");
         require(usdc_ != address(0), "USDC_ADDRESS=0");
+        _useInProcessUpgradeConfig();
 
         vm.startPrank(admin_);
         d = _deploy(admin_, registry_, vault_, usdc_);
@@ -108,7 +119,16 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         d.vault = vault_;
         d.usdc = usdc_;
 
-        d.router = new PortfolioRouter(usdc_, registry_, admin_);
+        d.implementation = address(new PortfolioRouter());
+        d.router = PortfolioRouter(
+            _deployProxy(
+                d.implementation,
+                abi.encodeCall(
+                    PortfolioRouter.initialize,
+                    (usdc_, registry_, admin_, _upgrade.authority, _upgrade.mode)
+                )
+            )
+        );
 
         // Single registry-backed eligibility gate (issue #475): mark the
         // vault router-eligible in the VaultRegistry. PortfolioRouter
@@ -142,6 +162,7 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
     function _logResult(Deployed memory d) internal view {
         console2.log("PortfolioRouter deployed and configured");
         console2.log("  router    :", address(d.router));
+        console2.log("  router_implementation:", d.implementation);
         console2.log("  registry  :", address(d.registry));
         console2.log("  admin     :", d.admin);
         console2.log("  vault     :", d.vault);
@@ -154,6 +175,10 @@ contract DeployPortfolioRouter is ExpectedChainGuard {
         string memory obj = "router_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "router", address(d.router));
+        vm.serializeAddress(obj, "router_implementation", d.implementation);
+        vm.serializeBytes32(obj, "router_layout_id", _layoutId("PortfolioRouter"));
+        vm.serializeAddress(obj, "upgrade_authority", _upgrade.authority);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(_upgrade.mode));
         vm.serializeAddress(obj, "registry", address(d.registry));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "vault", d.vault);

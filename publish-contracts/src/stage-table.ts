@@ -71,6 +71,16 @@ export interface TableRedeploy {
   libraries: string[];
   create2Libraries?: string[];
 }
+/**
+ * One proxied contract (ADR-0014 §1, issue 1809): the stage that deploys it (implementation, then an ERC1967Proxy whose constructor runs `initialize`), the
+ * manifest field of the proxy address and of the implementation behind it, and the implementation's build artifact. The proxy stage also writes `upgrade_authority`
+ * and `upgrade_mode` (PROXY_MANIFEST_FIELDS). `name` is the verifier label (`proxy[<name>]`) and the `--admin-arg proxy=<name>` of the upgrade and freeze rows.
+ */
+export interface TableProxy { name: string; stage: string; field: string; implementationField: string; artifact: string }
+/** The manifest fields every proxy stage writes next to its proxies (GovernedProxyDeploy): the authority the proxies were born with and the release mode. */
+export const PROXY_MANIFEST_FIELDS = { authority: "upgrade_authority", mode: "upgrade_mode" } as const;
+/** The env names every proxy stage reads (GovernedProxyDeploy._useEnvUpgradeConfig), with no default: the authority stage's timelock and the sheet's release mode. */
+export const PROXY_STAGE_ENV = ["UPGRADE_AUTHORITY", "UPGRADE_MODE"] as const;
 export interface StageTable {
   version: 1;
   stages: TableStage[];
@@ -81,6 +91,10 @@ export interface StageTable {
   create2Libraries?: TableCreate2Library[];
   /** Single-vault redeploys into a live deployment (issue 1796). Absent: none. */
   redeploys?: TableRedeploy[];
+  /** ADR-0014 §1 (issue 1809): the proxied contracts. Absent (a core sha before the proxies): every contract is a direct deployment. */
+  proxies?: TableProxy[];
+  /** The build artifact every proxy's runtime code must equal (OpenZeppelin ERC1967Proxy). Required when `proxies` lists any. */
+  proxyArtifact?: string;
   artifacts: Record<string, string>;
 }
 
@@ -157,6 +171,24 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
     else if (st.vault !== v.key || st.manifest !== v.manifest) bad(`vault ${v.key} disagrees with its stage ${v.stage}`);
     vaultRuleProblems(v).forEach((p) => bad(`vault ${v.key}: ${p}`));
   }
+  const proxies: unknown = t.proxies;
+  if (proxies !== undefined) {
+    if (!Array.isArray(proxies)) bad("proxies must be a list");
+    const seen = new Set<string>();
+    for (const x of proxies as TableProxy[]) {
+      if (!x || typeof x.name !== "string" || !/^[A-Za-z][A-Za-z0-9-]*$/.test(x.name)) bad(`a proxy has no usable name (letters, digits and dashes): ${JSON.stringify(x?.name)}`);
+      if (seen.has(x.name)) bad(`proxy ${x.name} is listed twice`);
+      seen.add(x.name);
+      for (const f of ["stage", "field", "implementationField", "artifact"] as const) if (typeof x[f] !== "string" || x[f] === "") bad(`proxy ${x.name} needs ${f}`);
+      const st = t.stages.find((s) => s.name === x.stage);
+      if (!st) return bad(`proxy ${x.name} names unknown stage '${x.stage}'`);
+      // issue 1809: a proxy stage must state the authority and the mode it deploys with. A stage that could run without them would deploy an undeclared mode.
+      for (const e of PROXY_STAGE_ENV) if (!st.requiredEnv.includes(e)) bad(`proxy ${x.name}: stage ${st.name} must require ${e} (a proxy is never deployed with an undeclared authority or mode)`);
+      const v = t.vaults.find((y) => y.stage === x.stage);
+      if (v && x.field === "vault" && v.artifact !== x.artifact) bad(`proxy ${x.name}: artifact ${x.artifact} differs from vault ${v.key}'s artifact ${v.artifact}`);
+    }
+    if ((proxies as unknown[]).length > 0 && (typeof t.proxyArtifact !== "string" || t.proxyArtifact === "")) bad("proxies need proxyArtifact: the build artifact every proxy's runtime code must equal");
+  }
   const decisions: unknown = t.vaultRuleDecisions;
   if (!decisions || typeof decisions !== "object" || Array.isArray(decisions)) return bad(`${where} needs vaultRuleDecisions (issue 1705): the decision behind each rule on which the vaults differ`);
   for (const [f, d] of Object.entries(decisions)) {
@@ -165,6 +197,17 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   }
   for (const f of differingRuleFields(t.vaults)) if (!(decisions as Record<string, unknown>)[f]) bad(`the vaults differ on ${f} and vaultRuleDecisions names no decision for it (issue 1705: a difference is recorded with its decision, never carried silently)`);
   return t as StageTable;
+}
+
+/** The proxied contracts of a table (none for a core sha before ADR-0014). */
+export const tableProxies = (t: Pick<StageTable, "proxies">): TableProxy[] => t.proxies ?? [];
+/** The proxies a stage deploys, in table order. */
+export const proxiesOfStage = (t: Pick<StageTable, "proxies">, stage: string): TableProxy[] => tableProxies(t).filter((p) => p.stage === stage);
+/** The proxy row of a name, or USAGE naming the known ones. */
+export function proxyByName(t: Pick<StageTable, "proxies">, name: string): TableProxy {
+  const p = tableProxies(t).find((x) => x.name === name);
+  if (!p) throw new PublishError("USAGE", `'${name}' is not a proxied contract of this core checkout (${tableProxies(t).map((x) => x.name).join(", ") || "none: the stage table lists no proxies"})`, { proxy: name });
+  return p;
 }
 
 /** The redeploy row of a vault, or INPUT_MISSING naming the checkout that lacks it. */

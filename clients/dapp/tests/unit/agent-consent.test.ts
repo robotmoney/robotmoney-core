@@ -49,6 +49,7 @@ const GOLDEN: AgentConsentFields = {
   nonce: 3n,
   chainId: 8453,
   gateway: "0x0000000000000000000000000000000000000b00",
+  version: "1",
 };
 const GOLDEN_DIGEST = "0x3ac1860ad8706f9a902e92d0657147f83d27f3a7c64bd38132d667196db1cdbf";
 const GOLDEN_SIGNATURE =
@@ -82,7 +83,7 @@ describe("agent consent typed data (issue 1791)", () => {
     });
   });
 
-  it("refuses a consent for any other owner, receiver, nonce, chain or gateway", async () => {
+  it("refuses a consent for any other owner, receiver, nonce, chain, gateway or version", async () => {
     const other = "0x00000000000000000000000000000000000000aa" as Address;
     for (const fields of [
       { ...GOLDEN, owner: other },
@@ -90,6 +91,9 @@ describe("agent consent typed data (issue 1791)", () => {
       { ...GOLDEN, nonce: 4n },
       { ...GOLDEN, chainId: 84532 },
       { ...GOLDEN, gateway: other },
+      // QA plan Decisions D5: after an upgrade bumps implementationVersion(), the
+      // consent signed under "1" no longer counts.
+      { ...GOLDEN, version: "2" },
     ]) {
       const check = await checkAgentConsent(GOLDEN_SIGNATURE, fields);
       expect(check.status).toBe("wrong-signer");
@@ -169,5 +173,28 @@ describe("revealAuthorization carries the consent (issue 1791)", () => {
       agentConsent: NO_AGENT_CONSENT,
     });
     expect(call.args[3]).toBe("0x");
+  });
+});
+
+describe("agent consent is bound to the gateway implementation version (QA plan D5)", () => {
+  it("signs in the domain of the live implementationVersion()", async () => {
+    const v2: AgentConsentFields = { ...GOLDEN, version: "2" };
+    expect(agentConsentTypedData(v2).domain.version).toBe("2");
+    expect(agentConsentDigest(v2)).not.toBe(GOLDEN_DIGEST);
+    const signature = await privateKeyToAccount(AGENT_KEY).signTypedData(agentConsentTypedData(v2));
+    expect(await checkAgentConsent(signature, v2)).toEqual({ status: "ok", signature });
+    // The same signature is the wrong signer for the version-1 domain.
+    expect((await checkAgentConsent(signature, GOLDEN)).status).toBe("wrong-signer");
+  });
+
+  it("the gateway ABI the dapp reads carries implementationVersion()", () => {
+    const hand = gatewayAbi.find(
+      (e) => e.type === "function" && e.name === "implementationVersion",
+    );
+    const generated = gatewayAbiGenerated.find(
+      (e) => e.type === "function" && e.name === "implementationVersion",
+    );
+    expect(hand).toBeDefined();
+    expect(generated).toBeDefined();
   });
 });

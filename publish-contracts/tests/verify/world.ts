@@ -18,6 +18,8 @@ import { getStageTable } from "../../src/stages.ts";
 import { basename } from "node:path";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../../src/proxies.ts";
+import { tableProxies } from "../../src/stage-table.ts";
 import type { Address, ChainReader, Hex, LogEntry, RawCallResult, VerifyOptions, VerifySheet } from "../../src/verify/types.ts";
 
 export const addr = (n: number): Address => (`0x${n.toString(16).padStart(40, "0")}`) as Address;
@@ -67,6 +69,23 @@ export const VAULTS: Record<string, { address: Address; kind: "usdc" | "basket" 
   rmPROTO: { address: addr(0xb0002), kind: "basket" },
   rmAGENT: { address: addr(0xb0003), kind: "agent" },
   rmRWA: { address: addr(0xb0004), kind: "basket" },
+};
+/**
+ * Issue 1809 (ADR-0014 §1): the nine proxied contracts. Each address above is the PROXY (what every call and role check reaches); the implementation behind it holds
+ * the contract's build. Keyed by the stage table's proxy name.
+ */
+export const PROXIES: Record<string, Address> = {
+  rmUSDC: VAULTS.rmUSDC!.address, registry: REGISTRY, router: ROUTER, gateway: GATEWAY, icpolicy: ICP, receipt: REC,
+  rmPROTO: VAULTS.rmPROTO!.address, rmAGENT: VAULTS.rmAGENT!.address, rmRWA: VAULTS.rmRWA!.address,
+};
+export const IMPLEMENTATIONS: Record<string, Address> = {
+  rmUSDC: addr(0xc0b0001), registry: addr(0xc04e6), router: addr(0xc40a7e4), gateway: addr(0xc6a7e), icpolicy: addr(0xc1c9), receipt: addr(0xc4ec),
+  rmPROTO: addr(0xc0b0002), rmAGENT: addr(0xc0b0003), rmRWA: addr(0xc0b0004),
+};
+/** The implementation behind a world address when it is a proxy, else the address itself: where the contract's own build runs. */
+export const implementationOf = (a: Address): Address => {
+  const n = Object.entries(PROXIES).find(([, p]) => p.toLowerCase() === a.toLowerCase())?.[0];
+  return n ? IMPLEMENTATIONS[n]! : a;
 };
 /** Library name (the table'"'"'s `libraries[].name`) -> address. */
 const LIBS: Record<string, Address> = { tick_math: addr(0x11b1) };
@@ -241,7 +260,7 @@ export function buildWorld(chainId = 8453): World {
   const CORE_CONTRACTS = coreContracts(table);
   const libArtifact = (n: string) => table.libraries.find((l) => l.name === n)!.artifact;
   const vaultArtifactOf = (key: string) => table.vaults.find((v) => ({ rmUSDC: "USDC", rmPROTO: "PROTO", rmAGENT: "AGENT", rmRWA: "RWA" })[key] === v.key)!.artifact;
-  const names = [...new Set([...CORE_CONTRACTS.map((c) => c.artifact), ...table.vaults.map((v) => v.artifact), ...Object.keys(LIBS).map(libArtifact), table.artifacts.v4Adapter!])];
+  const names = [...new Set([...CORE_CONTRACTS.map((c) => c.artifact), ...table.vaults.map((v) => v.artifact), ...Object.keys(LIBS).map(libArtifact), table.artifacts.v4Adapter!, table.proxyArtifact!])];
   const codeByName: Record<string, Hex> = {};
   for (const n of names) {
     const { artifact, chain } = codeFor(n, "ab");
@@ -256,6 +275,18 @@ export function buildWorld(chainId = 8453): World {
   for (const [k, v] of Object.entries(VAULTS)) setCode(v.address, vaultArtifactOf(k));
   setCode(V4_ADAPTER, table.artifacts.v4Adapter!);
   for (const [n, a] of Object.entries(LIBS)) setCode(a, libArtifact(n));
+  // issue 1809 (ADR-0014): every proxied contract runs behind an ERC1967Proxy. The proxy holds the proxy build and its ERC-1967 implementation slot names the
+  // implementation, which holds the contract's build. The proxy is initialized, the implementation's initializers are locked, the authority is the timelock, nothing is frozen.
+  for (const p of tableProxies(table)) {
+    const proxy = PROXIES[p.name]!, impl = IMPLEMENTATIONS[p.name]!;
+    setCode(impl, p.artifact);
+    setCode(proxy, table.proxyArtifact!);
+    ch.storage.set(`${proxy.toLowerCase()}|${ERC1967_IMPLEMENTATION_SLOT}`, pad(impl, { size: 32 }));
+    ch.storage.set(`${proxy.toLowerCase()}|${INITIALIZABLE_SLOT}`, toHex(1n, { size: 32 }));
+    ch.storage.set(`${impl.toLowerCase()}|${INITIALIZABLE_SLOT}`, toHex(INITIALIZERS_LOCKED, { size: 32 }));
+    ch.set(proxy, "upgradeAuthority", TIMELOCK);
+    ch.set(proxy, "upgradesFrozen", false);
+  }
   ch.codes.set(SAFE.toLowerCase(), "0x608060405234801561001057600080fd5b50");
   const safeHash = keccak256(ch.codes.get(SAFE.toLowerCase())!);
   ch.storage.set(`${SAFE.toLowerCase()}|${Z32}`, pad(SAFE_L2_141_SINGLETON, { size: 32 }));
@@ -377,20 +408,24 @@ export function buildWorld(chainId = 8453): World {
   ch.set(V4_ADAPTER, "POOL_FEE", RM_POOL_KEY.fee);
   ch.set(V4_ADAPTER, "TICK_SPACING", RM_POOL_KEY.tickSpacing);
 
-  const frozenCounts = { safe: 1, libs: 4, recorder: 6, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, "ic-policy": 3, "vault-proto": 6, "vault-agent": 3, "vault-rwa": 6, timelock: 18 };
+  const frozenCounts = { safe: 1, libs: 4, recorder: 6, authority: 1, vault: 12, registry: 2, router: 2, gateway: 3, governance: 2, "ic-policy": 3, "vault-proto": 6, "vault-agent": 3, "vault-rwa": 6, timelock: 18 };
   ch.noncesMap.set(DEPLOYER.toLowerCase(), Object.values(frozenCounts).reduce((a, b) => a + b, 0) + PROOF_TX_NONCES); // the stages plus the deployer's prove-control transaction (core 1712)
 
   const w = (f: string, o: unknown) => writeFileSync(join(manifestDir, f), JSON.stringify(o, null, 2));
   const file = (stage: string) => stageManifestFile(table, stage);
+  // issue 1809: each proxy stage names the implementation behind its proxy, the authority (the authority stage's timelock, the handover's) and the release mode
+  const governed = { upgrade_authority: TIMELOCK, upgrade_mode: "upgradeable" };
+  w(file("authority"), { chain_id: chainId, timelock: TIMELOCK, safe: SAFE, min_delay: delay, deployment_kind: "production", timelock_codehash: keccak256(ch.codes.get(TIMELOCK.toLowerCase())!) });
   w(file("vault"), {
     chain_id: chainId, vault: VAULTS.rmUSDC.address, seed_share_receiver: SEED_RECEIVER, seed_shares: SEED_SHARES.toString(), deployer_share_balance_after: 0,
     aave_adapter: USDC_ADAPTERS[0].address, compound_adapter: USDC_ADAPTERS[1].address, moonwell_flagship_adapter: USDC_ADAPTERS[2].address,
+    vault_implementation: IMPLEMENTATIONS.rmUSDC, ...governed,
   });
-  w(file("registry"), { chain_id: chainId, registry: REGISTRY });
-  w(file("router"), { chain_id: chainId, router: ROUTER });
-  w(file("gateway"), { chain_id: chainId, gateway: GATEWAY });
+  w(file("registry"), { chain_id: chainId, registry: REGISTRY, registry_implementation: IMPLEMENTATIONS.registry, ...governed });
+  w(file("router"), { chain_id: chainId, router: ROUTER, router_implementation: IMPLEMENTATIONS.router, ...governed });
+  w(file("gateway"), { chain_id: chainId, gateway: GATEWAY, gateway_implementation: IMPLEMENTATIONS.gateway, ...governed });
   w(file("governance"), { chain_id: chainId, governance: GOV });
-  w(file("ic-policy"), { chain_id: chainId, policy: ICP, consensus_receipt: REC });
+  w(file("ic-policy"), { chain_id: chainId, policy: ICP, consensus_receipt: REC, policy_implementation: IMPLEMENTATIONS.icpolicy, consensus_receipt_implementation: IMPLEMENTATIONS.receipt, ...governed });
   w(file("timelock"), {
     chain_id: chainId, timelock: TIMELOCK, safe: SAFE, emergency: EMERGENCY, executorPolicy: "open", cancellerPolicy: "safe-only", code_hashes: { safe: safeHash },
     roles: { gateway_agents_listed_count: 0, deployer_owns_a_listed_gateway_agent: false },
@@ -400,12 +435,13 @@ export function buildWorld(chainId = 8453): World {
   w(file("recorder"), { chain_id: chainId, recorder: RECORDER, pool_manager: POOL_MANAGER, pool_id: RM_POOL_ID, ring_slots: 7201 });
   for (const v of table.vaults) if (v.key !== "USDC") {
     const vkey = ({ PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" } as Record<string, string>)[v.key]!;
-    w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, ...(v.key === "AGENT" ? { adapter: ZERO, adapter_v4: V4_ADAPTER, recorder: RECORDER } : {}) });
+    w(basename(v.manifest), { chain_id: chainId, vault: VAULTS[vkey]!.address, vault_implementation: IMPLEMENTATIONS[vkey]!, ...governed, ...(v.key === "AGENT" ? { adapter: ZERO, adapter_v4: V4_ADAPTER, recorder: RECORDER } : {}) });
   }
 
   const sheet: VerifySheet = {
     chainId, deployer: DEPLOYER, pauser: PAUSER, emergency: EMERGENCY, safeOwners: [...OWNERS], safeThreshold: 2, timelockDelay: delay, vaults: vsheet,
     defaultWeights: Object.keys(VAULTS).map((vault, i) => ({ vault, bps: DEFAULT_BPS[i]! })),
+    upgradeMode: "upgradeable",
   };
   ch.txs.set(PROOF_TX.toLowerCase(), { to: SAFE, input: proofInput(chainId), value: 0n, status: "success" });
   const opts: VerifyOptions = { chain: ch, manifestDir, table, sheet, fromBlock: 0n, frozenCounts, artifactsDir, retryBaseMs: 0, usdcCodeHash: keccak256(USDC_CODE), controlProof: { txHash: PROOF_TX, nonce: 0 } };

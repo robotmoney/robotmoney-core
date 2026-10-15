@@ -131,7 +131,12 @@ Reads the configured `RobotMoneyGateway`. Returns gateway address, chain id,
 configured USDC and vault addresses, the runtime code hash (compared against
 `gateway_runtime_hash` in config), and the deposit-pause flag (`deposits_paused`,
 from `depositsPaused()`). It stops deposits only. A withdrawal still works. A code-hash mismatch is
-a hard refusal at write time (see `references/safety.md`).
+a hard refusal at write time (see `references/safety.md`). For a proxied gateway it also returns
+`implementation` and `implementation_code_hash` (read at the same block), the configured
+`configured_implementation_hashes`, `implementation_approved` (false means every write is refused
+with `ErrImplementationNotApproved`), `implementation_version` (the version an agent consent is
+signed under), `upgrade_authority` (the timelock) and `upgrades_frozen` (true means no upgrade can
+ever run again). A direct gateway reports `implementation: null`.
 
 ---
 

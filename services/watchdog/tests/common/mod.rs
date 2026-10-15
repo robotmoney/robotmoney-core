@@ -317,7 +317,7 @@ impl ScriptedWebhookServer {
 
     /// Drain every request answered since the last drain, in arrival order.
     pub fn drain_captures(&self) -> Vec<ScriptedCapture> {
-        self.state.lock().unwrap().1.drain(..).collect()
+        std::mem::take(&mut self.state.lock().unwrap().1)
     }
 
     /// Shut down the server.

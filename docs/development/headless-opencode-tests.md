@@ -314,7 +314,7 @@ against the same freshly-generated key, one assertable step at a time:
 | 2 | OpenCode skill invocation | `opencode run` exits 0 and emits a transcript. |
 | 3 | rmpc built and configured | `cargo build --release ... --bin rmpc` and a generated `config.toml` pinning the devnet chain id, RPC, gateway/vault/USDC addresses, gateway runtime hash, and the freshly-generated keystore path. |
 | 4 | Fresh keypair + keystore | `cast wallet new --json` produces a secp256k1 keypair; the private key is fed via `RMPC_IMPORT_PRIVKEY_HEX` + `RMPC_KEYSTORE_PASSPHRASE` into `rmpc-keystore-import <output-path>`. Step fails unless the keystore file exists, the printed address matches `^0x[0-9a-fA-F]{40}$`, and the keystore-derived address equals the cast-wallet address. |
-| 5 | On-chain authorization | `AGENT_ADDRESS` env points at the generated key, so the gateway stage (`DeployGateway.s.sol`) calls `gateway.authorizeAgent(generatedKey, policy)` with `msg.sender = ADMIN_ADDRESS = PARENT_ADDRESS`. A dedicated step then runs `cast call gateway "agentOwner(address)(address)" $AGENT_ADDRESS` and `cast call gateway "hasRole(bytes32,address)(bool)" $AGENT_ROLE $AGENT_ADDRESS` BEFORE the deposit and fails the job if either check is wrong. |
+| 5 | On-chain authorization | The deploy authorizes no agent (core 1527): `DeployGateway.s.sol` reads no `AGENT_*` variable. The step "Depositor authorizes the generated agent on-chain" first asserts that `agentOwner(generatedKey)` is zero and `hasRole(AGENT_ROLE, generatedKey)` is false. The depositor (the share receiver, an unlocked Anvil account) then sends `commitAuthorization` and, in a later block, `revealAuthorization` carrying the generated key's EIP-712 `AgentConsent` signature (issue 1791). The step then asserts that `agentOwner(generatedKey)` is the depositor and `hasRole(AGENT_ROLE, generatedKey)` is true, BEFORE the deposit, and fails the job if either check is wrong. |
 | 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; `.github/scripts/assert_headless_deposit_sender.py` parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
 | 7 | On-chain vault delta | `.github/scripts/assert_headless_deposit_delta.py` confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
 
@@ -323,9 +323,10 @@ against the same freshly-generated key, one assertable step at a time:
 - Workflow: `.github/workflows/suite-11b-opencode-headless.yml` — deposit
   job now generates the keypair with `cast wallet new --json`, passes the
   private key to `rmpc-keystore-import` through `RMPC_IMPORT_PRIVKEY_HEX`,
-  captures the printed address from stdout, sets `AGENT_ADDRESS` for the
-  forge deploy, asserts authorization on-chain via `cast call` BEFORE the
-  deposit, writes a `config.toml` wiring `keystore_path` to the generated
+  captures the printed address from stdout as `AGENT_ADDRESS`, asserts that
+  the deploy left it unauthorized, has the depositor authorize it by
+  commit/reveal with the agent's consent, asserts that authorization on-chain
+  via `cast call` BEFORE the deposit, writes a `config.toml` wiring `keystore_path` to the generated
   keystore, and asserts the deposit transaction's `from` field equals the
   generated key.
 - Assertion script: `.github/scripts/assert_headless_deposit_sender.py`
@@ -338,8 +339,8 @@ against the same freshly-generated key, one assertable step at a time:
   return. Runs as a step in `asserter-tests` on every trigger, including
   `pull_request` (issue #1235).
 - Pre-deposit fast-fail: the authorization assertion runs before any
-  capture/deposit step, so skipping `authorizeAgent` (or pointing it at
-  a different key) fails the job immediately.
+  capture/deposit step, so skipping the depositor's commit/reveal (or
+  pointing it at a different key) fails the job immediately.
 
 ---
 

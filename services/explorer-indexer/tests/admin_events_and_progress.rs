@@ -1,6 +1,9 @@
 //! Issue 1731: the Timelock and the Safe are listed and their events indexed; every tick records the chain
 //! head; an endpoint that refuses (HTTP 403) is reported as a refusal with one request, not as a flaky tick.
 //!
+//! QA plan P3 (core 1810): the proxies' `Upgraded` and `UpgradesFrozen` events, the other half of the
+//! governed-change path, are stored in `proxy_upgrade_events` and leave with their block on a reorg.
+//!
 //! The tests use the shared Postgres fixture and a stub RPC. They do not skip when Docker is missing: the
 //! fixture panics, naming the missing dependency (issue #1377).
 
@@ -10,7 +13,7 @@ use alloy_primitives::{Address, Bytes, FixedBytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall as _, SolEvent as _};
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{ITimelockEvents, Topics},
+    abi::{ITimelockEvents, IUpgradeEvents, Topics},
     db::CountTable,
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -166,6 +169,124 @@ async fn timelock_and_safe_events_are_indexed_listed_and_rolled_back_on_reorg() 
     // A reorg above block 9 removes the rows with every other event table.
     fx.db.delete_above_block(CHAIN, 9).await.unwrap();
     assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 0);
+}
+
+/// QA plan P3: an upgrade and a freeze of a watched proxy are stored with the implementation and code
+/// hash they name; the newest `upgraded` row is the proxy's implementation; a freeze that names another
+/// proxy than its emitter is not recorded; a reorg removes the rows with their block.
+#[tokio::test]
+async fn proxy_upgrade_and_freeze_events_are_indexed_and_rolled_back_on_reorg() {
+    let fx = pg_fixture().await;
+    let c = cfg();
+    let impl_v1 = Address::from([0xA1; 20]);
+    let impl_v2 = Address::from([0xA2; 20]);
+    let vault_impl = Address::from([0xB1; 20]);
+    let code_hash = B256::from([0xC0; 32]);
+
+    let upgraded =
+        |implementation: Address| IUpgradeEvents::Upgraded { implementation }.encode_log_data();
+    let frozen = |proxy: Address, implementation: Address| {
+        IUpgradeEvents::UpgradesFrozen {
+            proxy,
+            implementation,
+            codeHash: code_hash,
+        }
+        .encode_log_data()
+    };
+
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            // The gateway proxy is born on v1 and the vault proxy on its implementation.
+            log_json(c.gateway, &upgraded(impl_v1), 10, 0),
+            log_json(c.vault, &upgraded(vault_impl), 10, 1),
+            // The timelock upgrades the gateway to v2, then freezes it there.
+            log_json(c.gateway, &upgraded(impl_v2), 10, 2),
+            log_json(c.gateway, &frozen(c.gateway, impl_v2), 10, 3),
+            // A freeze-shaped log from the vault that names the gateway: not one of ours.
+            log_json(c.vault, &frozen(c.gateway, impl_v1), 10, 4),
+        ]),
+    );
+    let rpc = JsonRpc::new(&stub.url);
+    let outcome = run_once(&fx.db, &rpc, &c).await.unwrap();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+
+    assert_eq!(
+        fx.db.count(CountTable::ProxyUpgradeEvents).await.unwrap(),
+        4,
+        "the mismatched freeze is ignored"
+    );
+    // (contract, kind, implementation, code_hash)
+    type UpgradeRow = (Vec<u8>, String, Vec<u8>, Option<Vec<u8>>);
+    let rows: Vec<UpgradeRow> = sqlx::query_as(
+        "SELECT contract, kind, implementation, code_hash FROM proxy_upgrade_events \
+         WHERE chain_id = $1 ORDER BY log_index",
+    )
+    .bind(CHAIN)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows[0],
+        (
+            c.gateway.to_vec(),
+            "upgraded".into(),
+            impl_v1.to_vec(),
+            None
+        )
+    );
+    assert_eq!(
+        rows[1],
+        (
+            c.vault.to_vec(),
+            "upgraded".into(),
+            vault_impl.to_vec(),
+            None
+        )
+    );
+    assert_eq!(
+        rows[2],
+        (
+            c.gateway.to_vec(),
+            "upgraded".into(),
+            impl_v2.to_vec(),
+            None
+        )
+    );
+    assert_eq!(
+        rows[3],
+        (
+            c.gateway.to_vec(),
+            "frozen".into(),
+            impl_v2.to_vec(),
+            Some(code_hash.to_vec())
+        )
+    );
+
+    // The current state the explorer serves: newest implementation, frozen once any freeze exists.
+    let gateway_now: (Vec<u8>, bool) = sqlx::query_as(
+        "SELECT (SELECT implementation FROM proxy_upgrade_events \
+                 WHERE chain_id = $1 AND contract = $2 AND kind = 'upgraded' \
+                 ORDER BY block_number DESC, log_index DESC LIMIT 1), \
+                EXISTS (SELECT 1 FROM proxy_upgrade_events \
+                        WHERE chain_id = $1 AND contract = $2 AND kind = 'frozen')",
+    )
+    .bind(CHAIN)
+    .bind(c.gateway.as_slice())
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(gateway_now, (impl_v2.to_vec(), true));
+
+    stub.shutdown();
+    // A reorg above block 9 removes the upgrade history with every other event table.
+    fx.db.delete_above_block(CHAIN, 9).await.unwrap();
+    assert_eq!(
+        fx.db.count(CountTable::ProxyUpgradeEvents).await.unwrap(),
+        0
+    );
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ description: "Tests for gateway.depositTo routing through the PortfolioRouter. C
 
 # GatewayRouterTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:** Test
 
@@ -692,8 +692,10 @@ snapshot is enforced end-to-end.
 
 </i>
 
-Storage layout (forge inspect RobotMoneyGateway storageLayout):
-slot 3  → agents mapping (slot 2 is commitments, added by #507)
+Storage layout (forge inspect RobotMoneyGateway storageLayout, pinned by
+contracts/test/fixtures/storage-layout/RobotMoneyGateway.json; the proxy layout
+series of ADR-0014 starts with the three write-once addresses):
+slot 4  → agents mapping (slot 3 is commitments)
 AgentPolicy struct offsets from the mapping element base:
 +0 → active (bool) + validUntil (uint64, packed)
 +1 → maxPerPayment (uint256)

@@ -56,6 +56,14 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   gatewayRuntimeHash?: string;
   /**
+   * Code hash of the implementation behind a proxied gateway (QA plan P3),
+   * passed to ConfigExportPanel so the export pins it for rmpc. Set only when
+   * it matched one of the build's reviewed implementation pins (issue 1810).
+   */
+  gatewayImplementationHash?: string;
+  /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes` (issue 1810). */
+  vaultIsProxy?: boolean;
+  /**
    * TimelockController address (issue #647 / architecture §4.5).
    * When provided, the Timelock tab is inserted in the admin area.
    * When absent the tab is still rendered in the error/missing-config state.
@@ -199,6 +207,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           vault={a.vaultAddress}
           usdcAddress={a.usdcAddress}
           gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
+          gatewayImplementationHash={a.gatewayImplementationHash}
+          vaultIsProxy={a.vaultIsProxy}
           chainId={a.chainId}
           agent={a.agent as Address}
           agentOwner={a.walletAddress}

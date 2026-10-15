@@ -4,7 +4,7 @@ title: "BasketAssetConfigGuard"
 
 # BasketAssetConfigGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/BasketAssetConfigGuard.sol)
 
 ## Constants
 
@@ -89,6 +89,45 @@ function requireObservationHistory(address pool, uint32 twapWindow) public view;
 | ---- | ---- | ----------- |
 | pool | `address` |  |
 | twapWindow | `uint32` |  |
+
+<a id="addasset-assetinfo-newasset-bool-address-uint32-uint128"></a>
+
+### addAsset
+
+The body of `BasketVault.addAsset` after its zero-address and basket-size checks
+(ADR-0014 §9: one linked call instead of four keeps the vault under EIP-170). Runs, in
+order: the ADP-2 adapter allowlist (`adapterAllowed` is the vault's codehash verdict),
+the ORA-3 execution-pool check, pool usability over `twapWindow` with `minLiquidity`,
+and the NC-8 duplicate rule. Appends a new row unless an inactive row for the token
+was reactivated in place.
+
+```solidity
+function addAsset(
+        AssetInfo[] storage assets,
+        NewAsset memory a,
+        bool adapterAllowed,
+        address usdc,
+        uint32 twapWindow,
+        uint128 minLiquidity
+    ) public returns (uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetInfo[]` |  |
+| a | `NewAsset` |  |
+| adapterAllowed | `bool` |  |
+| usdc | `address` |  |
+| twapWindow | `uint32` |  |
+| minLiquidity | `uint128` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | The registry index of the added or reactivated row. |
 
 <a id="reuseorrejectduplicate-assetinfo-address-address-uint24-address-venue"></a>
 
@@ -439,13 +478,11 @@ error AssetStillHeld();
 
 ### AssetInfo
 
-<i>
-
-Layout-compatible mirror of `BasketVault.AssetInfo`. Field order and
-types MUST match exactly so the delegatecall-linked dedup scan below
-reads/writes the vault's `assets` storage correctly.
-
-</i>
+One basket row. The ONE declaration (ADR-0014 §8): `BasketVault.assets` is an array of this type, and
+every function below that takes `AssetInfo[] storage` writes the vault's own array through it. There is
+no mirror and no storage-pointer cast. The storage-layout gate pins this struct
+(`contracts/test/fixtures/storage-layout/*BasketVault*.json`): any change to it fails the gate, because
+live proxies hold rows in this exact shape. A new field needs a new struct in a new mapping.
 
 ```solidity
 struct AssetInfo {
@@ -462,10 +499,34 @@ struct AssetInfo {
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| token | `address` | ERC-20 basket token. |
+| pool | `address` | DEX pool pairing `token` with USDC (venue-specific; the V4 recorder for `Venue.V4`). |
+| swapFee | `uint24` | Fee parameter forwarded to the adapter (Uniswap fee tier, or Aerodrome tick spacing). |
+| active | `bool` | False once removed. Inactive rows are kept and reused on re-add (NC-8). |
+| adapter | `address` | Swap + TWAP adapter; address(0) is the default Uniswap V3 path via `SWAP_ROUTER`. |
+| venue | `Venue` | DEX venue the row is wired to. |
+
+### NewAsset
+
+The arguments of `BasketVault.addAsset`, as one memory value for `addAsset` below.
+
+```solidity
+struct NewAsset {
+        address token;
+        address pool;
+        uint24 swapFee;
+        address adapter;
+        Venue venue;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
 | token | `address` |  |
 | pool | `address` |  |
 | swapFee | `uint24` |  |
-| active | `bool` |  |
 | adapter | `address` |  |
 | venue | `Venue` |  |
 
@@ -473,13 +534,10 @@ struct AssetInfo {
 
 ### Venue
 
-<i>
-
-Mirror of `BasketVault.Venue`. Kept value-compatible (same ordinals). V4 is the Uniswap V4 venue: its "pool"
-is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`, `liquidity`, `slot0` and `observe`
-like a V3 pool, so every check below applies to it unchanged (core 1676).
-
-</i>
+DEX venue of a basket asset. The one declaration: `BasketVault.addAsset`, its `AssetAdded` event and
+`assets(i).venue` all use it (ADR-0014 §8). Ordinals are ABI-visible: V3 0, V4 1, Aerodrome 2. V4 is the
+Uniswap V4 venue: its "pool" is the `UniswapV4PriceRecorder`, which answers `token0`, `token1`, `fee`,
+`liquidity`, `slot0` and `observe` like a V3 pool, so every check below applies to it unchanged (core 1676).
 
 ```solidity
 enum Venue {

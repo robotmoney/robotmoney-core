@@ -320,6 +320,10 @@ export function DepositWithdrawTab(props: Props) {
           shares: withdrawShares,
           minAssets,
           holder: address,
+          // The deadline must track the wall clock at submit time, and the parent's injected `now`
+          // only refreshes when the app shell re-renders, so a long-open tab would sign an expired
+          // deadline. routerRedeemDeadline steps it in 5 minutes, which keeps renders stable.
+          // eslint-disable-next-line no-restricted-syntax -- boundary: real clock read here.
           deadline: routerRedeemDeadline(Date.now()),
         }
       : null;

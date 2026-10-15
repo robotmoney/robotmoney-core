@@ -43,7 +43,9 @@ vi.mock("wagmi", () => ({
         ? wagmiState.hasAdmin
         : cfg.functionName === "agentConsentNonce"
           ? 0n
-          : wagmiState.agentOwner,
+          : cfg.functionName === "implementationVersion"
+            ? "1"
+            : wagmiState.agentOwner,
   }),
   useSimulateContract: () => ({ data: wagmiState.simData }),
   useWriteContract: () => ({ writeContract: wagmiState.writeContract, isPending: false }),
@@ -147,6 +149,7 @@ describe("RotationTab — depositor path (wallet without ADMIN_ROLE)", () => {
       nonce: 0n,
       chainId: 918453,
       gateway: GATEWAY,
+      version: "1",
     });
     await pasteAgentConsent("rotation", signature);
   }

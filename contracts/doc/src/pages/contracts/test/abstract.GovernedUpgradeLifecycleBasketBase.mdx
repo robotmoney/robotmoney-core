@@ -1,0 +1,149 @@
+---
+title: "GovernedUpgradeLifecycleBasketBase"
+---
+
+# GovernedUpgradeLifecycleBasketBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/GovernedUpgradeLifecycle.t.sol)
+
+**Inherits:** [GovernedUpgradeLifecycleBase](/contracts/test/abstract.GovernedUpgradeLifecycleBase)
+
+<i>
+
+Shared basket fixture: one V3 asset priced 1:1 by `MockPool`, swaps filled by
+`MockSwapRouter` (both from BasketVault.t.sol).
+
+</i>
+
+## State Variables
+
+### basketToken
+
+```solidity
+TestERC20 internal basketToken;
+```
+
+### swapRouter
+
+```solidity
+MockSwapRouter internal swapRouter;
+```
+
+### pool
+
+```solidity
+MockPool internal pool;
+```
+
+## Functions
+
+<a id="_prepare"></a>
+
+### _prepare
+
+<i>
+
+Kind dependencies the initializer reads (a vault for the gateway, a factory ...).
+
+</i>
+
+```solidity
+function _prepare() internal override;
+```
+
+<a id="_initdata-address-governedupgrade-upgrademode"></a>
+
+### _initData
+
+<i>
+
+The kind's `initialize` call data, naming `authority` and `mode`.
+
+</i>
+
+```solidity
+function _initData(address authority, GovernedUpgrade.UpgradeMode mode)
+        internal
+        view
+        override
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| mode | `GovernedUpgrade.UpgradeMode` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_privileged"></a>
+
+### _privileged
+
+<i>
+
+Business-role holders of the kind. None of them may upgrade or freeze.
+
+</i>
+
+```solidity
+function _privileged() internal view override returns (address[] memory a);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address[]` |  |
+
+<a id="_populate"></a>
+
+### _populate
+
+<i>
+
+Give the proxy some business state (deposits, registrations, policies).
+
+</i>
+
+```solidity
+function _populate() internal override;
+```
+
+<a id="_state"></a>
+
+### _state
+
+<i>
+
+Balances, allowances, roles, fees, caps and the basket position (#1808 test plan).
+
+</i>
+
+```solidity
+function _state() internal view override returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="test_frozenproxykeepsredeemandredeeminkindopen"></a>
+
+### test_frozenProxyKeepsRedeemAndRedeemInKindOpen
+
+ADR-0014 tests: test_frozenProxyKeepsRedeemAndRedeemInKindOpen. After a governed
+upgrade and a freeze, `redeemInKind` and the USDC `redeem` both pay the holder.
+
+```solidity
+function test_frozenProxyKeepsRedeemAndRedeemInKindOpen() public;
+```
+

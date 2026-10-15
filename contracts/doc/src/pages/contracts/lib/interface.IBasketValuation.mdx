@@ -1,0 +1,60 @@
+---
+title: "IBasketValuation"
+---
+
+# IBasketValuation
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/BasketSwapOps.sol)
+
+<i>
+
+The two TWAP valuation views of `BasketVault` the swap legs price their floors with. The
+library runs as the vault (DELEGATECALL), so these are self-calls to the vault's own views,
+and the floors are exactly the ones the vault computed inline before ADR-0014.
+
+</i>
+
+## Functions
+
+<a id="assetusdcvalue-uint256-uint256"></a>
+
+### assetUsdcValue
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assettokenvalue-uint256-uint256"></a>
+
+### assetTokenValue
+
+```solidity
+function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| usdcAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

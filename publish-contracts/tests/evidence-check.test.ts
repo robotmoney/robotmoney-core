@@ -10,6 +10,8 @@ import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { keccak256 } from "viem";
+import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
+import { loadStageTable, tableProxies } from "../src/stage-table.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
@@ -371,6 +373,49 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   test("a missing unpause-USDC row is rejected: rmUSDC is no longer optional", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-USDC"); })).toContain("'unpause-USDC' of Stage 13 has no evidence entry"));
 });
 
+// ---- issue 1809 (ADR-0014): the governed proxies of the stage table, as a deployment's evidence records them and the chain answers ----
+const PROXY_IMPL_CODE = "0x6080604052" as Hex;
+const word32 = (v: bigint): Hex => `0x${v.toString(16).padStart(64, "0")}` as Hex;
+/** Every proxy name of the stage table (ADR-0014 §1) with its proxy and implementation: the four vaults are good()'s vault addresses, the registry good()'s registry. */
+const TABLE_PROXIES: Record<string, { proxy: string; implementation: string }> = {
+  rmUSDC: { proxy: a(5), implementation: a(0x2005) }, rmPROTO: { proxy: a(6), implementation: a(0x2006) }, rmAGENT: { proxy: a(7), implementation: a(0x2007) },
+  rmRWA: { proxy: a(8), implementation: a(0x2008) }, registry: { proxy: a(21), implementation: a(0x2021) }, router: { proxy: a(0x1003), implementation: a(0x2103) },
+  gateway: { proxy: a(0x1004), implementation: a(0x2104) }, icpolicy: { proxy: a(0x1006), implementation: a(0x2106) }, receipt: { proxy: a(0x1007), implementation: a(0x2107) },
+};
+/** `e` with `upgrade_mode` and a `proxies` entry per name, each what tableProxyChain answers. */
+function withTableProxies(e: any, names: readonly string[] = Object.keys(TABLE_PROXIES)): any {
+  e.upgrade_mode = "upgradeable";
+  e.proxies = Object.fromEntries(names.map((n) => [n, {
+    proxy: TABLE_PROXIES[n]!.proxy, implementation: TABLE_PROXIES[n]!.implementation, implementation_code_hash: keccak256(PROXY_IMPL_CODE), authority: e.timelock.address,
+    mode: "upgradeable", frozen: false, admin_slot_empty: true, beacon_slot_empty: true,
+  }]));
+  return e;
+}
+interface Live { implementation?: string; adminSlot?: Hex; beaconSlot?: Hex; code?: Hex; authority?: string; frozen?: boolean; uninitialized?: boolean; unlocked?: boolean }
+/** The stub chain of `e` plus every table proxy: `o` breaks one property of every proxy. */
+function tableProxyChain(e: any, o: Live = {}): ChainReader {
+  const base = stub(e);
+  const impls = new Set([...Object.values(TABLE_PROXIES).map((x) => x.implementation.toLowerCase()), ...(o.implementation ? [o.implementation.toLowerCase()] : [])]);
+  const isImpl = (x: string) => impls.has(x.toLowerCase());
+  const implOf = (x: string) => o.implementation ?? Object.values(TABLE_PROXIES).find((y) => y.proxy.toLowerCase() === x.toLowerCase())?.implementation ?? a(0);
+  return {
+    ...base,
+    getCode: async ({ address }) => (isImpl(address) ? (o.code ?? PROXY_IMPL_CODE) : ("0x6001" as Hex)),
+    getStorageAt: async ({ address, slot }) => {
+      if (slot === ERC1967_IMPLEMENTATION_SLOT) return isImpl(address) ? word32(0n) : word32(BigInt(implOf(address)));
+      if (slot === ERC1967_ADMIN_SLOT) return isImpl(address) ? word32(0n) : (o.adminSlot ?? word32(0n));
+      if (slot === ERC1967_BEACON_SLOT) return isImpl(address) ? word32(0n) : (o.beaconSlot ?? word32(0n));
+      if (slot === INITIALIZABLE_SLOT) return isImpl(address) ? word32(o.unlocked ? 0n : INITIALIZERS_LOCKED) : word32(o.uninitialized ? 0n : 1n);
+      return word32(0n);
+    },
+    readContract: async (x) => {
+      if (x.functionName === "upgradeAuthority") return o.authority ?? e.timelock.address;
+      if (x.functionName === "upgradesFrozen") return o.frozen ?? false;
+      return base.readContract(x);
+    },
+  };
+}
+
 describe("recorded chain fixture (offline mode of the same chain checks)", () => {
   const frozen = { safe: 2 };
   async function record(o: Opts = {}) {
@@ -407,7 +452,12 @@ describe("recorded chain fixture (offline mode of the same chain checks)", () =>
     const dir = mkdtempSync(join(tmpdir(), "evidence-ci-"));
     const run = join(dir, "evidence", "run-1");
     mkdirSync(run, { recursive: true });
-    const { e, fixture } = await record();
+    // the CLI checks the stage table's proxies (issue 1809): offline from the record, and on the fixture from the chain reads (QA plan v1 L1)
+    expect(Object.keys(TABLE_PROXIES).sort()).toEqual(tableProxies(loadStageTable(join(import.meta.dir, "..", ".."))).map((x) => x.name).sort());
+    const e = withTableProxies(good());
+    const rec = recordingChainReader(tableProxyChain(e));
+    expect(await checkEvidenceOnChain(e, rec.reader, frozen, { proxies: Object.keys(TABLE_PROXIES) })).toEqual([]);
+    const fixture = JSON.parse(JSON.stringify(rec.fixture));
     writeFileSync(join(run, "evidence.json"), JSON.stringify(e, null, 2));
     writeFileSync(join(run, "chain-fixture.json"), JSON.stringify(fixture, null, 2));
     const frozenFile = join(dir, "frozen.json");
@@ -786,5 +836,110 @@ describe("evidence secret scan: a hash field exempts its own value, never its li
       "govern-stdout.jsonl": [JSON.stringify({ row: "unpause-USDC", phase: "scheduled", txHash: h(17), status: 1 }), JSON.stringify({ event: "stage.done", tx_hashes: [h(18), h(19)] })].join("\n") + "\n",
       "forge.txt": `[Success] Hash: ${h(20)}\nTransaction hash: ${h(21)}\nblockHash            ${h(22)}\n`,
     })).toEqual([]);
+  });
+});
+
+// ---- issue 1809 (ADR-0014), QA plan v1 L1: the `proxies` evidence is read from the chain, never taken from the record ----
+describe("evidence check re-reads the governed proxies from the chain", () => {
+  const NAMES = ["rmUSDC", "registry"];
+  const word = word32;
+  const withProxies = () => withTableProxies(good(), NAMES);
+  const proxyChain = (e: any, o: Live = {}) => tableProxyChain(e, o);
+  const check = (e: any, chain: ChainReader) => checkEvidenceOnChain(e, chain, { safe: 2 }, { proxies: NAMES });
+
+  test("proxies that read on chain what the evidence records pass", async () => {
+    const e = withProxies();
+    expect(await check(e, proxyChain(e))).toEqual([]);
+  });
+  test("each property the chain contradicts is refused by name", async () => {
+    const cases: [Live, string][] = [
+      [{ implementation: a(0x2999) }, "implementation slot"],
+      [{ adminSlot: word(BigInt(a(0xad))) }, "admin slot"],
+      [{ beaconSlot: word(BigInt(a(0xbe))) }, "beacon slot"],
+      [{ code: "0x6080604053" as Hex }, "implementation code hash on chain"],
+      [{ code: "0x" as Hex }, "has no code"],
+      [{ authority: a(0x77) }, "upgradeAuthority()"],
+      [{ frozen: true }, "upgradesFrozen()"],
+      [{ uninitialized: true }, "not initialized"],
+      [{ unlocked: true }, "initializers are not locked"],
+    ];
+    for (const [o, needle] of cases) {
+      const e = withProxies();
+      const p = (await check(e, proxyChain(e, o))).join("\n");
+      expect(p, needle).toContain(needle);
+      expect(p, needle).toContain("proxies.rmUSDC");
+      expect(p, needle).toContain("proxies.registry");
+    }
+  });
+  test("a recorded frozen flag the chain does not hold is refused, and a frozen proxy the evidence records frozen passes", async () => {
+    const e = withProxies();
+    e.proxies.registry.frozen = true;
+    expect((await check(e, proxyChain(e))).join()).toContain("proxies.registry: upgradesFrozen()");
+    const f = withProxies();
+    for (const n of NAMES) f.proxies[n].frozen = true;
+    expect(await check(f, proxyChain(f, { frozen: true }))).toEqual([]);
+  });
+  test("a reader that cannot read code or storage proves nothing: a problem, never a pass", async () => {
+    const e = withProxies();
+    expect((await check(e, stub(e))).join()).toContain("cannot read code or storage");
+  });
+  test("without the table's proxy names the chain check reads no proxy (a deployment before the proxies)", async () => {
+    const e = withProxies();
+    expect(await checkEvidenceOnChain(e, stub(e), { safe: 2 })).toEqual([]);
+  });
+  test("the recorded chain fixture carries the proxy reads, as decimal storage words that pass the secret scan", async () => {
+    const e = withProxies();
+    const { reader, fixture } = recordingChainReader(proxyChain(e));
+    expect(await check(e, reader)).toEqual([]);
+    const fx = JSON.parse(JSON.stringify(fixture));
+    expect(fx.storage.length).toBeGreaterThan(0);
+    for (const s of fx.storage) expect(s.value).toMatch(/^[0-9]+$/);
+    expect(await check(e, chainReaderFromFixture(fx))).toEqual([]);
+    // the fixture alone, offline: a storage word that differs is caught there too (an admin slot that names someone)
+    const moved = JSON.parse(JSON.stringify(fx));
+    const slot = moved.storage.find((s: any) => s.address === a(5) && s.slot_hash === ERC1967_ADMIN_SLOT.toLowerCase());
+    slot.value = BigInt(a(0xad)).toString();
+    expect((await check(e, chainReaderFromFixture(moved))).join()).toContain("proxies.rmUSDC: the ERC-1967 admin slot");
+    const dir = mkdtempSync(join(tmpdir(), "evidence-proxy-fixture-"));
+    writeFileSync(join(dir, "chain-fixture.json"), JSON.stringify({ storage: fx.storage, codes: fx.codes }, null, 2) + "\n");
+    expect(scanEvidenceFolder(dir)).toEqual([]);
+  });
+});
+
+// ---- ADR-0014 §5 and §8 (issue 1809): the immutability claim and the storage-layout identifier ----
+describe("immutability claim and layout identifier (ADR-0014 §5, §8)", () => {
+  const names = Object.keys(TABLE_PROXIES);
+  const opts = { proxies: names };
+  const still = { governed_parameters: ["vault fees and caps"], upstream_dependencies: ["USDC"] };
+  const frozenAll = (e: any) => { e.upgrade_mode = "frozen-at-deploy"; for (const n of names) Object.assign(e.proxies[n], { mode: "frozen-at-deploy", frozen: true }); };
+
+  test("no claim: an upgradeable deployment passes", () => {
+    expect(checkEvidence(withTableProxies(good()), undefined, undefined, opts)).toEqual([]);
+  });
+
+  test("a claim while any proxy reads upgradeable is refused, naming the proxies", () => {
+    const e = withTableProxies(good());
+    e.immutability_claim = "core-logic-immutable";
+    e.immutability = { still_mutable: still };
+    const p = checkEvidence(e, undefined, undefined, opts).join("\n");
+    expect(p).toContain("immutability_claim");
+    expect(p).toContain("rmUSDC");
+  });
+
+  test("a claim with every proxy frozen passes only with the still-mutable list", () => {
+    const e = withTableProxies(good());
+    frozenAll(e);
+    e.immutability_claim = "core-logic-immutable";
+    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("still_mutable");
+    e.immutability = { still_mutable: still };
+    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
+  });
+
+  test("a deploy-recorded layout identifier that differs from the checkout's snapshot is refused", () => {
+    const e = withTableProxies(good());
+    Object.assign(e.proxies.gateway, { layout_hash: `0x${"11".repeat(32)}`, layout_source: "deploy-manifest", checkout_layout_hash: `0x${"22".repeat(32)}` });
+    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("proxies.gateway.layout_hash");
+    Object.assign(e.proxies.gateway, { checkout_layout_hash: `0x${"11".repeat(32)}` });
+    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
   });
 });

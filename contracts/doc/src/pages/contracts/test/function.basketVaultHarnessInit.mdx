@@ -1,0 +1,42 @@
+---
+title: "basketVaultHarnessInit"
+---
+
+# basketVaultHarnessInit
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/BasketVault.t.sol)
+
+<a id="basketvaultharnessinit-ierc20-iswaprouter-address-address"></a>
+
+### basketVaultHarnessInit
+
+<i>
+
+The harness's `initialize` call data (ADR-0014).
+
+</i>
+
+```solidity
+function basketVaultHarnessInit(
+    IERC20 usdc_,
+    ISwapRouter swapRouter_,
+    address admin_,
+    address emergencyResponder_
+) view returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+| swapRouter_ | `ISwapRouter` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+

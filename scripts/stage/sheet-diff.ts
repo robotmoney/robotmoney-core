@@ -19,6 +19,8 @@ export const PARAMETER_KEYS = new Set([
   "AGENT_MAX_PER_WINDOW",
   "AGENT_WINDOW_SECONDS",
   "SAFE_THRESHOLD",
+  // issue 1809 (ADR-0014 §5): the release mode is initialized state of one artifact: a rehearsal is upgradeable, a final release may be frozen-at-deploy
+  "UPGRADE_MODE",
 ]);
 
 /** Identity lines (addresses only). They are generated per run on stage and typed per run on mainnet. */

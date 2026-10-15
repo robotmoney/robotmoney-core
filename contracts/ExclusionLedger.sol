@@ -33,7 +33,7 @@ interface IExclusionLedgerVault {
 ///           It can be claimed any number of times as more recovery arrives. Rounding dust
 ///           stays here. No one can sweep unclaimed USDC: a claim never expires.
 ///
-///         The vault deploys this contract in its constructor and is its only writer
+///         The vault creates this contract through `ExclusionLedgerFactory` in its initializer and is its only writer
 ///         (`open`, `credit`, `finalize`, `checkpoint`). `claim` is permissionless and always
 ///         pays the holder, never the caller.
 ///
@@ -167,9 +167,11 @@ contract ExclusionLedger {
         _;
     }
 
-    /// @param usdc_ The vault's asset. The deployer (`msg.sender`) is the vault.
-    constructor(IERC20 usdc_) {
-        VAULT = msg.sender;
+    /// @param vault_ The vault this ledger belongs to: its only writer. `ExclusionLedgerFactory.create`
+    ///               passes its caller, the vault proxy, during the vault's initializer (ADR-0014 §9).
+    /// @param usdc_  The vault's asset.
+    constructor(address vault_, IERC20 usdc_) {
+        VAULT = vault_;
         USDC = usdc_;
     }
 

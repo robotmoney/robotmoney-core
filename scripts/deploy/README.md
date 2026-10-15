@@ -7,7 +7,7 @@
 ## Schema (version 1)
 
 - `stages[]`, in deploy order:
-  - `name`: `libs|recorder|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
+  - `name`: `libs|recorder|authority|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
   - `kind`: always `forge`.
   - `script`: `contracts/script/<File>.s.sol:<Contract>`.
   - `requiredEnv`: names the script reads with no default. This includes `DEPLOYMENT_OUT`. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
@@ -26,12 +26,18 @@
 - `vaultRuleDecisions`: for each rule field on which the vaults differ, the decision behind the difference (an issue number or an owner decision). The parser refuses a difference with no decision. The publish-contracts CLI derives its govern rows, evidence steps and verifier expectations from these rules (`publish-contracts/src/vault-rules.ts`), and refuses a `--core-dir` checkout whose table carries other rules. `stage-table.test.ts` ("vault rules") checks each rule against the scripts and contracts, and `contracts/test/FourVaultInitialState.t.sol` runs the four vault stages in process and compares `depositsPaused()` with `deployPaused`.
 - `libraries[]`: `{ name, artifact, manifestKey, path }`. `manifestKey` is the key the libs manifest holds the address under. `path` is the source file for `--libraries path:artifact:address`.
 - `artifacts`: forge contract names for `gateway`, `router`, `registry`, `governance`, `timelock`, `icPolicy`, `receipt`.
+- `proxies` (issue 1809, ADR-0014 §1): the nine contracts that run behind their own `ERC1967Proxy`, each `{ name, stage, field, implementationField, artifact }`: the stage that deploys it, the manifest field of the proxy address and of the implementation behind it, and the implementation's build artifact. `name` is the verifier label (`proxy[<name>]`) and the `--admin-arg proxy=<name>` of the `upgrade-proxy` and `freeze-proxy` govern rows. The list equals `contracts/test/fixtures/storage-layout/proxied.txt` (the storage-layout gate's list). Every proxy stage must require `UPGRADE_AUTHORITY` and `UPGRADE_MODE` (the parser refuses a table that would deploy a proxy with an undeclared authority or mode) and writes `upgrade_authority` and `upgrade_mode` next to the proxy and the implementation.
+- `proxyArtifact`: the build every proxy's runtime code must equal (`ERC1967Proxy`). Required when `proxies` lists any.
 
 Run order is the table order. The per-stage wiring (which manifest key feeds which env name) lives in `publish-contracts/src/core-wiring.ts`, not in the table. The post-stage proofs (router wiring, basket vault config, timelock roles) are labels of the one verifier (`publish-contracts/src/verify`).
 
 ## Stage 13 (govern)
 
 `stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each of the four vaults, rmUSDC included, because all four deploy paused (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. Router weights change on demand through the govern row `apply-receipt` (core 1696): the Safe, through the timelock, releases the Investment Committee's consensus receipt and applies its weights in one timelock call, `RouterGovernance.applyReceipt` (issue 1698). There is no voting by anyone. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
+
+## The authority stage and the proxies (issue 1809, ADR-0014 §4)
+
+`authority` runs right before the first proxy stage (`vault`). Its script, `DeployUpgradeAuthority.s.sol`, deploys only the `ProposerFloorTimelock` every proxy names as its upgrade authority (the Safe its one proposer and canceller, the executor open, no admin), with the handover's Safe and delay checks, and writes `upgrade-authority.json` (`timelock`, `timelock_codehash`, `safe`, `min_delay`, `deployment_kind`). It grants no role on any Robot Money contract. Every proxy stage reads that timelock as `UPGRADE_AUTHORITY` and the sheet's `UPGRADE_MODE` (`upgradeable` or `frozen-at-deploy`, no default); the `vault` stage also reads `EXCLUSION_LEDGER_FACTORY` (the libs manifest's `exclusion_ledger_factory`). The handover stage (`timelock`) reads the same timelock as `TIMELOCK_ADDRESS`, reuses it, and refuses unless every proxy it hands over names it. So the deployer never holds an upgrade path, not even between stages. The publish-contracts runner reads every proxy back right after its stage (implementation slot, empty admin and beacon slots, authority, mode, frozen flag, initialization) and stops the run on any miss.
 
 ## Required env (no defaults)
 

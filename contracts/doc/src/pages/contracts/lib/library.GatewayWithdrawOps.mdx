@@ -1,0 +1,298 @@
+---
+title: "GatewayWithdrawOps"
+description: "The policy checks of `RobotMoneyGateway.withdraw`, and the policy checks, intent hash and multi-leg execution of `RobotMoneyGateway.withdrawFromRouter`. A CREATE2-linked library: `public` functions run as the gateway through `DELEGATECALL`, so `address(this)` is the gateway proxy, `msg.sender` is the agent, token transfers and approvals are the gateway's, and the policy is read from the gateway's own storage."
+---
+
+# GatewayWithdrawOps
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/GatewayWithdrawOps.sol)
+
+**Title:** GatewayWithdrawOps
+
+The policy checks of `RobotMoneyGateway.withdraw`, and the policy checks, intent hash
+and multi-leg execution of `RobotMoneyGateway.withdrawFromRouter`. A CREATE2-linked library: `public` functions run
+as the gateway through `DELEGATECALL`, so `address(this)` is the gateway proxy,
+`msg.sender` is the agent, token transfers and approvals are the gateway's, and the
+policy is read from the gateway's own storage.
+
+<i>
+
+Why it exists (ADR-0014 §9): it keeps the gateway under EIP-170 with the 1,024-byte margin
+the ADR requires. The gateway keeps the AGENT_ROLE gate, `nonReentrant`, the entry gas
+floor (measured in the gateway's own frame), the rolling-window accrual, the payment-id
+reservation and the event. No pause applies to this path (core 1494). Errors mirror the
+gateway's declarations (same selectors).
+
+</i>
+
+## Constants
+
+### OP_WITHDRAW_ROUTER
+
+<i>
+
+Mirror of `RobotMoneyGateway.OP_WITHDRAW_ROUTER`: namespaces router-withdrawal payment ids
+away from the three sibling op kinds (L-12).
+
+</i>
+
+```solidity
+uint8 internal constant OP_WITHDRAW_ROUTER = 4;
+```
+
+## Functions
+
+<a id="checkwithdraw-igateway-agentpolicy-address-address-uint256-uint64-uint256"></a>
+
+### checkWithdraw
+
+Steps 1–5 of `withdraw` against the caller's policy `p`: withdrawal enabled, `shares`
+within `(0, maxWithdrawPerPayment]`, deadline inside `(now, now + maxDeadlineSkew]`,
+policy active and not expired, and `sourceVault` the pinned vault and, when the policy's
+`allowedSourceVaults` is non-empty, listed there.
+
+```solidity
+function checkWithdraw(
+        IGateway.AgentPolicy storage p,
+        address pinnedVault,
+        address sourceVault,
+        uint256 shares,
+        uint64 deadline,
+        uint256 maxDeadlineSkew
+    ) public view returns (uint256 maxWithdrawPerWindow, address assetRecipient);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+| pinnedVault | `address` |  |
+| sourceVault | `address` |  |
+| shares | `uint256` |  |
+| deadline | `uint64` |  |
+| maxDeadlineSkew | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxWithdrawPerWindow | `uint256` | The policy's rolling-window cap. |
+| assetRecipient | `address` |       The policy's `assetRecipient`, captured before any external call. |
+
+<a id="checkrouterwithdraw-igateway-agentpolicy-address-address-uint256-uint64-uint256"></a>
+
+### checkRouterWithdraw
+
+Steps 2–6 of `withdrawFromRouter` against the caller's policy `p`: withdrawal enabled,
+deadline inside `(now, now + maxDeadlineSkew]`, policy active and not expired, leg arrays
+parallel and non-empty, every non-zero leg allowed, and the total within the per-payment
+cap.
+
+<i>
+
+The vault set is the caller-supplied `vaults[]` (issue #967, F-03), not the router's live
+weight vector, so a holder can redeem a position the router has reweighted away from; the
+router re-validates each named vault against the registry in `redeemFor`. AZ-GW-3: an
+empty `allowedSourceVaults` is NOT an open allowlist; it means the pinned vault only.
+
+</i>
+
+```solidity
+function checkRouterWithdraw(
+        IGateway.AgentPolicy storage p,
+        address pinnedVault,
+        address[] calldata vaults,
+        uint256[] calldata sharesPerLeg,
+        uint64 deadline,
+        uint256 maxDeadlineSkew
+    ) public view returns (RouterWithdraw memory w);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `IGateway.AgentPolicy` |  |
+| pinnedVault | `address` |  |
+| vaults | `address[]` |  |
+| sharesPerLeg | `uint256[]` |  |
+| deadline | `uint64` |  |
+| maxDeadlineSkew | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `RouterWithdraw` |  |
+
+<a id="routerwithdrawpaymentid-bytes32-uint256-address-uint256-uint256-bytes32"></a>
+
+### routerWithdrawPaymentId
+
+The router-withdrawal payment id. DEADLINE INTENTIONALLY EXCLUDED (a deadline is
+liveness, not intent). The explicit `vaults`/`sharesPerLeg` are committed so two
+withdrawals naming different legs never collide (#967, NC-5), and `minAssetsPerLeg` is
+bound so a replay can never re-execute the same order under a weaker (e.g. zeroed)
+slippage floor (GW-5 / F-11). Runs as the gateway: `address(this)` is the gateway
+proxy and `msg.sender` the agent.
+
+```solidity
+function routerWithdrawPaymentId(
+        bytes32 orderId,
+        uint256 totalShares,
+        address[] calldata vaults,
+        uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
+        bytes32 idempotencyKey
+    ) public view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| orderId | `bytes32` |  |
+| totalShares | `uint256` |  |
+| vaults | `address[]` |  |
+| sharesPerLeg | `uint256[]` |  |
+| minAssetsPerLeg | `uint256[]` |  |
+| idempotencyKey | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="executerouterwithdraw-iportfoliorouter-routerwithdraw-address-uint256-uint256"></a>
+
+### executeRouterWithdraw
+
+Steps 11–14 of `withdrawFromRouter`: pull each non-zero leg's shares from
+`w.shareHolder` into the gateway, approve the router for exactly that amount, call
+`router.redeemFor` (USDC goes straight to `w.assetRecipient`, each leg under its
+caller-supplied floor, with the agent's real deadline), clear the approvals, and require
+the gateway's share balance of every leg vault to be unchanged.
+
+<i>
+
+The callers' state effects (payment id, rolling window) are written before this runs
+(CEI), and the gateway holds `nonReentrant`.
+
+</i>
+
+```solidity
+function executeRouterWithdraw(
+        IPortfolioRouter router,
+        RouterWithdraw memory w,
+        address[] memory vaults,
+        uint256[] memory sharesPerLeg,
+        uint256[] memory minAssetsPerLeg
+    ) public returns (uint256[] memory assetsPerLeg);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router | `IPortfolioRouter` |  |
+| w | `RouterWithdraw` |  |
+| vaults | `address[]` |  |
+| sharesPerLeg | `uint256[]` |  |
+| minAssetsPerLeg | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assetsPerLeg | `uint256[]` |  |
+
+## Errors
+
+### WithdrawalNotEnabled
+
+```solidity
+error WithdrawalNotEnabled();
+```
+
+### DeadlineExpired
+
+```solidity
+error DeadlineExpired();
+```
+
+### DeadlineTooFar
+
+```solidity
+error DeadlineTooFar();
+```
+
+### AgentNotAuthorized
+
+```solidity
+error AgentNotAuthorized();
+```
+
+### AgentPolicyExpired
+
+```solidity
+error AgentPolicyExpired();
+```
+
+### RouterLegLengthMismatch
+
+```solidity
+error RouterLegLengthMismatch();
+```
+
+### InvalidSourceVault
+
+```solidity
+error InvalidSourceVault();
+```
+
+### InvalidAmount
+
+```solidity
+error InvalidAmount();
+```
+
+### SharesExceedWithdrawPerPaymentCap
+
+```solidity
+error SharesExceedWithdrawPerPaymentCap();
+```
+
+### ShareCustodyInvariantViolated
+
+```solidity
+error ShareCustodyInvariantViolated();
+```
+
+## Structs
+
+### RouterWithdraw
+
+What `checkRouterWithdraw` hands back to the gateway.
+
+```solidity
+struct RouterWithdraw {
+        uint256 totalShares;
+        address shareHolder;
+        address assetRecipient;
+        uint256 maxWithdrawPerWindow;
+        uint64 deadline;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalShares | `uint256` | Sum of `sharesPerLeg`, for the per-payment and window caps. |
+| shareHolder | `address` | The policy's `shareReceiver`: whose shares are pulled. |
+| assetRecipient | `address` | The policy's `assetRecipient`: where every leg's USDC goes. |
+| maxWithdrawPerWindow | `uint256` | The policy's rolling-window cap. |
+| deadline | `uint64` | The agent's deadline, forwarded to the router (F-11). |
+

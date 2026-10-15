@@ -377,6 +377,16 @@ jobs:
           echo "VAULT_ADDRESS=$VAULT" >> $GITHUB_ENV
           GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_RUNTIME_HASH=$GATEWAY_RUNTIME_HASH" >> $GITHUB_ENV
+          # QA plan P3: the gateway is a proxy (ADR-0014); rmpc signs only against the
+          # implementation whose code hash the config pins.
+          GATEWAY_IMPLEMENTATION_HASH=$(jq -r '.gateway_implementation_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
+          echo "GATEWAY_IMPLEMENTATION_HASH=$GATEWAY_IMPLEMENTATION_HASH" >> $GITHUB_ENV
+          # Issue 1810: the vault the deposit lands in is a proxy too; rmpc pins its logic in
+          # proxy_implementation_hashes. Read its ERC-1967 implementation and hash that code.
+          VAULT_IMPL_WORD=$(cast storage "$VAULT" 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url "$RPC")
+          VAULT_IMPL="0x${VAULT_IMPL_WORD: -40}"
+          VAULT_IMPLEMENTATION_HASH=$(cast keccak "$(cast code "$VAULT_IMPL" --rpc-url "$RPC")")
+          echo "VAULT_IMPLEMENTATION_HASH=$VAULT_IMPLEMENTATION_HASH" >> $GITHUB_ENV
           AGENT_ROLE=$(cast call "$GATEWAY" "AGENT_ROLE()(bytes32)" --rpc-url "$RPC")
 
           # 1. The deploy authorized nothing: the generated key has no owner and no AGENT_ROLE.
@@ -469,6 +479,8 @@ jobs:
           usdc_address          = "$USDC_ADDRESS"
           vault_address         = "$VAULT_ADDRESS"
           gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
+          gateway_implementation_hashes = ["$GATEWAY_IMPLEMENTATION_HASH"]
+          proxy_implementation_hashes = ["$VAULT_IMPLEMENTATION_HASH"]
           state_dir             = "$STATE_DIR"
 
           [signer]

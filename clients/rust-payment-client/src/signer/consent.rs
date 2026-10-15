@@ -10,7 +10,8 @@
 //! module rebuilds the gateway's digest byte for byte:
 //!
 //! ```text
-//! domain = EIP712Domain(name "RobotMoneyGateway", version "1",
+//! domain = EIP712Domain(name "RobotMoneyGateway",
+//!                       version = gateway.implementationVersion(),
 //!                       chainId, verifyingContract = gateway)
 //! struct = AgentConsent(address agent, address owner,
 //!                       address shareReceiver, uint256 nonce)
@@ -21,6 +22,11 @@
 //! `nonce` is `agentConsentNonce(agent)` at signing time; each successful
 //! reveal advances it, so one signature authorizes once. The signature layout
 //! the gateway reads is `r ‖ s ‖ v` (65 bytes, `v` in {27, 28}, low `s`).
+//!
+//! The domain `version` is the gateway implementation version the caller read
+//! from `implementationVersion()` at signing time (ADR-0014 §10, QA plan
+//! Decisions D5). An upgrade that changes what a consent means bumps it, so a
+//! consent signed before that upgrade never verifies after it.
 //!
 //! The signer trait takes this struct, never a raw digest, so the agent key
 //! still exposes no generic signing oracle (see [`super::AgentSigner`]).
@@ -41,12 +47,14 @@ const EIP712_DOMAIN_TYPE: &str =
 /// The gateway's EIP-712 domain name.
 pub const DOMAIN_NAME: &str = "RobotMoneyGateway";
 
-/// The gateway's EIP-712 domain version.
+/// The domain version of the first gateway release (`implementationVersion()`
+/// returns `"1"`). Signing never assumes it: `rmpc agent-consent` reads the
+/// live value. It names the golden vector below.
 pub const DOMAIN_VERSION: &str = "1";
 
 /// One consent: everything the digest binds except the agent, which is the
 /// signer's own address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConsent {
     /// The depositor that will call `revealAuthorization` and own the binding.
     pub owner: Address,
@@ -58,8 +66,11 @@ pub struct AgentConsent {
     pub nonce: U256,
     /// The chain the gateway lives on (the domain's `chainId`).
     pub chain_id: u64,
-    /// The gateway address (the domain's `verifyingContract`).
+    /// The gateway address (the domain's `verifyingContract`): the proxy.
     pub gateway: Address,
+    /// `implementationVersion()` of the live gateway implementation (the
+    /// domain's `version`, QA plan Decisions D5).
+    pub version: String,
 }
 
 impl AgentConsent {
@@ -68,7 +79,7 @@ impl AgentConsent {
         let mut buf = Vec::with_capacity(5 * 32);
         buf.extend_from_slice(keccak256(EIP712_DOMAIN_TYPE.as_bytes()).as_slice());
         buf.extend_from_slice(keccak256(DOMAIN_NAME.as_bytes()).as_slice());
-        buf.extend_from_slice(keccak256(DOMAIN_VERSION.as_bytes()).as_slice());
+        buf.extend_from_slice(keccak256(self.version.as_bytes()).as_slice());
         buf.extend_from_slice(&U256::from(self.chain_id).to_be_bytes::<32>());
         buf.extend_from_slice(self.gateway.into_word().as_slice());
         keccak256(buf)
@@ -132,6 +143,7 @@ mod tests {
             nonce: U256::from(3u64),
             chain_id: 8453,
             gateway: address!("0000000000000000000000000000000000000b00"),
+            version: DOMAIN_VERSION.to_string(),
         }
     }
 
@@ -169,10 +181,14 @@ mod tests {
                 nonce: U256::ZERO,
                 ..golden()
             },
+            AgentConsent {
+                version: "2".to_string(),
+                ..golden()
+            },
         ] {
             let domain = eip712_domain! {
                 name: DOMAIN_NAME,
-                version: DOMAIN_VERSION,
+                version: consent.version.clone(),
                 chain_id: consent.chain_id,
                 verifying_contract: consent.gateway,
             };
@@ -190,7 +206,8 @@ mod tests {
     }
 
     /// Every bound field moves the digest: a consent for one owner, share
-    /// receiver, nonce, chain or gateway never verifies for another.
+    /// receiver, nonce, chain, gateway or implementation version never
+    /// verifies for another (the version is QA plan Decisions D5).
     #[test]
     fn every_bound_field_changes_the_digest() {
         let base = golden().digest(GOLDEN_AGENT);
@@ -214,6 +231,10 @@ mod tests {
             },
             AgentConsent {
                 gateway: other,
+                ..golden()
+            },
+            AgentConsent {
+                version: "2".to_string(),
                 ..golden()
             },
         ] {

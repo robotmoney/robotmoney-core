@@ -12,6 +12,7 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/libs.json",
+      "manifestNotes": "ADR-0014 §9 (issue 1809): besides TickMath the stage deploys VaultAdapterOps, GatewayWindows, GatewayAuth and GatewayWithdrawOps (forge's own CREATE2 library deployment; the vault and gateway stages compile with the same settings, so forge finds them deployed and links the same addresses) and the ExclusionLedgerFactory (CREATE2, read by the vault stage as EXCLUSION_LEDGER_FACTORY). Fields: tick_math, vault_adapter_ops, gateway_windows, gateway_auth, gateway_withdraw_ops, exclusion_ledger_factory. BasketSwapOps is deployed by the first basket stage, with the basket libraries.",
       "libraries": [],
       "vault": null
     },
@@ -31,6 +32,25 @@
       "vault": null
     },
     {
+      "name": "authority",
+      "kind": "forge",
+      "script": "contracts/script/DeployUpgradeAuthority.s.sol:DeployUpgradeAuthority",
+      "requiredEnv": [
+        "SAFE_ADDRESS",
+        "SAFE_OWNERS",
+        "SAFE_THRESHOLD",
+        "TIMELOCK_MIN_DELAY",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/upgrade-authority.json",
+      "manifestNotes": "ADR-0014 §4 (issue 1809): the ProposerFloorTimelock every proxy names as its upgrade authority, deployed before every proxy with the Safe as its one proposer and canceller, the executor open and no admin. Fields: timelock, timelock_codehash, safe, min_delay, deployment_kind. Each proxy stage reads its address as UPGRADE_AUTHORITY, the timelock stage (the role handover) reuses it as TIMELOCK_ADDRESS. It grants no role on any Robot Money contract.",
+      "libraries": [],
+      "vault": null
+    },
+    {
       "name": "vault",
       "kind": "forge",
       "script": "contracts/script/DeployVault.s.sol:DeployVault",
@@ -42,6 +62,9 @@
         "SEED_SHARE_RECEIVER",
         "SEED_DEPOSIT_USDC",
         "EXIT_FEE_BPS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
+        "EXCLUSION_LEDGER_FACTORY",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -60,6 +83,8 @@
         "ADMIN_ADDRESS",
         "VAULT_ADDRESS",
         "VAULT_NAME",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -77,6 +102,8 @@
         "ADMIN_ADDRESS",
         "REGISTRY_ADDRESS",
         "VAULT_ADDRESS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -96,6 +123,8 @@
         "SHARE_RECEIVER_ADDRESS",
         "VAULT_ADDRESS",
         "ROUTER_ADDRESS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -129,6 +158,8 @@
         "ADMIN_ADDRESS",
         "GATEWAY_ADDRESS",
         "RECEIPT_ADMIN_ADDRESS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -153,6 +184,8 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -185,6 +218,8 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -216,6 +251,8 @@
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
         "ROUTER_DEFAULT_BPS",
+        "UPGRADE_AUTHORITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -251,6 +288,7 @@
         "IC_POLICY_ADDRESS",
         "CONSENSUS_RECEIPT_ADDRESS",
         "RECEIPT_ADMIN_ADDRESS",
+        "TIMELOCK_ADDRESS",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -292,6 +330,7 @@
         "EXIT_FEE_BPS",
         "NAV_DEVIATION_BPS",
         "MIN_POOL_LIQUIDITY",
+        "UPGRADE_MODE",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -417,6 +456,73 @@
       "path": "contracts/lib/BasketViews.sol"
     }
   ],
+  "proxyArtifact": "ERC1967Proxy",
+  "proxies": [
+    {
+      "name": "rmUSDC",
+      "stage": "vault",
+      "field": "vault",
+      "implementationField": "vault_implementation",
+      "artifact": "RobotMoneyVault"
+    },
+    {
+      "name": "registry",
+      "stage": "registry",
+      "field": "registry",
+      "implementationField": "registry_implementation",
+      "artifact": "VaultRegistry"
+    },
+    {
+      "name": "router",
+      "stage": "router",
+      "field": "router",
+      "implementationField": "router_implementation",
+      "artifact": "PortfolioRouter"
+    },
+    {
+      "name": "gateway",
+      "stage": "gateway",
+      "field": "gateway",
+      "implementationField": "gateway_implementation",
+      "artifact": "RobotMoneyGateway"
+    },
+    {
+      "name": "icpolicy",
+      "stage": "ic-policy",
+      "field": "policy",
+      "implementationField": "policy_implementation",
+      "artifact": "InvestmentCommitteePolicy"
+    },
+    {
+      "name": "receipt",
+      "stage": "ic-policy",
+      "field": "consensus_receipt",
+      "implementationField": "consensus_receipt_implementation",
+      "artifact": "ConsensusRecommendationReceipt"
+    },
+    {
+      "name": "rmPROTO",
+      "stage": "proto",
+      "field": "vault",
+      "implementationField": "vault_implementation",
+      "artifact": "ProtocolAssetVault"
+    },
+    {
+      "name": "rmAGENT",
+      "stage": "agent",
+      "field": "vault",
+      "implementationField": "vault_implementation",
+      "artifact": "AgentTokenVault"
+    },
+    {
+      "name": "rmRWA",
+      "stage": "rwa",
+      "field": "vault",
+      "implementationField": "vault_implementation",
+      "artifact": "RwaBasketVault"
+    }
+  ],
+  "proxyNotes": "ADR-0014 §1 (issue 1809): the nine contracts that run behind their own ERC1967Proxy, with the stage that deploys each, the manifest field of the proxy address and of its implementation, and the implementation's build artifact. Every proxy stage writes upgrade_authority, upgrade_mode and <field>_layout_id (ADR-0014 §8: the sha256 of the contract's committed storage-layout snapshot) next to them and reads UPGRADE_AUTHORITY (the authority stage's timelock) and UPGRADE_MODE (the sheet: upgradeable or frozen-at-deploy, no default). The list equals contracts/test/fixtures/storage-layout/proxied.txt.",
   "artifacts": {
     "gateway": "RobotMoneyGateway",
     "router": "PortfolioRouter",

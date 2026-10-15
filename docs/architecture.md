@@ -5,7 +5,9 @@
 > `docs/technical/smart-contracts.md`, and accepted ADRs under
 > `docs/technical/`. This document describes how Robot Money is built.
 > Product promises and user workflows live in the PRD; delivery order
-> lives on the Plan tracking issue (#109).
+> lives on the GitHub Phase issues (label `phase-plan`) under the release
+> tracking issue (core 1418, Release 0.4.0). The old Plan issue (#109)
+> closed on 2026-08-26.
 
 ## 1. Overview
 
@@ -190,16 +192,28 @@ The current production-deployed source-backed vault is
 `RobotMoneyVault`, an ERC-4626 USDC vault with rmUSDC shares,
 OpenZeppelin access control, a deposit pause, reentrancy protection,
 caps, an exit fee ceiling, adapter routing, rebalance controls, and
-emergency shutdown. It is a direct non-proxy deployment on Base.
+emergency shutdown. The rmUSDC on Base today (Deploy 2) is a direct
+non-proxy deployment.
 
-The target release architecture uses an independent UUPS proxy for each
-approved stateful core contract, with upgrades controlled by the Safe through
-the admin timelock. Test, demo, rehearsal, and contained mainnet test instances
-stay upgradeable. A final mainnet proxy must either freeze upgrades in its
-deployment transaction or be frozen by a delayed governance action after an
-explicit production proving period. Existing direct addresses cannot acquire
-this behavior in place. The detailed scope, cutover, and safety gates are in
-`docs/technical/contract-upgradeability-plan.md`.
+The release architecture runs each of the nine stateful core contracts
+(`RobotMoneyVault`, the three `BasketVault` kinds, `PortfolioRouter`,
+`VaultRegistry`, `RobotMoneyGateway`, `InvestmentCommitteePolicy` and
+`ConsensusRecommendationReceipt`) behind its own OZ `ERC1967Proxy` with UUPS
+logic from `contracts/lib/GovernedUpgrade.sol` (ADR-0014, implemented by P1).
+Each proxy is initialized in its deployment transaction and stores one upgrade
+authority, the deployment's `ProposerFloorTimelock`, so upgrades are controlled
+by the Safe through the admin timelock and no role confers upgrade power. Each
+proxy reads `upgradeAuthority()` and `upgradesFrozen()` on chain. Test, demo,
+rehearsal, and contained mainnet test instances deploy in `Upgradeable` mode.
+A final mainnet proxy either deploys `FrozenAtDeploy` or is frozen by a
+delayed `freezeUpgrades` after an explicit production proving period; the
+freeze is one-way and bound to the reviewed implementation and code hash, and
+it never pauses or alters withdrawals. The fixed ceilings stay `constant`s
+in the implementation (ADR-0014 §7). Existing direct addresses cannot acquire
+this behavior in place; holders move by choice (ADR-0009). The scope, cutover,
+and safety gates are in ADR-0014 and
+`docs/technical/contract-upgradeability-plan.md`; the release steps are in
+`docs/operations/contract-release-runbooks.md` §4.12.
 
 The source tree also contains the basket-vault family — an abstract
 `BasketVault` base with hybrid NAV model: Uniswap V3 TWAP pricing for
@@ -299,9 +313,12 @@ per-vault withdrawal caps over a fixed window and depends on
 replaces the previous in-contract `isPrototype()` /
 `prototypeOverride` / `nonPrototypeAttested` machinery (issue #475) so
 the same contracts ship into every environment with no per-environment
-code variant. The router is not yet on the production mainnet
-deployment manifest; the contract surface is in place, audit and
-mainnet onboarding remain planned work on the Plan tracking issue (#109).
+code variant. The router is on every deployment manifest: the `router`
+stage of `scripts/deploy/stage-table.json` deploys it and writes
+`router.json`, and Deploy 2 on Base 8453 recorded it
+(`deployments/8453/deploy-2/router.json`). Its post-audit changes wait for
+the external audit before the final deployment (`docs/audits.md`, the
+`PortfolioRouter.sol` row).
 
 #### 4.2.1 What "eligible for routing" means
 
@@ -420,22 +437,27 @@ background implementation details.
 
 ### 4.5 Protocol Admin Authority
 
-All five protocol contracts (`RobotMoneyVault`, `RobotMoneyGateway`,
-`VaultRegistry`, `PortfolioRouter`, `RouterGovernance`) use OpenZeppelin
-`AccessControl` with an `ADMIN_ROLE` that governs privileged operations:
-adapter add/remove, cap and fee changes, vault registration and
-deregistration, pause-role grants, governance parameter changes, and
-`ADMIN_ROLE` membership changes.
+Every protocol contract uses OpenZeppelin `AccessControl` with an
+`ADMIN_ROLE`. A deployment has ten of them: the four vaults
+(`RobotMoneyVault` for rmUSDC, and the `BasketVault` kinds
+`ProtocolAssetVault`, `AgentTokenVault` and `RwaBasketVault`) and six
+singletons, `RobotMoneyGateway`, `VaultRegistry`, `PortfolioRouter`,
+`RouterGovernance`, `InvestmentCommitteePolicy` (§4.8) and
+`ConsensusRecommendationReceipt` (§4.9). `ADMIN_ROLE` governs privileged
+operations: adapter and basket-asset add/remove, cap and fee changes, vault
+registration and deregistration, pause-role grants, governance and
+committee parameter changes, and `ADMIN_ROLE` membership changes.
 
-On-chain enforcement requirement: `ADMIN_ROLE` on all five contracts
+On-chain enforcement requirement: `ADMIN_ROLE` on all ten contracts
 must be held by a deployed `TimelockController`. Every privileged action
 is Safe → `TimelockController` → target. The Safe is a canonical SafeL2
 1.4.1 proxy from the canonical factory with threshold ≥ 2, created by the
 deploy's stage 0 (`safe`). It holds `PROPOSER_ROLE` and CANCELLER_ROLE on
 the controller. EXECUTOR_ROLE is open (`address(0)`) so any address can
-execute an already-authorized operation after the delay (not yet
-implemented: core #1521; `DeployTimelock` still sets the Safe as
-executor). `rmpc` is not a governance signer. No EOA may hold
+execute an already-authorized operation after the delay (core #1521:
+`DeployTimelock` grants `EXECUTOR_ROLE` to `address(0)` only and records
+`executorPolicy` `open` in `timelock.json`; the stage 12 verifier checks
+both). `rmpc` is not a governance signer. No EOA may hold
 `ADMIN_ROLE` directly in production. All high-risk admin operations must
 pass through the schedule → delay → execute flow. The minimum delay has a
 48-hour (172800 s) floor on Base (chain id 8453), enforced by
@@ -597,8 +619,8 @@ line of this lifecycle authorises forced or admin-driven migration.
 
 ### 4.8 Investment Committee Policy Contract
 
-The IC policy contract is a **signalling-only registry** — a sixth
-protocol contract alongside the five in §4.5 — separate from
+The IC policy contract is a **signalling-only registry** — one of the
+ten timelock-governed protocol contracts in §4.5 — separate from
 `RouterGovernance` (see the boundary in §2.4).
 
 **State.** Metadata only — no USDC, share tokens, or basket assets. Two
@@ -620,8 +642,8 @@ treasury-moving role on another contract. Its only outputs are storage
 writes and events. This is the on-chain expression of `docs/prd.md` §12
 INV-4 and is mandatory (§8).
 
-**Roles and authority.** Follow the conventions the five protocol
-contracts already use: OpenZeppelin `AccessControl` with a self-administered
+**Roles and authority.** Follow the conventions the other protocol
+contracts in §4.5 use: OpenZeppelin `AccessControl` with a self-administered
 `ADMIN_ROLE`, the last-admin floor (`AdminFloorAccessControl`, so the sole
 admin cannot be removed), and role separation (an address that allowlists
 agents must not also be a committee agent). `ADMIN_ROLE` is held by the
@@ -988,8 +1010,9 @@ Agent ownership and policy rules (issue #1476):
 - a caller without `ADMIN_ROLE` binds an agent other than itself only with
   the agent's consent (issue #1791): an EIP-712
   `AgentConsent(agent, owner, shareReceiver, nonce)` signature by the agent
-  key, in the gateway's domain (`RobotMoneyGateway`, `1`, chain id, gateway
-  address), passed to `revealAuthorization`. Each use advances
+  key, in the gateway's domain (`RobotMoneyGateway`, `implementationVersion()`,
+  chain id, gateway address), passed to `revealAuthorization`. An upgrade that
+  bumps the version voids the consents signed before it (ADR-0014 §10). Each use advances
   `agentConsentNonce(agent)`, so one signature authorizes once. An agent
   revealing for itself needs no signature. An `ADMIN_ROLE` caller takes no
   consent, and an agent bound that way can free itself with `releaseAgent`.
@@ -1084,7 +1107,11 @@ explorer API plus live chain reads for vault state. It contains:
   get back?": it shows the receipt token plus the underlying basket
   assets — live `shortlist()` entries for VOLATILE and active-SPECULATIVE
   basket vaults, and static labels for STABLE_YIELD and inactive
-  SPECULATIVE vaults.
+  SPECULATIVE vaults. An Upgrades section (`UpgradeStatePanel`, ADR-0014,
+  QA plan P3) discloses whether the vault is a direct deployment or a
+  proxy, and for a proxy the live ERC-1967 implementation, its code hash,
+  the upgrade authority (the timelock) and whether it is upgradeable or
+  frozen. It reads these from the chain, never from the explorer.
 - Portfolio Router view: active vaults, current target weights, pending
   timelock weight operation (if any), and historical weight changes.
 - Protocol stats: total TVL across all active vaults, number of unique
@@ -1183,9 +1210,12 @@ to the live address. No test needs to hold RM. `RouterGovernance` reads no RM
 balance: router weights are applied by the weight setter through the
 timelock, and nothing in governance reads a token balance. rmAGENT
 launches paused and holding RM: `config/agent-token-shortlist.json` lists RM
-only, on the owner-funded Uniswap V3 RM/USDC pool at fee 10000. The owner
-funds the pool and raises its observation cardinality before the deploy,
-because `BasketVault.addAsset` refuses a pool below those floors (core 1554).
+only, on the Uniswap V4 RM/USDC pool with fee 2.91% (§4.1; owner decision
+2026-10-08, which replaced the V3 RM/USDC pool at fee 10000 because that
+pool has no in-range liquidity). rmAGENT registers `UniswapV4PriceRecorder`
+as RM's pool, and `BasketVault.addAsset` refuses it below the observation
+floors (core 1554), so the deploy waits for a full TWAP window of recorded
+history before the `agent` stage (core 1676).
 
 ### 5.4 Explorer Indexer and API
 
@@ -1207,6 +1237,11 @@ integrators who need activity feeds without running their own indexer.
 - Protocol stats: aggregate TVL across all active vaults, unique
   depositor count, total deposits and withdrawals by volume and count,
   and a global activity feed of recent events across all vaults.
+- Upgrades (`GET /v1/upgrades`, QA plan P3): each watched proxy's newest
+  implementation and freeze state, with the `Upgraded` and `UpgradesFrozen`
+  events behind them, from the `proxy_upgrade_events` table (migration
+  0024, rolled back on reorg). It is disclosure only: rmpc and the dapp read
+  the ERC-1967 slot from the chain. Fields are in `docs/explorer-api.md`.
 
 **Account-scope endpoints** (address parameter required):
 
@@ -1366,6 +1401,27 @@ and discovering that mid-incident is worse than at boot. The committed
 `pause_and_alert` mode, so starting from it unmodified exits immediately.
 Because the exit costs alerting too, it must be caught by the liveness
 mechanism below; it is (issue #1378).
+
+**Standing weight-setter-path check (issue 1698).** When `[governance]
+enabled = true`, each poll reads two role sets with `eth_call` and pages
+`weight_setter_path_drift:<chain>` when either differs from the config: the
+router's `WEIGHT_SETTER_ROLE` must be held only by `weight_setter_address`
+(`RouterGovernance`), and the weight setter's `ADMIN_ROLE` only by
+`timelock_address`. Another holder could change router weights without a
+consensus receipt or without the timelock delay. The stage 12 verifier checks
+the same sets once at deploy; this check catches a grant executed later. It
+resolves when both sets match again, and it never pauses. It replaced the
+`quorumThreshold()` floor check, whose view issue 1698 deleted. Verified by
+`services/watchdog/tests/governance_weight_setter_rpc.rs`.
+
+**Missed freeze-deadline alert (issue 1809, ADR-0014 §5).** A release deployed
+`upgradeable` with a proving period names a freeze deadline, and nothing on
+chain enforces it. When `[freeze_deadline] enabled = true`, each poll from
+`deadline_unix` on reads `upgradesFrozen()` on every configured proxy and pages
+`freeze_deadline_missed:<chain>` while any reads false, naming each one. It
+resolves when all read frozen, reads nothing before the deadline, and never
+pauses, upgrades or freezes. A failed read is logged, never taken as frozen
+(`services/watchdog/src/freeze_deadline.rs`, QA plan v1 L1).
 
 #### Watchdog liveness and deployment
 
@@ -1546,12 +1602,14 @@ are permitted: no test-only subclasses that alter readiness, no
 build-time branches, no `if (env == "test")` logic, no spoofed users
 or state.
 
-For the planned upgrade path, the same proxy and implementation artifacts are
-used in every environment. Upgrade/freeze mode is initialized state, and a
-one-way freeze is a Safe → timelock action. Final mainnet deployment must
-choose freeze-at-deploy or a reviewed proving period with a freeze deadline;
-the release sheet records and verifies the choice. This does not change the
-status of current direct deployments.
+The upgrade path (ADR-0014) uses the same `ERC1967Proxy` and implementation
+artifacts in every environment. The upgrade mode is initialized state
+(`UPGRADE_MODE` in the sheet: `upgradeable` or `frozen-at-deploy`), never a
+build variant, and a one-way freeze is a Safe → timelock action (govern row
+`freeze-proxy`). Final mainnet deployment must choose freeze-at-deploy or a
+reviewed proving period with a freeze deadline; the release sheet records the
+choice and the stage 12 verifier checks it on every proxy. This does not
+change the status of current direct deployments.
 
 Production-readiness for a vault — whether the Portfolio Router may
 weight it and route USDC into it — is expressed as **registry state**:
@@ -1634,10 +1692,16 @@ canonicalization or signature failure refuses submission; an unreachable URI or
 digest mismatch remains visible as an unverified indexed record; and an
 unreleased or stale receipt is non-actionable.
 
-## 8. Security Constraints
+## 8. Guardrails (Security Constraints)
 
 These constraints are mandatory for implementation plans derived from
-this architecture:
+this architecture. Each is a checkable claim: an invariant must always
+hold, and a negative invariant must never happen. This section summarises
+`docs/technical/security-model.md`, which is canonical for the attack
+taxonomy and the required control for each attack. The section number
+stays §8 because other documents cite it by number.
+
+### Invariants
 
 - Users and agents must call vaults or the Portfolio Router, not
   adapters or raw underlying venues.
@@ -1647,14 +1711,10 @@ this architecture:
   asset to a caller-supplied recipient (INV-1, the arbitrary-recipient
   `rescueTokens`/`rescueUsdc` functions are deleted); every protocol or
   depositor asset is redeemable or absorbed into NAV, with non-whitelisted
-  foreign tokens getting a permissionless `sweepForeignToken` to a single
-  hardcoded quarantine address (INV-2); and the fee recipient, fee
-  parameters, and quarantine address change only through the
+  foreign tokens getting a permissionless `sweepForeignToken` to a
+  quarantine address no caller chooses (INV-2); and the fee recipient, fee
+  parameters, and the governed quarantine address change only through the
   `TimelockController` (INV-3).
-- The permissionless `sweepForeignToken` must move only NON-protected
-  tokens (never USDC, the share token, a basket asset, or a protected
-  receipt token) and only to the fixed `ForeignTokenQuarantine.QUARANTINE`
-  address — never a caller-supplied recipient.
 - Vaults and router legs must enforce caps before accepting deposits.
 - Any router leg with slippage, oracle, liquidity, or quote-freshness
   risk must surface bounds before signing.
@@ -1665,20 +1725,44 @@ this architecture:
   assets out, and policy-configured recipient before signing and before
   execution.
 - `rmpc` must verify chain id, configured addresses, code hash, role,
-  policy, cap usage, allowance, balance, and fee caps before signing.
+  policy, cap usage, allowance, balance, and fee caps before signing. For a
+  proxied gateway the code hash check covers the live implementation too:
+  its code hash must be in `gateway_implementation_hashes`, read at one block
+  (`ErrImplementationNotApproved`, ADR-0014, QA plan P3). Every gateway write
+  runs it, the committee `vote-submit` and `receipt submit` included. The
+  vault a deposit lands in or a withdraw redeems from, the router and every
+  router leg are checked the same way against `proxy_implementation_hashes`
+  (issue 1810).
 - The dapp must decode transaction effects before wallet invocation.
-- Explorer data must not be used as the source of truth for signing or
-  safety decisions.
-- Software-backed credentials are development or low-value fallbacks and
-  must be explicit in config and UI.
+- Software-backed credentials must be explicit in config and UI: `rmpc`
+  signs with its software keystore only when
+  `[signer].allow_software_fallback` is true (else
+  `ErrSoftwareSignerDisallowed`), and prints the production warning first
+  on Base mainnet. A hardware wallet, HSM or KMS is optional, never
+  required (§10 "Production signer vendor").
 - `ADMIN_ROLE` on all protocol contracts must be held by the deployed
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
-- For future proxy deployments, only the Safe-controlled admin timelock may
-  authorize an implementation upgrade or permanently freeze upgrades. A final
-  release must record and verify its freeze choice. Adapter no-proxy and
-  codehash checks continue to apply. See the contract upgradeability plan.
+- On every core proxy, only the Safe-controlled admin timelock may
+  authorize an implementation upgrade or permanently freeze upgrades: it is
+  the one `upgradeAuthority()`, stored at initialization with no setter, and
+  no role confers upgrade power (ADR-0014 §4). A freeze never pauses or
+  alters withdrawals (ADR-0014 §6). A final release must record and verify
+  its freeze choice. Adapter no-proxy and codehash checks continue to apply.
+  See ADR-0014 and the contract upgradeability plan.
+
+### Negative Invariants
+
+- The permissionless `sweepForeignToken` never moves a protected token
+  (USDC, the share token, a basket asset, or a protected receipt token)
+  and never sends to a caller-supplied recipient. Its destination is the
+  timelock-governed `quarantineAddress` on `RobotMoneyVault` and
+  `PortfolioRouter` (the vault's `ExclusionLedger` reads the vault's), and
+  the fixed `ForeignTokenQuarantine.QUARANTINE` address on the basket
+  vaults and the adapters.
+- Explorer data must not be used as the source of truth for signing or
+  safety decisions.
 - The IC policy contract (§4.8) is signalling-only (custody invariant
   INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
   path, never call a vault or `PortfolioRouter.setWeights`, and grant no
@@ -1699,7 +1783,7 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | Plan tracking issue #109 §0 (git history) |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Optional signer classes, never required: a software keystore signs on every chain (owner decisions 2026-10-06 and 2026-10-14). Exact vendor not selected. | §10 "Production signer vendor"; closed Plan issue #109 §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 | Committee memo store | Off-chain rationale store | Host-agnostic by design: the IC contract stores any public `rationale_uri` and binds it with an on-chain `vote_digest` (§4.8, §7.4), so a GitHub gist, IPFS, or any reachable URL is acceptable — tamper-evidence comes from the hash, not the host. | `docs/prd.md` §"Committee"; proposal doc §4 |
 
@@ -1707,13 +1791,13 @@ this architecture:
 
 | Decision | Tradeoff | Recommended default |
 | --- | --- | --- |
-| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
+| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The `router` stage deploys it on every chain and Deploy 2 on Base 8453 recorded it in `router.json` (§4.2). | — |
 | Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
 | Router-weight governance implementation | Resolved: `contracts/RouterGovernance.sol` holds `WEIGHT_SETTER_ROLE` on the Portfolio Router and the timelock holds `ADMIN_ROLE` on it, so the Safe, through the timelock, is the only body that changes router weights. A weight change is one timelock operation, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, that releases the Investment Committee's consensus receipt and applies its vector in one transaction (govern row `apply-receipt`, core 1696; issue 1698). `contracts/script/DeployRouterGovernance.s.sol` grants the deployed `RouterGovernance` the router roles it needs to reach `setWeights` and `setDefaultWeights`; stage 11 points it at the receipt register and grants it `ADMIN_ROLE` there. The contract has no voting path, and there is no voting by token holders or anyone else. | The Safe through the timelock is the only governance body. |
 | Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC at launch; wSOL has no usable pool) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`; not yet implemented: core #1521). See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All ten protocol contracts of §4.5 (four vaults and six singletons) must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all ten contracts to it (stage 11); configure the stage 0 SafeL2 (threshold ≥ 2) as proposer and canceller; executor open (`address(0)`, core #1521). See §4.5 and issue #414. |
 | Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | No HSM/KMS/device-bound signer vendor is chosen, and none is required: every rmpc write, `committee` and `receipt` included, signs with the software keystore on every chain and prints the production warning first on Base mainnet (owner decisions 2026-10-06, issue #1545, and 2026-10-14, QA plan Decision D12). | Keep the signer backend trait stable so an operator who picks HSM/KMS can add it. Hardware stays optional, never required. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
@@ -1735,4 +1819,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP is **not supported** in Robot Money (org-wide decision, 2026-07); agent harnesses invoke `rmpc` as process-per-call. | — (decision closed, not deferred; no MCP implementation). |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| Plan tracking issue #109 (GitHub) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the live plan is the canonical source. | Implementation-plan file references; those were retired 2026-06-09. |
+| GitHub Phase issues (label `phase-plan`) under the release tracking issue (core 1418) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the open Phase issues are the canonical source. The old Plan issue (#109) closed on 2026-08-26. | Implementation-plan file references; those were retired 2026-06-09. |

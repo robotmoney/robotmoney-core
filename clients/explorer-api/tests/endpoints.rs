@@ -984,7 +984,7 @@ async fn stats_total_tvl_leaves_out_retired_vaults() {
     // Retired (status 2) vault that still holds assets.
     let beta = vec![0xbbu8; 20];
     let retired = vec![0xb0u8; 20];
-    let reg_tx = vec![0x10u8; 32];
+    let reg_tx = [0x10u8; 32];
     sqlx::query(
         "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
                               registered_at, registered_block, registered_tx) \

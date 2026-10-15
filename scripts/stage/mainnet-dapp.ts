@@ -155,6 +155,12 @@ export function assertMergedConfigLoopback(configJson: string): void {
 export interface MainnetAddresses {
   gateway: string;
   gatewayCodeHash: string;
+  /**
+   * Issue 1810: keccak256 of the implementation behind the gateway proxy (`gateway.json`
+   * `gateway_implementation_runtime_hash`). Empty for a direct (pre-ADR-0014) gateway, whose
+   * manifest has no such field.
+   */
+  gatewayImplementationHash: string;
   registry: string;
   router: string;
   /** keccak256 of the router's runtime code, as the timelock manifest read it from the chain (`code_hashes.router`). */
@@ -224,6 +230,11 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   if (typeof hash !== "string" || !BYTES32.test(hash) || /^0x0{64}$/.test(hash)) {
     throw new MainnetDappError("manifest-field", `${files.gateway} gateway_runtime_hash is not a non-zero bytes32`);
   }
+  const implHash = g.gateway_implementation_runtime_hash;
+  if (implHash !== undefined && (typeof implHash !== "string" || !BYTES32.test(implHash) || /^0x0{64}$/.test(implHash))) {
+    throw new MainnetDappError("manifest-field", `${files.gateway} gateway_implementation_runtime_hash is not a non-zero bytes32`);
+  }
+  const gatewayImplementationHash = typeof implHash === "string" ? implHash : "";
   const registry = addr(files.registry, "registry", docs[files.registry]!.registry);
   const router = addr(files.router, "router", docs[files.router]!.router);
   const governance = addr(files.governance, "governance", docs[files.governance]!.governance);
@@ -269,7 +280,7 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
   }
-  return { gateway, gatewayCodeHash: hash, registry, router, routerCodeHash, governance, consensusReceipt, timelock, safe, vaults, vaultCodeHashes };
+  return { gateway, gatewayCodeHash: hash, gatewayImplementationHash, registry, router, routerCodeHash, governance, consensusReceipt, timelock, safe, vaults, vaultCodeHashes };
 }
 
 // ─── the environment ─────────────────────────────────────────────────────────
@@ -341,6 +352,8 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_ADDRESS: a.gateway,
     VITE_VAULT_ADDRESS: a.vaults.rmUSDC,
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
+    // Issue 1810: the reviewed implementation behind the gateway proxy; empty for a direct gateway.
+    VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: a.gatewayImplementationHash,
     // Build-time vault and router pins (QA plan U5): vault address -> runtime code hash, and the router's hash.
     VITE_VAULT_EXPECTED_CODE_HASH: JSON.stringify(Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultCodeHashes[k]]))),
     VITE_ROUTER_EXPECTED_CODE_HASH: a.routerCodeHash,

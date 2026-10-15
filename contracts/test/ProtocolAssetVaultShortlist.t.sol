@@ -13,6 +13,8 @@ import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus a
 ///      flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). Mirrors the mock
@@ -94,7 +96,7 @@ contract ProtocolAssetVaultShortlistTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         router = new ShortlistStubSwapRouter();
-        vault = new ProtocolAssetVault(
+        vault = Proxied.protocolAssetVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,
@@ -110,7 +112,11 @@ contract ProtocolAssetVaultShortlistTest is Test {
                 new ShortlistMockPool(address(tokens[i]), address(usdc), POOL_FEE);
             vm.prank(admin);
             vault.addAsset(
-                address(tokens[i]), address(pool), POOL_FEE, address(0), BasketVault.Venue.V3
+                address(tokens[i]),
+                address(pool),
+                POOL_FEE,
+                address(0),
+                BasketAssetConfigGuard.Venue.V3
             );
         }
     }
@@ -183,7 +189,7 @@ contract ProtocolAssetVaultShortlistTest is Test {
     ///         distinguishes this ("No basket assets.") from the failure branch
     ///         ("unavailable"), so the empty case must succeed.
     function test_shortlist_emptyBasketReturnsEmptyArrays() public {
-        ProtocolAssetVault empty = new ProtocolAssetVault(
+        ProtocolAssetVault empty = Proxied.protocolAssetVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,
@@ -220,7 +226,13 @@ contract ProtocolAssetVaultShortlistTest is Test {
             .call(
                 abi.encodeCall(
                     BasketVault.addAsset,
-                    (address(wsol), address(pool), POOL_FEE, address(0), BasketVault.Venue.V3)
+                    (
+                        address(wsol),
+                        address(pool),
+                        POOL_FEE,
+                        address(0),
+                        BasketAssetConfigGuard.Venue.V3
+                    )
                 )
             );
     }

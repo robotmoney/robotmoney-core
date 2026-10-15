@@ -5,9 +5,9 @@ description: "`AccessControl` with a \"last-admin floor\" — the final holder o
 
 # AdminFloorAccessControlCounter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/lib/AdminFloorAccessControlCounter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/AdminFloorAccessControlCounter.sol)
 
-**Inherits:** AccessControl
+**Inherits:** AccessControlUpgradeable
 
 **Title:** AdminFloorAccessControlCounter
 
@@ -38,6 +38,10 @@ mutated, so when an `ADMIN_ROLE` revoke is in flight the current
 member count still includes the account being removed; a count of
 exactly 1 therefore means this is the last admin.
 
+ADR-0014: the parent is OZ `AccessControlUpgradeable` (role data in an ERC-7201
+namespace). `adminCount` is this base's only linear slot; `__gap` reserves the
+rest of a 50-slot block so a later field here never shifts a derived vault's state.
+
 ## Constants
 
 ### FLOOR_ADMIN_ROLE
@@ -58,6 +62,19 @@ Number of accounts currently holding the floor-protected role.
 
 ```solidity
 uint256 public adminCount;
+```
+
+### __gap
+
+<i>
+
+Storage gap (ADR-0014 §8): a new field here takes one slot from the gap, so every
+derived vault's slots stay put. The layout gate allows exactly that and nothing else.
+
+</i>
+
+```solidity
+uint256[49] private __gap;
 ```
 
 ## Functions

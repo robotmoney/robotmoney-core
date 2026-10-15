@@ -20,6 +20,7 @@ import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendation
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -235,7 +236,7 @@ contract SafeIntegrationTest is Test {
         script = new DeployTimelock();
         deployer = address(script);
 
-        vault = new RobotMoneyVault(
+        vault = Proxied.robotMoneyVault(
             usdc,
             type(uint256).max, // tvlCap
             type(uint256).max, // perDepositCap
@@ -245,7 +246,7 @@ contract SafeIntegrationTest is Test {
             deployer
         );
 
-        gateway = new RobotMoneyGateway(
+        gateway = Proxied.robotMoneyGateway(
             usdc,
             vault,
             deployer,
@@ -253,9 +254,9 @@ contract SafeIntegrationTest is Test {
             address(0) // no router yet
         );
 
-        registry = new VaultRegistry(deployer);
+        registry = Proxied.vaultRegistry(deployer);
 
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
 
         governance = new RouterGovernance(address(router), deployer);
 
@@ -663,7 +664,7 @@ contract SafeIntegrationTest is Test {
     /// @notice AC1c: Full Safe+timelock path on RouterGovernance (setReceiptContract,
     ///         the register the weight setter's applyReceipt releases from; issue #1698).
     function test_happyPath_routerGovernance_setReceiptContract() public withSnap {
-        ConsensusRecommendationReceipt register = new ConsensusRecommendationReceipt(
+        ConsensusRecommendationReceipt register = Proxied.consensusRecommendationReceipt(
             deployer, address(gateway), makeAddr("ic-policy-stand-in")
         );
         bytes memory callData =

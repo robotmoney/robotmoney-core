@@ -759,6 +759,11 @@ async fn rollback_set_equals_live_block_scoped_schema() {
             "{required} (QA plan X7) must be rolled back by a reorg"
         );
     }
+    // QA plan P3: the proxy upgrade and freeze history (0024).
+    assert!(
+        rollback.iter().any(|t| t == "proxy_upgrade_events"),
+        "proxy_upgrade_events (QA plan P3) must be rolled back by a reorg"
+    );
     // Every table the pre-#1283 literal named must still be covered.
     for required in [
         "wallet_positions",

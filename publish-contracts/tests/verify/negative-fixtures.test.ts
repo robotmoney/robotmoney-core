@@ -14,7 +14,8 @@ import {
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { buildWorld, failed, addr, implementationOf, DEPLOYER, IMPLEMENTATIONS, PROXIES, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
+import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT } from "../../src/proxies.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
 const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
@@ -51,9 +52,22 @@ const RULES: Rule[] = [
   [/^usdc: code hash equals pinned FiatTokenProxy$/, (w) => { w.chain.codes.set(USDC_ADDRESS.toLowerCase(), "0x6000"); }],
   [/^libraries: recorded in libs\.json$/, (w) => editManifest(w, "libs.json", (o) => { delete o.tick_math; })],
   [/^deployer: nonce equals sum of frozen counts$/, (w) => { w.chain.noncesMap.set(DEPLOYER.toLowerCase(), 1); }],
-  // code present and code equals the build
+  // issue 1809 (ADR-0014): the authority stage's timelock, and each governed proxy (the proxy build, the ERC-1967 slots, initialization, authority, mode, freeze)
+  [/^upgrade authority: the authority stage's timelock is the handover timelock$/, (w) => editManifest(w, "upgrade-authority.json", (o) => { o.timelock = OTHER; })],
+  [/^proxy\[(\w+)\]: runtime code equals the ERC1967Proxy build \(masked\)$/, (w, m) => { w.chain.codes.set(PROXIES[m[1]!]!.toLowerCase(), "0x6000"); }],
+  [/^proxy\[(\w+)\]: implementation slot equals the deployed or last upgraded implementation$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_IMPLEMENTATION_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^proxy\[(\w+)\]: ERC-1967 admin slot is empty$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_ADMIN_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^proxy\[(\w+)\]: ERC-1967 beacon slot is empty$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_BEACON_SLOT}`, pad(OTHER, { size: 32 })); }],
+  // an implementation deployed without _disableInitializers: anyone could initialize it
+  [/^proxy\[(\w+)\]: initialized, and the implementation's initializers are locked$/, (w, m) => { w.chain.storage.set(`${IMPLEMENTATIONS[m[1]!]!.toLowerCase()}|${INITIALIZABLE_SLOT}`, Z32); }],
+  [/^proxy\[(\w+)\]: upgradeAuthority is the timelock$/, (w, m) => w.chain.set(PROXIES[m[1]!]!, "upgradeAuthority", OTHER)],
+  // the sheet states no UPGRADE_MODE: an undeclared mode fails every proxy
+  [/^proxy\[(\w+)\]: upgrade mode is declared and equals the sheet$/, (w) => { w.sheet.upgradeMode = undefined; }],
+  // frozen with no freeze row and an upgradeable sheet
+  [/^proxy\[(\w+)\]: upgradesFrozen matches the mode and the executed freezes$/, (w, m) => w.chain.set(PROXIES[m[1]!]!, "upgradesFrozen", true)],
+  // code present and code equals the build (issue 1809: a proxied contract's build runs in the implementation behind its proxy)
   [/^(.+): has code$/, (w, m) => { w.chain.codes.delete(subject(m[1]).toLowerCase()); }],
-  [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(subject(m[1]).toLowerCase(), "0x6000"); }],
+  [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(implementationOf(subject(m[1])).toLowerCase(), "0x6000"); }],
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^deployment kind: the timelock delay agrees with the kind$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],

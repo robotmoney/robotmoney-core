@@ -3,9 +3,10 @@
 /**
  * useAgentConsent — the consent a depositor's reveal carries (QA plan D2/U4).
  *
- * Reads `agentConsentNonce(agent)` from the gateway, holds the signature the
- * depositor pastes, and checks it against the exact fields the reveal will
- * bind (agent, this wallet as owner, share receiver, nonce, chain, gateway).
+ * Reads `agentConsentNonce(agent)` and `implementationVersion()` from the
+ * gateway, holds the signature the depositor pastes, and checks it against the
+ * exact fields the reveal will bind (agent, this wallet as owner, share
+ * receiver, nonce, chain, gateway, implementation version — QA plan D5).
  * `consent` is the `agentConsent` argument to send: `"0x"` when the wallet
  * binds itself, the checked signature when it recovers to the agent, and
  * null otherwise. A surface must not commit while `consent` is null: the
@@ -60,11 +61,21 @@ export function useAgentConsent(args: {
     query: { enabled: required },
   });
   const nonce = typeof nonceData === "bigint" ? nonceData : undefined;
+  // The domain version is the live implementation's (QA plan Decisions D5): a
+  // consent signed before an upgrade that bumped it would revert on reveal.
+  const { data: versionData } = useReadContract({
+    address: args.gateway,
+    abi: gatewayAbi,
+    functionName: "implementationVersion",
+    query: { enabled: required },
+  });
+  const version = typeof versionData === "string" ? versionData : undefined;
 
   const fields: AgentConsentFields | null =
     required &&
     receiverOk &&
     nonce !== undefined &&
+    version !== undefined &&
     args.revealer !== undefined &&
     chainId !== undefined
       ? {
@@ -74,6 +85,7 @@ export function useAgentConsent(args: {
           nonce,
           chainId,
           gateway: args.gateway,
+          version,
         }
       : null;
 
@@ -81,9 +93,9 @@ export function useAgentConsent(args: {
   const [check, setCheck] = useState<AgentConsentCheck>({ status: "missing" });
 
   // Re-check whenever the pasted bytes or any bound field changes: a consent
-  // for another agent, owner, receiver, nonce or chain must stop counting.
+  // for another agent, owner, receiver, nonce, chain or version must stop counting.
   const key = fields
-    ? `${fields.agent}|${fields.owner}|${fields.shareReceiver}|${fields.nonce}|${fields.chainId}|${fields.gateway}`
+    ? `${fields.agent}|${fields.owner}|${fields.shareReceiver}|${fields.nonce}|${fields.chainId}|${fields.gateway}|${fields.version}`
     : "none";
   useEffect(() => {
     if (!required) {

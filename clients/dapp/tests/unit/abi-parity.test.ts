@@ -58,6 +58,8 @@ import {
   BASKET_VAULT_SHORTLIST_ABI,
   VAULT_EXCLUSION_ABI,
   EXCLUSION_LEDGER_ABI,
+  GOVERNED_UPGRADE_ABI,
+  GATEWAY_COMMITTEE_ABI,
 } from "../../src/lib/abi";
 import {
   gatewayAbiGenerated,
@@ -146,6 +148,28 @@ const PAIRS: readonly AbiPair[] = [
     label: "EXCLUSION_LEDGER_ABI vs ExclusionLedger",
     handMaintained: EXCLUSION_LEDGER_ABI,
     canonical: exclusionLedgerAbiGenerated,
+  },
+  // QA plan P3: the upgrade views the vault page reads (ADR-0014 GovernedUpgrade).
+  {
+    label: "GOVERNED_UPGRADE_ABI vs RobotMoneyVault",
+    handMaintained: GOVERNED_UPGRADE_ABI,
+    canonical: robotMoneyVaultAbiGenerated,
+  },
+  {
+    label: "GOVERNED_UPGRADE_ABI vs AgentTokenVault",
+    handMaintained: GOVERNED_UPGRADE_ABI,
+    canonical: agentTokenVaultAbiGenerated,
+  },
+  {
+    label: "GOVERNED_UPGRADE_ABI vs RobotMoneyGateway",
+    handMaintained: GOVERNED_UPGRADE_ABI,
+    canonical: gatewayAbiGenerated,
+  },
+  // Issue 1810: the committee pointers the protocol upgrade panel reads on the gateway.
+  {
+    label: "GATEWAY_COMMITTEE_ABI vs RobotMoneyGateway",
+    handMaintained: GATEWAY_COMMITTEE_ABI,
+    canonical: gatewayAbiGenerated,
   },
 ];
 

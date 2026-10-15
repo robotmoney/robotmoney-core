@@ -9,7 +9,7 @@ import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, KEEPER_ROLE, SAFE_GUARD_SLOT, SIG_ADAPTER_ALLOWED_SET, SIG_ADAPTER_CODE_HASH_ALLOWED_SET, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
-import { buildWorld, failed, addr, BASKET_SLIPPAGE_BPS, DEPLOYER, PAUSER, SAFE, SEED_SHARES, USDC_ADAPTERS, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, UNWIND_MAX_LOSS_BPS, UNWIND_MIN_USDC_OUT, type World } from "./world.ts";
+import { buildWorld, failed, addr, implementationOf, BASKET_SLIPPAGE_BPS, DEPLOYER, PAUSER, SAFE, SEED_SHARES, USDC_ADAPTERS, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, UNWIND_MAX_LOSS_BPS, UNWIND_MIN_USDC_OUT, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -436,7 +436,7 @@ describe("mutations fail with the expected label", () => {
 
   test("on-chain code differs from the build outside the immutable ranges", async () => {
     const w = buildWorld();
-    const key = VAULTS.rmUSDC.address.toLowerCase();
+    const key = implementationOf(VAULTS.rmUSDC.address).toLowerCase(); // issue 1809: rmUSDC's build runs in the implementation behind its proxy
     const code = w.chain.codes.get(key)!;
     w.chain.codes.set(key, (code.slice(0, -2) + "ff") as `0x${string}`);
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmUSDC]: runtime code equals build artifact (masked)"]);

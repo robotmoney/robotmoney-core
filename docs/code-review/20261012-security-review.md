@@ -22,6 +22,10 @@ Core issue 1791 changed `RobotMoneyGateway` agent authorization after this basel
 
 Core issue 1820 changed `RobotMoneyVault` exclusion recovery after this baseline: excluding an active adapter opens a record in the vault's `ExclusionLedger` with a snapshot of every holder's shares. USDC recovered from that adapter (`emergencyWithdrawAdapter`, `emergencyWithdraw`, `adminRebalance`, or restored eligibility, which realises the residual first) goes to the record, never to idle NAV, and is claimable pro rata by the holders at the snapshot, exiters included. A redeem that would pay 0 USDC during the exclusion reverts `ZeroPayoutDuringExclusion`. The finding 1 exit and orphan reproductions were flipped to assert the claim. Finding 1 below describes the baseline.
 
+Core issue 1698 (QA plan v1 task C1, `92c8c84e`) deleted the RouterGovernance propose, vote and execute path after this baseline, so the quorum in finding 4 no longer exists (`RouterGovernance.t.sol::test_noVotingSurface`). The same change makes `setWeights` and `_setDefaultWeights` revert `DuplicateVault`, which remediates finding 8. Finding 5 is still open under issue 1705; core 1820 narrows it, because a force removal of an adapter that was excluded first leaves the loss with the snapshot holders only. Findings 4, 5 and 8 below describe the baseline.
+
+The audit ledger records the disposition of every finding as rows SR-1012-1 to SR-1012-9 in `docs/audits.md`, and re-dispositions AZ-BSK-3, AZ-GW-3, AZ-GOV-1, HR-L-9 and HR-L-11 against source (issue 1792, QA plan v1 task W2). `scripts/check-audit-ledger.sh` fails when a numbered finding heading below has no ledger row. This remediates finding 9.
+
 ## Review conclusions
 
 | # | Finding | Severity / disposition | Required conditions | Evidence |
@@ -29,12 +33,12 @@ Core issue 1820 changed `RobotMoneyVault` exclusion recovery after this baseline
 | 1 | Deposits remain open while funded adapter value is excluded from NAV | Medium | ADMIN excludes value before deposits pause; value subsequently returns to NAV | Reproduced at baseline; window-deposit and keeper paths remediated by 1788; exit and recovery attribution remediated by 1820 |
 | 2 | Duplicate strategy adapter registration overpays early redeemers | Medium | ADMIN registers an already-active adapter again | Reproduced value extraction at baseline; remediated by 1789 |
 | 3 | A gateway agent can attribute a committee signal to another member | Low under advisory-only use | An allowlisted committee member exists; attacker self-registers at the gateway | On-chain spoofing reproduced at baseline; gateway identity guard remediated by 1790; aggregation inspected in source |
-| 4 | One voter meets quorum under example deployment values | Imminent retirement; no separate fix | Voting retained and used with quorum 2 and voter power 1000 | Reproduced on reviewed bytecode; removal accepted |
-| 5 | Emergency force removal reprices exits before recoverable value is settled | Medium; authority decision tracked | EMERGENCY removes a funded adapter | Reproduced |
+| 4 | One voter meets quorum under example deployment values | Imminent retirement; no separate fix | Voting retained and used with quorum 2 and voter power 1000 | Reproduced on reviewed bytecode; removal accepted; voting removed by 1698 |
+| 5 | Emergency force removal reprices exits before recoverable value is settled | Medium; authority decision tracked | EMERGENCY removes a funded adapter | Reproduced; open under 1705; narrowed by 1820 |
 | 6 | Keeper rebalance can reverse an emergency withdrawal | Info if keeper role is unheld; Medium if granted | A keeper can call after the rebalance interval | Reproduced at baseline; remediated by 1788 |
 | 7 | Permissionless authorization can squat another agent's policy ownership | Low | Target address is unowned and passes role-separation checks | Ownership denial reproduced at baseline; committee-blocking claim disproved; remediated by 1791 |
-| 8 | Router weight vectors permit duplicate vault addresses | Low | Authorized weight setter or ADMIN submits duplicates | Source inspection; previously reported HR-L-9 |
-| 9 | Audit dispositions and documentation disagree with current source | Info | — | Source/history inspection |
+| 8 | Router weight vectors permit duplicate vault addresses | Low | Authorized weight setter or ADMIN submits duplicates | Source inspection; previously reported HR-L-9; remediated by 1698 |
+| 9 | Audit dispositions and documentation disagree with current source | Info | — | Source/history inspection; ledger reconciled under 1792 |
 
 The V4 recorder has a reproduced sampling concern whose economic impact remains unassessed; see “Open review item: V4 sampling.”
 
@@ -161,6 +165,8 @@ The recorder samples a clamped live tick and extrapolates it until another recor
 This proves persistent sample distortion in the recorder, not a profitable attack on BasketVault. The test uses a mock pool and a two-slot recorder ring; it does not satisfy or exercise all BasketVault admission guards, perform real swaps, or model fees, liquidity, arbitrage and keeper competition. Existing flash-manipulation coverage records the restored tick two seconds later, so it does not cover this missing-record case.
 
 **Follow-up:** Exercise transient and repeated sampling against BasketVault with production-equivalent pool configuration, ring cardinality, spot/TWAP guards and honest recorder cadence. Measure feasible NAV/slippage effects and transaction profitability before assigning an economic severity. A periodic recorder service reduces the gap but is not proof that adversarial sampling is harmless.
+
+**After this baseline:** core 1793 (QA plan v1 task D5, `83e1899a`) measured the effect and added a USDC sell anchor to `BasketVault.redeem` (`BasketViews.checkSellAnchor`, 4-hour mean, recorder ring of 7,201 slots). Within 30 minutes of a held tick, a USDC redeem loses at most about 4.5 percent; `docs/technical/recorder-manipulation-1793.md` has the numbers and the residual. The ledger row is SR-1012-V4.
 
 ## Planned changes and remaining actions
 

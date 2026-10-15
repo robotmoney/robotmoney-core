@@ -716,6 +716,7 @@ mod tests {
             nonce: AlloyU256::from(3u64),
             chain_id: 8453,
             gateway: address!("0000000000000000000000000000000000000b00"),
+            version: crate::signer::consent::DOMAIN_VERSION.to_string(),
         };
         let sig = signer.sign_agent_consent(&consent).unwrap();
         assert_eq!(

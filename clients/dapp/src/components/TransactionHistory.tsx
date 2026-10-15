@@ -115,10 +115,10 @@ export function TransactionHistory(props: TransactionHistoryProps) {
                       key={`${ev.tx_hash}-${i}`}
                       data-testid="transaction-history-row"
                     >
-                      <td data-testid="transaction-history-row-type">{ev.event_type}</td>
+                      <td data-testid="transaction-history-row-type">{ev.kind}</td>
                       <td data-testid="transaction-history-row-block">{ev.block_number}</td>
                       <td data-testid="transaction-history-row-tx">{ev.tx_hash}</td>
-                      <td data-testid="transaction-history-row-vault">{ev.vault_address ?? "—"}</td>
+                      <td data-testid="transaction-history-row-vault">{ev.vault ?? "—"}</td>
                       <td data-testid="transaction-history-row-amount">
                         {formatUsdcString(ev.amount)}
                       </td>

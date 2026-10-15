@@ -17,6 +17,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
+import {Proxied} from "./helpers/Proxied.sol";
 
 /// @title DeployConsensusRecommendationReceiptTest
 /// @notice AC10: the receipt contract deploys **alongside**
@@ -41,7 +42,7 @@ contract DeployConsensusRecommendationReceiptTest is SafeGovernance {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = Proxied.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 

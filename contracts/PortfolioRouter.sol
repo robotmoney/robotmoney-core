@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.2 — Portfolio Router
 // (See also: docs/adr/ADR-0002-router-default-weights-on-chain.md — on-chain
-//            defaultWeights fallback for below-quorum router behaviour;
+//            defaultWeights fallback until a consensus receipt is applied;
 //            docs/prd.md §5 — Core Workflows (Router deposit flows);
 //            docs/development/single-production-codebase.md — the principle
 //            that drives expressing production-readiness as VaultRegistry
-//            state instead of a per-environment code variant.)
+//            state instead of a per-environment code variant;
+//            docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze.)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {GovernedUpgrade} from "./lib/GovernedUpgrade.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -42,8 +46,13 @@ interface IMinDelay {
 /// only by which vaults the operator has opted in. See
 /// `docs/development/single-production-codebase.md` for the principle.
 ///
+/// Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and
+/// initialized in the proxy's deployment transaction. Only the timelock named at
+/// `initialize` can upgrade it, and `freezeUpgrades` ends upgrades forever.
+/// `redeemFor` has no upgrade- or freeze-dependent branch.
+///
 /// Canonical: docs/architecture.md §4.2
-contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
+contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUpgrade {
     using SafeERC20 for IERC20;
 
     // ─── Roles ───────────────────────────────────────────────────────────────
@@ -53,9 +62,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     /// @notice Sole gate on `setWeights`, the active weight setter. After the
     ///         deploy ceremony only the RouterGovernance contract holds it, so
-    ///         active weights move only through propose, vote, quorum and the
-    ///         execution delay. The timelock keeps `ADMIN_ROLE` and reaches
-    ///         `setDefaultWeights` and `clearVotedWeights` only. The constructor
+    ///         active weights move only through `RouterGovernance.applyReceipt`,
+    ///         one Safe-scheduled call after the timelock delay (issue 1698).
+    ///         The timelock keeps `ADMIN_ROLE` and reaches
+    ///         `setDefaultWeights` and `clearVotedWeights` only. The initializer
     ///         seeds the role to `_admin` so the router deploy stage can write
     ///         the initial weights. The governance deploy stage revokes it. The role is its
     ///         own role admin, so no `ADMIN_ROLE` holder can grant it.
@@ -81,12 +91,13 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
-    /// @notice USDC token used as the deposit asset across all vaults.
-    IERC20 public immutable usdc;
+    /// @notice USDC token used as the deposit asset across all vaults. Written once by
+    ///         `initialize` (a constructor immutable before ADR-0014); no setter exists.
+    IERC20 public usdc;
 
     /// @notice VaultRegistry from which vault addresses, lifecycle status, and
-    ///         router-eligibility state are read.
-    VaultRegistry public immutable registry;
+    ///         router-eligibility state are read. Written once by `initialize`; no setter exists.
+    VaultRegistry public registry;
 
     /// @notice Global ceiling on the total USDC that may flow through a single
     ///         `deposit()` call. 0 means no cap enforced.
@@ -157,7 +168,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 weightBps
     );
 
-    /// @notice Emitted when the voted weight vector is updated.
+    /// @notice Emitted when the applied (active) weight vector is updated.
     /// @param vaults  New ordered list of vault addresses.
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event WeightsSet(address[] vaults, uint256[] bps);
@@ -172,13 +183,13 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice `WEIGHT_SETTER_ROLE` now has exactly one holder, `newHolder`.
     event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
 
-    /// @notice Emitted when the default (below-quorum fallback) weight vector
-    ///         is updated by ADMIN_ROLE.
+    /// @notice Emitted when the default (fallback) weight vector is updated
+    ///         by ADMIN_ROLE.
     /// @param vaults  New ordered list of vault addresses.
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event DefaultWeightsSet(address[] vaults, uint256[] bps);
 
-    /// @notice Emitted when the voted weight vector is cleared and the router
+    /// @notice Emitted when the applied weight vector is cleared and the router
     ///         reverts to the default weight vector.
     event VotedWeightsCleared();
 
@@ -232,7 +243,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     error VaultCapExceeded();
 
     /// @notice No weight vector has been set; cannot deposit. Raised when the
-    ///         voted vector is inactive AND no default weight vector has been
+    ///         applied vector is inactive AND no default weight vector has been
     ///         configured, so there is no effective allocation to route by.
     error NoWeightsSet();
 
@@ -361,15 +372,31 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice The delay has not passed. The rotation can execute from `readyAt`.
     error RotationNotReady(uint256 readyAt);
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
 
-    /// @param _usdc      USDC token address.
-    /// @param _registry  VaultRegistry contract address.
-    /// @param _admin     Address that receives `ADMIN_ROLE` at deploy time.
-    constructor(address _usdc, address _registry, address _admin) {
+    /// @dev The implementation is never initialized: only a proxy is.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+    /// @param _usdc            USDC token address.
+    /// @param _registry        VaultRegistry contract address.
+    /// @param _admin           Address that receives `ADMIN_ROLE` at deploy time.
+    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
+    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    function initialize(
+        address _usdc,
+        address _registry,
+        address _admin,
+        address upgradeAuthority,
+        UpgradeMode mode
+    ) external initializer {
         if (_usdc == address(0) || _registry == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
+        __ReentrancyGuard_init();
         usdc = IERC20(_usdc);
         registry = VaultRegistry(_registry);
         quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
@@ -382,6 +409,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         _grantRole(WEIGHT_SETTER_ROTATOR_ROLE, _admin);
         _setRoleAdmin(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE);
         _grantRole(WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, _admin);
+        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     // ─── Weight setter rotation (ADR-0002, 2026-10-07 amendment) ─────────────
@@ -1039,8 +1067,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         internal
         returns (uint256[] memory sharesPerLeg)
     {
-        // Route by the effective weight vector: the voted vector when active,
-        // otherwise the default (below-quorum fallback) vector. Snapshot into
+        // Route by the effective weight vector: the applied vector when active,
+        // otherwise the default (fallback) vector. Snapshot into
         // memory so the storage pointers do not stay live across the whole
         // body (keeps locals under the stack limit). ADR-0002.
         (address[] memory vaultList, uint256[] memory bpsList) = _effectiveWeightsMemory();
@@ -1219,17 +1247,17 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     // ─── Read surface ────────────────────────────────────────────────────────
 
-    /// @notice Return the voted (active) weight vector (vault list and bps).
-    ///         This is the raw voted vector and is empty until a proposal has
-    ///         passed; use `getEffectiveWeights` for the vector the router
-    ///         actually routes by.
+    /// @notice Return the applied (active) weight vector (vault list and bps).
+    ///         This is the raw applied vector and is empty until the first
+    ///         consensus receipt is applied; use `getEffectiveWeights` for the
+    ///         vector the router actually routes by.
     /// @return vaults  Ordered vault addresses.
     /// @return bps     Parallel weight array in basis points.
     function getWeights() external view returns (address[] memory vaults, uint256[] memory bps) {
         return (_weightVaultList, _weightBps);
     }
 
-    /// @notice Return the default (below-quorum fallback) weight vector.
+    /// @notice Return the default (fallback) weight vector.
     /// @return vaults  Ordered vault addresses.
     /// @return bps     Parallel weight array in basis points.
     function getDefaultWeights()
@@ -1241,7 +1269,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     }
 
     /// @notice Return the effective weight vector the router actually routes
-    ///         by: the voted vector when active, otherwise the default vector.
+    ///         by: the applied vector when active, otherwise the default vector.
     ///         This is the single source of truth the public allocation surface
     ///         (robotmoney.net/allocation) renders. ADR-0002.
     /// @return vaults  Ordered vault addresses.
@@ -1262,7 +1290,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         return _defaultWeightVaultList.length;
     }
 
-    /// @dev Return the storage vectors the router routes by: the voted vector
+    /// @dev Return the storage vectors the router routes by: the applied vector
     ///      when `votedWeightsActive`, otherwise the default vector.
     function _effectiveWeights()
         internal
