@@ -1059,12 +1059,12 @@ const OPERATION_ID_EVENTS = new Set(["govern.waiting", "timelock.effect"]);
  * Removes the known public 0x bytes32 shapes from one line, so the 64-hex rule sees only what is left. Never a general 64-hex allowance:
  * 1. the row name `apply-receipt-0x<receipt id>` (also a publish-run.json key), anywhere in a line;
  * 2. on a `govern.waiting` or `timelock.effect` JSON log line only: the `"id"`/`"ids"` operation id values and `operation 0x<id>` in the detail text;
- * 3. the all-zero bytes32 (`0x` and 64 zeros), anywhere in a line: it is the empty value of a bytes32 field (a V3 pool's `pool_id` in a compact deployment manifest) and no
- *    private key, so it is no key material.
+ * 3. the value of a `"pool_id"` key, anywhere in a line: a Uniswap V4 pool id (or the zero id of a V3 pool) is a public on-chain identifier. A compact deployment manifest
+ *    (one JSON object on one line) holds it, and such a file is committed verbatim, never re-formatted (deployments/8453/deploy-2/README.md).
  * A bare 0x64-hex, an env or keystore shaped value, or the same shapes on any other line stay in the line and are flagged.
  */
 export function stripPublicContexts(line: string): string {
-  let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-").replace(/0x0{64}(?![0-9a-fA-F])/g, "0x0");
+  let out = line.replace(new RegExp(`apply-receipt-${B32}`, "g"), "apply-receipt-").replace(new RegExp(`("pool_id"\\s*:\\s*)"${B32}"`, "g"), '$1"pool"');
   if (out.startsWith("{")) {
     let event: unknown;
     try { event = JSON.parse(out).event; } catch { /* not a JSON log line */ }

@@ -59,13 +59,14 @@ describe("secret scan over the evidence folder", () => {
     writeFileSync(join(oneLine, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}` } }) + "\n");
     expect(scanEvidenceFolder(oneLine).join()).toContain("64-hex");
   });
-  test("the all-zero bytes32 of a compact manifest is no key material, a 64-hex that differs from it by one digit still is", () => {
-    const zero = scratch();
-    writeFileSync(join(zero, "m.json"), `{"vault":"0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797","pool_id":"0x${"00".repeat(32)}"}\n`);
-    expect(scanEvidenceFolder(zero)).toEqual([]);
-    const near = scratch();
-    writeFileSync(join(near, "m.json"), `{"pool_id":"0x${"00".repeat(31)}01"}\n`);
-    expect(scanEvidenceFolder(near).join()).toContain("64-hex");
+  test("a pool_id value in a compact manifest is public, the same value under another key still is flagged", () => {
+    const id = `0x${"f2".repeat(32)}`;
+    const ok = scratch();
+    writeFileSync(join(ok, "m.json"), `{"vault":"0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797","assets":[{"pool_id":"${id}"},{"pool_id":"0x${"00".repeat(32)}"}]}\n`);
+    expect(scanEvidenceFolder(ok)).toEqual([]);
+    const other = scratch();
+    writeFileSync(join(other, "m.json"), `{"pool_id":"${id}","key":"${id}"}\n`);
+    expect(scanEvidenceFolder(other).join()).toContain("64-hex");
   });
   test("a keystore, an assignment and a mnemonic are found", () => {
     const d = scratch(); mkdirSync(join(d, "sub"));
