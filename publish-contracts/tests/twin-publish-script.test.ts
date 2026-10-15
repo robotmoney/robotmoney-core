@@ -88,6 +88,14 @@ describe("twin-publish step script", () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("deployerNonce");
   });
+  test("SHEET_OVERLAY_IN merges the committed upgrade overlay over the Twin sheet (issue 1811); without it the fragment has no UPGRADE_MODE", () => {
+    const r = runScript({ SHEET_OVERLAY_IN: "deployments/twin-918453/upgrade-rehearsal.env" });
+    expect(r.code).toBe(0);
+    const frag = readFileSync(join(r.exported.TWIN_RUN_DIR!, "fragment.env"), "utf8");
+    expect(frag).toMatch(/^UPGRADE_MODE=upgradeable$/m);
+    expect(frag).toMatch(/^UPGRADE_FREEZE_DEADLINE=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/m);
+    expect(readFileSync(join(runScript({}).exported.TWIN_RUN_DIR!, "fragment.env"), "utf8")).not.toMatch(/^UPGRADE_MODE=/m);
+  });
   test("govern is off unless asked for", () => {
     const r = runScript({ GOVERN_IN: "false" });
     expect(r.code).toBe(0);
@@ -209,7 +217,7 @@ fi
 describe("the rehearsal uses only the allowed Twin environment steps", () => {
   test("no anvil_ or evm_ RPC name in the action, its script or the suite 28 workflow", () => {
     const script = join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts");
-    const files = [join(ACTION, "action.yml"), script, join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml")];
+    const files = [join(ACTION, "action.yml"), script, join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml"), join(REPO_ROOT, "publish-contracts/src/ci/twin-upgrade-lifecycle.ts")];
     for (const f of files) expect(readFileSync(f, "utf8")).not.toMatch(/\b(anvil|evm)_[a-zA-Z]+/);
     const steps = [...readFileSync(script, "utf8").matchAll(/run\(\[bun, rehearsal, "([a-z-]+)"/g)].map((m) => m[1]).filter((x) => x !== "keys");
     expect(steps).toEqual(["fund-gas", "fund-usdc"]);

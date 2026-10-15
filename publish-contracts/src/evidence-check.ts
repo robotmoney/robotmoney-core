@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
-// Usage: bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
+// Usage: bun src/evidence-check.ts --upgrade-lifecycle FILE [--rpc URL]   (the Twin upgrade rehearsal: deploy upgradeable, governed upgrade, freeze, refused upgrade after the freeze, issue 1811)
+//        bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
 //        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696; on an --rpc of chain 8453 a floor under the 8453 floor is refused, issue 1701)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
@@ -31,6 +32,7 @@ import { loadStageTable } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
+import { upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "./upgrade-lifecycle.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -1132,6 +1134,34 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
+/** An eth_call that returns the revert data, or undefined when the call succeeds. Raw JSON-RPC: the revert data is the error's `data`. */
+export function rpcCallRevert(url: string): LifecycleChain["callRevert"] {
+  return async ({ from, to, data }) => {
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ from, to, data }, "latest"] }) });
+    const j = (await res.json()) as { result?: Hex; error?: { message?: string; data?: unknown } };
+    if (!j.error) return undefined;
+    const d = typeof j.error.data === "string" ? j.error.data : typeof (j.error.data as { data?: unknown })?.data === "string" ? (j.error.data as { data: string }).data : "";
+    return (/^0x[0-9a-fA-F]*$/.test(d) ? d : "0x") as Hex;
+  };
+}
+
+/**
+ * `--upgrade-lifecycle FILE` (issue 1811): the record of the Twin upgrade rehearsal (src/ci/twin-upgrade-lifecycle.ts). Offline: the steps tell one story against the full
+ * proxied core set of this checkout's stage table. With --rpc: every transaction, the refused operation and the final proxy record are read back from the chain.
+ */
+async function checkLifecycleMain(values: Record<string, string | boolean | undefined>): Promise<void> {
+  const r = JSON.parse(readFileSync(values["upgrade-lifecycle"] as string, "utf8"));
+  const problems = upgradeLifecycleProblems(r, repoProxyNames());
+  if (problems.length === 0 && typeof values.rpc === "string") {
+    const { createPublicClient, http } = await import("viem");
+    const client = createPublicClient({ transport: http(values.rpc) });
+    if ((await client.getChainId()) !== r.chain_id) problems.push(`upgrade-lifecycle: the --rpc chain id is ${await client.getChainId()}, the record is for ${r.chain_id}`);
+    else problems.push(...(await upgradeLifecycleOnChainProblems(r, Object.assign(client as unknown as LifecycleChain, { callRevert: rpcCallRevert(values.rpc) }))));
+  }
+  if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
+  console.log(`evidence ok (upgrade lifecycle: deploy upgradeable, governed upgrade, freeze of ${Object.keys(r.freeze.targets).length} proxies, refused upgrade${values.rpc ? ", chain read" : ", offline shape only"})`);
+}
+
 /** The per-stage cap from core's stage table in this checkout. */
 function adoptableFromTable(): AdoptableLibraries {
   const t = loadStageTable(new URL("../../", import.meta.url).pathname);
@@ -1139,10 +1169,11 @@ function adoptableFromTable(): AdoptableLibraries {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
+  const { values } = parseArgs({ options: { evidence: { type: "string" }, "receipt-applications": { type: "string" }, "delay-floor": { type: "string" }, "deployment-kind": { type: "string" }, "consensus-receipt": { type: "string" }, governance: { type: "string" }, timelock: { type: "string" }, frozen: { type: "string" }, "deploy-sha": { type: "string" }, rpc: { type: "string" }, "upgrade-lifecycle": { type: "string" }, "chain-fixture": { type: "string" }, "record-chain-fixture": { type: "string" }, "vault-redeploys": { type: "string" }, registry: { type: "string" } } });
   const kindArg = values["deployment-kind"] ?? "production";
   if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindArg)) { console.error(`evidence: --deployment-kind must be ${DEPLOYMENT_KINDS.join(" or ")}`); process.exit(2); }
   const kind = kindArg as DeploymentKind;
+  if (values["upgrade-lifecycle"]) return checkLifecycleMain(values);
   if (values["receipt-applications"]) return checkApplicationsMain(values, kind);
   if (values["vault-redeploys"]) return checkRedeploysMain(values, kind);
   if (!values.evidence) { console.error("missing --evidence FILE"); process.exit(2); }

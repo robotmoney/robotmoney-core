@@ -9,7 +9,8 @@ Stage 3 (signing clients, ABI consumers, dapp, explorer, indexer and monitoring)
 is implemented by issue 1810; see "Signing clients and disclosure (stage 3)"
 below. Stage 2 (release sheet and publish evidence) is implemented by issue
 1809; see "Release tooling and evidence (stage 2)" below. Stage 4 (Twin
-rehearsal and cutover) is planned.
+rehearsal and cutover documentation) is implemented by issue 1811; see "Twin
+rehearsal and release gate (stage 4)" below.
 
 ## Decision and scope
 
@@ -163,6 +164,23 @@ mode per contract needs a stage-table change. Implementation addresses are not
 typed into the sheet ahead of the run; the build fixes their code and verify
 records their addresses and hashes for the per-release runbook.
 
+## Twin rehearsal and release gate (stage 4)
+
+Implemented by issue 1811. The CI job `core-stages-twin-upgrade-lifecycle`
+(suite 28, in the deploy-gate list) deploys the exact release artifacts of the
+SHA on the Twin chain with `UPGRADE_MODE=upgradeable`
+(`deployments/twin-918453/upgrade-rehearsal.env`). Through the real Safe and
+timelock it upgrades the gateway proxy to a second copy of the release
+implementation, queues a second upgrade, freezes all ten core proxies in one
+batch bound to the reviewed `upgradeability.json`, and shows the queued upgrade
+is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
+immutability. `evidence-check --upgrade-lifecycle` reads the record back from
+the chain. The release runbook (4.1 and 4.12) makes this job and an external
+security review gates of a final mainnet release, and says why a rollback is not
+assumed safe after a state migration. Operator rows for upgrade and freeze
+rounds are follow-up work: the rehearsal drives the Safe tool library directly
+and re-records the gateway manifest itself.
+
 ## Signing clients and disclosure (stage 3)
 
 Implemented by issue 1810. Every Robot Money write a client signs goes to the
@@ -288,7 +306,7 @@ the target design until code and on-chain evidence exist.
 | `docs/technical/smart-contracts.md` §2, §5 | Preserve historic direct-address facts; distinguish current state from target, then document actual proxy and implementation addresses after deployment. | Done for the source; the proxy and implementation addresses are added after a proxied deployment. |
 | `docs/development/single-production-codebase.md` | Permit mode as initialized state of one artifact; prohibit an environment-specific implementation. | Done. |
 | `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure done in stage 3 (issue 1810): explorer API, dapp, `rmpc get-gateway`, watchdog. |
-| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Stage 2 done (issue 1809): runbook 4.12 covers the mode, the stage order, resume, the verify labels and record, freeze ownership, the deadline, missed-deadline alerts and the voluntary cutover plan. The Twin rehearsal of an upgrade and freeze is stage 4. |
+| `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Stage 2 done (issue 1809): runbook 4.12 covers the mode, the stage order, resume, the verify labels and record, freeze ownership, the deadline, missed-deadline alerts and the voluntary cutover plan. Stage 4 done (issue 1811): runbook 4.1 adds the external security review and the lifecycle rehearsal gates, 4.12 adds the Twin rehearsal, the steps after a governed upgrade and the rollback limits. |
 | `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes `UPGRADE_MODE=frozen` and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. Stage 2 done (issue 1809): the sheet's `UPGRADE_MODE` and `UPGRADE_FREEZE_DEADLINE`, the stage table's `proxies` and `upgradeAuthority`, the verifier's per-proxy labels and `upgradeability.json`, the evidence section, and source verification of every implementation. No frozen counts exist yet for a proxied DEPLOY_SHA: the next Twin rehearsal measures them. |
 | `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern, Proposed until it is reviewed and accepted. |
 

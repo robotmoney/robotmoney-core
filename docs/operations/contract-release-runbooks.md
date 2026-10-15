@@ -160,14 +160,30 @@ explicitly waived by the operator with a written reason.
 
 ### 4.1. Code-readiness gate
 
-Before any deployment activity, verify both of the following:
+Before any deployment activity, verify all of the following:
 
 1. The release tracking issue is closed/complete — every linked task is
    closed, and the release's objective is clearly stated (§6).
 2. `forge build` succeeds against the commit SHA being deployed, with no
    uncommitted local changes (`git status --short` is clean at that SHA).
+3. **External security review before a final mainnet release.** A final Base
+   mainnet release (chain 8453, `DEPLOYMENT_KIND` production, not a contained
+   test) requires a completed external security review of the exact contracts
+   at the release SHA, including the governed proxy form (`GovernedUUPS`, the
+   `GovernedUpgrade` library, the per-instance `ERC1967Proxy` deployment and
+   `freezeUpgrades`) and every contract `docs/audits.md` marks as needing an
+   external audit before the final deployment. The report is recorded in
+   `docs/audits.md`, every High and Medium finding is fixed or carries an owner
+   decision, and the tracking issue links it. Freeze removes recovery by
+   upgrade, so this gate is never waived for a final release. A Base mainnet
+   rehearsal or contained test does not need it.
+4. **Twin rehearsal of the governed proxy lifecycle.** For a release that
+   deploys governed proxies, the CI job `core-stages-twin-upgrade-lifecycle` is
+   green at the release SHA: it deploys the exact release artifacts upgradeable,
+   upgrades through the real Safe and timelock, freezes, and shows a queued
+   upgrade is refused after the freeze, with the evidence check passing (4.12).
 
-Do not begin preflight, rehearsal, or any other deployment step while either
+Do not begin preflight, rehearsal, or any other deployment step while any
 of the above is incomplete.
 
 ### 4.2. Preflight
@@ -651,6 +667,21 @@ Verify writes `deployments/<chain>/upgradeability.json` on every run, pass or fa
 
 After a miss the deployment stays reported as upgradeable everywhere until every proxy verifies frozen: `core_immutable` stays false, the explorer reports `upgrade_state` `upgradeable`, and the dapp shows the gateway as upgradeable. Never describe the release as immutable before that.
 
+**Twin rehearsal of the lifecycle (issue 1811).** Before a proxied release, the CI job `core-stages-twin-upgrade-lifecycle` (suite 28, in the deploy-gate list) rehearses the whole lifecycle with the exact release artifacts of the SHA on the Twin chain. It publishes with the committed Twin sheet plus the overlay `deployments/twin-918453/upgrade-rehearsal.env` (`UPGRADE_MODE=upgradeable`). Then `publish-contracts/src/ci/twin-upgrade-lifecycle.ts` runs these steps through the real Safe (two owners sign, the deployer pays gas) and the real timelock, with the delay passed by a Twin time warp:
+
+1. Record the deployment: every proxy upgradeable, no immutability claim.
+2. Deploy a second copy of the gateway implementation from the build. Schedule and execute `upgradeToAndCall(newImplementation, "")` on the gateway proxy. Re-record the gateway manifest's implementation pin and run verify.
+3. Queue a second gateway upgrade before the freeze, and leave it pending.
+4. Freeze all ten proxies in ONE batch of `freezeUpgrades(implementation, implementation_code_hash)`, with both values taken from the `upgradeability.json` the verify of step 2 wrote.
+5. Ask the Safe to execute the queued upgrade. The Safe tool refuses, and a simulated execute reverts with `UpgradesAreFrozen`.
+6. Run verify again. It claims core immutability.
+
+The record `upgrade-lifecycle.json` is checked by `bun publish-contracts/src/evidence-check.ts --upgrade-lifecycle FILE --rpc URL`, which reads every transaction, the refused operation and every proxy fact back from the chain. A Twin run proves the operations execute on the real contracts in this order. It does not prove the 48 hour delay or the mainnet signers.
+
+**After a governed upgrade.** The implementation slot of the upgraded proxy no longer equals its manifest, so `implementation slot equals the manifest` fails until the manifest is re-recorded from the chain (the implementation address, and for the gateway `gateway_implementation_runtime_hash`). Then run verify, and copy the new `upgradeability.json` into the evidence. Every signing client's implementation pin is updated from the new gateway manifest: the `rmpc` TOML, the dapp build env and the headless agent config. Until then the clients refuse to sign, which is the intended fail-closed behavior. The rehearsal re-records the manifest in its own harness. Operator tooling for the upgrade and freeze rounds (govern rows `upgrade-proxy` and `freeze-upgrades`) is tracked separately and is not part of this procedure yet.
+
+**Rollback is not assumed safe.** A rollback is another governed upgrade, possible only while the proxy is unfrozen, with the same review and delay. After an upgrade that migrated state (a reinitializer in `upgradeToAndCall` data, or new storage written by the new logic), the previous implementation may not read the migrated state correctly. Never schedule a rollback without the same storage layout review as a forward upgrade. After the freeze no rollback exists: only a new deployment and a voluntary cutover change logic.
+
 **Voluntary cutover from the current direct Base deployments (planned, not executed by this issue).** The contracts already live on Base 8453 are direct deployments. They cannot be upgraded in place, and pointing a new proxy at an implementation moves no share or permission. A governed-proxy release is therefore a NEW deployment at new addresses, and holders move by their own choice (`docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md`, no assisted migration):
 
 1. Deploy the proxied release with this tool (sections 4.3 and 4.12) at new addresses, and run verify and the evidence check. The current direct addresses stay recorded as they are and are labelled legacy (direct deployment, not upgradeable). They are never presented as upgraded.
@@ -687,6 +718,12 @@ merged PRs.
 The issue carries two GitHub-checkbox checklists mirroring the runbook's
 preflight and postflight gates. Checking a box is a claim that the
 corresponding gate was actually executed and passed.
+
+For a final Base mainnet release the preflight checklist always contains the
+item "External security review completed for the release SHA, report recorded
+in `docs/audits.md`" (§4.1, item 3). A release with governed proxies also
+carries "`core-stages-twin-upgrade-lifecycle` green at the release SHA"
+(§4.1, item 4).
 
 ## 7. Backporting
 
