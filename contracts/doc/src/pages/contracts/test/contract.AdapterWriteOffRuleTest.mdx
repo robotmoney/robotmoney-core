@@ -1,0 +1,148 @@
+---
+title: "AdapterWriteOffRuleTest"
+description: "Issue 1705 Q2 (a), the rule for the mainnet test, shown on a real RobotMoneyVault: - Only EMERGENCY_ROLE (the emergency key) may write off an adapter, through `forceRemoveAdapter`. ADMIN_ROLE (the timelock), the keeper and anyone else cannot. - The write-off pauses deposits, so nobody buys shares at the written-down price. - Only ADMIN_ROLE (the Safe through the timelock) recovers: it adds the adapter back and unpauses. The emergency key cannot do either. - A recovery is credited pro rata to whoever holds shares when it lands. A holder who exits during the write-off is paid at the reduced NAV and keeps no claim on it. - Withdrawals are never frozen: redeem works throughout. The baskets have no write-off lever at all (their EMERGENCY_ROLE functions are `emergencyLevers` in the stage table, asserted by scripts/deploy/stage-table.test.ts)."
+---
+
+# AdapterWriteOffRuleTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5e8d7ba6023ed2e0672e3841daf7b7ba268ac6ed/contracts/test/AdapterWriteOffRule.t.sol)
+
+**Inherits:** Test
+
+Issue 1705 Q2 (a), the rule for the mainnet test, shown on a real RobotMoneyVault:
+- Only EMERGENCY_ROLE (the emergency key) may write off an adapter, through
+`forceRemoveAdapter`. ADMIN_ROLE (the timelock), the keeper and anyone else cannot.
+- The write-off pauses deposits, so nobody buys shares at the written-down price.
+- Only ADMIN_ROLE (the Safe through the timelock) recovers: it adds the adapter back and
+unpauses. The emergency key cannot do either.
+- A recovery is credited pro rata to whoever holds shares when it lands. A holder who
+exits during the write-off is paid at the reduced NAV and keeps no claim on it.
+- Withdrawals are never frozen: redeem works throughout.
+The baskets have no write-off lever at all (their EMERGENCY_ROLE functions are
+`emergencyLevers` in the stage table, asserted by scripts/deploy/stage-table.test.ts).
+
+## Constants
+
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6;
+```
+
+## State Variables
+
+### usdc
+
+```solidity
+TestUSDC internal usdc;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### adapterA
+
+```solidity
+MockAdapter internal adapterA;
+```
+
+### adapterB
+
+```solidity
+MockAdapter internal adapterB;
+```
+
+### timelock
+
+```solidity
+address internal timelock = makeAddr("timelock");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### keeper
+
+```solidity
+address internal keeper = makeAddr("keeper");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_unauthorized-address-bytes32"></a>
+
+### _unauthorized
+
+```solidity
+function _unauthorized(address who, bytes32 role) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| role | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="test_onlytheemergencykeywritesoffanadapter"></a>
+
+### test_onlyTheEmergencyKeyWritesOffAnAdapter
+
+```solidity
+function test_onlyTheEmergencyKeyWritesOffAnAdapter() public;
+```
+
+<a id="test_onlythetimelockrecoversandreopens"></a>
+
+### test_onlyTheTimelockRecoversAndReopens
+
+```solidity
+function test_onlyTheTimelockRecoversAndReopens() public;
+```
+
+<a id="test_arecoveryiscreditedtotheholderswhenitlands"></a>
+
+### test_aRecoveryIsCreditedToTheHoldersWhenItLands
+
+```solidity
+function test_aRecoveryIsCreditedToTheHoldersWhenItLands() public;
+```
+

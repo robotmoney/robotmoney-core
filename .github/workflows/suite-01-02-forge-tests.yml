@@ -153,7 +153,11 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,FourVaultInitialState}.t.sol"
+
+      # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
+      - name: forge test (four-vault rules: paused router leg, adapter write-off — issue 1705)
+        run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
@@ -189,13 +193,11 @@ jobs:
         #   - DeployAgentTokenVault.t.sol: rmAGENT holds RM (added through the V3 pool floors), paused, registered.
         #   - DeployBasketVaultRwa.t.sol: rmRWA is a plain BasketVault row for deSPXA through
         #     the UniswapV3SwapAdapter on the fee 500 pool.
-        #   - ActivateBasketVaultEligibility.t.sol: atomic migrateEligibility per basket.
         #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/ActivateBasketVaultEligibility.t.sol"
           bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
           bun scripts/ci/check-set-registry-owner.ts
@@ -386,6 +388,9 @@ jobs:
           echo "::group::contracts/test/WithdrawalsNeverFrozen.t.sol:"
           bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
           echo "::endgroup::"
+
+      - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
       - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
