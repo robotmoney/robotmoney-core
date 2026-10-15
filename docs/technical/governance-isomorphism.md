@@ -77,9 +77,9 @@ sheet: the vault setters (per-deposit cap, TVL cap, exit fee, fee recipient),
 router eligibility and the router default weights. A sheet that routes any of
 them through govern is refused. The one on-demand govern row after launch is
 `apply-receipt` (core 1696): the Safe releases a consensus receipt and applies its
-weights as one timelock batch. `RouterGovernance`'s constructor arguments in the
-sheet (`VOTER_*`, `QUORUM_THRESHOLD`, `VOTING_PERIOD`) parameterise today's
-bytecode only; the test deployment's voter addresses are held by nobody.
+weights as one timelock call, `RouterGovernance.applyReceipt`. `RouterGovernance`
+has no voting configuration (issue 1698). The sheet parser refuses the old
+voter, quorum and period names.
 
 The Safe tool's other operations (`updateDelay`, a no-op `scheduleBatch`, a cancel)
 are demonstrations. They run on the Twin fork (`update-delay`, `batch`, `cancel`) and

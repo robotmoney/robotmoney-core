@@ -43,6 +43,8 @@ import {InvariantRegistry} from "./InvariantRegistry.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
+import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
 
 /// @dev Minimal USDC for the router-deposit FV harness.
 contract FvUSDC is ERC20 {
@@ -564,33 +566,43 @@ contract FvInvariantsTest is Test {
         router.deposit(amount, new uint256[](0));
     }
 
-    /// @notice GOV-4 (F-05/RTR-4) — a governance proposal that would render router
-    ///         deposits non-executable can never be executed. propose() rejects a
-    ///         weight vector containing a Paused/Retired vault up front, so a
-    ///         self-DoS proposal never enters the voting pipeline.
-    function test_GOV4_proposalCannotSelfDosRouter() public {
+    /// @notice GOV-4 (F-05/RTR-4) — a consensus receipt whose vector would render
+    ///         router deposits non-executable can never be applied. applyReceipt
+    ///         reverts on a vector containing a Paused/Retired vault (the router's
+    ///         `setWeights` refuses it), and the revert leaves the receipt
+    ///         unreleased, so a self-DoS vector never lands.
+    function test_GOV4_receiptCannotSelfDosRouter() public {
         (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vault) =
             _deployRouterStack();
 
-        // Stand up governance and hand it ADMIN_ROLE on the router so propose →
-        // execute → setWeights is the only weight-setting path.
+        // Stand up the weight setter and the receipt register it applies, and
+        // hand it the router's weight role so applyReceipt -> setWeights is the
+        // only weight-setting path.
+        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(address(this), address(this));
+        address submitter = makeAddr("submitter");
+        ic.registerAgent(submitter, "submitter");
+        ConsensusRecommendationReceipt receipts =
+            new ConsensusRecommendationReceipt(address(this), address(this), address(ic));
         RouterGovernance gov =
-            new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 2);
+            new RouterGovernance(address(router), address(receipts), address(this));
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
+        receipts.grantRole(receipts.ADMIN_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);
         vaults[0] = address(vault);
         bps[0] = 10_000;
+        bytes32 digest = keccak256("payload");
+        receipts.recordReceipt(submitter, keccak256("r1"), digest, "uri");
+        receipts.recordReceipt(submitter, keccak256("r2"), digest, "uri");
 
-        // While Active, propose succeeds.
-        uint256 pid = gov.propose(vaults, bps);
-        assertGt(pid, 0, "proposal created while Active");
-        gov.cancel(pid);
+        // While Active, the receipt applies.
+        gov.applyReceipt(keccak256("r1"), digest, vaults, bps);
+        assertTrue(receipts.isReleased(keccak256("r1")), "receipt applied while Active");
 
-        // Pause the vault: a proposal that would route deposits to it must be
-        // rejected at propose() time (GOV-4) — it can never become executable.
+        // Pause the vault: a receipt that would route deposits to it is refused,
+        // and stays unreleased.
         registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
         assertFalse(
@@ -598,9 +610,14 @@ contract FvInvariantsTest is Test {
             "eligible but not Active means not routable"
         );
         vm.expectRevert(
-            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vault))
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vault),
+                VaultRegistry.VaultStatus.DepositsPaused
+            )
         );
-        gov.propose(vaults, bps);
+        gov.applyReceipt(keccak256("r2"), digest, vaults, bps);
+        assertFalse(receipts.isReleased(keccak256("r2")), "refused receipt stays unreleased");
 
         // Silence unused-var warnings.
         usdc;

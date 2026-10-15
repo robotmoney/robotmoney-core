@@ -24,7 +24,8 @@
 //!    `IGatewayEvents` sol! block (currently marked MISSING).
 //! 2. `services/explorer-indexer/src/indexer.rs` — add `handle_log` branches
 //!    for `AgentWithdrawal`, `ExitFeeCharged` (as history row), `AgentRevoked`
-//!    (policy_change), `VoteCast` (governance_vote); call
+//!    (policy_change), `VoteCast` (governance_vote, deleted with
+//!    `RouterGovernance` voting in issue #1698); call
 //!    `db.insert_account_history_event(...)` from each branch.
 //! 3. `services/explorer-indexer/src/db.rs` — implement
 //!    `insert_account_history_event` and `list_account_history` (stubs in

@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/adb2035cd16f15e9a5ba046b03354f3b103120b6/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard
 
@@ -46,8 +46,9 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 Sole gate on `setWeights`, the active weight setter. After the
 deploy ceremony only the RouterGovernance contract holds it, so
-active weights move only through propose, vote, quorum and the
-execution delay. The timelock keeps `ADMIN_ROLE` and reaches
+active weights move only when the Safe, through the timelock,
+applies a recorded consensus receipt with
+`RouterGovernance.applyReceipt`. The timelock keeps `ADMIN_ROLE` and reaches
 `setDefaultWeights` and `clearVotedWeights` only. The constructor
 seeds the role to `_admin` so the router deploy stage can write
 the initial weights. The governance deploy stage revokes it. The role is its
@@ -192,9 +193,11 @@ mapping(address => uint256) public vaultCap;
 
 ### _weightVaultList
 
-Ordered list of vaults included in the voted (active) weight
-vector. Set by governance on a successful proposal execution
-via `setWeights`. Empty until the first vote passes.
+Ordered list of vaults included in the active ("voted") weight
+vector. Set through `setWeights` when the Safe applies a consensus
+receipt (`RouterGovernance.applyReceipt`). Empty until the first
+receipt is applied. The `voted` names are kept for ABI stability:
+there is no voting.
 
 ```solidity
 address[] private _weightVaultList;
@@ -212,7 +215,7 @@ uint256[] private _weightBps;
 ### votedWeightsActive
 
 True when the voted weight vector is in effect. False means the
-router falls back to `defaultWeights` (the on-chain below-quorum
+router falls back to `defaultWeights` (the on-chain
 fallback). Set true by `setWeights`, set false by
 `clearVotedWeights`. See ADR-0002.
 
@@ -224,9 +227,9 @@ bool public votedWeightsActive;
 
 Ordered list of vaults included in the default (fallback) weight
 vector. Used by `previewDeposit`/`deposit` whenever the voted
-vector is not active — i.e. no proposal has ever passed or
-governance has reverted to the default after a failed quorum.
-Admin-settable; survives proposal execution unchanged. ADR-0002.
+vector is not active: no receipt has been applied yet, or the
+timelock cleared the active vector. Admin-settable; survives a
+receipt application unchanged. ADR-0002.
 
 ```solidity
 address[] private _defaultWeightVaultList;
@@ -363,11 +366,11 @@ function setWeights(address[] calldata vaults, uint256[] calldata bps)
 
 ### setDefaultWeights
 
-Set the default (below-quorum fallback) weight vector. Used by
-`previewDeposit`/`deposit` whenever the voted vector is not
-active — when no proposal has ever passed, or governance has
-reverted to the default after a proposal failed quorum. This
-vector survives proposal execution unchanged. ADR-0002.
+Set the default (fallback) weight vector. Used by
+`previewDeposit`/`deposit` whenever the active vector is not
+in effect: no receipt has been applied yet, or the timelock
+cleared the active vector. This vector survives a receipt
+application unchanged. ADR-0002.
 
 All vaults must be registered AND router-eligible, the bps must
 sum to BPS_DENOMINATOR, and the length must equal the registry's
@@ -451,10 +454,10 @@ function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) i
 
 ### clearVotedWeights
 
-Clear the voted weight vector and revert routing to
-`defaultWeights`. Intended for governance to fall back to the
-default after the most recent proposal failed quorum. Restricted
-to `ADMIN_ROLE`. ADR-0002.
+Clear the active weight vector and revert routing to
+`defaultWeights`. The emergency lever: the Safe, through the
+timelock, falls back to the default vector. Restricted to
+`ADMIN_ROLE`. ADR-0002.
 
 ```solidity
 function clearVotedWeights() external onlyRole(ADMIN_ROLE);
@@ -925,8 +928,8 @@ function _executeLeg(address receiver, address vault, uint256 legAmount, uint256
 ### getWeights
 
 Return the voted (active) weight vector (vault list and bps).
-This is the raw voted vector and is empty until a proposal has
-passed; use `getEffectiveWeights` for the vector the router
+This is the raw active vector and is empty until a receipt has
+been applied; use `getEffectiveWeights` for the vector the router
 actually routes by.
 
 ```solidity
@@ -944,7 +947,7 @@ function getWeights() external view returns (address[] memory vaults, uint256[] 
 
 ### getDefaultWeights
 
-Return the default (below-quorum fallback) weight vector.
+Return the default (fallback) weight vector.
 
 ```solidity
 function getDefaultWeights()
@@ -1085,10 +1088,9 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 Return true iff `vault` is router-eligible AND its registry
 lifecycle status is `Active` — i.e. it can be written into a
 weight vector and accept a routed deposit right now. This is the
-exact predicate `setWeights`/`setDefaultWeights` enforce; governance
-(`RouterGovernance.propose`) reads it so a proposal that would
-render router deposits non-executable can never enter the voting
-pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+exact predicate `setWeights`/`setDefaultWeights` enforce, so an
+off-chain tool can check a weight vector before it schedules one
+(GOV-4, no self-DoS). Never reverts: returns false for a
 zero address, an EOA, an asset mismatch, an unregistered vault, or
 any non-Active status.
 
@@ -1107,6 +1109,29 @@ function isRouterEligibleAndActive(address vault) external view returns (bool ok
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | ok | `bool` | True iff the vault is eligible AND Active. |
+
+<a id="_requirenotrepeated-address-uint256"></a>
+
+### _requireNotRepeated
+
+<i>
+
+Revert `DuplicateVault` when `vaults[i]` already appears at an earlier
+index. Quadratic, and the vector holds at most the registry's few
+router-eligible vaults.
+
+</i>
+
+```solidity
+function _requireNotRepeated(address[] calldata vaults, uint256 i) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| i | `uint256` |  |
 
 <a id="_requireactiveandeligible-address"></a>
 
@@ -1247,7 +1272,7 @@ event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
 
 ### DefaultWeightsSet
 
-Emitted when the default (below-quorum fallback) weight vector
+Emitted when the default (fallback) weight vector
 is updated by ADMIN_ROLE.
 
 ```solidity
@@ -1577,6 +1602,24 @@ error VaultNotRouterEligible(address vault);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` | The vault address that lacks the eligibility flag. |
+
+### DuplicateVault
+
+`vault` appears twice in one weight vector (security review
+2026-10-12 finding 8, HR-L-9). A duplicate default could satisfy
+`length == routerEligibleCount` while omitting an eligible vault,
+and a duplicate active entry splits one vault's weight across two
+legs. `setWeights` and `setDefaultWeights` both refuse it.
+
+```solidity
+error DuplicateVault(address vault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
 
 ### OnlyRegistry
 

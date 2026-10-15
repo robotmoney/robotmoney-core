@@ -35,8 +35,8 @@
 
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
-    IPortfolioRouterEvents, IRouterGovernanceEvents, ITimelockEvents, IVaultEvents, IVaultReads,
-    IVaultRegistryEvents, Topics,
+    IPortfolioRouterEvents, ITimelockEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents,
+    Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -68,9 +68,11 @@ pub struct IndexerConfig {
     /// indexer calls `listVaults()` on each tick and ingests
     /// `VaultRegistered` / `VaultStatusChanged` events from the registry.
     pub registry: Option<Address>,
-    /// Optional PortfolioRouter / RouterGovernance contract address.
-    /// When set, the indexer ingests `ProposalCreated`, `VoteCast`,
-    /// `ProposalExecuted`, and `WeightsApplied` events.
+    /// Optional RouterGovernance (the router's weight setter) address. When
+    /// set, the indexer registers it in `contracts` (kind `router_governance`)
+    /// and counts it toward the deploy-block floor. It is not watched for logs:
+    /// its voting events were deleted with its voting (issue #1698), and the
+    /// weights it sets are indexed from the router's own `WeightsSet`.
     pub router_governance: Option<Address>,
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
@@ -130,11 +132,7 @@ impl IndexerConfig {
                 addrs.push(reg);
             }
         }
-        if let Some(gov) = self.router_governance {
-            addrs.push(gov);
-        }
         if let Some(pr) = self.portfolio_router {
-            // Only add if not already present (e.g. when portfolio_router == router_governance).
             if !addrs.contains(&pr) {
                 addrs.push(pr);
             }
@@ -1976,113 +1974,9 @@ pub async fn handle_log(
         return Ok(r);
     }
 
-    // ProposalCreated — insert a new governance proposal row.
-    // New signature: (uint256 indexed proposalId, address indexed proposer,
-    //                  address[] vaults, uint256[] bps, uint64 votingDeadline).
-    // Fields description/createdAt/deadlineBlock removed; use empty-string/
-    // block_number/votingDeadline-as-deadline as DB defaults.
-    if topic0 == topics.proposal_created {
-        let decoded =
-            IRouterGovernanceEvents::ProposalCreated::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("ProposalCreated: {e}")))?;
-        let r = db
-            .insert_proposal(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                decoded.proposer.into_array(),
-                "", // description removed from ProposalCreated (RouterGovernance.sol:106)
-                log.block_number as i64, // createdAt removed; use block_number
-                decoded.votingDeadline as i64,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // VoteCast — insert a per-voter vote row and update running tally.
-    // New signature: (uint256 indexed proposalId, address indexed voter,
-    //                  uint256 power, uint256 totalFor).
-    // `support` bool removed (all votes are FOR); `weight` renamed to `power`.
-    if topic0 == topics.vote_cast {
-        let decoded = IRouterGovernanceEvents::VoteCast::decode_log(&into_alloy_log(log), true)
-            .map_err(|e| IndexerError::Decode(format!("VoteCast: {e}")))?;
-        let mut r = db
-            .insert_vote(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                decoded.voter.into_array(),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                true, // support bool removed; governance only records FOR votes
-                decoded.power,
-            )
-            .await?;
-        // Store governance_vote in account history for the voter.
-        r += db
-            .insert_history_event(
-                cfg.chain_id,
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                decoded.voter.into_array(),
-                "governance_vote",
-                None,
-                None,
-                None,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // ProposalExecuted — mark proposal status = 2 (executed).
-    // New signature: (uint256 indexed proposalId, address indexed executor).
-    if topic0 == topics.proposal_executed {
-        let decoded =
-            IRouterGovernanceEvents::ProposalExecuted::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("ProposalExecuted: {e}")))?;
-        let r = db
-            .execute_proposal(
-                cfg.chain_id,
-                decoded.proposalId.try_into().unwrap_or(i64::MAX),
-                log.block_number as i64,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // WeightsApplied — record a router weight snapshot.
-    // New signature: (uint256 indexed proposalId, address[] vaults, uint256[] bps).
-    if topic0 == topics.weights_applied {
-        let decoded =
-            IRouterGovernanceEvents::WeightsApplied::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("WeightsApplied: {e}")))?;
-        let vault_addresses: Vec<[u8; 20]> =
-            decoded.vaults.iter().map(|a| a.into_array()).collect();
-        let bps_values: Vec<i64> = decoded
-            .bps
-            .iter()
-            .map(|b| b.try_into().unwrap_or(i64::MAX))
-            .collect();
-        let r = db
-            .insert_router_weight_snapshot(
-                cfg.chain_id,
-                log.address.into_array(),
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                vault_addresses,
-                bps_values,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // WeightsSet — direct admin call to PortfolioRouter.setWeights().
+    // WeightsSet — PortfolioRouter.setWeights(), called by
+    // RouterGovernance.applyReceipt (and by the demo seed script).
     // Signature: WeightsSet(address[] vaults, uint256[] bps).
-    // This is the path taken by the demo seed script (not governance execution).
     if topic0 == topics.weights_set {
         let decoded = IPortfolioRouterEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;
@@ -2280,7 +2174,7 @@ pub async fn handle_log(
     // T20 — GATE ON THE EMITTING CONTRACT.
     //
     // `handle_log` dispatches on `topic0` alone, over a watched-address set that
-    // also carries the gateway, the vaults, the registry, the router, governance
+    // also carries the gateway, the vaults, the registry, the router
     // and the IC policy. `ReceiptRecorded`'s topic0 is just a hash: ANY watched
     // contract that emits an event with that signature lands in the branches
     // below. Only the configured ConsensusRecommendationReceipt deployment may
@@ -3359,6 +3253,19 @@ mod tests {
             (router, "router_governance"),
             "first kind wins, which is what the upsert's ON CONFLICT already did"
         );
+    }
+
+    /// RouterGovernance emits no event the indexer decodes (issue #1698), so it
+    /// is registered as a contract but its logs are not fetched.
+    #[test]
+    fn router_governance_is_registered_but_not_watched() {
+        let gov = Address::from([0x66u8; 20]);
+        let mut cfg = admin_cfg();
+        cfg.router_governance = Some(gov);
+        assert!(!cfg.watched_addresses().contains(&gov));
+        assert!(cfg
+            .configured_contracts()
+            .contains(&(gov, "router_governance")));
     }
 
     #[test]

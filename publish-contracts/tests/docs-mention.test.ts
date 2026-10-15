@@ -12,9 +12,8 @@ const DOCS = {
 
 const PHRASES: [string, RegExp][] = [
   ["the row and its arguments", /--row apply-receipt --receipt-id 0x<bytes32> --payload FILE/],
-  ["one timelock batch of release and weights", /ONE (`scheduleBatch`|timelock batch)/],
-  ["releaseReceipt and the weight change", /releaseReceipt\(receiptId\)/],
-  ["setDefaultWeights on today's bytecode", /setDefaultWeights\(vaults, bps\)/],
+  ["one timelock call (issue 1698)", /ONE timelock call/],
+  ["the weight setter's applyReceipt", /applyReceipt\(receiptId, payloadDigest, vaults, bps\)/],
   ["the digest refusal", /keccak256/],
   ["the sum refusal", /10000 bps/],
   ["the vault set refusal", /router-eligible vaults/],
@@ -40,13 +39,13 @@ describe("docs mention the apply-receipt row (issue 1696)", () => {
   });
 });
 
-// Issue 1743: the clear row and the voted-vector refusal are documented in both docs.
-describe("docs mention the clear-voted-weights row and the voted-vector refusal (issue 1743)", () => {
+// Issue 1743: the clear row is documented in both docs, and that an active vector does not block apply-receipt (issue 1698).
+describe("docs mention the clear-voted-weights row and that applyReceipt overwrites an active vector (issue 1743, issue 1698)", () => {
   const P: [string, RegExp][] = [
     ["the row", /--row clear-voted-weights/],
     ["the single call", /RouterGovernance\.clearVotedWeights\(\)/],
     ["the role", /ADMIN_ROLE/],
-    ["the refusal error", /VOTED_WEIGHTS_ACTIVE/],
+    ["an active vector does not block the row", /An active vector already in effect does not block the row: `applyReceipt` overwrites it\./],
     ["the effective weights read-back", /getEffectiveWeights\(\)/],
     ["the evidence list", /voted_weights_clears/],
     ["the verifier labels", /router: votedWeightsActive is false after deploy/],

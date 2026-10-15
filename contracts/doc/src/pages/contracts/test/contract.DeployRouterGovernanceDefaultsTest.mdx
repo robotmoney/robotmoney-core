@@ -1,48 +1,32 @@
 ---
 title: "DeployRouterGovernanceDefaultsTest"
+description: "What the governance stage leaves behind, read from the chain: the weight setter holds router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the receipt register's ADMIN_ROLE; the deployer's router WEIGHT_SETTER_ROLE is gone; the deployer holds the governance contract's ADMIN_ROLE and WEIGHT_SETTER_ROLE until the timelock stage hands them over."
 ---
 
 # DeployRouterGovernanceDefaultsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployRouterGovernanceDefaults.t.sol)
 
 **Inherits:** Test
 
-<i>
-
-Why this file exists separately from GovernanceSeparationInvariant.t.sol:
-that suite proves the quorum is meaningful for a fixture it configures
-itself (`QUORUM_THRESHOLD = 250e18`). It says nothing about what a
-deployment does when nobody passes a quorum — which is exactly how the
-devnet ended up reporting `quorumThreshold() == 1`. The gap was a
-DEFAULT, so the test has to be about the default.
-
-</i>
+What the governance stage leaves behind, read from the chain: the weight
+setter holds router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the receipt
+register's ADMIN_ROLE; the deployer's router WEIGHT_SETTER_ROLE is gone; the
+deployer holds the governance contract's ADMIN_ROLE and WEIGHT_SETTER_ROLE
+until the timelock stage hands them over.
 
 ## Constants
 
-### VOTING_PERIOD
-
-<i>
-
-Explicit values the test passes. The script has no defaults for any of them.
-
-</i>
+### ADMIN_ROLE
 
 ```solidity
-uint64 internal constant VOTING_PERIOD = 3600;
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 ```
 
-### EXECUTION_DELAY
+### WEIGHT_SETTER_ROLE
 
 ```solidity
-uint64 internal constant EXECUTION_DELAY = 3600;
-```
-
-### QUORUM_THRESHOLD
-
-```solidity
-uint256 internal constant QUORUM_THRESHOLD = 2;
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 ```
 
 ## State Variables
@@ -57,6 +41,12 @@ DeployRouterGovernance internal script;
 
 ```solidity
 PortfolioRouter internal router;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
 ```
 
 ### admin
@@ -75,139 +65,40 @@ address internal admin = makeAddr("gov-admin");
 function setUp() public;
 ```
 
-<a id="test_deployingwiththedefaultyieldsameaningfulonchainquorum"></a>
+<a id="test_stage_wirestheweightsetter"></a>
 
-### test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum
-
-Deploying with the default produces on-chain state that agrees
-with it. The criterion is about `quorumThreshold()` as READ FROM
-THE CHAIN, so assert the deployed value, not the constant.
+### test_stage_wiresTheWeightSetter
 
 ```solidity
-function test_deployingWithTheDefaultYieldsAMeaningfulOnChainQuorum() public;
+function test_stage_wiresTheWeightSetter() public;
 ```
 
-<a id="test_defaultquorumexceedsoneunitofvotingpower"></a>
+<a id="test_stage_deployerholdsnorouterweightsetterrole"></a>
 
-### test_defaultQuorumExceedsOneUnitOfVotingPower
+### test_stage_deployerHoldsNoRouterWeightSetterRole
 
-The default quorum is strictly more than one unit of voting
-power, so a holder of one unit cannot constitute quorum alone.
-
-<i>
-
-Named for what it actually asserts. It does NOT drive a
-propose/vote/execute attempt, and a single voter granted two
-units would still reach the default quorum — the stronger
-voter-set form lives in
-GovernanceSeparationInvariant.t.sol::test_quorumReflectsTheVoterSet.
-
-</i>
+The router constructor seeds the deployer with the role. The stage drops it.
 
 ```solidity
-function test_defaultQuorumExceedsOneUnitOfVotingPower() public;
+function test_stage_deployerHoldsNoRouterWeightSetterRole() public;
 ```
 
-<a id="test_stage6_grantsweightsetterroletogovernance"></a>
+<a id="test_stage_refuseswithoutreceiptadmin"></a>
 
-### test_stage6_grantsWeightSetterRoleToGovernance
+### test_stage_refusesWithoutReceiptAdmin
 
-Stage 6 grants WEIGHT_SETTER_ROLE to RouterGovernance, the sole setWeights gate.
+A deployer that does not administer the receipt register cannot wire the
+release grant, and the stage stops instead of leaving applyReceipt dead.
 
 ```solidity
-function test_stage6_grantsWeightSetterRoleToGovernance() public;
+function test_stage_refusesWithoutReceiptAdmin() public;
 ```
 
-<a id="test_stage6_deployerholdsnoweightsetterrole"></a>
+<a id="test_inprocess_refuseszeroinputs"></a>
 
-### test_stage6_deployerHoldsNoWeightSetterRole
-
-The router constructor seeds the deployer with the role. Stage 6 drops it.
+### test_inProcess_refusesZeroInputs
 
 ```solidity
-function test_stage6_deployerHoldsNoWeightSetterRole() public;
-```
-
-<a id="test_runrefusesanexplicitquorumofone"></a>
-
-### test_runRefusesAnExplicitQuorumOfOne
-
-An explicit `QUORUM_THRESHOLD=1` is refused by the broadcast
-entrypoint before anything is deployed.
-
-<i>
-
-Sets ONLY `QUORUM_THRESHOLD`. `vm.setEnv` writes process-global
-state that concurrently scheduled test files share, and
-`Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds` both
-sets and asserts on `ADMIN_ADDRESS`; setting it here too raced
-that test and intermittently deployed with the wrong admin
-(AgentTokenVault.t.sol:238 records the prior incident). The
-script now checks the quorum floor before reading any address,
-so those two writes are unnecessary. `QUORUM_THRESHOLD` is read
-by nothing else in the suite. Restored afterwards so no later
-test in this file inherits it.
-
-</i>
-
-```solidity
-function test_runRefusesAnExplicitQuorumOfOne() public;
-```
-
-<a id="test_runrefusesaquorumofzero"></a>
-
-### test_runRefusesAQuorumOfZero
-
-`QUORUM_THRESHOLD=0` — the #864 env-default hazard — is refused
-by the same guard rather than by the contract's own minimum.
-
-<i>
-
-See the note on test_runRefusesAnExplicitQuorumOfOne: only
-`QUORUM_THRESHOLD` is touched, and it is restored.
-
-</i>
-
-```solidity
-function test_runRefusesAQuorumOfZero() public;
-```
-
-<a id="test_inprocessdeployrefusesaquorumofone"></a>
-
-### test_inProcessDeployRefusesAQuorumOfOne
-
-The in-process path enforces the same floor. It is the entrypoint
-fork tests and fixtures call, so an unguarded variant would be a
-second, quieter way to deploy a hollow quorum.
-
-```solidity
-function test_inProcessDeployRefusesAQuorumOfOne() public;
-```
-
-<a id="test_thedeploydefaultisnotbelowthecontractfloor"></a>
-
-### test_theDeployDefaultIsNotBelowTheContractFloor
-
-The contract floor and the deploy default now agree (T22 /
-D16: `MIN_QUORUM_THRESHOLD` was raised from 1 to 2). The script
-guard is kept anyway — it refuses BEFORE spending gas on a
-deployment and gives the operator a sentence instead of a
-four-byte selector — but it is no longer the only thing standing
-between the topology and a hollow quorum. This test fails loudly
-if the two ever drift apart in the weaker direction.
-
-```solidity
-function test_theDeployDefaultIsNotBelowTheContractFloor() public;
-```
-
-<a id="test_thecontractitselfrefusesaquorumofone"></a>
-
-### test_theContractItselfRefusesAQuorumOfOne
-
-The constructor now refuses a quorum of 1 on its own, so the
-guarantee survives a caller that bypasses this script entirely.
-
-```solidity
-function test_theContractItselfRefusesAQuorumOfOne() public;
+function test_inProcess_refusesZeroInputs() public;
 ```
 

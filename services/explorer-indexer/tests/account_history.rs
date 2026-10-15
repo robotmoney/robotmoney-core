@@ -1,13 +1,14 @@
 //! Issue #654 — account history multi-event indexing tests.
 //!
-//! Verifies that the indexer stores all five event types from
-//! architecture §5.4 into `account_history_events`:
+//! Verifies that the indexer stores the event types from architecture §5.4
+//! into `account_history_events`:
 //!
 //!   - AgentDeposit → kind="deposit"
 //!   - ERC-4626 Withdraw → kind="withdrawal"
 //!   - ExitFeeCharged → kind="fee_charged"
 //!   - AgentAuthorized / AgentRevoked → kind="policy_change"
-//!   - VoteCast → kind="governance_vote"
+//!
+//! There is no governance vote: `RouterGovernance` has no voting (issue #1698).
 //!
 //! Tests run against a real Postgres container (skipped if Docker
 //! is unavailable) and use the stub RPC server from `common`.
@@ -17,7 +18,7 @@ mod common;
 use alloy_primitives::{Address, U256};
 use common::pg_fixture;
 use explorer_indexer::{
-    abi::{IGatewayEvents, IRouterGovernanceEvents, IVaultEvents},
+    abi::{IGatewayEvents, IVaultEvents},
     db::CountTable,
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -61,7 +62,7 @@ fn stub_block(number: u64) -> serde_json::Value {
 }
 
 /// Standard IndexerConfig for account_history tests.
-fn history_cfg(gateway: Address, vault: Address, gov: Option<Address>) -> IndexerConfig {
+fn history_cfg(gateway: Address, vault: Address) -> IndexerConfig {
     IndexerConfig {
         chain_id: 8453,
         chain_name: "base".into(),
@@ -69,7 +70,7 @@ fn history_cfg(gateway: Address, vault: Address, gov: Option<Address>) -> Indexe
         gateway,
         vault,
         registry: None,
-        router_governance: gov,
+        router_governance: None,
         portfolio_router: None,
         investment_committee: None,
         consensus_receipt: None,
@@ -119,7 +120,7 @@ async fn account_history_deposit_event_indexed() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),
@@ -180,7 +181,7 @@ async fn account_history_withdrawal_event_indexed() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),
@@ -233,7 +234,7 @@ async fn account_history_fee_charged_event_indexed() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),
@@ -291,7 +292,7 @@ async fn account_history_policy_change_authorized_indexed() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),
@@ -315,85 +316,6 @@ async fn account_history_policy_change_authorized_indexed() {
     assert!(
         fx.db.count(CountTable::AgentPolicies).await.unwrap() >= 1,
         "agent_policies must still be populated"
-    );
-}
-
-/// AC-5: VoteCast event is stored as `kind="governance_vote"` in
-/// account_history_events, keyed to the voter address.
-#[tokio::test]
-async fn account_history_governance_vote_indexed() {
-    let fx = pg_fixture().await;
-
-    let gateway = Address::from([0x11u8; 20]);
-    let vault = Address::from([0x22u8; 20]);
-    let gov = Address::from([0x99u8; 20]);
-    let voter = Address::from([0x33u8; 20]);
-    let proposer = Address::from([0x44u8; 20]);
-
-    // First seed a proposal so the governance_votes FK is satisfied.
-    let proposal_log = encode_log(
-        IRouterGovernanceEvents::ProposalCreated {
-            proposalId: U256::from(1u64),
-            proposer,
-            vaults: vec![],
-            bps: vec![],
-            votingDeadline: 100u64,
-        },
-        gov,
-        9u64,
-        [0x66u8; 32],
-        0,
-    );
-    let vote_log = encode_log(
-        IRouterGovernanceEvents::VoteCast {
-            proposalId: U256::from(1u64),
-            voter,
-            power: U256::from(1u64),
-            totalFor: U256::from(1u64),
-        },
-        gov,
-        10u64,
-        [0x77u8; 32],
-        0,
-    );
-
-    let stub = common::StubRpcServer::start().await;
-    stub.set("eth_blockNumber", serde_json::Value::String("0x0f".into())); // 15
-    stub.set(
-        "eth_getLogs",
-        serde_json::Value::Array(vec![proposal_log, vote_log]),
-    );
-    stub.set(
-        "eth_call",
-        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
-    );
-    stub.set("eth_getBlockByNumber", stub_block(10));
-
-    let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, Some(gov));
-    let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(
-        outcome.error.is_none(),
-        "indexer run must succeed: {:?}",
-        outcome.error
-    );
-    stub.shutdown();
-
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM account_history_events WHERE chain_id = $1 AND kind = 'governance_vote'")
-            .bind(8453_i64)
-            .fetch_one(fx.db.pool())
-            .await
-            .unwrap();
-    assert_eq!(
-        count, 1,
-        "one governance_vote history row expected, got {count}"
-    );
-
-    // governance_votes must also be populated (no regression).
-    assert!(
-        fx.db.count(CountTable::GovernanceVotes).await.unwrap() >= 1,
-        "governance_votes must still be populated"
     );
 }
 
@@ -450,7 +372,7 @@ async fn account_history_deposit_and_withdrawal_chronological() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),
@@ -605,7 +527,7 @@ async fn agent_ownership_transferred_moves_owner_and_carries_policy() {
     stub.set("eth_getBlockByNumber", stub_block(10));
 
     let rpc = JsonRpc::new(&stub.url);
-    let cfg = history_cfg(gateway, vault, None);
+    let cfg = history_cfg(gateway, vault);
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
     assert!(
         outcome.error.is_none(),

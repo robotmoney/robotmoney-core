@@ -3,9 +3,11 @@
 // Canonical: docs/technical/security-model.md §4 — Access control & admin
 // Canonical: docs/technical/governance-isomorphism.md — the Safe is a real
 //            2-of-3 SafeProxy on the canonical SafeL2 singleton (R5, R6, R9)
-// Implements: fusion round-2 task R7 — the RouterGovernance execute() path must
+// Implements: fusion round-2 task R7 — the RouterGovernance weight path must
 //             actually reach PortfolioRouter.setWeights on a FRESH deployment,
 //             while the deployer EOA must not be able to call setWeights at all.
+// Implements: issue #1698 — that path is applyReceipt, driven by the Safe through
+//             the timelock; there is no voting.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -20,6 +22,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
@@ -30,10 +33,11 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 ///         scripts build it — not on a hand-wired fixture.
 ///
 ///         Before this task, `DeployRouterGovernance` deployed the governance
-///         contract and stopped. Nothing ever granted it `ADMIN_ROLE` on the
-///         `PortfolioRouter`, so a proposal that passed quorum and cleared its
-///         execution delay still reverted inside `router.setWeights` — the
-///         approving body could approve and could not act. The only thing that
+///         contract and stopped. Nothing ever granted it the router's weight
+///         role, so an approved weight change still reverted inside
+///         `router.setWeights` — the approving body could approve and could not
+///         act. Since issue 1698 the approved change is a Safe-scheduled
+///         `applyReceipt` through the timelock. The only thing that
 ///         COULD move weights was the deployer EOA, which is exactly the
 ///         inversion §4.3 describes as the gap.
 ///
@@ -71,6 +75,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     RobotMoneyVault internal vault;
     RobotMoneyGateway internal gateway;
     InvestmentCommitteePolicy internal icPolicy;
+    ConsensusRecommendationReceipt internal receipts;
     TimelockController internal timelock;
 
     MockGovVault internal vaultA;
@@ -94,19 +99,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     address internal emergency = makeAddr("emergency");
     address internal pauser = makeAddr("pauser");
 
-    // Approving body: two voters, one unit of power each, quorum 2 — so BOTH
-    // must vote. This is AC-GOV-03's "quorum 2 of total voting power 2".
-    address internal voter1 = makeAddr("gov-voter-1");
-    address internal voter2 = makeAddr("gov-voter-2");
-
     // Recommending body: committee agents, deliberately disjoint (INV-4).
     address internal agentAthena = makeAddr("committee-athena");
     address internal agentWoon = makeAddr("committee-woon");
 
-    uint64 internal constant VOTING_PERIOD = 1 days;
-    uint64 internal constant EXECUTION_DELAY = 1 days;
-    uint256 internal constant QUORUM = 2;
     uint256 internal constant MIN_DELAY = 2 days;
+
+    bytes32 internal constant RECEIPT_ID = keccak256("handover-receipt-1");
+    bytes32 internal constant DIGEST = keccak256("handover canonical receipt bytes");
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
@@ -148,25 +148,20 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        // The committee body. Separately administered; no voting power.
+        // The committee body. Separately administered; no weight authority.
+        // The receipt register's gateway is this test contract, so the test can
+        // record a receipt directly (the committee's record path is not under test).
         icPolicy = new InvestmentCommitteePolicy(deployer, address(gateway));
+        receipts = new ConsensusRecommendationReceipt(deployer, address(this), address(icPolicy));
         vm.startPrank(deployer);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentAthena);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentWoon);
         vm.stopPrank();
 
-        // The deployment under test: the governance script, at quorum 2.
-        DeployRouterGovernance.Deployed memory d = govScript.runInProcessWith(
-            deployer, address(router), VOTING_PERIOD, EXECUTION_DELAY, QUORUM
-        );
+        // The deployment under test: the governance script.
+        DeployRouterGovernance.Deployed memory d =
+            govScript.runInProcessWith(deployer, address(router), address(receipts));
         gov = d.governance;
-
-        // Voting power is assigned by ADMIN_ROLE, which the deployer still
-        // holds until the handover below.
-        vm.startPrank(deployer);
-        gov.setVotingPower(voter1, 1);
-        gov.setVotingPower(voter2, 1);
-        vm.stopPrank();
 
         // The handover ceremony: every ADMIN_ROLE moves to the timelock and is
         // revoked from the deployer EOA.
@@ -178,7 +173,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // role, and the script's "deployer no longer has ADMIN_ROLE" requires
         // pass vacuously.)
         vm.prank(deployer);
-        DeployTimelock.Deployed memory t = timelockScript.runInProcess(
+        DeployTimelock.Deployed memory t = timelockScript.runInProcessWithCommittee(
             address(vault),
             address(gateway),
             address(registry),
@@ -187,9 +182,17 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             address(safe),
             emergency,
             MIN_DELAY,
+            DeployTimelock.Committee({
+                icPolicy: address(icPolicy),
+                consensusReceipt: address(receipts),
+                receiptAdmin: deployer
+            }),
             DeployTimelock.SafeSpec({owners: _ownersOfSafe(), threshold: 2})
         );
         timelock = t.timelock;
+
+        // The committee records a receipt (this contract is the register's gateway).
+        receipts.recordReceipt(agentAthena, RECEIPT_ID, DIGEST, "https://example.invalid/r1");
     }
 
     // ─── Half 1: the approving body can act ──────────────────────────────────
@@ -198,7 +201,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     function test_governanceHoldsRouterAdminRole() public view {
         assertTrue(
             IAccessControl(address(router)).hasRole(ADMIN_ROLE, address(gov)),
-            "RouterGovernance cannot reach router.setWeights: execute() is dead on arrival"
+            "RouterGovernance cannot reach the router fallbacks: setDefaultWeights is dead on arrival"
         );
     }
 
@@ -215,40 +218,47 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, emergency), "emergency holds the setter");
     }
 
-    /// @notice THE R7 regression: propose (routed through the timelock, which
-    ///         now holds governance ADMIN_ROLE) → both voters vote → delay
-    ///         elapses → execute() lands the weights on the router.
-    function test_executeReachesSetWeightsOnAFreshDeployment() public {
+    /// @notice THE R7 regression: the Safe schedules `applyReceipt` on the
+    ///         timelock (which holds the governance WEIGHT_SETTER_ROLE), the delay
+    ///         elapses, and the execute releases the receipt and lands the
+    ///         weights on the router.
+    function test_applyReceiptReachesSetWeightsOnAFreshDeployment() public {
         (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
+        bytes memory data =
+            abi.encodeCall(RouterGovernance.applyReceipt, (RECEIPT_ID, DIGEST, vaults, bps));
+        bytes32 salt = keccak256("apply-receipt");
 
-        uint256 proposalId = _proposeViaTimelock(vaults, bps);
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(gov), 0, data, bytes32(0), salt, MIN_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        _safeExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(gov), 0, data, bytes32(0), salt))
+        );
 
-        // Quorum is 2 and each voter has 1: a single vote is not enough.
-        vm.prank(voter1);
-        gov.vote(proposalId);
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
-        vm.expectRevert(RouterGovernance.QuorumNotReached.selector);
-        gov.execute(proposalId);
-
-        // Second proposal, both voters — the honest path.
-        proposalId = _proposeViaTimelock(vaults, bps);
-        vm.prank(voter1);
-        gov.vote(proposalId);
-        vm.prank(voter2);
-        gov.vote(proposalId);
-
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
-
-        gov.execute(proposalId);
-
+        assertTrue(receipts.isReleased(RECEIPT_ID), "receipt not released");
         (address[] memory appliedVaults, uint256[] memory appliedBps) = router.getWeights();
-        assertEq(appliedVaults.length, 2, "no voted weight vector on the router");
+        assertEq(appliedVaults.length, 2, "no active weight vector on the router");
         assertEq(appliedVaults[0], address(vaultA));
         assertEq(appliedVaults[1], address(vaultB));
         assertEq(appliedBps[0], 6_000, "vault A weight not applied");
         assertEq(appliedBps[1], 4_000, "vault B weight not applied");
+    }
+
+    /// @notice After the handover the timelock alone holds the governance
+    ///         WEIGHT_SETTER_ROLE, and RouterGovernance can release receipts.
+    function test_timelockAloneAppliesReceipts() public view {
+        assertEq(gov.getRoleMemberCount(WEIGHT_SETTER_ROLE), 1, "one applyReceipt caller");
+        assertEq(gov.getRoleMember(WEIGHT_SETTER_ROLE, 0), address(timelock));
+        assertTrue(
+            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            "governance cannot release the receipt it applies"
+        );
+        assertEq(address(gov.receipts()), address(receipts));
     }
 
     // ─── Half 2: the deployer EOA cannot ─────────────────────────────────────
@@ -304,7 +314,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     }
 
     /// @notice The same Safe -> Timelock path still reaches setDefaultWeights,
-    ///         the below-quorum fallback the timelock keeps through ADMIN_ROLE.
+    ///         the fallback the timelock keeps through ADMIN_ROLE.
     function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public {
         (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
         bytes memory data = abi.encodeCall(PortfolioRouter.setDefaultWeights, (vaults, bps));
@@ -331,23 +341,18 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
     // ─── INV-4: the two bodies are disjoint ──────────────────────────────────
 
-    /// @notice The voters that carried the executed proposal hold no
-    ///         COMMITTEE_AGENT_ROLE, and the committee agents hold no power.
-    function test_voterSetIsDisjointFromTheCommittee() public view {
-        bytes32 agentRole = icPolicy.COMMITTEE_AGENT_ROLE();
-        assertFalse(icPolicy.hasRole(agentRole, voter1), "voter1 is also a committee agent");
-        assertFalse(icPolicy.hasRole(agentRole, voter2), "voter2 is also a committee agent");
-        assertEq(gov.votingPower(agentAthena), 0, "committee agent holds voting power");
-        assertEq(gov.votingPower(agentWoon), 0, "committee agent holds voting power");
-    }
-
-    /// @notice The quorum that carried it is the D16 floor, and it is not
-    ///         satisfiable by one voter.
-    function test_quorumIsTwoOfTotalVotingPowerTwo() public view {
-        (,, uint256 quorumThreshold, uint256 totalVotingPower) = gov.cadenceParams();
-        assertEq(quorumThreshold, 2);
-        assertEq(totalVotingPower, 2);
-        assertGt(quorumThreshold, 1, "a quorum of 1 is a hollow separate-body control");
+    /// @notice No committee agent holds any weight authority: not the
+    ///         governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
+    function test_committeeHoldsNoWeightAuthority() public view {
+        address[2] memory agents = [agentAthena, agentWoon];
+        for (uint256 i = 0; i < agents.length; i++) {
+            assertFalse(gov.hasRole(WEIGHT_SETTER_ROLE, agents[i]), "agent can apply receipts");
+            assertFalse(gov.hasRole(ADMIN_ROLE, agents[i]), "agent administers governance");
+            assertFalse(
+                IAccessControl(address(router)).hasRole(WEIGHT_SETTER_ROLE, agents[i]),
+                "agent can set router weights"
+            );
+        }
     }
 
     // ─── The Safe ────────────────────────────────────────────────────────────
@@ -382,7 +387,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             (
                 address(gov),
                 0,
-                abi.encodeCall(RouterGovernance.setQuorumThreshold, (99)),
+                abi.encodeCall(RouterGovernance.clearVotedWeights, ()),
                 bytes32(0),
                 keccak256("one-owner"),
                 MIN_DELAY
@@ -406,33 +411,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         bps = new uint256[](2);
         bps[0] = 6_000;
         bps[1] = 4_000;
-    }
-
-    /// @dev `propose` is ADMIN_ROLE-gated and ADMIN_ROLE now lives on the
-    ///      timelock, so a proposal is scheduled by the Safe and executed after
-    ///      the min delay — the real post-handover route.
-    function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
-        internal
-        returns (uint256 proposalId)
-    {
-        bytes memory data = abi.encodeCall(RouterGovernance.propose, (vaults, bps));
-        bytes32 salt = keccak256(abi.encode(block.timestamp, vaults, bps));
-
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(
-                TimelockController.schedule, (address(gov), 0, data, bytes32(0), salt, MIN_DELAY)
-            )
-        );
-
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(TimelockController.execute, (address(gov), 0, data, bytes32(0), salt))
-        );
-
-        proposalId = gov.currentProposalId();
     }
 
     /// @dev A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the

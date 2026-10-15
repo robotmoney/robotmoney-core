@@ -83,7 +83,7 @@ describe("issue 1754: record-receipt checks the digest and the id against the pa
 
 describe("issue 1754: apply-receipt accepts the real receipt only under the protocol digest", () => {
   const V = { USDC: "0x00000000000000000000000000000000000000a1", PROTO: "0x00000000000000000000000000000000000000a2", AGENT: "0x00000000000000000000000000000000000000a3", RWA: "0x00000000000000000000000000000000000000a4" } as Record<"USDC" | "PROTO" | "AGENT" | "RWA", Address>;
-  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.AGENT, V.RWA], vaultOf: V, votedWeightsActive: false };
+  const base = { receiptId: RID as Hex, payload: bytes, recorded: true, released: false, eligible: [V.USDC, V.PROTO, V.AGENT, V.RWA], vaultOf: V };
   test("stored protocol digest: the vector is the real weights in registry order", () => {
     const v = planApply({ ...base, storedDigest: DIGEST });
     expect(v.vaults).toEqual([V.USDC, V.PROTO, V.AGENT, V.RWA]);

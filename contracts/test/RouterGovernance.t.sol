@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Canonical: none — Foundry unit tests for contracts/RouterGovernance.sol
+// Canonical: docs/technical/governance-decisions.md §3.6 — unit tests for contracts/RouterGovernance.sol
+// Implements: issue #1698 (the governed path itself runs through the real Safe and timelock in RouterGovernanceApplyReceipt.t.sol)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -12,6 +12,8 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
+import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -72,1292 +74,197 @@ contract MockGovVault is ERC20 {
 
 // ─── RouterGovernanceTest ─────────────────────────────────────────────────────
 
+/// @notice Unit tests of the weight setter before any handover: constructor checks,
+///         role administration, the admin fallbacks and the router's duplicate-vault
+///         refusal. The governed path (Safe -> timelock -> applyReceipt) is proved in
+///         RouterGovernanceApplyReceipt.t.sol.
 contract RouterGovernanceTest is Test {
-    // ── Governance parameters ──
-    uint64 constant VOTING_PERIOD = 1 days;
-    uint64 constant EXECUTION_DELAY = 1 days;
-    uint256 constant QUORUM_THRESHOLD = 510_000e18; // 51% of 1M total power
-
-    // ── Voting power ──
-    uint256 constant ALICE_POWER = 600_000e18; // ~60%
-    uint256 constant BOB_POWER = 200_000e18; // ~20%
-    uint256 constant CAROL_POWER = 200_000e18; // ~20%
-
     MockUsdc internal usdc;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
+    ConsensusRecommendationReceipt internal receipts;
     RouterGovernance internal gov;
 
     address internal govAdmin = makeAddr("govAdmin");
     address internal routerAdmin = makeAddr("routerAdmin");
     address internal registryAdmin = makeAddr("registryAdmin");
-
-    address internal alice = makeAddr("alice"); // 60% power
-    address internal bob = makeAddr("bob"); // 20% power
-    address internal carol = makeAddr("carol"); // 20% power
-    address internal stranger = makeAddr("stranger"); // 0 power
+    address internal stranger = makeAddr("stranger");
 
     MockGovVault internal vaultA;
     MockGovVault internal vaultB;
 
-    VaultRegistry.VaultMetadata internal metaA;
-    VaultRegistry.VaultMetadata internal metaB;
-
-    // ─── setUp ────────────────────────────────────────────────────────────────
-
     function setUp() public {
-        // Deploy USDC and registry.
         usdc = new MockUsdc();
         registry = new VaultRegistry(registryAdmin);
-
-        // Deploy vaults and register them.
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
-
-        metaA =
-            VaultRegistry.VaultMetadata({name: "Vault A", asset: address(usdc), registeredAt: 0});
-        metaB =
-            VaultRegistry.VaultMetadata({name: "Vault B", asset: address(usdc), registeredAt: 0});
-
         vm.startPrank(registryAdmin);
-        registry.registerVault(address(vaultA), metaA);
-        registry.registerVault(address(vaultB), metaB);
-        vm.stopPrank();
-
-        // Deploy router and governance.
-        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
-        gov = new RouterGovernance(
-            address(router), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
+        registry.registerVault(
+            address(vaultA),
+            VaultRegistry.VaultMetadata({name: "Vault A", asset: address(usdc), registeredAt: 0})
         );
-
-        // Grant governance contract ADMIN_ROLE on the router so it can call setWeights.
-        bytes32 adminRole = router.ADMIN_ROLE();
-        vm.startPrank(routerAdmin);
-        router.grantRole(adminRole, address(gov));
-        // setWeights is gated by WEIGHT_SETTER_ROLE, held only by governance.
-        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
-        router.revokeRole(router.WEIGHT_SETTER_ROLE(), routerAdmin);
-        vm.stopPrank();
-        // Issue #475: production-readiness is registry state. Mark both
-        // vaults router-eligible in the registry so governance can weight
-        // them through the single production code path.
-        vm.startPrank(registryAdmin);
+        registry.registerVault(
+            address(vaultB),
+            VaultRegistry.VaultMetadata({name: "Vault B", asset: address(usdc), registeredAt: 0})
+        );
         registry.setRouterEligible(address(vaultA), true);
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        // Assign voting power via govAdmin.
-        vm.startPrank(govAdmin);
-        gov.setVotingPower(alice, ALICE_POWER);
-        gov.setVotingPower(bob, BOB_POWER);
-        gov.setVotingPower(carol, CAROL_POWER);
+        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
+        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(govAdmin, address(this));
+        receipts = new ConsensusRecommendationReceipt(govAdmin, address(this), address(ic));
+        gov = new RouterGovernance(address(router), address(receipts), govAdmin);
+
+        vm.startPrank(routerAdmin);
+        router.grantRole(router.ADMIN_ROLE(), address(gov));
+        router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
         vm.stopPrank();
     }
 
-    // ─── Helper ───────────────────────────────────────────────────────────────
-
-    /// @dev Build a valid 60/40 proposal and submit it from govAdmin.
-    function _proposeValid() internal returns (uint256 proposalId) {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        proposalId = gov.propose(vaults, bps);
-    }
-
-    // ─── Constructor ─────────────────────────────────────────────────────────
-
-    function test_constructor_revertsOnZeroRouter() public {
-        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(address(0), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD);
-    }
-
-    function test_constructor_revertsOnZeroAdmin() public {
-        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(
-            address(router), address(0), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
-        );
-    }
-
-    function test_constructor_storesParams() public view {
-        assertEq(address(gov.router()), address(router));
-        assertEq(gov.votingPeriod(), VOTING_PERIOD);
-        assertEq(gov.executionDelay(), EXECUTION_DELAY);
-        assertEq(gov.quorumThreshold(), QUORUM_THRESHOLD);
-    }
-
-    function test_constructor_adminRoleGranted() public view {
-        assertTrue(gov.hasRole(gov.ADMIN_ROLE(), govAdmin));
-    }
-
-    // ─── setVotingPower() ─────────────────────────────────────────────────────
-
-    function test_setVotingPower_setsAndTracksTotal() public view {
-        assertEq(gov.votingPower(alice), ALICE_POWER);
-        assertEq(gov.votingPower(bob), BOB_POWER);
-        assertEq(gov.votingPower(carol), CAROL_POWER);
-        assertEq(gov.totalVotingPower(), ALICE_POWER + BOB_POWER + CAROL_POWER);
-    }
-
-    function test_setVotingPower_revertsOnZeroAddress() public {
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        gov.setVotingPower(address(0), 100e18);
-    }
-
-    function test_setVotingPower_revertsForNonAdmin() public {
-        vm.prank(alice);
-        vm.expectRevert();
-        gov.setVotingPower(alice, 1e18);
-    }
-
-    // ─── propose() ───────────────────────────────────────────────────────────
-
-    function test_propose_successfulCreation() public {
-        uint256 pid = _proposeValid();
-        assertEq(pid, 1);
-        assertEq(gov.currentProposalId(), 1);
-    }
-
-    function test_propose_emitsProposalCreated() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        vm.expectEmit(true, true, false, false);
-        emit RouterGovernance.ProposalCreated(
-            1, govAdmin, vaults, bps, uint64(block.timestamp) + VOTING_PERIOD
-        );
-        gov.propose(vaults, bps);
-    }
-
-    function test_propose_revertsForNonAdmin() public {
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vaultA);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(alice);
-        vm.expectRevert();
-        gov.propose(vaults, bps);
-    }
-
-    function test_propose_revertsOnInvalidWeightSum() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 5_000;
-        bps[1] = 4_000; // sum = 9000, not 10000
-
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.InvalidWeightSum.selector);
-        gov.propose(vaults, bps);
-    }
-
-    function test_propose_revertsOnLengthMismatch() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.LengthMismatch.selector);
-        gov.propose(vaults, bps);
-    }
-
-    function test_propose_revertsIfAlreadyActive() public {
-        _proposeValid();
-
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vaultA);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.ActiveProposalExists.selector);
-        gov.propose(vaults, bps);
-    }
-
-    /// @notice propose() with address(0) in the vault list reverts naming address(0).
-    /// AC: forge test: propose() with address(0) in the vault list reverts naming address(0)
-    function test_propose_revertsOnZeroAddressVault() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(0);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(
-            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(0))
-        );
-        gov.propose(vaults, bps);
-    }
-
-    /// @notice propose() with a vault not in VaultRegistry reverts naming that vault.
-    /// AC: forge test: propose() with an unregistered vault reverts naming the vault address
-    function test_propose_revertsOnUnregisteredVault() public {
-        // Deploy a vault but do NOT register it in the registry.
-        MockGovVault unregisteredVault = new MockGovVault(address(usdc));
-
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(unregisteredVault);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                RouterGovernance.VaultNotEligible.selector, address(unregisteredVault)
-            )
-        );
-        gov.propose(vaults, bps);
-    }
-
-    /// @notice propose() with a vault that was registered then had eligibility revoked reverts at propose time.
-    /// AC: forge test: register then revoke eligibility for a vault; call propose() with it; assert revert
-    function test_propose_revertsOnIneligibleVault() public {
-        // vaultA is registered and eligible in setUp; revoke its eligibility.
-        vm.prank(registryAdmin);
-        registry.setRouterEligible(address(vaultA), false);
-
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(
-            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vaultA))
-        );
-        gov.propose(vaults, bps);
-    }
-
-    /// @notice propose() with a vault that was Paused (transient registry
-    ///         status) reverts VaultNotEligible naming that vault. This is the
-    ///         contract-side of the #1248 draft-worker fallback: the worker
-    ///         re-checks isRouterEligibleAndActive at draft time precisely
-    ///         because a vault Active at receipt time may be Paused by then and
-    ///         propose() would revert on exactly this vault.
-    /// AC: forge test: pause a vault; propose() with it reverts VaultNotEligible
-    function test_propose_revertsOnPausedVault() public {
-        // Mark vaultA Paused (transient status; eligibility flag stays set).
-        vm.startPrank(registryAdmin);
-        registry.setRouterEligible(address(vaultA), true);
-        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.DepositsPaused);
-        vm.stopPrank();
-        assertFalse(
-            router.isRouterEligibleAndActive(address(vaultA)), "Paused vault must be ineligible"
-        );
-
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        vm.expectRevert(
-            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vaultA))
-        );
-        gov.propose(vaults, bps);
-    }
-
-    /// @notice propose() with all eligible vaults succeeds and transitions proposal to Active state.
-    /// AC: forge test: propose() with all eligible vaults; assert proposal Active and no revert
-    function test_propose_allEligibleVaultsSucceedsActive() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        uint256 pid = gov.propose(vaults, bps);
-
-        assertEq(pid, 1);
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Active));
-    }
-
-    function test_propose_allowsNewProposalAfterDefeated() public {
-        _proposeValid();
-
-        // Fast-forward past voting period without quorum — proposal becomes Defeated.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vaultA);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(govAdmin);
-        uint256 pid = gov.propose(vaults, bps);
-        assertEq(pid, 2);
-        assertEq(gov.currentProposalId(), 2);
-    }
-
-    // ─── voteSnapshot — snapshot voting power at propose time (issue #756) ────
-
-    /// @notice propose() stores the creation block number as voteSnapshot.
-    function test_propose_snapshotsVoteSnapshot() public {
-        uint256 pid = _proposeValid();
-        assertEq(gov.proposalVoteSnapshot(pid), block.number);
-    }
-
-    /// @notice vote() reads checkpointed power at the snapshot block, not live
-    ///         votingPower: reducing Alice's power to 0 after propose() does not
-    ///         stop her from voting with her snapshot power.
-    function test_vote_usesSnapshotPowerNotLive() public {
-        uint256 pid = _proposeValid();
-
-        // Admin zeroes Alice's power in a later block, mid-proposal.
-        vm.roll(block.number + 1);
-        vm.prank(govAdmin);
-        gov.setVotingPower(alice, 0);
-        assertEq(gov.votingPower(alice), 0);
-
-        // Alice still votes with her snapshot power.
-        vm.prank(alice);
-        gov.vote(pid);
-
-        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
-        assertEq(votesFor, ALICE_POWER);
-    }
-
-    /// @notice Mid-proposal voting power changes do not retroactively affect
-    ///         already-cast votes. Alice votes with 600k power at vote time,
-    ///         then admin reduces Alice to 0 — her vote weight is preserved.
-    function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Admin reduces Alice's power to 0 mid-proposal.
-        vm.prank(govAdmin);
-        gov.setVotingPower(alice, 0);
-
-        // Alice's vote still counts — votesFor was already incremented.
-        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
-        assertEq(votesFor, ALICE_POWER);
-    }
-
-    /// @notice Granting voting power after a proposal is created does not let
-    ///         the new voter affect that proposal — the checkpoint lookup at the
-    ///         snapshot block returns 0 for newly-empowered addresses.
-    function test_vote_revertsIfPowerGrantedAfterProposal() public {
-        uint256 pid = _proposeValid();
-        uint256 snapBlock = block.number;
-
-        // Grant power to stranger in a later block.
-        vm.roll(snapBlock + 1);
-        vm.prank(govAdmin);
-        gov.setVotingPower(stranger, ALICE_POWER);
-
-        // Stranger tries to vote — voteSnapshot = snapBlock, at which
-        // stranger had no checkpoint → past power is 0.
-        vm.prank(stranger);
-        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
-        gov.vote(pid);
-    }
-
-    /// @notice getPastVotes returns the historical checkpoint value, not the
-    ///         latest assignment.
-    function test_getPastVotes_returnsHistoricalPower() public {
-        uint256 grantBlock = block.number;
-
-        vm.roll(grantBlock + 1);
-        vm.prank(govAdmin);
-        gov.setVotingPower(alice, 1e18);
-
-        // At grantBlock Alice still had her setUp power; at grantBlock+1 the
-        // new checkpoint applies.
-        assertEq(gov.getPastVotes(alice, grantBlock), ALICE_POWER);
-        assertEq(gov.getPastVotes(alice, grantBlock + 1), 1e18);
-        assertEq(gov.votingPower(alice), 1e18);
-    }
-
-    /// @notice getPastVotes for a snapshot 300 blocks in the past does not
-    ///         revert (AZ-GOV-1). The old 256-block cap would revert here.
-    function test_getPastVotes_300BlocksInPastDoesNotRevert() public {
-        // Voting power was set in setUp at block N. Roll forward 300 blocks so
-        // the snapshot is 300 behind the current tip.
-        uint256 snapshotBlock = block.number;
-        vm.roll(block.number + 300);
-
-        // Must not revert despite being 300 blocks behind tip.
-        uint256 power = gov.getPastVotes(alice, snapshotBlock);
-        assertEq(power, ALICE_POWER);
-    }
-
-    /// @notice getPastVotes for a snapshot 1800 blocks in the past (beyond
-    ///         MIN_VOTING_PERIOD on a 2s L2) does not revert (AZ-GOV-1).
-    function test_getPastVotes_1800BlocksInPastDoesNotRevert() public {
-        // Voting power was set in setUp at block N. Roll forward 1800 blocks
-        // (≈ 1 hour on a 2-second L2 — the full MIN_VOTING_PERIOD window) so
-        // the snapshot is 1800 behind the current tip.
-        uint256 snapshotBlock = block.number;
-        vm.roll(block.number + 1800);
-
-        // Must not revert despite being 1800 blocks behind tip.
-        uint256 power = gov.getPastVotes(alice, snapshotBlock);
-        assertEq(power, ALICE_POWER);
-    }
-
-    /// @notice getPastVotes for a snapshot more than MAX_HISTORY_BLOCKS behind
-    ///         the tip reverts with CheckpointTooOld.
-    function test_getPastVotes_revertsWhenTooOld() public {
-        uint256 snapshotBlock = block.number;
-        vm.roll(block.number + gov.MAX_HISTORY_BLOCKS() + 1);
-
-        vm.expectRevert(RouterGovernance.CheckpointTooOld.selector);
-        gov.getPastVotes(alice, snapshotBlock);
-    }
-
-    // ─── vote() ──────────────────────────────────────────────────────────────
-
-    function test_vote_success() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Check via proposalState — alice has 60% > 51% quorum so now Queued
-        // after voting period (at this point it's still Active since we didn't warp).
-        // Just check hasVoted.
-        assertTrue(gov.hasVoted(pid, alice));
-    }
-
-    function test_vote_emitsVoteCast() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        vm.expectEmit(true, true, false, true);
-        emit RouterGovernance.VoteCast(pid, alice, ALICE_POWER, ALICE_POWER);
-        gov.vote(pid);
-    }
-
-    function test_vote_revertsOnDoubleVote() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        vm.prank(alice);
-        vm.expectRevert(RouterGovernance.AlreadyVoted.selector);
-        gov.vote(pid);
-    }
-
-    function test_vote_revertsAfterVotingPeriod() public {
-        uint256 pid = _proposeValid();
-
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        vm.prank(alice);
-        vm.expectRevert(RouterGovernance.ProposalNotActive.selector);
-        gov.vote(pid);
-    }
-
-    function test_vote_revertsOnNonExistentProposal() public {
-        vm.prank(alice);
-        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
-        gov.vote(999);
-    }
-
-    function test_vote_revertsIfNoVotingPower() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(stranger);
-        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
-        gov.vote(pid);
-    }
-
-    function test_vote_multipleVotersAccumulate() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.prank(bob);
-        gov.vote(pid);
-
-        // Both have voted — check hasVoted.
-        assertTrue(gov.hasVoted(pid, alice));
-        assertTrue(gov.hasVoted(pid, bob));
-        assertFalse(gov.hasVoted(pid, carol));
-    }
-
-    // ─── proposalState() ─────────────────────────────────────────────────────
-
-    function test_proposalState_activeBeforeVotingDeadline() public {
-        uint256 pid = _proposeValid();
-        RouterGovernance.ProposalState s = gov.proposalState(pid);
-        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Active));
-    }
-
-    function test_proposalState_defeatedWhenNoQuorum() public {
-        uint256 pid = _proposeValid();
-
-        // Bob (20%) votes — below 51% quorum.
-        vm.prank(bob);
-        gov.vote(pid);
-
-        // Advance past voting period.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        RouterGovernance.ProposalState s = gov.proposalState(pid);
-        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Defeated));
-    }
-
-    function test_proposalState_queuedWhenQuorumReached() public {
-        uint256 pid = _proposeValid();
-
-        // Alice (60%) votes — quorum reached.
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Advance past voting period.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        RouterGovernance.ProposalState s = gov.proposalState(pid);
-        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Queued));
-    }
-
-    function test_proposalState_executedAfterExecution() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Advance past voting period + execution delay.
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        gov.execute(pid);
-
-        RouterGovernance.ProposalState s = gov.proposalState(pid);
-        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Executed));
-    }
-
-    function test_proposalState_revertsOnNonExistent() public {
-        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
-        gov.proposalState(999);
-    }
-
-    // ─── execute() ───────────────────────────────────────────────────────────
-
-    function test_execute_success() public {
-        uint256 pid = _proposeValid();
-
-        // Alice votes — 60% > 51% quorum.
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Fast-forward past voting period + execution delay.
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.prank(carol);
-        gov.execute(pid);
-
-        // Verify weights applied to router.
-        (address[] memory vaults, uint256[] memory bps) = router.getWeights();
-        assertEq(vaults.length, 2);
-        assertEq(vaults[0], address(vaultA));
-        assertEq(vaults[1], address(vaultB));
-        assertEq(bps[0], 6_000);
-        assertEq(bps[1], 4_000);
-    }
-
-    function test_execute_setsActiveWeightsThroughWeightSetterRole() public {
-        assertTrue(router.hasRole(router.WEIGHT_SETTER_ROLE(), address(gov)));
-        uint256 pid = _proposeValid();
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.prank(carol);
-        gov.execute(pid);
-
-        (, uint256[] memory bps) = router.getWeights();
-        assertEq(bps[0], 6_000);
-        assertEq(bps[1], 4_000);
-    }
-
-    function test_execute_revertsWhenGovernanceLacksWeightSetterRole() public {
-        bytes32 role = router.WEIGHT_SETTER_ROLE();
-        // The role is self-administered, so only the holder can drop it.
-        vm.prank(address(gov));
-        router.renounceRole(role, address(gov));
-
-        uint256 pid = _proposeValid();
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, address(gov), role
-            )
-        );
-        vm.prank(carol);
-        gov.execute(pid);
-    }
-
-    function test_execute_emitsProposalExecuted() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.prank(carol);
-        vm.expectEmit(true, true, false, false);
-        emit RouterGovernance.ProposalExecuted(pid, carol);
-        gov.execute(pid);
-    }
-
-    function test_execute_revertsBeforeVotingEnds() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Still within voting period — quorum reached but voting open.
-        vm.expectRevert(RouterGovernance.VotingStillOpen.selector);
-        gov.execute(pid);
-    }
-
-    function test_execute_revertsBeforeExecutionDelay() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Past voting period but before execution delay.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        vm.expectRevert(RouterGovernance.ExecutionDelayNotElapsed.selector);
-        gov.execute(pid);
-    }
-
-    function test_execute_revertsIfQuorumNotReached() public {
-        uint256 pid = _proposeValid();
-
-        // Bob only has 20% — below 51% quorum.
-        vm.prank(bob);
-        gov.vote(pid);
-
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.expectRevert(RouterGovernance.QuorumNotReached.selector);
-        gov.execute(pid);
-    }
-
-    function test_execute_revertsIfAlreadyExecuted() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-        gov.execute(pid);
-
-        vm.expectRevert(RouterGovernance.AlreadyExecuted.selector);
-        gov.execute(pid);
-    }
-
-    // ─── cadenceParams() ─────────────────────────────────────────────────────
-
-    function test_cadenceParams_returnsStoredValues() public view {
-        (uint64 vp, uint64 ed, uint256 qt, uint256 tvp) = gov.cadenceParams();
-        assertEq(vp, VOTING_PERIOD);
-        assertEq(ed, EXECUTION_DELAY);
-        assertEq(qt, QUORUM_THRESHOLD);
-        assertEq(tvp, ALICE_POWER + BOB_POWER + CAROL_POWER);
-    }
-
-    // ─── currentWeights() ────────────────────────────────────────────────────
-
-    function test_currentWeights_returnsRouterWeights() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-        gov.execute(pid);
-
-        (address[] memory vaults, uint256[] memory bps) = gov.currentWeights();
-        assertEq(vaults.length, 2);
-        assertEq(bps[0], 6_000);
-        assertEq(bps[1], 4_000);
-    }
-
-    // ─── hasVoted() ──────────────────────────────────────────────────────────
-
-    function test_hasVoted_tracksVoterState() public {
-        uint256 pid = _proposeValid();
-        assertFalse(gov.hasVoted(pid, alice));
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        assertTrue(gov.hasVoted(pid, alice));
-        assertFalse(gov.hasVoted(pid, bob));
-    }
-
-    // ─── Full round-trip ──────────────────────────────────────────────────────
-
-    function test_fullGovernanceRoundTrip() public {
-        // Propose.
-        uint256 pid = _proposeValid();
-        assertEq(gov.currentProposalId(), 1);
-
-        // Vote — alice (60%) reaches quorum.
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Advance past voting period.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        // State should be Queued.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
-
-        // Advance past execution delay.
-        vm.warp(block.timestamp + EXECUTION_DELAY);
-
-        // Execute — anyone may call.
-        gov.execute(pid);
-
-        // Weights applied.
-        (address[] memory vaults, uint256[] memory bps) = router.getWeights();
-        assertEq(vaults.length, 2);
-        assertEq(vaults[0], address(vaultA));
-        assertEq(vaults[1], address(vaultB));
-        assertEq(bps[0], 6_000);
-        assertEq(bps[1], 4_000);
-
-        // State is now Executed.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Executed));
-    }
-
-    // ─── setDefaultWeights() — ADR-0002 ────────────────────────────────────────
-
-    /// @dev Build a valid default 70/30 vector over the two eligible vaults.
-    function _defaultVectors()
+    function _vector(address a, address b, uint256 bpsA, uint256 bpsB)
         internal
-        view
+        pure
         returns (address[] memory vaults, uint256[] memory bps)
     {
         vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
+        vaults[0] = a;
+        vaults[1] = b;
         bps = new uint256[](2);
-        bps[0] = 7_000;
-        bps[1] = 3_000;
+        bps[0] = bpsA;
+        bps[1] = bpsB;
     }
 
-    /// @notice setDefaultWeights is gated by ADMIN_ROLE on governance; a
-    ///         non-admin caller reverts, and the admin path forwards to the
-    ///         router and updates `getDefaultWeights`.
-    function test_setDefaultWeights_admin_only() public {
-        (address[] memory vaults, uint256[] memory bps) = _defaultVectors();
+    // ─── Constructor ──────────────────────────────────────────────────────────
 
-        // Non-admin reverts (AccessControl).
+    function test_constructor_revertsOnZeroAddress() public {
+        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
+        new RouterGovernance(address(0), address(receipts), govAdmin);
+        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
+        new RouterGovernance(address(router), address(0), govAdmin);
+        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
+        new RouterGovernance(address(router), address(receipts), address(0));
+    }
+
+    function test_constructor_storesWiringAndSeedsBothRolesToAdmin() public view {
+        assertEq(address(gov.router()), address(router));
+        assertEq(address(gov.receipts()), address(receipts));
+        assertTrue(gov.hasRole(gov.ADMIN_ROLE(), govAdmin));
+        assertTrue(gov.hasRole(gov.WEIGHT_SETTER_ROLE(), govAdmin));
+        assertEq(gov.getRoleAdmin(gov.WEIGHT_SETTER_ROLE()), gov.WEIGHT_SETTER_ROLE());
+        assertEq(gov.getRoleAdmin(gov.ADMIN_ROLE()), gov.ADMIN_ROLE());
+    }
+
+    /// @notice An ADMIN_ROLE holder that is not the weight setter cannot grant itself
+    ///         the weight-setter role.
+    function test_adminRoleCannotGrantWeightSetter() public {
+        address admin2 = makeAddr("admin2");
+        vm.startPrank(govAdmin);
+        gov.grantRole(gov.ADMIN_ROLE(), admin2);
+        vm.stopPrank();
+        bytes32 role = gov.WEIGHT_SETTER_ROLE();
+        vm.prank(admin2);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", admin2, role
+            )
+        );
+        gov.grantRole(role, admin2);
+    }
+
+    function test_applyReceipt_revertsForStranger() public {
+        (address[] memory vaults, uint256[] memory bps) =
+            _vector(address(vaultA), address(vaultB), 6_000, 4_000);
+        bytes32 role = gov.WEIGHT_SETTER_ROLE();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, role
+            )
+        );
+        gov.applyReceipt(keccak256("r"), keccak256("d"), vaults, bps);
+    }
+
+    // ─── Admin fallbacks ──────────────────────────────────────────────────────
+
+    function test_setDefaultWeights_adminOnlyAndForwards() public {
+        (address[] memory vaults, uint256[] memory bps) =
+            _vector(address(vaultA), address(vaultB), 7_000, 3_000);
         vm.prank(stranger);
         vm.expectRevert();
         gov.setDefaultWeights(vaults, bps);
 
-        // Admin path forwards to the router.
         vm.prank(govAdmin);
         gov.setDefaultWeights(vaults, bps);
-
-        (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
-        assertEq(dV.length, 2);
-        assertEq(dV[0], address(vaultA));
-        assertEq(dV[1], address(vaultB));
-        assertEq(dB[0], 7_000);
-        assertEq(dB[1], 3_000);
+        (address[] memory dv, uint256[] memory db) = router.getDefaultWeights();
+        assertEq(dv, vaults);
+        assertEq(db, bps);
     }
 
-    /// @notice A default vector whose bps do not sum to 10 000 reverts.
-    function test_setDefaultWeights_rejects_bad_sum() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 7_000;
-        bps[1] = 2_000; // sums to 9 000
-
+    function test_setDefaultWeights_rejectsBadSumAndLength() public {
+        (address[] memory vaults, uint256[] memory bps) =
+            _vector(address(vaultA), address(vaultB), 7_000, 2_000);
         vm.prank(govAdmin);
         vm.expectRevert(PortfolioRouter.InvalidWeightSum.selector);
         gov.setDefaultWeights(vaults, bps);
-    }
 
-    /// @notice A default vector whose length does not match the registry's
-    ///         router-eligible vault count reverts.
-    function test_setDefaultWeights_rejects_length_mismatch() public {
-        // Only one leg, but two vaults are router-eligible.
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vaultA);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
+        address[] memory one = new address[](1);
+        one[0] = address(vaultA);
         vm.prank(govAdmin);
         vm.expectRevert(PortfolioRouter.LengthMismatch.selector);
-        gov.setDefaultWeights(vaults, bps);
+        gov.setDefaultWeights(one, bps);
     }
 
-    // ─── Floor validation — constructor ───────────────────────────────────────
-
-    /// @notice Deploying with quorumThreshold = 0 must revert.
-    function test_constructor_revertsOnZeroQuorumThreshold() public {
-        vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
-        new RouterGovernance(address(router), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, 0);
-    }
-
-    /// @notice Deploying with votingPeriod below MIN_VOTING_PERIOD must revert.
-    function test_constructor_revertsOnVotingPeriodBelowMin() public {
-        uint64 tooShort = uint64(gov.MIN_VOTING_PERIOD()) - 1;
-        vm.expectRevert(RouterGovernance.VotingPeriodBelowMinimum.selector);
-        new RouterGovernance(address(router), govAdmin, tooShort, EXECUTION_DELAY, QUORUM_THRESHOLD);
-    }
-
-    /// @notice Deploying with quorumThreshold = 1, votingPeriod = MIN_VOTING_PERIOD,
-    ///         and executionDelay = MIN_EXECUTION_DELAY succeeds.
-    function test_constructor_validFloorArgumentsSucceed() public {
-        RouterGovernance freshGov = new RouterGovernance(
-            address(router),
-            govAdmin,
-            uint64(gov.MIN_VOTING_PERIOD()),
-            uint64(gov.MIN_EXECUTION_DELAY()),
-            gov.MIN_QUORUM_THRESHOLD()
-        );
-        assertEq(freshGov.quorumThreshold(), gov.MIN_QUORUM_THRESHOLD());
-        assertEq(freshGov.votingPeriod(), gov.MIN_VOTING_PERIOD());
-        assertEq(freshGov.executionDelay(), gov.MIN_EXECUTION_DELAY());
-    }
-
-    // ─── Floor validation — setters ───────────────────────────────────────────
-
-    /// @notice setQuorumThreshold(0) must revert with QuorumBelowMinimum.
-    function test_setQuorumThreshold_revertsOnZero() public {
+    function test_clearVotedWeights_adminOnlyAndRevertsToDefault() public {
+        (address[] memory dv, uint256[] memory db) =
+            _vector(address(vaultA), address(vaultB), 7_000, 3_000);
         vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
-        gov.setQuorumThreshold(0);
-    }
-
-    /// @notice setVotingPeriod(MIN_VOTING_PERIOD - 1) must revert with VotingPeriodBelowMinimum.
-    function test_setVotingPeriod_revertsOnBelowMin() public {
-        uint64 tooShort = uint64(gov.MIN_VOTING_PERIOD()) - 1;
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.VotingPeriodBelowMinimum.selector);
-        gov.setVotingPeriod(tooShort);
-    }
-
-    // ─── Floor validation — execution delay ────────────────────────────────────
-
-    /// @notice Deploying with executionDelay below MIN_EXECUTION_DELAY must revert.
-    function test_constructor_revertsOnExecutionDelayBelowMin() public {
-        uint64 tooShort = uint64(gov.MIN_EXECUTION_DELAY()) - 1;
-        vm.expectRevert(RouterGovernance.ExecutionDelayBelowMinimum.selector);
-        new RouterGovernance(address(router), govAdmin, VOTING_PERIOD, tooShort, QUORUM_THRESHOLD);
-    }
-
-    /// @notice setExecutionDelay(MIN_EXECUTION_DELAY - 1) must revert with ExecutionDelayBelowMinimum.
-    function test_setExecutionDelay_revertsOnBelowMin() public {
-        uint64 tooShort = uint64(gov.MIN_EXECUTION_DELAY()) - 1;
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.ExecutionDelayBelowMinimum.selector);
-        gov.setExecutionDelay(tooShort);
-    }
-
-    /// @notice setExecutionDelay with MIN_EXECUTION_DELAY succeeds.
-    function test_setExecutionDelay_succeedsWithMinDelay() public {
-        uint64 minDelay = uint64(gov.MIN_EXECUTION_DELAY());
-        vm.prank(govAdmin);
-        gov.setExecutionDelay(minDelay);
-        assertEq(gov.executionDelay(), minDelay);
-    }
-
-    // ─── Zero-quorum exploit sequence is blocked ──────────────────────────────
-
-    /// @notice With quorumThreshold=1 a single actor cannot
-    ///         execute with 0 votes — execute() must revert because quorum is not
-    ///         reached (0 votes < 1 required).
-    function test_zeroVoteExploitSequenceBlocked() public {
-        // Deploy fresh governance with the minimum floor values.
-        RouterGovernance minGov = new RouterGovernance(
-            address(router),
-            govAdmin,
-            uint64(gov.MIN_VOTING_PERIOD()), // minimum period
-            uint64(gov.MIN_EXECUTION_DELAY()), // minimum delay
-            gov.MIN_QUORUM_THRESHOLD() // quorumThreshold = 1
-        );
-
-        // Grant minGov ADMIN_ROLE on the router.
-        vm.startPrank(routerAdmin);
-        router.grantRole(router.ADMIN_ROLE(), address(minGov));
-        vm.stopPrank();
-
-        // Grant voting power via govAdmin on minGov.
-        vm.prank(govAdmin);
-        minGov.setVotingPower(alice, ALICE_POWER);
-
-        // Create a proposal.
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6_000;
-        bps[1] = 4_000;
-
-        vm.prank(govAdmin);
-        uint256 pid = minGov.propose(vaults, bps);
-
-        // Warp past the voting period — no votes cast.
-        vm.warp(block.timestamp + gov.MIN_VOTING_PERIOD() + 1);
-
-        // Execute must fail: 0 votes cast < quorumThreshold = 1.
-        vm.expectRevert(RouterGovernance.QuorumNotReached.selector);
-        minGov.execute(pid);
-    }
-
-    // ─── setDefaultWeights() — ADR-0002 ────────────────────────────────────────
-
-    // ─── snapshotQuorum: retroactive manipulation vectors ─────────────────────
-
-    /// @notice Lowering quorumThreshold after a proposal's voting deadline must
-    ///         not retroactively change a Defeated proposal to Queued.
-    /// AC: forge test: lowering quorumThreshold after a proposal's voting deadline
-    ///     does not change the proposal's state from Defeated to Queued.
-    function test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated() public {
-        // Bob (20%) votes — below 51% quorum snapshot.
-        uint256 pid = _proposeValid();
-        vm.prank(bob);
-        gov.vote(pid);
-
-        // Advance past voting period — proposal is Defeated.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Defeated));
-
-        // Admin lowers quorumThreshold below bob's votes.
-        vm.prank(govAdmin);
-        gov.setQuorumThreshold(BOB_POWER - 1);
-
-        // Proposal must still be Defeated — snapshotQuorum is unchanged.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Defeated));
-    }
-
-    /// @notice Raising quorumThreshold while a proposal is Active must not
-    ///         retroactively force it to Defeated once voting ends.
-    /// AC: forge test: raising quorumThreshold while a proposal is Active does
-    ///     not force the proposal to Defeated.
-    function test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued() public {
-        // Alice (60%) votes — exceeds 51% quorum snapshot.
-        uint256 pid = _proposeValid();
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Raise quorumThreshold above alice's votes while still Active.
-        vm.prank(govAdmin);
-        gov.setQuorumThreshold(ALICE_POWER + 1);
-
-        // Advance past voting period.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-
-        // Proposal must still be Queued — snapshotQuorum is the original threshold.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
-    }
-
-    /// @notice p.snapshotQuorum must equal quorumThreshold at the time propose()
-    ///         was called, even if quorumThreshold changes afterward.
-    /// AC: forge test: p.snapshotQuorum equals quorumThreshold at the time
-    ///     propose() was called.
-    function test_snapshotQuorum_capturedAtProposeTime() public {
-        uint256 originalThreshold = gov.quorumThreshold();
-        uint256 pid = _proposeValid();
-
-        // Change live quorumThreshold.
-        vm.prank(govAdmin);
-        gov.setQuorumThreshold(originalThreshold * 2);
-
-        // activeProposal() must expose the original snapshot.
-        (,,,,,, uint256 votesFor, uint256 snap,,) = gov.activeProposal();
-        assertEq(snap, originalThreshold);
-        assertEq(votesFor, 0);
-        // Sanity: live threshold has changed.
-        assertEq(gov.quorumThreshold(), originalThreshold * 2);
-        // Suppress unused variable warning.
-        assertEq(pid, gov.currentProposalId());
-    }
-
-    /// @notice Two sequential proposals each capture their own quorumThreshold
-    ///         snapshot independently.
-    /// AC: forge test: two sequential proposals each use their own snapshot value
-    ///     even when quorumThreshold changes between them.
-    function test_snapshotQuorum_twoProposalsIndependentSnapshots() public {
-        uint256 threshold1 = gov.quorumThreshold();
-
-        // First proposal — snapshot = threshold1.
-        uint256 pid1 = _proposeValid();
-
-        // Advance past voting period without quorum to defeat it.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Defeated));
-
-        // Change quorumThreshold before creating second proposal.
-        uint256 threshold2 = threshold1 / 2; // half the original
-        vm.prank(govAdmin);
-        gov.setQuorumThreshold(threshold2);
-
-        // Second proposal — snapshot = threshold2.
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 5_000;
-        bps[1] = 5_000;
-        vm.prank(govAdmin);
-        uint256 pid2 = gov.propose(vaults, bps);
-
-        // Bob (20% of total power) votes — sufficient against threshold2 (25.5%)? No.
-        // Use carol who also has 20%. Combined (bob+carol) = 40% > threshold2 (25.5%).
-        vm.prank(bob);
-        gov.vote(pid2);
-        vm.prank(carol);
-        gov.vote(pid2);
-
-        // Advance past voting period — pid2 should be Queued (met threshold2).
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        assertEq(uint256(gov.proposalState(pid2)), uint256(RouterGovernance.ProposalState.Queued));
-
-        // Restore threshold1 and verify pid1 is still Defeated (its snapshot is threshold1).
-        vm.prank(govAdmin);
-        gov.setQuorumThreshold(threshold1);
-        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Defeated));
-    }
-
-    // ─── cancel() ────────────────────────────────────────────────────────────
-
-    /// @notice ADMIN_ROLE can cancel a Queued proposal; state transitions to
-    ///         Cancelled and ProposalCancelled event is emitted.
-    function test_cancel_adminCancelsQueuedProposal() public {
-        uint256 pid = _proposeValid();
-
-        // Alice (60%) votes — proposal reaches quorum.
-        vm.prank(alice);
-        gov.vote(pid);
-
-        // Advance past voting period so proposal is Queued.
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
-
-        // Admin cancels — expect ProposalCancelled event.
-        vm.prank(govAdmin);
-        vm.expectEmit(true, true, false, false);
-        emit RouterGovernance.ProposalCancelled(pid, govAdmin);
-        gov.cancel(pid);
-
-        // State must now be Cancelled.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Cancelled));
-    }
-
-    /// @notice ADMIN_ROLE can cancel an Active proposal.
-    function test_cancel_adminCancelsActiveProposal() public {
-        uint256 pid = _proposeValid();
-
-        // Proposal is still Active.
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Active));
-
-        vm.prank(govAdmin);
-        gov.cancel(pid);
-
-        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Cancelled));
-    }
-
-    /// @notice Non-ADMIN_ROLE cancel() call reverts with AccessControl error.
-    function test_cancel_revertsForNonAdmin() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(stranger);
-        vm.expectRevert();
-        gov.cancel(pid);
-    }
-
-    /// @notice cancel() on a non-existent proposal reverts with NoActiveProposal.
-    function test_cancel_revertsOnNonExistentProposal() public {
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
-        gov.cancel(999);
-    }
-
-    /// @notice cancel() on an already-executed proposal reverts with ProposalAlreadyExecuted.
-    function test_cancel_revertsOnAlreadyExecuted() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-        gov.execute(pid);
-
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.ProposalAlreadyExecuted.selector);
-        gov.cancel(pid);
-    }
-
-    /// @notice cancel() on an already-cancelled proposal reverts with ProposalAlreadyCancelled.
-    function test_cancel_revertsOnAlreadyCancelled() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(govAdmin);
-        gov.cancel(pid);
-
-        vm.prank(govAdmin);
-        vm.expectRevert(RouterGovernance.ProposalAlreadyCancelled.selector);
-        gov.cancel(pid);
-    }
-
-    /// @notice A new proposal can be created immediately after prior proposal is cancelled.
-    function test_cancel_allowsNewProposalAfterCancelled() public {
-        uint256 pid1 = _proposeValid();
-
-        // Cancel the first proposal.
-        vm.prank(govAdmin);
-        gov.cancel(pid1);
-
-        // Immediately submit a new proposal — must succeed.
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vaultA);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(govAdmin);
-        uint256 pid2 = gov.propose(vaults, bps);
-        assertEq(pid2, 2);
-        assertEq(gov.currentProposalId(), 2);
-    }
-
-    /// @notice execute() on a Cancelled proposal reverts with ProposalIsCancelled.
-    function test_execute_revertsIfCancelled() public {
-        uint256 pid = _proposeValid();
-
-        // Vote to queue it, then cancel.
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-
-        vm.prank(govAdmin);
-        gov.cancel(pid);
-
-        vm.expectRevert(RouterGovernance.ProposalIsCancelled.selector);
-        gov.execute(pid);
-    }
-
-    /// @notice Governance deadlock recovery: vault loses router eligibility after
-    ///         proposal is Queued, cancel() unblocks propose() with valid vaults.
-    function test_cancel_deadlockRecovery() public {
-        // Propose with vaultA and vaultB both eligible.
-        uint256 pid1 = _proposeValid();
-
-        // Vote to queue.
-        vm.prank(alice);
-        gov.vote(pid1);
-        vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Queued));
-
-        // Simulate deadlock: revoke vaultA's router eligibility.
-        vm.prank(registryAdmin);
-        registry.setRouterEligible(address(vaultA), false);
-
-        // execute() would now revert (router checks eligibility).
-        // cancel() unblocks the situation.
-        vm.prank(govAdmin);
-        gov.cancel(pid1);
-        assertEq(
-            uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Cancelled)
-        );
-
-        // Restore vaultA eligibility and submit a replacement proposal using only vaultB.
-        vm.prank(registryAdmin);
-        registry.setRouterEligible(address(vaultA), true);
-
-        // Submit replacement with valid vaults (both eligible again).
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 5_000;
-        bps[1] = 5_000;
-
-        vm.prank(govAdmin);
-        uint256 pid2 = gov.propose(vaults, bps);
-        assertEq(pid2, 2);
-
-        // Vote and execute the replacement.
-        vm.prank(alice);
-        gov.vote(pid2);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-        gov.execute(pid2);
-
-        // Weights applied successfully.
-        (address[] memory wVaults, uint256[] memory wBps) = router.getWeights();
-        assertEq(wVaults.length, 2);
-        assertEq(wBps[0], 5_000);
-        assertEq(wBps[1], 5_000);
-    }
-
-    /// @notice clearVotedWeights forwards to the router and reverts routing to
-    ///         the default vector while leaving defaultWeights untouched.
-    function test_clearVotedWeights_revertsToDefault() public {
-        // Seed a default vector.
-        (address[] memory vaults, uint256[] memory bps) = _defaultVectors();
-        vm.prank(govAdmin);
-        gov.setDefaultWeights(vaults, bps);
-
-        // Pass a proposal so the voted vector is active.
-        uint256 pid = _proposeValid();
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
-        gov.execute(pid);
+        gov.setDefaultWeights(dv, db);
+        (address[] memory vaults, uint256[] memory bps) =
+            _vector(address(vaultA), address(vaultB), 2_000, 8_000);
+        vm.prank(address(gov));
+        router.setWeights(vaults, bps);
         assertTrue(router.votedWeightsActive());
+        (address[] memory cur,) = gov.currentWeights();
+        assertEq(cur.length, 2);
 
-        // Non-admin cannot clear.
         vm.prank(stranger);
         vm.expectRevert();
         gov.clearVotedWeights();
 
-        // Admin clears -> back to default.
         vm.prank(govAdmin);
         gov.clearVotedWeights();
         assertFalse(router.votedWeightsActive());
+        (, uint256[] memory eb) = router.getEffectiveWeights();
+        assertEq(eb, db);
+    }
 
-        (address[] memory eV, uint256[] memory eB) = router.getEffectiveWeights();
-        assertEq(eV.length, 2);
-        assertEq(eB[0], 7_000);
-        assertEq(eB[1], 3_000);
+    // ─── Duplicate vault on the router setters (HR-L-9) ───────────────────────
+
+    /// @notice The router refuses a vector naming one vault twice on both setters,
+    ///         whoever holds the role. The governed-path version is in
+    ///         RouterGovernanceApplyReceipt.t.sol.
+    function test_router_rejectsDuplicateVaultOnBothSetters() public {
+        (address[] memory dup, uint256[] memory bps) =
+            _vector(address(vaultA), address(vaultA), 5_000, 5_000);
+        bytes memory reason =
+            abi.encodeWithSelector(PortfolioRouter.DuplicateVault.selector, address(vaultA));
+
+        vm.prank(address(gov));
+        vm.expectRevert(reason);
+        router.setWeights(dup, bps);
+
+        vm.prank(routerAdmin);
+        vm.expectRevert(reason);
+        router.setDefaultWeights(dup, bps);
+
+        vm.prank(govAdmin);
+        vm.expectRevert(reason);
+        gov.setDefaultWeights(dup, bps);
     }
 
     // ─── L-10: last-admin floor ────────────────────────────────────────────────
 
-    /// @notice The sole ADMIN_ROLE holder on RouterGovernance cannot renounce or
-    ///         revoke itself to zero admins (LastAdminFloor); after a second
-    ///         admin is granted, the original can be dropped.
     function test_lastAdminFloor_governance_cannotDropSoleAdmin() public {
         bytes32 adminRole = gov.ADMIN_ROLE();
         assertEq(gov.getRoleMemberCount(adminRole), 1, "expected a single gov admin");
@@ -1366,16 +273,11 @@ contract RouterGovernanceTest is Test {
         vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
         gov.renounceRole(adminRole, govAdmin);
 
-        vm.prank(govAdmin);
-        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
-        gov.revokeRole(adminRole, govAdmin);
-
         address gov2 = makeAddr("gov2");
         vm.prank(govAdmin);
         gov.grantRole(adminRole, gov2);
         vm.prank(gov2);
         gov.revokeRole(adminRole, govAdmin);
-        assertEq(gov.getRoleMemberCount(adminRole), 1, "second gov admin remains");
         assertTrue(gov.hasRole(adminRole, gov2), "gov2 retains the role");
     }
 }

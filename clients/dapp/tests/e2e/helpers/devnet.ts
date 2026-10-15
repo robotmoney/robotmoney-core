@@ -30,8 +30,6 @@ export interface DevnetEndpoints {
   registry_addr: string;
   /** PortfolioRouter contract address (issue #320). */
   router_addr: string;
-  /** RouterGovernance contract address (issue #477). */
-  governance_addr: string;
   /** InvestmentCommitteePolicy contract address (issue #1247/#1294). */
   ic_policy_addr: string;
   /** ConsensusRebalanceReceipt contract address (issue #1247/#1294). */

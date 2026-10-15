@@ -6,7 +6,6 @@
 //! issue #7. Unknown fields are rejected (`deny_unknown_fields`) so that a
 //! typo in operator config fails loudly instead of silently using a default.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -120,22 +119,6 @@ pub struct Config {
     /// When absent that subcommand exits with `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub ic_policy_address: Option<String>,
-    /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex). Optional —
-    /// only required for `rmpc governance draft-proposal`, which reads
-    /// `isReleased`/`getReceiptById` and scans `ReceiptReleased` logs here.
-    /// When absent that command exits with `EXIT_STARTUP_FAIL`.
-    #[serde(default)]
-    pub receipt_address: Option<String>,
-    /// Per-deployment vault-symbol → address table, keyed by the four
-    /// symbols in `tests/fixtures/consensus-receipt.bucket-vault-map.json`
-    /// (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`). Optional — only required
-    /// for `rmpc governance draft-proposal`, which maps each receipt bucket
-    /// to a router vault address through this table. No address is global
-    /// (docs/product/20260623-product-proposal-investment-committee-v0.md
-    /// §6.1): a receipt-capable deployment must supply its own complete
-    /// table or the command refuses rather than guessing.
-    #[serde(default)]
-    pub vault_addresses: Option<BTreeMap<String, String>>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
     pub gateway_runtime_hash: String,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.

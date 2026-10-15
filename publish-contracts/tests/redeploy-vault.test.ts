@@ -647,7 +647,7 @@ describe("the evidence entry", () => {
   });
   test("a receipt application recorded before the cutover keeps its own vault set: adding a redeploy entry neither rewrites nor invalidates it", () => {
     const RID = `0x${"ab".repeat(32)}`;
-    const app = { step: "apply-receipt", receipt_id: RID, target: addr(0x1006), governance: addr(0x1005), vaults: [USDC, OLD, AGENT, RWA], bps: DEF_BPS, voted_weights_active: false, effective_vaults: [USDC, OLD, AGENT, RWA], effective_bps: DEF_BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 900 };
+    const app = { step: "apply-receipt", receipt_id: RID, target: addr(0x1005), governance: addr(0x1005), payload_digest: `0x${"cd".repeat(32)}`, vaults: [USDC, OLD, AGENT, RWA], bps: DEF_BPS, voted_weights_active: true, effective_vaults: [USDC, OLD, AGENT, RWA], effective_bps: DEF_BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 900 };
     const before = JSON.stringify(app);
     const withBoth: ReturnType<typeof ev> & { receipt_applications?: object[] } = ev({ consensus_receipt: { address: addr(0x1006) }, governance: { address: addr(0x1005) }, receipt_applications: [app] });
     expect(checkReceiptApplications(withBoth, 900)).toEqual([]);

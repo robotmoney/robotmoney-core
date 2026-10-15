@@ -44,8 +44,6 @@ fn config() -> Config {
         timelock_from_block: None,
         gateway_from_block: None,
         ic_policy_address: None,
-        receipt_address: None,
-        vault_addresses: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: PathBuf::from("/tmp/ks.enc"),

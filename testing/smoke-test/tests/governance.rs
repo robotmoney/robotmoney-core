@@ -3,7 +3,10 @@
 //! Verifies that:
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
-//!   - The deployer holds no voting power and no admin; the timelock is admin.
+//!   - The deployer holds no admin; the timelock is admin.
+//!   - The deployer cannot apply a consensus receipt: the timelock holds
+//!     `WEIGHT_SETTER_ROLE` (the `applyReceipt` gate) and the deployer does not.
+//!     There is no voting power to check: voting was deleted (issue 1698).
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release -- governance --test-threads=1 --nocapture
@@ -45,12 +48,13 @@ fn governance_has_code() {
     );
 }
 
-/// Voting power is not set by the deployer. A fresh address has none, and the
-/// deployer's own power is zero: quorum and voters come through the real Safe
-/// and the timelock (the stage 13 govern matrix).
+/// The deployer cannot apply a consensus receipt after handover. Only the
+/// timelock holds `WEIGHT_SETTER_ROLE` on RouterGovernance, the gate on
+/// `applyReceipt` (issue 1698), so a receipt reaches the router only through the
+/// Safe scheduling the call on the timelock.
 #[test]
-fn deployer_holds_no_voting_power() {
-    require_prereqs("deployer_holds_no_voting_power");
+fn deployer_holds_no_weight_setter_role_timelock_does() {
+    require_prereqs("deployer_holds_no_weight_setter_role_timelock_does");
     let fx = fixture();
     let deployer: Address = fx
         .published()
@@ -59,10 +63,13 @@ fn deployer_holds_no_voting_power() {
         .expect("deployer address")
         .parse()
         .expect("parse deployer address");
-    assert_eq!(
-        read_voting_power(fx, deployer),
-        0,
-        "the deployer must not hold voting power"
+    assert!(
+        !governance_has_role(fx, WEIGHT_SETTER_ROLE, deployer),
+        "deployer must not hold WEIGHT_SETTER_ROLE on RouterGovernance"
+    );
+    assert!(
+        governance_has_role(fx, WEIGHT_SETTER_ROLE, fx.timelock()),
+        "the timelock must hold WEIGHT_SETTER_ROLE on RouterGovernance"
     );
 }
 
@@ -79,11 +86,11 @@ fn deployer_holds_no_admin_role_timelock_does() {
         .parse()
         .expect("parse deployer address");
     assert!(
-        !deployer_has_admin_role(fx, deployer),
+        !governance_has_role(fx, ADMIN_ROLE, deployer),
         "deployer must not hold ADMIN_ROLE on RouterGovernance"
     );
     assert!(
-        deployer_has_admin_role(fx, fx.timelock()),
+        governance_has_role(fx, ADMIN_ROLE, fx.timelock()),
         "the timelock must hold ADMIN_ROLE on RouterGovernance"
     );
 }
@@ -98,34 +105,18 @@ fn get_code(url: &str, addr: Address) -> String {
     )
 }
 
-/// Read votingPower(addr) from the RouterGovernance contract.
-/// votingPower(address) selector: keccak256("votingPower(address)")[0..4] = 0xc07473f6
-/// (verified via `cast sig "votingPower(address)"` — issue #1311 found this
-/// target had never executed anywhere, so the previously-hardcoded 0x13c8a7f5
-/// selector, which does not match any function on RouterGovernance, had never
-/// been caught).
-fn read_voting_power(fx: &Fixture, voter: Address) -> u128 {
-    // ABI-encode: selector + left-padded address (12 zero bytes + 20 addr bytes)
-    let voter_hex = format!("{voter:x}");
-    let data = format!("0xc07473f6{voter_hex:0>64}");
-    let result: String = rpc_call(
-        fx.rpc_url(),
-        "eth_call",
-        serde_json::json!([
-            {"to": format!("{:#x}", fx.governance()), "data": data},
-            "latest"
-        ]),
-    );
-    u256_from_hex(&result)
-}
+/// `keccak256("ADMIN_ROLE")`.
+const ADMIN_ROLE: &str = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
 
-/// Check hasRole(ADMIN_ROLE, account) on the governance contract.
+/// `keccak256("WEIGHT_SETTER_ROLE")`, the gate on `applyReceipt`.
+const WEIGHT_SETTER_ROLE: &str = "a2edfd05c0c1cda238b1c99a8a31252998b19153c63b3f9e5b7048bc4b5f4a3f";
+
+/// Check hasRole(role, account) on the governance contract. `role` is the
+/// 32-byte role id as 64 hex chars without a `0x` prefix.
 /// hasRole(bytes32,address) selector: 0x91d14854
-/// ADMIN_ROLE = keccak256("ADMIN_ROLE") = 0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775
-fn deployer_has_admin_role(fx: &Fixture, account: Address) -> bool {
-    let admin_role = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+fn governance_has_role(fx: &Fixture, role: &str, account: Address) -> bool {
     let account_hex = format!("{account:x}");
-    let data = format!("0x91d14854{admin_role}{account_hex:0>64}");
+    let data = format!("0x91d14854{role}{account_hex:0>64}");
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
@@ -135,17 +126,6 @@ fn deployer_has_admin_role(fx: &Fixture, account: Address) -> bool {
         ]),
     );
     result.trim_start_matches("0x").ends_with('1')
-}
-
-fn u256_from_hex(hex: &str) -> u128 {
-    let stripped = hex.trim_start_matches("0x");
-    let len = stripped.len();
-    let slice = if len > 32 {
-        &stripped[len - 32..]
-    } else {
-        stripped
-    };
-    u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
 fn rpc_call<T: for<'de> serde::Deserialize<'de>>(

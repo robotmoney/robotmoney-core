@@ -127,7 +127,7 @@ export interface DripEthArgs {
 /**
  * Sign and broadcast a native value transfer of `FAUCET_DRIP_AMOUNT_ETH`
  * from the harness holder EOA to `recipient` (issue #466). Provisions
- * fresh governance-test accounts with gas so they can broadcast votes
+ * fresh test accounts with gas so they can send transactions
  * without operator intervention. Returns the transaction hash. Throws
  * viem's native error verbatim on failure — the FaucetTab surfaces
  * `shortMessage` directly per react-guide §Errors & async.

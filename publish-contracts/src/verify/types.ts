@@ -66,15 +66,6 @@ export interface VaultSheet {
   contract?: string;
 }
 
-/** Deploy-time governance configuration the deployer sets before the timelock handover (issue 1520). */
-export interface GovernanceSheet {
-  voters: Address[];
-  voterPower: bigint;
-  quorum: bigint;
-  votingPeriod: bigint;
-  executionDelay: bigint;
-}
-
 export interface VerifySheet {
   chainId: number;
   deployer: Address;
@@ -88,7 +79,6 @@ export interface VerifySheet {
   deploymentKind?: "production" | "rehearsal";
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
-  governance: GovernanceSheet;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];
 }

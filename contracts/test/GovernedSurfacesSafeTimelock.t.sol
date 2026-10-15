@@ -4,6 +4,7 @@
 // Implements: issue #1644 — the remaining governed surfaces run Safe -> Timelock with two signatures
 pragma solidity ^0.8.24;
 
+import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
@@ -23,8 +24,8 @@ import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 
 /// @title GovernedSurfacesSafeTimelockTest
 /// @notice One real Safe -> Timelock test for each governed surface that had none: the
-///         InvestmentCommitteePolicy, adapter admin, role revoke, `setVotingPower` after the
-///         handover, `RouterGovernance.cancel` after the handover, and the AgentTokenVault
+///         InvestmentCommitteePolicy, adapter admin, role revoke, `setDefaultWeights` after the
+///         handover, `RouterGovernance.clearVotedWeights` after the handover, and the AgentTokenVault
 ///         non-asset setters. Two owners sign, the real SafeL2 proxy runs `execTransaction`,
 ///         the timelock waits, the timelock calls the contract. Nothing pranks the Safe.
 contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
@@ -49,7 +50,6 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
     MockGovVault internal vaultB;
 
     address internal pauser = makeAddr("pauser");
-    address internal voter = makeAddr("voter");
     address internal agent = makeAddr("agent");
 
     function setUp() public {
@@ -65,7 +65,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         ic = new InvestmentCommitteePolicy(address(this), address(gateway));
         registry = new VaultRegistry(address(this));
         router = new PortfolioRouter(address(usdc), address(registry), address(this));
-        gov = new RouterGovernance(address(router), address(this), 7 days, 1 days, 2);
+        gov = new RouterGovernance(address(router), makeAddr("receipts"), address(this));
         agentVault = new AgentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(new ShortlistStubSwapRouter())),
@@ -77,7 +77,8 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
             address(this)
         );
 
-        // Two router-eligible vaults so a governance proposal is valid.
+        // Two router-eligible vaults so a default weight vector is valid, and the
+        // router ADMIN_ROLE governance forwards its fallbacks with.
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
         registry.registerVault(
@@ -90,6 +91,7 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
         );
         registry.setRouterEligible(address(vaultA), true);
         registry.setRouterEligible(address(vaultB), true);
+        router.grantRole(ADMIN_ROLE, address(gov));
 
         // Handover: the timelock gets ADMIN_ROLE on each, the deployer gives it up.
         address[5] memory governed =
@@ -184,47 +186,49 @@ contract GovernedSurfacesSafeTimelockTest is SafeGovernance {
 
     // ─── RouterGovernance after the handover ──────────────────────────────────
 
-    function test_routerGovernance_setVotingPower_afterHandover_viaSafeThenTimelock() public {
-        assertEq(gov.votingPower(voter), 0);
+    function test_routerGovernance_setDefaultWeights_afterHandover_viaSafeThenTimelock() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
         _runChecked(
             address(gov),
-            abi.encodeCall(RouterGovernance.setVotingPower, (voter, 3)),
-            keccak256("voting-power")
+            abi.encodeCall(RouterGovernance.setDefaultWeights, (vaults, bps)),
+            keccak256("default-weights")
         );
-        assertEq(gov.votingPower(voter), 3, "voting power set by the timelock");
-        assertEq(gov.totalVotingPower(), 3);
+        (address[] memory got, uint256[] memory gotBps) = router.getDefaultWeights();
+        assertEq(got, vaults, "default vaults set by the timelock");
+        assertEq(gotBps, bps, "default bps set by the timelock");
     }
 
-    function test_routerGovernance_cancel_afterHandover_viaSafeThenTimelock() public {
-        address[] memory vaults = new address[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(vaultB);
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 6000;
-        bps[1] = 4000;
+    function test_routerGovernance_clearVotedWeights_afterHandover_viaSafeThenTimelock() public {
+        vm.recordLogs();
         _runChecked(
-            address(gov),
-            abi.encodeCall(RouterGovernance.propose, (vaults, bps)),
-            keccak256("propose")
+            address(gov), abi.encodeCall(RouterGovernance.clearVotedWeights, ()), keccak256("clear")
         );
-        assertEq(
-            uint256(gov.proposalState(1)),
-            uint256(RouterGovernance.ProposalState.Active),
-            "proposal created through the timelock"
-        );
-
-        _runChecked(address(gov), abi.encodeCall(RouterGovernance.cancel, (1)), keccak256("cancel"));
-        assertEq(
-            uint256(gov.proposalState(1)),
-            uint256(RouterGovernance.ProposalState.Cancelled),
-            "proposal cancelled by the timelock"
-        );
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 cleared;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(router)
+                    && logs[i].topics[0] == PortfolioRouter.VotedWeightsCleared.selector
+            ) cleared++;
+        }
+        assertEq(cleared, 1, "the timelock cleared the active vector once");
+        assertFalse(router.votedWeightsActive(), "routing on the default vector");
     }
 
     function test_routerGovernance_directSafeCall_isRefused_exactReason() public {
+        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
         _expectDirectSafeCallRefused(
-            safe, address(gov), abi.encodeCall(RouterGovernance.setVotingPower, (voter, 3))
+            safe, address(gov), abi.encodeCall(RouterGovernance.setDefaultWeights, (vaults, bps))
         );
+    }
+
+    function _sixtyForty() internal view returns (address[] memory vaults, uint256[] memory bps) {
+        vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps = new uint256[](2);
+        bps[0] = 6000;
+        bps[1] = 4000;
     }
 
     // ─── AgentTokenVault non-asset setters ────────────────────────────────────

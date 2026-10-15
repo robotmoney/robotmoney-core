@@ -283,7 +283,7 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
     //
     // This contract intentionally has NO treasury-spend functions and NO
     // router-weight setters. It holds no ERC-20 balances and cannot call
-    // `RouterGovernance.execute()` or `RobotMoneyGateway.deposit()`.
+    // `RouterGovernance.applyReceipt()` or `RobotMoneyGateway.deposit()`.
     // The signalling-only constraint is verified by the test suite:
     // InvestmentCommitteePolicyTest.testSignallingOnlyBoundary.
 }

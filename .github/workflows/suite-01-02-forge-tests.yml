@@ -160,7 +160,7 @@ jobs:
       # evidence reader to know that an individual file actually ran.
       - name: Fusion contract evidence targets
         run: |
-          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant QuorumFloorInvariant GatewayAgentPolicyAuthorization; do
+          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant RouterGovernanceApplyReceipt RouterGovernance GatewayAgentPolicyAuthorization; do
             echo "::group::contracts/test/${f}.t.sol:"
             bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"

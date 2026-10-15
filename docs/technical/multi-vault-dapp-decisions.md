@@ -48,8 +48,9 @@ product:
 - **Account layer** — watched address or connected wallet; shows portfolio
   positions, transaction history, and agent policies.
 - **Action layer** — wallet required; vault-selector deposit and multi-vault
-  withdrawal. The governance proposal surface renders nothing on mainnet: there are no proposals, because nobody holds a voter key, because router weights change only when the
-  Safe applies a consensus receipt through the timelock.
+  withdrawal. There is no governance proposal surface. `RouterGovernance` has
+  no voting (issue 1698). Router weights change only when the Safe applies a
+  consensus receipt through the timelock.
 
 Before any implementation issue begins, five questions must be resolved:
 
@@ -101,9 +102,8 @@ portfolio router ABI are missing and must be added.
   `docs/technical/vault-registry-decisions.md` §3.4.
 - `portfolioRouterAbi` — `deposit(...)`, `previewDeposit(uint256)`,
   `activeVaults()` per `docs/technical/portfolio-router-decisions.md` §3.1–3.2.
-- `routerGovernanceAbi` — `propose(...)`, `castVote(...)`, `execute(...)`,
-  `getProposal(uint256)` for the proposal surface. `RouterGovernance.propose`,
-  `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+- No `routerGovernanceAbi`. `RouterGovernance` has no proposal or vote
+  function (issue 1698), so the dapp needs none of its calls.
 
 No existing ABI in `abi.ts` needs to be changed. The edit is purely additive.
 Risk of merge conflict with other in-flight issues: moderate (other issues may
@@ -197,10 +197,10 @@ the batched vault list fetch. Per-vault metadata uses
 - Downstream components to call `useQueryClient().invalidateQueries(...)` with
   the scoped key rather than re-fetching everything.
 
-**Router and governance state.** A `RouterContext` holds active vault weights,
-pending governance proposal (if any), and the router address. It is provided
+**Router and governance state.** A `RouterContext` holds active vault weights
+and the router address. It is provided
 separately from `VaultRegistryContext` because its update cadence is different
-(governance proposals are rare; vault registration is rarer still). The
+(weight changes are rare; vault registration is rarer still). The
 `RouterContext` uses query key `['router', routerAddress, chainId]`.
 
 **Rationale.** wagmi's `useReadContract` instances do not deduplicate by
@@ -251,7 +251,6 @@ goes through RPC per implementation-plan.md §12."
 | `router.activeVaults()` | `useReadContract` | Weight routing for deposit split |
 | `router.previewDeposit(amount)` | `useReadContract` | Router deposit preview with per-leg splits |
 | USDC `allowance(owner, spender)` | `useReadContract` | Approve gate on deposit |
-| Governance `getProposal(id)` | `useReadContract` | Proposal surface; renders nothing on mainnet (no proposals exist) |
 
 **Explorer reads (HTTP API, display only, may be stale by one indexer tick):**
 
@@ -277,7 +276,7 @@ history pane; live chain state still goes through RPC."
 | File | Change | Risk of merge conflict |
 |---|---|---|
 | `main.tsx` | Remove `VITE_VAULT_ADDRESS`; provide `VaultRegistryContext` and `RouterContext` | High — central entry point |
-| `lib/abi.ts` | Add `vaultRegistryAbi`, `portfolioRouterAbi`, `routerGovernanceAbi` | Moderate — other issues append here |
+| `lib/abi.ts` | Add `vaultRegistryAbi`, `portfolioRouterAbi` | Moderate — other issues append here |
 | `components/StatusHeader.tsx` | Replace single vault stat card with registry summary | Low — display-only change |
 | `components/AgentsPanel.tsx` | Widen `vaultAddress` to `vaultAddresses` for registration check | Low — one prop change |
 | `lib/useVaultRegistration.ts` | Accept `vaultAddresses: readonly Address[]`; use multi-call | Low — isolated hook file |
@@ -293,7 +292,7 @@ history pane; live chain state still goes through RPC."
 | `components/ProtocolLayer.tsx` | Root container for protocol layer (no wallet) | Protocol |
 | `components/VaultRegistryView.tsx` | List of all vaults with TVL, risk, status | Protocol |
 | `components/VaultDetailView.tsx` | Single-vault adapter breakdown, charts | Protocol |
-| `components/PortfolioRouterView.tsx` | Active weights, governance proposal, history | Protocol |
+| `components/PortfolioRouterView.tsx` | Active weights, history | Protocol |
 | `components/ProtocolStats.tsx` | Aggregate TVL, depositor count, activity feed | Protocol |
 | `components/AccountLayer.tsx` | Root container for account layer | Account |
 | `components/PortfolioPositionView.tsx` | Receipt balances across all vaults | Account |
@@ -302,7 +301,6 @@ history pane; live chain state still goes through RPC."
 | `components/VaultSelectorDepositTab.tsx` | Deposit into a chosen vault (direct ERC-4626) | Action |
 | `components/RouterDepositTab.tsx` | Deposit via Portfolio Router with per-leg preview | Action |
 | `components/MultiVaultWithdrawalTab.tsx` | Redeem from chosen vault or router position | Action |
-| `components/GovernanceVoteTab.tsx` | Review proposal, cast vote | Action |
 | `lib/routerPreview.ts` | Preview pipeline for `RouterDepositTab` (mirrors `vaultPreview.ts`) | Shared |
 | `lib/usePortfolioPosition.ts` | Multi-vault `balanceOf` + share price batch hook | Shared |
 
@@ -318,7 +316,6 @@ This scout (317)
         └─> Account layer: portfolio position view (#319) — reads registry context + balanceOf
               └─> Action layer: vault-selector deposit (#320) — needs VaultRecord from context
                     └─> Action layer: withdrawal (#321) — needs position from #319
-              └─> Action layer: governance vote (#322) — reads governance state from RouterContext
 ```
 
 **Issues that are parallel-safe (no shared hot-file edits):**
@@ -328,7 +325,6 @@ This scout (317)
 | Protocol layer views (#318) and account layer (#319) | Neither edits the other's new additive components |
 | `VaultRegistryView` and `VaultDetailView` | Both additive; only dependency is `VaultRegistryContext` |
 | `PortfolioRouterView` and `ProtocolStats` | Both additive; read from separate query keys |
-| `RouterDepositTab` and `GovernanceVoteTab` | Both additive; no shared hot files |
 | `routerPreview.ts` and `usePortfolioPosition.ts` | Both new files; no overlap |
 
 **Issues that must serialize (shared hot-file edits):**
@@ -400,12 +396,8 @@ This scout (317)
    The `resolveExplorerApiUrl` / `fetchAgentDeposits` pattern in `explorerApi.ts`
    is the established model — extend it with typed functions per new endpoint.
 
-7. **Governance proposal surface.** `GovernanceVoteTab` depends on the
-   `RouterGovernance.sol` contract and its `castVote` / `getProposal` surface.
-   That contract is deployed as of the governance phase issues (#341, #342). The
-   tab is fully additive but must import `routerGovernanceAbi` from `abi.ts`
-   (added in step 1 of the serialization sequence). On mainnet it renders
-   nothing: there are no proposals, because nobody holds a voter key.
+7. **No governance proposal surface.** The dapp has no governance vote tab.
+   `RouterGovernance.sol` has no proposal or vote function (issue 1698).
 
 ---
 
@@ -420,5 +412,5 @@ All items below are in `Plan tracking issue #109` §"Phase: Multi-vault dapp".
 | Account layer: portfolio position, transaction history, agent policies (#319) | Yes | Context additions |
 | Action layer: vault-selector deposit (#320) | Yes | Context additions + `DepositWithdrawTab` widening |
 | Action layer: multi-vault withdrawal (#321) | Yes | Context additions + position view (#319) |
-| Action layer: governance vote (#322) | Yes | Context additions |
+| Action layer: governance vote (#322) | No: removed, `RouterGovernance` has no voting (issue 1698) | n/a |
 | Dapp Playwright E2E: multi-vault flows | Yes | All action layer issues merged |

@@ -255,11 +255,11 @@ contract SafeIntegrationTest is Test {
 
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
 
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
 
-        // RouterGovernance must hold the router's ADMIN_ROLE before the handover:
-        // ADMIN_ROLE is what gates setWeights, so without it every proposal that
-        // reaches quorum reverts inside execute(). DeployRouterGovernance performs
+        // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
+        // before the handover: WEIGHT_SETTER_ROLE gates setWeights (applyReceipt)
+        // and ADMIN_ROLE gates the two fallbacks. DeployRouterGovernance performs
         // this grant for a real deployment; this fixture constructs RouterGovernance
         // directly, so it must do the same. DeployTimelock's R7 precondition asserts
         // it below.
@@ -659,12 +659,22 @@ contract SafeIntegrationTest is Test {
         assertEq(router.routerCap(), 1_000_000e6, "router cap should be updated");
     }
 
-    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (setQuorumThreshold).
-    function test_happyPath_routerGovernance_setQuorumThreshold() public withSnap {
-        bytes memory callData = abi.encodeCall(RouterGovernance.setQuorumThreshold, (5));
+    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
+    function test_happyPath_routerGovernance_clearVotedWeights() public withSnap {
+        bytes memory callData = abi.encodeCall(RouterGovernance.clearVotedWeights, ());
+        vm.recordLogs();
         _scheduleAndExecute(address(governance), callData);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 cleared;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(router)
+                    && logs[i].topics[0] == PortfolioRouter.VotedWeightsCleared.selector
+            ) cleared++;
+        }
+        assertEq(cleared, 1, "the timelock cleared the active vector once");
 
-        assertEq(governance.quorumThreshold(), 5, "quorum threshold should be updated");
+        assertFalse(router.votedWeightsActive(), "active vector should be cleared");
     }
 
     /// @notice AC1d: Full Safe+timelock path on RobotMoneyVault (setExitFeeBps).
@@ -1064,7 +1074,7 @@ contract SafeIntegrationTest is Test {
             )
         );
         vm.prank(address(safe));
-        governance.setQuorumThreshold(99);
+        governance.clearVotedWeights();
     }
 
     /// @notice AC6d: Direct ADMIN_ROLE call on RobotMoneyVault reverts.
@@ -1390,7 +1400,7 @@ contract SafeIntegrationTest is Test {
     }
 
     function _replacementGovernance() internal returns (RouterGovernance) {
-        return new RouterGovernance(address(router), address(this), 7 days, 1 days, 2);
+        return new RouterGovernance(address(router), makeAddr("receipts"), address(this));
     }
 
     /// @notice The stage 11 handover leaves the Safe as the only rotator and the timelock as the only executor.

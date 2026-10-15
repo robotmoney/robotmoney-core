@@ -501,12 +501,14 @@ The legs that run execute atomically: if any of them reverts, the entire deposit
 
 The router maintains two weight vectors:
 
-- **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. While `votedWeightsActive` is true this vector is the source of truth.
-- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock). The router routes by it whenever `votedWeightsActive` is false. This is the vector the `apply-receipt` govern row writes on today's bytecode (ADR-0002, core 1696). Its length must equal `VaultRegistry.routerEligibleCount()`.
+- **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. While `votedWeightsActive` is true this vector is the source of truth. `RouterGovernance.applyReceipt` writes it (the `apply-receipt` govern row, core 1696).
+- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock). The router routes by it whenever `votedWeightsActive` is false. It is the fallback (ADR-0002). The `apply-receipt` govern row does not write it. Its length must equal `VaultRegistry.routerEligibleCount()`.
 
-At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. A voted vector written at deploy would override every later default, so a receipt-driven `setDefaultWeights` would not change routing; a router that already carries one is cleared with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
+At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. A voted vector written at deploy would override every later default change. A router that carries an active vector is returned to the default with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
 
-The Safe multisig, through the TimelockController, is the only body that changes router weights. `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6). The timelock reaches the weights through `RouterGovernance.setDefaultWeights` in the `apply-receipt` batch; the weight-setter `applyReceipt` call that lands before the final deployment calls `setWeights` instead.
+The Safe multisig, through the TimelockController, is the only body that changes router weights. `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock router `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6). The timelock reaches the weights through `RouterGovernance.applyReceipt`, gated by `RouterGovernance`'s own `WEIGHT_SETTER_ROLE`, which the timelock holds. `applyReceipt` calls `setWeights`.
+
+`setWeights` and `setDefaultWeights` revert `DuplicateVault(vault)` when a vault appears twice in the list (security review 2026-10-12, finding 8).
 
 #### Routing eligibility
 
@@ -535,9 +537,9 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 | Function | Role | Effect |
 |---|---|---|
 | `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Skip non-depositable legs, split the full amount pro rata across the rest, call vault.deposit per leg, return shares per leg. All-or-revert across the legs that run; reverts `NoWeightsSet` when no leg is depositable. |
-| `setWeights(address[] vaults, uint256[] bps)` | RouterGovernance only (not yet implemented: core #1522; today router `ADMIN_ROLE`) | Set voted weight vector. Overwrites current voted weights and sets `votedWeightsActive = true`. |
+| `setWeights(address[] vaults, uint256[] bps)` | `WEIGHT_SETTER_ROLE` (RouterGovernance) | Set the active weight vector. Overwrites the current active weights and sets `votedWeightsActive = true`. Reverts `DuplicateVault` on a repeated vault. |
 | `clearVotedWeights()` | ADMIN | Deactivate the voted vector; revert to default weights. |
-| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. |
+| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. Reverts `DuplicateVault` on a repeated vault. |
 | `setRouterCap(uint256)` | ADMIN | Set global deposit cap. |
 | `setVaultCap(address, uint256)` | ADMIN | Set per-vault leg cap. |
 | `previewDeposit(uint256 amount)` | view | Return per-vault estimated shares, weights, net amounts, and per-leg unavailable status without executing. |
@@ -556,35 +558,41 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ### 9.2.1 Purpose and scope
 
-`RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock operation releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696; on today's bytecode the batch is `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` plus `RouterGovernance.setDefaultWeights(vaults, bps)`). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
+`RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock call, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
 
-`RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+`RouterGovernance` has no propose, vote or execute function and no voting event (issue 1698). The mainnet test deployment ran the earlier bytecode with voter addresses nobody holds. The final deployment's verifier asserts that the runtime code has no voting function.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
 - Exposes the resulting weights for rmpc and dapp reads.
-- `ADMIN_ROLE` is held by the timelock after stage 11; the deployer holds nothing.
+- `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` (both self-administered) are held by the timelock after stage 11; the deployer holds nothing.
+- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and the receipt register's `ADMIN_ROLE`, so it can release a receipt in the same call that applies it.
 
 ### 9.2.2 Applying a receipt
 
 1. **Record**: the committee submitter records the consensus receipt through the gateway (`ConsensusRecommendationReceipt.recordReceipt`).
-2. **Schedule**: the Safe schedules one timelock batch: `releaseReceipt(receiptId)` and `RouterGovernance.setDefaultWeights(vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
+2. **Schedule**: the Safe schedules one timelock call: `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
 3. **Delay**: the timelock delay elapses (172800 s on 8453).
-4. **Execute**: the Safe executes the batch. Release and weights land in one operation; partial state is impossible.
-5. **Read back**: the tool reads `isReleased(receiptId)` and the router weights and fails on any difference.
+4. **Execute**: the Safe executes the call. `applyReceipt` checks that the receipt is recorded, not released and that `payloadDigest` equals the stored digest. It then calls `releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` and emits `ReceiptApplied`. Release and weights land in one call; partial state is impossible.
+5. **Read back**: the tool reads `isReleased(receiptId)`, `votedWeightsActive()` and the router's active and effective weights, and fails on any difference.
 
 ### 9.2.3 Key functions
 
 | Function | Role | Effect |
 |---|---|---|
-| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum and that the length equals the registry's router-eligible count. The weight write of the `apply-receipt` batch on today's bytecode. |
-| `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. |
-| `cancel(uint256 proposalId)`, `activeProposal()`, `proposalState(uint256)` | today's bytecode only | Unused (the voter addresses are held by nobody); deleted with `propose`, `vote` and `execute` before the final deployment. |
+| `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | WEIGHT_SETTER (timelock) | Release a recorded, unreleased receipt whose stored digest equals `payloadDigest`, then call `router.setWeights(vaults, bps)`, in one call. Sets the router's active vector. Emits `ReceiptApplied(receiptId, payloadDigest, vaults, bps)`. Reverts `ReceiptNotRecorded`, `ReceiptAlreadyReleased` or `PayloadDigestMismatch`; any router refusal reverts the whole call. |
+| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum and that the length equals the registry's router-eligible count. Sets the fallback vector. |
+| `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. The emergency lever. |
+| `currentWeights()` | view | The router's active weight vector (empty until a receipt is applied). |
+| `router()`, `receipts()` | view | The immutable `PortfolioRouter` and `ConsensusRecommendationReceipt` addresses. |
+| `ADMIN_ROLE`, `WEIGHT_SETTER_ROLE` | constants | Both self-administered. The constructor grants both to `_admin` (the deployer); the timelock stage hands both to the timelock. |
+
+Errors: `ZeroAddress` (a zero constructor argument), `ReceiptNotRecorded(receiptId)`, `ReceiptAlreadyReleased(receiptId)`, `PayloadDigestMismatch(receiptId, stored, given)`.
 
 ### 9.2.4 Key invariants
 
-- **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance`'s admin calls.
-- **Atomic rebalance**: a receipt's release and its weights are one timelock operation.
+- **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance.applyReceipt` and its admin calls.
+- **Atomic rebalance**: a receipt's release and its weights are one call.
 - **Timelock delay enforcement**: no weight change lands before the timelock delay elapses.
 
 ---

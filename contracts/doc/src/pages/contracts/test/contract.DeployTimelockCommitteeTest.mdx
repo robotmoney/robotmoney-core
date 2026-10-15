@@ -5,7 +5,7 @@ description: "Issue #1319: before this change, `DeployTimelock.s.sol` only hande
 
 # DeployTimelockCommitteeTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelockCommittee.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployTimelockCommittee.t.sol)
 
 **Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
@@ -173,6 +173,28 @@ bool internal runAsDeployer;
 ```solidity
 function setUp() public;
 ```
+
+<a id="_wiregovernance-address"></a>
+
+### _wireGovernance
+
+<i>
+
+Build RouterGovernance against `receipts_` and mirror DeployRouterGovernance's
+router ADMIN_ROLE and WEIGHT_SETTER_ROLE grants (R7), then hand every router
+role to address(script).
+
+</i>
+
+```solidity
+function _wireGovernance(address receipts_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receipts_ | `address` |  |
 
 <a id="_deployreceiptandrun-address-address"></a>
 

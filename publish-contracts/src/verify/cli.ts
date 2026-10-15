@@ -15,8 +15,6 @@ export function parseSheetJson(text: string): VerifySheet {
     if (v.seed !== undefined) v.seed = BigInt(v.seed);
     v.assets ??= [];
   }
-  const g = j.governance;
-  if (g) for (const k of ["voterPower", "quorum", "votingPeriod", "executionDelay"]) g[k] = BigInt(g[k]);
   return j as VerifySheet;
 }
 

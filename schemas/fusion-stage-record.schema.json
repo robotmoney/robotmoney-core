@@ -28,7 +28,6 @@
     ".vault_addresses.rmAGENT",
     ".vault_addresses.rmRWA",
     ".ephemeral.approver",
-    ".ephemeral.voters",
     ".ephemeral.emergency",
     ".ephemeral.keystore_dir",
     ".ephemeral.safe_signers"
@@ -108,16 +107,11 @@
     "ephemeral": {
       "type": "object",
       "description": "The throwaway ceremony keys and Safe signer roster (2026-09-24 decision: staging is throwaway, no key outlives the run that minted it).",
-      "required": ["approver", "voters", "emergency", "keystore_dir", "safe_signers"],
+      "required": ["approver", "emergency", "keystore_dir", "safe_signers"],
       "properties": {
         "approver": {
           "allOf": [{ "$ref": "#/$defs/address" }],
           "description": "Must equal the address of the safe_signers entry whose role is \"approver\" — the relayer every Safe call is sent from."
-        },
-        "voters": {
-          "type": "array",
-          "minItems": 2,
-          "items": { "$ref": "#/$defs/address" }
         },
         "emergency": { "$ref": "#/$defs/address" },
         "keystore_dir": {

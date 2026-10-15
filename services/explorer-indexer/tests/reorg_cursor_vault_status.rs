@@ -17,7 +17,7 @@
 
 mod common;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::Address;
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::db::{CountTable, REORG_ROLLBACK_EXCLUSIONS};
 use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
@@ -666,29 +666,29 @@ async fn rollback_order_deletes_children_before_parents() {
     let db = &fx.db;
     db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
 
-    db.insert_proposal(
-        CHAIN,
-        1,
-        105,
-        0,
-        [0xC1u8; 32],
-        [0x71u8; 20],
-        "orphaned proposal",
-        1_700_000_000,
-        200,
+    // Seeded with raw SQL: the indexer no longer writes either table
+    // (issue #1698), but both still exist and still carry the FK.
+    sqlx::query(
+        "INSERT INTO governance_proposals \
+         (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, \
+          created_at, deadline_block) \
+         VALUES ($1, 1, 105, 0, $2, $3, 'orphaned proposal', 1700000000, 200)",
     )
+    .bind(CHAIN)
+    .bind(&[0xC1u8; 32][..])
+    .bind(&[0x71u8; 20][..])
+    .execute(db.pool())
     .await
     .unwrap();
-    db.insert_vote(
-        CHAIN,
-        1,
-        [0x72u8; 20],
-        106,
-        0,
-        [0xC2u8; 32],
-        true,
-        U256::from(42u64),
+    sqlx::query(
+        "INSERT INTO governance_votes \
+         (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
+         VALUES ($1, 1, $2, 106, 0, $3, true, 42)",
     )
+    .bind(CHAIN)
+    .bind(&[0x72u8; 20][..])
+    .bind(&[0xC2u8; 32][..])
+    .execute(db.pool())
     .await
     .unwrap();
 

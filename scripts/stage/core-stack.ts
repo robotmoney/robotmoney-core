@@ -19,7 +19,7 @@
 //   - the dapp stack is docker-compose.dapp.yaml plus docker-compose.dapp.stage.yaml (project robotmoney-dapp),
 //     started from the environment the deploy job wrote.
 // The deploy, the real Safe handover, the verifier and the stage 13 govern matrix all run through publish
-// contracts and the Safe SDK tool. Voting power, quorum, agent registration and weights are govern rows executed
+// contracts and the Safe SDK tool. There is no voting (issue 1698). Agent registration and weights are govern rows executed
 // through the real Safe and the timelock, never set by a deployer. The passphrase stays in a 0600 file: only its
 // PATH is passed, never its content.
 //
@@ -104,7 +104,7 @@ export const RECORD_REQUIRED_FIELDS = [
   ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
   ".code_hashes.gateway",
   ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-  ".ephemeral.approver", ".ephemeral.voters", ".ephemeral.emergency",
+  ".ephemeral.approver", ".ephemeral.emergency",
   ".ephemeral.keystore_dir", ".ephemeral.safe_signers",
 ];
 
@@ -1019,7 +1019,6 @@ async function recordWrite(s: Stack): Promise<void> {
   const sheet = parseSheet(readFileSync(sheetPath, "utf8"));
   const sg = (k: string): string => (sheet.get(k) ?? "").replaceAll(" ", "");
   const owners = sg("SAFE_OWNERS").split(",");
-  const voters = sg("VOTER_ADDRESSES").split(",").filter(Boolean);
   const emergency = sg("EMERGENCY_ADDRESS");
   const stamp = new Date(s.deps.nowMs()).toISOString().replace(/\.\d+Z$/, "Z");
   const record = {
@@ -1047,7 +1046,6 @@ async function recordWrite(s: Stack): Promise<void> {
     vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
     ephemeral: {
       approver: owners[0],
-      voters,
       emergency,
       keystore_dir: s.sv("key_dir"),
       safe_signers: [
@@ -1083,7 +1081,7 @@ export function validateRecord(rec: Json, recordPath: string): void {
     ".deployer", ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
     ".addresses.consensus_receipt", ".addresses.ic_policy", ".addresses.timelock", ".addresses.safe", ".addresses.emergency",
     ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
-    ".ephemeral.approver", ".ephemeral.emergency", ".ephemeral.voters[0]", ".ephemeral.voters[1]",
+    ".ephemeral.approver", ".ephemeral.emergency",
   ]) addr(f);
   const hash = get(".code_hashes.gateway");
   if (!BYTES32.test(hash) || /^0x0{64}$/.test(hash)) throw recordBad("record-field-malformed", `.code_hashes.gateway is not a non-zero bytes32 ('${hash}')`);

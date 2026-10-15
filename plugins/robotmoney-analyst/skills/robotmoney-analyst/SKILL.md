@@ -153,8 +153,8 @@ Read the `RouterGovernance` state. Delegates to:
 rmpc get-governance --config <CONFIG> --pretty
 ```
 
-Surface the router weight vector. `active_proposal` is always `null` and the
-`cadence_params` block holds constructor arguments of today's bytecode: nobody holds a voter key, so there are no proposals.
+Surface the router's active and default weight vectors. There are no
+proposals: `RouterGovernance` has no voting (issue 1698).
 
 ### get-weights
 
@@ -189,8 +189,9 @@ is the only authority over router weights. It submits the Investment
 Committee's consensus receipt, and that submission is the rebalance: one
 timelock operation releases the receipt and applies its weights
 (publish-contracts govern row `apply-receipt`, core 1696). There is no voting
-by token holders or anyone else, and `rmpc governance draft-proposal` prints an unsigned review draft only: no voter set, no voting power, no quorum, no
-voting period, no execution delay, no propose, vote or execute. An analyst's
+by token holders or anyone else: no voter set, no voting power, no quorum, no
+voting period, no execution delay, no propose, vote or execute. The one call
+that moves the weights is `RouterGovernance.applyReceipt` (issue 1698). An analyst's
 weight recommendation reaches the chain only as a committee tilt
 (`rmpc committee vote-submit`, a signed tilt that is not a vote on anything)
 and then as the committee's consensus receipt.

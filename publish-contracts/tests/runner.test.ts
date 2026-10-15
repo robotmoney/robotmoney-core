@@ -25,7 +25,7 @@ describe("the stage runner on stub forge and cast", () => {
     expect(lastError(w)).toBeUndefined();
     expect(code).toBe(0);
     expect(broadcasts(w)).toEqual([SCRIPT.libs, SCRIPT.recorder, SCRIPT.vault, SCRIPT.registry, SCRIPT.router, SCRIPT.gateway,
-      SCRIPT.governance, SCRIPT["ic-policy"], SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
+      SCRIPT["ic-policy"], SCRIPT.governance, SCRIPT.proto, SCRIPT.agent, SCRIPT.rwa, SCRIPT.timelock]);
     expect(w.safeCalls[0]).toBe("createSafe");
     const m = manifest(w);
     expect(Object.keys(m.stages)).toEqual(DEPLOY);

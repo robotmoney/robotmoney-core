@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, encodeFunctionData, keccak256, parseAbi, toBytes, toFunctionSelector } from "viem";
-import { APPLY_ROW, GOVERNANCE_WEIGHTS_ABI, applyRecordKey } from "../src/apply-receipt.ts";
+import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, buildSelfAdminCall, refuseSafeConfigChange, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, UNPAUSE_USDC_ROW, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
@@ -1092,7 +1092,7 @@ describe("issue 1688: the unpause ordering cannot be bypassed by a legacy record
   });
 });
 
-// ---- issue 1696: the apply-receipt row, one timelock batch (release + weights) through the real Safe ----
+// ---- issue 1696, issue 1698: the apply-receipt row, one timelock call (the weight setter's applyReceipt) through the real Safe ----
 describe("issue 1696: apply-receipt, the Safe applies a consensus receipt through the timelock", () => {
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
@@ -1124,25 +1124,25 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(w.tl.s.log).toEqual([]);
   };
 
-  test("apply-receipt schedules one batch through the Safe: releaseReceipt then the weight change, and one executeBatch after the delay", async () => {
+  test("apply-receipt calls the weight setter: one timelock call, RouterGovernance.applyReceipt(receiptId, digest, vaults, bps), scheduled and executed through the Safe", async () => {
     const w = world();
     const out: string[] = [];
     const res = await w.apply({ warp: warpTo(w.tl), emit: (l: string) => out.push(l) });
     expect(res.rows).toEqual([applyRecordKey(RID)]);
-    // exactly one scheduleBatch and one executeBatch, nothing else
-    expect(w.tl.s.log).toEqual(["scheduleBatch", "executeBatch"]);
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "executeBatch:apply-receipt"]);
+    // exactly one schedule and one execute of a single call, nothing else
+    expect(w.tl.s.log).toEqual(["schedule", "execute"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "execute:apply-receipt"]);
     const sc = w.tl.s.scheduled.get("apply-receipt")!;
-    expect(sc.form).toBe("batch");
-    expect(sc.calls.length).toBe(2);
-    expect(sc.calls[0]).toEqual({ target: A.receipt, data: buildReleaseCall(A.receipt, RID).data });
-    const d0 = decodeFunctionData({ abi: RECEIPT_ABI, data: sc.calls[0]!.data as `0x${string}` });
-    expect(d0.functionName).toBe("releaseReceipt");
-    expect(d0.args).toEqual([RID]);
-    expect(sc.calls[1]!.target).toBe(A.governance);
-    const d1 = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: sc.calls[1]!.data as `0x${string}` });
-    expect(d1.functionName).toBe("setDefaultWeights");
-    expect(d1.args).toEqual([WANT_VAULTS, WANT_BPS]);
+    expect(sc.form).toBe("single");
+    expect(sc.calls.length).toBe(1);
+    expect(sc.calls[0]!.target).toBe(A.governance);
+    const d = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
+    expect(d.functionName).toBe("applyReceipt");
+    expect(d.args).toEqual([RID, w.tl.s.digests.get(RID)!, WANT_VAULTS, WANT_BPS]);
+    // the one call released the receipt and set the router's active vector; the default vector is untouched
+    expect(w.tl.s.released.has(RID)).toBe(true);
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n] });
     // the schedule is signed by owners and sent as ONE Safe transaction, and the lines carry the row
     expect(w.tl.s.safeTxs.get(w.tl.s.ids.get("apply-receipt")!)!.length).toBe(2);
     const lines = out.map((l) => JSON.parse(l));
@@ -1151,7 +1151,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // the evidence entry (receipt_applications) carries both Safe transactions, the vector and block times one delay apart
     const entries = (w.manifest as { receipt_applications?: any[] }).receipt_applications!;
     expect(entries.length).toBe(1);
-    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, target: A.receipt, governance: A.governance, vaults: WANT_VAULTS, bps: [5000, 3000, 2000], schedule_status: 1, execute_status: 1 });
+    expect(entries[0]).toMatchObject({ step: "apply-receipt", receipt_id: RID, target: A.governance, governance: A.governance, vaults: WANT_VAULTS, bps: [5000, 3000, 2000], voted_weights_active: true, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000], schedule_status: 1, execute_status: 1 });
     expect(entries[0].execute_block_timestamp - entries[0].schedule_block_timestamp).toBeGreaterThanOrEqual(Number(DELAY));
     expect(entries[0].schedule_tx).not.toBe(entries[0].execute_tx);
     // never in the matrix
@@ -1163,14 +1163,14 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const ok = world();
     await ok.apply({ warp: warpTo(ok.tl) });
     expect(ok.tl.s.released.has(RID)).toBe(true);
-    expect(ok.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
-    // the router reads another vector after the batch executed
+    expect(ok.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    // the router reads another active vector after the call executed
     const wrongWeights = world();
-    wrongWeights.tl.s.reads.getDefaultWeights = [WANT_VAULTS, [6000n, 2500n, 1500n]];
+    wrongWeights.tl.s.reads.getWeights = [WANT_VAULTS, [6000n, 2500n, 1500n]];
     await expect(wrongWeights.apply({ warp: warpTo(wrongWeights.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN });
     // the router reads the vault list in another order
     const wrongOrder = world();
-    wrongOrder.tl.s.reads.getDefaultWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA], WANT_BPS];
+    wrongOrder.tl.s.reads.getWeights = [[A.vaults.PROTO, A.vaults.USDC, A.vaults.RWA], WANT_BPS];
     await expect(wrongOrder.apply({ warp: warpTo(wrongOrder.tl) })).rejects.toMatchObject({ kind: "GOVERN" });
     // the receipt reads not released after the batch executed
     const notReleased = world();
@@ -1232,8 +1232,8 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     w.tl.s.weights = { vaults: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], bps: [6000n, 2500n, 500n, 1000n] };
     await w.apply({ warp: warpTo(w.tl) });
     const sc = w.tl.s.scheduled.get("apply-receipt")!;
-    const d1 = decodeFunctionData({ abi: GOVERNANCE_WEIGHTS_ABI, data: sc.calls[1]!.data as `0x${string}` });
-    expect(d1.args).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], [8550n, 525n, 575n, 350n]]);
+    const d = decodeFunctionData({ abi: GOVERNANCE_APPLY_ABI, data: sc.calls[0]!.data as `0x${string}` });
+    expect([d.args[2], d.args[3]]).toEqual([[A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA], [8550n, 525n, 575n, 350n]]);
   });
 
   test("apply-receipt is not in stage 13: stageRows(8453) is the four unpauses and GOVERN_ROWS has no apply-receipt", () => {
@@ -1264,7 +1264,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // named, it runs on 8453 and is its own operation, scheduled alone
     const named = world(8453);
     await expect(named.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(named.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(named.tl.s.events).toEqual(["schedule:apply-receipt"]);
   });
 
   test("issue 1796: a receipt operation scheduled before a vault cutover is re-planned from the chain on the next run and refused (nothing is sent), as is a receipt released meanwhile", async () => {
@@ -1274,13 +1274,13 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     w.tl.s.ineligible.add(A.vaults.PROTO);
     w.tl.s.clock += DELAY;
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("differs from the registry's router-eligible vaults") });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
     expect(w.tl.s.released.has(RID)).toBe(false);
     // the vault set is right again but the receipt was released meanwhile
     w.tl.s.ineligible.delete(A.vaults.PROTO);
     w.tl.s.released.add(RID);
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("was released after operation") });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
   });
 
   test("apply-receipt pending and cancelled rounds: a pending round exits GOVERN_PENDING with the resume command and a cancelled operation schedules again with a newer seq", async () => {
@@ -1294,7 +1294,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     expect(e.details.ready_at).toBe((1000n + DELAY).toString());
     expect(String(e.details.next_command)).toContain(`--row ${APPLY_ROW} --receipt-id ${RID} --payload ${w.file}`);
     expect(String(e.details.next_command)).toContain("--chain 8453");
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
     expect(w.tl.s.released.has(RID)).toBe(false);
     // a resume before the delay pends again and sends nothing
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
@@ -1305,7 +1305,7 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     const firstId = (w.manifest.govern![key] as { scheduled: { operation_id: string } }).scheduled.operation_id;
     w.tl.s.ops.delete(firstId);
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "scheduleBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "schedule:apply-receipt"]);
     const again = w.manifest.govern![key] as { scheduled: { seq: number; operation_id: string } };
     expect(again.scheduled.seq).toBeGreaterThan(firstSeq);
     expect(again.scheduled.operation_id).toBe(firstId); // a cancelled id may be scheduled again
@@ -1313,9 +1313,9 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     // after the delay the same command executes and reads released and the weights back
     w.tl.s.clock += DELAY;
     await w.apply({ warp: noWarp, emit: (l: string) => out.push(l) });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt", "scheduleBatch:apply-receipt", "executeBatch:apply-receipt"]);
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt", "schedule:apply-receipt", "execute:apply-receipt"]);
     expect(w.tl.s.released.has(RID)).toBe(true);
-    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: WANT_BPS });
     // a rerun sends nothing
     await w.apply({ warp: noWarp });
     expect(w.tl.s.events.length).toBe(3);

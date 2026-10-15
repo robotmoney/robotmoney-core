@@ -22,8 +22,12 @@
 #   release  admin release, then the two duplicate refusals that only exist once
 #            something is anchored                       AC-CORE-03 AC-E2E-03 AC-E2E-06
 #   dapp     the dapp serves the receipt surface          AC-CORE-08
-#   govern   release produces at most a human-reviewable draft and no on-chain
-#            proposal                                    AC-GOV-01 AC-GOV-02 AC-E2E-04
+#   govern   a release-only path sets no router weights: the weight setter's
+#            RouterGovernance.currentWeights() is unchanged  AC-E2E-04
+#            (issue 1698: a receipt reaches the router only through
+#            RouterGovernance.applyReceipt, the publish-contracts govern row
+#            apply-receipt, which releases it and sets the weights in one call.
+#            There is no proposal and nothing to draft.)
 #
 # Every stage appends assertions to a machine-readable result file. ANY failed
 # assertion makes the script exit non-zero; a stage that is skipped is recorded
@@ -118,13 +122,13 @@ for s in $STAGES; do
   [[ " $ALL_STAGES " == *" $s "* ]] || { echo "unknown stage: $s" >&2; exit 64; }
 done
 
-# record/index/release/govern all key off the receipt id that only the verify
+# record/index/release all key off the receipt id that only the verify
 # stage derives. Selecting one without it used to run the whole harness and
 # then SKIP the thing under test as `prerequisite_failed`, which reads like a
 # chain problem rather than a stage list that cannot work. Pull it in instead,
 # preserving ALL_STAGES order so the dependency runs first.
 if [[ " $STAGES " != *" verify "* ]]; then
-  for s in record index release govern; do
+  for s in record index release; do
     if [[ " $STAGES " == *" $s "* ]]; then
       echo "note: stage '$s' needs the receipt id; adding 'verify'" >&2
       ordered=""
@@ -197,9 +201,9 @@ expect() { # <stage> <id> <condition-exit-status-already-evaluated:0|1> <detail>
 have_stage() { [[ " $STAGES " == *" $1 "* ]]; }
 
 # ── INV-4 witnesses ──────────────────────────────────────────────────────────
-# AC-CORE-04 names three: vault balances, router weights, proposal count. All
-# three are read, because weights and proposal count alone would miss an asset
-# movement.
+# AC-CORE-04 names vault balances and router weights (and a proposal count,
+# which no longer exists: issue 1698 removed propose/vote/execute). Both are
+# read, because weights alone would miss an asset movement. See lib/inv4.sh.
 IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
 # EXACTLY FOUR, in canonical bucket order. AC-FMT-04 names four buckets and four
 # vaults; a short list would either index an unset array element (fatal under
@@ -241,7 +245,7 @@ assert_witnesses_unchanged() { # <stage> <label> [baseline]
   local now diff baseline id
   baseline="${3:-$W_START}"
   now="$(witnesses)"
-  id="$2 — vault balances, router weights and proposal count unchanged (INV-4)"
+  id="$2 — vault balances, router weights unchanged (INV-4)"
   keep "witnesses-after-$1.txt" "$now"
   # AN UNREADABLE WITNESS IS A FAILED ASSERTION, NEVER A PASS. Two snapshots of
   # the same error text diff clean, which is exactly how ten failed reads used
@@ -279,7 +283,7 @@ if have_stage verify; then
   verify_out="$("$RMPC_BIN" receipt -c "$FUSION_RMPC_CONFIG" verify --receipt-url "$RECEIPT_URL" 2>&1)"
   vrc=$?
   keep "verify.json" "$verify_out"
-  # Exit code AND envelope, for the same reason the govern stage checks both:
+  # Exit code AND envelope:
   # an rmpc subcommand can report `ok:false` without exiting non-zero, and a
   # verification reported as passed when it did not is the worst failure this
   # script can have.
@@ -376,15 +380,7 @@ if have_stage negative; then
           "no digest from the verify stage" prerequisite_failed
       fi
 
-      # And it must never become a governance handoff: no propose_calldata.
-      "$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal \
-        --receipt-id "${RECEIPT_ID:-0x}" --receipt-file "$WORK/neg-weights.json" \
-        >"$WORK/neg-weights-draft.json" 2>&1
-      ! jq -e '[.drafts[]? | select((.propose_calldata | type) == "string" and (.propose_calldata | length) > 0)]
-               | length > 0' "$WORK/neg-weights-draft.json" >/dev/null 2>&1
-      expect negative "AC-GOV-01 a weights-tampered receipt produces NO propose_calldata" $? \
-        "$(head -c 300 "$WORK/neg-weights-draft.json")"
-      keep "negative-tampered-weights.txt" "$(cat "$WORK/neg-weights.out" 2>/dev/null; cat "$WORK/neg-weights-draft.json" 2>/dev/null)"
+      keep "negative-tampered-weights.txt" "$(cat "$WORK/neg-weights.out" 2>/dev/null)"
     else
       record_assertion negative "tampered weights refused against the anchored digest" FAIL \
         "could not build the weights-tamper case: the receipt does not carry four weights"
@@ -489,8 +485,8 @@ if have_stage record; then
     # receiptId, payloadDigest AND the operator-supplied payloadUri, so
     # `grep -qi -- "${PAYLOAD_DIGEST#0x}"` over the whole thing reports PASS for a
     # tuple whose real digest field is wrong but whose content-addressed URI
-    # carries the right one — and this run's own watcher template is
-    # `{receipt_id}.json`, one convention change from exactly that. This is the
+    # carries the right one — and a content-addressed `{receipt_id}.json` URL
+    # convention is one change from exactly that. This is the
     # comparison submit-receipt-worker.sh already implements and explains.
     # Receipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri, ...):
     # both leading fields are fixed-width hex, so the first two commas delimit
@@ -673,67 +669,25 @@ else
 fi
 
 # ── stage: govern ────────────────────────────────────────────────────────────
+# Issue 1698: RouterGovernance has no propose/vote/execute and nothing is
+# drafted. A receipt reaches the router ONLY through applyReceipt (publish
+# contracts govern row apply-receipt), which releases it and sets the weights in
+# one call. What remains to assert here is the converse: the release-only path
+# this script exercises (row release-receipt) set no weights. The weight setter's
+# own read of the router must equal its reading from before any write stage.
 if have_stage govern; then
-  if [[ -z "$RECEIPT_ID" ]]; then
-    record_assertion govern "governance draft" SKIP \
-      "no receipt id — an earlier stage already failed" prerequisite_failed
+  setter_before="$(sed -n 's/^setter_weights=//p' <<<"$W_PRE_WRITE")"
+  if inv4_unreadable "$W_PRE_WRITE" || [[ -z "$setter_before" ]]; then
+    record_assertion govern "AC-E2E-04 a release-only path sets no router weights" FAIL \
+      "the pre-write RouterGovernance.currentWeights() reading is missing: ${W_PRE_WRITE:-<empty>}"
+  elif setter_after="$(_inv4_read "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
+         'currentWeights()(address[],uint256[])')"; then
+    [[ "$setter_before" == "$setter_after" ]]
+    expect govern "AC-E2E-04 a release-only path sets no router weights (RouterGovernance.currentWeights unchanged)" $? \
+      "currentWeights $setter_before -> $setter_after"
   else
-    proposals_before="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
-      --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"
-    "$RMPC_BIN" governance -c "$FUSION_RMPC_CONFIG" draft-proposal --receipt-id "$RECEIPT_ID" \
-      --receipt-file "$WORK/receipt.json" >"$WORK/draft.json" 2>&1
-    drc=$?
-    keep "governance-draft.json" "$(cat "$WORK/draft.json")"
-    # ASSERT ON THE ENVELOPE, NOT ON THE EXIT CODE.
-    #
-    # In SCAN mode (`--from-block`, what the draft watcher runs) `rmpc
-    # governance draft-proposal` exits 0 for the range while reporting each
-    # undraftable receipt as a `"refused"` entry inside `.drafts[]`, so one
-    # poison receipt cannot wedge the cursor; the watcher reads those entries
-    # rather than the exit code (see watch-released-drafts.sh). In
-    # SINGLE-RECEIPT mode, which is what this stage uses, a content refusal
-    # exits 2 and a transport/RPC failure exits 3.
-    #
-    # Neither shape may be read from `$?` alone here: an ok:false envelope with
-    # a zero exit was measured against the rc.1 stand-in during QA step 3.8,
-    # which is how this was found, and the exit codes are the producer's
-    # contract rather than this script's. Both are therefore checked — the exit
-    # code AND `.ok`.
-    { (( drc == 0 )) && jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; }
-    expect govern "AC-GOV-01 release produces a governance handoff result" $? \
-      "exit $drc; $(head -c 400 "$WORK/draft.json")"
-    if jq -e '.ok == true' "$WORK/draft.json" >/dev/null 2>&1; then
-      # T15. `length <= 1` exits 0 for `drafts: []` AND for
-      # `[{"status":"refused"}]`, so the headline claim — "the release produced
-      # exactly one reviewable draft whose calldata decodes to those same four
-      # vaults and four weights" — could not be distinguished from "the release
-      # produced no draft at all". Assert the SHAPE.
-      jq -e '(.drafts | length) == 1 and .drafts[0].status == "ready_for_review"
-             and (.drafts[0].vaults | length) == 4
-             and ([.drafts[0].vaults[].weight_bps] | add) == 10000
-             and (.drafts[0].propose_calldata | type) == "string"
-             and (.drafts[0].propose_calldata | length) > 0' "$WORK/draft.json" >/dev/null 2>&1
-      expect govern "AC-GOV-01 EXACTLY ONE ready_for_review draft over four vaults whose bps total 10000 and which carries propose_calldata" $? \
-        "$(jq -c '{n:(.drafts|length),status:[.drafts[]?.status],vaults:(.drafts[0].vaults|length?),
-                   bps:[.drafts[0].vaults[]?.weight_bps],calldata:(.drafts[0].propose_calldata|type?)}' \
-             "$WORK/draft.json" 2>/dev/null)"
-
-      # AND THE BPS MUST BE THE RECEIPT'S OWN, IN CANONICAL BUCKET ORDER. The
-      # weights are the one field that becomes treasury calldata and the one the
-      # analyst signature check cannot cover (T01, T02): a draft that totals
-      # 10000 over the WRONG four numbers satisfies every assertion above.
-      draft_bps="$(jq -c '[.drafts[0].vaults[]?.weight_bps]' "$WORK/draft.json" 2>/dev/null)"
-      receipt_bps="$(jq -c '[.weights[]?.weight_bps]' "$WORK/receipt.json" 2>/dev/null)"
-      { [[ -n "$receipt_bps" && "$receipt_bps" != "[]" && "$draft_bps" == "$receipt_bps" ]]; }
-      expect govern "AC-FMT-04 the drafted bps equal the receipt's weights in canonical bucket order" $? \
-        "draft: ${draft_bps:-<none>}; receipt: ${receipt_bps:-<none>} (canonical order: \
-conservative_defi_yield, protocol_tokens, agent_tokens, real_world_assets)"
-    fi
-    proposals_after="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'currentProposalId()(uint256)' \
-      --rpc-url "$FUSION_RPC_URL" 2>&1 | tr -d '[:space:]')"
-    [[ "$proposals_before" == "$proposals_after" ]]
-    expect govern "AC-E2E-04 drafting submits NO on-chain proposal" $? \
-      "currentProposalId $proposals_before -> $proposals_after"
+    record_assertion govern "AC-E2E-04 a release-only path sets no router weights" FAIL \
+      "RouterGovernance.currentWeights() could not be READ at $FUSION_GOVERNANCE_ADDRESS"
   fi
 else
   record_assertion govern "stage not selected" SKIP "stages: $STAGES" not_selected

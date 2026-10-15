@@ -17,10 +17,11 @@
 //! stood on 2026-05-15; the sources have moved since and these numbers are
 //! deliberately left frozen so the record still reads as the snapshot it was.
 //! The `AgentAuthorized` / `AgentRevoked` / `VaultRegistered` /
-//! `VaultStatusChanged` / `ProposalCreated` / `VoteCast` / `ProposalExecuted` /
-//! `WeightsApplied` drifts below were all corrected by issue #366 (closed) and
-//! no longer exist.  The **live, maintained** citations are the ones on the
-//! `sol!` declarations, the `Topics` fields, and the `abi_drift_gate` table
+//! `VaultStatusChanged` drifts below were all corrected by issue #366 (closed)
+//! and no longer exist. The `RouterGovernance` voting events the record also
+//! covered were deleted from the contract with its voting (issue #1698), so the
+//! indexer no longer decodes any `RouterGovernance` event. The **live,
+//! maintained** citations are the ones on the `sol!` declarations, the `Topics` fields, and the `abi_drift_gate` table
 //! further down this file — those were re-derived from the current sources in
 //! issue #1346 and are the ones to trust.
 //!
@@ -74,40 +75,6 @@
 //! - **Fields changed:** `newStatus` is now `indexed`; `timestamp` is `uint256` not `uint64`.
 //! - **Topic-0 impact:** All `VaultStatusChanged` events silently dropped.
 //!
-//! ## IRouterGovernanceEvents — `contracts/RouterGovernance.sol`
-//!
-//! ### `ProposalCreated` — DRIFTED (fix in issue #366)
-//! - **abi.rs (current):**
-//!   `ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description, uint256 deadlineBlock, uint64 createdAt)`
-//! - **RouterGovernance.sol:106 (authoritative):**
-//!   `ProposalCreated(uint256 indexed proposalId, address indexed proposer, address[] vaults, uint256[] bps, uint64 votingDeadline)`
-//! - **Fields changed:** `description`→`address[] vaults`, `deadlineBlock`→`uint256[] bps`, `createdAt`→`uint64 votingDeadline`.
-//! - **Topic-0 impact:** All `ProposalCreated` events silently dropped.
-//!
-//! ### `VoteCast` — DRIFTED (fix in issue #366)
-//! - **abi.rs (current):**
-//!   `VoteCast(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight)`
-//! - **RouterGovernance.sol:119 (authoritative):**
-//!   `VoteCast(uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor)`
-//! - **Fields changed:** `bool support` removed, `weight`→`power`, `totalFor` added.
-//! - **Topic-0 impact:** All `VoteCast` events silently dropped.
-//!
-//! ### `ProposalExecuted` — DRIFTED (fix in issue #366)
-//! - **abi.rs (current):**
-//!   `ProposalExecuted(uint256 indexed proposalId)`
-//! - **RouterGovernance.sol:126 (authoritative):**
-//!   `ProposalExecuted(uint256 indexed proposalId, address indexed executor)`
-//! - **Missing:** `address indexed executor`.
-//! - **Topic-0 impact:** All `ProposalExecuted` events silently dropped.
-//!
-//! ### `WeightsSet` → `WeightsApplied` — NAME AND SIGNATURE DRIFTED (fix in issue #366)
-//! - **abi.rs (current):**
-//!   `WeightsSet(address[] vaults, uint256[] bps)`
-//! - **RouterGovernance.sol:132 (authoritative):**
-//!   `WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps)`
-//! - **Name changed** from `WeightsSet` to `WeightsApplied`; `proposalId` added.
-//! - **Topic-0 impact:** All `WeightsApplied` events silently dropped (wrong name too).
-//!
 //! # Deposit pause only; withdrawals are never frozen (issue #368, core 1494)
 //!
 //! Issue #368 found that an emergency drain left USDC idle in the vault while a
@@ -145,14 +112,6 @@
 //!   "When empty, only the pinned vault (`vault()`) and the portfolio router (`router()`) are
 //!   accepted." No contract logic change is required for Option A.
 //!
-//! # Governance Documentation Ownership (issue #372)
-//!
-//! `RouterGovernance.sol` implements admin-weighted voting via explicit `votingPower` mapping
-//! (set by `ADMIN_ROLE` via `setVotingPower`).  The contract is NOT token-holder governance.
-//! Documentation in `docs/prd.md` and NatSpec should label it as an admin-weighted MVP mock.
-//! The `WeightsApplied` event (not `WeightsSet`) is the canonical on-chain signal that the
-//! weight vector changed as a result of a governance proposal execution.
-
 use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
 
@@ -164,42 +123,6 @@ use alloy_sol_types::sol;
 // values land transposed (issue #1368). `event_topics_match_foundry_artifacts`
 // compares that view against the compiled Foundry artifacts.
 sol! {
-    /// Event surface from `RouterGovernance`.
-    ///
-    /// Signatures match `RouterGovernance.sol` exactly so that
-    /// `SolEvent::SIGNATURE_HASH` and the `Topics` keccak strings agree
-    /// with the on-chain topic-0.  See `docs/architecture.md §5.4`.
-    #[sol(abi)]
-    #[allow(missing_docs)]
-    interface IRouterGovernanceEvents {
-        /// Emitted when a new governance proposal is created.
-        /// RouterGovernance.sol:163
-        event ProposalCreated(
-            uint256 indexed proposalId,
-            address indexed proposer,
-            address[] vaults,
-            uint256[] bps,
-            uint64  votingDeadline
-        );
-
-        /// Emitted when a voter casts a vote in favour.
-        /// RouterGovernance.sol:176
-        event VoteCast(
-            uint256 indexed proposalId,
-            address indexed voter,
-            uint256 power,
-            uint256 totalFor
-        );
-
-        /// Emitted when a queued proposal is executed.
-        /// RouterGovernance.sol:183
-        event ProposalExecuted(uint256 indexed proposalId, address indexed executor);
-
-        /// Emitted by RouterGovernance when the router weight vector is updated.
-        /// RouterGovernance.sol:189
-        event WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps);
-    }
-
     /// Event surface from `IGateway`. Names match the Solidity source so
     /// `SolEvent::SIGNATURE_HASH` lines up with the on-chain topic.
     #[sol(abi)]
@@ -334,9 +257,9 @@ sol! {
 
     /// Event surface from `PortfolioRouter`.  The `RouterDeposit` event is
     /// emitted once per vault leg on every successful `deposit()` call.
-    /// `WeightsSet` and `DefaultWeightsSet` are emitted by admin calls to
-    /// `setWeights()` and `setDefaultWeights()` respectively — the direct-seed
-    /// paths taken by the demo seed script (not governance execution).
+    /// `WeightsSet` and `DefaultWeightsSet` are emitted by `setWeights()` and
+    /// `setDefaultWeights()` respectively; `RouterGovernance.applyReceipt` sets
+    /// a receipt's vector through `setWeights()`.
     ///
     /// Signatures match `PortfolioRouter.sol` exactly so that
     /// `SolEvent::SIGNATURE_HASH` agrees with the on-chain topic-0.
@@ -353,11 +276,11 @@ sol! {
             uint256 weightBps
         );
 
-        /// Emitted when the voted weight vector is set directly by admin.
+        /// Emitted when the active weight vector is set.
         /// PortfolioRouter.sol:133
         event WeightsSet(address[] vaults, uint256[] bps);
 
-        /// Emitted when the default (below-quorum fallback) weight vector is
+        /// Emitted when the default (fallback) weight vector is
         /// set by ADMIN_ROLE.
         /// PortfolioRouter.sol:139
         event DefaultWeightsSet(address[] vaults, uint256[] bps);
@@ -494,11 +417,6 @@ pub struct Topics {
     // VaultRegistry events.
     pub vault_registered: B256,
     pub vault_status_changed: B256,
-    // RouterGovernance events — docs/architecture.md §5.4.
-    pub proposal_created: B256,
-    pub vote_cast: B256,
-    pub proposal_executed: B256,
-    pub weights_applied: B256,
     /// Per-leg deposit emitted by PortfolioRouter.sol:122.
     pub router_deposit: B256,
     /// Voted weight vector set directly by admin — PortfolioRouter.sol:133.
@@ -571,13 +489,6 @@ impl Topics {
             // VaultRegistry — docs/technical/vault-registry-decisions.md §3.5.
             vault_registered: keccak256(b"VaultRegistered(address,string,address)"),
             vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint256)"),
-            // RouterGovernance — docs/architecture.md §5.4.
-            proposal_created: keccak256(
-                b"ProposalCreated(uint256,address,address[],uint256[],uint64)",
-            ),
-            vote_cast: keccak256(b"VoteCast(uint256,address,uint256,uint256)"),
-            proposal_executed: keccak256(b"ProposalExecuted(uint256,address)"),
-            weights_applied: keccak256(b"WeightsApplied(uint256,address[],uint256[])"),
             router_deposit: keccak256(
                 b"RouterDeposit(address,address,uint256,uint256,uint256)",
             ),
@@ -628,10 +539,6 @@ impl Topics {
             self.vault_exit_fee_charged,
             self.vault_registered,
             self.vault_status_changed,
-            self.proposal_created,
-            self.vote_cast,
-            self.proposal_executed,
-            self.weights_applied,
             self.router_deposit,
             self.weights_set,
             self.default_weights_set,
@@ -798,7 +705,6 @@ mod tests {
             IGatewayEvents,
             IVaultEvents,
             IVaultRegistryEvents,
-            IRouterGovernanceEvents,
             IPortfolioRouterEvents,
             IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
@@ -1021,31 +927,6 @@ mod tests {
                 "VaultStatusChanged",
                 t.vault_status_changed,
             ),
-            // RouterGovernance.
-            (
-                "RouterGovernance.sol",
-                "RouterGovernance",
-                "ProposalCreated",
-                t.proposal_created,
-            ),
-            (
-                "RouterGovernance.sol",
-                "RouterGovernance",
-                "VoteCast",
-                t.vote_cast,
-            ),
-            (
-                "RouterGovernance.sol",
-                "RouterGovernance",
-                "ProposalExecuted",
-                t.proposal_executed,
-            ),
-            (
-                "RouterGovernance.sol",
-                "RouterGovernance",
-                "WeightsApplied",
-                t.weights_applied,
-            ),
             // PortfolioRouter.
             (
                 "PortfolioRouter.sol",
@@ -1157,8 +1038,9 @@ mod tests {
             checks.len(),
             "not every entry in the artifact cross-check table was evaluated"
         );
+        // 26 since issue #1698 deleted the four RouterGovernance voting events.
         assert!(
-            checked >= 27,
+            checked >= 26,
             "artifact cross-check covered only {checked} events — entries were removed \
              from the table without removing the corresponding topic from `Topics`"
         );
@@ -1248,23 +1130,6 @@ mod tests {
         assert_eq!(
             t.vault_status_changed,
             IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH
-        );
-        // RouterGovernance — docs/architecture.md §5.4.
-        assert_eq!(
-            t.proposal_created,
-            IRouterGovernanceEvents::ProposalCreated::SIGNATURE_HASH
-        );
-        assert_eq!(
-            t.vote_cast,
-            IRouterGovernanceEvents::VoteCast::SIGNATURE_HASH
-        );
-        assert_eq!(
-            t.proposal_executed,
-            IRouterGovernanceEvents::ProposalExecuted::SIGNATURE_HASH
-        );
-        assert_eq!(
-            t.weights_applied,
-            IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH
         );
         // PortfolioRouter events.
         assert_eq!(
@@ -1358,7 +1223,7 @@ mod tests {
     ///
     /// Source references:
     ///   IGateway.sol:102,116,122,137,156,176  VaultRegistry.sol:146,152
-    ///   RouterGovernance.sol:163,176,183,189  PortfolioRouter.sol:122
+    ///   PortfolioRouter.sol:122
     #[test]
     fn abi_drift_gate() {
         use alloy_primitives::keccak256;
@@ -1412,30 +1277,6 @@ mod tests {
                 "VaultStatusChanged",
                 b"VaultStatusChanged(address,uint8,uint256)",
                 IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH,
-            ),
-            // RouterGovernance.sol:163
-            (
-                "ProposalCreated",
-                b"ProposalCreated(uint256,address,address[],uint256[],uint64)",
-                IRouterGovernanceEvents::ProposalCreated::SIGNATURE_HASH,
-            ),
-            // RouterGovernance.sol:176
-            (
-                "VoteCast",
-                b"VoteCast(uint256,address,uint256,uint256)",
-                IRouterGovernanceEvents::VoteCast::SIGNATURE_HASH,
-            ),
-            // RouterGovernance.sol:183
-            (
-                "ProposalExecuted",
-                b"ProposalExecuted(uint256,address)",
-                IRouterGovernanceEvents::ProposalExecuted::SIGNATURE_HASH,
-            ),
-            // RouterGovernance.sol:189
-            (
-                "WeightsApplied",
-                b"WeightsApplied(uint256,address[],uint256[])",
-                IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH,
             ),
             // PortfolioRouter.sol:122
             (

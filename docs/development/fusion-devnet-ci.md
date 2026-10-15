@@ -5,9 +5,10 @@ Harness self-tests: [`.github/workflows/suite-25-fusion-harness-selftests.yml`](
 
 ## Why there are two workflows
 
-`scripts/fusion/` carries the only executing proof of two acceptance clauses:
-`AC-CORE-09`'s "retryable/idempotent" submitter and `AC-GOV-01`'s draft-only
-watcher. Those properties live in shell, so they are exactly the kind of claim
+`scripts/fusion/` carries the only executing proof of `AC-CORE-09`'s
+"retryable/idempotent" submitter. The draft watcher is deleted: a released
+receipt is already applied, so there is nothing to draft (issue 1698). That
+property lives in shell, so it is exactly the kind of claim
 that gets asserted in a comment and never executed.
 
 | | suite-25 `fusion-harness-selftests` | suite-26 `fusion-devnet-acceptance` |
@@ -198,7 +199,7 @@ fork `pull_request` contexts. A nightly that cannot run should be red, not green
 ```
 gh workflow run suite-26-fusion-devnet-acceptance.yml -R robotmoney/robotmoney-core \
   --ref releases-0.4.x \
-  -f stages=verify,negative,record,index,dapp,govern \
+  -f stages=verify,negative,record,index,dapp \
   -f receipt_url=https://…/receipt.json
 ```
 

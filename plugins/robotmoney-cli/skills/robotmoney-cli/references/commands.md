@@ -49,20 +49,22 @@ rmpc get-router --config <CONFIG> [--pretty]
 
 ### `rmpc get-governance`
 
-Read RouterGovernance state: constructor params and weights.
+Read RouterGovernance state: router weights, bound contracts and role holders.
 Requires `governance_address` in config.
 
 ```
 rmpc get-governance --config <CONFIG> [--pretty]
 ```
 
-Output includes `active_proposal` (always `null`: nobody holds a voter key, so there are no proposals), the `cadence_params` block (constructor arguments of today's
-bytecode, not a governance model) and the router weight vector. Router weights
-change only when `WEIGHT_SETTER_ROLE` applies the Investment Committee's
-consensus receipt through the Safe and the timelock (publish-contracts govern
-row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc` has no
-governance write command. `RouterGovernance.propose`, `vote` and `execute`
-exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+Output carries `router` and `receipts` (the PortfolioRouter and
+ConsensusRecommendationReceipt the contract is bound to), `current_weights`
+(the router's active vector, empty until a receipt is applied),
+`default_weights` (the router's fallback vector), and `admin_role` /
+`weight_setter_role` (each role's hash and holders). Router weights change only
+when `WEIGHT_SETTER_ROLE` (the timelock) calls `applyReceipt` with a recorded
+Investment Committee consensus receipt, scheduled by the Safe (publish-contracts
+govern row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc`
+has no governance write command.
 
 ### `rmpc get-timelock`
 
@@ -288,45 +290,6 @@ the nonce lock, before any RPC call — when:
 Other named errors: `ErrReceiptFetchFailed`, `ErrReceiptReadFailed`,
 `ErrReceiptDigestMalformed`, `ErrReceiptRecordReverted` (missing role, or a
 receipt id already recorded — one receipt per session per subject).
-
-## Governance handoff commands
-
-`rmpc governance` turns a **released** consensus receipt into a draft weight
-change for a human to review (Project Fusion). It is the recommending side
-only: it never signs, never takes a nonce lock, and never broadcasts a
-transaction. There is no code path here that submits anything. The weight
-change itself is applied by the Safe through the timelock (govern row
-`apply-receipt`), not by this command.
-
-### `rmpc governance draft-proposal`
-
-Requires `receipt_address`, `router_address`, `governance_address`, and a
-`[vault_addresses]` table (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`) in
-config. Exactly one of `--receipt-id` or `--from-block` is required.
-
-```
-rmpc governance --config <CONFIG> draft-proposal --receipt-id <0x...64hex>
-  --receipt-url <URL> [--pretty]
-```
-
-```
-rmpc governance --config <CONFIG> draft-proposal --from-block 0
-  [--to-block latest] --receipt-url-template <URL_WITH_{receipt_id}>
-  [--pretty]
-```
-
-For each released receipt: refuses if `isReleased` is false
-(`ErrReceiptNotReleased`); skips (not an error) a receipt with no `weights`
-vector (`status: "skipped_no_weights"`); re-checks
-`PortfolioRouter.isRouterEligibleAndActive` for every mapped vault and, if any
-is ineligible, drops it and redistributes its bps across the remaining
-eligible vaults (`fallback_applied: true`), refusing with
-`ErrNoEligibleVaults` only if every vault is ineligible; and reports
-`status: "blocked_active_proposal"` with the blocking proposal id instead of
-a submittable draft when today's `RouterGovernance` bytecode already holds an
-active or queued proposal. A ready draft carries `propose_calldata`, the hex
-calldata of today's bytecode, for a human to review. Never submitted by this
-command.
 
 ## Investment Swarm signing identity commands
 

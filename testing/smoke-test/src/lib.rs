@@ -598,7 +598,6 @@ impl Fixture {
             twin.set_usdc_balance(&deployer_hex, DEPLOYER_USDC_GRANT)?;
             let mut gas_only: Vec<String> = Vec::new();
             gas_only.extend(keys.address_list("SAFE_OWNERS"));
-            gas_only.extend(keys.address_list("VOTER_ADDRESSES"));
             gas_only.push(keys.address("EMERGENCY_ADDRESS")?.to_string());
             gas_only.push(agent_hex.clone());
             gas_only.push(PAUSER_ADDRESS_HEX.to_string());
@@ -1766,9 +1765,9 @@ impl Fixture {
         Ok(id)
     }
 
-    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696): `govern --row apply-receipt` schedules ONE batch
-    /// (releaseReceipt plus the router weight change), waits the real delay (one time warp on the fork) and executes it. Returns the govern lines
-    /// (scheduled, executed), each with a tx hash and receipt status 1.
+    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696, issue 1698): `govern --row apply-receipt` schedules
+    /// ONE call, RouterGovernance.applyReceipt (release plus setWeights in one call), waits the real delay (one time warp on the fork) and executes
+    /// it. Returns the govern lines (scheduled, executed), each with a tx hash and receipt status 1.
     pub fn apply_fixture_receipt(
         &self,
         file: &str,
@@ -2949,8 +2948,6 @@ fn dapp_compose_env(
         // offer the Portfolio Router deposit path.
         kv("VITE_REGISTRY_ADDRESS", &d.registry),
         kv("VITE_ROUTER_ADDRESS", &d.router),
-        // Issue #364: RouterGovernance address for the Governance tab.
-        kv("VITE_GOVERNANCE_ADDRESS", &d.governance),
         // Core 1544: the timelock and the Safe that proposes to it (the admin tabs build a Safe -> Timelock
         // proposal instead of a wallet transaction).
         kv("VITE_TIMELOCK_ADDRESS", &d.timelock),

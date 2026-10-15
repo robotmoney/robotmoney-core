@@ -8,9 +8,6 @@ import { readFileSync } from "node:fs";
 export const PARAMETER_KEYS = new Set([
   "CHAIN_ID",
   "TIMELOCK_MIN_DELAY",
-  "VOTING_PERIOD",
-  "EXECUTION_DELAY",
-  "QUORUM_THRESHOLD",
   "TVL_CAP",
   "PER_DEPOSIT_CAP",
   "SEED_DEPOSIT_USDC",
@@ -33,7 +30,6 @@ export const IDENTITY_KEYS = new Set([
   "FEE_RECIPIENT",
   "SEED_SHARE_RECEIVER",
   "SAFE_OWNERS",
-  "VOTER_ADDRESSES",
 ]);
 
 /** Keys that must never appear in any sheet: they are escape hatches the one scheme removes. */

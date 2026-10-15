@@ -15,8 +15,6 @@
 //   GET /v1/vaults
 //   GET /v1/vaults/:address
 //   GET /v1/router/weights
-//   GET /v1/governance/proposals
-//   GET /v1/governance/proposals/:id
 //   GET /v1/governance/admin-events
 //   GET /v1/stats
 //   GET /v1/router/state
@@ -57,17 +55,17 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, headroom_of, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
+    dec_to_string, headroom_of, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
     AdapterAllocationEntry, AdminEventEntry, AdminEventsResponse, AgentPolicy, AgentResponse,
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, Freshness, Health, ProposalDetail, ProposalDetailResponse,
-    ProposalSummary, ProposalsResponse, RegimeFeedResponse, RegimeSnapshot, RouterStateResponse,
-    RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse, Vault, VaultDetail,
-    VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
-    VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
+    DepositsResponse, EventKind, Freshness, Health, RegimeFeedResponse, RegimeSnapshot,
+    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
+    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
+    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
+    WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -132,27 +130,6 @@ type WeightSnapshotRow = (
     Vec<i64>,
     chrono::DateTime<chrono::Utc>,
 );
-
-// (chain_id, proposal_id, proposer BYTEA, description, created_at, deadline_block, status, votes_for, votes_against, block_number, executed_block, indexed_at)
-// votes_for / votes_against are NUMERIC(78,0) since migration 0013 (vote power sums); the queries clamp
-// them to BIGINT, so a real row decodes instead of failing the whole list with a 500 (issue 1647).
-type ProposalRow = (
-    i64,
-    i64,
-    Vec<u8>,
-    String,
-    i64,
-    i64,
-    i16,
-    i64,
-    i64,
-    i64,
-    Option<i64>,
-    chrono::DateTime<chrono::Utc>,
-);
-
-// (voter BYTEA, support, weight NUMERIC, block_number, tx_hash BYTEA)
-type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
 
 // (block_number, tx_hash, adapter BYTEA NULL, adapter_index BIGINT NULL, amount, event_kind, indexed_at)
 type AdapterAllocationRow = (
@@ -255,8 +232,6 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vaults/:address", get(get_vault))
         // Governance endpoints (issue #307).
         .route("/v1/router/weights", get(get_router_weights))
-        .route("/v1/governance/proposals", get(list_proposals))
-        .route("/v1/governance/proposals/:id", get(get_proposal))
         .route("/v1/governance/admin-events", get(list_admin_events))
         // Multi-vault protocol stats endpoints (issue #316).
         .route("/v1/stats", get(get_stats))
@@ -887,69 +862,6 @@ async fn get_router_weights(
     }))
 }
 
-/// GET /v1/governance/proposals — list all proposals with status and tally.
-async fn list_proposals(State(state): State<AppState>) -> ApiResult<Json<ProposalsResponse>> {
-    let rows: Vec<ProposalRow> = sqlx::query_as(
-        "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
-                status, \
-                LEAST(votes_for, 9223372036854775807)::BIGINT AS votes_for, \
-                LEAST(votes_against, 9223372036854775807)::BIGINT AS votes_against, \
-                block_number, executed_block, indexed_at \
-         FROM governance_proposals \
-         WHERE chain_id = $1 \
-         ORDER BY block_number DESC, proposal_id DESC \
-         LIMIT 500",
-    )
-    .bind(state.chain_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let proposals: Vec<ProposalSummary> = rows
-        .into_iter()
-        .map(
-            |(
-                chain_id,
-                proposal_id,
-                proposer,
-                description,
-                created_at,
-                deadline_block,
-                status,
-                votes_for,
-                votes_against,
-                block_number,
-                _executed_block,
-                indexed_at,
-            )| ProposalSummary {
-                chain_id,
-                proposal_id,
-                proposer: addr_to_hex(&proposer),
-                description,
-                created_at,
-                deadline_block,
-                status: proposal_status_label(status),
-                votes_for,
-                votes_against,
-                block_number,
-                indexed_at,
-            },
-        )
-        .collect();
-
-    let freshness = match proposals.first() {
-        Some(p) => Freshness {
-            block_number: p.block_number,
-            indexed_at: p.indexed_at,
-        },
-        None => latest_freshness(&state).await?,
-    };
-
-    Ok(Json(ProposalsResponse {
-        proposals,
-        freshness,
-    }))
-}
-
 // (block_number, log_index, tx_hash, contract, contract_kind, event_name, op_id, detail, indexed_at)
 type AdminEventRow = (
     i64,
@@ -1008,89 +920,6 @@ async fn list_admin_events(State(state): State<AppState>) -> ApiResult<Json<Admi
         .collect();
     let freshness = latest_freshness(&state).await?;
     Ok(Json(AdminEventsResponse { events, freshness }))
-}
-
-/// GET /v1/governance/proposals/:id — single proposal with per-voter tally.
-async fn get_proposal(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> ApiResult<Json<ProposalDetailResponse>> {
-    let row: Option<ProposalRow> = sqlx::query_as(
-        "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
-                status, \
-                LEAST(votes_for, 9223372036854775807)::BIGINT AS votes_for, \
-                LEAST(votes_against, 9223372036854775807)::BIGINT AS votes_against, \
-                block_number, executed_block, indexed_at \
-         FROM governance_proposals \
-         WHERE chain_id = $1 AND proposal_id = $2 \
-         LIMIT 1",
-    )
-    .bind(state.chain_id)
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    let (
-        chain_id,
-        proposal_id,
-        proposer,
-        description,
-        created_at,
-        deadline_block,
-        status,
-        votes_for,
-        votes_against,
-        block_number,
-        executed_block,
-        indexed_at,
-    ) = row.ok_or(ApiError::NotFound)?;
-
-    // Fetch per-voter votes.
-    let vote_rows: Vec<VoteRow> = sqlx::query_as(
-        "SELECT voter, support, weight, block_number, tx_hash \
-         FROM governance_votes \
-         WHERE chain_id = $1 AND proposal_id = $2 \
-         ORDER BY block_number ASC, voter ASC",
-    )
-    .bind(state.chain_id)
-    .bind(proposal_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let votes: Vec<VoteEntry> = vote_rows
-        .into_iter()
-        .map(|(voter, support, weight, bn, tx)| VoteEntry {
-            voter: addr_to_hex(&voter),
-            support,
-            weight: dec_to_string(&weight),
-            block_number: bn,
-            tx_hash: hash_to_hex(&tx),
-        })
-        .collect();
-
-    let proposal = ProposalDetail {
-        chain_id,
-        proposal_id,
-        proposer: addr_to_hex(&proposer),
-        description,
-        created_at,
-        deadline_block,
-        status: proposal_status_label(status),
-        votes_for,
-        votes_against,
-        executed_block,
-        block_number,
-        indexed_at,
-        votes,
-    };
-
-    Ok(Json(ProposalDetailResponse {
-        freshness: Freshness {
-            block_number: proposal.block_number,
-            indexed_at: proposal.indexed_at,
-        },
-        proposal,
-    }))
 }
 
 // ─── Multi-vault protocol stats handlers (issue #316) ─────────────────────
@@ -1214,10 +1043,10 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
     }))
 }
 
-/// GET /v1/router/state — current PortfolioRouter weights and WeightsApplied history.
+/// GET /v1/router/state — current PortfolioRouter weights and WeightsSet history.
 ///
 /// Reads router_weight_snapshots (added in migration 0003).  Returns an empty
-/// current_weights and empty history when no WeightsApplied events have been
+/// current_weights and empty history when no WeightsSet events have been
 /// indexed yet (table exists but is empty). Chain-scoped to state.chain_id.
 async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<RouterStateResponse>> {
     let rows: Vec<WeightSnapshotRow> = sqlx::query_as(
@@ -1353,8 +1182,8 @@ async fn get_account_positions(
 /// GET /v1/accounts/:address/history — chronological event log (issue #654).
 ///
 /// Returns all events from `account_history_events` where `account = address`,
-/// covering all five architecture §5.4 event types: deposits, withdrawals,
-/// fee events, policy changes, and governance votes.  Ordered by block
+/// covering the architecture §5.4 event types: deposits, withdrawals,
+/// fee events, and policy changes.  Ordered by block
 /// ascending (chronological).  Includes up to 500 rows.  Chain-scoped to
 /// state.chain_id.
 ///

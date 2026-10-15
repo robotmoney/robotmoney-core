@@ -39,11 +39,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   EMERGENCY_ADDRESS: { kind: "address" },
   SHARE_RECEIVER_ADDRESS: { kind: "address" },
   RECEIPT_ADMIN_ADDRESS: { kind: "address" },
-  // VOTER_ADDRESSES and VOTER_POWER (with QUORUM_THRESHOLD and VOTING_PERIOD below) are constructor arguments of today's RouterGovernance
-  // bytecode. They stay parseable until the contract change (issue 1698) deletes voting. There is no voting by anyone: the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for,
-  // and RouterGovernance.propose, vote and execute exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment. Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt, core 1696).
-  VOTER_ADDRESSES: { kind: "address-list" },
-  VOTER_POWER: { kind: "uint" },
   SAFE_OWNERS: { kind: "address-list" },
   SAFE_THRESHOLD: { kind: "uint" },
   SAFE_VERSION: { kind: "string" },
@@ -56,10 +51,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
-  // governance: constructor arguments of today's RouterGovernance bytecode (see the VOTER_* note above); not a governance model
-  QUORUM_THRESHOLD: { kind: "uint" },
-  VOTING_PERIOD: { kind: "uint" },
-  EXECUTION_DELAY: { kind: "uint" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
   /** Issue 1727: `production` (the default when the line is absent) or `rehearsal` (a Base mainnet rehearsal with a 900 s timelock). Sheet only: never an environment variable, never a CLI flag. */
   DEPLOYMENT_KIND: { kind: "string" },
@@ -85,7 +76,8 @@ const REFUSED: [RegExp, string][] = [
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine or an encrypted keystore with a typed passphrase"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
-  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*); VOTER_*, QUORUM_THRESHOLD and VOTING_PERIOD are constructor arguments of today's RouterGovernance bytecode, not governance. Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
+  [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
@@ -110,8 +102,6 @@ export interface Sheet {
   emergency: Address;
   shareReceiver: Address;
   receiptAdmin: Address;
-  voters: Address[];
-  voterPower: bigint;
   safeOwners: Address[];
   safeThreshold: number;
   safeSalt?: string;
@@ -120,9 +110,6 @@ export interface Sheet {
   /** The checksummed address, or "@safe" meaning the Safe the deployer created. */
   feeRecipient: Address | "@safe";
   seedDeposit: bigint;
-  quorum: bigint;
-  votingPeriod: bigint;
-  executionDelay: bigint;
   timelockMinDelay: bigint;
   vaults: Record<VaultKey, SheetVault>;
   /** Baskets made router-eligible by the deployer in the basket vault stages (rmUSDC is eligible from the router stage). */
@@ -240,7 +227,6 @@ export function parseSheet(text: string): Sheet {
   const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
   const shareReceiver = asAddress("SHARE_RECEIVER_ADDRESS", v.SHARE_RECEIVER_ADDRESS!);
   const receiptAdmin = asAddress("RECEIPT_ADMIN_ADDRESS", v.RECEIPT_ADMIN_ADDRESS!);
-  const voters = asList("VOTER_ADDRESSES", v.VOTER_ADDRESSES!);
   const safeOwners = asList("SAFE_OWNERS", v.SAFE_OWNERS!);
   const safeThreshold = asSafeInt("SAFE_THRESHOLD", v.SAFE_THRESHOLD!);
   if (v.SAFE_VERSION !== undefined && v.SAFE_VERSION !== "1.4.1") throw err(`SAFE_VERSION must be 1.4.1 (the only supported version), got '${v.SAFE_VERSION}'`);
@@ -251,11 +237,9 @@ export function parseSheet(text: string): Sheet {
   if (lc(receiptAdmin) !== lc(admin)) throw err(`RECEIPT_ADMIN_ADDRESS ${receiptAdmin} must equal ADMIN_ADDRESS ${admin}: the deployer holds the receipt roles until the timelock stage revokes them`);
   // roles and owners: pairwise distinct on every chain (plan, Parameters)
   assertDistinct("roles", [["ADMIN_ADDRESS", admin], ["PAUSER_ADDRESS", pauser], ["EMERGENCY_ADDRESS", emergency]]);
-  assertDistinct("voters", voters.map((a, i) => [`VOTER_ADDRESSES[${i}]`, a]));
   assertDistinct("Safe owners", safeOwners.map((a, i) => [`SAFE_OWNERS[${i}]`, a]));
   const roleSet = new Map<string, string>([[lc(admin), "ADMIN_ADDRESS"], [lc(pauser), "PAUSER_ADDRESS"], [lc(emergency), "EMERGENCY_ADDRESS"]]);
   for (const o of safeOwners) { const r = roleSet.get(lc(o)); if (r) throw err(`Safe owner ${o} is also ${r}: signers are separate from the deployer and the operational keys`); }
-  for (const a of voters) { const r = roleSet.get(lc(a)); if (r) throw err(`voter ${a} is also ${r}`); }
   // Safe structure floor, every chain
   const n = safeOwners.length;
   if (n < 3) throw err(`a Safe needs at least 3 owners (got ${n}): threshold from 2 to N-1`);
@@ -271,12 +255,6 @@ export function parseSheet(text: string): Sheet {
   const seedDeposit = asUint("SEED_DEPOSIT_USDC", v.SEED_DEPOSIT_USDC!);
   if (seedDeposit === 0n) throw err("SEED_DEPOSIT_USDC must be above 0 (rmUSDC seed)");
 
-  const quorum = asUint("QUORUM_THRESHOLD", v.QUORUM_THRESHOLD!);
-  if (quorum <= 1n) throw err("QUORUM_THRESHOLD must be above 1 on every chain");
-  const votingPeriod = asUint("VOTING_PERIOD", v.VOTING_PERIOD!);
-  const executionDelay = asUint("EXECUTION_DELAY", v.EXECUTION_DELAY!);
-  if (votingPeriod < 3600n) throw err("VOTING_PERIOD is below 3600 (the contract floor on every chain)");
-  if (executionDelay < 3600n) throw err("EXECUTION_DELAY is below 3600 (the contract floor on every chain)");
   const timelockMinDelay = asUint("TIMELOCK_MIN_DELAY", v.TIMELOCK_MIN_DELAY!);
   if (timelockMinDelay < 1n) throw err("TIMELOCK_MIN_DELAY must be at least 1 second on every chain");
   if (kind === "rehearsal") {
@@ -286,9 +264,6 @@ export function parseSheet(text: string): Sheet {
     // a rehearsal reuses the first rehearsal's keys, so the same owners and threshold would predict the Safe that already exists: a new salt is always explicit
     if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
   }
-  const voterPower = asUint("VOTER_POWER", v.VOTER_POWER!);
-  if (voterPower === 0n) throw err("VOTER_POWER must be above 0");
-  if (voterPower * BigInt(voters.length) < quorum) throw err("QUORUM_THRESHOLD is above the total voting power: no proposal could ever pass");
 
   const vaults = {} as Record<VaultKey, SheetVault>;
   for (const k of VAULT_KEYS) {
@@ -343,8 +318,8 @@ export function parseSheet(text: string): Sheet {
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
-    values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, voters, voterPower, safeOwners, safeThreshold,
-    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, quorum, votingPeriod, executionDelay, timelockMinDelay, vaults,
+    values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
+    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, vaults,
     eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }

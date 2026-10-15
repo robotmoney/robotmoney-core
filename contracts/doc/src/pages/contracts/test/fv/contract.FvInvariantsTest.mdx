@@ -4,7 +4,7 @@ title: "FvInvariantsTest"
 
 # FvInvariantsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:** Test
 
@@ -279,17 +279,18 @@ the whole router deposit (NC-4).
 function test_RTR5_previewMatchesExecute() public;
 ```
 
-<a id="test_gov4_proposalcannotselfdosrouter"></a>
+<a id="test_gov4_receiptcannotselfdosrouter"></a>
 
-### test_GOV4_proposalCannotSelfDosRouter
+### test_GOV4_receiptCannotSelfDosRouter
 
-GOV-4 (F-05/RTR-4) — a governance proposal that would render router
-deposits non-executable can never be executed. propose() rejects a
-weight vector containing a Paused/Retired vault up front, so a
-self-DoS proposal never enters the voting pipeline.
+GOV-4 (F-05/RTR-4) — a consensus receipt whose vector would render
+router deposits non-executable can never be applied. applyReceipt
+reverts on a vector containing a Paused/Retired vault (the router's
+`setWeights` refuses it), and the revert leaves the receipt
+unreleased, so a self-DoS vector never lands.
 
 ```solidity
-function test_GOV4_proposalCannotSelfDosRouter() public;
+function test_GOV4_receiptCannotSelfDosRouter() public;
 ```
 
 <a id="_deployrouterstack"></a>

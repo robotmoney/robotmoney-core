@@ -3,8 +3,10 @@
 # WHY THIS SUITE EXISTS (Fusion T13 · AC-E2E-05, AC-CORE-09, AC-GOV-01)
 # ---------------------------------------------------------------------
 # `scripts/fusion/tests/run-tests.sh` is the ONLY executor of AC-CORE-09's
-# retry/idempotency clause and AC-GOV-01's draft-only watcher clause. Those two
-# properties live entirely in shell, and before this workflow existed
+# retry/idempotency clause. (It also executed AC-GOV-01's draft-only watcher
+# clause until issue 1698 deleted the watcher: a receipt is applied by
+# RouterGovernance.applyReceipt in one call, so there is nothing to draft.)
+# That property lives entirely in shell, and before this workflow existed
 # `grep -rn 'scripts/fusion' .github/` returned nothing: no workflow, on any
 # branch, on any event, ran the suite. AC-E2E-05 requires "a repeatable
 # cross-repo CI/devnet test, not only a one-off manual demonstration" — a suite

@@ -20,21 +20,21 @@ rebalance:
 COMMITTEE (records a receipt: id, payload digest, payload URI)
    │  recordReceipt through the gateway, COMMITTEE_AGENT_ROLE only
    ▼
-SAFE schedules ONE timelock batch                                  ← govern row `apply-receipt`
-   │  releaseReceipt(receiptId) + the router weight change
+SAFE schedules ONE timelock call                                   ← govern row `apply-receipt`
+   │  RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)
    ▼
 timelock delay (172800 s on 8453)
    ▼
-SAFE executes the batch → receipt released, router weights applied
+SAFE executes the call → receipt released, router weights applied
    ▼
 verifier reads isReleased(receiptId) and the router weights back
 ```
 
 There is no voting by token holders or anyone else: no voter set, no voting
 power, no quorum, no voting period, no execution delay, no propose, vote or
-execute. `RouterGovernance.propose`, `vote` and `execute` exist in the deployed
-test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final
-deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them. Nothing
+execute. `RouterGovernance` has no propose, vote or execute function (issue
+1698). The mainnet test deployment ran the earlier bytecode with voter addresses
+nobody holds. Nothing
 submits a weight change unattended: every rebalance is a Safe-signed timelock
 operation. This runbook is the operator's playbook for that path, end to end.
 
@@ -44,12 +44,13 @@ operation. This runbook is the operator's playbook for that path, end to end.
 
 `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, which is its own
 role admin (core 1522). `RouterGovernance` holds it, together with router
-`ADMIN_ROLE`, and the `TimelockController` holds `ADMIN_ROLE` on
-`RouterGovernance`. On today's bytecode the weight call inside the
-`apply-receipt` batch is `RouterGovernance.setDefaultWeights(vaults, bps)`,
-which the timelock reaches through that `ADMIN_ROLE`. The final deployment
-replaces it with a weight-setter `applyReceipt` call, and the role ends with the
-timelock.
+`ADMIN_ROLE`. The `TimelockController` holds `ADMIN_ROLE` and
+`RouterGovernance`'s own `WEIGHT_SETTER_ROLE` on `RouterGovernance`. The
+`apply-receipt` call is `RouterGovernance.applyReceipt(receiptId,
+payloadDigest, vaults, bps)`, which the timelock reaches through that
+`WEIGHT_SETTER_ROLE`. It releases the receipt and calls
+`PortfolioRouter.setWeights` in one call. It sets the router's active vector.
+The default vector stays the fallback.
 
 **No committee agent holds weight-setting or timelock authority.** The
 `COMMITTEE_AGENT_ROLE` holder set is disjoint from the Safe signers, the
@@ -66,11 +67,12 @@ new `RouterGovernance` `ADMIN_ROLE` does not move `setWeights` authority,
 because `setWeights` is gated on `WEIGHT_SETTER_ROLE`, which no role admin can
 grant. Only the rotation moves it.
 
-1. Deploy the new `RouterGovernance` against the existing router
-   (`RouterGovernance.router` is an immutable). Its deployer hands its
-   `ADMIN_ROLE` to the timelock. The constructor's cadence arguments are
-   unused configuration on today's bytecode, and the new instance starts
-   empty.
+1. Deploy the new `RouterGovernance` against the existing router and receipt
+   register (`RouterGovernance.router` and `receipts` are immutables). Its
+   deployer hands its `ADMIN_ROLE` and its own `WEIGHT_SETTER_ROLE` (the
+   `applyReceipt` gate) to the timelock and drops both copies. The timelock
+   must be the only holder of that `WEIGHT_SETTER_ROLE`. The new instance
+   starts empty.
 2. The Safe calls `router.proposeWeightSetterRotation(newGovernance)` directly.
    It needs the Safe's 2-of-3 signatures. The target must be a contract. Only
    one proposal can be pending. The `WeightSetterRotationProposed` log and
@@ -79,6 +81,10 @@ grant. Only the rotation moves it.
 3. The Safe schedules ONE timelock batch (`scheduleBatch`) with three router
    calls, in this order: `executeWeightSetterRotation(newGovernance)`,
    `grantRole(ADMIN_ROLE, newGovernance)`, `revokeRole(ADMIN_ROLE, oldGovernance)`.
+   Add two calls on the `ConsensusRecommendationReceipt` register to the same
+   batch: `grantRole(ADMIN_ROLE, newGovernance)` and
+   `revokeRole(ADMIN_ROLE, oldGovernance)`. `applyReceipt` releases the receipt,
+   so the new instance needs that role.
    Never schedule them separately. The execute call does not touch `ADMIN_ROLE`,
    so the old `RouterGovernance` would keep it (caps, quarantine, default
    weights) between operations. The batch runs once the timelock delay has
@@ -88,7 +94,11 @@ grant. Only the rotation moves it.
    batch. The timelock cannot cancel.
 4. Check after the batch: `getRoleMemberCount(WEIGHT_SETTER_ROLE) == 1`, the new
    instance holds `WEIGHT_SETTER_ROLE` and router `ADMIN_ROLE`, and the old
-   instance holds neither. Check the router caps, `quarantineAddress` and
+   instance holds neither. The new instance holds the receipt register's
+   `ADMIN_ROLE` and the old one does not. The timelock is the one holder of the
+   new instance's own `WEIGHT_SETTER_ROLE`. The verifier asserts both
+   (`receipt: ADMIN_ROLE held by governance (applyReceipt releases)` and
+   `governance: WEIGHT_SETTER_ROLE (applyReceipt) held by timelock`). Check the router caps, `quarantineAddress` and
    default weights are unchanged (`routerCap`, `vaultCap[*]`,
    `quarantineAddress`, `getDefaultWeights`).
 5. The target must not be able to grant `WEIGHT_SETTER_ROLE` to other accounts.
@@ -187,7 +197,7 @@ A committee agent records the consensus through the gateway
 `COMMITTEE_AGENT_ROLE`; `consensus-receipt-submitter-runbook.md`). The receipt
 stores the id, the `keccak256` digest of the payload and the payload URI. It
 moves no funds and calls no `setWeights`. Most receipts are recorded and never
-applied: the Safe applies a receipt by scheduling the batch in Step 2 and
+applied: the Safe applies a receipt by scheduling the call in Step 2 and
 declines one by doing nothing (D5 admin discretion,
 `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1).
 
@@ -207,8 +217,8 @@ Before anything is sent the row checks, and exits `USAGE` on any failure:
 - the payload's weight vector sums to 10 000 bps,
 - the vault set and order equal the registry's router-eligible list.
 
-It then schedules ONE timelock batch through the real Safe (`scheduleBatch`):
-`releaseReceipt(receiptId)` and the router weight change for that vector. The
+It then schedules ONE timelock call through the real Safe (`schedule`):
+`RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`. The
 Safe's signers sign one transaction. The CLI exits `GOVERN_PENDING` (exit 15)
 with the ready time and the exact resume command. On 8453 the row runs only
 when named with `--row apply-receipt` and a receipt id, as a post-launch action
@@ -223,12 +233,13 @@ The timelock enforces its real delay (172800 s on 8453). To abort, the Safe
 cancels the scheduled operation on the timelock before the delay passes.
 Nothing else can stop or speed up the operation.
 
-### Step 4 — the Safe executes the batch
+### Step 4 — the Safe executes the call
 
-The same command resumes: the Safe executes the batch, the receipt flips to
-released and the router's weight vector becomes the receipt's allocation in the
-same transaction. Partial state is impossible: release and weights are one
-operation, so a reverting weight call releases nothing.
+The same command resumes: the Safe executes the call, the receipt flips to
+released and the router's active weight vector becomes the receipt's allocation
+in the same transaction. `applyReceipt` re-checks that the receipt is recorded,
+unreleased and that the payload digest matches. Partial state is impossible:
+release and weights are one call, so a reverting weight call releases nothing.
 
 ### Step 5 — read back and record
 
@@ -246,7 +257,7 @@ core 1696), and rerun the stage 12 verifier, which labels the applied receipt an
 | **Submitter EOA** (recorded a receipt) | Can anchor a wrong digest, polluting the public record; cannot release, cannot set weights. | New session id + public correction (`consensus-receipt-submitter-runbook.md`); revoke `AGENT_ROLE`/`COMMITTEE_AGENT_ROLE` via timelock. Never schedule `apply-receipt` for a receipt under correction. |
 | **One Safe signer's key** | Can sign, alone, nothing: the Safe threshold needs more than one signer. | Rotate the signer on the Safe; cancel any operation that signer helped schedule and is still pending. |
 | **Payload file on the operator host** | Cannot pass the digest check unless it is the recorded payload; cannot change what the receipt says. | Rebuild from clean state; re-fetch the payload from the receipt's URI and re-run the row. |
-| **`ADMIN_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the committee and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |
+| **`ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` on `RouterGovernance`** (held by the timelock) | Reaches `applyReceipt`, `setDefaultWeights` and `clearVotedWeights` only after a Safe-signed schedule and the delay. | The Safe cancels the pending operation; verify the committee and weight-setter sets are still disjoint (`GovernanceSeparationInvariant.t.sol`). |
 
 ---
 

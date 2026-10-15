@@ -1,11 +1,11 @@
-// Issue 1743: a voted weight vector overrides the default vector, so apply-receipt (which writes the DEFAULT vector) must refuse while one is active, read the EFFECTIVE weights back,
-// and the clear-voted-weights row removes the voted vector through the Safe and the timelock. In-memory Safe and timelock (tests/govern-world.ts).
+// Issue 1743, issue 1698: apply-receipt sets the router's ACTIVE ("voted") vector through the weight setter's applyReceipt and reads the EFFECTIVE weights back. The
+// clear-voted-weights row removes the active vector through the Safe and the timelock, so routing falls back to the default. In-memory Safe and timelock (tests/govern-world.ts).
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
 import { decodeFunctionData, keccak256, toBytes } from "viem";
-import { APPLY_ROW, applyReadBackProblems, applyRecordKey, planApply } from "../src/apply-receipt.ts";
+import { APPLY_ROW, applyReadBackProblems, applyRecordKey } from "../src/apply-receipt.ts";
 import { CLEAR_ROW, GOVERNANCE_CLEAR_ABI, buildClearCall, clearReadBackProblems } from "../src/clear-voted-weights.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { GOVERN_ROWS, govRowRefusal, resolveGovernRow, roundKey, runGovern, stageRows } from "../src/govern.ts";
@@ -44,51 +44,30 @@ function world(chainId = 918453, voted = true) {
   return { ...d, tl, file, manifest, apply, clear };
 }
 
-describe("apply-receipt refuses while a voted vector is active (issue 1743)", () => {
-  test("planApply refuses VOTED_WEIGHTS_ACTIVE (GOVERN) even for a receipt in flight, and names the clear row", () => {
-    const base = { receiptId: RID, payload: new Uint8Array(), recorded: true, released: false, eligible: [], vaultOf: A.vaults };
-    for (const inFlight of [false, true]) {
-      let err: unknown;
-      try { planApply({ ...base, inFlight, votedWeightsActive: true }); } catch (e) { err = e; }
-      expect(err).toBeInstanceOf(PublishError);
-      const msg = (err as PublishError).message;
-      expect((err as PublishError).kind).toBe("GOVERN");
-      expect(msg.includes("VOTED_WEIGHTS_ACTIVE") && msg.includes("--row clear-voted-weights")).toBe(true);
-    }
-  });
-  test("the run refuses before it sends anything: no schedule, no Safe transaction, no manifest row", async () => {
+describe("apply-receipt sets the ACTIVE vector, whatever was active before (issue 1743, issue 1698)", () => {
+  test("over an earlier active vector the call executes, the active and effective weights equal the receipt vector and the evidence records them", async () => {
     const w = world();
-    await expect(w.apply({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN, message: expect.stringContaining("VOTED_WEIGHTS_ACTIVE") });
-    expect(w.tl.s.events).toEqual([]);
-    expect(w.tl.s.log).toEqual([]);
-    expect(w.tl.s.released.size).toBe(0);
+    await w.apply({ warp: warpTo(w.tl) });
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: [5000n, 3000n, 2000n] });
+    const e = (w.manifest as { receipt_applications?: any[] }).receipt_applications![0];
+    expect(e).toMatchObject({ voted_weights_active: true, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000] });
   });
-  test("a vote that activates a voted vector while the batch waits is caught before the execute", async () => {
-    const w = world(8453, false);
-    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
-    w.tl.s.voted = { vaults: [A.vaults.USDC], bps: [10000n] };
-    w.tl.s.clock += DELAY + 1n;
-    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("VOTED_WEIGHTS_ACTIVE") });
-    expect(w.tl.s.events).toEqual(["scheduleBatch:apply-receipt"]);
-  });
-  test("with no voted vector the batch executes, the effective weights equal the receipt vector and the evidence records them", async () => {
+  test("with no active vector before, the same: the default stays untouched as the fallback", async () => {
     const w = world(918453, false);
     await w.apply({ warp: warpTo(w.tl) });
-    expect(w.tl.s.weights.vaults).toEqual(WANT_VAULTS);
-    const e = (w.manifest as { receipt_applications?: any[] }).receipt_applications![0];
-    expect(e).toMatchObject({ voted_weights_active: false, effective_vaults: WANT_VAULTS, effective_bps: [5000, 3000, 2000] });
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: [5000n, 3000n, 2000n] });
+    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n] });
   });
-  test("the read-back exits GOVERN when the EFFECTIVE weights differ from the receipt vector although the default is right", async () => {
+  test("the read-back exits GOVERN when the EFFECTIVE weights differ from the receipt vector although the active vector is right", async () => {
     const w = world(918453, false);
     w.tl.s.reads.getEffectiveWeights = [[A.vaults.USDC], [10000n]];
     await expect(w.apply({ warp: warpTo(w.tl) })).rejects.toMatchObject({ kind: "GOVERN", exitCode: EXIT_CODES.GOVERN, message: expect.stringContaining("getEffectiveWeights") });
     expect(w.manifest.govern![applyRecordKey(RID)]).not.toHaveProperty("executed");
     expect((w.manifest as { receipt_applications?: unknown[] }).receipt_applications).toBeUndefined();
   });
-  test("the read-back exits GOVERN when votedWeightsActive reads true after the batch", () => {
-    const bad = applyReadBackProblems(RID, true, { defaultVaults: WANT_VAULTS, defaultBps: [5000n, 3000n, 2000n], effectiveVaults: WANT_VAULTS, effectiveBps: [5000n, 3000n, 2000n], votedWeightsActive: true }, { vaults: WANT_VAULTS, bps: [5000, 3000, 2000] });
-    expect(bad).toEqual([expect.stringContaining("votedWeightsActive() is true")]);
+  test("the read-back exits GOVERN when votedWeightsActive reads false after the call", () => {
+    const bad = applyReadBackProblems(RID, true, { activeVaults: WANT_VAULTS, activeBps: [5000n, 3000n, 2000n], effectiveVaults: WANT_VAULTS, effectiveBps: [5000n, 3000n, 2000n], votedWeightsActive: false }, { vaults: WANT_VAULTS, bps: [5000, 3000, 2000] });
+    expect(bad).toEqual([expect.stringContaining("votedWeightsActive() is false")]);
   });
 });
 
@@ -137,7 +116,7 @@ describe("the clear-voted-weights row (issue 1743)", () => {
     expect((w.manifest as { voted_weights_clears?: unknown[] }).voted_weights_clears).toBeUndefined();
     expect(clearReadBackProblems({ votedWeightsActive: true, defaultVaults: [], defaultBps: [], effectiveVaults: [], effectiveBps: [] })).toEqual([expect.stringContaining("still true")]);
   });
-  test("a second run is a no-op reprint, and a vote that sets a voted vector again opens round 2 with a new operation", async () => {
+  test("a second run is a no-op reprint, and an applied receipt that sets an active vector again opens round 2 with a new operation", async () => {
     const w = world();
     await w.clear({ warp: warpTo(w.tl) });
     const firstId = w.tl.s.ids.get(CLEAR_ROW);
@@ -148,12 +127,12 @@ describe("the clear-voted-weights row (issue 1743)", () => {
     expect(w.manifest.govern![roundKey(CLEAR_ROW, 1)]).toBeDefined();
     expect((w.manifest as { voted_weights_clears?: any[] }).voted_weights_clears!.map((x) => x.round)).toEqual([1, 2]);
   });
-  test("the flow the rebalance needs: apply refuses, clear, then apply changes the EFFECTIVE routing", async () => {
-    const w = world();
-    await expect(w.apply({ warp: warpTo(w.tl) })).rejects.toMatchObject({ message: expect.stringContaining("VOTED_WEIGHTS_ACTIVE") });
-    await w.clear({ warp: warpTo(w.tl) });
+  test("the emergency lever: apply sets the active vector, clear returns routing to the default", async () => {
+    const w = world(918453, false);
     await w.apply({ warp: warpTo(w.tl) });
+    expect(w.tl.s.voted).toEqual({ vaults: WANT_VAULTS, bps: [5000n, 3000n, 2000n] });
+    await w.clear({ warp: warpTo(w.tl) });
     expect(w.tl.s.voted).toBeUndefined();
-    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [5000n, 3000n, 2000n] });
+    expect(w.tl.s.weights).toEqual({ vaults: WANT_VAULTS, bps: [6000n, 2500n, 1500n] });
   });
 });

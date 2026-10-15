@@ -354,39 +354,3 @@ async fn the_no_baseline_page_reports_no_gap_numbers_it_never_measured() {
     }
     server.shutdown();
 }
-
-/// The quorum-floor page is its own incident with the numbers on it (T22/D16).
-#[tokio::test]
-async fn a_quorum_below_the_floor_pages_with_the_observed_threshold() {
-    use watchdog::alert::dispatch_quorum_below_floor_alert;
-    use watchdog::governance::QuorumBreach;
-
-    let server = MockWebhookServer::start().await;
-    let client = Client::new();
-    let breach = QuorumBreach {
-        chain_id: 918_453,
-        router_address: format!("0x{}", "ab".repeat(20)),
-        threshold: 1,
-        min_threshold: 2,
-    };
-    dispatch_quorum_below_floor_alert(&client, &server.url, &breach)
-        .await
-        .expect("dispatch");
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    let caps = server.drain_captures();
-    assert_eq!(caps.len(), 1);
-    let v: serde_json::Value = serde_json::from_slice(&caps[0].body).unwrap();
-    assert_eq!(v["event_action"], "trigger");
-    assert_eq!(v["dedup_key"], "router_quorum_below_floor:918453");
-    let d = &v["payload"]["custom_details"];
-    assert_eq!(d["alert_kind"], "router_quorum_below_floor");
-    assert_eq!(d["quorum_threshold"], 1);
-    assert_eq!(d["min_quorum_threshold"], 2);
-    assert_eq!(d["router_address"], breach.router_address);
-    assert!(v["payload"]["summary"]
-        .as_str()
-        .unwrap()
-        .contains("one voter is a quorum"));
-    server.shutdown();
-}

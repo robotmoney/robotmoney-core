@@ -202,7 +202,7 @@ export interface RouterWeightsResponse {
  * `GET /v1/accounts/:address/history`.
  */
 export interface AccountEvent {
-  /** "deposit" | "withdrawal" | "governance_vote" */
+  /** "deposit" | "withdrawal" */
   readonly event_type: string;
   readonly block_number: number;
   readonly tx_hash: string;
@@ -214,26 +214,6 @@ export interface AccountEvent {
 export interface AccountHistoryResponse {
   readonly address: string;
   readonly events: readonly AccountEvent[];
-  readonly block_number: number;
-  readonly indexed_at: string;
-}
-
-export interface ProposalSummary {
-  readonly chain_id: number;
-  readonly proposal_id: number;
-  readonly proposer: string;
-  readonly description: string;
-  readonly created_at: number;
-  readonly deadline_block: number;
-  readonly status: string;
-  readonly votes_for: number;
-  readonly votes_against: number;
-  readonly block_number: number;
-  readonly indexed_at: string;
-}
-
-export interface ProposalsResponse {
-  readonly proposals: readonly ProposalSummary[];
   readonly block_number: number;
   readonly indexed_at: string;
 }
@@ -300,18 +280,6 @@ export async function fetchRouterWeights(
   const res = await fetchImpl(url, { signal: options.signal });
   if (!res.ok) throw new Error(`explorer API ${res.status}`);
   return (await res.json()) as RouterWeightsResponse;
-}
-
-/** GET /v1/governance/proposals — list governance proposals. */
-export async function fetchProposals(
-  baseUrl: string,
-  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
-): Promise<ProposalsResponse> {
-  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
-  const url = `${baseUrl.replace(/\/+$/, "")}/v1/governance/proposals`;
-  const res = await fetchImpl(url, { signal: options.signal });
-  if (!res.ok) throw new Error(`explorer API ${res.status}`);
-  return (await res.json()) as ProposalsResponse;
 }
 
 /** GET /v1/stats — aggregate protocol statistics. */

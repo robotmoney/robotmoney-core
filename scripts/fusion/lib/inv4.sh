@@ -14,10 +14,16 @@
 # only `totalAssets`, no `totalSupply`, and none of the accrual reasoning.
 #
 # THE RULES THIS FILE ENFORCES
-#   1. FOUR quantities, always: RouterGovernance.currentProposalId,
-#      PortfolioRouter.getWeights, and per mapped vault totalAssets AND
-#      totalSupply. AC-CORE-04 names vault balances, router weights and proposal
-#      count; totalSupply is what separates a share-price move from a deposit.
+#   1. FOUR quantities, always: RouterGovernance.currentWeights (the weight
+#      setter's own read of the router), PortfolioRouter.getWeights, and per
+#      mapped vault totalAssets AND totalSupply. AC-CORE-04 names vault balances
+#      and router weights; totalSupply is what separates a share-price move from
+#      a deposit. AC-CORE-04 also named the proposal count, but issue 1698
+#      removed propose/vote/execute from RouterGovernance: there is no proposal
+#      counter left to read. The only on-chain effect a receipt can have is
+#      applyReceipt setting the router weights, which both weight reads cover.
+#      Reading currentWeights through FUSION_GOVERNANCE_ADDRESS also proves that
+#      address is the live weight setter wired to this router.
 #   2. NO `2>&1` anywhere near a compared value. Error text must never be able to
 #      become a witness that compares equal to another error text.
 #   3. Every `cast call`'s exit status is checked. A read that did not answer
@@ -39,7 +45,7 @@ INV4_UNREADABLE_SENTINEL="INV4_WITNESS_UNREADABLE"
 # comparison stays exact equality and the WINDOW is what narrows, to bracket the
 # write stages only.
 # shellcheck disable=SC2034  # consumed by the sourcing harnesses, not by this file
-INV4_ACCRUAL_NOTE="NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY movement is a small totalAssets/totalSupply drift on a yield-bearing vault, attribute it before calling it an INV-4 breach; proposal count and router weights cannot drift and any movement there is real."
+INV4_ACCRUAL_NOTE="NOTE: a mapped vault with a yield adapter accrues on its own. If the ONLY movement is a small totalAssets/totalSupply drift on a yield-bearing vault, attribute it before calling it an INV-4 breach; router weights cannot drift and any movement there is real."
 
 # _inv4_read <cast-bin> <rpc-url> <target> <signature>
 # Echoes the whitespace-stripped value on stdout. Returns the failing exit status
@@ -61,12 +67,12 @@ inv4_witnesses() {
   shift 4
   local out="" v val rc
 
-  if ! val="$(_inv4_read "$cast" "$rpc" "$gov" 'currentProposalId()(uint256)')"; then
+  if ! val="$(_inv4_read "$cast" "$rpc" "$gov" 'currentWeights()(address[],uint256[])')"; then
     rc=$?
-    printf '%s witness=proposals target=%s exit=%s\n' "$INV4_UNREADABLE_SENTINEL" "$gov" "$rc"
+    printf '%s witness=setter_weights target=%s exit=%s\n' "$INV4_UNREADABLE_SENTINEL" "$gov" "$rc"
     return 1
   fi
-  out+="proposals=$val"$'\n'
+  out+="setter_weights=$val"$'\n'
 
   if ! val="$(_inv4_read "$cast" "$rpc" "$router" 'getWeights()(address[],uint256[])')"; then
     rc=$?

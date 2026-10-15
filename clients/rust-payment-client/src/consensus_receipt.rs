@@ -1063,7 +1063,7 @@ impl ConsensusReceipt {
             }
 
             // ── weights, RECOMPUTED from the same submissions (invariant 8) ──
-            // The one field that becomes `RouterGovernance.propose` calldata and
+            // The one field that becomes `RouterGovernance.applyReceipt` calldata and
             // the one no analyst signature covers. OMISSION is not checkable and
             // is not checked — a `position_actions` subject produces no vector
             // however many members submitted one, and the receipt does not carry
@@ -1209,7 +1209,7 @@ pub fn bucket_shares_to_bps(
     // below 1, so the leftover is below the bucket count and one bp per bucket
     // always suffices — but that is a proof, and a proof stops holding when
     // someone widens SHARE_SUM_TOLERANCE. A vector that does not close on 10000
-    // must never leave this function: `RouterGovernance.propose` reverts on one,
+    // must never leave this function: `PortfolioRouter.setWeights` reverts on one,
     // and by then it is signed.
     if leftover != 0 {
         return Err(format!(

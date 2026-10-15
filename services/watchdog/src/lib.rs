@@ -21,8 +21,6 @@
 //!   #1247 task 4.13). Alert-only; it never pauses the gateway.
 //! - [`pager_state`] — durable per-incident pager state, so a restart mid-incident
 //!   still sends the matching resolve (task T08).
-//! - [`governance`] — standing `RouterGovernance.quorumThreshold()` floor check
-//!   (task T22, decision D16). Read-only; it never pauses the gateway.
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
 //!   by the `watchdog-liveness` binary (issue #1378).
 
@@ -30,7 +28,6 @@
 
 pub mod alert;
 pub mod config;
-pub mod governance;
 pub mod liveness;
 pub mod pager_state;
 pub mod pause;

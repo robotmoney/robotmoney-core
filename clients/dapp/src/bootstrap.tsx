@@ -78,7 +78,6 @@ import { VaultCards } from "./components/VaultCards";
 import { LandingPriceStrip } from "./components/LandingPriceStrip";
 import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
-import { GovernancePanel } from "./components/GovernancePanel";
 import { ConsensusReceiptPanel } from "./components/ConsensusReceiptPanel";
 import { parseVaultAddressMap } from "./lib/consensusReceiptApi";
 import { makeConfig } from "./lib/wagmi";
@@ -109,7 +108,6 @@ export interface DappConfig {
   readonly vault: Address;
   readonly registry?: Address;
   readonly router?: Address;
-  readonly governance?: Address;
   readonly timelock?: Address;
   /** Core 1544: the 2-of-3 Safe that proposes to the timelock. Absent: admin proposals are blocked. */
   readonly safe?: Address;
@@ -132,7 +130,6 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     vault: (env.VITE_VAULT_ADDRESS ?? ZERO_ADDRESS) as Address,
     registry: env.VITE_REGISTRY_ADDRESS ? (env.VITE_REGISTRY_ADDRESS as Address) : undefined,
     router: env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : undefined,
-    governance: env.VITE_GOVERNANCE_ADDRESS ? (env.VITE_GOVERNANCE_ADDRESS as Address) : undefined,
     // Issue #647: TimelockController address for the Timelock admin tab (architecture §4.5).
     timelock: configuredAddress(env.VITE_TIMELOCK_ADDRESS),
     safe: configuredAddress(env.VITE_SAFE_ADDRESS),
@@ -256,20 +253,6 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                 content: (
                   <div className="tab-section-stack">
                     <RouterView apiUrl={cfg.explorerApiUrl} routerAddress={cfg.router} />
-                    {cfg.governance ? (
-                      <GovernancePanel
-                        governanceAddress={cfg.governance}
-                        apiUrl={cfg.explorerApiUrl}
-                      />
-                    ) : (
-                      <section data-testid="governance-config-missing">
-                        <h2>Governance — Weight Proposals</h2>
-                        <p className="hint">
-                          Router governance voting is unavailable until the governance contract
-                          address is configured.
-                        </p>
-                      </section>
-                    )}
                   </div>
                 ),
               },

@@ -76,10 +76,10 @@ describe("stage 12: the one verifier", () => {
     expect(v.vaults.rmUSDC!.minPoolLiquidity).toBeUndefined();
   });
 
-  test("the verifier sheet carries every deploy-time value of the sheet: voting power, quorum, periods, eligibility and the router default weights (issue 1520)", () => {
-    const { ctx, sheet } = setup();
+  test("the verifier sheet carries every deploy-time value of the sheet: eligibility and the router default weights, and no voting value (issue 1520, issue 1698)", () => {
+    const { ctx } = setup();
     const v = buildVerifySheet(ctx, "0x00000000000000000000000000000000000050fe");
-    expect(v.governance).toEqual({ voters: sheet.voters, voterPower: sheet.voterPower, quorum: sheet.quorum, votingPeriod: sheet.votingPeriod, executionDelay: sheet.executionDelay });
+    expect(v).not.toHaveProperty("governance");
     // the example sheet makes PROTO, AGENT and RWA eligible: rmUSDC always is
     expect(Object.fromEntries(Object.entries(v.vaults).map(([k, x]) => [k, x.routerEligible]))).toEqual({ rmUSDC: true, rmPROTO: true, rmAGENT: true, rmRWA: true });
     expect(v.defaultWeights).toEqual([{ vault: "rmUSDC", bps: 9500 }, { vault: "rmPROTO", bps: 500 }, { vault: "rmAGENT", bps: 0 }, { vault: "rmRWA", bps: 0 }]);
@@ -356,6 +356,7 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
 describe("issue 1701: on 8453 the applied receipt vector of the run manifest must be backed by its timelock batch on chain", () => {
   const TL = "0x0000000000000000000000000000000000000071", GOV = "0x0000000000000000000000000000000000000072", RCPT = "0x0000000000000000000000000000000000000073";
   const RID = ("0x" + "0a".repeat(32)) as `0x${string}`;
+  const DIGEST = ("0x" + "0d".repeat(32)) as `0x${string}`;
   const VAULTS = [vaultAddr("USDC"), vaultAddr("PROTO"), vaultAddr("RWA")];
   const ONCHAIN_BPS = [5000, 3000, 2000];
   const TLEV = parseAbi([
@@ -368,10 +369,9 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
     data: name === "CallScheduled" ? encodeAbiParameters(parseAbiParameters("address, uint256, bytes, bytes32, uint256"), [target as `0x${string}`, 0n, data, ("0x" + "00".repeat(32)) as `0x${string}`, 172800n])
       : encodeAbiParameters(parseAbiParameters("address, uint256, bytes"), [target as `0x${string}`, 0n, data]),
   });
-  /** The chain: one real apply batch that set ONCHAIN_BPS, scheduled at t=1000 and executed one 172800 s delay later. */
+  /** The chain: one real applyReceipt call (issue 1698) that set ONCHAIN_BPS, scheduled at t=1000 and executed one 172800 s delay later. */
   const chain = () => {
-    const [rel, w] = applyCalldata(RID, VAULTS, ONCHAIN_BPS);
-    const calls = [{ target: RCPT, data: rel }, { target: GOV, data: w }];
+    const calls = [{ target: GOV, data: applyCalldata(RID, DIGEST, VAULTS, ONCHAIN_BPS) }];
     const rc: Record<string, { status: "success"; blockNumber: bigint; logs: any[] }> = {
       ["0x" + "51".repeat(32)]: { status: "success", blockNumber: 1n, logs: calls.map((c, i) => tlLog("CallScheduled", BigInt(i), c.target, c.data)) },
       ["0x" + "52".repeat(32)]: { status: "success", blockNumber: 2n, logs: calls.map((c, i) => tlLog("CallExecuted", BigInt(i), c.target, c.data)) },
@@ -383,7 +383,7 @@ describe("issue 1701: on 8453 the applied receipt vector of the run manifest mus
     };
   };
   const entry = (bps: number[]) => ({
-    step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps, voted_weights_active: false, effective_vaults: VAULTS, effective_bps: bps,
+    step: "apply-receipt", receipt_id: RID, target: GOV, governance: GOV, payload_digest: DIGEST, vaults: VAULTS, bps, voted_weights_active: true, effective_vaults: VAULTS, effective_bps: bps,
     operation_id: OP, schedule_tx: "0x" + "51".repeat(32), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: "0x" + "52".repeat(32), execute_status: 1, execute_block_timestamp: 1000 + 172800,
   });
   async function run(apps: unknown[]) {

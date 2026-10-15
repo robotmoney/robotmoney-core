@@ -77,7 +77,7 @@ fn temp_config(name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// Alert-only config: no pauser key, receipt and governance checks off, so the
+/// Alert-only config: no pauser key, receipt check off, so the
 /// daemon's only database side effect is the cursor.
 fn alert_only_config() -> String {
     r#"

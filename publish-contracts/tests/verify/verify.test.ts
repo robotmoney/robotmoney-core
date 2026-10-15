@@ -59,17 +59,18 @@ describe("agents the depositors authorize after the handover are theirs (core 15
   });
 });
 
-describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
+describe("a receipt the Safe applied through the timelock (issue 1696, issue 1698)", () => {
   const LABEL = "receipt: applied receipt is released and its weights are on the router";
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const vaults = () => Object.values(VAULTS).map((v) => v.address);
   const BPS = [4000, 3000, 2000, 1000];
-  /** The router holds the applied vector and the receipt reads released. */
+  /** applyReceipt released the receipt and set the router's ACTIVE vector; the default vector is still the sheet's. */
   const applied = (over: { released?: boolean; routerBps?: number[] } = {}) => {
     const w = buildWorld();
     w.opts.appliedReceipt = { receiptId: RID, vaults: vaults(), bps: BPS };
     w.chain.set(REC, "isReleased", () => over.released ?? true);
-    w.chain.set(ROUTER, "getDefaultWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
+    w.chain.set(ROUTER, "votedWeightsActive", true);
+    w.chain.set(ROUTER, "getWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
     w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), (over.routerBps ?? BPS).map((x) => BigInt(x))]);
     return w;
   };
@@ -81,7 +82,7 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
     w.chain.set(ROUTER, "getEffectiveWeights", [vaults(), BPS.map((x) => BigInt(x))]);
     expect(failed(await verifyDeployment(w.opts)).sort()).toEqual(["router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
   });
-  test("applied, released and on the router: every check passes, the sheet vector having been superseded", async () => {
+  test("applied, released and active on the router: every check passes, the default vector staying the sheet's", async () => {
     const r = await verifyDeployment(applied().opts);
     expect(failed(r)).toEqual([]);
     expect(r.checks.find((c) => c.label === LABEL)).toMatchObject({ ok: true });
@@ -90,13 +91,18 @@ describe("a receipt the Safe applied through the timelock (issue 1696)", () => {
   test("applied but the receipt reads not released fails the label", async () => {
     expect(failed(await verifyDeployment(applied({ released: false }).opts))).toEqual([LABEL]);
   });
-  test("applied but the router holds another vector fails the label and the weights label", async () => {
-    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: default weights equal sheet", "router: effective weights equal the sheet's launch vector"].sort());
+  test("applied but the router holds another vector fails the label and the effective weights label", async () => {
+    expect(failed(await verifyDeployment(applied({ routerBps: [5000, 3000, 2000, 0] }).opts)).sort()).toEqual([LABEL, "router: effective weights equal the sheet's launch vector"].sort());
+  });
+  test("applied but the active vector is not in effect fails the active label", async () => {
+    const w = applied();
+    w.chain.set(ROUTER, "votedWeightsActive", false);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["router: votedWeightsActive is true only after an applied receipt"]);
   });
 });
 
-describe("the voted vector must not override the launch vector (issue 1743)", () => {
-  const ACTIVE = "router: votedWeightsActive is false after deploy";
+describe("no active vector may override the launch vector without an applied receipt (issue 1743)", () => {
+  const ACTIVE = "router: votedWeightsActive is true only after an applied receipt";
   const EFFECTIVE = "router: effective weights equal the sheet's launch vector";
   const vaults = () => Object.values(VAULTS).map((v) => v.address);
   test("the healthy world passes both labels", async () => {
@@ -423,6 +429,9 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
     w.chain.grant(ROUTER, WEIGHT_SETTER_ROLE, NEW_GOV);
     w.chain.revoke(ROUTER, ADMIN_ROLE, GOV);
     w.chain.grant(ROUTER, ADMIN_ROLE, NEW_GOV);
+    // issue 1698: the new weight setter releases receipts, so the timelock moves the receipt register's ADMIN_ROLE to it too
+    w.chain.revoke(REC, ADMIN_ROLE, GOV);
+    w.chain.grant(REC, ADMIN_ROLE, NEW_GOV);
     if (updateManifest) {
       const p = join(w.manifestDir, stageManifestFile(getStageTable(), "governance"));
       const o = JSON.parse(readFileSync(p, "utf8"));

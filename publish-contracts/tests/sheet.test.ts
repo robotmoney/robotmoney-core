@@ -152,7 +152,7 @@ describe("whitelist parser", () => {
   test("duplicate names, bad addresses, bad numbers and bad quoting are refused", () => {
     expect(() => parseSheetText("A=1\nA=2")).toThrow(PublishError);
     expect(refused(sheetText({ ADMIN_ADDRESS: "0x123" })).message).toContain("ADMIN_ADDRESS");
-    expect(refused(sheetText({ VOTER_POWER: "ten" })).message).toContain("VOTER_POWER");
+    expect(refused(sheetText({ SAFE_THRESHOLD: "ten" })).message).toContain("SAFE_THRESHOLD");
     expect(() => parseSheetText('A="unterminated')).toThrow(PublishError);
   });
 
@@ -162,7 +162,6 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({ SAFE_OWNERS: "0x000000000000000000000000000000000000c001,0x000000000000000000000000000000000000c002" })).message).toContain("3 owners");
     expect(refused(sheetText({ SAFE_OWNERS: "0x000000000000000000000000000000000000a001,0x000000000000000000000000000000000000c002,0x000000000000000000000000000000000000c003" })).message).toContain("Safe owner");
     expect(refused(sheetText({ PAUSER_ADDRESS: "0x000000000000000000000000000000000000a001" })).message).toContain("same address");
-    expect(refused(sheetText({ QUORUM_THRESHOLD: "1" })).message).toContain("QUORUM");
     expect(refused(sheetText({ FEE_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000a001" })).message).toContain("deployer");
     expect(refused(sheetText({ SEED_DEPOSIT_USDC: "0" })).message).toContain("SEED");
     expect(refused(sheetText({ SAFE_VERSION: "1.3.0" })).message).toContain("1.4.1");
@@ -175,6 +174,15 @@ describe("whitelist parser", () => {
     const a = parseSheet(exampleText());
     const b = parseSheet(sheetText({ TIMELOCK_MIN_DELAY: "172800" }));
     expect(diffSheets(a, b).map((r) => r.name)).toEqual(["TIMELOCK_MIN_DELAY"]);
+  });
+});
+
+describe("there is no voting: the deleted voting names are refused by name (issue 1698)", () => {
+  test("VOTER_ADDRESSES, VOTER_POWER, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY are refused with the reason, and none is required", () => {
+    for (const name of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) {
+      expect(refused(sheetText({}, [`${name}=2`])).message, name).toContain("there is no voting by anyone");
+      expect(REQUIRED_NAMES).not.toContain(name);
+    }
   });
 });
 
