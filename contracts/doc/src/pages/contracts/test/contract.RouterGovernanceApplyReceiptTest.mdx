@@ -5,7 +5,7 @@ description: "A recorded consensus receipt is applied the production way: two of
 
 # RouterGovernanceApplyReceiptTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RouterGovernanceApplyReceipt.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7947a8e6f43a743f5ba2aa35912426cbfda6b46c/contracts/test/RouterGovernanceApplyReceipt.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -53,6 +53,18 @@ bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
 
 ```solidity
 bytes32 internal constant DIGEST = keccak256("canonical receipt bytes 1");
+```
+
+### RECEIPT_B
+
+```solidity
+bytes32 internal constant RECEIPT_B = keccak256("receipt-2");
+```
+
+### DIGEST_B
+
+```solidity
+bytes32 internal constant DIGEST_B = keccak256("canonical receipt bytes 2");
 ```
 
 ## State Variables
@@ -334,6 +346,92 @@ self-administered, so the only way to change its holder is the holder.
 
 ```solidity
 function test_weightSetterRoleIsSelfAdministered() public view;
+```
+
+<a id="_vectorb"></a>
+
+### _vectorB
+
+<i>
+
+Receipt B's vector differs from receipt A's (`_vector`), so the test can
+tell which one the router holds.
+
+</i>
+
+```solidity
+function _vectorB() internal view returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="_scheduleboth-uint256"></a>
+
+### _scheduleBoth
+
+<i>
+
+Records receipt B `gap` seconds after receipt A (recorded in setUp), then
+schedules both applies through the Safe and mines the delay, so both are
+ready on the timelock at once.
+
+</i>
+
+```solidity
+function _scheduleBoth(uint256 gap)
+        internal
+        returns (bytes memory applyA, bytes memory applyB);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gap | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| applyA | `bytes` |  |
+| applyB | `bytes` |  |
+
+<a id="test_applyreceipt_outoforderolderreverts"></a>
+
+### test_applyReceipt_outOfOrderOlderReverts
+
+A recorded before B, both applies ready: B executes through the Safe, then
+A (straight on the open-executor timelock, as any address may) reverts with
+ReceiptNotNewerThanApplied. B's vector stays active and A stays unreleased.
+
+```solidity
+function test_applyReceipt_outOfOrderOlderReverts() public;
+```
+
+<a id="test_applyreceipt_samerecordedatrefused"></a>
+
+### test_applyReceipt_sameRecordedAtRefused
+
+A receipt recorded in the same second as the applied one is not newer, so
+it is refused.
+
+```solidity
+function test_applyReceipt_sameRecordedAtRefused() public;
+```
+
+<a id="test_applyreceipt_inorderstillapplies"></a>
+
+### test_applyReceipt_inOrderStillApplies
+
+In order, A then B, both apply and B's vector is the active one.
+
+```solidity
+function test_applyReceipt_inOrderStillApplies() public;
 ```
 
 <a id="test_duplicatevault_revertsonsettersandreceiptpath"></a>

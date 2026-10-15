@@ -2,6 +2,7 @@
 // Canonical: docs/technical/governance-decisions.md §3.2, §3.6, §3.7 — the Safe applies a consensus receipt through the weight setter
 // Canonical: docs/technical/governance-isomorphism.md — the test governance path is the production one
 // Implements: issue #1698 — applyReceipt in one call through the real Safe and timelock; no voting surface; no duplicate vault
+// Implements: issue #1831 — two ready applies executed out of order leave the newer vector active
 pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
@@ -278,6 +279,112 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
     function test_weightSetterRoleIsSelfAdministered() public view {
         assertEq(gov.getRoleAdmin(WEIGHT_SETTER_ROLE), WEIGHT_SETTER_ROLE);
         assertEq(gov.getRoleAdmin(ADMIN_ROLE), ADMIN_ROLE);
+    }
+
+    // ─── Ordering: the newer receipt wins (issue 1831) ───────────────────────
+
+    bytes32 internal constant RECEIPT_B = keccak256("receipt-2");
+    bytes32 internal constant DIGEST_B = keccak256("canonical receipt bytes 2");
+
+    /// @dev Receipt B's vector differs from receipt A's (`_vector`), so the test can
+    ///      tell which one the router holds.
+    function _vectorB() internal view returns (address[] memory vaults, uint256[] memory bps) {
+        (vaults, bps) = _vector();
+        bps[0] = 2_500;
+        bps[1] = 7_500;
+    }
+
+    /// @dev Records receipt B `gap` seconds after receipt A (recorded in setUp), then
+    ///      schedules both applies through the Safe and mines the delay, so both are
+    ///      ready on the timelock at once.
+    function _scheduleBoth(uint256 gap)
+        internal
+        returns (bytes memory applyA, bytes memory applyB)
+    {
+        vm.warp(block.timestamp + gap);
+        receipts.recordReceipt(submitter, RECEIPT_B, DIGEST_B, "https://example.invalid/r2");
+        (address[] memory va, uint256[] memory ba) = _vector();
+        (address[] memory vb, uint256[] memory bb) = _vectorB();
+        applyA = _applyCall(RECEIPT_ID, DIGEST, va, ba);
+        applyB = _applyCall(RECEIPT_B, DIGEST_B, vb, bb);
+        _govSchedule(safe, timelock, address(gov), applyA, keccak256("apply-A"), DELAY);
+        _govSchedule(safe, timelock, address(gov), applyB, keccak256("apply-B"), DELAY);
+        vm.warp(block.timestamp + DELAY);
+        assertTrue(
+            timelock.isOperationReady(
+                timelock.hashOperation(address(gov), 0, applyA, bytes32(0), keccak256("apply-A"))
+            )
+        );
+        assertTrue(
+            timelock.isOperationReady(
+                timelock.hashOperation(address(gov), 0, applyB, bytes32(0), keccak256("apply-B"))
+            )
+        );
+    }
+
+    /// @notice A recorded before B, both applies ready: B executes through the Safe, then
+    ///         A (straight on the open-executor timelock, as any address may) reverts with
+    ///         ReceiptNotNewerThanApplied. B's vector stays active and A stays unreleased.
+    function test_applyReceipt_outOfOrderOlderReverts() public {
+        uint64 recordedA = receipts.getReceiptById(RECEIPT_ID).recordedAt;
+        (bytes memory applyA, bytes memory applyB) = _scheduleBoth(1 hours);
+        uint64 recordedB = receipts.getReceiptById(RECEIPT_B).recordedAt;
+        assertLt(recordedA, recordedB, "A is recorded before B");
+
+        _govExecute(safe, timelock, address(gov), applyB, keccak256("apply-B"));
+        assertEq(gov.lastAppliedRecordedAt(), recordedB);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RouterGovernance.ReceiptNotNewerThanApplied.selector,
+                RECEIPT_ID,
+                recordedA,
+                recordedB
+            )
+        );
+        timelock.execute(address(gov), 0, applyA, bytes32(0), keccak256("apply-A"));
+
+        (address[] memory vb, uint256[] memory bb) = _vectorB();
+        _assertRouterVector(vb, bb);
+        assertFalse(receipts.isReleased(RECEIPT_ID), "the older receipt stays unreleased");
+        assertTrue(receipts.isReleased(RECEIPT_B), "the newer receipt is released");
+        assertEq(gov.lastAppliedRecordedAt(), recordedB, "the guard still holds B");
+    }
+
+    /// @notice A receipt recorded in the same second as the applied one is not newer, so
+    ///         it is refused.
+    function test_applyReceipt_sameRecordedAtRefused() public {
+        (bytes memory applyA, bytes memory applyB) = _scheduleBoth(0);
+        uint64 recorded = receipts.getReceiptById(RECEIPT_ID).recordedAt;
+        assertEq(receipts.getReceiptById(RECEIPT_B).recordedAt, recorded, "same recordedAt");
+
+        _govExecute(safe, timelock, address(gov), applyA, keccak256("apply-A"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RouterGovernance.ReceiptNotNewerThanApplied.selector, RECEIPT_B, recorded, recorded
+            )
+        );
+        timelock.execute(address(gov), 0, applyB, bytes32(0), keccak256("apply-B"));
+
+        (address[] memory va, uint256[] memory ba) = _vector();
+        _assertRouterVector(va, ba);
+        assertFalse(receipts.isReleased(RECEIPT_B), "the refused receipt stays unreleased");
+    }
+
+    /// @notice In order, A then B, both apply and B's vector is the active one.
+    function test_applyReceipt_inOrderStillApplies() public {
+        (bytes memory applyA, bytes memory applyB) = _scheduleBoth(1 hours);
+
+        _govExecute(safe, timelock, address(gov), applyA, keccak256("apply-A"));
+        (address[] memory va, uint256[] memory ba) = _vector();
+        _assertRouterVector(va, ba);
+        _govExecute(safe, timelock, address(gov), applyB, keccak256("apply-B"));
+
+        (address[] memory vb, uint256[] memory bb) = _vectorB();
+        _assertRouterVector(vb, bb);
+        assertTrue(receipts.isReleased(RECEIPT_ID), "A released");
+        assertTrue(receipts.isReleased(RECEIPT_B), "B released");
+        assertEq(gov.lastAppliedRecordedAt(), receipts.getReceiptById(RECEIPT_B).recordedAt);
     }
 
     // ─── Duplicate vault (security review 2026-10-12 finding 8, HR-L-9) ──────
