@@ -12,8 +12,8 @@
 //!
 //! For each basket vault:
 //!  1. Deploy the vault contract on the fork with the test account as admin.
-//!  2. Add one confirmed Base asset (cbBTC for ProtocolAssetVault, JUNO
-//!     for AgentTokenVault) so the basket is non-empty.
+//!  2. Add one Base asset with a deep Uniswap V3 USDC pool (cbBTC for
+//!     ProtocolAssetVault, wETH for AgentTokenVault) so the basket is non-empty.
 //!  3. Approve USDC → deposit → assert shares > 0.
 //!  4. Redeem → assert net USDC delta within exitFeeBps + maxSlippageBps +
 //!     10 bps slack + 1 wei rounding.
@@ -309,17 +309,18 @@ fn basket_vault_round_trip() {
         "ProtocolAssetVault/cbBTC",
     );
 
-    // ── AgentTokenVault: single asset = JUNO/USDC (1% fee) ────────────
-    // JUNO is the simplest confirmed AgentTokenVault shortlist asset with a
-    // direct USDC pool on Base (no multi-hop). WOON (UniV4) and GIZA
-    // (Aerodrome) require additional adapter contracts not deployed in the
-    // fork harness; ZYFAI routes WETH→ZYFAI (two-hop, not one-hop V3).
+    // ── AgentTokenVault: single asset = wETH/USDC (0.05% fee) ─────────
+    // The old JUNO/USDC leg was removed from the launch shortlist (no usable pool: its
+    // TWAP cardinality is far below the guard's floor). The launch asset, RM, trades
+    // on a Uniswap V4 pool that needs the V4 adapter and recorder, which this harness
+    // does not deploy. The wETH/USDC V3 pool exercises the same BasketVault
+    // deposit/redeem path with real Base liquidity and TWAP history.
     basket_round_trip(
         &fx,
         "AgentTokenVault",
-        addresses::JUNO,
-        addresses::BASKET_AGENT_POOL_JUNO,
-        addresses::BASKET_AGENT_POOL_JUNO_FEE,
-        "AgentTokenVault/JUNO",
+        addresses::WETH9,
+        addresses::POOL_WETH_USDC,
+        500,
+        "AgentTokenVault/wETH",
     );
 }
