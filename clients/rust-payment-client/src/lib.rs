@@ -17,6 +17,7 @@ pub mod config;
 pub mod consensus_receipt;
 pub mod errors;
 pub mod fees;
+pub mod floors;
 pub mod gateway;
 pub mod logging;
 pub mod network_env;

@@ -39,6 +39,9 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::errors::RmpcError;
+pub use crate::floors::{
+    router_withdraw_gas_floor as gas_floor, ROUTER_WITHDRAW_BASE_GAS, ROUTER_WITHDRAW_GAS_PER_LEG,
+};
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::AuditDecision;
 use crate::output::emit;
@@ -574,19 +577,9 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
-/// Gateway `withdrawFromRouter` entry floor: fixed part
-/// (`ROUTER_WITHDRAW_BASE_GAS`) in gas.
-pub const ROUTER_WITHDRAW_BASE_GAS: u64 = 400_000;
-/// Gateway entry floor per non-zero leg (`ROUTER_WITHDRAW_GAS_PER_LEG`).
-pub const ROUTER_WITHDRAW_GAS_PER_LEG: u64 = 1_850_000;
 /// Headroom above the floor for intrinsic tx gas and calldata, which the
 /// entry check does not see.
 const GAS_MARGIN: u64 = 150_000;
-
-/// Gateway entry floor for a `withdrawFromRouter` with `legs` legs.
-pub fn gas_floor(legs: usize) -> u64 {
-    ROUTER_WITHDRAW_BASE_GAS.saturating_add(ROUTER_WITHDRAW_GAS_PER_LEG.saturating_mul(legs as u64))
-}
 
 /// The gateway's entry floor for these shares: it counts only the non-zero
 /// legs (`RobotMoneyGateway.withdrawFromRouter`, core 1482).

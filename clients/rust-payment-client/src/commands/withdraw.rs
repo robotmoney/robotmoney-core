@@ -53,9 +53,9 @@ use alloy_primitives::{Address, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
 use serde::Serialize;
 
-use crate::commands::withdraw_router::gas_floor as router_withdraw_gas_floor;
 use crate::config::Config;
 use crate::errors::{Result as RmpcResult, RmpcError};
+use crate::floors::{floor_from_preview, router_withdraw_gas_floor, DEFAULT_FLOOR_TOLERANCE_BPS};
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::AuditDecision;
 use crate::output::emit;
@@ -74,13 +74,6 @@ mod erc4626 {
         function previewRedeem(uint256 shares) external view returns (uint256 assets);
     }
 }
-
-/// The default floor sits this far under `previewRedeem(shares)`, in basis
-/// points (0.50%): the tolerance the dapp's router deposit and router redeem
-/// use. ERC-4626 has `redeem` pay at least `previewRedeem` in the same block,
-/// so the floor binds only on a move between the preflight read and
-/// inclusion, such as a dragged TWAP on a basket leg (core 1793).
-pub const DEFAULT_FLOOR_TOLERANCE_BPS: u64 = 50;
 
 /// `RobotMoneyGateway.WITHDRAW_GAS_FLOOR`: `gateway.withdraw` checks
 /// `gasleft()` against it at entry.
@@ -155,15 +148,6 @@ pub fn parse_min_assets(raw: Option<&str>) -> Result<MinAssetsArg, String> {
             .map(MinAssetsArg::Explicit)
             .map_err(|_| s.to_string()),
     }
-}
-
-/// The default floor for a redemption whose `previewRedeem(shares)` is
-/// `preview`: the preview less [`DEFAULT_FLOOR_TOLERANCE_BPS`], rounded
-/// down. Split into quotient and remainder so no product can overflow.
-pub fn floor_from_preview(preview: U256) -> U256 {
-    let denom = U256::from(10_000u64);
-    let keep = U256::from(10_000u64 - DEFAULT_FLOOR_TOLERANCE_BPS);
-    (preview / denom) * keep + (preview % denom) * keep / denom
 }
 
 /// Which gateway entry point signs the redemption (QA plan D9).

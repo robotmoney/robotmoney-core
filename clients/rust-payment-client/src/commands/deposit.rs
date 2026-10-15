@@ -47,9 +47,9 @@ use alloy_primitives::{Address, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
 use serde::Serialize;
 
-use crate::commands::withdraw::{floor_from_preview, DEFAULT_FLOOR_TOLERANCE_BPS};
 use crate::config::Config;
 use crate::errors::{Result as RmpcResult, RmpcError};
+use crate::floors::{floor_from_preview, DEFAULT_FLOOR_TOLERANCE_BPS};
 use crate::gateway::{PortfolioRouter, RobotMoneyGateway};
 use crate::logging::AuditDecision;
 use crate::output::emit;
