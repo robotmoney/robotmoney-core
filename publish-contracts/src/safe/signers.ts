@@ -227,14 +227,15 @@ export async function signerFromSpec(spec: string, hdPath?: string): Promise<Sig
 }
 
 
-/** A signer that is only an address: it can name the sender of a simulation and can never sign or send. Used by --dry-run with no secret. */
 /**
  * An address-only signer that can SEND, for the preflight's local simulation chain only: the node itself signs for the unlocked
- * (impersonated) account, so no key exists anywhere. Refused against any RPC that is not loopback, and against Base mainnet's chain id.
+ * (impersonated) account, so no key exists anywhere. Refused against any RPC that is not loopback, at every chain id.
+ * The guard is the RPC, not the chain id: the simulation anvil is a fork of the target, so a dry run of an 8453 sheet
+ * legitimately reports chain id 8453 on a loopback URL (issue 1720). A real node is never loopback.
  * It cannot sign a Safe hash.
  */
 export function impersonatedSender(address: Address, chain: ChainOpts): Signer {
-  if (!isLoopbackRpc(chain.rpcUrl) || chain.chainId === BASE_MAINNET_CHAIN_ID) {
+  if (!isLoopbackRpc(chain.rpcUrl)) {
     throw new SafeToolError("BAD_INPUT", "an impersonated sender is accepted only against the local simulation anvil (a loopback RPC).");
   }
   return {
@@ -248,6 +249,7 @@ export function impersonatedSender(address: Address, chain: ChainOpts): Signer {
   };
 }
 
+/** A signer that is only an address: it can name the sender of a simulation and can never sign or send. Used by --dry-run with no secret. */
 export function addressOnlySigner(address: Address): Signer {
   const no = (what: string): never => { throw new SafeToolError("BAD_INPUT", `an address-only signer cannot ${what}: it exists for --dry-run, which sends nothing`); };
   return {
