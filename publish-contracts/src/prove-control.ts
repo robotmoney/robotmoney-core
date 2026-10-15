@@ -5,9 +5,10 @@
 // The run manifest keeps the transaction hash and the signers. Stage 11 refuses without that record (control-proof.ts).
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseAbiItem, type Address, type Hex } from "viem";
+import { createPublicClient, http, parseAbiItem, type Address, type Hex } from "viem";
 import { PROOF_STAGE, controlNotProven, inspectProofTx, type ControlProofRecord } from "./control-proof.ts";
 import { PublishError } from "./errors.ts";
+import { rpcLabel } from "./safe/chain.ts";
 import { confirmStage, manifestDir, readManifestField, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
 import { manifestRef, type StageRow } from "./stages.ts";
 import {
@@ -19,7 +20,8 @@ export interface SafeExecution { txHash: Hex; safeTxHash: Hex; success: boolean;
 export interface LandedTx { from: Address; to: string | null; input: Hex; value: bigint; status: "success" | "reverted"; block: number }
 /** The chain reads behind the adoption of a landed proof. Injected in tests, viem in production. Nothing here sends. */
 export interface ProveChain {
-  /** Every ExecutionSuccess and ExecutionFailure the Safe itself emitted from `fromBlock` to the latest block, oldest first. */
+  /** The ExecutionSuccess and ExecutionFailure events the Safe itself emitted from `fromBlock`, oldest first: those of the first eth_getLogs
+   *  window that holds any (the real reader stops there, see proveChain), or none up to the latest block. */
   executions(handle: SafeHandle, fromBlock: number): Promise<SafeExecution[]>;
   transaction(handle: SafeHandle, hash: Hex): Promise<LandedTx | null>;
 }
@@ -28,35 +30,129 @@ const EXECUTION_EVENTS = [
   parseAbiItem("event ExecutionSuccess(bytes32 indexed txHash, uint256 payment)"),
   parseAbiItem("event ExecutionFailure(bytes32 indexed txHash, uint256 payment)"),
 ] as const;
-/** eth_getLogs window. Base RPC providers cap the range of one call (commonly 2000 to 10000 blocks), so the scan walks the range in windows of this size. */
+/** eth_getLogs window (--logs-window). Base RPC providers cap the range of one call (commonly 2000 to 10000 blocks), so the scan walks the range in windows of this size. */
 export const LOG_WINDOW = 2000n;
-/** About 93 days of Base blocks. A proof older than this is not a crashed run: refuse instead of scanning forever. */
+/** About 93 days of Base blocks at the default window. A proof older than this is not a crashed run: refuse instead of scanning forever. */
 export const MAX_LOG_WINDOWS = 2000n;
+export const MAX_SCAN_BLOCKS = LOG_WINDOW * MAX_LOG_WINDOWS;
+/** Tries of one eth_getLogs call the RPC throttles (HTTP 429 or a rate-limit error), --logs-tries. Backoff doubles from LOG_BACKOFF_MS, capped. */
+export const LOG_TRIES = 6;
+export const LOG_BACKOFF_MS = 1000;
+export const LOG_BACKOFF_MAX_MS = 30_000;
 
-export const realProveChain: ProveChain = {
-  async executions(handle, fromBlock) {
-    const latest = await handle.client.getBlockNumber();
-    if (BigInt(fromBlock) > latest) return [];
-    if ((latest - BigInt(fromBlock)) / LOG_WINDOW > MAX_LOG_WINDOWS) throw new PublishError("SAFE", `the Safe stage block ${fromBlock} is more than ${MAX_LOG_WINDOWS * LOG_WINDOW} blocks behind ${latest}: not scanned`);
-    const out: SafeExecution[] = [];
-    for (let from = BigInt(fromBlock); from <= latest; from += LOG_WINDOW) {
-      const to = from + LOG_WINDOW - 1n < latest ? from + LOG_WINDOW - 1n : latest;
-      let logs;
-      try { logs = await handle.client.getLogs({ address: handle.address, events: EXECUTION_EVENTS, fromBlock: from, toBlock: to }); }
-      catch (e) { throw new PublishError("SAFE", `reading the Safe's execution events for blocks ${from} to ${to} failed (${(e as Error).message}): the proof was not adopted`); }
-      for (const l of logs) {
-        if (l.transactionHash == null || l.blockNumber == null || l.logIndex == null || l.removed) continue;
-        out.push({ txHash: l.transactionHash, safeTxHash: l.args.txHash as Hex, success: l.eventName === "ExecutionSuccess", block: Number(l.blockNumber), logIndex: l.logIndex });
+/**
+ * How the --resume adoption reads the Safe's execution events (issue 1724). Public RPCs refuse a long eth_getLogs walk (HTTP 429, range caps)
+ * and some are pruned (no old receipts), so the scan is bounded, retried and diagnosable, and its RPC can be split from --rpc.
+ */
+export interface LogScanOpts {
+  /** A separate RPC used ONLY for eth_getLogs (--logs-rpc). Every other read (block number, transaction, receipt, nonce) stays on --rpc. */
+  logsRpc?: string;
+  /** Blocks per eth_getLogs call (--logs-window, default LOG_WINDOW). Halved on a range-limit error, down to one block. */
+  window?: bigint;
+  /** Tries of one throttled eth_getLogs call (--logs-tries, default LOG_TRIES). */
+  tries?: number;
+  /** First backoff in ms (default LOG_BACKOFF_MS). It doubles each try, capped at LOG_BACKOFF_MAX_MS. A Retry-After header in seconds wins, same cap. */
+  backoffMs?: number;
+  /** Test seam: no real sleeping in tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** What failed in an RPC call: the HTTP status, the JSON-RPC code, every message in the error chain, and the Retry-After header in ms. */
+function rpcFailure(e: unknown): { status?: number; code?: number; text: string; retryAfterMs?: number } {
+  let status: number | undefined, code: number | undefined, retryAfterMs: number | undefined;
+  const texts: string[] = [];
+  for (let x = e as Record<string, unknown> | undefined, n = 0; x && n < 10; x = x.cause as Record<string, unknown> | undefined, n++) {
+    if (typeof x.status === "number") status ??= x.status;
+    if (typeof x.code === "number") code ??= x.code;
+    const h = (x.headers as Headers | undefined)?.get?.("retry-after");
+    if (h && /^\d+$/.test(h.trim())) retryAfterMs ??= Number(h.trim()) * 1000;
+    const t = (x.details ?? x.shortMessage ?? x.message) as unknown;
+    if (typeof t === "string" && t && !texts.includes(t.split("\n")[0]!)) texts.push(t.split("\n")[0]!);
+  }
+  return { status, code, retryAfterMs, text: texts.join(" | ") || String(e) };
+}
+const THROTTLED = /rate.?limit|too many requests|throttl|capacity|compute units|quota/i;
+const RANGE_LIMIT = /block range|range (is )?too (large|wide|big)|range limit|max(imum)? (block )?range|exceed\w* .*(range|blocks|results)|more than \d+ (results|blocks|logs)|too many (results|logs|blocks)|response size|limited to \d+/i;
+function failureKind(f: ReturnType<typeof rpcFailure>): "throttled" | "range" | "other" {
+  if (f.status === 429) return "throttled";
+  if (RANGE_LIMIT.test(f.text)) return "range";
+  return THROTTLED.test(f.text) ? "throttled" : "other";
+}
+
+/** RPC_REFUSED: names the RPC host (never the path, which may carry an API key), the method, the status or code, and the block range or hash. */
+export function rpcRefused(url: string, method: string, e: unknown, at: string, details: Record<string, unknown> = {}): PublishError {
+  const host = rpcLabel(url);
+  const f = rpcFailure(e);
+  const answer = [f.status !== undefined ? `HTTP ${f.status}` : "", f.code !== undefined ? `code ${f.code}` : ""].filter(Boolean).join(", ") || "no status";
+  return new PublishError("RPC_REFUSED", `RPC ${host} refused ${method} for ${at} (${answer}: ${f.text.split(url).join(host)}): the proof was not adopted. Retry later, or name another RPC (--logs-rpc for eth_getLogs, --rpc for the rest)`,
+    { rpc_host: host, method, status: f.status, code: f.code, ...details });
+}
+
+/**
+ * The real chain reader. eth_getLogs goes to --logs-rpc when given, else to --rpc, through a client of its own with no transport retry, so the
+ * bounded backoff here is the only retry. The scan starts at `fromBlock` (the safe stage block) and STOPS at the first window that holds an
+ * execution event: the proof follows the Safe creation closely, so it never walks to the latest block when the proof is there. A later
+ * execution cannot hide past that window: adoption first requires the Safe nonce to be exactly 1, and every execTransaction moves the nonce.
+ */
+export function proveChain(o: LogScanOpts = {}): ProveChain {
+  const window0 = o.window ?? LOG_WINDOW;
+  const tries = Math.max(1, o.tries ?? LOG_TRIES);
+  const backoff = o.backoffMs ?? LOG_BACKOFF_MS;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
+  return {
+    async executions(handle, fromBlock) {
+      const url = o.logsRpc ?? handle.chain.rpcUrl;
+      const logsClient = createPublicClient({ transport: http(url, { retryCount: 0 }) });
+      let latest: bigint;
+      try { latest = await handle.client.getBlockNumber(); } catch (e) { throw rpcRefused(handle.chain.rpcUrl, "eth_blockNumber", e, "the latest block"); }
+      if (BigInt(fromBlock) > latest) return [];
+      if (latest - BigInt(fromBlock) > MAX_SCAN_BLOCKS) throw new PublishError("SAFE", `the Safe stage block ${fromBlock} is more than ${MAX_SCAN_BLOCKS} blocks behind ${latest}: not scanned`);
+      const out: SafeExecution[] = [];
+      let size = window0 > 0n ? window0 : LOG_WINDOW;
+      let windows = 0n;
+      for (let from = BigInt(fromBlock); from <= latest && out.length === 0;) {
+        if (++windows > MAX_LOG_WINDOWS) throw new PublishError("SAFE", `no execution event of ${handle.address} in ${MAX_LOG_WINDOWS} eth_getLogs windows from block ${fromBlock} (the window shrank to ${size} blocks): not scanned further`);
+        const to = from + size - 1n < latest ? from + size - 1n : latest;
+        let logs;
+        for (let i = 1; ; i++) {
+          try { logs = await logsClient.getLogs({ address: handle.address, events: EXECUTION_EVENTS, fromBlock: from, toBlock: to }); break; }
+          catch (e) {
+            const f = rpcFailure(e);
+            const kind = failureKind(f);
+            const at = `blocks ${from} to ${to}`;
+            if (kind === "range" && size > 1n) {
+              size = (to - from + 1n) / 2n > 0n ? (to - from + 1n) / 2n : 1n;
+              handle.logger?.log("warn", "prove.logs_range_shrunk", { rpc_host: rpcLabel(url), from: String(from), to: String(to), window: String(size) });
+              logs = null; break;
+            }
+            if (kind !== "throttled" || i >= tries) throw rpcRefused(url, "eth_getLogs", e, at, { from: String(from), to: String(to), tries: i });
+            const ms = Math.min(f.retryAfterMs ?? backoff * 2 ** (i - 1), LOG_BACKOFF_MAX_MS);
+            handle.logger?.log("warn", "prove.logs_throttled", { rpc_host: rpcLabel(url), from: String(from), to: String(to), try: i, tries, wait_ms: ms });
+            await sleep(ms);
+          }
+        }
+        if (logs === null) continue; // the same `from`, a smaller window
+        for (const l of logs) {
+          if (l.transactionHash == null || l.blockNumber == null || l.logIndex == null || l.removed) continue;
+          out.push({ txHash: l.transactionHash, safeTxHash: l.args.txHash as Hex, success: l.eventName === "ExecutionSuccess", block: Number(l.blockNumber), logIndex: l.logIndex });
+        }
+        from = to + 1n;
       }
-    }
-    return out.sort((a, b) => a.block - b.block || a.logIndex - b.logIndex);
-  },
-  async transaction(handle, hash) {
-    let tx, receipt;
-    try { [tx, receipt] = await Promise.all([handle.client.getTransaction({ hash }), handle.client.getTransactionReceipt({ hash })]); } catch { return null; }
-    return { from: tx.from, to: tx.to ?? null, input: tx.input, value: tx.value, status: receipt.status, block: Number(receipt.blockNumber) };
-  },
-};
+      return out.sort((a, b) => a.block - b.block || a.logIndex - b.logIndex);
+    },
+    async transaction(handle, hash) {
+      // Not found is null (the caller refuses "cannot be read"). Any other failure (a pruned node, a throttle) is RPC_REFUSED, never "not found".
+      const [tx, receipt] = await Promise.allSettled([handle.client.getTransaction({ hash }), handle.client.getTransactionReceipt({ hash })]);
+      const reads = [[tx, "eth_getTransactionByHash", "TransactionNotFoundError"], [receipt, "eth_getTransactionReceipt", "TransactionReceiptNotFoundError"]] as const;
+      for (const [r, method, notFound] of reads) {
+        if (r.status === "rejected" && (r.reason as Error)?.name !== notFound) throw rpcRefused(handle.chain.rpcUrl, method, r.reason, `transaction ${hash}`, { tx_hash: hash });
+      }
+      if (tx.status === "rejected" || receipt.status === "rejected") return null;
+      return { from: tx.value.from, to: tx.value.to ?? null, input: tx.value.input, value: tx.value.value, status: receipt.value.status, block: Number(receipt.value.blockNumber) };
+    },
+  };
+}
+export const realProveChain: ProveChain = proveChain();
 
 export interface ProveApi {
   connectSafe: typeof connectSafe;
@@ -77,6 +173,8 @@ export interface ProveOpts {
   api?: ProveApi;
   /** Bound and test seam for the --resume nonce re-read when the chain holds an execution but the RPC answers nonce 0 (issue 1723). */
   staleRead?: StaleReadRetry;
+  /** --logs-rpc, --logs-window, --logs-tries (issue 1724). When set, the adoption reads through proveChain(logs) instead of api.chain. */
+  logs?: LogScanOpts;
 }
 
 const lc = (a: string): string => a.toLowerCase();
@@ -93,7 +191,8 @@ export async function assertEveryOwnerSigned(owners: readonly string[], bundle: 
 }
 
 export async function runProveControl(ctx: RunContext, row: StageRow, manifest: RunManifest, o: ProveOpts): Promise<ControlProofRecord> {
-  const api = o.api ?? realProveApi;
+  const base = o.api ?? realProveApi;
+  const api: ProveApi = o.logs ? { ...base, chain: proveChain(o.logs) } : base;
   const safe = readManifestField(ctx, manifestRef("safe", "safe")) as Address;
   const startedAt = new Date().toISOString();
   const handle: SafeHandle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: safe, logger: ctx.log });
