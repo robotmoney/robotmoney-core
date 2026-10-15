@@ -270,6 +270,41 @@ export async function fetchVaultDetail(
   return (await res.json()) as VaultDetailResponse;
 }
 
+/**
+ * One contract from GET /v1/chains/:chain_id/contracts. `implementation`,
+ * `upgrade_state` and `frozen_at_block` come from the indexed proxy
+ * `Upgraded` / `UpgradesFrozen` events (issue 1810). Disclosure only: the
+ * index never authorizes a write.
+ */
+export interface ContractRow {
+  readonly chain_id: number;
+  readonly address: string;
+  readonly kind: string;
+  readonly implementation?: string | null;
+  readonly upgrade_state?: "frozen" | "upgradeable" | "unknown";
+  readonly frozen_at_block?: number | null;
+}
+
+export interface ContractsResponse {
+  readonly chain_id: number;
+  readonly contracts: readonly ContractRow[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+/** GET /v1/chains/:chain_id/contracts — the indexed contracts and their upgrade state. */
+export async function fetchContracts(
+  baseUrl: string,
+  chainId: number,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<ContractsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/chains/${chainId}/contracts`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as ContractsResponse;
+}
+
 /** GET /v1/router/weights — current weight vector and history. */
 export async function fetchRouterWeights(
   baseUrl: string,

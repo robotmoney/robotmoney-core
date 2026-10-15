@@ -68,6 +68,7 @@ import { TestnetBanner } from "./components/TestnetBanner";
 import { MainnetBanner } from "./components/MainnetBanner";
 import { WrongChainGate } from "./components/WrongChainGate";
 import { VerificationBanner } from "./components/VerificationBanner";
+import { GatewayUpgradeStatus } from "./components/GatewayUpgradeStatus";
 import { VaultList } from "./components/VaultList";
 import { VaultDetail } from "./components/VaultDetail";
 import { RouterView } from "./components/RouterView";
@@ -113,6 +114,12 @@ export interface DappConfig {
   readonly safe?: Address;
   readonly rmToken?: Address;
   readonly expectedCodeHash?: string;
+  /**
+   * Issue 1810: the approved ERC-1967 implementation behind the gateway proxy
+   * and its code hash. Build-time-only pins, like `expectedCodeHash`.
+   */
+  readonly expectedImplementation?: string;
+  readonly expectedImplementationHash?: string;
   readonly envClass: "fork" | "devnet" | "testnet" | "mainnet";
   readonly explorerApiUrl: string;
   readonly vaultAddressBySymbol: ReturnType<typeof parseVaultAddressMap>;
@@ -137,6 +144,8 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     // ROBOTMONEY token on Base; nothing deploys RM, core 1489).
     rmToken: env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined,
     expectedCodeHash: env.VITE_GATEWAY_EXPECTED_CODE_HASH,
+    expectedImplementation: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION,
+    expectedImplementationHash: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH,
     envClass: (env.VITE_ENV_CLASS as DappConfig["envClass"]) ?? "fork",
     explorerApiUrl: resolveExplorerApiUrl(env),
     // Issue #1247 task 4.14: the per-deployment vault-symbol map that
@@ -152,6 +161,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
     cfg.gateway,
     cfg.expectedCodeHash,
+    { address: cfg.expectedImplementation, hash: cfg.expectedImplementationHash },
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState("my-account");
@@ -212,6 +222,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
       <WrongChainGate>
         <StatusHeader />
         <VerificationBanner state={verificationState} refresh={verificationRefresh} />
+        <GatewayUpgradeStatus state={verificationState} />
         <main className="dapp-shell">
           <div className="landing-overview">
             <ProtocolStats />

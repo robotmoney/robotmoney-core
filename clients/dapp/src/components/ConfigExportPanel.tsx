@@ -22,6 +22,9 @@ interface Props {
   usdcAddress: Address;
   /** keccak256(eth_getCode(gateway)) — non-zero for production deployments */
   gatewayRuntimeHash: string;
+  /** The verified implementation behind a proxied gateway (issue 1810). */
+  gatewayImplementation?: string;
+  gatewayImplementationRuntimeHash?: string;
   chainId: number;
   agent: Address;
 }
@@ -55,6 +58,8 @@ export function ConfigExportPanel(props: Props) {
     usdc_address: props.usdcAddress,
     vault_address: props.vault,
     gateway_runtime_hash: props.gatewayRuntimeHash,
+    gateway_implementation: props.gatewayImplementation,
+    gateway_implementation_runtime_hash: props.gatewayImplementationRuntimeHash,
     signer,
   });
 

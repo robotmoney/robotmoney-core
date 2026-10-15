@@ -25,6 +25,9 @@ export function VerificationBanner({ state, refresh }: Props) {
         {state.status === "refused" && (
           <p data-testid="gateway-verification-refused" className="unsafe-banner">
             <strong>Gateway verification refused — admin writes disabled.</strong> {state.reason}{" "}
+            {state.detail && (
+              <span data-testid="gateway-verification-refused-detail">({state.detail}) </span>
+            )}
             <button type="button" data-testid="gateway-verification-retry" onClick={refresh}>
               Re-verify
             </button>

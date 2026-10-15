@@ -74,6 +74,8 @@ one built without a pin fails closed.
 | `VITE_VAULT_ADDRESS`              | `0x000…0`               | Vault contract address                                                                        |
 | `VITE_FORK_RPC_URL`               | `http://127.0.0.1:8545` | RPC endpoint                                                                                  |
 | `VITE_GATEWAY_EXPECTED_CODE_HASH` | unset                   | Keccak-256 of the gateway runtime bytecode. Admin writes refused until this matches on-chain. |
+| `VITE_GATEWAY_EXPECTED_IMPLEMENTATION` | unset              | Approved ERC-1967 implementation behind a proxied gateway (issue 1810). Build-time-only. |
+| `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH` | unset         | Keccak-256 of that implementation's code. A proxied gateway refuses admin writes without both. |
 | `VITE_GATEWAY_CODE_HASH_VERIFIED` | `true`                  | Set `false` to test refusal path                                                              |
 | `VITE_ENV_CLASS`                  | `fork`                  | One of `fork` / `devnet` / `testnet` / `mainnet`                                              |
 | `VITE_HISTORY_PANE`               | unset (false)           | Opt-in to the explorer-API-backed history pane                                                |

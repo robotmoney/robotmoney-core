@@ -17,13 +17,18 @@
  *
  * Works without a connected wallet.
  *
+ * Upgradeability (issue 1810): the vault's ERC-1967 implementation and
+ * whether its upgrades are frozen, from the explorer's indexed proxy events
+ * (GET /v1/chains/:chain_id/contracts). A failed or missing read shows
+ * "unknown", never "frozen".
+ *
  * issue #318 — protocol layer.
  * issue #941 — composition view.
  */
 import { useEffect, useState } from "react";
 import { useReadContract } from "wagmi";
-import type { FetchLike, VaultDetailRow } from "../lib/explorerApi";
-import { fetchVaultDetail } from "../lib/explorerApi";
+import type { ContractRow, FetchLike, VaultDetailRow } from "../lib/explorerApi";
+import { fetchContracts, fetchVaultDetail } from "../lib/explorerApi";
 import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
 import {
   formatSharesString,
@@ -171,6 +176,45 @@ function CompositionSection({ vaultAddress, riskLabel, status }: CompositionSect
   );
 }
 
+/** The upgrade-state words the explorer serves, as the dapp shows them. */
+export function upgradeStateLabel(row: ContractRow | undefined): string {
+  switch (row?.upgrade_state) {
+    case "frozen":
+      return "Frozen — upgrades permanently disabled";
+    case "upgradeable":
+      return "Upgradeable through the timelock";
+    default:
+      return "Unknown";
+  }
+}
+
+/**
+ * The vault's upgradeability as the explorer indexed it. `row` is undefined
+ * while loading or when the vault is not listed.
+ */
+export function VaultUpgradeability({ row }: { row: ContractRow | undefined }) {
+  return (
+    <div className="stat-card" data-testid="vault-detail-upgradeability">
+      <p className="stat-label">Upgradeability</p>
+      <p
+        data-testid="vault-detail-upgrade-state"
+        className="stat-value"
+        data-upgrade-state={row?.upgrade_state ?? "unknown"}
+      >
+        {upgradeStateLabel(row)}
+      </p>
+      <p data-testid="vault-detail-implementation" className="hint font-mono">
+        Implementation: {row?.implementation ?? "unknown"}
+      </p>
+      {row?.frozen_at_block != null && (
+        <p data-testid="vault-detail-frozen-at" className="hint">
+          Frozen at block {row.frozen_at_block}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface VaultDetailProps {
   apiUrl: string;
   address: string;
@@ -197,6 +241,22 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
   const { byAddress: chainPaused } = useVaultsDepositsPaused([address]);
   // The vault is its own ERC-4626 share token: print its own symbol(), never a hardcoded unit (issue 1767).
   const shareSymbol = useVaultShareSymbols([address])(address);
+  const [upgradeRow, setUpgradeRow] = useState<ContractRow | undefined>(undefined);
+  const chainId = state.phase === "ok" ? state.vault.chain_id : undefined;
+
+  // Issue 1810: the vault's indexed upgrade state. Non-fatal: on any failure
+  // the card says "Unknown".
+  useEffect(() => {
+    setUpgradeRow(undefined);
+    if (chainId === undefined) return;
+    const ac = new AbortController();
+    fetchContracts(apiUrl, chainId, { fetchImpl, signal: ac.signal })
+      .then((res) =>
+        setUpgradeRow(res.contracts.find((c) => c.address.toLowerCase() === address.toLowerCase())),
+      )
+      .catch(() => undefined);
+    return () => ac.abort();
+  }, [apiUrl, address, chainId, fetchImpl]);
 
   useEffect(() => {
     setState({ phase: "loading" });
@@ -299,6 +359,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
             {vault.address}
           </p>
         </div>
+        <VaultUpgradeability row={upgradeRow} />
       </div>
 
       <CompositionSection

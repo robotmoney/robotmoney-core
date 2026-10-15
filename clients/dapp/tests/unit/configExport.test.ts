@@ -104,4 +104,27 @@ describe("exportRmpcConfig", () => {
     const parsed = parse(toml) as Record<string, unknown>;
     expect(parsed.chain_id).toBe(31337);
   });
+
+  it("emits the gateway implementation pin for a proxied gateway (issue 1810)", () => {
+    const impl = "0x00000000000000000000000000000000000a11ce";
+    const implHash = "0x" + "cd".repeat(32);
+    const parsed = parse(
+      exportRmpcConfig({
+        ...baseInputs,
+        gateway_implementation: impl,
+        gateway_implementation_runtime_hash: implHash,
+        signer: { kind: "encrypted_keystore", keystore_path: "./k.json" },
+      }),
+    ) as Record<string, unknown>;
+    expect(parsed.gateway_implementation).toBe(impl);
+    expect(parsed.gateway_implementation_runtime_hash).toBe(implHash);
+  });
+
+  it("omits the implementation pin for a direct gateway (issue 1810)", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "encrypted_keystore", keystore_path: "./k.json" },
+    });
+    expect(toml).not.toContain("gateway_implementation");
+  });
 });
