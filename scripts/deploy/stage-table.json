@@ -59,7 +59,6 @@
       "requiredEnv": [
         "ADMIN_ADDRESS",
         "VAULT_ADDRESS",
-        "VAULT_NAME",
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
@@ -316,27 +315,90 @@
       "key": "USDC",
       "stage": "vault",
       "artifact": "RobotMoneyVault",
-      "manifest": "deployments/<chain>/vault.json"
+      "manifest": "deployments/<chain>/vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-USDC",
+      "unpauseInStage13": true,
+      "seed": "SEED_DEPOSIT_USDC",
+      "eligibilitySource": "router-stage",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyWithdraw",
+        "emergencyWithdrawAdapter",
+        "forceRemoveAdapter",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     },
     {
       "key": "PROTO",
       "stage": "proto",
       "artifact": "ProtocolAssetVault",
-      "manifest": "deployments/<chain>/protocol-asset-vault.json"
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-PROTO",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     },
     {
       "key": "AGENT",
       "stage": "agent",
       "artifact": "AgentTokenVault",
-      "manifest": "deployments/<chain>/agent-token-vault.json"
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-AGENT",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     },
     {
       "key": "RWA",
       "stage": "rwa",
       "artifact": "RwaBasketVault",
-      "manifest": "deployments/<chain>/rwa-basket-vault.json"
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-RWA",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     }
   ],
+  "vaultRuleDecisions": {
+    "seed": {
+      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (issue 1705 Q6 (a)).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "eligibilitySource": {
+      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility, and the last one leaves exactly the sheet's ROUTER_WEIGHTS, which names all four vaults. Issue 1705 Q4 (a) fixes the sheet format: ELIGIBLE_VAULTS=PROTO,AGENT,RWA with rmUSDC in ROUTER_WEIGHTS, the same on the Twin chain and on 8453 (docs/technical/governance-isomorphism.md 1.1).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "emergencyLevers": {
+      "reason": "The two vault families have different emergency levers, each callable by EMERGENCY_ROLE (the emergency key) with no timelock. None freezes a withdrawal. For the mainnet test the levers stay as they are and are named here per vault (issue 1705 Q2 (a)). Only rmUSDC can write off a position: forceRemoveAdapter drops an adapter from NAV. A later recovery (ADMIN_ROLE, through the timelock, adds the adapter back) is credited to whoever holds shares at that moment; a holder who exits during the write-off is paid at the reduced NAV. Narrowing the levers is decided before the final deployment.",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    }
+  },
   "libraries": [
     {
       "name": "tick_math",

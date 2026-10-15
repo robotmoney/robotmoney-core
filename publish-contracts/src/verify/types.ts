@@ -64,6 +64,10 @@ export interface VaultSheet {
   routerEligible: boolean;
   /** Build artifact contract name when it is not implied by the kind. */
   contract?: string;
+  /** Baskets (issue 1705 C4): the maxSlippageBps the config sets, else the vault's constructor default. Required for kind basket and agent. */
+  maxSlippageBps?: bigint;
+  /** rmUSDC (issue 1705 C4): the strategy adapters the vault stage registered, in order, with the bps cap the deploy script gives each. Required for kind usdc. */
+  adapters?: { adapter: Address; capBps: number }[];
 }
 
 export interface VerifySheet {

@@ -478,6 +478,7 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
+**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
 All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
 of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
 right after its seed deposit) and are unpaused only by Safe → Timelock
@@ -490,8 +491,9 @@ eligible for Portfolio Router allocation — four initially, extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
 launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
-come from RouterGovernance votes (not yet implemented: core #1520, core
-#1522). The
+come only from the Safe applying an Investment Committee consensus receipt
+through the weight setter (`RouterGovernance.applyReceipt`, through the
+timelock, core #1698). There is no voting. The
 stable-yield product's single-transaction redemption is met through
 proportional withdrawal across all active strategies in one transaction.
 If any strategy cannot fulfil its proportional share, the product covers

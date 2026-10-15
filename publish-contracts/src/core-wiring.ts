@@ -142,6 +142,17 @@ export const VENUE_V3 = 0;
 export const VENUE_V4 = 1;
 /** The manifest field that holds the adapter of an asset on this venue. */
 export const adapterFieldFor = (venue: number): string => (venue === VENUE_V4 ? VAULT_ADAPTER_V4_FIELD : VAULT_ADAPTER_FIELD);
+/**
+ * The strategy adapters a RobotMoneyVault stage registers (DeployVault.s.sol, issue 1705 C4): in registration order, the manifest field of each adapter and the
+ * script constant that holds its bps cap. The verifier reads the cap from the script source at the DEPLOY_SHA, never a number typed here.
+ */
+export const STRATEGY_ADAPTER_WIRING = [
+  { field: "aave_adapter", capConstant: "AAVE_BPS" },
+  { field: "compound_adapter", capConstant: "COMPOUND_BPS" },
+  { field: "moonwell_flagship_adapter", capConstant: "THIRD_VENUE_BPS" },
+] as const;
+/** The vault contract whose stage registers STRATEGY_ADAPTER_WIRING. */
+export const STRATEGY_ADAPTER_VAULT_ARTIFACT = "RobotMoneyVault";
 
 
 /** The verifier's vault kind per table vault key. */

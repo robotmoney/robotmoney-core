@@ -171,6 +171,7 @@ vault[rmPROTO]: asset config equals sheet
 vault[rmPROTO]: navDeviationGuardBps equals sheet
 vault[rmPROTO]: navDeviationGuardBps above zero
 vault[rmPROTO]: pool liquidity meets the sheet floor
+vault[rmPROTO]: maxSlippageBps equals config
 vault[rmAGENT]: ADMIN_ROLE held by timelock
 vault[rmAGENT]: ADMIN_ROLE not held by deployer
 vault[rmAGENT]: DEFAULT_ADMIN not held by deployer
@@ -199,7 +200,7 @@ vault[rmAGENT]: V4 adapter is bound to the recorder, the PoolManager and the poo
 recorder: PoolKey and PoolManager equal config
 recorder: observation ring holds the full window floor
 recorder: has no owner, role or setter
-vault[rmAGENT]: maxSlippageBps equals 500
+vault[rmAGENT]: maxSlippageBps equals config
 vault[rmRWA]: ADMIN_ROLE held by timelock
 vault[rmRWA]: ADMIN_ROLE not held by deployer
 vault[rmRWA]: DEFAULT_ADMIN not held by deployer
@@ -221,6 +222,16 @@ vault[rmRWA]: asset config equals sheet
 vault[rmRWA]: navDeviationGuardBps equals sheet
 vault[rmRWA]: navDeviationGuardBps above zero
 vault[rmRWA]: pool liquidity meets the sheet floor
+vault[rmRWA]: maxSlippageBps equals config
+vault[rmUSDC]: KEEPER_ROLE has no holder
+vault[rmUSDC]: EMERGENCY_ROLE has exactly one holder
+vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script
+vault[rmPROTO]: KEEPER_ROLE has no holder
+vault[rmPROTO]: EMERGENCY_ROLE has exactly one holder
+vault[rmAGENT]: KEEPER_ROLE has no holder
+vault[rmAGENT]: EMERGENCY_ROLE has exactly one holder
+vault[rmRWA]: KEEPER_ROLE has no holder
+vault[rmRWA]: EMERGENCY_ROLE has exactly one holder
 agents: no agent authorized at handover
 agents: manifest lists zero agents
 agents: no address holds AGENT_ROLE after handover

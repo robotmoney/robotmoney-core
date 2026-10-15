@@ -5,7 +5,7 @@ description: "Foundry deploy script for the VaultRegistry contract. Deploys Vaul
 
 # DeployVaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/script/DeployVaultRegistry.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/851b6f6154c5148deb9edad9c16aa038d73ecd19/contracts/script/DeployVaultRegistry.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -22,8 +22,8 @@ DEPLOYMENT_OUT so rmpc and the dapp discover it without manual editing.
 Required env vars:
 ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 VAULT_ADDRESS    — RobotMoneyVault to register
-
-VAULT_NAME       — registered vault name, from the frozen sheet (no default)
+The registered name is RMUSDC_VAULT_NAME (DeployVault.s.sol), a script constant like each basket
+script's VAULT_NAME (issue 1705 C9: one registry-name source for all four vaults).
 USDC is the canonical Base USDC constant on every chain.
 Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 (mandatory and equal to 8453 on Base mainnet).

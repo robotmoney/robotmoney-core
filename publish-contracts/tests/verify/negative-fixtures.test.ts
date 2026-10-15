@@ -134,7 +134,11 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
   // core 1695: the vault bound moved off the launch value (the pool fee alone is 291 bps)
-  [/^(vault\[rmAGENT\]): maxSlippageBps equals 500$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 300n)],
+  [/^(vault\[\w+\]): maxSlippageBps equals config$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 1n)],
+  // issue 1705 C5: a keeper, a second emergency holder; C4: an rmUSDC adapter cap off the deploy script
+  [/^(vault\[\w+\]): KEEPER_ROLE has no holder$/, (w, m) => { const k = keccak256(toHex("KEEPER_ROLE")); w.chain.grant(subject(m[1]), k, OTHER); w.chain.roleGrantedLog(subject(m[1]), k, OTHER, 400n); }],
+  [/^(vault\[\w+\]): EMERGENCY_ROLE has exactly one holder$/, (w, m) => { w.chain.grant(subject(m[1]), EMERGENCY_ROLE, OTHER); w.chain.roleGrantedLog(subject(m[1]), EMERGENCY_ROLE, OTHER, 400n); }],
+  [/^vault\[rmUSDC\]: adapter set, caps and code-hash allowlist equal the deploy script$/, (w) => { w.sheet.vaults.rmUSDC.adapters![0]!.capBps = 1; }],
   [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],

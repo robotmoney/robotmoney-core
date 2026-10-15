@@ -148,7 +148,8 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         vm.startBroadcast();
         d = _deployAll(p, cfg);
         // Deploy-time router configuration (issue 1520): eligibility and the default weights are set here, by the deployer, before the
-        // timelock handover. The only mainnet operation after the handover is the vault unpause (stage 13 unpauses all four vaults).
+        // timelock handover. After it, stage 13 unpauses all four vaults and router weights change only when the Safe applies a
+        // consensus receipt through the timelock (apply-receipt, core 1698).
         _makeRouterEligible(VaultRegistry(p.registry), d.vault, eligibilityBps);
         vm.stopBroadcast();
 

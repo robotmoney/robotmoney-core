@@ -239,6 +239,18 @@ must supply a fresh cap rather than silently reusing a stale value:
 |---|---|---|
 | `restoreVault(uint256 newTvlCap)` | ADMIN | Reverts with `NotShutdown()` unless `shutdown == true`. Requires `newTvlCap > 0` (else `InvalidCap()`) and `perDepositCap <= newTvlCap` (else `InvalidParam()`). Clears `shutdown`, sets `tvlCap = newTvlCap`, emits `VaultRestored(newTvlCap)` and `TvlCapUpdated(old, newTvlCap)`. Deposits resume under the new cap. |
 
+#### Emergency levers per vault and the adapter write-off rule (issue 1705)
+
+One table names every emergency lever per vault: `scripts/deploy/stage-table.json` `vaults[].emergencyLevers`, each an `EMERGENCY_ROLE` function with no timelock (`scripts/deploy/stage-table.test.ts` fails when a vault contract gains or loses one). rmUSDC: `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. rmPROTO, rmAGENT and rmRWA: `pauseDeposits`, `emergencyUnwind`, `emergencyUnwindWithOverride`, `shutdownVault`. None freezes a withdrawal.
+
+The rule for the mainnet test (issue 1705 Q2 (a); narrowing the levers is decided before the final deployment):
+
+- **Who writes off a position.** Only `EMERGENCY_ROLE` (the emergency key), through `forceRemoveAdapter` on rmUSDC. It drops the adapter from NAV and pauses deposits, so nobody buys shares at the written-down price. `ADMIN_ROLE` (the timelock) can only remove an empty adapter (`removeAdapter`). The baskets have no write-off lever: `removeAsset` (ADMIN) refuses a held asset.
+- **Who recovers.** Only `ADMIN_ROLE`, the Safe through the timelock: it adds the adapter back (`addAdapter`) and reopens deposits (`unpauseDeposits`). The emergency key can do neither.
+- **How a recovery is attributed.** Pro rata to whoever holds shares when it lands. A holder who exits during the write-off is paid at the reduced NAV and keeps no claim on the recovery. On a basket, a balance that reappears on a removed asset is swapped back into NAV by the permissionless `reabsorbRemovedAsset`, credited the same way.
+
+`contracts/test/AdapterWriteOffRule.t.sol` shows the rmUSDC rule on a real vault.
+
 #### 3.8.1 Pause names (core 1494)
 
 Owner decision 2026-10-05: withdrawals are never frozen. A pause stops new deposits only, and the names say so. This is the one rename table. It covers RobotMoneyVault, the unified `Vault`, the BasketVault family (rmPROTO, rmAGENT, rmRWA), `RobotMoneyGateway` / `IGateway`, `VaultRegistry` and `PortfolioRouter`.
@@ -428,7 +440,9 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 
 Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply == 0` and `totalAssets == 0` has a share price backed only by virtual shares. The seed deposit ensures that real capital anchors the price before any public depositor arrives.
 
-**Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01).
+**Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (`scripts/deploy/stage-table.json` `vaults[].seed`, issue 1705 Q6).
+
+**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
 
 **Seed share receiver:** the sheet's `SHARE_RECEIVER_ADDRESS`, passed to the script as `SEED_SHARE_RECEIVER`. It is never zero and never the deployer or admin (the sheet's `ADMIN_ADDRESS` is the deployer, which holds admin until the timelock handover). The deployer holds no seed shares (core 1503, fixed on PR 1505).
 
@@ -650,7 +664,7 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | Role | Powers |
 |---|---|
 | ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, `unpauseDeposits()` (also clears the deposit halt `emergencyUnwind` sets), set the emergency-unwind guard. |
-| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a lossy, fast path (no slippage limit) if normal withdrawal is blocked (oracle failure, liquidity crash). Override allowed only if loss is within `maxLossBps` of the oracle-derived floor. |
+| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a fast path if normal withdrawal is blocked (oracle failure, liquidity crash). Each leg is floored at its TWAP value less `maxSlippageBps`, or at the configured `minUsdcOut` when that is higher; with no oracle the configured floor is required. `emergencyUnwindWithOverride()` is oracle-independent and allowed only if loss is within `maxLossBps` of the configured `minUsdcOut`. |
 
 ### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 

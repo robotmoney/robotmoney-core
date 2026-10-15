@@ -18,6 +18,8 @@ export const WEIGHT_SETTER_ROLE = role("WEIGHT_SETTER_ROLE");
 export const WEIGHT_SETTER_ROTATOR_ROLE = role("WEIGHT_SETTER_ROTATOR_ROLE");
 export const WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE = role("WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE");
 export const EMERGENCY_ROLE = role("EMERGENCY_ROLE");
+/** RobotMoneyVault's keeper role (rebalance). The deploy grants it to nobody, and the verifier asserts no vault has a holder (issue 1705 C5). */
+export const KEEPER_ROLE = role("KEEPER_ROLE");
 export const DEPOSIT_PAUSER_ROLE = role("DEPOSIT_PAUSER_ROLE");
 export const PROPOSER_ROLE = role("PROPOSER_ROLE");
 export const EXECUTOR_ROLE = role("EXECUTOR_ROLE");

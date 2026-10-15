@@ -112,7 +112,7 @@ Fill this table at the mainnet deploy from the stage 11 manifest and the stage 1
 | Canceller policy | The Safe only, recorded as `cancellerPolicy` in `timelock.json` | _TBD at deploy_ |
 | Gateway agents authorized by the deploy | None (`AGENT_ADDRESSES=none`, see §13) | _TBD at deploy_ |
 
-Deploy-time configuration (setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) is set by the deployer before stage 11. Stage 13 holds only the basket vault deposit unpause operations, one timelock operation per vault (not yet implemented: core #1520; `publish-contracts/src/govern.ts` still lists the older 13-row set).
+Deploy-time configuration (setters, eligibility, router default weights, at launch rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps) is set by the deployer before stage 11. There is no voting configuration: RouterGovernance has no voter, power or quorum (core 1698). **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. Stage 13 holds only the four vault deposit unpause operations, one timelock operation per vault.
 
 ---
 

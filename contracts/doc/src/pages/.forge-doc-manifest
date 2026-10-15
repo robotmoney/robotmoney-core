@@ -50,7 +50,7 @@ contracts/lib/library.TwapTickMath.mdx
 contracts/library.FeatureFlags.mdx
 contracts/script/abstract.BasketVaultDeployBase.mdx
 contracts/script/abstract.ExpectedChainGuard.mdx
-contracts/script/contract.ActivateBasketVaultEligibility.mdx
+contracts/script/constants.DeployVault.s.mdx
 contracts/script/contract.DeployAgentTokenVault.mdx
 contracts/script/contract.DeployGateway.mdx
 contracts/script/contract.DeployInvestmentCommitteePolicy.mdx
@@ -78,8 +78,8 @@ contracts/test/contract.AaveV3AdapterPositionTest.mdx
 contracts/test/contract.AaveV3AdapterTest.mdx
 contracts/test/contract.AccessRolesHarness.mdx
 contracts/test/contract.AccessRolesTest.mdx
-contracts/test/contract.ActivateBasketVaultEligibilityTest.mdx
 contracts/test/contract.AdapterDelegatecallGuardTest.mdx
+contracts/test/contract.AdapterWriteOffRuleTest.mdx
 contracts/test/contract.AgentDeployHarness.mdx
 contracts/test/contract.AgentGuardHarness.mdx
 contracts/test/contract.AgentTokenVaultGovernanceTest.mdx
@@ -158,6 +158,7 @@ contracts/test/contract.EligibilityWeightsInterlockTest.mdx
 contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
 contracts/test/contract.FixedLiquidityPool.mdx
+contracts/test/contract.FourVaultInitialStateForkTest.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx
@@ -214,6 +215,7 @@ contracts/test/contract.MorphoAdapterTest.mdx
 contracts/test/contract.NaiveAgentGateway.mdx
 contracts/test/contract.NoYieldTestAdapterTest.mdx
 contracts/test/contract.PartialAcceptVault.mdx
+contracts/test/contract.PortfolioRouterPausedLegTest.mdx
 contracts/test/contract.PortfolioRouterRuntimeEligibilityTest.mdx
 contracts/test/contract.PortfolioRouterTest.mdx
 contracts/test/contract.PortfolioRouterZeroLegInvariantTest.mdx
@@ -335,6 +337,7 @@ contracts/test/helpers/library.ForkSelect.mdx
 contracts/test/helpers/library.RoleHolders.mdx
 contracts/test/helpers/library.VaultTestParams.mdx
 contracts/test/helpers/library.VenueEtcher.mdx
+contracts/test/interface.IDepositsPaused.mdx
 contracts/test/interface.ILendingMinOutSurface.mdx
 contracts/test/interface.IRetireVaultLinks.mdx
 contracts/test/interface.ISafe.mdx

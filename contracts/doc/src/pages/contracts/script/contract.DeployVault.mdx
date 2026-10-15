@@ -5,7 +5,7 @@ description: "Stage 2 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f17dc454551bd2a41cf6b3f2185df435b5d543da/contracts/script/DeployVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/851b6f6154c5148deb9edad9c16aa038d73ecd19/contracts/script/DeployVault.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -47,6 +47,16 @@ Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-t
 
 ```solidity
 string public constant MANIFEST_FILE = "vault.json";
+```
+
+### VAULT_NAME
+
+Name rmUSDC is registered under in the VaultRegistry. A script constant like each
+basket's VAULT_NAME: one registry-name source for all four vaults (issue 1705 C9).
+The registry stage reads it from here.
+
+```solidity
+string public constant VAULT_NAME = RMUSDC_VAULT_NAME;
 ```
 
 ### CANONICAL_BASE_USDC

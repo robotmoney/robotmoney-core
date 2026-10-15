@@ -46,7 +46,9 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "manifests the stage table names are missing in {}: {missing:?}",
         dir.display()
     );
-    // Core 1710: all four vaults deploy paused, rmUSDC included. The verifier below expects exactly that before stage 13.
+    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all four deploy paused, rmUSDC included),
+    // and after govern it is open where the table makes the unpause a stage 13 row. The verifier below expects exactly that.
+    let rules = table.vault_deposit_rules();
     let deposits_paused = |vault: alloy_primitives::Address| -> bool {
         fx.cast_call_raw(vault, "depositsPaused()", &[])
             .expect("read depositsPaused")
@@ -58,8 +60,17 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         ("rmAGENT", fx.agent_vault()),
         ("rmRWA", fx.rwa_vault()),
     ];
-    for (name, vault) in four_vaults {
-        assert!(deposits_paused(vault), "{name} must deploy paused");
+    assert_eq!(
+        rules.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+        four_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        "the stage table's vault rows and the harness vaults must be the same four, in order"
+    );
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+        assert_eq!(
+            deposits_paused(vault),
+            rule.deploy_paused,
+            "{name}: depositsPaused before govern must equal the stage table's deployPaused"
+        );
     }
     let verified = fx
         .published()
@@ -239,10 +250,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "the govern matrix must print one scheduled and one executed line for {row}"
         );
     }
-    for (name, vault) in four_vaults {
-        assert!(
-            !deposits_paused(vault),
-            "{name} must read open after stage 13"
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+        assert_eq!(
+            deposits_paused(vault),
+            rule.paused_after_stage13(),
+            "{name}: depositsPaused after stage 13 must follow the stage table (deployPaused, unpauseInStage13)"
         );
     }
 

@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../..");
@@ -67,4 +67,64 @@ test("no voting vocabulary outside history", () => {
     });
   }
   expect(hits).toEqual([]);
+});
+
+// Issue 1705: one table holds the per-vault deploy and governance rule (scripts/deploy/stage-table.json vaults[]). The stale sentences of Scope D1 to D6, each in
+// the file it was found in, must not come back, and the four canonical docs state the initial-state rule the table holds.
+describe("four-vault rule", () => {
+  const flat = (path: string) => read(path).replace(/\s+/g, " ");
+  const STALE: [string, string][] = [
+    // D1 prd.md: a stale implementation note and the deleted voting path
+    ["docs/prd.md", "not yet implemented: core #1520"],
+    ["docs/prd.md", "RouterGovernance votes"],
+    // D2 contract-release-runbooks.md: rmUSDC was said to deploy open
+    ["docs/operations/contract-release-runbooks.md", "Only the baskets deploy paused (`docs/prd.md`)"],
+    ["docs/operations/contract-release-runbooks.md", "rmUSDC still deploys open"],
+    ["docs/operations/contract-release-runbooks.md", "not yet implemented: core #1520"],
+    // D3 security-model.md
+    ["docs/technical/security-model.md", "not yet implemented: core #1520; `publish-contracts/src/govern.ts` still lists the older 13-row set"],
+    ["docs/technical/security-model.md", "Stage 13 holds only the basket vault deposit unpause operations"],
+    // D4 smart-contracts.md: emergencyUnwind floors each leg at the TWAP value less slippage
+    ["docs/technical/smart-contracts.md", "lossy, fast path (no slippage limit)"],
+    // D5 the vault scripts
+    ["contracts/script/DeployVault.s.sol", "before the vault is opened"],
+    ["contracts/script/BasketVaultDeployBase.sol", "The only mainnet operation after the handover is the vault unpause"],
+    ["contracts/script/DeployProtocolAssetVault.s.sol", "The only operation after the handover is the basket unpause"],
+    ["contracts/script/DeployAgentTokenVault.s.sol", "The only operation after the handover is the basket unpause"],
+    ["contracts/script/DeployRwaBasketVault.s.sol", "The only operation after the handover is the basket unpause"],
+    // D6 the owner-decision attribution of "one class of operation"
+    ["publish-contracts/README.md", "exactly one class of operation remains"],
+    ["publish-contracts/src/govern.ts", "ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520)"],
+    ["docs/technical/governance-isomorphism.md", "Exactly one class of operation runs after the timelock handover"],
+  ];
+  for (const [file, sentence] of STALE) {
+    test(`${file} no longer says: ${sentence}`, () => {
+      expect(flat(file)).not.toContain(sentence.replace(/\s+/g, " "));
+    });
+  }
+
+  test("prd.md, contract-release-runbooks.md, security-model.md and smart-contracts.md state the table's initial-state rule and cite the table", () => {
+    const table = JSON.parse(read("scripts/deploy/stage-table.json")) as { vaults: { key: string; deployPaused: boolean; unpauseInStage13: boolean }[] };
+    // the docs' sentence is the table's rule: written for the case every vault deploys paused and stage 13 opens every vault
+    expect(table.vaults.map((v) => [v.key, v.deployPaused, v.unpauseInStage13])).toEqual(table.vaults.map((v) => [v.key, true, true]));
+    const rule = "all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock";
+    for (const doc of ["docs/prd.md", "docs/operations/contract-release-runbooks.md", "docs/technical/security-model.md", "docs/technical/smart-contracts.md"]) {
+      const text = flat(doc);
+      expect([doc, text.includes(rule)]).toEqual([doc, true]);
+      expect([doc, text.includes("`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`")]).toEqual([doc, true]);
+    }
+  });
+
+  test("the deleted ActivateBasketVaultEligibility script is gone and nothing refers to it", () => {
+    const self = "publish-contracts/tests/docs-consistency.test.ts";
+    const walk = (dir: string, ext: RegExp): string[] => readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+      const child = `${dir}/${e.name}`;
+      if (["node_modules", "docs/archive", "docs/code-review", "contracts/doc"].some((x) => child.endsWith(x))) return [];
+      return e.isDirectory() ? walk(child, ext) : ext.test(e.name) ? [child] : [];
+    });
+    expect(existsSync(join(ROOT, "contracts/script/ActivateBasketVaultEligibility.s.sol"))).toBe(false);
+    const files = [...walk("docs", /\.md$/), ...walk("contracts", /\.sol$/), ...walk("scripts", /\.(ts|json|sh|md)$/), ...walk("publish-contracts/src", /\.ts$/), ...walk("publish-contracts/tests", /\.ts$/), ...walk(".github/workflows", /\.ya?ml$/)];
+    const hits = files.filter((f) => f !== self && read(f).includes("ActivateBasketVaultEligibility"));
+    expect(hits).toEqual([]);
+  });
 });

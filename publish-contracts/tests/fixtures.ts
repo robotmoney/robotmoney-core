@@ -62,6 +62,11 @@ export function writeCoreAssetConfig(coreDir: string, o: { proto?: object[]; rwa
   writeFileSync2(join2(coreDir, "config", "protocol-assets.json"), JSON.stringify({ ...head, assets: o.proto ?? [CONFIG_ASSET] }));
   writeFileSync2(join2(coreDir, "config", "rwa-assets.json"), JSON.stringify({ ...head, assets: o.rwa ?? [{ ...CONFIG_ASSET, symbol: "deSPXA", token: "0x9c5C365e764829876243d0b289733B9D2b729685", pool: "0x00000000000000000000000000000000000000a3" }] }));
   writeFileSync2(join2(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ ...head, shortlist: o.shortlist ?? [] }));
+  // issue 1705 C4: the verifier reads rmUSDC's adapter caps from the vault stage script and a basket's default maxSlippageBps from its contract, at the DEPLOY_SHA
+  for (const f of ["contracts/script/DeployVault.s.sol", "contracts/vaults/ProtocolAssetVault.sol", "contracts/vaults/AgentTokenVault.sol", "contracts/vaults/RwaBasketVault.sol"]) {
+    mkdirSync2(join2(coreDir, f, ".."), { recursive: true });
+    writeFileSync2(join2(coreDir, f), readFileSync(join2(REPO, f), "utf8"));
+  }
 }
 
 const OBSERVE_ABI = parseAbi2(["function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)"]);

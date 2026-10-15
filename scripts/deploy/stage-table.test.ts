@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadStageTable } from "../stage/stage-table";
-import { loadStageTable as cliLoadStageTable } from "../../publish-contracts/src/stage-table";
+import { loadStageTable as cliLoadStageTable, VAULT_RULE_FIELDS, vaultRules } from "../../publish-contracts/src/stage-table";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
@@ -28,8 +28,8 @@ describe("stage-table.json", () => {
 
   test("every non-script deploy script in contracts/script has a stage", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
-    // a govern action, not a stage; and the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
-    const skip = new Set(["ActivateBasketVaultEligibility.s.sol", "RedeployProtocolAssetVault.s.sol"]);
+    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
+    const skip = new Set(["RedeployProtocolAssetVault.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
@@ -167,6 +167,81 @@ describe("stage-table.json", () => {
         expect(src).not.toMatch(/registerVault|migrateEligibility|setRouterEligible/);
       });
     }
+  });
+
+  // Issue 1705: one table holds the per-vault deploy and governance rule. A field that differs between the vaults names its reason and decision link.
+  describe("vault rules", () => {
+    const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
+    const rules = vaultRules(raw);
+    test("every rule field is present on all four vaults", () => {
+      expect(rules.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+      for (const v of rules) for (const f of VAULT_RULE_FIELDS) expect([v.key, f, f in v]).toEqual([v.key, f, true]);
+    });
+    test("a field that differs between vaults names a reason and a decision link, and a uniform field has no decision", () => {
+      const decisions = raw.vaultRuleDecisions as Record<string, { reason: string; decision: string }>;
+      for (const f of VAULT_RULE_FIELDS) {
+        const values = new Set(rules.map((v) => JSON.stringify(f === "unpauseRow" ? (v[f] as string).replace(v.key, "<KEY>") : v[f])));
+        if (values.size > 1) {
+          expect([f, decisions[f]?.reason.length > 0]).toEqual([f, true]);
+          expect([f, decisions[f]?.decision]).toEqual([f, expect.stringMatching(/^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/)]);
+        } else expect([f, decisions[f]]).toEqual([f, undefined]);
+      }
+      // The recorded differences today: the seed, the eligibility source and the emergency levers. The registry name has one source (C9).
+      expect(Object.keys(decisions).sort()).toEqual(["eligibilitySource", "emergencyLevers", "seed"]);
+    });
+    test("the loader refuses a difference with no decision, a stale decision and a missing field", () => {
+      const copy = () => JSON.parse(JSON.stringify(raw));
+      const noDecision = copy(); delete noDecision.vaultRuleDecisions.seed;
+      expect(() => vaultRules(noDecision)).toThrow(/vault rule seed differs between vaults/);
+      const stale = copy(); stale.vaultRuleDecisions.deployPaused = { reason: "r", decision: "https://github.com/robotmoney/robotmoney-core/issues/1" };
+      expect(() => vaultRules(stale)).toThrow(/vaultRuleDecisions.deployPaused is stale/);
+      const split = copy(); split.vaults[0].deployPaused = false; split.vaults[0].unpauseInStage13 = false;
+      expect(() => vaultRules(split)).toThrow(/vault rule deployPaused differs between vaults/);
+      const missing = copy(); delete missing.vaults[2].emergencyLevers;
+      expect(() => vaultRules(missing)).toThrow(/vault AGENT has no emergencyLevers/);
+    });
+    test("all four vaults deploy paused and stage 13 unpauses all four, each by its own row (issue 1705 Q1)", () => {
+      for (const v of rules) expect([v.key, v.deployPaused, v.unpauseInStage13, v.unpauseRow]).toEqual([v.key, true, true, `unpause-${v.key}`]);
+      const g = (table as unknown as { govern: { mainnetRows: string[] } }).govern;
+      expect(g.mainnetRows).toEqual(rules.filter((v) => v.unpauseInStage13).map((v) => v.unpauseRow));
+    });
+    test("the seed sheet name is the vault stage's required env, and only the seeded vault's stage reads one", () => {
+      for (const v of rules) {
+        const env = table.stages.find((s) => s.name === v.stage)!.requiredEnv;
+        if (v.seed) expect(env).toContain(v.seed);
+        else expect(env.filter((n) => n.startsWith("SEED_"))).toEqual([]);
+      }
+    });
+    test("eligibility: the router-stage vault is the one the router stage makes eligible, every other vault stage reads ROUTER_DEFAULT_BPS", () => {
+      const router = read("contracts/script/DeployPortfolioRouter.s.sol");
+      expect(router).toContain("setRouterEligible(vault_, true)");
+      for (const v of rules) {
+        const env = table.stages.find((s) => s.name === v.stage)!.requiredEnv;
+        if (v.eligibilitySource === "router-stage") expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, false]);
+        else expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, true]);
+      }
+      expect(rules.filter((v) => v.eligibilitySource === "router-stage").map((v) => v.key)).toEqual(["USDC"]);
+    });
+    test("emergencyLevers is every EMERGENCY_ROLE function of the vault contract, so a lever cannot be added unnamed", () => {
+      const src = (artifact: string) => read(artifact === "RobotMoneyVault" ? "contracts/RobotMoneyVault.sol" : "contracts/vaults/BasketVault.sol");
+      for (const v of rules) {
+        const levers = [...src(v.artifact).matchAll(/function (\w+)\([^)]*\)[^{;]*onlyRole\(EMERGENCY_ROLE\)/g)].map((m) => m[1]);
+        expect([v.key, [...levers].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
+      }
+    });
+    test("registry name: one source for all four vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
+      expect(new Set(rules.map((v) => v.registryNameSource))).toEqual(new Set(["script-constant"]));
+      // each vault script holds its name as a constant: VAULT_NAME = "<name>", or for rmUSDC VAULT_NAME = RMUSDC_VAULT_NAME, a file-level constant of the same script
+      const nameOf = (src: string) => /string public constant VAULT_NAME = "([^"]+)";/.exec(src)?.[1] ?? (/string public constant VAULT_NAME = RMUSDC_VAULT_NAME;/.test(src) ? /string constant RMUSDC_VAULT_NAME = "([^"]+)";/.exec(src)?.[1] : undefined);
+      const names = rules.map((v) => nameOf(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)));
+      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money Agent Tokens", "Robot Money RWA"]);
+      for (const s of table.stages) expect([s.name, s.requiredEnv.includes("VAULT_NAME")]).toEqual([s.name, false]);
+      // the registry stage registers rmUSDC under DeployVault's constant, not an env read
+      const reg = read("contracts/script/DeployVaultRegistry.s.sol");
+      expect(reg).toMatch(/import \{RMUSDC_VAULT_NAME\} from "\.\/DeployVault\.s\.sol";/);
+      expect(reg).toContain("vaultName = RMUSDC_VAULT_NAME");
+      expect(reg).not.toContain('"VAULT_NAME"');
+    });
   });
 
   test("the one driver (publish-contracts CLI) reads the same table from the repo root", () => {

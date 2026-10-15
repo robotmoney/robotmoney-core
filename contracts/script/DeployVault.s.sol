@@ -14,6 +14,11 @@ import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
+/// @dev The name rmUSDC is registered under in the VaultRegistry. A script constant like each
+///      basket script's VAULT_NAME: one registry-name source for all four vaults (issue 1705 C9).
+///      File level so the registry stage (DeployVaultRegistry.s.sol) imports this one value.
+string constant RMUSDC_VAULT_NAME = "Robot Money USDC";
+
 /// @title DeployVault
 /// @notice Stage 2 of the core deploy (libs, vault, registry, router, gateway).
 ///         Deploys RobotMoneyVault (rmUSDC) with its three real strategy adapters (Aave V3,
@@ -41,6 +46,10 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 contract DeployVault is ExpectedChainGuard {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "vault.json";
+    /// @notice Name rmUSDC is registered under in the VaultRegistry. A script constant like each
+    ///         basket's VAULT_NAME: one registry-name source for all four vaults (issue 1705 C9).
+    ///         The registry stage reads it from here.
+    string public constant VAULT_NAME = RMUSDC_VAULT_NAME;
 
     /// @notice Canonical Base mainnet USDC (FiatTokenProxy).
     address public constant CANONICAL_BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;

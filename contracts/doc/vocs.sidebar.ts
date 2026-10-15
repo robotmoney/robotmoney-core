@@ -137,7 +137,6 @@ export const sidebar = [
           text: "Contracts",
           collapsed: true,
           items: [
-            { text: "ActivateBasketVaultEligibility", link: "/contracts/script/contract.ActivateBasketVaultEligibility" },
             { text: "DeployAgentTokenVault", link: "/contracts/script/contract.DeployAgentTokenVault" },
             { text: "DeployGateway", link: "/contracts/script/contract.DeployGateway" },
             { text: "DeployInvestmentCommitteePolicy", link: "/contracts/script/contract.DeployInvestmentCommitteePolicy" },
@@ -178,6 +177,13 @@ export const sidebar = [
             { text: "AdapterBytecodeGuard", link: "/contracts/script/library.AdapterBytecodeGuard" },
           ],
         },
+        {
+          text: "Constants",
+          collapsed: true,
+          items: [
+            { text: "DeployVault.s", link: "/contracts/script/constants.DeployVault.s" },
+          ],
+        },
       ],
     },
     {
@@ -191,8 +197,8 @@ export const sidebar = [
             { text: "AaveV3AdapterTest", link: "/contracts/test/contract.AaveV3AdapterTest" },
             { text: "AccessRolesHarness", link: "/contracts/test/contract.AccessRolesHarness" },
             { text: "AccessRolesTest", link: "/contracts/test/contract.AccessRolesTest" },
-            { text: "ActivateBasketVaultEligibilityTest", link: "/contracts/test/contract.ActivateBasketVaultEligibilityTest" },
             { text: "AdapterDelegatecallGuardTest", link: "/contracts/test/contract.AdapterDelegatecallGuardTest" },
+            { text: "AdapterWriteOffRuleTest", link: "/contracts/test/contract.AdapterWriteOffRuleTest" },
             { text: "AgentDeployHarness", link: "/contracts/test/contract.AgentDeployHarness" },
             { text: "AgentGuardHarness", link: "/contracts/test/contract.AgentGuardHarness" },
             { text: "AgentTokenVaultGovernanceTest", link: "/contracts/test/contract.AgentTokenVaultGovernanceTest" },
@@ -271,6 +277,7 @@ export const sidebar = [
             { text: "FeatureFlagsTest", link: "/contracts/test/contract.FeatureFlagsTest" },
             { text: "FeeOnTransferUSDC", link: "/contracts/test/contract.FeeOnTransferUSDC" },
             { text: "FixedLiquidityPool", link: "/contracts/test/contract.FixedLiquidityPool" },
+            { text: "FourVaultInitialStateForkTest", link: "/contracts/test/contract.FourVaultInitialStateForkTest" },
             { text: "GasBurningAdapter", link: "/contracts/test/contract.GasBurningAdapter" },
             { text: "GasMeteredStubVault", link: "/contracts/test/contract.GasMeteredStubVault" },
             { text: "GasUSDC", link: "/contracts/test/contract.GasUSDC" },
@@ -327,6 +334,7 @@ export const sidebar = [
             { text: "NaiveAgentGateway", link: "/contracts/test/contract.NaiveAgentGateway" },
             { text: "NoYieldTestAdapterTest", link: "/contracts/test/contract.NoYieldTestAdapterTest" },
             { text: "PartialAcceptVault", link: "/contracts/test/contract.PartialAcceptVault" },
+            { text: "PortfolioRouterPausedLegTest", link: "/contracts/test/contract.PortfolioRouterPausedLegTest" },
             { text: "PortfolioRouterRuntimeEligibilityTest", link: "/contracts/test/contract.PortfolioRouterRuntimeEligibilityTest" },
             { text: "PortfolioRouterTest", link: "/contracts/test/contract.PortfolioRouterTest" },
             { text: "PortfolioRouterZeroLegInvariantTest", link: "/contracts/test/contract.PortfolioRouterZeroLegInvariantTest" },
@@ -428,6 +436,7 @@ export const sidebar = [
           text: "Interfaces",
           collapsed: true,
           items: [
+            { text: "IDepositsPaused", link: "/contracts/test/interface.IDepositsPaused" },
             { text: "ILendingMinOutSurface", link: "/contracts/test/interface.ILendingMinOutSurface" },
             { text: "IRetireVaultLinks", link: "/contracts/test/interface.IRetireVaultLinks" },
             { text: "ISafe", link: "/contracts/test/interface.ISafe" },

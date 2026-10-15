@@ -7,8 +7,8 @@
 // Router eligibility is deploy-time configuration (issue 1520): after registering, the broadcast
 // path calls `registry.migrateEligibility` once when `ROUTER_DEFAULT_BPS` is a vector (it also sets
 // the router default weights), and leaves the vault ineligible when it is `none`. The deployer
-// holds ADMIN_ROLE on the registry until the timelock stage. The only operation after the handover
-// is the basket unpause.
+// holds ADMIN_ROLE on the registry until the timelock stage. After the handover stage 13 unpauses the
+// vault through the Safe and the timelock (scripts/deploy/stage-table.json vault rules, issue 1705).
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";

@@ -22,6 +22,8 @@ const DEPLOYER_KS = "/dev/shm/stub/DEPLOYER"; // the world's default --signer
 const DEPLOYER_SPEC = `keystore:${DEPLOYER_KS}`;
 const EMERGENCY_SPEC = "keystore:/k/EMERGENCY";
 const vaultAddr = (i: number): string => `0x00000000000000000000000000000000000b${(i + 1).toString(16).padStart(3, "0")}`;
+/** rmUSDC's strategy adapters in the vault stage manifest: the verifier sheet reads them (issue 1705 C4). */
+const STRATEGY_ADAPTERS = { aave_adapter: "0x00000000000000000000000000000000000000e1", compound_adapter: "0x00000000000000000000000000000000000000e2", moonwell_flagship_adapter: "0x00000000000000000000000000000000000000e3" };
 const VAULTS = getStageTable().vaults;
 
 /** A signer that names its keystore in the flags, so a test reads WHICH key `cast send` was given. */
@@ -64,7 +66,7 @@ function seed(w: ReturnType<typeof world>, stages: Record<string, unknown>): voi
   const m = join(w.coreDir, "deployments", "918453");
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
-  VAULTS.forEach((v, i) => writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: vaultAddr(i), adapter: MANIFEST_ADAPTER })));
+  VAULTS.forEach((v, i) => writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: vaultAddr(i), adapter: MANIFEST_ADAPTER, ...(v.artifact === "RobotMoneyVault" ? STRATEGY_ADAPTERS : {}) })));
   mkdirSync(w.evidence, { recursive: true });
   writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages }));
 }

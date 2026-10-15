@@ -5,6 +5,7 @@
 //   - Values that a stage produces (REGISTRY_ADDRESS, IC_POLICY_ADDRESS, DEPLOYMENT_OUT ...) are refused: they come from manifests.
 // Plan: one-deployment-scheme principles 16, 18, 19, 20 (devops issue 53); issue devops 55 (S6).
 import { USDC_ADDRESS } from "./usdc.ts";
+import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
@@ -47,8 +48,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   USDC_ADDRESS: { kind: "address" },
   FEE_RECIPIENT_ADDRESS: { kind: "address-or-safe" },
   SEED_DEPOSIT_USDC: { kind: "uint" },
-  /** The name the rmUSDC vault is registered under in the registry (core registry stage env VAULT_NAME; from the frozen sheet, no default). */
-  VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
@@ -78,6 +77,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
+  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all four vaults). Delete the line"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
@@ -294,8 +294,9 @@ export function parseSheet(text: string): Sheet {
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
   // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
   if (chainId === MAINNET_CHAIN_ID) {
-    const missing = (["USDC", "PROTO", "AGENT", "RWA"] as const).filter((k) => !unpauseVaults.includes(k));
-    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list USDC, PROTO, AGENT and RWA on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+    // The stage 13 vaults are the stage table's vault rules (unpauseInStage13, issue 1705).
+    const missing = STAGE13_UNPAUSE_VAULTS.filter((k) => !unpauseVaults.includes(k));
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list ${STAGE13_UNPAUSE_VAULTS.join(", ")} on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
