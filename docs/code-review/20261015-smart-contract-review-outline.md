@@ -131,6 +131,26 @@ At review close, complete one row per item below with **rechecked / fixed and ve
 - [ ] Earlier router uniqueness finding HR-L-9 and all prior adapter duplication/accounting reports; verify fixes on the exact target contracts, not similarly named vault families.
 - [ ] Open or partially dispositioned audit-ledger groups named by the October 12 review: SR-H4, FS-VLT-10/21/22/23/27, HR-I-1/2/3/7, FORCEREMOVE-001, DC-0606-DEFER GOV-003, AC-008, and SR-0612-OPEN. Resolve whether each is in scope, superseded, still open, or accepted, with evidence.
 
+### June 12, 2026 full Solidity finding set
+
+Re-read every entry in the source report, including entries later marked fixed or accepted. Record a current disposition and evidence for each ID; do not use this list as a claim that any historical status still applies. The June 12 report covered the gateway, vaults, router/governance, registry, adapters, and devnet stubs.
+
+- [ ] High: SR-H1 (gateway share-donation DoS), SR-H3 (`redeemFor` confused deputy), SR-H4 (reverting adapter `totalAssets` blocks vault and removal), SR-H6 (TWAP observation failure blocks basket operations and emergency exits).
+- [ ] Medium: SR-M1 (commitment overwrite), SR-M2 (authorization front-run/ownership), SR-M3 (rolling-window cap burst), SR-M4 (minimum execution delay), SR-M5 (vote snapshot), SR-M6 (router custody donation DoS), SR-M7 (stale weight vector/paused vault blocks deposits), SR-M8 (Chronicle zero or out-of-range price), SR-M9 (exit-fee max-withdraw inconsistency), SR-M10 (rebalance bypasses per-call bound/emergency withdrawal), SR-M11 (unswappable asset blocks redemptions), SR-M12 (inactive asset consumes max-assets slot), SR-M13 (ERC-4626 max-view violations), SR-M14 (redeem reports preview floor rather than actual payout), SR-M15 (duplicate basket assets/adapters double-count NAV), SR-M16 (sandwichable basket entry/exit and deadline), SR-M17 (emergency override still constrained by TWAP floor), SR-M18 (emergency unwind pauses redemptions), SR-M19 (Aerodrome execution/pricing mismatch).
+- [ ] Low: SR-L1 (rescue self-rescue guard regression), SR-L2 (gateway share-owner inconsistency), SR-L3 (max-withdraw views while paused), SR-L4 (proportional-pull rounding remainder/shortfall), SR-L5 (irreversible emergency shutdown), SR-L6 (allowlist revocation blocks deposits/rebalance), SR-L7 (zero slippage setting bricks swaps), SR-L8 (inactive basket asset rescue), SR-L9 (registry asset/ERC-4626 mismatch), SR-L10 (Uniswap V4 narrowing casts), SR-L11 (Morpho withdraw-all sentinel), SR-L12 (dust donation blocks asset removal), SR-L13 (router redemption lacks caller floor), SR-L14 (execute does not revalidate eligibility and stuck proposals).
+- [ ] Compare the June 12 remediation-drift table and the June 18 Layer 1 table with current code and tests, especially regressions and claims that a fix existed only on an unmerged branch.
+
+### June 18, 2026 residual risks explicitly left open or partial
+
+- [ ] Reassess L-3 irreversible `shutdownVault` under EMERGENCY authority; L-8 `redeemFor` without a caller floor/deadline; L-9 duplicate router weights; L-10 loss of the last self-administered admin; and L-11 arbitrary-recipient `rescueUsdc`.
+- [ ] Reassess I-1 unbounded inactive adapter-array growth; I-3 Morpho withdraw-all sentinel and false-positive test; I-4 RmToken approval race/infinite allowance (including accepted devnet-only scope); I-5 chain guard on `UniswapV3PoolSlot0Stub`; I-6 fee-on-transfer balance-delta handling in the V4 adapter; I-7 registry asset cross-check; and I-8 unbounded AgentPolicy arrays.
+- [ ] Review the June 18 table’s remaining informational items, including adapter-array gas growth, exit-fee dust rounding, token approval semantics, test-only reachability, and scaling documentation. Record current status even if the issue remains intentionally accepted.
+- [ ] For the June 9 audit findings H-1, M-1 through M-10, L-1 through L-17, and I-1 through I-10, verify the June 18 remediation evidence still holds at today’s target commit; include the especially important admin-controlled weight-setting bypass (M-10) and its current governance model.
+
+### Cross-report inventory requirement
+
+- [ ] Inventory all contract-relevant findings in every earlier `docs/code-review` snapshot, including the May 8, May 9, May 18, June 2, June 6, June 7, June 9, June 12, June 18, June 19, June 23, July 28, October 12, October 14, and October 15 reports. Add a coverage row for any contract claim not represented above, preserve its original identifier, and explain why it is out of scope if it is not rechecked. Also inspect `docs/audits.md` for unresolved or partially closed contract findings.
+
 ## Review closeout
 
 - [ ] Summarize target commit, exact scope, method, commands, and evidence level.
