@@ -395,7 +395,7 @@ pub async fn dispatch_no_baseline_resolve(
 /// The single POST seam every consensus-receipt event goes
 /// through. Generic over the payload so there is exactly one place to add a
 /// timeout, a retry or an auth header (T30c).
-async fn post_event<B: Serialize>(
+pub(crate) async fn post_event<B: Serialize>(
     client: &Client,
     webhook_url: &str,
     body: &B,

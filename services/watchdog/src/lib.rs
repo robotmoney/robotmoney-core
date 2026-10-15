@@ -23,6 +23,8 @@
 //!   still sends the matching resolve (task T08).
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
 //!   by the `watchdog-liveness` binary (issue #1378).
+//! - [`upgrade_monitor`] — pages each governed upgrade or freeze of a proxied
+//!   core contract once, from the indexed proxy events (issue 1810). Alert-only.
 
 #![warn(missing_docs)]
 
@@ -40,6 +42,7 @@ pub mod scan_remediation_seams;
 /// Documentation-only, no runtime code; the bug it describes is still present
 /// at HEAD.
 pub mod scan_residual_seams;
+pub mod upgrade_monitor;
 pub mod volume;
 pub mod watchdog;
 

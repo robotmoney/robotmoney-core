@@ -218,6 +218,18 @@ jobs:
             -p watchdog \
             --test cursor_and_volume -- --test-threads=1 --nocapture
 
+      # Issue 1810: governed upgrades and freezes of proxied core contracts are
+      # paged once, from the indexer's admin_events proxy rows; deployments are
+      # not paged and a failed delivery is retried. Postgres testcontainer plus a
+      # mock webhook. Floor = the two tests the target holds.
+      - name: Proxy upgrade and freeze alert integration test (issue 1810)
+        env:
+          CARGO_TEST_MIN_EXECUTED: 2
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test proxy_upgrades -- --test-threads=1 --nocapture
+
       # Issue #1378: a dead watchdog must be distinguishable from a quiet
       # market. Drives the real `watchdog` and `watchdog-liveness` binaries
       # against a Postgres testcontainer: healthy through a quiet market longer
