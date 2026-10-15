@@ -26,7 +26,7 @@
 //!    `gateway.withdrawFromRouter(orderId, [sourceVault], [shares],
 //!    [minAssets], deadline, idempotencyKey)`, and the router reverts
 //!    `SlippageExceeded` below `minAssets`. The floor is `--min-assets`, or
-//!    `previewRedeem(shares)` less [`DEFAULT_FLOOR_TOLERANCE_BPS`] when the
+//!    `previewRedeem(shares)` less [`DEFAULT_FLOOR_TOLERANCE_BPS`](crate::floors::DEFAULT_FLOOR_TOLERANCE_BPS) when the
 //!    flag is omitted; `--min-assets 0` sends no floor. That path pulls the
 //!    shares from the policy's `shareReceiver`, as `withdraw-router` does.
 //!    The router is a proxy (issue 1808): before it signs, the command reads
@@ -55,7 +55,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::errors::{Result as RmpcResult, RmpcError};
-use crate::floors::{floor_from_preview, router_withdraw_gas_floor, DEFAULT_FLOOR_TOLERANCE_BPS};
+use crate::floors::{floor_from_preview, router_withdraw_gas_floor};
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::AuditDecision;
 use crate::output::emit;
@@ -133,7 +133,7 @@ pub struct WithdrawOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MinAssetsArg {
     /// Omitted: the floor is the source vault's `previewRedeem(shares)`, read
-    /// by this run, less [`DEFAULT_FLOOR_TOLERANCE_BPS`].
+    /// by this run, less [`DEFAULT_FLOOR_TOLERANCE_BPS`](crate::floors::DEFAULT_FLOOR_TOLERANCE_BPS).
     FromPreview,
     /// Given: the floor in USDC base units. `0` sends no floor.
     Explicit(U256),
