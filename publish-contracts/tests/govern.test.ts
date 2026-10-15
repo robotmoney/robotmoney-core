@@ -1451,3 +1451,18 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     await expect(run(ctx, newManifest(ctx, addr(0xa001)), sheet, tl, { row: "unpause-PROTO", selfAdmin: { threshold: 3 } })).rejects.toMatchObject({ kind: "USAGE" });
   });
 });
+
+describe("issue 1701: payloadVector looks a bucket up as an own key only", () => {
+  test("a bucket named constructor, __proto__, toString or hasOwnProperty is a USAGE error naming the bucket, not a TypeError", async () => {
+    const { payloadVector } = await import("../src/apply-receipt.ts");
+    const vaultOf = { USDC: addr(1), PROTO: addr(2), AGENT: addr(3), RWA: addr(4) } as never;
+    for (const bucket of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      const payload = toBytes(JSON.stringify({ weights: [{ bucket: "conservative_defi_yield", weight_bps: 10000 }, { bucket, weight_bps: 0 }] }));
+      let err: unknown;
+      try { payloadVector(payload, vaultOf, [addr(1)]); } catch (e) { err = e; }
+      expect(err).toBeInstanceOf(PublishError);
+      expect((err as PublishError).kind).toBe("USAGE");
+      expect((err as PublishError).message).toContain(`bucket '${bucket}' is not one of`);
+    }
+  });
+});

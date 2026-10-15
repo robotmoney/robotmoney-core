@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Evidence check for a mainnet run. Reads evidence/<run-id>/evidence.json (template: publish-contracts/evidence.example.json).
 // Usage: bun src/evidence-check.ts --vault-redeploys RUN_MANIFEST --registry ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a single-vault redeploy of a rehearsal or a Twin run, issue 1796)
-//        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696)
+//        bun src/evidence-check.ts --receipt-applications RUN_MANIFEST --consensus-receipt ADDR --governance ADDR --timelock ADDR [--delay-floor SECONDS] [--rpc URL]   (a Twin run; the floor defaults to the 8453 floor, a Twin run passes its own timelock min delay, issue 1696; on an --rpc of chain 8453 a floor under the 8453 floor is refused, issue 1701)
 //        bun src/evidence-check.ts --evidence FILE [--frozen FILE --deploy-sha SHA] [--rpc URL [--record-chain-fixture OUT] | --chain-fixture FILE]
 // Rejects: a wrong tx count against the frozen count, a missing tx hash, a failed receipt, a delay under 172800 s, a govern
 // schedule-to-execute gap under 172800 s per operation, a govern operation that shares a transaction or a timelock operation id with another one, any
@@ -1053,6 +1053,27 @@ export function scanEvidenceFolder(dir: string, strip: (line: string) => string 
 }
 
 /**
+ * Issue 1701: the `--delay-floor` of the run-manifest checks. Any positive integer is accepted off 8453 (a Twin run passes its own timelock min delay). When the
+ * --rpc chain id is 8453 a floor below that chain's floor for the kind (172800 s for production) is refused: a short floor would pass a mainnet batch that skipped the delay.
+ * Empty string when the floor is acceptable.
+ */
+export function delayFloorArgProblem(floor: number, rpcChainId: number | undefined, kind: DeploymentKind): string {
+  if (!Number.isInteger(floor) || floor < 1) return "--delay-floor must be a positive number of seconds";
+  const min = delayFloor(MAINNET_CHAIN_ID, kind);
+  if (rpcChainId === MAINNET_CHAIN_ID && floor < min) return `--delay-floor ${floor} is below the chain ${MAINNET_CHAIN_ID} floor ${min} s: the --rpc reads chain ${MAINNET_CHAIN_ID}, where every timelock batch waits at least ${min} s`;
+  return "";
+}
+
+/** The floor of a run-manifest check: --delay-floor, else the 8453 floor of the kind. Exits 2 on a refused floor. With --rpc it reads the chain id first (issue 1701). */
+async function floorArg(values: Record<string, string | boolean | undefined>, kind: DeploymentKind, reader: ChainReader | undefined): Promise<number> {
+  if (typeof values["delay-floor"] !== "string") return delayFloor(MAINNET_CHAIN_ID, kind);
+  const floor = Number(values["delay-floor"]);
+  const why = delayFloorArgProblem(floor, reader ? await reader.getChainId() : undefined, kind);
+  if (why) { console.error(`evidence: ${why}`); process.exit(2); }
+  return floor;
+}
+
+/**
  * `--receipt-applications RUN_MANIFEST` (issue 1696): checks the `receipt_applications` entries a `govern --row apply-receipt` run wrote to its run manifest,
  * with the receipt, governance and timelock addresses of that run. Offline shape and delay checks, then (with --rpc) the timelock events on that chain.
  * The Twin rehearsal uses it: a Twin run proves the row executes on the real contracts, not that mainnet governance works.
@@ -1063,17 +1084,16 @@ async function checkApplicationsMain(values: Record<string, string | boolean | u
   const m = JSON.parse(readFileSync(values["receipt-applications"] as string, "utf8"));
   const ev = { deployment_kind: kind, consensus_receipt: { address: values["consensus-receipt"] }, governance: { address: values.governance }, timelock: { address: values.timelock }, receipt_applications: m.receipt_applications, voted_weights_clears: m.voted_weights_clears,
     ...(kind === "rehearsal" ? { committee_registrations: m.committee_registrations, recorded_receipts: m.recorded_receipts } : {}) };
-  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
-  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const { createPublicClient, http } = await import("viem");
+  const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
+  const floor = await floorArg(values, kind, reader);
   const problems = [...(Array.isArray(m.receipt_applications) && m.receipt_applications.length > 0 ? [] : ["the run manifest has no receipt_applications entry"]), ...checkReceiptApplications(ev, floor), ...checkVotedWeightsClears(ev, floor)];
   // issue 1727: a rehearsal's receipt path (registration, REAL recorded receipt, application) must trace end to end. A production run manifest has none of the first two.
   if (kind === "rehearsal") {
     receiptPathProblems(ev, kind, Array.isArray(m.receipt_applications) ? m.receipt_applications : [], (x) => problems.push(x));
     operationProblems((Array.isArray(m.committee_registrations) ? m.committee_registrations : []).map((r: any) => ({ ...r, step: regLabel(r) })), (x) => problems.push(x), floor);
   }
-  if (typeof values.rpc === "string") {
-    const { createPublicClient, http } = await import("viem");
-    const reader = createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader;
+  if (reader) {
     problems.push(...(await checkReceiptApplicationsOnChain(ev, reader, floor)));
     problems.push(...(await checkVotedWeightsClearsOnChain(ev, reader, floor)));
     if (kind === "rehearsal") problems.push(...(await checkReceiptPathOnChain(ev, reader, floor)));
@@ -1092,13 +1112,11 @@ async function checkRedeploysMain(values: Record<string, string | boolean | unde
   const m = JSON.parse(readFileSync(values["vault-redeploys"] as string, "utf8"));
   const entries: any[] = Array.isArray(m.vault_redeploys) ? m.vault_redeploys : [];
   const ev = { deployment_kind: kind, registry: { address: values.registry }, timelock: { address: values.timelock }, vault_redeploys: entries, vaults: Object.fromEntries(entries.map((r) => [r?.vault, { address: r?.new_vault }])) };
-  const floor = typeof values["delay-floor"] === "string" ? Number(values["delay-floor"]) : delayFloor(MAINNET_CHAIN_ID, kind);
-  if (!Number.isInteger(floor) || floor < 1) { console.error("evidence: --delay-floor must be a positive number of seconds"); process.exit(2); }
+  const { createPublicClient, http } = await import("viem");
+  const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
+  const floor = await floorArg(values, kind, reader);
   const problems = [...(entries.length > 0 ? [] : ["the run manifest has no vault_redeploys entry"]), ...entries.filter((r) => r?.status !== "governed").map((r) => `${redeployLabel(r)}: status is ${String(r?.status)}, want governed`), ...checkVaultRedeploys(ev, floor, kind)];
-  if (typeof values.rpc === "string") {
-    const { createPublicClient, http } = await import("viem");
-    problems.push(...(await checkVaultRedeploysOnChain(ev, createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader, floor)));
-  }
+  if (reader) problems.push(...(await checkVaultRedeploysOnChain(ev, reader, floor)));
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (${entries.length} vault redeploy entr${entries.length === 1 ? "y" : "ies"}${values.rpc ? ", chain read" : ", offline shape only"})`);
 }

@@ -319,6 +319,27 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     expect(lastError(w).message).toContain("could NOT be recorded");
   });
 
+  test("issue 1701: a pause that is both incomplete and unrecorded names the vault left open AND tells the operator to cancel every pending unpause", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.failSendTo = vaultAddr(1);
+    mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`)); // every manifest write fails
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(EXIT_CODES.PAUSE);
+    const err = lastError(w);
+    expect(err.message).toContain("NOT confirmed paused");
+    expect(err.message).toContain("could NOT be recorded");
+    expect(err.message).toContain("Cancel every pending unpause operation through the Safe by hand now");
+    expect(report(w).pauseAll).toMatchObject({ allPaused: false, manifestRecorded: false });
+    // the automatic pause after a failed verify says the same
+    const v = world({ writeSafeManifest: true }), cv = newChain();
+    seed(v, BEFORE_HANDOVER);
+    cv.failSendTo = vaultAddr(1);
+    mkdirSync(join(v.evidence, `publish-run.json.${process.pid}.tmp`));
+    expect(await v.run(["verify"], { ...deps(cv), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
+    expect(lastError(v).message).toContain("NOT confirmed paused");
+    expect(lastError(v).message).toContain("Cancel every pending unpause operation through the Safe by hand now");
+  });
+
   test("issue 1688: a recorded pause-all reports manifestRecorded true and exits 0", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);

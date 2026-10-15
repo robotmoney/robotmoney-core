@@ -603,3 +603,20 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
     expect(checkEvidence({ ...good(), voted_weights_clears: [] })).toEqual([]);
   });
 });
+
+describe("issue 1701: --delay-floor cannot go under the 8453 floor when --rpc reads chain 8453", () => {
+  test("a production floor below 172800 s on chain 8453 is refused with a clear error, the 8453 floor itself and a Twin chain floor pass", async () => {
+    const { delayFloorArgProblem } = await import("../src/evidence-check.ts");
+    for (const f of [1, 3600, 172799]) expect(delayFloorArgProblem(f, 8453, "production")).toContain(`--delay-floor ${f} is below the chain 8453 floor 172800 s`);
+    expect(delayFloorArgProblem(172800, 8453, "production")).toBe("");
+    expect(delayFloorArgProblem(200000, 8453, "production")).toBe("");
+    // a Twin run (chain 918453) and an offline check (no --rpc) keep their own floor
+    expect(delayFloorArgProblem(3600, 918453, "production")).toBe("");
+    expect(delayFloorArgProblem(3600, undefined, "production")).toBe("");
+    // a rehearsal on 8453 runs a short timelock: its floor is the rehearsal floor, still refused below it
+    expect(delayFloorArgProblem(900, 8453, "rehearsal")).toBe("");
+    expect(delayFloorArgProblem(899, 8453, "rehearsal")).toContain("below the chain 8453 floor 900 s");
+    // not a positive integer: refused everywhere
+    for (const f of [0, -1, 1.5, Number.NaN]) expect(delayFloorArgProblem(f, 918453, "production")).toContain("positive number of seconds");
+  });
+});

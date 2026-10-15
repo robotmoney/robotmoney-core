@@ -55,3 +55,20 @@ describe("docs mention the clear-voted-weights row and the voted-vector refusal 
   ];
   for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
 });
+
+// Issue 1701: the two causes of exit 25 and the apply-receipt versus pause-all ordering gap are documented in both docs.
+describe("docs name both causes of exit 25 and the apply-receipt ordering gap (issue 1701)", () => {
+  const P: [string, RegExp][] = [
+    ["the ordering gap", /An apply-receipt batch scheduled before a pause-all can still execute after it/],
+    ["the pause check that ignores it", /`refuseIfPausedSince`.{0,60}ignores every row that is not an unpause/],
+    ["exit 25: a vault not confirmed paused", /details\.unpaused/],
+    ["exit 25: a pause not recorded", /details\.manifest_recorded: false/],
+  ];
+  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+  test("the README exit-code text lists both causes of 25", () => {
+    const readme = DOCS["publish-contracts/README.md"];
+    expect(readme).toContain("Exit 25 (`PAUSE`) has two causes");
+    expect(readme).not.toContain("A vault not confirmed paused exits 25.");
+    expect(readme.match(/pause not confirmed or not recorded 25/g)?.length).toBe(2);
+  });
+});
