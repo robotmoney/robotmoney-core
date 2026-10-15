@@ -15,7 +15,7 @@
 # a pinned profile in place would destroy the very evidence the run collects.
 #
 # WHAT DIFFERS FROM config.staging.toml. Exactly three values, all in
-# [consensus_receipts], plus the [governance] section:
+# [consensus_receipts]:
 #   expected_cadence_secs  86400 -> 300
 #   grace_secs             21600 ->  60
 #   (budget 28 h -> 6 min)
@@ -56,21 +56,3 @@ enabled = true
 # observe the gap open, the anchor land, and the incident close.
 expected_cadence_secs = 300
 grace_secs = 60
-
-# Standing quorum floor (task T22, decision D16). Read-only: one eth_call per
-# poll against the deployed RouterGovernance. The contract's MIN_QUORUM_THRESHOLD
-# stops a NEW deployment from being wired below the floor; this is the only thing
-# that catches an ADMIN_ROLE holder lowering quorumThreshold on the router that is
-# already live, after AC-GOV-03's evidence was collected.
-#
-# router_address is left unset here on purpose: the Deploy phase fills in the
-# address from the run's own deployment manifest (phase2/2.7) rather than this
-# file carrying a stale one. Leaving `enabled = true` with no address is refused
-# at startup, which is the intended failure — a blind check must not be reachable
-# by omission.
-[governance]
-enabled = false
-rpc_url = "http://127.0.0.1:18545"
-# router_address = "0x…"   # supplied by the Deploy phase
-min_quorum_threshold = 2
-repage_secs = 300

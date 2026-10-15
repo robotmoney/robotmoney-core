@@ -195,7 +195,6 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
-        governance: Default::default(),
     }
 }
 
@@ -235,7 +234,6 @@ fn per_vault_config(
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
-        governance: Default::default(),
     }
 }
 
@@ -527,7 +525,6 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
         // The consensus-receipt liveness monitor is off by default, so these
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
-        governance: Default::default(),
     };
     // Derive the signing state the way the daemon does — once, at "startup" —
     // and confirm the raw hex is gone from the config afterwards (issue #1357).

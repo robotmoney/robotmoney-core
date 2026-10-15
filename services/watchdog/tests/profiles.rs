@@ -109,23 +109,3 @@ fn the_acceptance_profile_header_declares_itself_as_the_acceptance_profile() {
         "the header must cite the task that authorises it"
     );
 }
-
-#[test]
-fn an_enabled_quorum_check_without_a_router_address_is_refused_at_startup() {
-    // The acceptance profile ships `[governance] enabled = false` with the
-    // address left for the Deploy phase. Flipping `enabled` without supplying
-    // the address must fail loudly rather than run a blind check.
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("config.staging-acceptance.toml"),
-    )
-    .expect("read acceptance profile");
-    let flipped = text.replace("enabled = false", "enabled = true");
-    let cfg: Config = toml::from_str(&flipped).expect("parses");
-    let err = cfg
-        .validate()
-        .expect_err("an enabled quorum check with no router address must be refused");
-    assert!(
-        format!("{err}").contains("router_address"),
-        "unexpected error: {err}"
-    );
-}

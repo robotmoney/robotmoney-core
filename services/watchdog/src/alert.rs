@@ -270,11 +270,6 @@ pub fn no_baseline_dedup_key(chain_id: i64) -> String {
     format!("consensus_receipt_monitor_no_baseline:{chain_id}")
 }
 
-/// Stable incident key for "the router's quorum threshold is below the floor".
-pub fn quorum_below_floor_dedup_key(chain_id: i64) -> String {
-    format!("router_quorum_below_floor:{chain_id}")
-}
-
 /// Details for the no-baseline page.
 ///
 /// Its own type rather than a reuse of [`MissingReceiptDetails`] (T30c): a
@@ -305,96 +300,6 @@ struct NoBaselineAlertInner {
     severity: &'static str,
     source: &'static str,
     custom_details: NoBaselineDetails,
-}
-
-/// Details for the router quorum-floor page (task T22, decision D16).
-#[derive(Debug, Serialize)]
-pub struct QuorumBelowFloorDetails {
-    /// Always `"router_quorum_below_floor"`.
-    pub alert_kind: &'static str,
-    /// Chain the router lives on.
-    pub chain_id: i64,
-    /// Router address that was read.
-    pub router_address: String,
-    /// The threshold read from the chain.
-    pub quorum_threshold: u64,
-    /// The configured floor.
-    pub min_quorum_threshold: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct QuorumAlertPayload {
-    event_action: &'static str,
-    routing_key: &'static str,
-    dedup_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<QuorumAlertInner>,
-}
-
-#[derive(Debug, Serialize)]
-struct QuorumAlertInner {
-    summary: String,
-    severity: &'static str,
-    source: &'static str,
-    custom_details: QuorumBelowFloorDetails,
-}
-
-/// Page because `RouterGovernance.quorumThreshold()` is at or below the floor.
-///
-/// Decision D16: the contract floor stops a *new* deployment from being wired
-/// this way; this stops an already-deployed router from being quietly lowered
-/// by an `ADMIN_ROLE` holder after `AC-GOV-03`'s evidence was collected.
-pub async fn dispatch_quorum_below_floor_alert(
-    client: &Client,
-    webhook_url: &str,
-    breach: &crate::governance::QuorumBreach,
-) -> Result<(), WatchdogError> {
-    post_event(
-        client,
-        webhook_url,
-        &QuorumAlertPayload {
-            event_action: "trigger",
-            routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(breach.chain_id),
-            payload: Some(QuorumAlertInner {
-                summary: format!(
-                    "RobotMoney watchdog: RouterGovernance.quorumThreshold() is {} on chain {} \
-                     (floor {}) — one voter is a quorum. AC-GOV-03 was accepted on two-of-two; \
-                     check who called setQuorumThreshold and restore the threshold.",
-                    breach.threshold, breach.chain_id, breach.min_threshold,
-                ),
-                severity: "critical",
-                source: "watchdog",
-                custom_details: QuorumBelowFloorDetails {
-                    alert_kind: "router_quorum_below_floor",
-                    chain_id: breach.chain_id,
-                    router_address: breach.router_address.clone(),
-                    quorum_threshold: breach.threshold,
-                    min_quorum_threshold: breach.min_threshold,
-                },
-            }),
-        },
-    )
-    .await
-}
-
-/// Resolve the quorum-floor page once the threshold is back at or above it.
-pub async fn dispatch_quorum_below_floor_resolve(
-    client: &Client,
-    webhook_url: &str,
-    chain_id: i64,
-) -> Result<(), WatchdogError> {
-    post_event(
-        client,
-        webhook_url,
-        &QuorumAlertPayload {
-            event_action: "resolve",
-            routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(chain_id),
-            payload: None,
-        },
-    )
-    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -487,7 +392,7 @@ pub async fn dispatch_no_baseline_resolve(
     .await
 }
 
-/// The single POST seam every consensus-receipt and governance event goes
+/// The single POST seam every consensus-receipt event goes
 /// through. Generic over the payload so there is exactly one place to add a
 /// timeout, a retry or an auth header (T30c).
 async fn post_event<B: Serialize>(
@@ -590,36 +495,6 @@ mod tests {
                 "a blind monitor must not report {absent}: it measured nothing"
             );
         }
-    }
-
-    #[test]
-    fn quorum_dedup_key_is_its_own_incident_per_chain() {
-        assert_eq!(
-            quorum_below_floor_dedup_key(918_453),
-            "router_quorum_below_floor:918453"
-        );
-        assert_ne!(
-            quorum_below_floor_dedup_key(918_453),
-            missing_receipt_dedup_key(918_453)
-        );
-        assert_ne!(
-            quorum_below_floor_dedup_key(918_453),
-            quorum_below_floor_dedup_key(8_453)
-        );
-    }
-
-    #[test]
-    fn a_quorum_resolve_carries_the_key_and_no_payload() {
-        let v = serde_json::to_value(QuorumAlertPayload {
-            event_action: "resolve",
-            routing_key: "watchdog",
-            dedup_key: quorum_below_floor_dedup_key(918_453),
-            payload: None,
-        })
-        .unwrap();
-        assert_eq!(v["event_action"], "resolve");
-        assert_eq!(v["dedup_key"], "router_quorum_below_floor:918453");
-        assert!(v.get("payload").is_none());
     }
 
     #[test]
