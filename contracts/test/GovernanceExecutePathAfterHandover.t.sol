@@ -575,9 +575,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
         // The exact reason, straight on the open-executor timelock.
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA), 0
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA))
         );
         timelock.execute(address(vault), 0, dup, bytes32(0), salt);
         // Through the Safe the inner reason is hidden as GS013.
@@ -635,9 +633,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         );
         vm.warp(block.timestamp + MIN_DELAY + 1);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA), 2
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapterA))
         );
         timelock.execute(address(vault), 0, dup, bytes32(0), salt);
     }

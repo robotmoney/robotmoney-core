@@ -494,9 +494,7 @@ contract RobotMoneyVaultTest is Test {
         // Same address as the fixture's index-0 entry, any cap.
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 0
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
         );
         vault.addAdapter(address(adapter), 5_000);
 
@@ -511,9 +509,7 @@ contract RobotMoneyVaultTest is Test {
         vault.addAdapter(address(second), 10_000);
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(second), 1
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(second))
         );
         vault.addAdapter(address(second), 10_000);
         assertEq(vault.adapterCount(), 2, "still two registry entries");
@@ -558,9 +554,7 @@ contract RobotMoneyVaultTest is Test {
         // The scan skips the inactive index 0 and finds the new active index 1.
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 1
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
         );
         vault.addAdapter(address(adapter), 10_000);
 

@@ -23,7 +23,7 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](20);
+        paths = new string[](21);
         paths[0] = "contracts/PortfolioRouter.sol";
         paths[1] = "contracts/RobotMoneyVault.sol";
         paths[2] = "contracts/VaultRegistry.sol";
