@@ -1,22 +1,20 @@
-//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
-//! Canonical: docs/technical/governance-decisions.md §7 — read surface
+//! Canonical: docs/technical/governance-decisions.md §7 — Read surface
 //! Implements: issue #309 (rmpc get-governance subprocess assertion)
-//! Implements: issue #1698 (no proposal or voter state is left to read)
+//! Implements: issue #1698 — voting deleted; reads the weight setter's state
 //!
-//! `rmpc get-governance` — direct on-chain read of RouterGovernance state.
+//! `rmpc get-governance` — direct on-chain read of the router's weight setter,
+//! `RouterGovernance`. There is no voting and there are no proposals: the Safe
+//! applies a recorded consensus receipt by scheduling `applyReceipt` through
+//! the timelock, which holds `WEIGHT_SETTER_ROLE`.
 //!
 //! Sub-reads (all `eth_call`, pinned to a single `eth_blockNumber` snapshot):
 //!
-//! - `RouterGovernance.router()` → the Portfolio Router it sets weights on.
-//! - `RouterGovernance.receiptContract()` → the receipt register
-//!   `applyReceipt` releases from (zero until stage 11 sets it).
-//! - `RouterGovernance.currentWeights()` → the router weights the weight
-//!   setter last applied (the router's applied vector).
-//!
-//! Issue 1698 deleted the voting path (`propose`, `vote`, `execute`,
-//! `currentProposalId`, `activeProposal`, `cadenceParams`), so there is no
-//! proposal, voter, quorum or voting-period field to report. A weight change
-//! is one Safe-scheduled timelock call, `applyReceipt`.
+//! - `RouterGovernance.router()` → the Portfolio Router whose weights it sets.
+//! - `RouterGovernance.receipts()` → the consensus receipt register it applies.
+//! - `RouterGovernance.currentWeights()` → the router's active weight vector.
+//! - `PortfolioRouter.getDefaultWeights()` → the fallback vector (ADR-0002).
+//! - `ADMIN_ROLE()` / `WEIGHT_SETTER_ROLE()` and `getRoleMember*` → who holds
+//!   each role (the timelock after the deploy handover).
 //!
 //! Config field `governance_address` must be set; exits `EXIT_STARTUP_FAIL`
 //! when absent.
@@ -28,12 +26,12 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::RouterGovernance;
+use crate::gateway::{PortfolioRouter, RouterGovernance};
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
 use crate::read_output::{Envelope, PartialBuilder};
@@ -42,11 +40,20 @@ use crate::rpc::{CallRequest, FailoverRpcClient};
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
 
-/// One entry in the weight vector as read from governance.
+/// One entry in a weight vector.
 #[derive(Debug, Default, Serialize)]
 pub struct WeightEntry {
     pub vault: String,
     pub bps: u64,
+}
+
+/// The holders of one `RouterGovernance` role.
+#[derive(Debug, Default, Serialize)]
+pub struct RoleMembers {
+    /// The role hash (0x-hex `bytes32`) read from the contract.
+    pub hash: String,
+    /// Every holder, from `getRoleMember(hash, i)`.
+    pub members: Vec<String>,
 }
 
 /// `data` payload for `rmpc get-governance`.
@@ -54,15 +61,18 @@ pub struct WeightEntry {
 pub struct GovernanceData {
     /// RouterGovernance address (from operator config).
     pub address: String,
-    /// The Portfolio Router this contract sets weights on. `null` when the
-    /// read failed (the failure is in the envelope's `errors`).
-    pub router: Option<String>,
-    /// The receipt register `applyReceipt` releases from. `null` while it is
-    /// unset (the zero address) or when the read failed.
-    pub receipt_contract: Option<String>,
-    /// The router weights the weight setter last applied. Empty when no
-    /// receipt has been applied (the router routes by its default vector).
+    /// The Portfolio Router this contract sets weights on.
+    pub router: String,
+    /// The ConsensusRecommendationReceipt register whose receipts it applies.
+    pub receipts: String,
+    /// The router's active weight vector. Empty until a receipt is applied.
     pub current_weights: Vec<WeightEntry>,
+    /// The router's default (fallback) weight vector.
+    pub default_weights: Vec<WeightEntry>,
+    /// Holders of `ADMIN_ROLE` (sets default weights, clears the active vector).
+    pub admin_role: RoleMembers,
+    /// Holders of `WEIGHT_SETTER_ROLE` (may call `applyReceipt`).
+    pub weight_setter_role: RoleMembers,
 }
 
 /// Entry point invoked from `main.rs`. Returns the process exit code.
@@ -142,96 +152,148 @@ async fn read_governance(
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
 
-    // router().
-    match call_address(rpc, governance, &block_tag, Read::Router).await {
-        Ok(a) => b.data_mut().router = Some(format!("{a:#x}")),
-        Err(e) => b.record_err("router".to_string(), e.to_string()),
-    }
-
-    // receiptContract().
-    match call_address(rpc, governance, &block_tag, Read::ReceiptContract).await {
-        Ok(a) if a == Address::ZERO => {}
-        Ok(a) => b.data_mut().receipt_contract = Some(format!("{a:#x}")),
-        Err(e) => b.record_err("receipt_contract".to_string(), e.to_string()),
-    }
-
-    // currentWeights().
-    match call_current_weights(rpc, governance, &block_tag).await {
-        Ok((vaults, bps)) => {
-            let entries: Vec<WeightEntry> = vaults
-                .into_iter()
-                .zip(bps)
-                .map(|(v, bps_val)| WeightEntry {
-                    vault: format!("{v:#x}"),
-                    bps: bps_val.saturating_to::<u64>(),
-                })
-                .collect();
-            b.data_mut().current_weights = entries;
+    match call(rpc, governance, &block_tag, RouterGovernance::routerCall {}).await {
+        Ok(r) => {
+            let router = r._0;
+            b.data_mut().router = format!("{router:#x}");
+            match call(
+                rpc,
+                router,
+                &block_tag,
+                PortfolioRouter::getDefaultWeightsCall {},
+            )
+            .await
+            {
+                Ok(w) => b.data_mut().default_weights = weight_entries(w.vaults, w.bps),
+                Err(e) => b.record_err("default_weights".to_string(), e),
+            }
         }
         Err(e) => {
-            b.record_err("current_weights".to_string(), e.to_string());
+            b.record_err("router".to_string(), e.clone());
+            b.record_err("default_weights".to_string(), e);
         }
+    }
+
+    match call(
+        rpc,
+        governance,
+        &block_tag,
+        RouterGovernance::receiptsCall {},
+    )
+    .await
+    {
+        Ok(r) => b.data_mut().receipts = format!("{:#x}", r._0),
+        Err(e) => b.record_err("receipts".to_string(), e),
+    }
+
+    match call(
+        rpc,
+        governance,
+        &block_tag,
+        RouterGovernance::currentWeightsCall {},
+    )
+    .await
+    {
+        Ok(w) => b.data_mut().current_weights = weight_entries(w.vaults, w.bps),
+        Err(e) => b.record_err("current_weights".to_string(), e),
+    }
+
+    match call(
+        rpc,
+        governance,
+        &block_tag,
+        RouterGovernance::ADMIN_ROLECall {},
+    )
+    .await
+    {
+        Ok(r) => match read_role_members(rpc, governance, r._0, &block_tag).await {
+            Ok(m) => b.data_mut().admin_role = m,
+            Err(e) => b.record_err("admin_role".to_string(), e),
+        },
+        Err(e) => b.record_err("admin_role".to_string(), e),
+    }
+
+    match call(
+        rpc,
+        governance,
+        &block_tag,
+        RouterGovernance::WEIGHT_SETTER_ROLECall {},
+    )
+    .await
+    {
+        Ok(r) => match read_role_members(rpc, governance, r._0, &block_tag).await {
+            Ok(m) => b.data_mut().weight_setter_role = m,
+            Err(e) => b.record_err("weight_setter_role".to_string(), e),
+        },
+        Err(e) => b.record_err("weight_setter_role".to_string(), e),
     }
 
     Ok(b.finish())
 }
 
-/// The two single-address reads `get-governance` makes.
-#[derive(Debug, Clone, Copy)]
-enum Read {
-    Router,
-    ReceiptContract,
+fn weight_entries(vaults: Vec<Address>, bps: Vec<U256>) -> Vec<WeightEntry> {
+    vaults
+        .into_iter()
+        .zip(bps)
+        .map(|(v, bps_val)| WeightEntry {
+            vault: format!("{v:#x}"),
+            bps: bps_val.saturating_to::<u64>(),
+        })
+        .collect()
 }
 
-async fn call_address(
+async fn read_role_members(
     rpc: &FailoverRpcClient,
     governance: Address,
+    role: B256,
     block_tag: &str,
-    read: Read,
-) -> crate::errors::Result<Address> {
-    let data = match read {
-        Read::Router => RouterGovernance::routerCall {}.abi_encode(),
-        Read::ReceiptContract => RouterGovernance::receiptContractCall {}.abi_encode(),
-    };
+) -> Result<RoleMembers, String> {
+    let count = call(
+        rpc,
+        governance,
+        block_tag,
+        RouterGovernance::getRoleMemberCountCall { role },
+    )
+    .await?
+    ._0;
+    let mut members = Vec::new();
+    let mut index = U256::ZERO;
+    while index < count {
+        let m = call(
+            rpc,
+            governance,
+            block_tag,
+            RouterGovernance::getRoleMemberCall { role, index },
+        )
+        .await?;
+        members.push(format!("{:#x}", m._0));
+        index += U256::from(1u8);
+    }
+    Ok(RoleMembers {
+        hash: format!("{role:#x}"),
+        members,
+    })
+}
+
+/// `eth_call` one view on `to` at `block_tag` and decode its returns.
+async fn call<C: SolCall>(
+    rpc: &FailoverRpcClient,
+    to: Address,
+    block_tag: &str,
+    c: C,
+) -> Result<C::Return, String> {
     let out = rpc
         .eth_call(
             &CallRequest {
-                to: governance,
+                to,
                 from: None,
-                data: data.into(),
+                data: c.abi_encode().into(),
             },
             Some(block_tag),
         )
-        .await?;
-    let decoded = match read {
-        Read::Router => RouterGovernance::routerCall::abi_decode_returns(&out, true).map(|r| r._0),
-        Read::ReceiptContract => {
-            RouterGovernance::receiptContractCall::abi_decode_returns(&out, true).map(|r| r._0)
-        }
-    };
-    decoded.map_err(|e| crate::errors::RmpcError::ErrRpcDecode(format!("{read:?} abi decode: {e}")))
-}
-
-async fn call_current_weights(
-    rpc: &FailoverRpcClient,
-    governance: Address,
-    block_tag: &str,
-) -> crate::errors::Result<(Vec<Address>, Vec<U256>)> {
-    let data = RouterGovernance::currentWeightsCall {}.abi_encode();
-    let out = rpc
-        .eth_call(
-            &CallRequest {
-                to: governance,
-                from: None,
-                data: data.into(),
-            },
-            Some(block_tag),
-        )
-        .await?;
-    let r = RouterGovernance::currentWeightsCall::abi_decode_returns(&out, true).map_err(|e| {
-        crate::errors::RmpcError::ErrRpcDecode(format!("currentWeights abi decode: {e}"))
-    })?;
-    Ok((r.vaults, r.bps))
+        .await
+        .map_err(|e| format!("{} eth_call failed: {e}", C::SIGNATURE))?;
+    C::abi_decode_returns(&out, true).map_err(|e| format!("{} abi decode: {e}", C::SIGNATURE))
 }
 
 #[cfg(test)]
@@ -266,27 +328,19 @@ keystore_path           = "{ks}"
         assert_eq!(code, EXIT_STARTUP_FAIL);
     }
 
-    /// Issue 1698: the envelope carries no proposal, voter or cadence field.
+    /// The payload carries no proposal or voting vocabulary: there is no
+    /// voting on the deployed bytecode (issue #1698).
     #[test]
     fn governance_data_has_no_voting_fields() {
-        let data = GovernanceData {
-            address: "0x0000000000000000000000000000000000000001".to_string(),
-            router: Some("0x0000000000000000000000000000000000000002".to_string()),
-            receipt_contract: None,
-            current_weights: vec![WeightEntry {
-                vault: "0x0000000000000000000000000000000000000003".to_string(),
-                bps: 10_000,
-            }],
-        };
-        let v: serde_json::Value = serde_json::to_value(&data).unwrap();
-        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            ["address", "current_weights", "receipt_contract", "router"],
-            "get-governance reads the applied weights and the receipt register only"
-        );
-        assert!(v["receipt_contract"].is_null());
-        assert_eq!(v["current_weights"][0]["bps"], 10_000);
+        let v: serde_json::Value = serde_json::to_value(GovernanceData::default()).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        for key in &keys {
+            assert!(
+                !key.contains("proposal") && !key.contains("quorum") && !key.contains("voting"),
+                "unexpected voting-era field {key}"
+            );
+        }
+        assert!(keys.contains(&"current_weights"));
+        assert!(keys.contains(&"weight_setter_role"));
     }
 }

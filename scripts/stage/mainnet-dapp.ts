@@ -1,3 +1,4 @@
+import { currentGeneration, type MigrationOverlay } from "../../publish-contracts/src/migration-overlay.ts";
 // Read-only dapp stack on Base mainnet (8453), core issue 1725. Bun TypeScript, pure functions.
 //
 // `core-stack dapp up --chain 8453 --rpc URL --manifests DIR --start-block N` starts docker-compose.dapp.yaml plus
@@ -158,10 +159,10 @@ export interface MainnetAddresses {
   gateway: string;
   gatewayCodeHash: string;
   /**
-   * Issue 1810: keccak256 of the implementation behind the gateway proxy (`gateway.json`
-   * `gateway_implementation_runtime_hash`). Empty for a direct (pre-ADR-0014) gateway, whose
-   * manifest has no such field.
+   * Issue 1810: the approved ERC-1967 implementation behind a proxied gateway and its code hash, from the
+   * gateway manifest. Empty for a direct (legacy) gateway, whose manifest has neither field.
    */
+  gatewayImplementation: string;
   gatewayImplementationHash: string;
   registry: string;
   router: string;
@@ -180,7 +181,7 @@ export interface MainnetAddresses {
   governance: string;
   consensusReceipt: string;
   /**
-   * The InvestmentCommitteePolicy proxy (`timelock.json` `addresses.ic_policy`). Security round 1: one of the nine proxied contracts (ADR-0014 §1), so the indexer must
+   * The InvestmentCommitteePolicy proxy (`timelock.json` `addresses.ic_policy`). Security round 1: one of the proxied core contracts (ADR-0014 §1), so the indexer must
    * watch it, or its Upgraded and UpgradesFrozen events never reach proxy_upgrade_events and the watchdog's upgrade page stays silent for it.
    */
   icPolicy: string;
@@ -242,7 +243,7 @@ function implementationHash(file: string, field: string, proxy: boolean, v: unkn
  * addresses the dapp stack is configured with. Every manifest must say chain_id 8453, and the manifests must agree
  * with one another on the shared addresses.
  */
-export function readMainnetManifests(dir: string, read: (p: string) => string = (p) => readFileSync(p, "utf8")): MainnetAddresses {
+export function readMainnetManifests(dir: string, read: (p: string) => string = (p) => readFileSync(p, "utf8"), overlay?: MigrationOverlay): MainnetAddresses {
   const files = {
     gateway: manifestOf("gateway"),
     registry: manifestOf("registry"),
@@ -264,11 +265,17 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   if (typeof hash !== "string" || !BYTES32.test(hash) || /^0x0{64}$/.test(hash)) {
     throw new MainnetDappError("manifest-field", `${files.gateway} gateway_runtime_hash is not a non-zero bytes32`);
   }
-  const implHash = g.gateway_implementation_runtime_hash;
-  if (implHash !== undefined && (typeof implHash !== "string" || !BYTES32.test(implHash) || /^0x0{64}$/.test(implHash))) {
-    throw new MainnetDappError("manifest-field", `${files.gateway} gateway_implementation_runtime_hash is not a non-zero bytes32`);
+  // Issue 1810: a proxied gateway's manifest names its implementation; both fields or neither.
+  let gatewayImplementation = "";
+  let gatewayImplementationHash = "";
+  if (g.gateway_implementation !== undefined || g.gateway_implementation_runtime_hash !== undefined) {
+    gatewayImplementation = addr(files.gateway, "gateway_implementation", g.gateway_implementation);
+    const ih = g.gateway_implementation_runtime_hash;
+    if (typeof ih !== "string" || !BYTES32.test(ih) || /^0x0{64}$/.test(ih)) {
+      throw new MainnetDappError("manifest-field", `${files.gateway} gateway_implementation_runtime_hash is not a non-zero bytes32`);
+    }
+    gatewayImplementationHash = ih;
   }
-  const gatewayImplementationHash = typeof implHash === "string" ? implHash : "";
   const registry = addr(files.registry, "registry", docs[files.registry]!.registry);
   const router = addr(files.router, "router", docs[files.router]!.router);
   const governance = addr(files.governance, "governance", docs[files.governance]!.governance);
@@ -291,14 +298,26 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
     throw new MainnetDappError("manifest-field", `${files.timelock} addresses.vaults is not a list of ${VAULT_KEYS.length} vaults`);
   }
   const vaults = {} as MainnetAddresses["vaults"];
+  /** The deploy-time vault of each key, before the migration overlay names a later generation (issue 1796). */
+  const deployedVaults = {} as MainnetAddresses["vaults"];
   VAULT_KEYS.forEach((key, i) => {
     const file = vaultFiles[key]!;
     const a = addr(file, "vault", docs[file]!.vault);
     if (!same(a, addr(files.timelock, `addresses.vaults[${i}]`, timelockVaults[i]))) {
       throw new MainnetDappError("manifest-mismatch", `${file} vault differs from ${files.timelock} addresses.vaults[${i}] (${key})`);
     }
-    vaults[key] = a;
+    deployedVaults[key] = a;
+    vaults[key] = overlay ? currentGeneration(overlay, MAINNET_CHAIN_ID, key, a) : a;
   });
+  /**
+   * A vault the migration overlay moved to a later generation (issue 1796): the overlay's verified runtime hash of the
+   * current generation. The timelock manifest records only the deploy-time vault, so its hashes no longer apply.
+   */
+  const movedRuntimeHash = (key: (typeof VAULT_KEYS)[number]): string | undefined => {
+    if (!overlay || same(vaults[key], deployedVaults[key])) return undefined;
+    const gen = overlay.generations.find((r) => r.vault === key && same(r.current_address, vaults[key]));
+    return codeHash("current-vaults.json", `generations[${key}].current_runtime_hash`, gen?.current_runtime_hash);
+  };
   // QA plan U5 (issue 1737 item 1): the dapp's build-time code-hash pins. DeployTimelock reads every vault's and
   // the router's runtime code hash back from the chain into the timelock manifest. A vault or router with no
   // recorded hash refuses the build: a bundle without its pin would refuse every deposit into it anyway.
@@ -307,10 +326,11 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   const vaultCodeHashes = {} as MainnetAddresses["vaultCodeHashes"];
   VAULT_KEYS.forEach((key, i) => {
     const entry = (handover[`vault_${i}`] ?? {}) as Json;
-    if (!same(addr(files.timelock, `vault_handover.vault_${i}.address`, entry.address), vaults[key])) {
+    if (!same(addr(files.timelock, `vault_handover.vault_${i}.address`, entry.address), deployedVaults[key])) {
       throw new MainnetDappError("manifest-mismatch", `${files.timelock} vault_handover.vault_${i}.address is not the ${key} vault`);
     }
-    vaultCodeHashes[key] = codeHash(files.timelock, `vault_handover.vault_${i}.code_hash`, entry.code_hash);
+    const deployedHash = codeHash(files.timelock, `vault_handover.vault_${i}.code_hash`, entry.code_hash);
+    vaultCodeHashes[key] = movedRuntimeHash(key) ?? deployedHash;
   });
   // ADR-0014: behind a proxy the code hashes above are the generic ERC1967Proxy, the same for every proxy and
   // unchanged by an upgrade. The implementation pins say which logic was reviewed. DeployTimelock reads each
@@ -324,12 +344,17 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   const vaultImplementationHashes = {} as MainnetAddresses["vaultImplementationHashes"];
   VAULT_KEYS.forEach((key, i) => {
     const entry = (handover[`vault_${i}`] ?? {}) as Json;
-    vaultImplementationHashes[key] = implementationHash(
+    // DeployVault names the implementation `vault_implementation`; the basket vault deploys name it `implementation`.
+    const vaultDoc = docs[vaultFiles[key]!]!;
+    const deployed = implementationHash(
       files.timelock,
       `vault_handover.vault_${i}.implementation_code_hash`,
-      isProxyManifest(docs[vaultFiles[key]!]!.vault_implementation),
+      isProxyManifest(vaultDoc.vault_implementation ?? vaultDoc.implementation),
       entry.implementation_code_hash,
     );
+    // A vault the overlay moved has no recorded implementation hash: no pin, so the dapp refuses deposits into it
+    // (exits are never gated by a pin) until a pin for its implementation is recorded.
+    vaultImplementationHashes[key] = movedRuntimeHash(key) === undefined ? deployed : "";
   });
   if (!same(vaults.rmUSDC, addr(files.gateway, "vault", g.vault))) {
     throw new MainnetDappError("manifest-mismatch", `${files.gateway} vault is not the rmUSDC vault`);
@@ -337,6 +362,7 @@ export function readMainnetManifests(dir: string, read: (p: string) => string = 
   return {
     gateway,
     gatewayCodeHash: hash,
+    gatewayImplementation,
     gatewayImplementationHash,
     registry,
     router,
@@ -365,49 +391,6 @@ export interface MainnetDappInput {
   /** The URLs a browser reaches the stack on when something already on this host forwards to the loopback ports. Default: the loopback URLs. */
   publicDappUrl?: string;
   publicExplorerUrl?: string;
-  /**
-   * Security round 2 (review: SECURITY_OPERATIONAL_PIN_ROTATION_GAP): the govern evidence of chain 8453 (evidence.json, or the run manifest it is copied from) whose
-   * `proxy_upgrades` rounds name the implementations an upgrade-proxy round installed. Security round 3: the code hash of the latest executed round of the vault, router
-   * or gateway replaces its deploy-time pin (upgradedImplementationHashes); a superseded implementation is never pinned. Absent: the deploy-time pins only, and every
-   * write to an upgraded contract refuses.
-   */
-  upgradeEvidence?: string;
-}
-
-/**
- * Security round 2: the implementation code hashes executed upgrade-proxy rounds installed, per proxy address (lower case), in round order, from the govern evidence
- * at `path`. The timelock manifest is the deploy-time record and never changes; this is the only supported way to pin an upgraded implementation (the runbook's
- * rotation step). Refused: a file of another chain, and any row that is not an executed round (a scheduled round is not pinned until the timelock ran it).
- * Security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): "round order" is execution order: by `execute_block_timestamp` when the rows carry it (the timelock's
- * EXECUTOR_ROLE is open, so two ready rounds of one proxy can execute in either order whatever order govern recorded them), the file's order breaking a tie. The LAST
- * hash of each list is the implementation the proxy runs now; buildMainnetDappEnv pins only that one.
- */
-export function upgradedImplementationHashes(path: string, read: (p: string) => string = (p) => readFileSync(p, "utf8")): Map<string, string[]> {
-  let doc: Json;
-  try {
-    doc = JSON.parse(read(path)) as Json;
-  } catch (e) {
-    throw new MainnetDappError("upgrade-evidence", `${path}: ${(e as Error).message}`);
-  }
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) throw new MainnetDappError("upgrade-evidence", `${path} is not a JSON object`);
-  const chain = doc.chain_id ?? doc.chainId;
-  if (chain !== MAINNET_CHAIN_ID) throw new MainnetDappError("wrong-chain", `${path} is the evidence of chain ${JSON.stringify(chain ?? null)}, not ${MAINNET_CHAIN_ID}`);
-  const rows = doc.proxy_upgrades ?? [];
-  if (!Array.isArray(rows)) throw new MainnetDappError("upgrade-evidence", `${path} proxy_upgrades is not a list`);
-  const out = new Map<string, string[]>();
-  const executed = rows.map((r: Json, i: number) => {
-    const where = `proxy_upgrades[${i}]`;
-    if (typeof r?.execute_tx !== "string" || !BYTES32.test(r.execute_tx) || r.execute_status !== 1) {
-      throw new MainnetDappError("upgrade-not-executed", `${path} ${where} (${String(r?.proxy ?? "?")}) is not an executed upgrade round (no successful execute_tx): only an implementation the timelock installed is pinned`);
-    }
-    const at = r.execute_block_timestamp;
-    if (at !== undefined && !(Number.isSafeInteger(at) && at > 0)) throw new MainnetDappError("upgrade-evidence", `${path} ${where}.execute_block_timestamp is not a positive integer`);
-    return { i, at: at as number | undefined, proxy: addr(path, `${where}.proxy_address`, r.proxy_address).toLowerCase(), hash: codeHash(path, `${where}.implementation_code_hash`, r.implementation_code_hash) };
-  });
-  // execution order: a row without a timestamp keeps its place relative to the rows of its proxy (stable sort, file order breaks every tie)
-  executed.sort((a: { i: number; at?: number }, b: { i: number; at?: number }) => (a.at !== undefined && b.at !== undefined && a.at !== b.at ? a.at - b.at : a.i - b.i));
-  for (const e of executed) out.set(e.proxy, [...(out.get(e.proxy) ?? []), e.hash]);
-  return out;
 }
 
 /** `https://host` for a URL, nothing else: a path or a query can carry an API key. */
@@ -451,19 +434,13 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
   if (input.publicDappUrl) checkRpcUrl("--public-dapp-url", input.publicDappUrl);
   if (input.publicExplorerUrl) checkRpcUrl("--public-explorer-url", input.publicExplorerUrl);
   const origin = (u: string): string => u.replace(/\/+$/, "");
-  const a = readMainnetManifests(input.manifestsDir, read);
-  // Security round 2: an executed upgrade's implementation is pinned (the dapp accepts a comma-separated list per contract). A contract the manifests say is direct
-  // has no implementation to pin: an upgrade row naming it means the files disagree.
-  // Security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): only the implementation of the proxy's LATEST executed round is pinned, the deploy-time hash only
-  // when no round executed. Before, the deploy-time hash and every executed round's hash stayed pinned forever, so a timelock rollback to a superseded (buggy)
-  // implementation passed the dapp's guard and badged the contract verified. A rollback the Safe means is a round of its own, recorded and pinned like any other.
-  const upgraded = input.upgradeEvidence ? upgradedImplementationHashes(input.upgradeEvidence, read) : new Map<string, string[]>();
-  const pinsOf = (what: string, address: string, deployed: string): string => {
-    const rounds = upgraded.get(address.toLowerCase()) ?? [];
-    if (rounds.length > 0 && deployed === "") throw new MainnetDappError("manifest-mismatch", `${input.upgradeEvidence} records an executed upgrade of ${what} ${address}, which the manifests name as a direct contract (no implementation)`);
-    return rounds.length > 0 ? rounds[rounds.length - 1]! : deployed;
-  };
-  const vaultPins = Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], pinsOf(k, a.vaults[k], a.vaultImplementationHashes[k])]).filter(([, h]) => h !== ""));
+  const reader = read ?? ((p: string) => readFileSync(p, "utf8"));
+  const overlayPath = join(input.manifestsDir, "current-vaults.json");
+  const overlay = existsSync(overlayPath) ? JSON.parse(reader(overlayPath)) as MigrationOverlay : undefined;
+  const a = readMainnetManifests(input.manifestsDir, reader, overlay);
+  // ADR-0014: the reviewed implementation behind each proxied vault; a direct contract has none, and neither has a vault the
+  // migration overlay moved (the overlay records the new generation's runtime hash only, see readMainnetManifests).
+  const vaultPins = Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultImplementationHashes[k]]).filter(([, h]) => h !== ""));
   const env: Record<string, string> = {
     COMPOSE_PROFILES: "",
     DAPP_PORT: String(dappPort),
@@ -477,18 +454,18 @@ export function buildMainnetDappEnv(input: MainnetDappInput, read?: (p: string) 
     VITE_GATEWAY_ADDRESS: a.gateway,
     VITE_VAULT_ADDRESS: a.vaults.rmUSDC,
     VITE_GATEWAY_EXPECTED_CODE_HASH: a.gatewayCodeHash,
-    // Issue 1810: the reviewed implementation behind the gateway proxy; empty for a direct gateway. Security round 3: after an executed upgrade, the latest round's only.
-    VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: pinsOf("the gateway", a.gateway, a.gatewayImplementationHash),
+    // Issue 1810: the approved implementation behind the gateway proxy and its code hash; empty for a direct gateway.
+    VITE_GATEWAY_EXPECTED_IMPLEMENTATION: a.gatewayImplementation,
+    VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH: a.gatewayImplementationHash,
     // Build-time vault and router pins (QA plan U5): vault address -> runtime code hash, and the router's hash.
     VITE_VAULT_EXPECTED_CODE_HASH: JSON.stringify(Object.fromEntries(VAULT_KEYS.map((k) => [a.vaults[k], a.vaultCodeHashes[k]]))),
     VITE_ROUTER_EXPECTED_CODE_HASH: a.routerCodeHash,
-    // ADR-0014: the reviewed implementation behind each proxied vault and the router. A direct contract has none. Security round 3: the hash the latest executed
-    // upgrade-proxy round of that address installed (--upgrade-evidence), else the deploy-time hash. Never a superseded one.
+    // ADR-0014 (security review 2026-10-15, review-security-007/010): behind a proxy the code-hash pins above are the generic
+    // ERC1967Proxy, so the reviewed implementation behind each proxied vault and the router is pinned too. A direct contract has none.
     VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH: JSON.stringify(vaultPins),
-    VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH: pinsOf("the router", a.router, a.routerImplementationHash),
+    VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH: a.routerImplementationHash,
     VITE_REGISTRY_ADDRESS: a.registry,
     VITE_ROUTER_ADDRESS: a.router,
-    VITE_GOVERNANCE_ADDRESS: a.governance,
     VITE_TIMELOCK_ADDRESS: a.timelock,
     VITE_SAFE_ADDRESS: a.safe,
     VITE_VAULT_ADDRESSES: JSON.stringify(a.vaults),

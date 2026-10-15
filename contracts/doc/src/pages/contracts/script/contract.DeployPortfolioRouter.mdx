@@ -5,9 +5,9 @@ description: "Foundry deploy script for the PortfolioRouter contract. Stage 4 of
 
 # DeployPortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployPortfolioRouter.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployPortfolioRouter.s.sol)
 
-**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployPortfolioRouter
 
@@ -27,15 +27,12 @@ ADMIN_ADDRESS      — receives ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router
 REGISTRY_ADDRESS   — deployed VaultRegistry address
 VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
 
-UPGRADE_AUTHORITY  — the deployment's timelock, deployed first (ADR-0014 §4)
-UPGRADE_MODE       — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
-
 USDC is the canonical Base USDC constant on every chain.
 Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 (mandatory and equal to 8453 on Base mainnet).
-
-The router is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
-`initialize` in its constructor.
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+of the router proxy (`UpgradeAuthority`, issue 1808). The manifest `router` is the
+ERC-1967 proxy; `router_implementation` is its implementation.
 
 ## Constants
 
@@ -110,7 +107,7 @@ function runInProcessWith(address admin_, address registry_, address vault_, add
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing the deployed router and key parameters. |
 
-<a id="_deploy-address-address-address-address"></a>
+<a id="_deploy-address-address-address-address-upgradeconfig"></a>
 
 ### _deploy
 
@@ -122,9 +119,13 @@ is active on the call context (broadcast or prank).
 </i>
 
 ```solidity
-function _deploy(address admin_, address registry_, address vault_, address usdc_)
-        internal
-        returns (Deployed memory d);
+function _deploy(
+        address admin_,
+        address registry_,
+        address vault_,
+        address usdc_,
+        UpgradeConfig memory u
+    ) internal returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -135,6 +136,7 @@ function _deploy(address admin_, address registry_, address vault_, address usdc
 | registry_ | `address` |  |
 | vault_ | `address` |  |
 | usdc_ | `address` |  |
+| u | `UpgradeConfig` |  |
 
 **Returns**
 
@@ -178,14 +180,13 @@ Result struct returned to in-process callers (e.g. forge tests).
 
 ```solidity
 struct Deployed {
-        /// The proxy.
         PortfolioRouter router;
         VaultRegistry registry;
         address admin;
         address vault;
         address usdc;
-        /// The implementation behind `router` (ADR-0014).
-        address implementation;
+        address routerImplementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -198,5 +199,6 @@ struct Deployed {
 | admin | `address` |  |
 | vault | `address` |  |
 | usdc | `address` |  |
-| implementation | `address` |  |
+| routerImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

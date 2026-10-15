@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -15,16 +15,17 @@ R7's two halves, proved on one topology built the way the deploy
 scripts build it — not on a hand-wired fixture.
 
 Before this task, `DeployRouterGovernance` deployed the governance
-contract and stopped. Nothing ever granted it the router roles, so
-the weight setter could be told to act and could not. The only
-thing that COULD move weights was the deployer EOA, which is exactly
-the inversion §4.3 describes as the gap.
+contract and stopped. Nothing ever granted it the router's weight
+role, so an approved weight change still reverted inside
+`router.setWeights` — the approving body could approve and could not
+act. Since issue 1698 the approved change is a Safe-scheduled
+`applyReceipt` through the timelock. The only thing that
+COULD move weights was the deployer EOA, which is exactly the
+inversion §4.3 describes as the gap.
 
 `DeployTimelock` then revokes the deployer's router `ADMIN_ROLE`,
-points the weight setter at the receipt register and grants it the
-register's `ADMIN_ROLE` (issue #1698), so after a complete ceremony
-the honest end state is: the weight setter can apply a receipt in
-one call, the deployer cannot, and the timelock administers both.
+so after a complete ceremony the honest end state is: governance
+can act, the deployer cannot, and the timelock administers both.
 
 <i>
 
@@ -95,22 +96,16 @@ bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
 uint256 internal constant MIN_DELAY = 2 days;
 ```
 
-### PAYLOAD_URI
-
-```solidity
-string internal constant PAYLOAD_URI = "https://robotmoney.net/api/swarm/receipts/session-1";
-```
-
 ### RECEIPT_ID
 
 ```solidity
-bytes32 internal constant RECEIPT_ID = keccak256("receipt-after-handover");
+bytes32 internal constant RECEIPT_ID = keccak256("handover-receipt-1");
 ```
 
 ### DIGEST
 
 ```solidity
-bytes32 internal constant DIGEST = keccak256("payload-after-handover");
+bytes32 internal constant DIGEST = keccak256("handover canonical receipt bytes");
 ```
 
 ### HOLDER_DEPOSIT
@@ -189,10 +184,10 @@ RobotMoneyGateway internal gateway;
 InvestmentCommitteePolicy internal icPolicy;
 ```
 
-### register
+### receipts
 
 ```solidity
-ConsensusRecommendationReceipt internal register;
+ConsensusRecommendationReceipt internal receipts;
 ```
 
 ### timelock
@@ -245,10 +240,10 @@ address internal emergency = makeAddr("emergency");
 address internal pauser = makeAddr("pauser");
 ```
 
-### submitter
+### agentAthena
 
 ```solidity
-address internal submitter = makeAddr("committee-submitter");
+address internal agentAthena = makeAddr("committee-athena");
 ```
 
 ### agentWoon
@@ -295,7 +290,7 @@ function setUp() public;
 
 ### test_governanceHoldsRouterAdminRole
 
-The deploy script leaves governance able to reach the router.
+The deploy script leaves governance able to call setWeights.
 
 ```solidity
 function test_governanceHoldsRouterAdminRole() public view;
@@ -313,39 +308,28 @@ emergency key do not.
 function test_onlyGovernanceHoldsWeightSetterRole() public view;
 ```
 
-<a id="test_ceremonywirestheweightsettertothereceiptregister"></a>
-
-### test_ceremonyWiresTheWeightSetterToTheReceiptRegister
-
-Issue #1698: the ceremony wired the weight setter to the register
-and gave it the release role; the timelock administers the register.
-
-```solidity
-function test_ceremonyWiresTheWeightSetterToTheReceiptRegister() public view;
-```
-
 <a id="test_applyreceiptreachessetweightsonafreshdeployment"></a>
 
 ### test_applyReceiptReachesSetWeightsOnAFreshDeployment
 
-THE R7 regression and the #1698 acceptance: the Safe schedules ONE
-applyReceipt on the timelock (which holds governance ADMIN_ROLE),
-the delay elapses, the Safe executes, and in that transaction
-the receipt is released and the weights land on the router.
+THE R7 regression: the Safe schedules `applyReceipt` on the
+timelock (which holds the governance WEIGHT_SETTER_ROLE), the delay
+elapses, and the execute releases the receipt and lands the
+weights on the router.
 
 ```solidity
 function test_applyReceiptReachesSetWeightsOnAFreshDeployment() public;
 ```
 
-<a id="test_applyreceipt_secondroundforthesamereceiptisrefused"></a>
+<a id="test_timelockaloneappliesreceipts"></a>
 
-### test_applyReceipt_secondRoundForTheSameReceiptIsRefused
+### test_timelockAloneAppliesReceipts
 
-One operation per receipt: a second round for the same id fails at
-execution (GS013 from the Safe) and changes nothing.
+After the handover the timelock alone holds the governance
+WEIGHT_SETTER_ROLE, and RouterGovernance can release receipts.
 
 ```solidity
-function test_applyReceipt_secondRoundForTheSameReceiptIsRefused() public;
+function test_timelockAloneAppliesReceipts() public view;
 ```
 
 <a id="test_deployereoacannotcallsetweightsdirectly"></a>
@@ -365,17 +349,6 @@ function test_deployerEoaCannotCallSetWeightsDirectly() public;
 
 ```solidity
 function test_deployerEoaHasNoRouterAdminRole() public view;
-```
-
-<a id="test_deployereoacannotapplyreceiptdirectly"></a>
-
-### test_deployerEoaCannotApplyReceiptDirectly
-
-The deployer EOA cannot apply a receipt either: governance
-ADMIN_ROLE left with the handover.
-
-```solidity
-function test_deployerEoaCannotApplyReceiptDirectly() public;
 ```
 
 <a id="test_timelocksetweightsthroughrealsafescheduleexecute_reverts"></a>
@@ -402,16 +375,15 @@ the fallback the timelock keeps through ADMIN_ROLE.
 function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public;
 ```
 
-<a id="test_committeeisdisjointfromtheweightsetter"></a>
+<a id="test_committeeholdsnoweightauthority"></a>
 
-### test_committeeIsDisjointFromTheWeightSetter
+### test_committeeHoldsNoWeightAuthority
 
-The committee agents that recorded the receipt hold no weight
-authority, and the weight setter, the timelock and the Safe hold
-no COMMITTEE_AGENT_ROLE.
+No committee agent holds any weight authority: not the
+governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
 
 ```solidity
-function test_committeeIsDisjointFromTheWeightSetter() public view;
+function test_committeeHoldsNoWeightAuthority() public view;
 ```
 
 <a id="test_safeisthetimelockdriverandistwoofthree"></a>
@@ -578,59 +550,6 @@ function _sixtyForty() internal view returns (address[] memory vaults, uint256[]
 | ---- | ---- | ----------- |
 | vaults | `address[]` |  |
 | bps | `uint256[]` |  |
-
-<a id="_submitterpolicy"></a>
-
-### _submitterPolicy
-
-<i>
-
-The committee submitter's gateway policy: enough to hold AGENT_ROLE
-and record a receipt; it moves no value.
-
-</i>
-
-```solidity
-function _submitterPolicy() internal view returns (IGateway.AgentPolicy memory);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `IGateway.AgentPolicy` |  |
-
-<a id="_applyviatimelock-bytes32-bytes32-address-uint256-bytes32"></a>
-
-### _applyViaTimelock
-
-<i>
-
-`applyReceipt` is ADMIN_ROLE-gated and ADMIN_ROLE now lives on the
-timelock, so the apply is scheduled by the Safe and executed after
-the min delay — the real post-handover route, one call.
-
-</i>
-
-```solidity
-function _applyViaTimelock(
-        bytes32 receiptId,
-        bytes32 digest,
-        address[] memory vaults,
-        uint256[] memory bps,
-        bytes32 salt
-    ) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiptId | `bytes32` |  |
-| digest | `bytes32` |  |
-| vaults | `address[]` |  |
-| bps | `uint256[]` |  |
-| salt | `bytes32` |  |
 
 <a id="_createsafe"></a>
 

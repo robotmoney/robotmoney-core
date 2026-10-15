@@ -5,7 +5,7 @@ description: "Role constants and AccessControl wiring for the RobotMoney gateway
 
 # AccessRoles
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/AccessRoles.sol)
 
 **Inherits:** AccessControlUpgradeable
 
@@ -41,9 +41,6 @@ constructor grants both to the same admin address), but never with
 `DEPOSIT_PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
 holder could renounce `ADMIN_ROLE` and then self-grant `AGENT_ROLE`,
 silently bypassing the disjointness invariant.
-
-ADR-0014: the parent is OZ `AccessControlUpgradeable` (role data in an
-ERC-7201 namespace), so this base adds no linear storage.
 
 ## Constants
 

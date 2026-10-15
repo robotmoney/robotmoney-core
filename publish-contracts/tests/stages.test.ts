@@ -64,7 +64,7 @@ describe("stage list built from core's stage table", () => {
     STAGES.forEach((s, i) => { if (s.manifest) written.set(manifestBase(s.manifest), i); });
     STAGES.forEach((s, i) => {
       for (const e of [...s.requiredEnv]) {
-        const src = resolveEnv(e, s.vault ?? null, s.name);
+        const src = resolveEnv(e, s.vault ?? null);
         const stages = src.from === "manifest" ? [src.stage] : src.from === "vaults" ? table.vaults.map((v) => v.stage) : [];
         for (const st of stages) {
           const file = manifestRef(st, "x").split(":")[0]!;
@@ -75,7 +75,10 @@ describe("stage list built from core's stage table", () => {
   });
   test("the libs stage links nothing and every library a stage links comes from the libs manifest key", () => {
     expect(STAGES.find((s) => s.name === LIBS_STAGE)!.libraries).toEqual([]);
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.vault)).toEqual(["PROTO", "AGENT", "RWA"]);
+    // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
+    // so does the timelock stage, whose TimelockController init code (metadata included) every proxy's CREATE2 prediction hashes.
+    // The libs and recorder stages deploy no proxy and link nothing.
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {
@@ -122,12 +125,15 @@ describe("stage list built from core's stage table", () => {
 
 describe("deploy-time configuration is consumed by the deployer stages 4 to 10, never by govern (issue 1520)", () => {
   const stage = (n: string) => STAGES.find((s) => s.name === n)!;
-  test("the governance stage deploys the weight setter from the admin and the router alone: no voting input exists (issue 1698)", () => {
-    expect(stage("governance").requiredEnv).toEqual(["ADMIN_ADDRESS", "ROUTER_ADDRESS", "DEPLOYMENT_OUT"]);
-    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) {
-      expect(stage("governance").requiredEnv).not.toContain(gone);
-      expect(requiredSheetNames(stage("governance"))).not.toContain(gone);
-    }
+  test("the governance stage takes no voting value and wires the receipt register from the ic-policy manifest (issue 1698)", () => {
+    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(stage("governance").requiredEnv).not.toContain(k);
+    // Issue 1808: TIMELOCK_MIN_DELAY (with SAFE_ADDRESS from the Safe manifest) names the timelock the governance proxy's upgrade authority is.
+    // Issue 1809: UPGRADE_MODE is the release sheet's (no literal, no default).
+    expect(requiredSheetNames(stage("governance"))).toEqual(["ADMIN_ADDRESS", "TIMELOCK_MIN_DELAY", "UPGRADE_MODE"]);
+    expect(resolveEnv("UPGRADE_MODE", null)).toEqual({ from: "sheet", name: "UPGRADE_MODE" });
+    expect(resolveEnv("CONSENSUS_RECEIPT_ADDRESS", null)).toEqual({ from: "manifest", stage: "ic-policy", field: "consensus_receipt" });
+    const names = forge.map((s) => s.name);
+    expect(names.indexOf("ic-policy")).toBeLessThan(names.indexOf("governance"));
   });
   test("each basket stage takes the caps, the exit fee, the fee recipient and the router eligibility with the default weights", () => {
     for (const n of ["proto", "agent", "rwa"]) {
@@ -139,19 +145,16 @@ describe("deploy-time configuration is consumed by the deployer stages 4 to 10, 
   test("every deploy-time key reaches a stage between router (4) and rwa (10), and no deployer stage reads a GOVERN_ name", () => {
     const names = forge.map((s) => s.name);
     const between = names.slice(names.indexOf("router"), names.indexOf("rwa") + 1);
-    expect(between).toEqual(["router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa"]);
+    expect(between).toEqual(["router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
     const consumed = new Set(between.flatMap((n) => stage(n).requiredEnv));
-    for (const k of ["TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
-    // issue 1698: no deployer stage reads a voting name any more
-    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(consumed.has(k), k).toBe(false);
+    for (const k of ["CONSENSUS_RECEIPT_ADDRESS", "TVL_CAP", "PER_DEPOSIT_CAP", "EXIT_FEE_BPS", "FEE_RECIPIENT", "ROUTER_DEFAULT_BPS"]) expect(consumed.has(k), k).toBe(true);
     for (const s of forge) for (const e of s.requiredEnv) expect(e.startsWith("GOVERN_"), `${s.name} reads ${e}`).toBe(false);
     expect(stage("govern").requiredEnv).toEqual([]);
   });
-  test("stageEnv hands the sheet values to the stages: the admin and the router to governance (no voting input), the eligibility vector to each basket", () => {
+  test("stageEnv hands the sheet values to the stages: no voting value to governance, the eligibility vector to each basket", () => {
     const { ctx, sheet } = setup();
     const gov = stageEnv(ctx, stage("governance"));
-    expect(gov.ADMIN_ADDRESS.toLowerCase()).toBe(sheet.admin.toLowerCase());
-    for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(gov[gone], gone).toBeUndefined();
+    for (const k of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(gov).not.toHaveProperty(k);
     // the example sheet makes PROTO, AGENT and RWA eligible with the launch vector USDC 9500, PROTO 500, AGENT 0, RWA 0
     expect(stageEnv(ctx, stage("proto")).ROUTER_DEFAULT_BPS).toBe("9500,500");
     expect(stageEnv(ctx, stage("agent")).ROUTER_DEFAULT_BPS).toBe("9500,500,0");

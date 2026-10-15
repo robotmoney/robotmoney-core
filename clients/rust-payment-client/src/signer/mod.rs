@@ -3,11 +3,10 @@
 //! `signer` module — `AgentSigner` trait and backends.
 //!
 //! Issue #8 / `Plan tracking issue #109` §3.2–§3.3. The trait is
-//! deliberately narrow: [`AgentSigner::sign_eip1559_hash`] — the live
-//! write path — and [`AgentSigner::sign_agent_consent`], the one typed
-//! message the gateway asks an agent to sign (issue #1791). Raw
-//! `sign_hash` / `sign_message` / `sign_typed_data` are intentionally
-//! absent so future HSM/KMS backends cannot widen the signing surface.
+//! deliberately narrow: only [`AgentSigner::sign_eip1559_hash`] — the
+//! live write path. Raw `sign_hash` / `sign_message` /
+//! `sign_typed_data` are intentionally absent so future HSM/KMS
+//! backends cannot widen the signing surface.
 //!
 //! The MVP backend lives in [`software`] and decrypts a passphrase-protected
 //! keystore on demand.
@@ -23,10 +22,7 @@
 use alloy_primitives::{Address, Signature as AlloySignature};
 use thiserror::Error;
 
-pub mod consent;
 pub mod software;
-
-pub use consent::AgentConsent;
 
 /// Backend kinds the daemon may report to operators (see `rmpc self-check`).
 ///
@@ -96,13 +92,6 @@ pub trait AgentSigner: Send + Sync {
     /// fields the caller controls; signing arbitrary digests outside
     /// the envelope is not exposed.
     fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError>;
-
-    /// Sign the gateway's EIP-712 `AgentConsent` for this agent (issue
-    /// #1791): the agent named in the digest is always
-    /// [`AgentSigner::public_address`], and the backend builds the digest
-    /// from the typed fields itself ([`AgentConsent::digest`]). It never
-    /// takes a caller-supplied digest, so it is not a signing oracle.
-    fn sign_agent_consent(&self, consent: &AgentConsent) -> Result<AlloySignature, SignerError>;
 }
 
 /// Whether a backend is device-bound (HSM/KMS). A label for `rmpc

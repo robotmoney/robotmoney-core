@@ -11,10 +11,8 @@
 #      Contracts whose runtime sits within SIZE_WARN_MARGIN of the EIP-170 cap
 #      are reported loudly (the #1298 growth risk) but do not fail the gate.
 #   2. Env-default guard — TIMELOCK_MIN_DELAY must not be left at the unsafe
-#      `0` default (the #864 revert class). Issue 1698 deleted RouterGovernance
-#      voting: its constructor is (router, admin), so QUORUM_THRESHOLD,
-#      VOTING_PERIOD and EXECUTION_DELAY are no longer constructor arguments
-#      and are not checked here (a sheet may still carry them; nothing reads them).
+#      `0` default (the #864 revert class). RouterGovernance has no voting, so
+#      there is no quorum or execution delay to guard (issue 1698).
 #
 # Usage:
 #   preflight-guards.sh [--contract NAME ...] [--dependency-manifest CHAIN_ID:RELEASE]
@@ -81,12 +79,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── 1. Hard env-default guard (#864 class) ──────────────────────────────────
-for var in TIMELOCK_MIN_DELAY; do
-  if [[ -n "${!var:-}" ]] && [[ "${!var}" == "0" ]]; then
-    fail "${var}=0 is the unsafe env-default hazard (#864) — set a non-zero value before the ceremony"
-  fi
-done
-# Issue 1698: no quorum, voting period or execution delay guard. RouterGovernance has no voting surface (constructor (router, admin)).
+if [[ -n "${TIMELOCK_MIN_DELAY:-}" ]] && [[ "${TIMELOCK_MIN_DELAY}" == "0" ]]; then
+  fail "TIMELOCK_MIN_DELAY=0 is the unsafe env-default hazard (#864) — set a non-zero value before the ceremony"
+fi
 echo "OK: [preflight] env-default guard: TIMELOCK_MIN_DELAY=${TIMELOCK_MIN_DELAY:-unset}"
 
 # ─── 2. EIP-170 / EIP-3860 size gate against the exact artifacts ─────────────

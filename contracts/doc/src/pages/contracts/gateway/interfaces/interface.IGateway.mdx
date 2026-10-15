@@ -5,7 +5,7 @@ description: "Minimal interface stub for the RobotMoney deposit gateway."
 
 # IGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/725de7a46a2d46fd825ed75f010959b8c56b8591/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:** IGateway
 
@@ -30,13 +30,6 @@ Authority model (issues #269, #1476). First-time authorization records
 also through `authorizeAgent`. Only the recorded owner can update the
 policy, hand the agent to an `ADMIN_ROLE` holder, or revoke it.
 `ADMIN_ROLE` grants no authority over an agent it does not own.
-
-Agent consent (issue #1791). A caller without `ADMIN_ROLE` can bind an
-agent address other than itself only with the agent's EIP-712
-`AgentConsent` signature over (agent, owner, shareReceiver, nonce) in the
-gateway's domain (name `RobotMoneyGateway`, version `1`, chain id, this
-gateway). An address bound without that consent (by an `ADMIN_ROLE`
-caller) can free itself through `releaseAgent`.
 
 Policy rule (issue #1476). Every call that writes a policy applies the
 same validator: the caller-independent shape checks plus one
@@ -246,6 +239,13 @@ Permissionless. Any EOA may commit. The hash binds the agent
 address, the caller identity, and a caller-chosen salt so that
 a mempool observer cannot front-run the reveal with a different
 depositor address.
+An agent address also uses this to consent to an owner (core 1791):
+from its own key it submits
+`keccak256(abi.encode(owner, keccak256(callData)))`, where `callData` is
+the full `revealAuthorization(agent, salt, policy)` calldata `owner` will
+send. That reveal then consumes it, so the consent covers one agent, one
+policy and one salt. Without the consent the reveal reverts
+`OwnerConsentMissing`, so nobody can take an address that never agreed.
 
 </i>
 
@@ -257,9 +257,9 @@ function commitAuthorization(bytes32 commitHash) external;
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| commitHash | `bytes32` | `keccak256(abi.encode(agent, msg.sender, salt))`. |
+| commitHash | `bytes32` | `keccak256(abi.encode(agent, msg.sender, salt))`, or the consent hash above. |
 
-<a id="revealauthorization-address-bytes32-agentpolicy-bytes"></a>
+<a id="revealauthorization-address-bytes32-agentpolicy"></a>
 
 ### revealAuthorization
 
@@ -268,7 +268,9 @@ Reveal `agent` and `salt` to validate the prior commitment and
 authorize the agent with the supplied policy. Reverts if no
 prior commitment matches, if the commitment has expired, if
 `msg.sender` is not the original committer, or if the hash
-does not match.
+does not match. For an `agent` other than the caller it also
+reverts `OwnerConsentMissing` unless the agent consented to this
+caller and this exact call through `commitAuthorization`.
 
 <i>
 
@@ -279,26 +281,8 @@ a caller without `ADMIN_ROLE` must name itself as
 
 </i>
 
-Agent consent (issue #1791). A caller without `ADMIN_ROLE`
-that names an `agent` other than itself must pass the agent's
-65-byte EIP-712 signature (`r ‖ s ‖ v`) over
-`AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)`
-with `owner = msg.sender`, `shareReceiver = p.shareReceiver`
-and `nonce = agentConsentNonce(agent)`, in the domain
-(`RobotMoneyGateway`, `implementationVersion()`, `block.chainid`,
-this gateway).
-Anything else reverts `InvalidAgentConsent`. A successful use
-advances the nonce, so a consent authorizes once. An agent
-revealing for itself, and an `ADMIN_ROLE` caller, pass empty
-bytes; the field is not read for them.
-
 ```solidity
-function revealAuthorization(
-        address agent,
-        bytes32 salt,
-        AgentPolicy calldata p,
-        bytes calldata agentConsent
-    ) external;
+function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 ```
 
 **Parameters**
@@ -308,7 +292,6 @@ function revealAuthorization(
 | agent | `address` | The agent address to authorize (must not already be owned). |
 | salt | `bytes32` | The caller-chosen salt used when building `commitHash`. |
 | p | `AgentPolicy` | Initial policy parameters. |
-| agentConsent | `bytes` | The agent's consent signature, or empty (see above). |
 
 <a id="authorizeagent-address-agentpolicy"></a>
 
@@ -323,8 +306,6 @@ authority after the deploy handover revokes the deployer's
 `agent` already has a recorded owner; that owner must call
 `setPolicy` to update or `revokeAgent` to release. The caller
 holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
-No agent consent is taken, so the agent may undo the binding
-with `releaseAgent` (issue #1791).
 
 ```solidity
 function authorizeAgent(address agent, AgentPolicy calldata p) external;
@@ -393,7 +374,7 @@ function transferAgentOwnership(address agent, address newOwner) external;
 ### revokeAgent
 
 Revoke an agent. Reverts if `msg.sender` is not the recorded
-owner. Clears policy, role, owner record and consent record.
+owner. Clears policy, role, and owner record.
 
 ```solidity
 function revokeAgent(address agent) external;
@@ -404,23 +385,6 @@ function revokeAgent(address agent) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | agent | `address` | The agent address whose policy and role are revoked. |
-
-<a id="releaseagent"></a>
-
-### releaseAgent
-
-Release path for an address bound without its consent (issue
-#1791). The caller is the agent: when it has a recorded owner
-and never consented to that binding (an `ADMIN_ROLE` caller
-authorized it), this clears its policy, role and owner record
-exactly as `revokeAgent` does and emits `AgentRevoked` with the
-owner it had. Reverts `AgentNotReleasable` when the caller has
-no owner or consented to its binding (by signature or by
-revealing for itself); such an agent's owner revokes it.
-
-```solidity
-function releaseAgent() external;
-```
 
 <a id="pausedeposits"></a>
 
@@ -693,76 +657,6 @@ function agentOwner(address agent) external view returns (address);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` | The account that authorized `agent` or received it through<br/>`transferAgentOwnership`, or zero if none. |
 
-<a id="agentconsentnonce-address"></a>
-
-### agentConsentNonce
-
-Nonce the agent's next `AgentConsent` signature must carry
-(issue #1791). Starts at zero and advances by one each time a
-consent signature authorizes the agent.
-
-```solidity
-function agentConsentNonce(address agent) external view returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` | The agent address to look up. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="implementationversion"></a>
-
-### implementationVersion
-
-The gateway implementation version: the EIP-712 domain `version`
-of every `AgentConsent` (ADR-0014 §10, QA plan Decisions D5). An
-implementation that changes what a signed consent means returns a
-new value, so every consent signed under the old one stops
-verifying after the upgrade; a pure fix keeps it. Clients read it
-before they sign and never assume a value.
-
-```solidity
-function implementationVersion() external pure returns (string memory);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `string` |  |
-
-<a id="agentconsented-address"></a>
-
-### agentConsented
-
-True when the agent's current binding carries its consent: a
-consent signature, or the agent revealed for itself. False for
-an unbound address and for a binding an `ADMIN_ROLE` caller made
-without consent, which the agent can undo with `releaseAgent`.
-
-```solidity
-function agentConsented(address agent) external view returns (bool);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| agent | `address` | The agent address to look up. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `bool` |  |
-
 <a id="effectivewithdrawwindowgross-address"></a>
 
 ### effectiveWithdrawWindowGross
@@ -906,9 +800,7 @@ event AgentOwnershipTransferred(
 
 ### AgentRevoked
 
-Emitted when an agent's policy and role are revoked, by its
-recorded owner through `revokeAgent` or by the agent itself
-through `releaseAgent`.
+Emitted when an agent's policy and role are revoked.
 
 ```solidity
 event AgentRevoked(address indexed agent, address indexed owner);
@@ -919,7 +811,7 @@ event AgentRevoked(address indexed agent, address indexed owner);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | agent | `address` | Agent address whose policy was removed. |
-| owner | `address` | The agent's recorded owner at the time it was removed. |
+| owner | `address` | Depositor EOA that revoked (must equal the recorded owner). |
 
 ### DepositsPaused
 

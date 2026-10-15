@@ -10,7 +10,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Tests for NoYieldTestAdapter and its integration with RobotMoneyVault.
 ///
@@ -39,7 +39,7 @@ contract NoYieldTestAdapterTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         // Deploy vault: tvlCap=10M, perDepositCap=1M, exitFeeBps=0
-        vault = Proxied.robotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)),
             10_000_000 * ONE_USDC, // tvlCap
             1_000_000 * ONE_USDC, // perDepositCap

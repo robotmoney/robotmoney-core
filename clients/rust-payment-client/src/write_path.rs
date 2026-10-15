@@ -41,6 +41,27 @@
 //! orchestration is unit-testable against a `mockito` server without
 //! spawning the `rmpc` binary.
 //!
+//! # Implementation binding (issue 1810)
+//!
+//! The gateway is an ERC-1967 proxy whose implementation can change through
+//! the governed timelock. Preflight verifies the proxy code and the live
+//! implementation at one pinned block and hands the verified implementation
+//! to [`Submission::gateway_implementation`]. [`WriteSession::submit`] binds
+//! the signed transaction to it twice more:
+//!
+//! - **before broadcast** it re-verifies the gateway at `latest`. A different
+//!   or unapproved implementation discards the signed envelope unsent
+//!   (`ErrImplementationChanged` / `ErrImplementationNotApproved`);
+//! - **after the receipt** it reads the implementation slot at the block the
+//!   transaction executed in. If it is not the bound implementation, the
+//!   write is reported as `ErrImplementationChanged` with its `tx_hash`, never
+//!   as a success, and the replay entry stays so it cannot be re-sent blindly.
+//!
+//! The transaction's `deadline` (at most `MAX_DEADLINE_SKEW_SECS`) bounds how
+//! long a signed transaction can wait to execute, so an upgrade queued in
+//! the timelock (minimum delay far above that bound) cannot silently apply to
+//! an old signature for long.
+//!
 //! # One broadcast path
 //!
 //! [`WriteSession::submit`] is the only place in this module that calls
@@ -66,8 +87,11 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::implementation::{
+    check_executed_under, fmt_implementation, read_implementation,
+};
 use crate::policy::revert::{simulate, Simulation};
-use crate::policy::ChecksOutput;
+use crate::policy::{verify_gateway_code, ChecksOutput};
 use crate::replay_cache::ReplayCache;
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
@@ -557,6 +581,10 @@ pub struct Submission<'a> {
     /// transaction reaches the chain. A closure because those refusals are
     /// the unhappy path: the snapshot is not built on a successful write.
     pub checks: &'a dyn Fn() -> ChecksOutput,
+    /// The gateway implementation preflight verified
+    /// ([`crate::policy::PreflightReport::gateway_implementation`]); `None`
+    /// for a direct gateway. The signed transaction is bound to it.
+    pub gateway_implementation: Option<Address>,
 }
 
 /// A signed, mined, non-reverted transaction and its receipt.
@@ -603,6 +631,7 @@ impl WriteSession {
             receipt_timeout_secs,
             replay_deadline,
             checks,
+            gateway_implementation,
         } = submission;
 
         // -- Pre-sign simulation (QA plan U6) ----------------------------
@@ -653,6 +682,34 @@ impl WriteSession {
                 ));
             }
         };
+
+        // -- Implementation binding, before broadcast (issue 1810) --------
+        // Re-verify the gateway now that the envelope is signed. A changed
+        // or unapproved implementation discards the envelope: it is never
+        // sent, so it can never execute.
+        let live = self.rt.block_on(async {
+            let live = read_implementation(&self.rpc, self.request.gateway, "latest").await?;
+            if live != gateway_implementation {
+                return Err(RmpcError::ErrImplementationChanged(format!(
+                    "gateway implementation changed from {} to {} after preflight; the signed \
+                     transaction was discarded unsent",
+                    fmt_implementation(gateway_implementation),
+                    fmt_implementation(live)
+                )));
+            }
+            verify_gateway_code(&self.rpc, cfg, "latest")
+                .await
+                .map(|_| ())
+        });
+        if let Err(e) = live {
+            log::error!("rmpc {cmd}: {e}");
+            self.record(AuditDecision::Refused, Some(e.name().to_string()));
+            return Err(WriteAbort::refused(
+                self.refusal(e.name())
+                    .message(format!("{e}"))
+                    .checks(checks()),
+            ));
+        }
 
         // -- Broadcast ----------------------------------------------------
         // A broadcast failure is a refusal with a stable name, not a
@@ -724,6 +781,27 @@ impl WriteSession {
                 ));
             }
         };
+
+        // -- Implementation binding, at execution (issue 1810) ------------
+        // The transaction ran under whatever implementation the proxy held
+        // in its block. Anything other than the bound one is not a success:
+        // the operator must review what executed. The replay entry stays.
+        let executed_under = self.rt.block_on(check_executed_under(
+            &self.rpc,
+            self.request.gateway,
+            gateway_implementation,
+            receipt.block_number,
+            &tx_hash_hex,
+        ));
+        if let Err(e) = executed_under {
+            log::error!("rmpc {cmd}: {e}");
+            self.record(AuditDecision::Refused, Some(e.name().to_string()));
+            return Err(WriteAbort::refused(
+                self.refusal(e.name())
+                    .message(format!("{e}"))
+                    .tx_hash(tx_hash_hex.clone()),
+            ));
+        }
 
         Ok(Confirmed {
             tx_hash_hex,

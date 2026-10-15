@@ -6,8 +6,7 @@
  * The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil. This checks
  * the owner rule "ONE pin per workflow run (a setup job outputs the pin; jobs take it as input)":
  *   1. the nightly (suite-29-nightly-twin-fork.yml) calls suites 5, 7, 8, 10, 11b, 14 and 28 with
- *      pin_block taken from its own pin job, and passes secrets with `secrets: inherit`; it stays nightly
- *      and runs the governed-proxy lifecycle job `twin-upgrade-rehearsal` (QA plan v1 P4, issue 1811);
+ *      pin_block taken from its own pin job, and passes secrets with `secrets: inherit`;
  *   2. each of those suites declares the workflow_call input pin_block, has a `pin` job that uses
  *      .github/actions/twin-pin with that input, and every step that uses .github/actions/twin-fork
  *      takes its pin-block from the pin job output and sits in a job that needs the pin job;
@@ -115,32 +114,6 @@ if (JSON.stringify(nightly).includes("secrets.") && /secrets\.(?!BASE_UPSTREAM_R
   if (/upstream_url|upstream:\s*up\b|JSON\.stringify\(up\)/.test(run)) bad(`${NIGHTLY} pin file must not carry the upstream URL`);
 }
 ok("the nightly uploads suite-results and twin-pin and needs no secret beyond the optional BASE_UPSTREAM_RPC");
-
-// 2e. the governed-proxy lifecycle rehearsal (QA plan v1 P4, issue 1811): a named job of THIS nightly, never per pull request.
-{
-  const on = nightly.on ?? nightly.true;
-  if (on?.pull_request || on?.pull_request_target || on?.push) bad(`${NIGHTLY} must stay nightly (schedule and workflow_dispatch): the upgrade rehearsal is not a per-PR job`);
-  if (!on?.schedule) bad(`${NIGHTLY} has no schedule: the upgrade rehearsal must run nightly`);
-  const job = nightly.jobs?.["twin-upgrade-rehearsal"];
-  if (!job) bad(`${NIGHTLY} has no twin-upgrade-rehearsal job`);
-  if (![].concat(job.needs ?? []).includes("pin")) bad("twin-upgrade-rehearsal must need the pin job");
-  const steps: any[] = job.steps ?? [];
-  const idx = (f: (x: any) => boolean) => steps.findIndex(f);
-  const fork = idx((x) => String(x.uses ?? "").endsWith("/twin-fork"));
-  const publish = idx((x) => String(x.uses ?? "").endsWith("/twin-publish"));
-  const rehearse = idx((x) => /publish-contracts\/src\/ci\/twin-upgrade-rehearsal\.ts/.test(String(x.run ?? "")));
-  if (fork < 0 || steps[fork].with?.["pin-block"] !== PIN_OUT) bad(`twin-upgrade-rehearsal must start twin-fork at ${PIN_OUT}`);
-  if (publish < 0 || steps[publish].with?.verify !== "true" || steps[publish].with?.govern !== "true") bad("twin-upgrade-rehearsal must deploy with twin-publish (verify and govern) first");
-  if (steps[publish]?.with?.rehearsal === "true") bad("twin-upgrade-rehearsal deploys the production-kind Twin sheet: the rehearsal kind and its receipt path are suite 28's");
-  if (rehearse < 0 || !(fork < publish && publish < rehearse)) bad("twin-upgrade-rehearsal must run publish-contracts/src/ci/twin-upgrade-rehearsal.ts after twin-fork and twin-publish");
-  if (!/steps\.fork\.outputs\.rpc-url/.test(String(steps[rehearse]?.env?.RPC_URL ?? ""))) bad("twin-upgrade-rehearsal must hand the fork's rpc-url to the rehearsal script as RPC_URL");
-  const up = steps.find((x) => String(x.uses ?? "").includes("upload-artifact"));
-  if (!/^upgrade-rehearsal-\$\{\{ github\.sha \}\}$/.test(String(up?.with?.name)) || !/always\(\)/.test(String(up?.if ?? ""))) bad("twin-upgrade-rehearsal must upload upgrade-rehearsal-<sha> with if: always()");
-  if (/TWIN_RUN_DIR/.test(steps.map((x) => String(x.run ?? "")).join("\n"))) bad("twin-upgrade-rehearsal must not upload the run dir (it holds the throwaway keys and the passphrase file)");
-  if (![].concat(nightly.jobs?.results?.needs ?? []).includes("twin-upgrade-rehearsal")) bad("the results job must need twin-upgrade-rehearsal, so a red rehearsal makes the nightly red");
-  if (!/twin-upgrade-rehearsal\.json/.test(String((nightly.jobs?.results?.steps ?? [])[0]?.run ?? ""))) bad("the results job must record and require twin-upgrade-rehearsal.json");
-  ok("the nightly runs twin-upgrade-rehearsal (twin-fork at the pin, twin-publish, the lifecycle script), uploads its evidence and fails the run when it is red");
-}
 
 // 2c. suite 1-2: the forge fork job runs on the Twin fork at one pin and no saved state.
 {

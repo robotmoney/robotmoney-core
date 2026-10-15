@@ -15,9 +15,6 @@
  * a confirmed commit transaction, advance the mock block number so revealReady
  * is true, then check the reveal submit calls revealAuthorization.
  *
- * The agent is not the depositor, so each surface first takes the agent's
- * EIP-712 AgentConsent (issue 1791); `giveConsent` signs and pastes it.
- *
  * The commit hash correctness (keccak256(abi.encode(agent, caller, salt))) is
  * verified by checking the first argument to commitAuthorization is a 66-char
  * 0x-prefixed hex string (32 bytes). The full hash round-trip is verified in
@@ -29,7 +26,6 @@ import { fireEvent, render, screen, waitFor } from "./helpers/render";
 import { OnboardingWizard } from "../../src/components/OnboardingWizard";
 import { AuthorizeTab } from "../../src/components/AuthorizeTab";
 import type { PreviewContext } from "../../src/lib/preview";
-import { CONSENT_AGENT, pasteAgentConsent, signAgentConsent } from "./helpers/agentConsent";
 
 // ---------------------------------------------------------------------------
 // Shared spy state
@@ -54,14 +50,11 @@ vi.mock("wagmi", async (importOriginal) => {
     useAccount: () => ({
       address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const,
       isConnected: true,
-      chainId: 918453,
     }),
     useChainId: () => 918453,
     useReadContract: ({ functionName }: { functionName: string }) => {
       // Return a USDC address for gateway.usdc() call; non-zero balance for others.
       if (functionName === "usdc") return { data: "0x4444444444444444444444444444444444444444" };
-      if (functionName === "agentConsentNonce") return { data: 0n };
-      if (functionName === "implementationVersion") return { data: "1" };
       return { data: 1000n };
     },
     useBalance: () => ({ data: { value: 1000n } }),
@@ -91,9 +84,7 @@ vi.mock("wagmi", async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
-/** An agent whose key the test holds, so it can sign the agent's consent. */
-const AGENT = CONSENT_AGENT.address;
-const DEPOSITOR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
+const AGENT = "0x2222222222222222222222222222222222222222" as const;
 const SHARE_RECEIVER = "0x3333333333333333333333333333333333333333" as const;
 
 const ctx: PreviewContext = {
@@ -141,20 +132,6 @@ function advanceWizardToStep3() {
   fireEvent.click(screen.getByTestId("step-2-next"));
 }
 
-/** Sign the agent's consent for this depositor and paste it into `<prefix>-agent-consent-input`. */
-async function giveConsent(prefix: "wizard" | "authorize") {
-  const signature = await signAgentConsent({
-    owner: DEPOSITOR,
-    shareReceiver: SHARE_RECEIVER,
-    nonce: 0n,
-    chainId: 918453,
-    gateway: GATEWAY,
-    version: "1",
-  });
-  await pasteAgentConsent(prefix, signature);
-  return signature;
-}
-
 // Simulate commit onSuccess: call the callback with a mock tx hash, set the
 // receipt block number to 100n (the commit mined at block 100), and advance
 // the current block to 101n so revealReady = 101n > 100n = true.
@@ -194,7 +171,6 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
   it("commit submit calls commitAuthorization with a 32-byte hash", async () => {
     renderWizard();
     advanceWizardToStep3();
-    await giveConsent("wizard");
 
     const commitBtn = screen.getByTestId("wizard-commit-submit");
     expect(commitBtn).not.toBeDisabled();
@@ -214,7 +190,6 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
   it("commit submit does NOT call authorizeAgent", async () => {
     renderWizard();
     advanceWizardToStep3();
-    await giveConsent("wizard");
 
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
 
@@ -228,7 +203,6 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
   it("transitions to reveal phase after commit onSuccess", async () => {
     renderWizard();
     advanceWizardToStep3();
-    await giveConsent("wizard");
 
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
 
@@ -239,10 +213,9 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     });
   });
 
-  it("reveal submit calls revealAuthorization with agent, salt, policy and the agent's consent", async () => {
+  it("reveal submit calls revealAuthorization with agent, salt, and policy", async () => {
     renderWizard();
     advanceWizardToStep3();
-    const consent = await giveConsent("wizard");
 
     // Commit
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
@@ -265,18 +238,12 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
 
     const revealCall = capturedWriteArgs[0];
     expect(revealCall.functionName).toBe("revealAuthorization");
-    // args: [agent, salt, policy, agentConsent] (issue 1791)
-    const [revealAgent, revealSalt, revealPolicy, revealConsent] = revealCall.args as [
-      string,
-      string,
-      unknown,
-      string,
-    ];
+    // args: [agent, salt, policy]
+    const [revealAgent, revealSalt, revealPolicy] = revealCall.args as [string, string, unknown];
     expect(revealAgent.toLowerCase()).toBe(AGENT.toLowerCase());
     // salt must be a 32-byte hex string
     expect(revealSalt).toMatch(/^0x[0-9a-f]{64}$/i);
     expect(revealPolicy).toBeTruthy();
-    expect(revealConsent).toBe(consent.toLowerCase());
   });
 
   it("reveal button is disabled before the commit receipt arrives (still mining)", async () => {
@@ -284,7 +251,6 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     // revealReady requires commitBlockNumber !== null, so button stays disabled.
     renderWizard();
     advanceWizardToStep3();
-    await giveConsent("wizard");
 
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
 
@@ -325,7 +291,6 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
 
   it("commit submit calls commitAuthorization (not authorizeAgent)", async () => {
     renderAuthorizeTab();
-    await giveConsent("authorize");
 
     fireEvent.click(screen.getByTestId("authorize-submit"));
 
@@ -339,7 +304,6 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
 
   it("commitAuthorization args[0] is a 32-byte hash", async () => {
     renderAuthorizeTab();
-    await giveConsent("authorize");
 
     fireEvent.click(screen.getByTestId("authorize-submit"));
 
@@ -351,7 +315,6 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
 
   it("transitions to reveal phase and calls revealAuthorization after block advances", async () => {
     renderAuthorizeTab();
-    await giveConsent("authorize");
 
     // Commit
     fireEvent.click(screen.getByTestId("authorize-submit"));
@@ -377,6 +340,5 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
     const [revealAgent, revealSalt] = revealCall.args as [string, string, unknown];
     expect(revealAgent.toLowerCase()).toBe(AGENT.toLowerCase());
     expect(revealSalt).toMatch(/^0x[0-9a-f]{64}$/i);
-    expect(revealCall.args).toHaveLength(4);
   });
 });

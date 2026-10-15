@@ -1,5 +1,5 @@
-//! Integration tests for issue #1022 (IDX-3 / IDX-5): account-position and
-//! vote-power accounting in the explorer indexer.
+//! Integration tests for issue #1022 (IDX-3): account-position accounting in
+//! the explorer indexer.
 //!
 //! - **IDX-3** — `insert_wallet_position` had zero call sites, so the
 //!   `wallet_positions` table (which backs the `account_positions` view / the
@@ -10,10 +10,14 @@
 //!   balance row.
 //! - **IDX-5** — the proposal vote-power tally. Its test is gone with the
 //!   tally: RouterGovernance voting was deleted (issue 1698, QA plan C1) and
-//!   migration 0023 dropped `governance_proposals` and `governance_votes`.
+//!   migration 0024 dropped `governance_proposals` and `governance_votes`.
 //!
-//! Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-3/IDX-5),
-//!            services/explorer-indexer/src/scan_residual_seams.rs §B1/§B2.
+//! The file name keeps the IDX-5 vote-power half it used to carry because CI
+//! selects it by name. That half was deleted with `RouterGovernance` voting
+//! (issue #1698): there is no vote and no tally to index.
+//!
+//! Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-3),
+//!            services/explorer-indexer/src/scan_residual_seams.rs §B1.
 
 mod common;
 

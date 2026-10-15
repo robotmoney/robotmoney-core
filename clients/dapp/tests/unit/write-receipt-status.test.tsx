@@ -19,11 +19,11 @@ import { fireEvent, render, screen, waitFor } from "./helpers/render";
 import { AuthorizeTab } from "../../src/components/AuthorizeTab";
 import { RotationTab } from "../../src/components/RotationTab";
 import type { PreviewContext } from "../../src/lib/preview";
-import { CONSENT_AGENT, pasteAgentConsent, signAgentConsent } from "./helpers/agentConsent";
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
 const DEPOSITOR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 const OLD_AGENT = "0x5555555555555555555555555555555555555555" as const;
+const NEW_AGENT = "0x6666666666666666666666666666666666666666" as const;
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const tx = (b: string) => `0x${b.repeat(64)}` as `0x${string}`;
 const COMMIT_TX = tx("c");
@@ -48,8 +48,6 @@ vi.mock("wagmi", async (importOriginal) => {
     useReadContract: ({ functionName }: { functionName: string }) => {
       if (functionName === "hasRole") return { data: false };
       if (functionName === "agentOwner") return { data: ZERO };
-      if (functionName === "agentConsentNonce") return { data: 0n };
-      if (functionName === "implementationVersion") return { data: "1" };
       return { data: undefined };
     },
     useBlockNumber: () => ({ data: state.block }),
@@ -95,7 +93,7 @@ beforeEach(() => {
 });
 
 describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
-  // A self-reveal: the wallet binds itself, so no agent consent is needed.
+  // A self-reveal: the wallet binds itself, so no agent consent commit is needed (core 1791).
   function renderSelfBinding() {
     return render(
       <AuthorizeTab
@@ -167,30 +165,21 @@ describe("AuthorizeTab — commit and reveal receipts (QA plan U5)", () => {
 });
 
 describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
-  async function fillAndConsent() {
+  function fill() {
     render(<RotationTab gatewayAddress={GATEWAY} ctx={ctx} now={NOW} />);
     fireEvent.change(screen.getByTestId("rotation-old-agent-input"), {
       target: { value: OLD_AGENT },
     });
     fireEvent.change(screen.getByTestId("rotation-new-agent-input"), {
-      target: { value: CONSENT_AGENT.address },
+      target: { value: NEW_AGENT },
     });
     fireEvent.change(screen.getByTestId("rotation-shareReceiver-input"), {
       target: { value: DEPOSITOR },
     });
-    const signature = await signAgentConsent({
-      owner: DEPOSITOR,
-      shareReceiver: DEPOSITOR,
-      nonce: 0n,
-      chainId: 918453,
-      gateway: GATEWAY,
-      version: "1",
-    });
-    await pasteAgentConsent("rotation", signature);
   }
 
   async function runToReveal(revealReceipt: Receipt) {
-    await fillAndConsent();
+    fill();
     const revoke = screen.getByTestId("rotation-revoke-submit");
     await waitFor(() => expect(revoke).not.toBeDisabled());
     fireEvent.click(revoke);
@@ -219,7 +208,7 @@ describe("RotationTab — every step renders its receipt (QA plan U5)", () => {
   });
 
   it("a reverted revoke shows its revert and keeps step 2 closed", async () => {
-    await fillAndConsent();
+    fill();
     const revoke = screen.getByTestId("rotation-revoke-submit");
     await waitFor(() => expect(revoke).not.toBeDisabled());
     fireEvent.click(revoke);

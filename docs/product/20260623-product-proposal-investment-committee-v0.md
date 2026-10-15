@@ -120,7 +120,7 @@ asks for:
 | Allocation choices | **Per-vault tilts over the existing 4-vault catalog, not a weight vector.** Each vote is one vault (`overweight`/`neutral`/`underweight` at `InvestmentCommitteePolicy.sol:63-69`, `tests/fixtures/committee-vote.schema.json:22-33` with `target_weight_bps` 0–10 000 and `confidence` 0–100). Aggregation to a router weight vector is **off-chain, admin-applied**; there is no on-chain aggregation in v0. A vault is votable only when it is Active and (for router relevance) `isRouterEligible` (`docs/architecture.md` §4.1, §4.7; `RouterGovernance.sol:387`). | Shipped | `docs/prd.md` §11, `docs/architecture.md:4.1,4.7`, `RouterGovernance.sol:365-422` |
 | Daily regime feed | **Protocol-scope, read-only dapp surface with declared authority.** Rendered from the indexer + live chain reads per `docs/architecture.md` §5.0/5.3/5.4 (protocol scope: no wallet; safety-critical signing values still come from live `rmpc` reads, `docs/architecture.md` §6.1). Authored by Robot Money (RM) on a daily cadence; staleness and late-publish handling are specified in §3.2. | Shipped (shape) | `docs/architecture.md:5.0,5.3,5.4` |
 | Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own tilt history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: tilt submission (`committee vote-submit`: vault → stance/weight → `rationale_uri` → preview → sign via gateway). A tilt is a signed recommendation, not a vote on anything; the preview states explicitly that it does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
-| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. The Safe, through the timelock, releases the receipt and applies its weights in one timelock operation (`releaseReceipt` sets `released=true` and emits `ReceiptReleased`; the weight setter writes the router weights in the same batch — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9; the receipt contract itself makes no router call). Receipts are observable via the indexer/API like tilts. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
+| Consensus recommendation receipts | **v0.1 — implemented on the local devnet (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. The Safe, through the timelock, releases the receipt and applies its weights in one timelock operation (`releaseReceipt` sets `released=true` and emits `ReceiptReleased`; the weight setter writes the router weights in the same `RouterGovernance.applyReceipt` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.9; the receipt contract itself makes no router call). Receipts are observable via the indexer/API like tilts. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Implemented locally; public deployment deferred | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.9,5.1,5.4,7.5`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
 
 #### 2.1 Consensus recommendation receipts — v0.1 implementation scope
 
@@ -186,9 +186,8 @@ the local-devnet path; there is no unimplemented receipt interface.
   the receipt (`releaseReceipt`, emits `ReceiptReleased`) and applies its
   weights (publish-contracts govern row `apply-receipt`, core 1696). That
   operation is one call, `RouterGovernance.applyReceipt(receiptId,
-  payloadDigest, vaults, bps)`, which releases the receipt and calls
-  `PortfolioRouter.setWeights` in the same transaction (issue 1698). There is
-  no voting by anyone (`docs/architecture.md` §2.3, §2.4, §4.8).
+  payloadDigest, vaults, bps)`. There is no voting by
+  anyone (`docs/architecture.md` §2.3, §2.4, §4.8).
 - **Consensus derivation — deterministic; the judge explains, it does not decide
   (decided).** The weight vector is the **unweighted arithmetic mean of the
   analysts' normalized vectors** — `robotmoney-frontend`'s shipped
@@ -531,15 +530,14 @@ behaviors the shape leaves open.
 ### 3.4 No contract refactor — and who recommends vs. who approves
 
 `InvestmentCommitteePolicy` never calls and is never called by
-`RouterGovernance` (`RouterGovernance.sol:1-630` controls `PortfolioRouter`
+`RouterGovernance` (`RouterGovernance.sol` controls `PortfolioRouter`
 weights only, `docs/architecture.md:92-99,114-125`). The linkage is
 the `apply-receipt` govern row: the Safe (via timelock, `docs/architecture.md:4.5`)
-schedules one call, `RouterGovernance.applyReceipt`, that releases the
+schedules one `RouterGovernance.applyReceipt` call that releases the
 hash-verified receipt and applies its weight vector through the weight setter;
 the tool checks before sending that the bps sum to 10000 and that the vault
-list equals the registry's router-eligible list. Issue 1698 deleted the
-contract's proposal, vote and execute functions with the voter set, and
-`applyReceipt` replaced them.
+list equals the registry's router-eligible list. `RouterGovernance` has no
+voting function (issue 1698).
 
 #### Governance topology (this repo has more than one governing body)
 
@@ -549,7 +547,7 @@ included. Two roles sit beside it with no configuration authority:
 
 | Body | Membership | Governs |
 |---|---|---|
-| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, owners sign with encrypted keystores and a typed passphrase (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the one-call `apply-receipt` operation) |
+| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, owners sign with encrypted keystores and a typed passphrase (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004), and router weights through `WEIGHT_SETTER_ROLE` (the `apply-receipt` call, `RouterGovernance.applyReceipt`) |
 | **Committee agents** | `COMMITTEE_AGENT_ROLE` holders registered by the timelock | Nothing on chain: they record tilts and the consensus receipt as signed recommendations |
 | **Guardian** | Lower quorum than the full Safe; may pause, may **not** unpause (`docs/technical/security-model.md:212`) | Emergency pause |
 
@@ -592,7 +590,7 @@ Remaining uncertainty is in §6.
 | # | Decision | Resolution | Owner / grounding |
 |---|---|---|---|
 | 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; pinned for receipts.** Votes retain their existing commitment tuple and public memo. A receipt's chain record stores derived `receipt_id`, `payload_digest`, `payload_uri`, authenticated submitter, and released state only. The schema-pinned off-chain payload carries session/subject identity, quorum and stance counts, judge prose, exact analyst Ed25519 signature material, `prompt_hash` / `inputs_digest`, and an optional four-bucket bps vector (§2.1, §6.1). | Contract + schema |
-| 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **The `apply-receipt` timelock batch; no refactor.** IC tilts are signed recommendations and the IC contracts make no router call (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is one timelock operation scheduled by the Safe: release the receipt and apply its weights through the weight setter (core 1696). | Architecture |
+| 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **The `apply-receipt` timelock call; no refactor.** IC tilts are signed recommendations and the IC contracts make no router call (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is one timelock operation scheduled by the Safe: release the receipt and apply its weights through the weight setter (core 1696). | Architecture |
 | 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0/v0.1, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register` (*note 2026-10-05: that command was removed in issue #1447 workstream K; seed through the Safe and timelock per `docs/technical/consensus-receipt-submitter-runbook.md` §3*). External organization onboarding is deferred to a follow-on proposal (§6.3). | Ops + product |
 
 ---
@@ -691,9 +689,8 @@ Remaining uncertainty is in §6.
   payload signature count as off-chain evidence. `meanTakeWeights` supplies the
   normalized unweighted mean; conversion uses the schema-pinned binary64
   largest-remainder allocation in canonical bucket order, which closes exactly
-  at 10,000 bps. The Safe schedules the one-call `apply-receipt` operation
-  (`RouterGovernance.applyReceipt`) through the timelock; it releases the
-  receipt and applies its weights in one transaction
+  at 10,000 bps. The Safe schedules the `apply-receipt` call through the
+  timelock; it releases the receipt and applies its weights in one operation
   after the pre-send eligibility checks. Nothing submits unattended. The existing
   per-vault registration and tilt-submission path (`committee vote-submit`, a
   signed tilt, not a vote on anything) is kept unchanged alongside receipts; no

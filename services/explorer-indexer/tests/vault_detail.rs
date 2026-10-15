@@ -709,7 +709,7 @@ async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
 /// opens, the transferee when it claims. An `ExclusionOpened` from an address that is not the
 /// ledger of a watched vault writes nothing.
 ///
-/// The ledger is where `ExclusionLedgerFactory` created it (ADR-0014 §9), and the indexer learns it
+/// The ledger is where the vault's initializer created it, and the indexer learns it
 /// from the vault's `exclusionLedger()` (security round 1). The vault's own CREATE address at
 /// nonce 1, which the indexer used to derive, is the impostor here: on a proxy vault it is no
 /// ledger at all.
@@ -1127,7 +1127,9 @@ async fn exclusion_snapshot_balances_are_read_by_a_budgeted_pass() {
 #[tokio::test]
 async fn a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed() {
     use alloy_sol_types::{SolCall as _, SolEvent as _};
-    use explorer_indexer::abi::{IExclusionLedgerEvents, IRobotMoneyVaultReads, IUpgradeEvents};
+    use explorer_indexer::abi::{
+        IExclusionLedgerEvents, IGovernedUpgradeEvents, IRobotMoneyVaultReads,
+    };
     use std::sync::Arc;
 
     let fx = pg_fixture().await;
@@ -1170,7 +1172,7 @@ async fn a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed() {
         .await
         .unwrap();
 
-    let upgraded = IUpgradeEvents::Upgraded {
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: Address::from([0x99u8; 20]),
     }
     .encode_log_data();
@@ -1295,21 +1297,21 @@ async fn a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed() {
 /// The indexer reads each vault's ledger from its `exclusionLedger()` once, stores the answer
 /// (`exclusion_ledgers_of`, `vault_exclusion_ledgers`), and reads it again only when the vault
 /// emits `Upgraded` or `Initialized` (security rounds 2 and 3). That holds only while (a)
-/// `RobotMoneyVault` keeps a public `ExclusionLedger exclusionLedger` (the getter
-/// `IRobotMoneyVaultReads` calls), and (b) the only write to it is `_initLedger`, which an
-/// initializer runs with the ledger `ExclusionLedgerFactory.create` returns. A reinitializer is
+/// `RobotMoneyVault` keeps the external view `exclusionLedger()` (the getter
+/// `IRobotMoneyVaultReads` calls), and (b) the only write to the stored ledger is
+/// `RobotMoneyVaultOps.createLedger`, which `initialize` calls once and which reverts on a second call. A reinitializer is
 /// seen through the `Upgraded` event of its upgrade
 /// (`a_vault_upgrade_that_moves_its_ledger_keeps_both_ledgers_indexed`) or, run later by its own
 /// timelock operation, through its `Initialized` event
 /// (`a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed`);
 /// a setter callable without an upgrade would move the ledger with no event the indexer follows,
-/// and the new ledger's records would be lost with no error. The vault creates no contract itself,
-/// so no address derived from the vault is a ledger.
+/// and the new ledger's records would be lost with no error. The vault creates no contract itself
+/// (the library does, through DELEGATECALL), so no address derived from the vault is a ledger.
 ///
 /// This replaces the guard on the old derivation (the vault's CREATE address at nonce 1), which
-/// failed once ADR-0014 moved the ledger's creation into the factory. Runs without a DB.
+/// failed once the ledger's creation moved into the proxy initializer. Runs without a DB.
 #[test]
-fn exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault() {
+fn exclusion_ledger_is_set_once_by_the_initializer_and_read_from_the_vault() {
     use alloy_sol_types::SolCall as _;
     use explorer_indexer::abi::IRobotMoneyVaultReads;
 
@@ -1368,9 +1370,9 @@ fn exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault() {
 
     // (a) The getter the indexer calls.
     assert!(
-        squashed.contains("ExclusionLedger public exclusionLedger;"),
-        "RobotMoneyVault must keep `ExclusionLedger public exclusionLedger;`: the indexer reads \
-         the ledger through that getter"
+        squashed.contains("function exclusionLedger() external view returns (ExclusionLedger)"),
+        "RobotMoneyVault must keep `function exclusionLedger() external view returns \
+         (ExclusionLedger)`: the indexer reads the ledger through that getter"
     );
     assert_eq!(
         IRobotMoneyVaultReads::exclusionLedgerCall::SIGNATURE,
@@ -1378,36 +1380,54 @@ fn exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault() {
         "the indexer's read must name the vault's getter"
     );
 
-    // (b) One write, inside `_initLedger`, of what the factory created.
-    let writes: Vec<usize> = squashed
-        .match_indices("exclusionLedger = ")
-        .map(|(at, _)| at)
-        .collect();
+    // (b) One write, inside `RobotMoneyVaultOps.createLedger`, of the ledger it created, and one
+    // call to it, from `initialize`.
     assert_eq!(
-        writes.len(),
+        squashed.matches("RobotMoneyVaultOps.createLedger(").count(),
         1,
-        "RobotMoneyVault must write `exclusionLedger` exactly once, or the ledger the indexer \
+        "the vault must call `RobotMoneyVaultOps.createLedger` exactly once (from initialize)"
+    );
+    assert!(
+        !squashed.contains(".ledger = "),
+        "RobotMoneyVault must not write the stored ledger itself: only createLedger may"
+    );
+    let ops_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("contracts")
+        .join("lib")
+        .join("RobotMoneyVaultOps.sol");
+    let ops = std::fs::read_to_string(&ops_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", ops_path.display()));
+    let ops: String = ops
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        ops.matches("$.ledger = ").count(),
+        1,
+        "RobotMoneyVaultOps must write the stored ledger exactly once, or the ledger the indexer \
          stored can move under it"
     );
-    let init = squashed
-        .find("function _initLedger(")
-        .expect("RobotMoneyVault declares _initLedger");
-    let init_end = squashed[init..]
+    let create = ops
+        .find("function createLedger(")
+        .expect("RobotMoneyVaultOps declares createLedger");
+    let create_end = ops[create..]
         .find(" function ")
-        .map(|i| init + i)
-        .unwrap_or(squashed.len());
+        .map(|i| create + i)
+        .unwrap_or(ops.len());
+    let write = ops.find("$.ledger = ").unwrap();
     assert!(
-        (init..init_end).contains(&writes[0]),
-        "the one write to exclusionLedger must be in _initLedger"
+        (create..create_end).contains(&write),
+        "the one write to the stored ledger must be in createLedger"
     );
     assert!(
-        squashed[init..init_end].contains("factory.create("),
-        "_initLedger must take the ledger ExclusionLedgerFactory.create returns"
-    );
-    assert_eq!(
-        squashed.matches("_initLedger(").count(),
-        2,
-        "_initLedger is declared once and called once (from initialize)"
+        ops[create..create_end].contains("!= address(0)) revert InvalidParam()"),
+        "createLedger must be write-once"
     );
 
     // The vault creates no contract, so no address derived from it is the ledger.
@@ -1431,7 +1451,7 @@ fn exclusion_ledger_is_set_once_from_the_factory_and_read_from_the_vault() {
     }
     assert!(
         created.is_empty(),
-        "RobotMoneyVault creates {created:?}; the ledger must come from ExclusionLedgerFactory"
+        "RobotMoneyVault creates {created:?}; only RobotMoneyVaultOps.createLedger may create the ledger"
     );
 }
 
@@ -1566,7 +1586,7 @@ fn opened_record(id: u64) -> alloy_primitives::LogData {
 #[tokio::test]
 async fn a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed() {
     use alloy_sol_types::SolEvent as _;
-    use explorer_indexer::abi::IUpgradeEvents;
+    use explorer_indexer::abi::IGovernedUpgradeEvents;
     use std::sync::Arc;
 
     const UPGRADE: u64 = 55;
@@ -1583,11 +1603,11 @@ async fn a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed()
         .await
         .unwrap();
 
-    let upgraded = IUpgradeEvents::Upgraded {
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: Address::from([0x99u8; 20]),
     }
     .encode_log_data();
-    let reinitialized = IUpgradeEvents::Initialized { version: 2 }.encode_log_data();
+    let reinitialized = IGovernedUpgradeEvents::Initialized { version: 2 }.encode_log_data();
     let logs = vec![
         log_json(vault, &upgraded, UPGRADE, [0x55u8; 32], 0),
         log_json(vault, &reinitialized, REINIT, [0x60u8; 32], 0),
@@ -1685,7 +1705,7 @@ async fn a_reinitializer_run_after_its_upgrade_moves_the_ledger_and_is_indexed()
 #[tokio::test]
 async fn a_rebuilt_index_learns_the_ledger_a_vault_moved_away_from() {
     use alloy_sol_types::SolEvent as _;
-    use explorer_indexer::abi::{IExclusionLedgerEvents, IUpgradeEvents};
+    use explorer_indexer::abi::{IExclusionLedgerEvents, IGovernedUpgradeEvents};
     use std::sync::Arc;
 
     const U: u64 = 55;
@@ -1696,11 +1716,11 @@ async fn a_rebuilt_index_learns_the_ledger_a_vault_moved_away_from() {
     let l2 = Address::from([0x12u8; 20]);
     let holder = Address::from([0x0Au8; 20]);
 
-    let upgraded = IUpgradeEvents::Upgraded {
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: Address::from([0x99u8; 20]),
     }
     .encode_log_data();
-    let reinitialized = IUpgradeEvents::Initialized { version: 2 }.encode_log_data();
+    let reinitialized = IGovernedUpgradeEvents::Initialized { version: 2 }.encode_log_data();
     let claimed = IExclusionLedgerEvents::ExclusionClaimed {
         exclusionId: U256::from(1u64),
         holder,
@@ -1807,7 +1827,7 @@ async fn a_rebuilt_index_learns_the_ledger_a_vault_moved_away_from() {
 #[tokio::test]
 async fn a_node_without_old_state_reads_the_ledger_at_the_safe_head() {
     use alloy_sol_types::SolEvent as _;
-    use explorer_indexer::abi::IUpgradeEvents;
+    use explorer_indexer::abi::IGovernedUpgradeEvents;
     use std::sync::Arc;
 
     const SAFE_HEAD: u64 = 65;
@@ -1815,7 +1835,7 @@ async fn a_node_without_old_state_reads_the_ledger_at_the_safe_head() {
     let fx = pg_fixture().await;
     let vault = Address::from([0xA1u8; 20]);
     let l2 = Address::from([0x12u8; 20]);
-    let upgraded = IUpgradeEvents::Upgraded {
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
         implementation: Address::from([0x99u8; 20]),
     }
     .encode_log_data();

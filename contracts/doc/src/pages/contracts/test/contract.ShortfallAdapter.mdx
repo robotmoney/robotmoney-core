@@ -4,7 +4,7 @@ title: "ShortfallAdapter"
 
 # ShortfallAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
 
@@ -103,7 +103,7 @@ supply-only pause. A venue that refuses withdrawals too (Aave reserve paused or
 inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
 round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
 USDC balance, never by a return value, and leaves the rest idle
-(`VaultAdapterOps._allocate`).
+(`RobotMoneyVaultOps._allocate`).
 
 </i>
 

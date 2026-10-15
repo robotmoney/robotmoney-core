@@ -239,12 +239,10 @@ pub struct Fixture {
     published: publish::Published,
     /// keccak256 of the gateway's runtime code on this chain.
     gateway_runtime_hash: String,
-    /// keccak256 of the code of the implementation behind the gateway proxy (ADR-0014); `None` for a
-    /// direct gateway. rmpc refuses to sign against a proxy without it (QA plan P3).
-    gateway_implementation_hash: Option<String>,
     /// keccak256 of the implementation code behind every other proxy an rmpc write reaches through
     /// the gateway (the four vaults and the router), deduplicated, for rmpc's
-    /// `proxy_implementation_hashes` (issue 1810). Empty when none of them is a proxy.
+    /// `proxy_implementation_hashes` (issue 1810). The gateway itself is pinned by
+    /// `gateway_implementation` + `gateway_implementation_runtime_hash`. Empty when none is a proxy.
     proxy_implementation_hashes: Vec<String>,
     repo_root: PathBuf,
     /// Harness-owned nonce source of truth for every EOA this devnet sends
@@ -644,7 +642,6 @@ impl Fixture {
             logging::error("smoke-test", format!("manifest read failed: {err}"));
         })?;
         let gateway_runtime_hash = runtime_code_hash(&rpc_url, &topology.gateway)?;
-        let gateway_implementation_hash = implementation_code_hash(&rpc_url, &topology.gateway)?;
         let mut proxy_implementation_hashes = Vec::new();
         for addr in topology
             .vaults
@@ -670,7 +667,6 @@ impl Fixture {
             topology,
             published,
             gateway_runtime_hash,
-            gateway_implementation_hash,
             proxy_implementation_hashes,
             repo_root,
             nonce_tracker,
@@ -767,10 +763,15 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         &self.gateway_runtime_hash
     }
-    /// keccak256 of the gateway implementation's code, for rmpc's `gateway_implementation_hashes`
-    /// (QA plan P3). `None` when the gateway is not a proxy.
-    pub fn gateway_implementation_hash(&self) -> Option<&str> {
-        self.gateway_implementation_hash.as_deref()
+    /// The approved ERC-1967 implementation behind the gateway proxy, from
+    /// the gateway manifest (issue 1810).
+    pub fn gateway_implementation_hex(&self) -> &str {
+        &self.topology.gateway_implementation
+    }
+    /// `keccak256` of the gateway implementation's runtime code, from the
+    /// gateway manifest (issue 1810).
+    pub fn gateway_implementation_runtime_hash(&self) -> &str {
+        &self.topology.gateway_implementation_runtime_hash
     }
     /// keccak256 of the implementations behind the vaults and the router, for rmpc's
     /// `proxy_implementation_hashes` (issue 1810). Empty when none of them is a proxy.
@@ -1606,11 +1607,8 @@ impl Fixture {
     }
 
     /// The test depositor authorizes the harness agent: `commitAuthorization(keccak(agent, depositor, salt))`,
-    /// then `revealAuthorization(agent, salt, policy, agentConsent)` in a later block. The policy names the
-    /// depositor as the share receiver (the permissionless path requires it). The depositor is not the agent and
-    /// holds no ADMIN_ROLE, so the reveal carries the agent's EIP-712 consent, signed with [`AGENT_PRIVATE_KEY`]
-    /// at the gateway's current `agentConsentNonce(agent)` (issue #1791, QA plan v1 D2). Returns the reveal
-    /// transaction hash.
+    /// the agent's own `commitAuthorization` consent (core 1791), then `revealAuthorization(agent, salt, policy)` in a later block. The policy names the depositor as the
+    /// share receiver (the permissionless path requires it). Returns the reveal transaction hash.
     pub fn depositor_authorize_agent(
         &self,
         max_per_payment: u128,
@@ -1632,6 +1630,50 @@ impl Fixture {
             "commitAuthorization(bytes32)",
             &[&commit_hash],
         )?;
+        let receiver = format!("{depositor:#x}");
+        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
+        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
+        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
+        let policy = format!(
+            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
+        );
+        let reveal_sig = "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
+        let agent_hex = format!("{agent:#x}");
+        let salt_hex = format!("0x{}", hex::encode(salt.0));
+
+        // The agent consents to the depositor for this exact reveal (core 1791): it submits
+        // keccak256(abi.encode(depositor, keccak256(revealCalldata))) through commitAuthorization from its own key.
+        let out = Command::new("cast")
+            .arg("calldata")
+            .arg(reveal_sig)
+            .args([&agent_hex, &salt_hex, &policy])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast calldata {reveal_sig} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let call_data = hex::decode(
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .trim_start_matches("0x"),
+        )
+        .map_err(|e| HarnessError::other(format!("reveal calldata is not hex: {e}")))?;
+        let mut consent_preimage = Vec::with_capacity(64);
+        consent_preimage.extend_from_slice(&[0u8; 12]);
+        consent_preimage.extend_from_slice(depositor.as_slice());
+        consent_preimage.extend_from_slice(keccak256(&call_data).as_slice());
+        let consent_hash = format!("0x{}", hex::encode(keccak256(&consent_preimage).0));
+        // The agent key needs gas for its own consent transaction.
+        self.fund_eth_from_harness(agent, "1000000000000000000")?;
+        self.cast_send(
+            &format!("0x{}", hex::encode(AGENT_PRIVATE_KEY)),
+            self.gateway(),
+            "commitAuthorization(bytes32)",
+            &[&consent_hash],
+        )?;
+
         // The reveal must land in a later block than the commit (CommitmentTooRecent otherwise). A fork without a
         // block time mines only on transactions, so mine one block here (a one-second warp).
         let commit_head = self.nonce_tracker.eth_block_number()?;
@@ -1641,39 +1683,11 @@ impl Fixture {
                 "no new block after commitAuthorization and a one-second warp",
             ));
         }
-        let receiver = format!("{depositor:#x}");
-        // (active, validUntil, maxPerPayment, maxPerWindow, shareReceiver, allowedDestinations,
-        //  assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow, allowedSourceVaults)
-        // validUntil is the year 2100: the Twin chain time warps forward through every timelock delay.
-        let policy = format!(
-            "(true,4102444800,{max_per_payment},{max_per_window},{receiver},[],{receiver},{max_per_payment},{max_per_window},[])"
-        );
-        // The consent binds this revealer and share receiver at the agent's current nonce; the gateway advances
-        // the nonce on success, so a re-authorization after a revoke signs the next one.
-        let agent_hex = format!("{agent:#x}");
-        let nonce = parse_word(
-            &self.cast_call_raw(self.gateway(), "agentConsentNonce(address)", &[&agent_hex])?,
-            "agentConsentNonce(address)",
-        )?;
-        let digest = agent_consent_digest(
-            self.gateway(),
-            self.chain_id,
-            agent,
-            depositor,
-            depositor,
-            nonce,
-        );
-        let consent = sign_digest(&AGENT_PRIVATE_KEY, &digest)?;
         self.cast_send(
             SHARE_RECEIVER_PRIVATE_KEY_HEX,
             self.gateway(),
-            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]),bytes)",
-            &[
-                &agent_hex,
-                &format!("0x{}", hex::encode(salt.0)),
-                &policy,
-                &format!("0x{}", hex::encode(consent)),
-            ],
+            reveal_sig,
+            &[&agent_hex, &salt_hex, &policy],
         )
     }
 
@@ -1784,9 +1798,9 @@ impl Fixture {
         Ok(id)
     }
 
-    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696, issue 1698): `govern --row apply-receipt` schedules ONE call,
-    /// `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` (the release and the router weight change in one transaction), waits the real
-    /// delay (one time warp on the fork) and executes it. Returns the govern lines (scheduled, executed), each with a tx hash and receipt status 1.
+    /// Apply a recorded fixture receipt through the REAL Safe and the REAL timelock (issue 1696, issue 1698): `govern --row apply-receipt` schedules
+    /// ONE call, RouterGovernance.applyReceipt (release plus setWeights in one call), waits the real delay (one time warp on the fork) and executes
+    /// it. Returns the govern lines (scheduled, executed), each with a tx hash and receipt status 1.
     pub fn apply_fixture_receipt(
         &self,
         file: &str,
@@ -1916,78 +1930,6 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
     let pubkey = vk.to_encoded_point(false);
     let hash = keccak256(&pubkey.as_bytes()[1..]);
     Address::from_slice(&hash[12..])
-}
-
-/// EIP-712 digest of `AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
-/// (`RobotMoneyGateway`, `1`, `chain_id`, `gateway`), built exactly as
-/// `RobotMoneyGateway._requireAgentConsent` builds it (issue #1791). `nonce` is the 32-byte
-/// big-endian `agentConsentNonce(agent)` word. Mirrors `contracts/test/helpers/AgentConsent.sol`.
-fn agent_consent_digest(
-    gateway: Address,
-    chain_id: u64,
-    agent: Address,
-    owner: Address,
-    share_receiver: Address,
-    nonce: [u8; 32],
-) -> [u8; 32] {
-    fn word_addr(a: Address) -> [u8; 32] {
-        let mut w = [0u8; 32];
-        w[12..].copy_from_slice(a.as_slice());
-        w
-    }
-    let mut chain = [0u8; 32];
-    chain[24..].copy_from_slice(&chain_id.to_be_bytes());
-    let mut domain = Vec::with_capacity(160);
-    domain.extend_from_slice(
-        keccak256(
-            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
-        )
-        .as_slice(),
-    );
-    domain.extend_from_slice(keccak256(b"RobotMoneyGateway").as_slice());
-    domain.extend_from_slice(keccak256(b"1").as_slice());
-    domain.extend_from_slice(&chain);
-    domain.extend_from_slice(&word_addr(gateway));
-    let mut strukt = Vec::with_capacity(160);
-    strukt.extend_from_slice(
-        keccak256(b"AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)")
-            .as_slice(),
-    );
-    strukt.extend_from_slice(&word_addr(agent));
-    strukt.extend_from_slice(&word_addr(owner));
-    strukt.extend_from_slice(&word_addr(share_receiver));
-    strukt.extend_from_slice(&nonce);
-    let mut typed = Vec::with_capacity(66);
-    typed.extend_from_slice(b"\x19\x01");
-    typed.extend_from_slice(keccak256(&domain).as_slice());
-    typed.extend_from_slice(keccak256(&strukt).as_slice());
-    keccak256(&typed).0
-}
-
-/// Sign a raw 32-byte digest with `privkey`: `r ‖ s ‖ v` (65 bytes, v = 27 or 28). k256 normalizes
-/// to low-s, which the gateway requires (EIP-2: it refuses the high-s twin).
-fn sign_digest(privkey: &[u8; 32], digest: &[u8; 32]) -> Result<[u8; 65], HarnessError> {
-    use k256::ecdsa::SigningKey;
-    let sk = SigningKey::from_bytes(privkey.into())
-        .map_err(|e| HarnessError::other(format!("invalid signing key: {e}")))?;
-    let (sig, recid) = sk
-        .sign_prehash_recoverable(digest)
-        .map_err(|e| HarnessError::other(format!("signing the digest failed: {e}")))?;
-    let mut out = [0u8; 65];
-    out[..64].copy_from_slice(&sig.to_bytes());
-    out[64] = 27 + recid.to_byte();
-    Ok(out)
-}
-
-/// Parse one ABI word (`cast call` raw output, `0x` plus 64 hex digits) into 32 bytes.
-fn parse_word(raw: &str, what: &str) -> Result<[u8; 32], HarnessError> {
-    let s = raw.trim().strip_prefix("0x").unwrap_or(raw.trim());
-    let bytes = hex::decode(s)
-        .map_err(|e| HarnessError::other(format!("{what} returned non-hex {raw:?}: {e}")))?;
-    bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| HarnessError::other(format!("{what} returned {raw:?}, not one 32-byte word")))
 }
 
 fn parse_addr(s: &str) -> Address {
@@ -2459,31 +2401,11 @@ fn purge_stale_dapp_compose_state(
     }
 }
 
-/// keccak256 of the runtime code at `addr`, read with `cast code`.
-fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> {
-    let out = Command::new("cast")
-        .args(["code", addr, "--rpc-url", rpc_url])
-        .output()?;
-    if !out.status.success() {
-        return Err(HarnessError::other(format!(
-            "cast code {addr} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let bytes = hex::decode(raw.trim_start_matches("0x"))
-        .map_err(|e| HarnessError::other(format!("cast code {addr} is not hex: {e}")))?;
-    if bytes.is_empty() {
-        return Err(HarnessError::other(format!("{addr} has no code")));
-    }
-    Ok(format!("0x{}", hex::encode(keccak256(&bytes).0)))
-}
-
 /// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
 const ERC1967_IMPLEMENTATION_SLOT: &str =
     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 
-/// keccak256 of the code of the implementation the proxy at `addr` delegates to (ADR-0014), or
+/// keccak256 of the code of the implementation the proxy at `addr` delegates to (issue 1808), or
 /// `None` when its ERC-1967 implementation slot is empty (a direct deployment).
 fn implementation_code_hash(rpc_url: &str, addr: &str) -> Result<Option<String>, HarnessError> {
     let out = Command::new("cast")
@@ -2513,6 +2435,26 @@ fn implementation_code_hash(rpc_url: &str, addr: &str) -> Result<Option<String>,
         return Ok(None);
     }
     runtime_code_hash(rpc_url, &format!("0x{implementation}")).map(Some)
+}
+
+/// keccak256 of the runtime code at `addr`, read with `cast code`.
+fn runtime_code_hash(rpc_url: &str, addr: &str) -> Result<String, HarnessError> {
+    let out = Command::new("cast")
+        .args(["code", addr, "--rpc-url", rpc_url])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast code {addr} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let bytes = hex::decode(raw.trim_start_matches("0x"))
+        .map_err(|e| HarnessError::other(format!("cast code {addr} is not hex: {e}")))?;
+    if bytes.is_empty() {
+        return Err(HarnessError::other(format!("{addr} has no code")));
+    }
+    Ok(format!("0x{}", hex::encode(keccak256(&bytes).0)))
 }
 
 /// Delays before the 2nd, 3rd and 4th attempt of a
@@ -3071,17 +3013,19 @@ fn dapp_compose_env(
         kv("VITE_GATEWAY_ADDRESS", &d.gateway),
         kv("VITE_VAULT_ADDRESS", &d.vault),
         kv("VITE_GATEWAY_EXPECTED_CODE_HASH", &d.gateway_runtime_hash),
-        // Issue 1810: the dapp verifies the implementation behind the gateway proxy too.
+        // Issue 1810: the gateway is an ERC-1967 proxy; admin writes need its approved implementation.
+        kv(
+            "VITE_GATEWAY_EXPECTED_IMPLEMENTATION",
+            &d.gateway_implementation,
+        ),
         kv(
             "VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH",
-            &d.gateway_implementation_hash,
+            &d.gateway_implementation_runtime_hash,
         ),
         // Issue #320: registry and router addresses so the DestinationSelector can list registered vaults and
         // offer the Portfolio Router deposit path.
         kv("VITE_REGISTRY_ADDRESS", &d.registry),
         kv("VITE_ROUTER_ADDRESS", &d.router),
-        // Issue #364: RouterGovernance address for the Governance tab.
-        kv("VITE_GOVERNANCE_ADDRESS", &d.governance),
         // Core 1544: the timelock and the Safe that proposes to it (the admin tabs build a Safe -> Timelock
         // proposal instead of a wallet transaction).
         kv("VITE_TIMELOCK_ADDRESS", &d.timelock),
@@ -3130,9 +3074,8 @@ struct DappDeployed {
     gateway: String,
     vault: String,
     gateway_runtime_hash: String,
-    /// Issue 1810: the gateway implementation's code hash, the dapp's build-time implementation
-    /// pin. Empty for a direct gateway.
-    gateway_implementation_hash: String,
+    gateway_implementation: String,
+    gateway_implementation_runtime_hash: String,
     registry: String,
     router: String,
     governance: String,
@@ -3150,9 +3093,9 @@ impl DappDeployed {
             gateway: fixture.gateway_hex().to_string(),
             vault: fixture.vault_hex().to_string(),
             gateway_runtime_hash: fixture.gateway_runtime_hash().to_string(),
-            gateway_implementation_hash: fixture
-                .gateway_implementation_hash()
-                .unwrap_or("")
+            gateway_implementation: fixture.gateway_implementation_hex().to_string(),
+            gateway_implementation_runtime_hash: fixture
+                .gateway_implementation_runtime_hash()
                 .to_string(),
             registry: fixture.registry_hex().to_string(),
             router: fixture.router_hex().to_string(),
@@ -3722,43 +3665,6 @@ mod tests {
         assert_eq!(derive_address(&pk), parse_addr(SHARE_RECEIVER_ADDRESS_HEX));
     }
 
-    /// The consent the depositor's reveal carries (issue #1791) must be the EIP-712 `AgentConsent` signature a
-    /// wallet produces, or the gateway refuses `InvalidAgentConsent` and every harness deploy stops at the
-    /// reveal. Vectors: gateway 0x11..11, chain 918453, the harness agent, the depositor as owner and share
-    /// receiver, nonce 0. The digest is the same tuple hashed with `cast abi-encode` and `cast keccak` (the
-    /// suite 11b step's construction); the signature is `cast wallet sign --data` over the typed-data JSON,
-    /// which equals `cast wallet sign --no-hash` over that digest.
-    #[test]
-    fn agent_consent_signature_matches_the_eip712_vector() {
-        let gateway = parse_addr("0x1111111111111111111111111111111111111111");
-        let depositor = parse_addr(SHARE_RECEIVER_ADDRESS_HEX);
-        let digest = agent_consent_digest(
-            gateway,
-            918453,
-            agent_address(),
-            depositor,
-            depositor,
-            [0u8; 32],
-        );
-        assert_eq!(
-            format!("0x{}", hex::encode(digest)),
-            "0x720ca83a29814f4c27a8ad63d31873619b0bd589e2c635b945510ec22de9ec59"
-        );
-        let sig = sign_digest(&AGENT_PRIVATE_KEY, &digest).unwrap();
-        assert_eq!(
-            format!("0x{}", hex::encode(sig)),
-            "0x7c45cc9c6de66e9918edc786a748333648ddc87777b3a7ec8432c8210d97f6ac\
-             0b1eb0c07d37d64effd1d78a043192b3dbc4a0555801e036ac15add28198af161b"
-        );
-        // A later nonce is a different digest: a consent authorizes once.
-        let mut one = [0u8; 32];
-        one[31] = 1;
-        assert_ne!(
-            agent_consent_digest(gateway, 918453, agent_address(), depositor, depositor, one),
-            digest
-        );
-    }
-
     const RECEIPT_A_ID_VECTOR: &str =
         "0x379e538a5b294305dbd33d7781ef89aafee97b59e2a0ede478cd87c1895fc17a";
 
@@ -4270,7 +4176,8 @@ ccc333\t\teth-beacon
             gateway: a(1),
             vault: a(2),
             gateway_runtime_hash: format!("0x{:064x}", 3),
-            gateway_implementation_hash: format!("0x{:064x}", 10),
+            gateway_implementation: a(10),
+            gateway_implementation_runtime_hash: format!("0x{:064x}", 11),
             registry: a(4),
             router: a(5),
             governance: a(6),
@@ -4345,13 +4252,22 @@ ccc333\t\teth-beacon
         );
         assert_eq!(get("VITE_DAPP_URL"), Some("https://dapp.example"));
         assert_eq!(get("INDEXER_RPC_URL"), Some("http://twin-chain:8545"));
+        // Issue 1810: the dapp's admin writes need the gateway implementation pin.
+        assert_eq!(
+            get("VITE_GATEWAY_EXPECTED_IMPLEMENTATION"),
+            Some(format!("0x{:040x}", 10).as_str())
+        );
+        assert_eq!(
+            get("VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH"),
+            Some(format!("0x{:064x}", 11).as_str())
+        );
         assert_eq!(get("DAPP_PORT"), Some("5173"));
         assert_eq!(get("EXPLORER_API_PORT"), Some("18546"));
     }
 
     /// Security round 2: the stage stack's indexer watches the InvestmentCommitteePolicy proxy, the
     /// timelock and the Safe, as the 8453 stack does. Without them an `Upgraded` of the IC policy
-    /// proxy never reached `proxy_upgrade_events`, the watchdog's upgrade page stayed silent for it,
+    /// proxy never reached the indexed proxy admin events, the watchdog's upgrade page stayed silent for it,
     /// and `/v1/committee/*` and `/v1/governance/admin-events` stayed empty on the rehearsal chain.
     #[test]
     fn dapp_compose_env_watches_the_ic_policy_timelock_and_safe() {

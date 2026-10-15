@@ -1,23 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
-import { applyCalldata, chainReaderFromFixture, checkEvidence, delayFloorRefusal, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, checkVaultRedeploys, checkVaultRedeploysOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
-import { buildRedeployCalls } from "../src/redeploy-vault.ts";
+import { applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
-import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
+import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { keccak256 } from "viem";
-import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
-import { loadStageTable, tableProxies } from "../src/stage-table.ts";
+import { withUpgradeability, withUpgradeabilityReads } from "./upgradeability-fixture.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 /** The unpauses are scheduled in one sitting: step i is scheduled i seconds after step 0, and each waits one 172800 s delay. */
 const T0 = 1000;
-const good = () => ({
+const good = () => withUpgradeability({
   chain_id: 8453, core_sha: "ab".repeat(20), plan_approved_at: "2026-10-05T10:00:00Z",
   owner_exceptions: [{ text: "signer C is a Ledger on a shared laptop", recorded_at: "2026-10-04T10:00:00Z" }],
   stages: [{ stage: "safe", frozen_count: 2, receipt_count: 2, tx_hashes: [h(1), h(2)], receipts_status: [1, 1] }],
@@ -28,7 +27,7 @@ const good = () => ({
   deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 172800, schedule_status: 1, execute_status: 1 })),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
-});
+} as any);
 const mut = (f: (e: any) => void) => { const e = good(); f(e); return checkEvidence(e).join("\n"); };
 
 describe("evidence check", () => {
@@ -86,13 +85,7 @@ const log = (eventName: "CallScheduled" | "CallExecuted" | "Cancelled", n: numbe
     : eventName === "CallExecuted" ? encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [target as Hex, 0n, calldata as Hex]) : "0x";
   return { address: tl, topics: topics as Hex[], data: data as Hex };
 };
-/** QA plan v1 C2: the event RouterGovernance.applyReceipt emits, the chain's own record of an application. */
-const GOV_EV = parseAbi(["event ReceiptApplied(bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
-const appliedLog = (from: string, receiptId: string, digest: string, vaults: string[], bps: number[]) => ({
-  address: from, topics: encodeEventTopics({ abi: GOV_EV, eventName: "ReceiptApplied", args: { receiptId: receiptId as Hex } }) as Hex[],
-  data: encodeAbiParameters([{ type: "bytes32" }, { type: "address[]" }, { type: "uint256[]" }], [digest as Hex, vaults as Hex[], bps.map(BigInt)]),
-});
-interface Opts { appEvent?: false | { from?: string; digest?: string; vaults?: string[]; bps?: number[] }; clearData?: string; clearTarget?: string; clearDelay?: bigint; clearGap?: number; clearCalls?: number; appDelay?: bigint; appGap?: number; appCalls?: number; appData?: string; appTarget?: string; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
+interface Opts { clearData?: string; clearTarget?: string; clearDelay?: bigint; clearGap?: number; clearCalls?: number; appDelay?: bigint; appGap?: number; appCalls?: number; appData?: string; appTarget?: string; appId?: number; stepData?: Record<string, string>; stepTarget?: Record<string, string>; pausedBy?: Record<string, boolean>; relTarget?: string; relData?: string; relDelay?: bigint; relGap?: number; relExtraCall?: boolean; sharedId?: boolean; paused?: boolean; nonce?: number; failed?: string; delay?: bigint; gap?: number; listed?: string[]; chainId?: number }
 function stub(ev: any, o: Opts = {}): ChainReader {
   const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
   const add = (hash: string, logs: any[], ts: number) => { receipts.set(hash, { status: o.failed === hash ? "reverted" : "success", blockNumber: bn, logs }); blocks.set(bn++, ts); };
@@ -116,16 +109,12 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     add(r.execute_tx, [log("CallExecuted", id, 0n, o.relTarget ?? RCPT, o.relData ?? releaseCalldata(r.receipt_id))], t0 + (o.relGap ?? 172800));
   });
   (ev.receipt_applications ?? []).forEach((r: any, i: number) => {
-    // issue 1698: ONE applyReceipt call on the governance contract (appCalls above 1 plants extra copies, as a batch would)
     const id = o.appId ?? 70 + i;
     const t0 = T0 + 20 + i;
-    const data = o.appData ?? applyCalldata(r.receipt_id, r.payload_digest, r.vaults, r.bps);
-    const target = o.appTarget ?? GOV;
-    const sched = Array.from({ length: o.appCalls ?? 1 }, (_, k) => log("CallScheduled", id, o.appDelay, target, data, BigInt(k)));
-    add(r.schedule_tx, sched, t0);
-    // QA plan v1 C2: the execute tx carries the governance contract's ReceiptApplied event (appEvent false drops it, an object plants another one)
-    const evt = o.appEvent === false ? [] : [appliedLog(o.appEvent?.from ?? GOV, r.receipt_id, o.appEvent?.digest ?? r.payload_digest, o.appEvent?.vaults ?? r.vaults, o.appEvent?.bps ?? r.bps)];
-    add(r.execute_tx, [log("CallExecuted", id, 0n, target, data), ...evt], t0 + (o.appGap ?? 172800));
+    const call = { target: o.appTarget ?? GOV, data: o.appData ?? applyCalldata(r.receipt_id, r.payload_digest, r.vaults, r.bps) };
+    const calls = Array.from({ length: o.appCalls ?? 1 }, () => call);
+    add(r.schedule_tx, calls.map((c, k) => log("CallScheduled", id, o.appDelay, c.target, c.data, BigInt(k))), t0);
+    add(r.execute_tx, calls.map((c, k) => log("CallExecuted", id, 0n, c.target, c.data, BigInt(k))), t0 + (o.appGap ?? 172800));
   });
   (ev.voted_weights_clears ?? []).forEach((r: any, i: number) => {
     const id = 90 + i;
@@ -135,20 +124,18 @@ function stub(ev: any, o: Opts = {}): ChainReader {
     add(r.schedule_tx, sched, t0);
     add(r.execute_tx, [log("CallExecuted", id, 0n, o.clearTarget ?? GOV, data)], t0 + (o.clearGap ?? 172800));
   });
-  return {
+  return withUpgradeabilityReads(ev, {
     getChainId: async () => o.chainId ?? 8453,
     getTransactionCount: async () => o.nonce ?? 3,
     getTransactionReceipt: async ({ hash }) => { const r = receipts.get(hash); if (!r) throw new Error("not found"); return r; },
     getBlock: async ({ blockNumber }) => ({ timestamp: BigInt(blocks.get(blockNumber)!) }),
     readContract: async ({ address, functionName }) => (functionName === "depositsPaused" ? (o.pausedBy?.[address] ?? o.paused ?? false) : (o.listed ?? Object.values(ev.vaults).map((v: any) => v.address))),
-  };
+  });
 }
 const VAULT: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
 const RCPT = a(30);
 const GOV = a(32);
 const RID = h(0xabc);
-/** The payload digest an application names (issue 1698: part of the applyReceipt calldata, so the entry carries it). */
-const DIGEST = h(0xd16);
 const withRelease = (e: any) => {
   e.consensus_receipt = { address: RCPT };
   e.receipt_releases = [{ receipt_id: RID, target: RCPT, operation_id: h(950), schedule_tx: h(600), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(601), execute_status: 1, execute_block_timestamp: T0 + 10 + 172800 }];
@@ -215,12 +202,12 @@ describe("a post-launch consensus receipt release on 8453 (issue 1611)", () => {
   });
 });
 
-describe("receipt_applications: one timelock call, applyReceipt on the governance contract (issue 1696, issue 1698)", () => {
+describe("receipt_applications: one timelock call, the weight setter's applyReceipt (issue 1696, issue 1698)", () => {
   const VAULTS = [a(5), a(6), a(8)];
   const BPS = [5000, 3000, 2000];
   const withApply = (e: any) => {
     e.consensus_receipt = { address: RCPT }; e.governance = { address: GOV };
-    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, governance: GOV, receipt: RCPT, vaults: VAULTS, bps: BPS, payload_digest: DIGEST, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
+    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: GOV, governance: GOV, payload_digest: h(0xd16), vaults: VAULTS, bps: BPS, voted_weights_active: true, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
   };
   const app = (f: (e: any) => void = () => {}) => { const e = good(); withApply(e); f(e); return e; };
   const offline = (f: (e: any) => void = () => {}) => checkEvidence(app(f)).join("\n");
@@ -240,19 +227,14 @@ describe("receipt_applications: one timelock call, applyReceipt on the governanc
     const tw = app((e) => { e.receipt_applications[0].schedule_tx = "0x12"; });
     expect(checkReceiptApplications(tw).join("\n")).toContain("schedule_tx is missing");
   });
-  test("receipt_applications: receipt id, the register, the governance target, the digest and the vector are checked, and one receipt is released once", () => {
+  test("receipt_applications: receipt id, targets and the vector are checked, and one receipt is released once", () => {
     expect(offline((e) => { e.receipt_applications[0].receipt_id = "0x12"; })).toContain("receipt_id is not a bytes32");
     expect(offline((e) => { e.receipt_applications.push({ ...e.receipt_applications[0], schedule_tx: h(640), execute_tx: h(641), operation_id: h(971) }); })).toContain("more than one evidence entry");
-    expect(offline((e) => { e.receipt_applications[0].receipt = a(31); })).toContain("is not the receipt contract");
-    // a pre-1698 entry named the register as `target`: still read, still checked
-    expect(offline((e) => { delete e.receipt_applications[0].receipt; e.receipt_applications[0].target = RCPT; })).toBe("");
-    expect(offline((e) => { delete e.receipt_applications[0].receipt; e.receipt_applications[0].target = a(31); })).toContain("is not the receipt contract");
+    expect(offline((e) => { e.receipt_applications[0].target = RCPT; })).toContain("is not the weight setter");
+    expect(offline((e) => { e.receipt_applications[0].payload_digest = "0x12"; })).toContain("payload_digest is not a bytes32");
     expect(offline((e) => { e.receipt_applications[0].governance = a(33); })).toContain("is not the governance contract");
     expect(offline((e) => { delete e.consensus_receipt; })).toContain("consensus_receipt.address is missing");
     expect(offline((e) => { delete e.governance; })).toContain("governance.address is missing");
-    // issue 1698: the digest the applyReceipt call named is part of the entry
-    expect(offline((e) => { delete e.receipt_applications[0].payload_digest; })).toContain("payload_digest is not a bytes32");
-    expect(offline((e) => { e.receipt_applications[0].payload_digest = "0x12"; })).toContain("payload_digest is not a bytes32");
     expect(offline((e) => { e.receipt_applications[0].bps = [5000, 3000, 1999]; })).toContain("bps do not sum to 10000");
     expect(offline((e) => { e.receipt_applications[0].bps = [5000, 5000]; })).toContain("distinct addresses with one weight each");
     expect(offline((e) => { e.receipt_applications[0].vaults = [a(5), a(5), a(8)]; })).toContain("distinct addresses");
@@ -260,13 +242,10 @@ describe("receipt_applications: one timelock call, applyReceipt on the governanc
     expect(offline((e) => { e.receipt_applications = {}; })).toContain("receipt_applications is not a list");
     expect(offline((e) => { e.receipt_releases = [{ receipt_id: RID, target: RCPT, operation_id: h(950), schedule_tx: h(600), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(601), execute_status: 1, execute_block_timestamp: T0 + 10 + 172800 }]; })).toContain("a receipt is released once");
   });
-  test("receipt_applications on chain: exactly one call, applyReceipt(receipt_id, payload_digest, vaults, bps) on the governance contract, one delay apart (issue 1698)", async () => {
-    expect(await chain({ appCalls: 2 })).toContain("exactly one call");
-    expect(await chain({ appCalls: 0 })).toContain("exactly one call");
-    expect(await chain({ appTarget: a(31) })).toContain("is not the governance contract");
-    expect(await chain({ appTarget: RCPT })).toContain("is not the governance contract"); // the pre-1698 release target is not the one call
+  test("receipt_applications on chain: exactly one applyReceipt call of the recorded entry on the weight setter, one delay apart", async () => {
+    expect(await chain({ appCalls: 2 })).toContain("exactly one applyReceipt call");
+    expect(await chain({ appTarget: RCPT })).toContain("is not the weight setter");
     expect(await chain({ appData: "0x12345678" })).toContain("calldata is not applyReceipt");
-    expect(await chain({ appData: releaseCalldata(RID) })).toContain("calldata is not applyReceipt"); // a bare release is not an application
     expect(await chain({}, (e) => { e.receipt_applications[0].bps = [6000, 2000, 2000]; })).toContain("calldata is not applyReceipt");
     expect(await chain({}, (e) => { e.receipt_applications[0].receipt_id = h(0xdef); })).toContain("calldata is not applyReceipt");
     expect(await chain({}, (e) => { e.receipt_applications[0].payload_digest = h(0xd17); })).toContain("calldata is not applyReceipt");
@@ -279,24 +258,10 @@ describe("receipt_applications: one timelock call, applyReceipt on the governanc
     // the standalone chain check (the Twin run) is the same function and does not read the chain id
     const e = app();
     expect(await checkReceiptApplicationsOnChain(e, stub(e, { chainId: 918453 }))).toEqual([]);
-    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appCalls: 2 }))).join()).toContain("exactly one call");
+    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appCalls: 2 }))).join()).toContain("exactly one applyReceipt call");
     // a shorter floor (a Twin timelock) accepts a shorter delay and gap, and still rejects one under it
     expect(await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3600n, appGap: 3601 }), 3600)).toEqual([]);
     expect((await checkReceiptApplicationsOnChain(e, stub(e, { appDelay: 3599n, appGap: 3599 }), 3600)).join("\n")).toContain("under 3600 s");
-  });
-  test("forged receipt_applications entry refused: the entry must be the receipt, digest and vector of the chain's ReceiptApplied event (QA plan v1 C2, issue 1701)", async () => {
-    // the entry is edited after the run to the vector the router drifted to: the chain applied another one
-    expect(await chain({}, (e) => { e.receipt_applications[0].bps = [6000, 2000, 2000]; e.receipt_applications[0].effective_bps = [6000, 2000, 2000]; })).toContain("is not the vector the chain applied");
-    // every recorded field and the timelock call agree, and still the chain's event names another vector or digest
-    expect(await chain({ appEvent: { bps: [6000, 2000, 2000] } })).toContain("is not the vector the chain applied");
-    expect(await chain({ appEvent: { digest: h(0xd17) } })).toContain("ReceiptApplied names payload digest");
-    // no ReceiptApplied event, or one from another contract than the governance contract: nothing was applied
-    expect(await chain({ appEvent: false })).toContain("0 ReceiptApplied events");
-    expect(await chain({ appEvent: { from: a(31) } })).toContain("0 ReceiptApplied events");
-    // the standalone check of a Twin run manifest is the same function
-    const e = app();
-    expect((await checkReceiptApplicationsOnChain(e, stub(e, { appEvent: { bps: [6000, 2000, 2000] } }))).join("\n")).toContain("is not the vector the chain applied");
-    expect(await checkReceiptApplicationsOnChain(e, stub(e))).toEqual([]);
   });
   test("receipt_applications: the template lists the block and an empty list passes", () => {
     const tpl = JSON.parse(readFileSync(join(import.meta.dir, "..", "evidence.example.json"), "utf8"));
@@ -314,7 +279,7 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
     const r = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "evidence-check.ts"), "--receipt-applications", file, "--consensus-receipt", a(30), "--governance", a(32), "--timelock", a(9), ...extra]);
     return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
   };
-  const entry = { step: "apply-receipt", receipt_id: h(0xabc), governance: a(32), receipt: a(30), vaults: [a(5), a(6)], bps: [6000, 4000], payload_digest: DIGEST, effective_vaults: [a(5), a(6)], effective_bps: [6000, 4000], operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: h(621), execute_status: 1, execute_block_timestamp: 1000 + 172800 };
+  const entry = { step: "apply-receipt", receipt_id: h(0xabc), target: a(32), governance: a(32), payload_digest: h(0xd16), vaults: [a(5), a(6)], bps: [6000, 4000], voted_weights_active: true, effective_vaults: [a(5), a(6)], effective_bps: [6000, 4000], operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: h(621), execute_status: 1, execute_block_timestamp: 1000 + 172800 };
   test("a complete entry passes, a missing entry or a broken one exits 1 naming the problem", () => {
     const ok = run({ receipt_applications: [entry] });
     expect(ok.code).toBe(0);
@@ -332,18 +297,6 @@ describe("evidence-check --receipt-applications: the Twin run manifest (issue 16
     const nohash = run({ receipt_applications: [{ ...entry, execute_tx: "" }] });
     expect(nohash.code).toBe(1);
     expect(nohash.err).toContain("execute_tx is missing");
-  });
-});
-
-describe("issue 1701: --delay-floor against chain 8453", () => {
-  test("a floor below the 8453 floor of the deployment kind is refused when the --rpc reads chain 8453; a Twin run keeps its own shorter floor", () => {
-    expect(delayFloorRefusal(3600, 8453, "production")).toContain("below 172800 s");
-    expect(delayFloorRefusal(172799, 8453, "production")).toContain("below 172800 s");
-    expect(delayFloorRefusal(172800, 8453, "production")).toBeUndefined();
-    expect(delayFloorRefusal(899, 8453, "rehearsal")).toContain("below 900 s");
-    expect(delayFloorRefusal(900, 8453, "rehearsal")).toBeUndefined();
-    expect(delayFloorRefusal(3600, 918453, "production")).toBeUndefined();
-    expect(delayFloorRefusal(1, 918453, "rehearsal")).toBeUndefined();
   });
 });
 
@@ -372,49 +325,6 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
   });
   test("a missing unpause-USDC row is rejected: rmUSDC is no longer optional", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-USDC"); })).toContain("'unpause-USDC' of Stage 13 has no evidence entry"));
 });
-
-// ---- issue 1809 (ADR-0014): the governed proxies of the stage table, as a deployment's evidence records them and the chain answers ----
-const PROXY_IMPL_CODE = "0x6080604052" as Hex;
-const word32 = (v: bigint): Hex => `0x${v.toString(16).padStart(64, "0")}` as Hex;
-/** Every proxy name of the stage table (ADR-0014 §1) with its proxy and implementation: the four vaults are good()'s vault addresses, the registry good()'s registry. */
-const TABLE_PROXIES: Record<string, { proxy: string; implementation: string }> = {
-  rmUSDC: { proxy: a(5), implementation: a(0x2005) }, rmPROTO: { proxy: a(6), implementation: a(0x2006) }, rmAGENT: { proxy: a(7), implementation: a(0x2007) },
-  rmRWA: { proxy: a(8), implementation: a(0x2008) }, registry: { proxy: a(21), implementation: a(0x2021) }, router: { proxy: a(0x1003), implementation: a(0x2103) },
-  gateway: { proxy: a(0x1004), implementation: a(0x2104) }, icpolicy: { proxy: a(0x1006), implementation: a(0x2106) }, receipt: { proxy: a(0x1007), implementation: a(0x2107) },
-};
-/** `e` with `upgrade_mode` and a `proxies` entry per name, each what tableProxyChain answers. */
-function withTableProxies(e: any, names: readonly string[] = Object.keys(TABLE_PROXIES)): any {
-  e.upgrade_mode = "upgradeable";
-  e.proxies = Object.fromEntries(names.map((n) => [n, {
-    proxy: TABLE_PROXIES[n]!.proxy, implementation: TABLE_PROXIES[n]!.implementation, implementation_code_hash: keccak256(PROXY_IMPL_CODE), authority: e.timelock.address,
-    mode: "upgradeable", frozen: false, admin_slot_empty: true, beacon_slot_empty: true,
-  }]));
-  return e;
-}
-interface Live { implementation?: string; adminSlot?: Hex; beaconSlot?: Hex; code?: Hex; authority?: string; frozen?: boolean; uninitialized?: boolean; unlocked?: boolean }
-/** The stub chain of `e` plus every table proxy: `o` breaks one property of every proxy. */
-function tableProxyChain(e: any, o: Live = {}): ChainReader {
-  const base = stub(e);
-  const impls = new Set([...Object.values(TABLE_PROXIES).map((x) => x.implementation.toLowerCase()), ...(o.implementation ? [o.implementation.toLowerCase()] : [])]);
-  const isImpl = (x: string) => impls.has(x.toLowerCase());
-  const implOf = (x: string) => o.implementation ?? Object.values(TABLE_PROXIES).find((y) => y.proxy.toLowerCase() === x.toLowerCase())?.implementation ?? a(0);
-  return {
-    ...base,
-    getCode: async ({ address }) => (isImpl(address) ? (o.code ?? PROXY_IMPL_CODE) : ("0x6001" as Hex)),
-    getStorageAt: async ({ address, slot }) => {
-      if (slot === ERC1967_IMPLEMENTATION_SLOT) return isImpl(address) ? word32(0n) : word32(BigInt(implOf(address)));
-      if (slot === ERC1967_ADMIN_SLOT) return isImpl(address) ? word32(0n) : (o.adminSlot ?? word32(0n));
-      if (slot === ERC1967_BEACON_SLOT) return isImpl(address) ? word32(0n) : (o.beaconSlot ?? word32(0n));
-      if (slot === INITIALIZABLE_SLOT) return isImpl(address) ? word32(o.unlocked ? 0n : INITIALIZERS_LOCKED) : word32(o.uninitialized ? 0n : 1n);
-      return word32(0n);
-    },
-    readContract: async (x) => {
-      if (x.functionName === "upgradeAuthority") return o.authority ?? e.timelock.address;
-      if (x.functionName === "upgradesFrozen") return o.frozen ?? false;
-      return base.readContract(x);
-    },
-  };
-}
 
 describe("recorded chain fixture (offline mode of the same chain checks)", () => {
   const frozen = { safe: 2 };
@@ -452,12 +362,7 @@ describe("recorded chain fixture (offline mode of the same chain checks)", () =>
     const dir = mkdtempSync(join(tmpdir(), "evidence-ci-"));
     const run = join(dir, "evidence", "run-1");
     mkdirSync(run, { recursive: true });
-    // the CLI checks the stage table's proxies (issue 1809): offline from the record, and on the fixture from the chain reads (QA plan v1 L1)
-    expect(Object.keys(TABLE_PROXIES).sort()).toEqual(tableProxies(loadStageTable(join(import.meta.dir, "..", ".."))).map((x) => x.name).sort());
-    const e = withTableProxies(good());
-    const rec = recordingChainReader(tableProxyChain(e));
-    expect(await checkEvidenceOnChain(e, rec.reader, frozen, { proxies: Object.keys(TABLE_PROXIES) })).toEqual([]);
-    const fixture = JSON.parse(JSON.stringify(rec.fixture));
+    const { e, fixture } = await record();
     writeFileSync(join(run, "evidence.json"), JSON.stringify(e, null, 2));
     writeFileSync(join(run, "chain-fixture.json"), JSON.stringify(fixture, null, 2));
     const frozenFile = join(dir, "frozen.json");
@@ -561,7 +466,8 @@ const adoptedEv = (txs = 0) => {
   e.deployer_nonce_final = 2 + txs + 1;
   return e;
 };
-const codeChain = (e: any, code: Hex | undefined = LIBCODE, nonce = 3): ChainReader => ({ ...stub(e, { nonce }), getCode: async () => code });
+// issue 1809: the proxies and implementations of the upgradeability record keep their own code; every other address holds `code`
+const codeChain = (e: any, code: Hex | undefined = LIBCODE, nonce = 3): ChainReader => withUpgradeabilityReads(e, { ...stub(e, { nonce }), getCode: async () => code });
 describe("evidence check: an adopted libs stage (issue 1721)", () => {
   test("offline: an adopted libs stage with zero receipts passes, the frozen count of 4 is not demanded of it", () => {
     expect(checkEvidence(adoptedEv(), FROZEN_WITH_LIBS)).toEqual([]);
@@ -632,7 +538,7 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     const e = adoptedEv();
     expect((await checkEvidenceOnChain(e, codeChain(e, "0x73" + "22".repeat(20) + "3014" as Hex), FROZEN_WITH_LIBS)).join()).toContain("code hash on chain");
     expect((await checkEvidenceOnChain(e, codeChain(e, "0x"), FROZEN_WITH_LIBS)).join()).toContain("has no code");
-    const noReader = stub(e, { nonce: 3 });
+    const noReader: ChainReader = { ...stub(e, { nonce: 3 }), getCode: undefined };
     expect((await checkEvidenceOnChain(e, noReader, FROZEN_WITH_LIBS)).join()).toContain("cannot read code");
   });
   test("on chain: the on-chain deployer nonce uses the adopted count too, so a stray extra transaction is refused", async () => {
@@ -655,7 +561,7 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
   const BPS = [5000, 3000, 2000];
   const withApply = (e: any) => {
     e.consensus_receipt = { address: RCPT }; e.governance = { address: GOV };
-    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, governance: GOV, receipt: RCPT, vaults: VAULTS, bps: BPS, payload_digest: DIGEST, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
+    e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: GOV, governance: GOV, payload_digest: h(0xd16), vaults: VAULTS, bps: BPS, voted_weights_active: true, effective_vaults: VAULTS, effective_bps: BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 172800 }];
   };
   const withClear = (e: any) => {
     e.governance = { address: GOV };
@@ -666,11 +572,10 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
   const clearOffline = (f: (e: any) => void = () => {}) => checkEvidence(clr(f)).join("\n");
   const clearChain = (o: Opts = {}, f: (e: any) => void = () => {}) => { const e = clr(); const c = stub(e, o); f(e); return checkEvidenceOnChain(e, c, { safe: 2 }).then((p) => p.join("\n")); };
 
-  test("an application records effective weights equal to the applied vector (its vector is the active one: no voted flag is asked of it, issue 1698), and refuses without them", () => {
+  test("an application records votedWeightsActive true (applyReceipt sets the active vector) and effective weights equal to the applied vector, and refuses without them", () => {
     expect(app()).toBe("");
-    // a flag either way is not the application's proof: the effective vector is
-    expect(app((e) => { e.receipt_applications[0].voted_weights_active = true; })).toBe("");
-    expect(app((e) => { e.receipt_applications[0].voted_weights_active = false; })).toBe("");
+    expect(app((e) => { e.receipt_applications[0].voted_weights_active = false; })).toContain("voted_weights_active is false, want true");
+    expect(app((e) => { delete e.receipt_applications[0].voted_weights_active; })).toContain("voted_weights_active is undefined");
     expect(app((e) => { delete e.receipt_applications[0].effective_vaults; delete e.receipt_applications[0].effective_bps; })).toContain("effective_vaults and effective_bps");
     expect(app((e) => { e.receipt_applications[0].effective_vaults = [a(5)]; e.receipt_applications[0].effective_bps = [10000]; })).toContain("routing did not change");
     expect(app((e) => { e.receipt_applications[0].effective_bps = [5000, 3000, 1000]; })).toContain("effective_vaults and effective_bps");
@@ -702,8 +607,25 @@ describe("effective weights and voted_weights_clears in the evidence (issue 1743
   });
 });
 
+describe("issue 1701: --delay-floor cannot go under the 8453 floor when --rpc reads chain 8453", () => {
+  test("a production floor below 172800 s on chain 8453 is refused with a clear error, the 8453 floor itself and a Twin chain floor pass", async () => {
+    const { delayFloorArgProblem } = await import("../src/evidence-check.ts");
+    for (const f of [1, 3600, 172799]) expect(delayFloorArgProblem(f, 8453, "production")).toContain(`--delay-floor ${f} is below the chain 8453 floor 172800 s`);
+    expect(delayFloorArgProblem(172800, 8453, "production")).toBe("");
+    expect(delayFloorArgProblem(200000, 8453, "production")).toBe("");
+    // a Twin run (chain 918453) and an offline check (no --rpc) keep their own floor
+    expect(delayFloorArgProblem(3600, 918453, "production")).toBe("");
+    expect(delayFloorArgProblem(3600, undefined, "production")).toBe("");
+    // a rehearsal on 8453 runs a short timelock: its floor is the rehearsal floor, still refused below it
+    expect(delayFloorArgProblem(900, 8453, "rehearsal")).toBe("");
+    expect(delayFloorArgProblem(899, 8453, "rehearsal")).toContain("below the chain 8453 floor 900 s");
+    // not a positive integer: refused everywhere
+    for (const f of [0, -1, 1.5, Number.NaN]) expect(delayFloorArgProblem(f, 918453, "production")).toContain("positive number of seconds");
+  });
+});
+
 describe("vault_redeploys: new_vault is the contract the deploy created (QA plan v1 C2, issue 1701)", () => {
-  const DEPLOYER = a(20), OLD = a(6) as Hex, NEW = a(0x3012), REG = a(21) as Hex, ROUTER = a(40), ASSET = a(0xc0de) as Hex;
+  const DEPLOYER = a(20), OLD = a(6) as Hex, NEW = a(0x3012), REG = a(21) as Hex, ROUTER = a(40) as Hex, ASSET = a(0xc0de) as Hex;
   const FINAL = [a(5), NEW, a(7), a(8)], BPS4 = [8550, 525, 575, 350];
   const entry = (): any => ({
     step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: tl, deployer: DEPLOYER, core_sha: "ab".repeat(20),
@@ -712,9 +634,9 @@ describe("vault_redeploys: new_vault is the contract the deploy created (QA plan
     operation_id: h(0x577), schedule_tx: h(0x510), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(0x511), execute_status: 1, execute_block_timestamp: T0 + 900,
   });
   const ev = (r: any, over: object = {}) => ({ deployment_kind: "rehearsal", registry: { address: REG }, timelock: { address: tl }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [r], ...over });
-  /** The chain the entry describes: deploy tx 0 is a CREATE of `created` by `creator`, deploy tx 1 a call, then the seven-call batch for the ENTRY's vaults and cap, one delay apart. */
+  /** The chain the entry describes: deploy tx 0 is a CREATE of `created` by `creator`, deploy tx 1 a call, then the batch for the ENTRY's vaults and cap, one delay apart. */
   const chainOf = (r: any, o: { created?: string; creator?: string } = {}): ChainReader => {
-    const want = buildRedeployCalls({ registry: REG, router: ROUTER as Hex, oldVault: OLD, newVault: r.new_vault, registryName: r.registry_name, asset: ASSET, finalVaults: r.vaults, finalBps: r.bps, vaultCap: r.router_vault_cap });
+    const want = buildRedeployCalls({ router: ROUTER, routerVaultCap: BigInt(r.router_vault_cap), registry: REG, oldVault: OLD, newVault: r.new_vault, registryName: r.registry_name, asset: ASSET, finalVaults: r.vaults, finalBps: r.bps });
     const receipts = new Map<string, any>(); const blocks = new Map<bigint, number>(); let bn = 1n;
     const add = (hash: string, logs: any[], ts: number, extra: object = {}) => { receipts.set(hash, { status: "success", blockNumber: bn, logs, ...extra }); blocks.set(bn++, ts); };
     add(r.deploy_tx_hashes[0], [], 1, { from: o.creator ?? DEPLOYER, contractAddress: o.created ?? NEW });
@@ -746,225 +668,25 @@ describe("vault_redeploys: new_vault is the contract the deploy created (QA plan
   });
 });
 
-describe("evidence secret scan: a hash field exempts its own value, never its line (QA plan v1 E8, issue 1689)", () => {
-  // Synthetic shapes only: none is a real key, hash or receipt.
-  const KEY = "0x" + "c3".repeat(32);
-  const SHA = "5d".repeat(32);
-  /** Writes the files into a fresh folder and scans it: each hit as `name:line: rule`. */
-  const scan = (files: Record<string, string>): string[] => {
-    const d = mkdtempSync(join(tmpdir(), "evidence-e8-"));
-    for (const [n, body] of Object.entries(files)) writeFileSync(join(d, n), body);
-    return scanEvidenceFolder(d).map((x) => x.slice(d.length + 1));
-  };
-  const flagged = (hits: string[], rule = "64-hex") => hits.filter((x) => x.includes(rule)).map((x) => x.split(":")[0]).sort();
-
-  test("a privateKey line is not exempt", () => {
-    // the end-of-line shape `"name": "0x<64 hex>",` once passed under any name: a secret name never passes, as a value, a list or a snake_case key
-    const run = JSON.stringify({ stages: { libs: { txHash: h(1), privateKey: KEY, status: "done" } } }, null, 2) + "\n";
-    expect(run).toContain(`"privateKey": "${KEY}",`);
-    const line = run.split("\n").findIndex((l) => l.includes("privateKey")) + 1;
-    const hits = scan({ "publish-run.json": run });
-    expect(hits).toContain(`publish-run.json:${line}: 64-hex value (private key shape)`);
-    expect(hits).toContain(`publish-run.json:${line}: secret assignment`);
-    expect(hits.every((x) => x.startsWith(`publish-run.json:${line}:`))).toBe(true); // the txHash line above it stays clean
-    expect(flagged(scan({
-      "snake.json": JSON.stringify({ deployer: { private_key: KEY, note: "x" } }, null, 2) + "\n",
-      "list.json": JSON.stringify({ signerKeys: [KEY] }, null, 2) + "\n",
-      "hash-named.json": JSON.stringify({ keyHash: KEY, note: "x" }, null, 2) + "\n",
-    }))).toEqual(["hash-named.json", "list.json", "snake.json"]);
+describe("vault_redeploys: the verify of a round at another sha is recorded (QA plan v1 E1)", () => {
+  const SHA_A = "ab".repeat(20), SHA_B = "cd".repeat(20);
+  const OLD = a(6), NEW = a(0x3012);
+  const FINAL = [a(5), NEW, a(7), a(8)], BPS4 = [8550, 525, 575, 350];
+  const entry = (over: object = {}): any => ({
+    step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: a(21), router: a(40), timelock: tl, deployer: a(20), core_sha: SHA_A,
+    deploy_count: 1, deploy_tx_hashes: [h(0x501)], deploy_receipt_statuses: [1], registry_name: "Robot Money Protocol", asset: a(0xc0de),
+    vaults: FINAL, bps: BPS4, router_vault_cap: "250000000", voted_weights_active: false, effective_vaults: FINAL, effective_bps: BPS4, old_vault_status: "Retired", new_vault_status: "Active",
+    operation_id: h(0x577), schedule_tx: h(0x510), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(0x511), execute_status: 1, execute_block_timestamp: T0 + 900, ...over,
   });
-
-  test("a token, auth, credential or bearer key is not exempt, and a key off the public-name allowlist exempts nothing", () => {
-    // the end-of-line shape `"name": "0x<64 hex>",` passes only under a name that says it is public: a hash, a qualified id, a role, a topic
-    const one = (k: string) => JSON.stringify({ x: { [k]: KEY, n: 1 } }, null, 2) + "\n";
-    const names = ["token", "authToken", "auth_token", "accessToken", "credential", "credentials", "bearer", "apikey", "sessionId", "signer", "id", "note", "value"];
-    const hits = scan(Object.fromEntries(names.map((k) => [`${k}.json`, one(k)])));
-    expect(flagged(hits)).toEqual(names.map((k) => `${k}.json`).sort());
-    // the quoted JSON key forms of the credential names are a secret assignment too, like "privateKey"
-    for (const k of ["token", "authToken", "auth_token", "accessToken", "credential", "credentials", "bearer"]) expect(hits).toContain(`${k}.json:3: secret assignment`);
-    // a list under such a name exempts nothing either
-    expect(flagged(scan({ "tokens.json": JSON.stringify({ tokens: [KEY] }, null, 2) + "\n", "values.json": JSON.stringify({ values: [KEY] }, null, 2) + "\n" }))).toEqual(["tokens.json", "values.json"]);
+  const ev = (r: any) => ({ deployment_kind: "rehearsal", core_sha: SHA_A, registry: { address: a(21) }, timelock: { address: tl }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [r] });
+  test("a round at the deployment's sha needs neither field; one written alone is refused", () => {
+    expect(checkVaultRedeploys(ev(entry()), 900)).toEqual([]);
+    expect(checkVaultRedeploys(ev(entry({ prior_out_sha: SHA_A })), 900).join("\n")).toContain("written together");
   });
-
-  test("an ERC-20 token address, a pool id on a one-line manifest and a code_hashes object scan clean", () => {
-    const TOKEN = "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3";
-    expect(scan({
-      "agent-token-vault.json": JSON.stringify({ chain_id: 8453, assets: [{ symbol: "RM", token: TOKEN, pool_id: h(30) }] }) + "\n",
-      "assets.json": JSON.stringify({ assets: [{ symbol: "RM", token: TOKEN }] }, null, 2) + "\n",
-      "timelock.json": JSON.stringify({ code_hashes: { safe: h(31), consensus_receipt: h(32) }, pool_id: h(33) }, null, 2) + "\n",
-      "govern-pending.txt": `next: govern --row set-unwind-guard --admin-arg token=${TOKEN} --admin-arg token=all\n`,
-    })).toEqual([]);
-    // the same object under a secret name is not a hash object: its keys exempt nothing
-    expect(flagged(scan({ "keys.json": JSON.stringify({ signer_keys: { safe: KEY } }, null, 2) + "\n" }))).toEqual(["keys.json"]);
-  });
-
-  test("a hash word elsewhere on the line exempts nothing: a key beside a tx hash, and a bare 64-hex on a hash or tx line, are flagged", () => {
-    expect(flagged(scan({
-      "log.jsonl": JSON.stringify({ event: "tx.sent", hash: h(2), signer: KEY }) + "\n",
-      "notes.txt": `deploy tx ${h(3)} signed with ${KEY}\n`,
-      "env.txt": `PRIVATE_KEY=${KEY} # salt for the libs tx\n`,
-      "bare.json": JSON.stringify({ txHash: "ab".repeat(32) }, null, 2) + "\n",
-      "bare.txt": `block hash ${"ab".repeat(32)}\n`,
-    }))).toEqual(["bare.json", "bare.txt", "env.txt", "log.jsonl", "notes.txt"]);
-  });
-
-  test("a sha256 value passes only directly under configHashes or config_hashes", () => {
-    const iso = { chainId: 8453, configHashes: { "config/dex-pools.json": `sha256:${SHA}` }, codehashes: { "vault[USDC]": h(4) } };
-    expect(scan({
-      "isomorphism-8453.json": JSON.stringify(iso, null, 2) + "\n",
-      "one-line.json": JSON.stringify({ configHashes: iso.configHashes }) + "\n",
-      "snake.json": JSON.stringify({ config_hashes: { "config/rwa-assets.json": `sha256:${SHA}` } }, null, 2) + "\n",
-    })).toEqual([]);
-    expect(flagged(scan({
-      "elsewhere.json": JSON.stringify({ artifacts: { "out/Vault.json": `sha256:${SHA}` } }, null, 2) + "\n",
-      "nested.json": JSON.stringify({ configHashes: { extra: { "config/x.json": `sha256:${SHA}` } } }, null, 2) + "\n",
-      "text.txt": `image sha256:${SHA}\n`,
-    }))).toEqual(["elsewhere.json", "nested.json", "text.txt"]);
-  });
-
-  test("the public hash fields a run writes still scan clean", () => {
-    const manifest = {
-      stages: { libs: { status: "done", txHashes: [h(5), h(6)], firstBlock: 10 } },
-      govern: { "unpause-USDC": { scheduled: { txHash: h(7), operation_id: h(8), salt: h(9), predecessor: h(0) } } },
-      receipt_applications: [{ receipt_id: h(10), payload_digest: h(11), schedule_tx: h(12) }],
-    };
-    const fixture = { receipts: [{ hash: h(13), logs: [{ address: a(1), topics: [h(14), h(15)], data: h(16) }] }], reads: { [`${a(2)}:DEFAULT_ADMIN_ROLE`]: h(0) } };
-    expect(scan({
-      "publish-run.json": JSON.stringify(manifest, null, 2) + "\n",
-      "chain-fixture.json": JSON.stringify(fixture, null, 2) + "\n",
-      "frozen-counts.json": JSON.stringify({ measured: { crossChecked: { sha: "ab".repeat(20), fileHash: SHA } } }, null, 2) + "\n",
-      "govern-stdout.jsonl": [JSON.stringify({ row: "unpause-USDC", phase: "scheduled", txHash: h(17), status: 1 }), JSON.stringify({ event: "stage.done", tx_hashes: [h(18), h(19)] })].join("\n") + "\n",
-      "forge.txt": `[Success] Hash: ${h(20)}\nTransaction hash: ${h(21)}\nblockHash            ${h(22)}\n`,
-    })).toEqual([]);
-  });
-});
-
-// ---- issue 1809 (ADR-0014), QA plan v1 L1: the `proxies` evidence is read from the chain, never taken from the record ----
-describe("evidence check re-reads the governed proxies from the chain", () => {
-  const NAMES = ["rmUSDC", "registry"];
-  const word = word32;
-  const withProxies = () => withTableProxies(good(), NAMES);
-  const proxyChain = (e: any, o: Live = {}) => tableProxyChain(e, o);
-  const check = (e: any, chain: ChainReader) => checkEvidenceOnChain(e, chain, { safe: 2 }, { proxies: NAMES });
-
-  test("proxies that read on chain what the evidence records pass", async () => {
-    const e = withProxies();
-    expect(await check(e, proxyChain(e))).toEqual([]);
-  });
-  test("each property the chain contradicts is refused by name", async () => {
-    const cases: [Live, string][] = [
-      [{ implementation: a(0x2999) }, "implementation slot"],
-      [{ adminSlot: word(BigInt(a(0xad))) }, "admin slot"],
-      [{ beaconSlot: word(BigInt(a(0xbe))) }, "beacon slot"],
-      [{ code: "0x6080604053" as Hex }, "implementation code hash on chain"],
-      [{ code: "0x" as Hex }, "has no code"],
-      [{ authority: a(0x77) }, "upgradeAuthority()"],
-      [{ frozen: true }, "upgradesFrozen()"],
-      [{ uninitialized: true }, "not initialized"],
-      [{ unlocked: true }, "initializers are not locked"],
-    ];
-    for (const [o, needle] of cases) {
-      const e = withProxies();
-      const p = (await check(e, proxyChain(e, o))).join("\n");
-      expect(p, needle).toContain(needle);
-      expect(p, needle).toContain("proxies.rmUSDC");
-      expect(p, needle).toContain("proxies.registry");
-    }
-  });
-  test("a recorded frozen flag the chain does not hold is refused, and a frozen proxy the evidence records frozen passes", async () => {
-    const e = withProxies();
-    e.proxies.registry.frozen = true;
-    expect((await check(e, proxyChain(e))).join()).toContain("proxies.registry: upgradesFrozen()");
-    const f = withProxies();
-    for (const n of NAMES) f.proxies[n].frozen = true;
-    expect(await check(f, proxyChain(f, { frozen: true }))).toEqual([]);
-  });
-  test("a reader that cannot read code or storage proves nothing: a problem, never a pass", async () => {
-    const e = withProxies();
-    expect((await check(e, stub(e))).join()).toContain("cannot read code or storage");
-  });
-  test("without the table's proxy names the chain check reads no proxy (a deployment before the proxies)", async () => {
-    const e = withProxies();
-    expect(await checkEvidenceOnChain(e, stub(e), { safe: 2 })).toEqual([]);
-  });
-  test("the recorded chain fixture carries the proxy reads, as decimal storage words that pass the secret scan", async () => {
-    const e = withProxies();
-    const { reader, fixture } = recordingChainReader(proxyChain(e));
-    expect(await check(e, reader)).toEqual([]);
-    const fx = JSON.parse(JSON.stringify(fixture));
-    expect(fx.storage.length).toBeGreaterThan(0);
-    for (const s of fx.storage) expect(s.value).toMatch(/^[0-9]+$/);
-    expect(await check(e, chainReaderFromFixture(fx))).toEqual([]);
-    // the fixture alone, offline: a storage word that differs is caught there too (an admin slot that names someone)
-    const moved = JSON.parse(JSON.stringify(fx));
-    const slot = moved.storage.find((s: any) => s.address === a(5) && s.slot_hash === ERC1967_ADMIN_SLOT.toLowerCase());
-    slot.value = BigInt(a(0xad)).toString();
-    expect((await check(e, chainReaderFromFixture(moved))).join()).toContain("proxies.rmUSDC: the ERC-1967 admin slot");
-    const dir = mkdtempSync(join(tmpdir(), "evidence-proxy-fixture-"));
-    writeFileSync(join(dir, "chain-fixture.json"), JSON.stringify({ storage: fx.storage, codes: fx.codes }, null, 2) + "\n");
-    expect(scanEvidenceFolder(dir)).toEqual([]);
-  });
-});
-
-// ---- ADR-0014 §5 and §8 (issue 1809): the immutability claim and the storage-layout identifier ----
-describe("immutability claim and layout identifier (ADR-0014 §5, §8)", () => {
-  const names = Object.keys(TABLE_PROXIES);
-  const opts = { proxies: names };
-  const still = { governed_parameters: ["vault fees and caps"], upstream_dependencies: ["USDC"] };
-  const frozenAll = (e: any) => { e.upgrade_mode = "frozen-at-deploy"; for (const n of names) Object.assign(e.proxies[n], { mode: "frozen-at-deploy", frozen: true }); };
-
-  test("no claim: an upgradeable deployment passes", () => {
-    expect(checkEvidence(withTableProxies(good()), undefined, undefined, opts)).toEqual([]);
-  });
-
-  test("a claim while any proxy reads upgradeable is refused, naming the proxies", () => {
-    const e = withTableProxies(good());
-    e.immutability_claim = "core-logic-immutable";
-    e.immutability = { still_mutable: still };
-    const p = checkEvidence(e, undefined, undefined, opts).join("\n");
-    expect(p).toContain("immutability_claim");
-    expect(p).toContain("rmUSDC");
-  });
-
-  test("a claim with every proxy frozen passes only with the still-mutable list", () => {
-    const e = withTableProxies(good());
-    frozenAll(e);
-    e.immutability_claim = "core-logic-immutable";
-    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("still_mutable");
-    e.immutability = { still_mutable: still };
-    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
-  });
-
-  // Security round 1: after a redeploy the old vault is still a proxy of the deployment with holders inside, and its authority is still the timelock.
-  test("a claim is refused while a vault a redeploy replaced is not frozen by an executed proxy_freezes entry", () => {
-    const OLD = `0x${"3f".repeat(20)}`;
-    const e = withTableProxies(good());
-    frozenAll(e);
-    e.immutability_claim = "core-logic-immutable";
-    e.immutability = { still_mutable: still };
-    e.vault_redeploys = [{ vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD }];
-    const claim = () => checkEvidence(e, undefined, undefined, opts).filter((m) => m.includes("immutability_claim"));
-    expect(claim().join()).toContain(`a redeploy replaced (rmPROTO ${OLD})`);
-    e.proxy_freezes = [{ step: "freeze-proxy", proxies: [{ name: "rmPROTO.retired-1", proxy: OLD, implementation: `0x${"9f".repeat(20)}`, code_hash: `0x${"cd".repeat(32)}` }] }];
-    expect(claim().join()).toContain("a redeploy replaced"); // scheduled, never executed
-    e.proxy_freezes[0].execute_tx = `0x${"13".repeat(32)}`;
-    expect(claim()).toEqual([]);
-  });
-
-  test("a deploy-recorded layout identifier that differs from the checkout's snapshot is refused", () => {
-    const e = withTableProxies(good());
-    Object.assign(e.proxies.gateway, { layout_hash: `0x${"11".repeat(32)}`, layout_source: "deploy-manifest", checkout_layout_hash: `0x${"22".repeat(32)}` });
-    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("proxies.gateway.layout_hash");
-    Object.assign(e.proxies.gateway, { checkout_layout_hash: `0x${"11".repeat(32)}` });
-    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
-  });
-
-  // Security round 1: an upgraded proxy's layout is the one its upgrade round recorded, held to the snapshot of that round's build checkout.
-  test("an upgrade-round layout identifier that differs from its build checkout's snapshot is refused", () => {
-    const e = withTableProxies(good());
-    Object.assign(e.proxies.gateway, { layout_hash: `0x${"11".repeat(32)}`, layout_source: "upgrade-round", checkout_layout_hash: `0x${"22".repeat(32)}` });
-    expect(checkEvidence(e, undefined, undefined, opts).join("\n")).toContain("recorded by the upgrade round that installed it");
-    Object.assign(e.proxies.gateway, { checkout_layout_hash: `0x${"11".repeat(32)}` });
-    expect(checkEvidence(e, undefined, undefined, opts)).toEqual([]);
+  test("a round at another sha needs the verify at that sha with --prior-out of the deployment's sha", () => {
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B })), 900).join("\n")).toContain("prior_out_sha is missing");
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_B })), 900)).toEqual([]);
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_B, verified_at_sha: SHA_B })), 900).join("\n")).toContain("is not the evidence core_sha");
+    expect(checkVaultRedeploys(ev(entry({ core_sha: SHA_B, prior_out_sha: SHA_A, verified_at_sha: SHA_A })), 900).join("\n")).toContain(`verified_at_sha ${SHA_A} is not ${SHA_B}`);
   });
 });

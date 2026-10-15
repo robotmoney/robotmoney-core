@@ -37,9 +37,6 @@ pub mod scan_remediation_seams;
 pub mod scan_residual_seams;
 pub mod signer;
 pub mod tx;
-/// The gateway proxy's live implementation and freeze state, checked before
-/// every signature (ADR-0014 §10, QA plan P3).
-pub mod upgrade;
 /// The orchestration owner for every `rmpc` write command — the shared
 /// prologue and epilogue `deposit`, `withdraw` and `withdraw-router` used to
 /// copy verbatim (issue #1285).

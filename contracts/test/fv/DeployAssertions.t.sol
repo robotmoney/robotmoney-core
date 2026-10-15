@@ -40,7 +40,8 @@ import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
 import {SafeFixture} from "../helpers/SafeFixture.sol";
-import {Proxied} from "../helpers/Proxied.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 
 /// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
 contract Ora3Token is ERC20 {
@@ -83,30 +84,42 @@ contract Ora3Pool {
     }
 }
 
+/// @dev A `Ora3BasketVault` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
+///      the harness constructor took.
+function newOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_)
+    returns (Ora3BasketVault)
+{
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    BasketVault.InitParams memory p = BasketVault.InitParams({
+        usdc: usdc_,
+        swapRouter: router_,
+        tvlCap: type(uint256).max,
+        perDepositCap: type(uint256).max,
+        exitFeeBps: 0,
+        feeRecipient: admin_,
+        admin: admin_,
+        emergencyResponder: admin_
+    });
+    return Ora3BasketVault(
+        CoreProxies.proxy(
+            address(new Ora3BasketVault()), abi.encodeCall(Ora3BasketVault.initialize, (p, t, m))
+        )
+    );
+}
+
 /// @dev Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
 contract Ora3BasketVault is BasketVault {
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("ORA3 Basket", "bORA3", 30, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+    }
+
     function maxAssets() public pure override returns (uint256) {
         return 8;
     }
-
-    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
-        return ("ORA3 Basket", "bORA3", 30);
-    }
-}
-
-/// @dev `Ora3BasketVault` behind its own initialized ERC1967Proxy (ADR-0014): uncapped, no exit
-///      fee, `admin_` in every role.
-function deployOra3BasketVault(IERC20 usdc_, ISwapRouter router_, address admin_)
-    returns (Ora3BasketVault)
-{
-    return Ora3BasketVault(
-        Proxied.proxy(
-            address(new Ora3BasketVault()),
-            Proxied.basketInit(
-                usdc_, router_, type(uint256).max, type(uint256).max, 0, admin_, admin_, admin_
-            )
-        )
-    );
 }
 
 /// @dev Stand-in for the deployer EOA. It holds the constructor-granted roles and
@@ -240,6 +253,14 @@ contract DeployAssertionsTest is SafeFixture {
         assertFalse(
             _aclGovernance.hasRole(ADMIN_ROLE, deployer), "deployer retains governance ADMIN_ROLE"
         );
+        assertFalse(
+            _aclGovernance.hasRole(keccak256("WEIGHT_SETTER_ROLE"), deployer),
+            "deployer retains governance WEIGHT_SETTER_ROLE (applyReceipt)"
+        );
+        assertTrue(
+            _aclGovernance.hasRole(keccak256("WEIGHT_SETTER_ROLE"), timelock),
+            "timelock missing governance WEIGHT_SETTER_ROLE (applyReceipt)"
+        );
 
         // The independent hot key holds the vault EMERGENCY_ROLE; the Timelock
         // holds the Gateway root.
@@ -273,10 +294,10 @@ contract DeployAssertionsTest is SafeFixture {
         TestERC20 usdc = new TestERC20();
         address admin = makeAddr("acl7-admin");
         address pauser = makeAddr("acl7-pauser");
-        RobotMoneyVault v = Proxied.robotMoneyVault(
+        RobotMoneyVault v = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, makeAddr("acl7-safe"), admin, admin
         );
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(usdc, v, admin, pauser, address(0));
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(usdc, v, admin, pauser, address(0));
 
         // An attacker pre-binds an INTENDED future admin address as an AGENT via
         // the permissionless registration surface (modelled here by the
@@ -336,21 +357,30 @@ contract DeployAssertionsTest is SafeFixture {
         _installSafeSet();
         address safe = _newDefaultSafe();
         _aclDeployer = address(harness);
+        // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(safe, 2 days), GovernedUUPS.UpgradeMode.Upgradeable
+        );
         _aclEmergency = makeAddr("fv-emergency");
 
         // Construct the five contracts with the harness as admin so it holds the
         // at-risk roles. The gateway also grants the harness DEFAULT_ADMIN_ROLE;
         // the vault grants the harness EMERGENCY_ROLE — the pre-fix EOA-retains-
         // role gap the handover must close.
-        _aclVault = Proxied.robotMoneyVault(
+        _aclVault = CoreProxies.robotMoneyVault(
             usdc, type(uint256).max, type(uint256).max, 0, safe, _aclDeployer, _aclDeployer
         );
-        _aclGateway = Proxied.robotMoneyGateway(
+        _aclGateway = CoreProxies.robotMoneyGateway(
             usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0)
         );
-        _aclRegistry = Proxied.vaultRegistry(_aclDeployer);
-        _aclRouter = Proxied.portfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
-        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer);
+        _aclRegistry = CoreProxies.vaultRegistry(_aclDeployer);
+        _aclRouter = CoreProxies.portfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
+        _aclGovernance =
+            CoreProxies.routerGovernance(address(_aclRouter), makeAddr("receipts"), _aclDeployer);
+        // The governance WEIGHT_SETTER_ROLE (applyReceipt) is self-administered: the
+        // script's grant to the timelock runs as address(script), so it must hold it.
+        vm.prank(_aclDeployer);
+        _aclGovernance.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(script));
         // R7: DeployRouterGovernance grants this at deploy time and
         // DeployTimelock asserts it before handing over. Without it the
         // handover refuses — correctly, because the approving body would be
@@ -417,7 +447,7 @@ contract DeployAssertionsTest is SafeFixture {
         TestERC20 usdc = new TestERC20(); // 6-dec USDC stand-in
         address admin = makeAddr("ora3Admin");
         Ora3BasketVault vault =
-            deployOra3BasketVault(IERC20(address(usdc)), ISwapRouter(address(this)), admin);
+            newOra3BasketVault(IERC20(address(usdc)), ISwapRouter(address(this)), admin);
 
         Ora3Token token = new Ora3Token();
         (address t0, address t1) = address(token) < address(usdc)
@@ -429,19 +459,13 @@ contract DeployAssertionsTest is SafeFixture {
         vm.prank(admin);
         vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
         vault.addAsset(
-            address(token),
-            address(mismatchedPool),
-            500,
-            address(0),
-            BasketAssetConfigGuard.Venue.V3
+            address(token), address(mismatchedPool), 500, address(0), BasketVault.Venue.V3
         );
 
         // Match: pool's fee() equals swapFee_ → addAsset succeeds.
         Ora3Pool matchedPool = new Ora3Pool(t0, t1, 500);
         vm.prank(admin);
-        vault.addAsset(
-            address(token), address(matchedPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(token), address(matchedPool), 500, address(0), BasketVault.Venue.V3);
         assertEq(vault.assetCount(), 1, "matched pool/fee registers the asset");
     }
 }

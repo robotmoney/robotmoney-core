@@ -20,7 +20,10 @@
 
 mod common;
 
-use crate::common::{jrpc_result, jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE};
+use crate::common::{
+    install_direct_gateway_code_mocks, install_gateway_implementation, jrpc_result,
+    jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
+};
 use alloy_consensus::TxEip1559;
 use alloy_primitives::TxKind;
 use alloy_primitives::{address, b256, hex as ahex, Address, B256};
@@ -65,10 +68,19 @@ struct CommitteeFixture {
 
 impl CommitteeFixture {
     fn build(rpc_url: &str) -> Self {
-        Self::build_on(rpc_url, CHAIN_ID)
+        Self::build_full(rpc_url, CHAIN_ID, "")
     }
 
     fn build_on(rpc_url: &str, chain_id: u64) -> Self {
+        Self::build_full(rpc_url, chain_id, "")
+    }
+
+    /// [`Self::build`] with `extra` top-level TOML lines.
+    fn build_with(rpc_url: &str, extra: &str) -> Self {
+        Self::build_full(rpc_url, CHAIN_ID, extra)
+    }
+
+    fn build_full(rpc_url: &str, chain_id: u64, extra: &str) -> Self {
         use alloy_primitives::keccak256;
         use rust_payment_client::signer::software::SoftwareSigner;
 
@@ -98,7 +110,7 @@ vault_address         = "0x0000000000000000000000000000000000000d00"
 ic_policy_address     = "{IC_POLICY:#x}"
 gateway_runtime_hash  = "{runtime_hash}"
 max_fee_per_gas_cap   = 100000000000
-
+{extra}
 [signer]
 allow_software_fallback = true
 keystore_path           = "{ks}"
@@ -215,7 +227,7 @@ fn committee_vote_submit_base_mainnet_signs_with_software_keystore() {
 async fn test_committee_vote_submit_happy_path() {
     let mut server = mockito::Server::new_async().await;
     let fix = CommitteeFixture::build(&server.url());
-    common::install_gateway_pin_mocks(&mut server).await;
+    install_direct_gateway_code_mocks(&mut server).await;
 
     // eth_chainId
     server
@@ -386,7 +398,7 @@ async fn test_committee_vote_submit_happy_path() {
 async fn test_committee_vote_submit_unauthorized_rejected() {
     let mut server = mockito::Server::new_async().await;
     let fix = CommitteeFixture::build(&server.url());
-    common::install_gateway_pin_mocks(&mut server).await;
+    install_direct_gateway_code_mocks(&mut server).await;
 
     // eth_chainId
     server
@@ -635,7 +647,7 @@ fn reverted_receipt_body() -> String {
 /// Install the five RPC mocks a committee write needs, with the receipt the
 /// caller chooses.
 async fn install_committee_mocks(server: &mut mockito::Server, receipt_body: &str) {
-    common::install_gateway_pin_mocks(server).await;
+    install_direct_gateway_code_mocks(server).await;
     for (method, body) in [
         ("eth_chainId", jrpc_result(&format!("0x{CHAIN_ID:x}"))),
         ("eth_feeHistory", jrpc_result_raw(&fee_history_body())),
@@ -730,6 +742,76 @@ async fn test_committee_vote_submit_refuses_a_reverted_transaction() {
         .expect("rmpc ran");
 
     assert_refused_as_reverted(&output, "vote-submit");
+}
+
+/// Issue 1810: the vote goes to the gateway proxy, so `vote-submit` verifies
+/// the live implementation before signing. The proxy code (and its pinned
+/// hash) is unchanged; the implementation slot names one nobody approved.
+/// The command refuses and nothing is signed or sent.
+#[tokio::test]
+async fn test_committee_vote_submit_refuses_an_unapproved_implementation() {
+    use alloy_primitives::keccak256;
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+    const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0xbb];
+
+    let mut server = mockito::Server::new_async().await;
+    install_committee_mocks(&mut server, &simple_receipt_body()).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, None).await;
+    let fix = CommitteeFixture::build_with(
+        &server.url(),
+        &format!(
+            "gateway_implementation = \"{IMPL_A:#x}\"\n\
+             gateway_implementation_runtime_hash = \"0x{}\"\n",
+            ahex::encode(keccak256(IMPL_A_CODE))
+        ),
+    );
+
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "vote-submit",
+            "--vault",
+            "0x1111111111111111111111111111111111111111",
+            "--stance",
+            "overweight",
+            "--weight-bps",
+            "6000",
+            "--confidence",
+            "85",
+            "--rationale-uri",
+            "https://gist.github.com/robotmoney/test123",
+            "--vote-json-hash",
+            &format!("{VOTE_JSON_HASH:#x}"),
+            "--prompt-hash",
+            &format!("{PROMPT_HASH:#x}"),
+            "--inputs-digest",
+            &format!("{INPUTS_DIGEST:#x}"),
+            "--schema-version",
+            "1.0",
+            "--timestamp",
+            "1750000000",
+            "--order-id",
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("STDOUT: {stdout}");
+    assert_eq!(output.status.code(), Some(2), "refusal exit code");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    assert!(v["tx_hash"].is_null(), "nothing was sent: {v}");
 }
 
 // ─── rmpc is not a governance signer (issue #1447, workstream K) ──────────────

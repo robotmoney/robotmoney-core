@@ -1,0 +1,1737 @@
+---
+title: "RobotMoneyVaultOps"
+description: "The adapter registry loops of `RobotMoneyVault`, as an externally linked library: deposit routing, proportional pulls, registry writes, exclusion records, emergency drains, rebalance legs and the adapter views. Its `public` functions run by DELEGATECALL on the vault proxy's own storage, with the vault's `msg.sender`, so `address(this)` is the vault and every event is logged by the vault with the vault's signatures."
+---
+
+# RobotMoneyVaultOps
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/lib/RobotMoneyVaultOps.sol)
+
+**Title:** RobotMoneyVaultOps
+
+The adapter registry loops of `RobotMoneyVault`, as an externally linked library:
+deposit routing, proportional pulls, registry writes, exclusion records, emergency
+drains, rebalance legs and the adapter views. Its `public` functions run by
+DELEGATECALL on the vault proxy's own storage, with the vault's `msg.sender`, so
+`address(this)` is the vault and every event is logged by the vault with the vault's
+signatures.
+
+<i>
+
+Why it exists (issue 1808): behind a proxy the vault also carries the upgrade entry points
+and its former constructor as an initializer, so these bodies moved out to keep it under
+EIP-170. The vault keeps every role check, every `nonReentrant` guard and every entry gas
+floor; nothing here is reachable except through the vault. NAV (`totalAssets`) stays in
+the vault and uses the `internal` helpers below, so the vault and this library share one
+definition of eligibility and of equal weight.
+
+</i>
+
+`Book` is layout-identical to the vault's three registry variables `adapters`,
+`adapterAllowed` and `adapterCodeHashAllowed` (consecutive sequential slots); the vault
+casts them to it (`RobotMoneyVault._book`). The exclusion state (core 1820) lives in the
+ERC-7201 namespace `robotmoney.storage.RobotMoneyVaultExclusions` (`Exclusions`), so it
+adds nothing to the vault's sequential layout.
+
+Errors and events below mirror the vault's declarations (same selectors and topics), so a
+revert or log from here decodes against the vault ABI.
+
+## Constants
+
+### EXCLUSIONS_STORAGE
+
+```solidity
+bytes32 internal constant EXCLUSIONS_STORAGE =
+        0x6c6b6cd52f2574360cd487c4d8463dd92cc33d7fc37b49d1bb9ed2058e2e5400;
+```
+
+### MAX_BPS
+
+```solidity
+uint256 internal constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
+```
+
+## Functions
+
+<a id="exclusions"></a>
+
+### exclusions
+
+<i>
+
+The vault's exclusion state (`Exclusions`, ERC-7201 namespaced).
+
+</i>
+
+```solidity
+function exclusions() internal pure returns (Exclusions storage $);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `Exclusions` |  |
+
+<a id="createledger-ierc20"></a>
+
+### createLedger
+
+Create the vault's `ExclusionLedger` and record it (core 1820). Called once, from
+`RobotMoneyVault.initialize`. Runs as the vault (DELEGATECALL), so the vault proxy
+creates the ledger and the ledger names it as its only writer (`VAULT()`). The
+ledger's creation code lives in this library, not in the EIP-170-tight vault.
+Write-once: a second call reverts `InvalidParam`.
+
+```solidity
+function createLedger(IERC20 asset) public returns (ExclusionLedger ledger);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `IERC20` | The vault's asset (USDC), which the ledger holds and pays. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `ExclusionLedger` |  |
+
+<a id="iseligible-book-address-address"></a>
+
+### isEligible
+
+<i>
+
+Entry eligibility: allowlisted address, allowlisted runtime code hash, and the adapter
+reports this vault's asset and this vault (`address(this)`). Never reverts: the NAV
+path must keep working while an adapter misbehaves (ADP-2 / F-14, audit L-4).
+
+</i>
+
+```solidity
+function isEligible(Book storage b, address usdc, address adapter_)
+        internal
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| adapter_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="isusable-book-address-uint256"></a>
+
+### isUsable
+
+<i>
+
+Entry `i` may price into NAV and take or return USDC: no open exclusion record
+(core 1820) and currently eligible. Does not check `active`.
+
+</i>
+
+```solidity
+function isUsable(Book storage b, address usdc, uint256 i) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="iscounted-book-address-uint256"></a>
+
+### isCounted
+
+<i>
+
+Entry `i` counts in NAV and takes proportional pulls: active AND usable. The one NAV-side
+check, so `RobotMoneyVault.totalAssets` and `pullFromAdapters` can never drift apart.
+
+</i>
+
+```solidity
+function isCounted(Book storage b, address usdc, uint256 i) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="anyactiveblocked-book-address-bool"></a>
+
+### anyActiveBlocked
+
+Body of `RobotMoneyVault._anyActiveAdapterBlocked`: true when an active entry is
+not usable (ineligible, or under an open exclusion record: core 1788 / 1820). With
+`venues`, also true when a usable active entry reports that its venue refuses
+withdrawals (`IVenueHealthAdapter.venueWithdrawable` false: an Aave reserve paused
+or inactive, a Comet with `isWithdrawPaused` set; security round 3). NAV counts
+that venue's balance at face, so a deposit would mint against value nobody can
+withdraw, and a slice the venue hands back would sit idle to pay early exits at
+that NAV while a later haircut falls on the holders who stay. Deposits stay closed
+until the venue reopens or the adapter leaves the active set. A missing or reverting
+view reads as open, as `_ceiling` reads `maxExposure`; the lending adapter's own
+`deploy` still refuses to hand a slice back while its venue is shut
+(`VenueWithdrawalsClosed`). An unusable entry is never asked.
+
+```solidity
+function anyActiveBlocked(Book storage b, address usdc, bool venues)
+        public
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| venues | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="equalweightbalance-uint256-uint256-uint256"></a>
+
+### equalWeightBalance
+
+<i>
+
+The `rank`-th active adapter's slice of `total` when `active` adapters split it
+equally. `MAX_BPS / active` alone FLOORS (three adapters: 3333, summing to 9999), so the
+`MAX_BPS % active` remainder bps go one each to the lowest ranks, and the slice is the
+DIFFERENCE OF TWO PREFIX SHARES rather than `total * bps / MAX_BPS`, so the slices
+partition `total` exactly (issue #1391). Because they sum to `total` while the adapters
+hold `total - idle`, routing pass 1's deficits always sum to at least the deposit.
+
+</i>
+
+```solidity
+function equalWeightBalance(uint256 total, uint256 rank, uint256 active)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+| rank | `uint256` |  |
+| active | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="activecount-book"></a>
+
+### activeCount
+
+<i>
+
+Number of active registry entries.
+
+</i>
+
+```solidity
+function activeCount(Book storage b) internal view returns (uint256 count);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| count | `uint256` |  |
+
+<a id="routedeposit-book-address-uint256-uint256-uint256"></a>
+
+### routeDeposit
+
+Route `amount` idle USDC into the adapters. Body of `RobotMoneyVault._routeDepositAt`.
+
+<i>
+
+Pass 1 fills each usable active adapter toward `min(equal-weight slice, capBps)`. Pass 2
+spreads the leftover into adapters with absolute `capBps` headroom, and only runs when
+pass 1 saw headroom (see `_routePass2`). Both passes also stop at an adapter's own
+exposure cap (`_ceiling`, `MorphoAdapter.maxExposure`), so a capped adapter never
+reverts the deposit. A venue that refuses the supply (Aave supply cap or frozen
+reserve, MetaMorpho `AllCapsReached`, Comet supply pause) does not revert it either:
+the lending adapter hands the USDC back, `_allocate` counts only what stayed, and pass
+2 skips that entry (security round 2). Anything still unrouted stays idle in the vault
+and is reported with `UnroutedDeposit`. A quarantined entry, or one under an open
+exclusion record, is skipped rather than reverted on (audit 2026-06-09 L-4, core 1820).
+
+</i>
+
+```solidity
+function routeDeposit(
+        Book storage b,
+        address usdc,
+        uint256 amount,
+        uint256 totalAfter,
+        uint256 adapterCallGasFloor
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| amount | `uint256` |  |
+| totalAfter | `uint256` | NAV including `amount`, which already sits idle in the vault. |
+| adapterCallGasFloor | `uint256` | The vault's `ADAPTER_CALL_GAS_FLOOR`, checked before each `deploy`. |
+
+<a id="_ceiling-book-uint256-uint256"></a>
+
+### _ceiling
+
+<i>
+
+The highest balance routing may fill entry `i` to: its `capBps` slice of `totalAfter`,
+lowered to the adapter's own exposure cap when it reports one
+(`IExposureCappedAdapter.maxExposure`, `MorphoAdapter`, FS-VLT-10; 0 means uncapped). The
+adapter reverts a `deploy` that would cross its cap, and `_allocate` does not catch it, so
+a slice past the cap would revert the whole deposit, every router deposit with an rmUSDC
+leg, and keeper `rebalance` (security round 1, D8 follow-up). The read never reverts: an
+adapter without the view (Aave, Compound) is uncapped here. What the VENUE will accept
+is not read here: a refused supply comes back to the vault instead (`_allocate`).
+
+</i>
+
+```solidity
+function _ceiling(Book storage b, uint256 totalAfter, uint256 i)
+        private
+        view
+        returns (uint256 ceiling);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| totalAfter | `uint256` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ceiling | `uint256` |  |
+
+<a id="_routepass1-book-route-uint256"></a>
+
+### _routePass1
+
+<i>
+
+Pass 1: fill toward `min(equal target, capBps)`, taken on the balances the two bps
+figures denote so the equal-weight slice keeps its exact partition of NAV. Leaves
+`r.remaining` (USDC not placed) and `r.capHeadroom`: the absolute `capBps` headroom over
+the adapters it visited. That scores an allocated adapter as holding
+`currentBalance + allocation`, an UPPER bound on what a share-priced adapter really holds
+(`MorphoAdapter` rounds down), so it is a LOWER bound on real headroom: pass 2 is never
+entered on a false premise.
+
+</i>
+
+```solidity
+function _routePass1(Book storage b, Route memory r, uint256[] memory cachedBalance) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| r | `Route` |  |
+| cachedBalance | `uint256[]` |  |
+
+<a id="_pass1leg-book-route-uint256-uint256"></a>
+
+### _pass1Leg
+
+<i>
+
+One pass-1 leg: allocate the deficit to `min(shareBalance, capBalance)`, at most
+`r.remaining`. Returns the read balance + 1 when nothing was allocated, else 0. A leg
+whose venue refused part or all of the slice adds no headroom and is marked in
+`r.refused`: the venue is full for this call, whatever `capBps` says.
+
+</i>
+
+```solidity
+function _pass1Leg(Book storage b, Route memory r, uint256 i, uint256 shareBalance)
+        private
+        returns (uint256 cachedPlusOne);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| r | `Route` |  |
+| i | `uint256` |  |
+| shareBalance | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cachedPlusOne | `uint256` |  |
+
+<a id="_routepass2-book-route-uint256-bool"></a>
+
+### _routePass2
+
+<i>
+
+Pass 2: spread `r.remaining` into adapters with absolute cap headroom, re-reading and
+re-checking `capBps` against a real balance before placing. Skipped when pass 1 saw
+no headroom: a cap set summing to exactly `MAX_BPS` (devnet 3334/3333/3333) floors to
+slightly LESS than NAV, so a few wei of every deposit are unplaceable, and re-reading
+every adapter to rediscover that was the second round of reads #1391 removed. The
+trade: skipping may leave a few wei of share-rounding dust idle (on a fork pass 2's
+whole contribution to a `capBps`-bound deposit was ONE wei,
+`VaultForkRegressions.test_fork_unroutedDeposit_emitsEventAndStaysIdle`); it stays in
+NAV and the next deposit or `rebalance` routes it. An entry whose venue refused a supply
+earlier in this call (`r.refused`) is not asked again.
+
+</i>
+
+```solidity
+function _routePass2(
+        Book storage b,
+        Route memory r,
+        uint256[] memory cachedBalance,
+        bool useCache
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| r | `Route` |  |
+| cachedBalance | `uint256[]` |  |
+| useCache | `bool` |  |
+
+<a id="pullfromadapters-book-address-uint256-uint256"></a>
+
+### pullFromAdapters
+
+Pull `remainingNeeded` USDC from the counted adapters for a withdrawal. Body of the
+adapter part of `RobotMoneyVault._pullProportional` (the vault applies idle first).
+
+<i>
+
+Only counted (active AND usable) adapters are pulled from: a revoked adapter is excluded
+from NAV, so it must be excluded here too or the proportional denominator would not match
+NAV (ADP-2 / F-14). Fails fast with `InsufficientAdapterLiquidity` when the counted
+adapters cannot cover the request (audit 2026-06-09, L-2). Pass 1 pulls proportionally,
+each pull capped at the adapter's reported balance, and the last counted adapter takes the
+flooring remainder (core 1482), so pass 2 runs only when an adapter is short. Pass 2
+sweeps leftovers across all counted adapters at `min(remaining, balance)`. An
+under-delivering adapter reverts `InsufficientAdapterLiquidity`; it is never funded from
+other holders' idle USDC (FEE-2 / NC-11).
+
+</i>
+
+```solidity
+function pullFromAdapters(
+        Book storage b,
+        address usdc,
+        uint256 remainingNeeded,
+        uint256 adapterCallGasFloor
+    ) public returns (uint256 pulled);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| remainingNeeded | `uint256` |  |
+| adapterCallGasFloor | `uint256` | The vault's `ADAPTER_CALL_GAS_FLOOR`, checked before each `withdraw`. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pulled | `uint256` | USDC the adapters actually returned. |
+
+<a id="addadapter-book-address-exclusionledger-address-uint16-uint256"></a>
+
+### addAdapter
+
+Body of `RobotMoneyVault.addAdapter`.
+
+<i>
+
+Reverts `AdapterAlreadyActive` when any ACTIVE entry holds `adapter_` (core 1789):
+two active entries count one balance twice in NAV. Inactive entries are skipped, so a
+re-add after removal appends a NEW entry. Then the count cap, then full eligibility.
+
+</i>
+
+Security round 1: an inactive entry of the same address can still hold an OPEN
+exclusion record, left by `forceRemoveAdapter` while the adapter held a balance. That
+balance belongs to the record's snapshot holders. So before the new entry is pushed,
+the adapter's whole balance is withdrawn into that record and the record closes
+(`Restored`), exactly as a restore through `syncExclusions` does. The new entry starts
+empty, so the re-add never lifts NAV for today's holders. If the adapter cannot pay
+out, the add reverts `AdapterNotEmpty`.
+
+```solidity
+function addAdapter(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        address adapter_,
+        uint16 capBps_,
+        uint256 maxAdapters
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| adapter_ | `address` |  |
+| capBps_ | `uint16` |  |
+| maxAdapters | `uint256` |  |
+
+<a id="requireeligible-book-address-address"></a>
+
+### requireEligible
+
+Reverting eligibility check with a typed reason for each failure.
+
+```solidity
+function requireEligible(Book storage b, address usdc, address adapter_) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| adapter_ | `address` |  |
+
+<a id="removeadapter-book-exclusionledger-uint256"></a>
+
+### removeAdapter
+
+Body of `RobotMoneyVault.removeAdapter`: the entry must be active and empty. Closes
+its open exclusion record, if any (`Removed`, core 1820).
+
+```solidity
+function removeAdapter(Book storage b, ExclusionLedger ledger, uint256 index) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| ledger | `ExclusionLedger` |  |
+| index | `uint256` |  |
+
+<a id="setadaptercap-book-uint256-uint16"></a>
+
+### setAdapterCap
+
+Body of `RobotMoneyVault.setAdapterCap`.
+
+```solidity
+function setAdapterCap(Book storage b, uint256 index, uint16 newCapBps) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| index | `uint256` |  |
+| newCapBps | `uint16` |  |
+
+<a id="setadaptermaxexposure-book-uint256-uint256"></a>
+
+### setAdapterMaxExposure
+
+Body of `RobotMoneyVault.setAdapterMaxExposure` (FS-VLT-10). The event comes first:
+the adapter call is the last step, and a revert there undoes both.
+
+```solidity
+function setAdapterMaxExposure(Book storage b, uint256 index, uint256 cap) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| index | `uint256` |  |
+| cap | `uint256` |  |
+
+<a id="syncexclusions-book-address-exclusionledger-uint256-bool"></a>
+
+### syncExclusions
+
+Body of `RobotMoneyVault._syncExclusions`. For every active entry: an ineligible
+entry with no open record gets one, with a snapshot of `supply` (skipped while no
+shares exist: there is no holder to protect). When `restore` is set, an eligible entry
+that still has an open record is restored: its whole balance is withdrawn into the
+record, then the record closes (`Restored`) and the now-empty entry counts again. If
+the adapter cannot pay out, the restore reverts `AdapterNotEmpty`. Opening never calls
+the adapter from here (the ledger try/catches its informational `totalAssets()`), so
+excluding is never blocked.
+
+```solidity
+function syncExclusions(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply,
+        bool restore
+    ) public returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+| restore | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when at least one record opened (the vault then turns on checkpoints). |
+
+<a id="emergencywithdrawall-book-address-exclusionledger-uint256"></a>
+
+### emergencyWithdrawAll
+
+Body of `RobotMoneyVault.emergencyWithdraw` after the deposit halt: sync exclusions
+(open only), then drain every active entry, tolerant of a failing adapter.
+
+```solidity
+function emergencyWithdrawAll(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply
+    ) public returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when the sync opened a record. |
+
+<a id="emergencywithdrawone-book-address-exclusionledger-uint256-uint256"></a>
+
+### emergencyWithdrawOne
+
+Body of `RobotMoneyVault.emergencyWithdrawAdapter` after the deposit halt.
+
+```solidity
+function emergencyWithdrawOne(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256 index
+    ) public returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when the sync opened a record. |
+
+<a id="emergencyexclude-book-address-exclusionledger-uint256-uint256"></a>
+
+### emergencyExclude
+
+Body of `RobotMoneyVault.emergencyExcludeAdapter`: the exclude-only half of
+`setAdapterAllowed(adapter, false)`, for the hot key. Revokes the active entry's
+address allowance, then syncs (open only), so the entry leaves NAV and its record
+opens with a snapshot of `supply` in this call. Restoring stays `ADMIN_ROLE`'s:
+`setAdapterAllowed(adapter, true)` drains the adapter into the record first.
+
+<i>
+
+Security round 1 (FS-VLT-8 follow-up): before this lever only the timelock could open a
+record, so in the 48 h before it ran an illiquid adapter stayed in NAV while
+`emergencyWithdraw` moved the healthy adapters to idle, and early redeemers took full
+NAV from idle. Exclude first, then drain: every holder bears the haircut pro rata.
+
+</i>
+
+```solidity
+function emergencyExclude(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256 index
+    ) public returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when the sync opened a record. |
+
+<a id="forceremoveadapter-book-exclusionledger-uint256-uint256"></a>
+
+### forceRemoveAdapter
+
+Body of `RobotMoneyVault.forceRemoveAdapter` after the deposit halt. The entry
+leaves the registry without a withdrawal. Its balance leaves NAV, but it is not
+handed to anyone: it stays owed to the holders of the moment through an exclusion
+record (security round 1, SR-1012-5 / issue 1705 finding 5).
+
+<i>
+
+- A funded entry (or one whose `totalAssets` reverts) with no open record gets one,
+with a snapshot of `supply` (skipped at zero supply). So a holder who exits at the
+written-down NAV keeps a pro-rata claim on whatever the adapter later returns.
+- An open record is closed (`ForceRemoved`) only when the adapter reports an empty
+balance. Otherwise it stays open on the inactive index. `recoverRemoved`
+(EMERGENCY) credits it tranche by tranche as the venue can pay (security round
+2), and a later `addAdapter` of the same address realises the whole remaining
+balance into it before the new entry counts (see `addAdapter`). Before this, the
+record closed here and a re-add put the stranded balance back into NAV for
+whoever held shares then.
+
+</i>
+
+```solidity
+function forceRemoveAdapter(
+        Book storage b,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256 index
+    ) public returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when a record opened. |
+
+<a id="recoverremoved-book-address-exclusionledger-uint256-uint256"></a>
+
+### recoverRemoved
+
+Body of `RobotMoneyVault.recoverRemovedAdapter`: withdraw up to `amount` from the
+INACTIVE entry `index` straight into its open exclusion record.
+
+<i>
+
+Security round 2. `forceRemoveAdapter` leaves a funded entry's record open, and before
+this the only path that could credit it was `addAdapter`, which withdraws the WHOLE
+balance in one call and reverts `AdapterNotEmpty` otherwise. A venue that can repay
+only part of the position (high utilization, bad debt in one market) therefore
+stranded even the liquid part. This lever takes any tranche the venue can pay now.
+- `amount` is clamped to the adapter's reported balance when that read works, so
+`type(uint256).max` asks for everything. The plain `withdraw(amount)` reverts on a
+shortfall, so ask for at most what the venue can pay.
+- The USDC that reaches the vault, measured by balance (`_credit`), goes to the
+record (`EmergencyWithdrawAdapter`), never to idle NAV.
+- When the adapter then reports an empty balance, the record closes (`ForceRemoved`),
+exactly as `forceRemoveAdapter` closes an empty one.
+Reverts `AdapterNotFound` unless `index` names an inactive entry, and `NoOpenExclusion`
+when that entry has no open record (nothing is owed to anyone through it).
+
+</i>
+
+```solidity
+function recoverRemoved(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 index,
+        uint256 amount
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| index | `uint256` |  |
+| amount | `uint256` |  |
+
+<a id="rebalancepull-book-address-uint256-uint256"></a>
+
+### rebalancePull
+
+Pull leg of `RobotMoneyVault.rebalance`: withdraw each usable active adapter's
+excess over its equal-weight target, up to `maxMovePerCall` in total. Never pulls from
+a quarantined entry or one under an open exclusion record (core 1788 / 1820): its
+balance is outside NAV and recovery goes through the governed paths.
+
+```solidity
+function rebalancePull(
+        Book storage b,
+        address usdc,
+        uint256 totalAssetsCached,
+        uint256 maxMovePerCall
+    ) public returns (uint256 totalMoved);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| totalAssetsCached | `uint256` |  |
+| maxMovePerCall | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalMoved | `uint256` | USDC the adapters returned. |
+
+<a id="adminrebalancepull-book-address-exclusionledger-uint256-uint256"></a>
+
+### adminRebalancePull
+
+Pull leg of `RobotMoneyVault.adminRebalance`: restore eligible excluded entries
+first, then withdraw every active entry's excess over `targetBalances[i]`. A pull from
+an entry under an open record is credited to that record (core 1820, E2), so the drain
+cannot hand the excluded value to today's holders.
+
+```solidity
+function adminRebalancePull(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 supply,
+        uint256[] memory targetBalances
+    ) public returns (uint256 totalMoved, bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| supply | `uint256` |  |
+| targetBalances | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalMoved | `uint256` | USDC the adapters returned. |
+| opened | `bool` |     True when the sync opened a record. |
+
+<a id="adminrebalanceallocate-book-address-uint256-uint256"></a>
+
+### adminRebalanceAllocate
+
+Allocation leg of `RobotMoneyVault.adminRebalance`: move idle USDC into each active
+entry below `targetBalances[i]`, in registry order, with the full eligibility revert.
+A slice the venue refuses comes back and stays idle (security round 2); the
+adapter's `DeployRefused` event and the missing `Allocated` show it.
+
+```solidity
+function adminRebalanceAllocate(
+        Book storage b,
+        address usdc,
+        uint256[] memory targetBalances,
+        uint256 adapterCallGasFloor
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| targetBalances | `uint256[]` |  |
+| adapterCallGasFloor | `uint256` |  |
+
+<a id="adapterinfo-book-uint256"></a>
+
+### adapterInfo
+
+Body of `RobotMoneyVault.getAdapterInfo`.
+
+```solidity
+function adapterInfo(Book storage b, uint256 index)
+        public
+        view
+        returns (
+            address adapterAddr,
+            uint16 capBps,
+            bool active,
+            uint256 currentBalance,
+            uint256 targetBps
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterAddr | `address` |  |
+| capBps | `uint16` |  |
+| active | `bool` |  |
+| currentBalance | `uint256` |  |
+| targetBps | `uint256` |  |
+
+<a id="adapterdrift-book-uint256"></a>
+
+### adapterDrift
+
+Body of `RobotMoneyVault.getAdapterDrift` against NAV `total`.
+
+```solidity
+function adapterDrift(Book storage b, uint256 total)
+        public
+        view
+        returns (
+            uint256[] memory currentBalances,
+            uint256[] memory targetBalances,
+            int256[] memory drifts
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| total | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currentBalances | `uint256[]` |  |
+| targetBalances | `uint256[]` |  |
+| drifts | `int256[]` |  |
+
+<a id="_requireactive-book-uint256"></a>
+
+### _requireActive
+
+<i>
+
+Reverts `AdapterNotFound` unless `index` names an active registry entry.
+
+</i>
+
+```solidity
+function _requireActive(Book storage b, uint256 index) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| index | `uint256` |  |
+
+<a id="_requiregas-uint256"></a>
+
+### _requireGas
+
+<i>
+
+`gasleft()` must cover `floor` before an adapter call (core 1482). Measured inside this
+DELEGATECALL frame, which holds 63/64 of the vault's gas, so it is at least as strict as
+the same check in the vault; the vault's entry floors still bind first.
+
+</i>
+
+```solidity
+function _requireGas(uint256 floor) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
+
+<a id="_allocate-book-address-uint256-uint256-uint256"></a>
+
+### _allocate
+
+<i>
+
+Move `amount` USDC into entry `i` and deploy it, with the full eligibility revert.
+Returns `placed`: what the adapter kept. Security round 2: a lending adapter whose
+venue refuses the supply (Aave supply cap or frozen reserve, MetaMorpho
+`AllCapsReached`, Comet supply pause) hands the USDC straight back instead of
+reverting the deposit. The vault measures that by its own balance, not by anything the
+adapter returns, and `Allocated` reports only what stayed. USDC an adapter sends back
+beyond `amount` simply stays idle in NAV.
+
+</i>
+
+```solidity
+function _allocate(Book storage b, address usdc, uint256 i, uint256 amount, uint256 floor)
+        private
+        returns (uint256 placed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+| floor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| placed | `uint256` |  |
+
+<a id="_withdrawfrom-istrategyadapter-uint256-uint256-uint256"></a>
+
+### _withdrawFrom
+
+<i>
+
+Withdraw `pull` from entry `i` behind the adapter-call gas floor; returns what it paid.
+
+</i>
+
+```solidity
+function _withdrawFrom(IStrategyAdapter adpt, uint256 i, uint256 pull, uint256 floor)
+        private
+        returns (uint256 actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adpt | `IStrategyAdapter` |  |
+| i | `uint256` |  |
+| pull | `uint256` |  |
+| floor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| actual | `uint256` |  |
+
+<a id="_targetbpsforindex-book-uint256"></a>
+
+### _targetBpsForIndex
+
+<i>
+
+Equal-weight target in bps for the entry at `index` (0 when inactive). The
+`MAX_BPS % active` remainder bps go one each to the lowest ranks (#1391).
+
+</i>
+
+```solidity
+function _targetBpsForIndex(Book storage b, uint256 index) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_emergencypull-book-address-exclusionledger-uint256-bool"></a>
+
+### _emergencyPull
+
+<i>
+
+One emergency drain of active entry `i`, tolerant of a failing adapter. Emits
+`EmergencyWithdrawAdapterCalled` per outcome; only the single-adapter lever reports an
+empty adapter. A pull from an entry under an open record is credited to it.
+
+</i>
+
+```solidity
+function _emergencyPull(
+        Book storage b,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 i,
+        bool single
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| i | `uint256` |  |
+| single | `bool` |  |
+
+<a id="_drain-istrategyadapter-uint256-address-exclusionledger-exclusionledger-recoverysource"></a>
+
+### _drain
+
+<i>
+
+Withdraw `adpt`'s whole reported balance, tolerant of a failing adapter, and credit it
+to record `id` when non-zero. `ok` is false when `totalAssets` or `withdraw` reverted
+(then `actual` is 0); `empty` when the adapter reported no balance (nothing is called).
+
+</i>
+
+```solidity
+function _drain(
+        IStrategyAdapter adpt,
+        uint256 id,
+        address usdc,
+        ExclusionLedger ledger,
+        ExclusionLedger.RecoverySource source
+    ) private returns (bool ok, uint256 actual, bool empty);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adpt | `IStrategyAdapter` |  |
+| id | `uint256` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| actual | `uint256` |  |
+| empty | `bool` |  |
+
+<a id="_restore-book-address-exclusionledger-uint256"></a>
+
+### _restore
+
+<i>
+
+Restore entry `i` from its open record: withdraw the adapter's whole balance into the
+record (`Restoration`), then close it (`Restored`). Reverts `AdapterNotEmpty` when the
+adapter cannot pay out, so the record stays open. Shared by `syncExclusions` (an
+active entry whose eligibility came back) and `addAdapter` (a re-add of an address
+whose inactive entry was force-removed with a balance).
+
+</i>
+
+```solidity
+function _restore(Book storage b, address usdc, ExclusionLedger ledger, uint256 i) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| i | `uint256` |  |
+
+<a id="_credit-uint256-address-exclusionledger-uint256-exclusionledger-recoverysource"></a>
+
+### _credit
+
+<i>
+
+Move the USDC that arrived since `before` into record `id` (no-op for id 0). The
+balance delta, not the adapter's return value, is what moves: an excluded adapter is
+untrusted, and overstating its return must not take idle USDC.
+
+</i>
+
+```solidity
+function _credit(
+        uint256 id,
+        address usdc,
+        ExclusionLedger ledger,
+        uint256 before,
+        ExclusionLedger.RecoverySource source
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| usdc | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| before | `uint256` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+
+<a id="_finalize-book-exclusionledger-uint256-exclusionledger-finalizereason"></a>
+
+### _finalize
+
+<i>
+
+Close entry `i`'s open record, if any. It stays claimable forever.
+
+</i>
+
+```solidity
+function _finalize(
+        Book storage b,
+        ExclusionLedger ledger,
+        uint256 i,
+        ExclusionLedger.FinalizeReason reason
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| ledger | `ExclusionLedger` |  |
+| i | `uint256` |  |
+| reason | `ExclusionLedger.FinalizeReason` |  |
+
+## Events
+
+### AdapterAdded
+
+```solidity
+event AdapterAdded(uint256 indexed index, address indexed adapter, uint16 capBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| capBps | `uint16` |  |
+
+### AdapterAllowedSet
+
+```solidity
+event AdapterAllowedSet(address indexed adapter, bool allowed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| allowed | `bool` |  |
+
+### AdapterRemoved
+
+```solidity
+event AdapterRemoved(uint256 indexed index, address indexed adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+
+### AdapterCapUpdated
+
+```solidity
+event AdapterCapUpdated(uint256 indexed index, uint16 oldBps, uint16 newBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| oldBps | `uint16` |  |
+| newBps | `uint16` |  |
+
+### AdapterMaxExposureSet
+
+```solidity
+event AdapterMaxExposureSet(uint256 indexed index, address indexed adapter, uint256 cap);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| cap | `uint256` |  |
+
+### AdapterForceRemoved
+
+```solidity
+event AdapterForceRemoved(uint256 indexed index, address indexed adapter, uint256 lossAmount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| lossAmount | `uint256` |  |
+
+### Allocated
+
+```solidity
+event Allocated(uint256 indexed index, address indexed adapter, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+
+### Pulled
+
+```solidity
+event Pulled(uint256 indexed index, address indexed adapter, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+
+### UnroutedDeposit
+
+```solidity
+event UnroutedDeposit(uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+### EmergencyWithdrawCalled
+
+```solidity
+event EmergencyWithdrawCalled();
+```
+
+### EmergencyWithdrawAdapterCalled
+
+```solidity
+event EmergencyWithdrawAdapterCalled(
+        uint256 indexed index, address indexed adapter, uint256 amount, bool success
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+| success | `bool` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### InvalidParam
+
+```solidity
+error InvalidParam();
+```
+
+### InvalidCap
+
+```solidity
+error InvalidCap();
+```
+
+### MaxAdaptersReached
+
+```solidity
+error MaxAdaptersReached();
+```
+
+### AdapterAlreadyActive
+
+```solidity
+error AdapterAlreadyActive(address adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+### AdapterNotFound
+
+```solidity
+error AdapterNotFound();
+```
+
+### AdapterNotEmpty
+
+```solidity
+error AdapterNotEmpty();
+```
+
+### AdapterNotAllowed
+
+```solidity
+error AdapterNotAllowed(address adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+### AdapterCodeHashNotAllowed
+
+```solidity
+error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| codeHash | `bytes32` |  |
+
+### AdapterCompatibilityCheckFailed
+
+```solidity
+error AdapterCompatibilityCheckFailed(address adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+### AdapterAssetMismatch
+
+```solidity
+error AdapterAssetMismatch(address adapter, address expected, address actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| expected | `address` |  |
+| actual | `address` |  |
+
+### AdapterVaultMismatch
+
+```solidity
+error AdapterVaultMismatch(address adapter, address expected, address actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| expected | `address` |  |
+| actual | `address` |  |
+
+### InsufficientAdapterLiquidity
+
+```solidity
+error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requested | `uint256` |  |
+| available | `uint256` |  |
+
+### InsufficientGas
+
+```solidity
+error InsufficientGas(uint256 available, uint256 required);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| available | `uint256` |  |
+| required | `uint256` |  |
+
+### NoOpenExclusion
+
+```solidity
+error NoOpenExclusion(uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+## Structs
+
+### AdapterInfo
+
+One strategy-adapter registry entry. Layout-identical to `RobotMoneyVault.AdapterInfo`.
+
+```solidity
+struct AdapterInfo {
+        IStrategyAdapter adapter;
+        uint16 capBps;
+        bool active;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `IStrategyAdapter` | The adapter contract. |
+| capBps | `uint16` | Max allocation out of 10_000 bps; also acts as ramp control. |
+| active | `bool` | False once removed or force-removed. Inactive entries are never reused. |
+
+### Book
+
+The vault's adapter registry: the vault's `adapters`, `adapterAllowed` and
+`adapterCodeHashAllowed`, which sit in consecutive slots in this order. One storage
+reference per library call.
+
+```solidity
+struct Book {
+        AdapterInfo[] adapters;
+        mapping(address adapter => bool allowed) allowed;
+        mapping(bytes32 codeHash => bool allowed) codeHashAllowed;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapters | `AdapterInfo[]` | Ordered registry of all strategy adapters (active and inactive). |
+| allowed | `mapping(address adapter => bool allowed)` | Exact adapter instances governance approved to receive the vault's USDC. |
+| codeHashAllowed | `mapping(bytes32 codeHash => bool allowed)` | Runtime code hashes governance approved for adapter onboarding. |
+
+### Exclusions
+
+The vault's exclusion state (core 1820).
+
+**Note:**
+
+- **storage-location:** erc7201:robotmoney.storage.RobotMoneyVaultExclusions
+
+```solidity
+struct Exclusions {
+        ExclusionLedger ledger;
+        bool snapshots;
+        mapping(uint256 index => uint256 exclusionId) openExclusionOf;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `ExclusionLedger` | The vault's `ExclusionLedger`, created once by `createLedger` in<br/>`RobotMoneyVault.initialize`; no setter exists. |
+| snapshots | `bool` | True once the first record opened. From then on the vault's<br/>`_update` checkpoints every share balance change in the ledger. |
+| openExclusionOf | `mapping(uint256 index => uint256 exclusionId)` | Open exclusion record id per registry index (0 = none). A<br/>force-removed (inactive) index keeps its record open while the<br/>adapter still holds a balance, until `recoverRemoved` drains it<br/>empty or a re-add settles it. |
+
+### Route
+
+<i>
+
+Scalars one routing call threads through its passes (memory, to stay within the legacy
+code generator's stack reach). `refused` has bit `i` set once entry `i`'s venue refused
+a supply in this call (security round 2), so pass 2 does not ask it again.
+
+</i>
+
+```solidity
+struct Route {
+        address usdc;
+        uint256 totalAfter;
+        uint256 gasFloor;
+        uint256 remaining;
+        uint256 capHeadroom;
+        uint256 refused;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| totalAfter | `uint256` |  |
+| gasFloor | `uint256` |  |
+| remaining | `uint256` |  |
+| capHeadroom | `uint256` |  |
+| refused | `uint256` |  |
+

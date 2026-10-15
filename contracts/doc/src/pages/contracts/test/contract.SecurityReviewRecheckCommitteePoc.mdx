@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckCommitteePoc"
 
 # SecurityReviewRecheckCommitteePoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SecurityReviewRecheckCommitteePoc.t.sol)
 
 **Inherits:** [ICGatewayIntegration](/contracts/test/contract.ICGatewayIntegration)
 
@@ -42,29 +42,12 @@ function _selfPolicy(address self) internal view returns (IGateway.AgentPolicy m
 
 ### _selfReveal
 
-Permissionless commit/reveal: `owner` authorizes `agent` with a policy
-naming `owner` as shareReceiver, as `_validatePolicy` demands of
-non-admin callers. It carries no agent consent, so since issue #1791 it
-lands only when `owner == agent` (the reveal is the agent's own consent).
+Permissionless commit/reveal: `owner` authorizes `agent` (may be any
+address that is not already owned) with a policy naming `owner` as
+shareReceiver, as `_validatePolicy` demands of non-admin callers.
 
 ```solidity
 function _selfReveal(address owner, address agent, bytes32 salt) internal;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| owner | `address` |  |
-| agent | `address` |  |
-| salt | `bytes32` |  |
-
-<a id="_commitandroll-address-address-bytes32"></a>
-
-### _commitAndRoll
-
-```solidity
-function _commitAndRoll(address owner, address agent, bytes32 salt) internal;
 ```
 
 **Parameters**
@@ -79,16 +62,24 @@ function _commitAndRoll(address owner, address agent, bytes32 salt) internal;
 
 ### test_spoofedVoteCannotSupersedeMembersLatestVote
 
+Remediated by core 1790 (PR 1818): the gateway reverts `CommitteeAgentNotCaller`
+when `p.agent != msg.sender`, so the member's `latestVoteByAgent` stays theirs.
+
 ```solidity
 function test_spoofedVoteCannotSupersedeMembersLatestVote() public;
 ```
 
-<a id="test_spoofedvotefloodrevertsundermembername"></a>
+<a id="test_spoofedvotefloodundermembernamereverts"></a>
 
-### test_spoofedVoteFloodRevertsUnderMemberName
+### test_spoofedVoteFloodUnderMemberNameReverts
+
+Remediated by core 1790 (PR 1818): every spoofed submission reverts, so no
+row naming the member is appended. The aggregate side (latest signal per
+member and vault) is covered end to end by
+`vote_flood_from_one_member_counts_once_end_to_end` in explorer-indexer.
 
 ```solidity
-function test_spoofedVoteFloodRevertsUnderMemberName() public;
+function test_spoofedVoteFloodUnderMemberNameReverts() public;
 ```
 
 <a id="test_selfrevealedagentcannotvoteunderownaddress"></a>
@@ -117,24 +108,22 @@ function test_selfRevealedAgentCannotVoteUnderOwnAddress() public;
 function test_selfRegisteredAgentCannotAnchorReceipt() public;
 ```
 
-<a id="test_permissionlessrevealcannotsquatthirdpartyagentaddress"></a>
+<a id="test_permissionlessrevealsquatsthirdpartyagentaddress"></a>
 
-### test_permissionlessRevealCannotSquatThirdPartyAgentAddress
-
-<i>
-
-Finding 7. At baseline the attacker became the policy owner of a
-published third-party address, with itself as share receiver, and
-admin onboarding of that address then reverted `AgentAlreadyOwned`
-(also after the admin stripped its role). Issue #1791 requires the
-agent's EIP-712 consent for a non-admin reveal of another address,
-so the same reveal reverts `InvalidAgentConsent`, nothing is bound,
-and the admin onboards the address.
-
-</i>
+### test_permissionlessRevealSquatsThirdPartyAgentAddress
 
 ```solidity
-function test_permissionlessRevealCannotSquatThirdPartyAgentAddress() public;
+function test_permissionlessRevealSquatsThirdPartyAgentAddress() public;
+```
+
+<a id="test_consenttooneownerdoesnotletanotherownerreveal"></a>
+
+### test_consentToOneOwnerDoesNotLetAnotherOwnerReveal
+
+A consent names one owner and one exact reveal: another owner cannot use it.
+
+```solidity
+function test_consentToOneOwnerDoesNotLetAnotherOwnerReveal() public;
 ```
 
 <a id="test_selfregisteredagentcannotpullanotherholdersshares"></a>

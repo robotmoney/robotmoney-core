@@ -1,34 +1,34 @@
-//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
-//! Canonical: docs/technical/governance-decisions.md §3.2, §3.7 — a receipt is applied, not voted on
-//! Implements: issue #309; issue #1698 (QA plan v1 C1) — one `applyReceipt` call, no voting
+//! Canonical: docs/technical/governance-decisions.md §3 — the Safe applies consensus receipts through the weight setter
+//! Implements: issue #1698 — the weight setter applies a consensus receipt in one call; voting deleted
 //!
-//! Fork e2e scenarios for the weight setter's receipt path: RouterGovernance releases on the
-//! ConsensusRecommendationReceipt register and writes PortfolioRouter weights. Each scenario deploys a
-//! fresh stack on an anvil-fork backend (a VaultRegistry, two MockVaults, a PortfolioRouter, an
-//! InvestmentCommitteePolicy, a ConsensusRecommendationReceipt and a RouterGovernance), records one
-//! consensus receipt, and drives `RouterGovernance.applyReceipt` (or one of its refusals), asserting
-//! on-chain state.
+//! Fork e2e scenarios for the RouterGovernance → PortfolioRouter weight path.
+//! Each scenario deploys a fresh VaultRegistry + MockVault + PortfolioRouter +
+//! InvestmentCommitteePolicy + ConsensusRecommendationReceipt + RouterGovernance
+//! stack on an anvil-fork backend, records a consensus receipt, and drives
+//! `RouterGovernance.applyReceipt` (or the relevant failure branch).
 //!
-//! Issue 1698 deleted the propose -> vote -> execute path, the voter set, voting power, quorum, voting
-//! period and execution delay. These scenarios replaced the three that drove that path. The Safe and the
-//! timelock are not deployed here: the deployer holds RouterGovernance `ADMIN_ROLE` as the timelock does
-//! after stage 11, and stands in as the register's gateway (its only permitted writer). The deploy wiring
-//! itself (stage 11 points `receiptContract` at the register and grants the weight setter the register's
-//! `ADMIN_ROLE`) is asserted on the real deployment by `testing/smoke-test/tests/governance.rs`.
+//! The test account stands in for both the gateway (the receipt register's
+//! only writer) and the timelock (the holder of RouterGovernance's
+//! `WEIGHT_SETTER_ROLE`). It is also the allowlisted committee agent that
+//! submits the receipt.
 //!
 //! Covered scenarios:
 //!
-//! - `governance_apply_receipt_releases_and_sets_weights_in_one_call` — happy path: one `applyReceipt`
-//!   releases the receipt (`ReceiptReleased` from the register) and writes its vector (`ReceiptApplied`
-//!   from the weight setter) in the same transaction; `isReleased` is true and `router.getWeights()`
-//!   returns the receipt's vector.
+//! - `governance_apply_receipt_round_trip` — happy path: `applyReceipt`
+//!   releases the receipt, sets its vector on the router (`getWeights` equals
+//!   the vector, `votedWeightsActive` is true) and emits `ReceiptApplied`.
+//! - `governance_apply_receipt_digest_mismatch_reverts` — a call naming a
+//!   digest other than the stored one reverts `PayloadDigestMismatch`.
+//! - `governance_apply_receipt_already_released_reverts` — a second apply of
+//!   the same receipt reverts `ReceiptAlreadyReleased`.
+//! - `governance_apply_receipt_non_weight_setter_reverts` — a caller without
+//!   `WEIGHT_SETTER_ROLE` reverts `AccessControlUnauthorizedAccount`.
+//! - `governance_apply_receipt_duplicate_vault_reverts` — a vector naming a
+//!   vault twice reverts `DuplicateVault` and leaves the receipt unreleased;
+//!   the same receipt then applies with a valid vector.
 //!
-//! - `governance_apply_receipt_refuses_a_digest_mismatch` — the call names a digest the register did not
-//!   store; it reverts, the receipt stays unreleased and the router weights are unchanged.
-//!
-//! - `governance_apply_receipt_refused_vector_releases_nothing` — the router refuses the vector (a
-//!   duplicate vault); the whole call reverts, so the receipt stays unreleased, and the same receipt then
-//!   applies with a valid vector.
+//! Each failure scenario asserts the revert selector through `eth_call`, then
+//! sends the transaction and asserts it reverted on chain and changed nothing.
 //!
 //! Each test boots its own anvil fork backend (per ADR §3.5), providing
 //! full state isolation without snapshot/revert coordination.
@@ -36,8 +36,8 @@
 use std::path::PathBuf;
 
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
-use alloy_sol_types::{sol, SolCall};
-use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
+use alloy_sol_types::{sol, SolCall, SolError, SolEvent};
+use rmpc_fork_e2e::{skip_if_no_fork, Account, ForkFixture, HarnessError};
 use serde_json::Value as JsonValue;
 
 // ── Workspace root helper ────────────────────────────────────────────────────
@@ -76,11 +76,43 @@ fn load_initcode(sol_file: &str, contract_name: &str) -> Bytes {
     )
 }
 
-/// ABI-encode a single `address` constructor argument (left-padded to 32 bytes).
-fn encode_address_arg(addr: Address) -> [u8; 32] {
-    let mut arg = [0u8; 32];
-    arg[12..].copy_from_slice(addr.as_slice());
-    arg
+/// Deploy a governed core contract (core 1808) behind an ERC-1967 proxy, initialized with the
+/// address arguments its constructor used to take.
+fn deploy_governed(
+    deployer: &Account<'_>,
+    sol_file: &str,
+    contract_name: &str,
+    args: &[Address],
+    gas_limit: u64,
+) -> Address {
+    rmpc_fork_e2e::governed::deploy_governed_with_address_args(
+        deployer,
+        sol_file,
+        contract_name,
+        args,
+        gas_limit,
+    )
+    .unwrap_or_else(|e| panic!("deploy {contract_name}: {e}"))
+}
+
+/// Deploy `sol_file:contract_name` with ABI-encoded address constructor
+/// arguments (each left-padded to a 32-byte slot).
+fn deploy_with_address_args(
+    deployer: &Account<'_>,
+    sol_file: &str,
+    contract_name: &str,
+    args: &[Address],
+    gas_limit: u64,
+) -> Address {
+    let mut code = load_initcode(sol_file, contract_name).to_vec();
+    for addr in args {
+        let mut slot = [0u8; 32];
+        slot[12..].copy_from_slice(addr.as_slice());
+        code.extend_from_slice(&slot);
+    }
+    deployer
+        .deploy(Bytes::from(code), gas_limit)
+        .unwrap_or_else(|e| panic!("deploy {contract_name}: {e}"))
 }
 
 // ── ABI bindings ─────────────────────────────────────────────────────────────
@@ -89,8 +121,6 @@ sol! {
     /// VaultRegistry interface.
     #[allow(missing_docs)]
     interface IVaultRegistry {
-        enum VaultStatus { Active, DepositsPaused, Retired }
-
         struct VaultMetadata {
             string name;
             address asset;
@@ -99,157 +129,128 @@ sol! {
 
         function registerVault(address vault, VaultMetadata calldata metadata) external;
         function setRouterEligible(address vault, bool eligible) external;
-        function isRouterEligible(address vault) external view returns (bool);
-        function listVaults() external view returns (address[] memory);
     }
 
-    /// PortfolioRouter interface — governance subset.
+    /// PortfolioRouter interface — weight subset.
     #[allow(missing_docs)]
     interface IPortfolioRouter {
-        function setWeights(address[] calldata vaults, uint256[] calldata bps) external;
+        error DuplicateVault(address vault);
+
         function getWeights() external view returns (address[] memory vaults, uint256[] memory bps);
-        function ADMIN_ROLE() external view returns (bytes32);
+        function votedWeightsActive() external view returns (bool);
         function WEIGHT_SETTER_ROLE() external view returns (bytes32);
-        function grantRole(bytes32 role, address account) external;
     }
 
-    /// RouterGovernance interface (issue 1698: the weight setter applies a receipt, no voting).
-    #[allow(missing_docs)]
-    interface IRouterGovernance {
-        function setReceiptContract(address receipt) external;
-        function receiptContract() external view returns (address);
-        function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] calldata vaults, uint256[] calldata bps) external;
-    }
-
-    /// InvestmentCommitteePolicy subset: the register reads COMMITTEE_AGENT_ROLE from it.
+    /// InvestmentCommitteePolicy interface — agent allowlist subset.
     #[allow(missing_docs)]
     interface IInvestmentCommitteePolicy {
-        function registerAgent(address agent, string calldata agentId) external;
+        function registerAgent(address agent, string calldata agentId_) external;
     }
 
-    /// ConsensusRecommendationReceipt subset.
+    /// ConsensusRecommendationReceipt interface — record / read subset.
     #[allow(missing_docs)]
     interface IConsensusRecommendationReceipt {
-        function recordReceipt(address submitter, bytes32 receiptId, bytes32 payloadDigest, string calldata payloadUri) external returns (uint256 index);
-        function isRecorded(bytes32 receiptId) external view returns (bool);
+        function ADMIN_ROLE() external view returns (bytes32);
+        function recordReceipt(
+            address submitter,
+            bytes32 receiptId,
+            bytes32 payloadDigest,
+            string calldata payloadUri
+        ) external returns (uint256 index);
         function isReleased(bytes32 receiptId) external view returns (bool);
+    }
+
+    /// OpenZeppelin AccessControl subset shared by every contract above.
+    #[allow(missing_docs)]
+    interface IAccessControl {
+        error AccessControlUnauthorizedAccount(address account, bytes32 neededRole);
+
         function grantRole(bytes32 role, address account) external;
+        function hasRole(bytes32 role, address account) external view returns (bool);
+    }
+
+    /// RouterGovernance interface — the weight setter.
+    #[allow(missing_docs)]
+    interface IRouterGovernance {
+        event ReceiptApplied(
+            bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps
+        );
+
+        error ReceiptNotRecorded(bytes32 receiptId);
+        error ReceiptAlreadyReleased(bytes32 receiptId);
+        error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
+
+        function WEIGHT_SETTER_ROLE() external view returns (bytes32);
+        function applyReceipt(
+            bytes32 receiptId,
+            bytes32 payloadDigest,
+            address[] calldata vaults,
+            uint256[] calldata bps
+        ) external;
     }
 }
 
-// ── Event signature helpers ───────────────────────────────────────────────────
+// ── The deployed stack ───────────────────────────────────────────────────────
 
-/// `RouterGovernance.ReceiptApplied(bytes32,bytes32,address[],uint256[])` — topic0.
-fn receipt_applied_topic0() -> B256 {
-    keccak256(b"ReceiptApplied(bytes32,bytes32,address[],uint256[])")
-}
-
-/// `ConsensusRecommendationReceipt.ReceiptReleased(bytes32,address,uint64)` — topic0.
-fn receipt_released_topic0() -> B256 {
-    keccak256(b"ReceiptReleased(bytes32,address,uint64)")
-}
-
-/// `ADMIN_ROLE` of RouterGovernance and of the receipt register: `keccak256("ADMIN_ROLE")`.
-fn admin_role() -> B256 {
-    keccak256(b"ADMIN_ROLE")
-}
-
-// ── Contract deployment helpers ──────────────────────────────────────────────
-
-/// Deploy `VaultRegistry` behind its proxy (ADR-0014) with `admin` as the admin.
-fn deploy_registry(deployer: &rmpc_fork_e2e::Account<'_>, admin: Address) -> Address {
-    rmpc_fork_e2e::proxied::deploy_vault_registry(deployer, admin).expect("deploy VaultRegistry")
-}
-
-/// Deploy `MockVault` with `asset_` = USDC address.
-fn deploy_mock_vault(deployer: &rmpc_fork_e2e::Account<'_>, usdc: Address) -> Address {
-    let mut code = load_initcode("MockVault.sol", "MockVault").to_vec();
-    code.extend_from_slice(&encode_address_arg(usdc));
-    deployer
-        .deploy(Bytes::from(code), 2_000_000)
-        .expect("deploy MockVault")
-}
-
-/// Deploy `PortfolioRouter` behind its proxy (ADR-0014) with the given usdc, registry, and admin.
-fn deploy_portfolio_router(
-    deployer: &rmpc_fork_e2e::Account<'_>,
-    usdc: Address,
-    registry: Address,
-    admin: Address,
-) -> Address {
-    rmpc_fork_e2e::proxied::deploy_portfolio_router(deployer, usdc, registry, admin)
-        .expect("deploy PortfolioRouter")
-}
-
-/// Deploy `RouterGovernance`. Constructor (issue 1698): `(address _router, address _admin)`.
-fn deploy_router_governance(
-    deployer: &rmpc_fork_e2e::Account<'_>,
+/// One deployed weight-setter stack. `admin` deployed everything and holds
+/// every admin role. It is the receipt register's gateway, the allowlisted
+/// committee agent, and RouterGovernance's `WEIGHT_SETTER_ROLE` holder.
+struct Stack<'a> {
+    admin: Account<'a>,
     router: Address,
-    admin: Address,
-) -> Address {
-    let mut code = load_initcode("RouterGovernance.sol", "RouterGovernance").to_vec();
-    code.extend_from_slice(&encode_address_arg(router));
-    code.extend_from_slice(&encode_address_arg(admin));
-    deployer
-        .deploy(Bytes::from(code), 5_000_000)
-        .expect("deploy RouterGovernance")
+    receipts: Address,
+    governance: Address,
+    vault_a: Address,
+    vault_b: Address,
 }
 
-/// Deploy `InvestmentCommitteePolicy` behind its proxy (ADR-0014): `initialize(admin, gateway, ...)`.
-fn deploy_ic_policy(
-    deployer: &rmpc_fork_e2e::Account<'_>,
-    admin: Address,
-    gateway: Address,
-) -> Address {
-    rmpc_fork_e2e::proxied::deploy_investment_committee_policy(deployer, admin, gateway)
-        .expect("deploy InvestmentCommitteePolicy")
+fn read_bytes32<C: SolCall>(caller: &Account<'_>, to: Address, call: &C, label: &str) -> B256 {
+    let raw = caller
+        .call(to, call)
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+    assert!(raw.len() >= 32, "{label} returned fewer than 32 bytes");
+    B256::from_slice(&raw[..32])
 }
 
-/// Deploy `ConsensusRecommendationReceipt` behind its proxy (ADR-0014):
-/// `initialize(admin, gateway, icPolicy, ...)`.
-fn deploy_receipt_register(
-    deployer: &rmpc_fork_e2e::Account<'_>,
-    admin: Address,
-    gateway: Address,
-    ic_policy: Address,
-) -> Address {
-    rmpc_fork_e2e::proxied::deploy_consensus_recommendation_receipt(
-        deployer, admin, gateway, ic_policy,
-    )
-    .expect("deploy ConsensusRecommendationReceipt")
+fn read_bool<C: SolCall>(caller: &Account<'_>, to: Address, call: &C, label: &str) -> bool {
+    read_bytes32(caller, to, call, label) != B256::ZERO
 }
 
-/// Register `vault_addr` in `registry` with a minimal metadata struct.
-fn register_vault(
-    deployer: &rmpc_fork_e2e::Account<'_>,
+fn grant_role(admin: &Account<'_>, target: Address, role: B256, account: Address, label: &str) {
+    admin
+        .send(
+            target,
+            &IAccessControl::grantRoleCall { role, account },
+            U256::ZERO,
+            200_000,
+        )
+        .unwrap_or_else(|e| panic!("grantRole {label}: {e}"));
+}
+
+/// Register `vault` in `registry` and mark it router-eligible (issue #475:
+/// `setWeights` reverts `VaultNotRouterEligible` until the registry flag is set).
+fn register_eligible_vault(
+    admin: &Account<'_>,
     registry: Address,
-    vault_addr: Address,
+    vault: Address,
     usdc: Address,
     name: &str,
 ) {
-    let meta = IVaultRegistry::VaultMetadata {
-        name: name.to_string(),
-        asset: usdc,
-        registeredAt: U256::ZERO,
-    };
-    deployer
+    admin
         .send(
             registry,
             &IVaultRegistry::registerVaultCall {
-                vault: vault_addr,
-                metadata: meta,
+                vault,
+                metadata: IVaultRegistry::VaultMetadata {
+                    name: name.to_string(),
+                    asset: usdc,
+                    registeredAt: U256::ZERO,
+                },
             },
             U256::ZERO,
             500_000,
         )
         .expect("registerVault");
-}
-
-/// Mark `vault` router-eligible in the VaultRegistry so `setWeights` accepts
-/// it. Issue #475: production-readiness is registry state — `PortfolioRouter`
-/// reverts with `VaultNotRouterEligible` until the ADMIN_ROLE caller flips
-/// the flag on the registry. See `docs/development/single-production-codebase.md`.
-fn mark_router_eligible(admin: &rmpc_fork_e2e::Account<'_>, registry: Address, vault: Address) {
     admin
         .send(
             registry,
@@ -263,416 +264,476 @@ fn mark_router_eligible(admin: &rmpc_fork_e2e::Account<'_>, registry: Address, v
         .expect("setRouterEligible(true)");
 }
 
-/// Grant ADMIN_ROLE and WEIGHT_SETTER_ROLE on the PortfolioRouter to `governance`.
-/// `setWeights` is gated by WEIGHT_SETTER_ROLE, the other governance calls by ADMIN_ROLE.
-fn grant_router_admin(deployer: &rmpc_fork_e2e::Account<'_>, router: Address, governance: Address) {
-    // Fetch ADMIN_ROLE selector: `ADMIN_ROLE()` → bytes32.
-    let raw = deployer
-        .call(router, &IPortfolioRouter::ADMIN_ROLECall {})
-        .expect("ADMIN_ROLE()");
-    if raw.len() < 32 {
-        panic!("ADMIN_ROLE() returned fewer than 32 bytes");
-    }
-    let admin_role = alloy_primitives::B256::from_slice(&raw[..32]);
-    deployer
-        .send(
-            router,
-            &IPortfolioRouter::grantRoleCall {
-                role: admin_role,
-                account: governance,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("grantRole(ADMIN_ROLE, governance)");
-
-    let raw = deployer
-        .call(router, &IPortfolioRouter::WEIGHT_SETTER_ROLECall {})
-        .expect("WEIGHT_SETTER_ROLE()");
-    if raw.len() < 32 {
-        panic!("WEIGHT_SETTER_ROLE() returned fewer than 32 bytes");
-    }
-    let setter_role = alloy_primitives::B256::from_slice(&raw[..32]);
-    deployer
-        .send(
-            router,
-            &IPortfolioRouter::grantRoleCall {
-                role: setter_role,
-                account: governance,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("grantRole(WEIGHT_SETTER_ROLE, governance)");
-}
-
-/// Read `router.getWeights()` and return (vaults, bps) — decoded from the
-/// ABI return blob.
-fn read_router_weights(
-    caller: &rmpc_fork_e2e::Account<'_>,
-    router: Address,
-) -> (Vec<Address>, Vec<U256>) {
-    let raw = caller
-        .call(router, &IPortfolioRouter::getWeightsCall {})
-        .expect("getWeights()");
-    let r = IPortfolioRouter::getWeightsCall::abi_decode_returns(&raw, true)
-        .expect("decode getWeights return");
-    (r.vaults, r.bps)
-}
-
-/// One deployed receipt-path stack.
-struct Stack {
-    router: Address,
-    governance: Address,
-    register: Address,
-    vault_a: Address,
-    vault_b: Address,
-}
-
-/// The receipt every scenario records, and the digest the register stores for it.
-fn receipt_id() -> B256 {
-    keccak256(b"fork-e2e governance receipt")
-}
-fn payload_digest() -> B256 {
-    keccak256(b"fork-e2e governance payload")
-}
-
-/// Deploy and wire the stack the way stage 11 wires it, with the deployer standing in for the timelock
-/// (RouterGovernance `ADMIN_ROLE`) and for the gateway (the register's only writer). The router starts at
-/// 100% vault_a; the deployer records one receipt as an allowlisted committee agent.
-fn deploy_stack(tag: &str, deployer: &rmpc_fork_e2e::Account<'_>) -> Stack {
+/// Deploy and wire the full stack on `fx`.
+fn deploy_stack<'a>(fx: &'a ForkFixture, tag: &str) -> Stack<'a> {
     let usdc = rmpc_fork_e2e::addresses::USDC;
-    let me = deployer.address;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let admin = fx
+        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
+        .expect("fund admin");
+    let me = admin.address;
 
-    let registry = deploy_registry(deployer, me);
-    let vault_a = deploy_mock_vault(deployer, usdc);
-    let vault_b = deploy_mock_vault(deployer, usdc);
-    let router = deploy_portfolio_router(deployer, usdc, registry, me);
-    let governance = deploy_router_governance(deployer, router, me);
-    let ic_policy = deploy_ic_policy(deployer, me, me);
-    let register = deploy_receipt_register(deployer, me, me, ic_policy);
+    let registry = deploy_governed(
+        &admin,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &[me],
+        3_000_000,
+    );
+    let vault_a =
+        deploy_with_address_args(&admin, "MockVault.sol", "MockVault", &[usdc], 2_000_000);
+    let vault_b =
+        deploy_with_address_args(&admin, "MockVault.sol", "MockVault", &[usdc], 2_000_000);
+    let router = deploy_governed(
+        &admin,
+        "PortfolioRouter.sol",
+        "PortfolioRouter",
+        &[usdc, registry, me],
+        8_000_000,
+    );
+    // InvestmentCommitteePolicy(admin_, gateway_): the gateway is never called here.
+    let ic_policy = deploy_governed(
+        &admin,
+        "InvestmentCommitteePolicy.sol",
+        "InvestmentCommitteePolicy",
+        &[me, me],
+        8_000_000,
+    );
+    // ConsensusRecommendationReceipt(admin_, gateway_, icPolicy_): the test
+    // account is the gateway, so it can call `recordReceipt` directly.
+    let receipts = deploy_governed(
+        &admin,
+        "ConsensusRecommendationReceipt.sol",
+        "ConsensusRecommendationReceipt",
+        &[me, me, ic_policy],
+        5_000_000,
+    );
+    // RouterGovernance(_router, _receipts, _admin): `_admin` gets ADMIN_ROLE and
+    // WEIGHT_SETTER_ROLE, standing in for the timelock.
+    let governance = deploy_governed(
+        &admin,
+        "RouterGovernance.sol",
+        "RouterGovernance",
+        &[router, receipts, me],
+        5_000_000,
+    );
     eprintln!(
         "[{tag}] registry={registry:#x} vault_a={vault_a:#x} vault_b={vault_b:#x} router={router:#x} \
-         governance={governance:#x} ic_policy={ic_policy:#x} register={register:#x}"
+         ic_policy={ic_policy:#x} receipts={receipts:#x} governance={governance:#x}"
     );
 
-    register_vault(deployer, registry, vault_a, usdc, "Vault A");
-    register_vault(deployer, registry, vault_b, usdc, "Vault B");
-    // Issue #475: mark both vaults router-eligible via the single registry gate.
-    mark_router_eligible(deployer, registry, vault_a);
-    mark_router_eligible(deployer, registry, vault_b);
+    register_eligible_vault(&admin, registry, vault_a, usdc, "Vault A");
+    register_eligible_vault(&admin, registry, vault_b, usdc, "Vault B");
 
-    // Initial 100% vault_a, written by the deployer (the router constructor grants it WEIGHT_SETTER_ROLE).
-    deployer
-        .send(
-            router,
-            &IPortfolioRouter::setWeightsCall {
-                vaults: vec![vault_a],
-                bps: vec![U256::from(10_000u64)],
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("setWeights initial");
-
-    // The weight setter holds ADMIN_ROLE and WEIGHT_SETTER_ROLE on the router.
-    grant_router_admin(deployer, router, governance);
-    // Stage 11: point the weight setter at the register and grant it the register's ADMIN_ROLE (the
-    // releaseReceipt gate).
-    deployer
-        .send(
-            governance,
-            &IRouterGovernance::setReceiptContractCall { receipt: register },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("setReceiptContract");
-    deployer
-        .send(
-            register,
-            &IConsensusRecommendationReceipt::grantRoleCall {
-                role: admin_role(),
-                account: governance,
-            },
-            U256::ZERO,
-            200_000,
-        )
-        .expect("register grantRole(ADMIN_ROLE, governance)");
-
-    // The committee records one receipt through the "gateway" (the deployer here).
-    deployer
+    // The receipt's submitter must hold COMMITTEE_AGENT_ROLE on the IC policy.
+    admin
         .send(
             ic_policy,
             &IInvestmentCommitteePolicy::registerAgentCall {
                 agent: me,
-                agentId: "fork-e2e".to_string(),
+                agentId_: "fork-e2e-agent".to_string(),
             },
             U256::ZERO,
             300_000,
         )
         .expect("registerAgent");
-    deployer
-        .send(
-            register,
-            &IConsensusRecommendationReceipt::recordReceiptCall {
-                submitter: me,
-                receiptId: receipt_id(),
-                payloadDigest: payload_digest(),
-                payloadUri: "https://receipts.invalid/fork-e2e.json".to_string(),
-            },
-            U256::ZERO,
-            500_000,
-        )
-        .expect("recordReceipt");
-    assert!(
-        read_bool(
-            deployer,
-            register,
-            &IConsensusRecommendationReceipt::isRecordedCall {
-                receiptId: receipt_id()
-            }
-        ),
-        "the receipt must be recorded before any scenario applies it"
+
+    // RouterGovernance releases receipts (receipt ADMIN_ROLE) and sets weights
+    // (router WEIGHT_SETTER_ROLE).
+    let receipt_admin_role = read_bytes32(
+        &admin,
+        receipts,
+        &IConsensusRecommendationReceipt::ADMIN_ROLECall {},
+        "receipts.ADMIN_ROLE()",
+    );
+    grant_role(
+        &admin,
+        receipts,
+        receipt_admin_role,
+        governance,
+        "receipts ADMIN_ROLE -> governance",
+    );
+    let router_setter_role = read_bytes32(
+        &admin,
+        router,
+        &IPortfolioRouter::WEIGHT_SETTER_ROLECall {},
+        "router.WEIGHT_SETTER_ROLE()",
+    );
+    grant_role(
+        &admin,
+        router,
+        router_setter_role,
+        governance,
+        "router WEIGHT_SETTER_ROLE -> governance",
     );
 
-    Stack {
+    let stack = Stack {
+        admin,
         router,
+        receipts,
         governance,
-        register,
         vault_a,
         vault_b,
+    };
+    assert!(
+        !stack.voted_weights_active(),
+        "a fresh router has no active weight vector"
+    );
+    stack
+}
+
+impl Stack<'_> {
+    /// Record a receipt as the gateway, submitted by the allowlisted agent.
+    /// Returns `(receiptId, payloadDigest)`.
+    fn record_receipt(&self, label: &str) -> (B256, B256) {
+        let receipt_id = keccak256(format!("fork-e2e receipt {label}").as_bytes());
+        let digest = keccak256(format!("fork-e2e payload {label}").as_bytes());
+        self.admin
+            .send(
+                self.receipts,
+                &IConsensusRecommendationReceipt::recordReceiptCall {
+                    submitter: self.admin.address,
+                    receiptId: receipt_id,
+                    payloadDigest: digest,
+                    payloadUri: format!("ipfs://fork-e2e/{label}"),
+                },
+                U256::ZERO,
+                400_000,
+            )
+            .expect("recordReceipt");
+        assert!(
+            !self.is_released(receipt_id),
+            "a freshly recorded receipt is unreleased"
+        );
+        (receipt_id, digest)
+    }
+
+    fn apply_call(
+        &self,
+        receipt_id: B256,
+        digest: B256,
+        vaults: Vec<Address>,
+        bps: &[u64],
+    ) -> IRouterGovernance::applyReceiptCall {
+        IRouterGovernance::applyReceiptCall {
+            receiptId: receipt_id,
+            payloadDigest: digest,
+            vaults,
+            bps: bps.iter().map(|b| U256::from(*b)).collect(),
+        }
+    }
+
+    fn is_released(&self, receipt_id: B256) -> bool {
+        read_bool(
+            &self.admin,
+            self.receipts,
+            &IConsensusRecommendationReceipt::isReleasedCall {
+                receiptId: receipt_id,
+            },
+            "isReleased",
+        )
+    }
+
+    fn voted_weights_active(&self) -> bool {
+        read_bool(
+            &self.admin,
+            self.router,
+            &IPortfolioRouter::votedWeightsActiveCall {},
+            "votedWeightsActive",
+        )
+    }
+
+    fn router_weights(&self) -> (Vec<Address>, Vec<U256>) {
+        let raw = self
+            .admin
+            .call(self.router, &IPortfolioRouter::getWeightsCall {})
+            .expect("getWeights()");
+        let r = IPortfolioRouter::getWeightsCall::abi_decode_returns(&raw, true)
+            .expect("decode getWeights return");
+        (r.vaults, r.bps)
     }
 }
 
-/// eth_call a view that returns one `bool`.
-fn read_bool<C: SolCall>(caller: &rmpc_fork_e2e::Account<'_>, to: Address, call: &C) -> bool {
-    let raw = caller.call(to, call).expect("bool view");
-    assert_eq!(raw.len(), 32, "a bool view returns one word, got {raw:?}");
-    raw[31] == 1
+/// Assert `call` from `caller` reverts with the custom error `selector`: first
+/// through `eth_call` (which carries the revert data), then as a sent
+/// transaction (which must fail on chain).
+fn expect_revert(
+    caller: &Account<'_>,
+    to: Address,
+    call: &IRouterGovernance::applyReceiptCall,
+    selector: [u8; 4],
+    error_name: &str,
+) {
+    let selector_hex = hex::encode(selector);
+    match caller.call(to, call) {
+        Ok(out) => panic!(
+            "eth_call must revert {error_name}; returned 0x{}",
+            hex::encode(out)
+        ),
+        Err(e) => {
+            let msg = e.to_string().to_lowercase();
+            assert!(
+                msg.contains(&selector_hex),
+                "eth_call must revert {error_name} (selector 0x{selector_hex}); got: {e}"
+            );
+        }
+    }
+    match caller.send(to, call, U256::ZERO, 1_000_000) {
+        Err(HarnessError::Reverted(_)) => {}
+        Ok(r) => panic!(
+            "applyReceipt must revert {error_name}; tx {:?} succeeded",
+            r.tx_hash
+        ),
+        Err(e) => panic!("expected an on-chain revert ({error_name}), got: {e:?}"),
+    }
 }
 
-fn is_released(caller: &rmpc_fork_e2e::Account<'_>, s: &Stack) -> bool {
-    read_bool(
-        caller,
-        s.register,
-        &IConsensusRecommendationReceipt::isReleasedCall {
-            receiptId: receipt_id(),
-        },
+// ── Scenario 1: happy path ───────────────────────────────────────────────────
+
+/// governance_apply_receipt_round_trip — record a receipt, apply it, and assert
+/// the receipt is released, the router routes by its vector, and
+/// `ReceiptApplied` records the digest and the vector.
+#[test]
+fn governance_apply_receipt_round_trip() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let tag = "governance_apply_receipt_round_trip";
+    eprintln!("[{tag}] {}", fx.summary_line());
+    let s = deploy_stack(&fx, tag);
+
+    let (receipt_id, digest) = s.record_receipt("round-trip");
+    let vaults = vec![s.vault_a, s.vault_b];
+    let bps = [6000u64, 4000];
+    let r = s
+        .admin
+        .send(
+            s.governance,
+            &s.apply_call(receipt_id, digest, vaults.clone(), &bps),
+            U256::ZERO,
+            1_000_000,
+        )
+        .expect("applyReceipt");
+    assert_eq!(r.status, 1, "applyReceipt must succeed");
+    eprintln!(
+        "[{tag}] applyReceipt tx {:?} gasUsed={}",
+        r.tx_hash, r.gas_used
+    );
+
+    // ReceiptApplied(receiptId indexed, payloadDigest, vaults, bps).
+    let log = r
+        .logs
+        .iter()
+        .find(|l| {
+            l.address == s.governance
+                && l.topics.first() == Some(&IRouterGovernance::ReceiptApplied::SIGNATURE_HASH)
+        })
+        .unwrap_or_else(|| panic!("ReceiptApplied not found in logs: {:?}", r.logs));
+    let ev = IRouterGovernance::ReceiptApplied::decode_raw_log(
+        log.topics.iter().copied(),
+        &log.data,
+        true,
     )
+    .expect("decode ReceiptApplied");
+    assert_eq!(ev.receiptId, receipt_id, "event receiptId");
+    assert_eq!(ev.payloadDigest, digest, "event payloadDigest");
+    assert_eq!(ev.vaults, vaults, "event vaults");
+    let want_bps: Vec<U256> = bps.iter().map(|b| U256::from(*b)).collect();
+    assert_eq!(ev.bps, want_bps, "event bps");
+
+    assert!(
+        s.is_released(receipt_id),
+        "applyReceipt must release the receipt"
+    );
+    assert!(
+        s.voted_weights_active(),
+        "applyReceipt must make the receipt's vector the active one"
+    );
+    let (w_vaults, w_bps) = s.router_weights();
+    assert_eq!(
+        w_vaults, vaults,
+        "router vaults must equal the receipt's vector"
+    );
+    assert_eq!(
+        w_bps, want_bps,
+        "router bps must equal the receipt's vector"
+    );
+    eprintln!("[{tag}] passed");
 }
 
-/// The router still routes 100% to vault_a: nothing was applied.
-fn assert_weights_unchanged(caller: &rmpc_fork_e2e::Account<'_>, s: &Stack, tag: &str) {
-    let (w_vaults, w_bps) = read_router_weights(caller, s.router);
+// ── Scenario 2: digest mismatch ──────────────────────────────────────────────
+
+/// governance_apply_receipt_digest_mismatch_reverts — the scheduled call names a
+/// digest other than the receipt's stored one; `applyReceipt` reverts and the
+/// receipt stays unreleased.
+#[test]
+fn governance_apply_receipt_digest_mismatch_reverts() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let tag = "governance_apply_receipt_digest_mismatch_reverts";
+    eprintln!("[{tag}] {}", fx.summary_line());
+    let s = deploy_stack(&fx, tag);
+
+    let (receipt_id, digest) = s.record_receipt("digest-mismatch");
+    let wrong_digest = keccak256(b"some other payload");
+    assert_ne!(wrong_digest, digest);
+    expect_revert(
+        &s.admin,
+        s.governance,
+        &s.apply_call(receipt_id, wrong_digest, vec![s.vault_a], &[10_000]),
+        IRouterGovernance::PayloadDigestMismatch::SELECTOR,
+        "PayloadDigestMismatch",
+    );
+
+    assert!(
+        !s.is_released(receipt_id),
+        "the receipt must stay unreleased"
+    );
+    assert!(!s.voted_weights_active(), "no vector may be set");
+    eprintln!("[{tag}] passed");
+}
+
+// ── Scenario 3: already released ─────────────────────────────────────────────
+
+/// governance_apply_receipt_already_released_reverts — a receipt applies once; a
+/// second apply (even with a different vector) reverts and the first vector
+/// stays active.
+#[test]
+fn governance_apply_receipt_already_released_reverts() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let tag = "governance_apply_receipt_already_released_reverts";
+    eprintln!("[{tag}] {}", fx.summary_line());
+    let s = deploy_stack(&fx, tag);
+
+    let (receipt_id, digest) = s.record_receipt("already-released");
+    s.admin
+        .send(
+            s.governance,
+            &s.apply_call(receipt_id, digest, vec![s.vault_a], &[10_000]),
+            U256::ZERO,
+            1_000_000,
+        )
+        .expect("first applyReceipt");
+    assert!(
+        s.is_released(receipt_id),
+        "first apply releases the receipt"
+    );
+
+    expect_revert(
+        &s.admin,
+        s.governance,
+        &s.apply_call(receipt_id, digest, vec![s.vault_b], &[10_000]),
+        IRouterGovernance::ReceiptAlreadyReleased::SELECTOR,
+        "ReceiptAlreadyReleased",
+    );
+
+    let (w_vaults, w_bps) = s.router_weights();
     assert_eq!(
         w_vaults,
         vec![s.vault_a],
-        "[{tag}] router vaults must be unchanged"
+        "the first vector must stay active"
     );
-    assert_eq!(
-        w_bps,
-        vec![U256::from(10_000u64)],
-        "[{tag}] router bps must be unchanged"
-    );
+    assert_eq!(w_bps, vec![U256::from(10_000u64)]);
+    eprintln!("[{tag}] passed");
 }
 
-/// The call must have reverted on chain.
-fn assert_reverted(
-    result: Result<rmpc_fork_e2e::Receipt, rmpc_fork_e2e::HarnessError>,
-    what: &str,
-) {
-    match result {
-        Err(rmpc_fork_e2e::HarnessError::Reverted(_)) => {}
-        Ok(r) => panic!("{what} must revert; it succeeded in {:?}", r.tx_hash),
-        Err(e) => panic!("{what}: expected Reverted, got {e:?}"),
-    }
-}
+// ── Scenario 4: caller without WEIGHT_SETTER_ROLE ────────────────────────────
 
-// ── Scenario 1: one call releases and applies ─────────────────────────────────
-
-/// governance_apply_receipt_releases_and_sets_weights_in_one_call — one `applyReceipt` releases the
-/// recorded receipt and writes its 60/40 vector in the same transaction.
+/// governance_apply_receipt_non_weight_setter_reverts — only the
+/// `WEIGHT_SETTER_ROLE` holder (the timelock) may apply a receipt; any other
+/// caller reverts and the receipt stays unreleased.
 #[test]
-fn governance_apply_receipt_releases_and_sets_weights_in_one_call() {
-    const TAG: &str = "governance_apply_receipt_releases_and_sets_weights_in_one_call";
+fn governance_apply_receipt_non_weight_setter_reverts() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[{TAG}] {}", fx.summary_line());
+    let tag = "governance_apply_receipt_non_weight_setter_reverts";
+    eprintln!("[{tag}] {}", fx.summary_line());
+    let s = deploy_stack(&fx, tag);
+
+    let (receipt_id, digest) = s.record_receipt("non-weight-setter");
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
-        .expect("fund deployer");
-    let s = deploy_stack(TAG, &deployer);
+    let stranger = fx.ephemeral(one_eth, U256::ZERO).expect("fund stranger");
+    let setter_role = read_bytes32(
+        &s.admin,
+        s.governance,
+        &IRouterGovernance::WEIGHT_SETTER_ROLECall {},
+        "governance.WEIGHT_SETTER_ROLE()",
+    );
     assert!(
-        !is_released(&deployer, &s),
-        "a recorded receipt starts unreleased"
+        !read_bool(
+            &s.admin,
+            s.governance,
+            &IAccessControl::hasRoleCall {
+                role: setter_role,
+                account: stranger.address,
+            },
+            "hasRole(stranger)",
+        ),
+        "the stranger must not hold WEIGHT_SETTER_ROLE"
     );
 
-    let receipt = deployer
+    expect_revert(
+        &stranger,
+        s.governance,
+        &s.apply_call(receipt_id, digest, vec![s.vault_a], &[10_000]),
+        IAccessControl::AccessControlUnauthorizedAccount::SELECTOR,
+        "AccessControlUnauthorizedAccount",
+    );
+
+    assert!(
+        !s.is_released(receipt_id),
+        "the receipt must stay unreleased"
+    );
+    assert!(!s.voted_weights_active(), "no vector may be set");
+    eprintln!("[{tag}] passed");
+}
+
+// ── Scenario 5: duplicate vault ──────────────────────────────────────────────
+
+/// governance_apply_receipt_duplicate_vault_reverts — the router refuses a
+/// vector that names a vault twice; the whole call reverts, so the receipt is
+/// not released either.
+#[test]
+fn governance_apply_receipt_duplicate_vault_reverts() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    let tag = "governance_apply_receipt_duplicate_vault_reverts";
+    eprintln!("[{tag}] {}", fx.summary_line());
+    let s = deploy_stack(&fx, tag);
+
+    let (receipt_id, digest) = s.record_receipt("duplicate-vault");
+    expect_revert(
+        &s.admin,
+        s.governance,
+        &s.apply_call(
+            receipt_id,
+            digest,
+            vec![s.vault_a, s.vault_a],
+            &[5000, 5000],
+        ),
+        IPortfolioRouter::DuplicateVault::SELECTOR,
+        "DuplicateVault",
+    );
+
+    assert!(
+        !s.is_released(receipt_id),
+        "a refused vector must not leave the receipt released"
+    );
+    assert!(!s.voted_weights_active(), "no vector may be set");
+
+    // Nothing was consumed (QA plan v1 C1): the same receipt then applies with a valid vector.
+    let r = s
+        .admin
         .send(
             s.governance,
-            &IRouterGovernance::applyReceiptCall {
-                receiptId: receipt_id(),
-                payloadDigest: payload_digest(),
-                vaults: vec![s.vault_a, s.vault_b],
-                bps: vec![U256::from(6000u64), U256::from(4000u64)],
-            },
+            &s.apply_call(receipt_id, digest, vec![s.vault_b], &[10_000]),
             U256::ZERO,
-            800_000,
-        )
-        .expect("applyReceipt");
-    eprintln!(
-        "[{TAG}] applyReceipt tx {:?} gasUsed={}",
-        receipt.tx_hash, receipt.gas_used
-    );
-
-    // Release and weights are one transaction: both events are in this receipt.
-    let released = receipt.logs.iter().any(|l| {
-        l.address == s.register
-            && l.topics.first() == Some(&receipt_released_topic0())
-            && l.topics.get(1) == Some(&receipt_id())
-    });
-    assert!(
-        released,
-        "ReceiptReleased from the register missing; logs={:?}",
-        receipt.logs
-    );
-    let applied = receipt.logs.iter().any(|l| {
-        l.address == s.governance
-            && l.topics.first() == Some(&receipt_applied_topic0())
-            && l.topics.get(1) == Some(&receipt_id())
-    });
-    assert!(
-        applied,
-        "ReceiptApplied from the weight setter missing; logs={:?}",
-        receipt.logs
-    );
-    assert!(is_released(&deployer, &s), "the receipt must be released");
-
-    let (w_vaults, w_bps) = read_router_weights(&deployer, s.router);
-    assert_eq!(w_vaults, vec![s.vault_a, s.vault_b], "router vaults");
-    assert_eq!(
-        w_bps,
-        vec![U256::from(6000u64), U256::from(4000u64)],
-        "router bps must be the receipt's vector"
-    );
-
-    // One operation per receipt: applying it again reverts and changes nothing.
-    assert_reverted(
-        deployer.send(
-            s.governance,
-            &IRouterGovernance::applyReceiptCall {
-                receiptId: receipt_id(),
-                payloadDigest: payload_digest(),
-                vaults: vec![s.vault_a],
-                bps: vec![U256::from(10_000u64)],
-            },
-            U256::ZERO,
-            800_000,
-        ),
-        "a second applyReceipt of a released receipt",
-    );
-    let (_, w_bps) = read_router_weights(&deployer, s.router);
-    assert_eq!(
-        w_bps,
-        vec![U256::from(6000u64), U256::from(4000u64)],
-        "a refused second application changes nothing"
-    );
-    eprintln!("[{TAG}] passed");
-}
-
-// ── Scenario 2: digest mismatch ───────────────────────────────────────────────
-
-/// governance_apply_receipt_refuses_a_digest_mismatch — the call names a digest the register did not
-/// store; it reverts, the receipt stays unreleased and the weights are unchanged.
-#[test]
-fn governance_apply_receipt_refuses_a_digest_mismatch() {
-    const TAG: &str = "governance_apply_receipt_refuses_a_digest_mismatch";
-    skip_if_no_fork!();
-    let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[{TAG}] {}", fx.summary_line());
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
-        .expect("fund deployer");
-    let s = deploy_stack(TAG, &deployer);
-
-    assert_reverted(
-        deployer.send(
-            s.governance,
-            &IRouterGovernance::applyReceiptCall {
-                receiptId: receipt_id(),
-                payloadDigest: keccak256(b"an edited payload"),
-                vaults: vec![s.vault_a, s.vault_b],
-                bps: vec![U256::from(6000u64), U256::from(4000u64)],
-            },
-            U256::ZERO,
-            800_000,
-        ),
-        "applyReceipt with a digest the register did not store",
-    );
-    assert!(
-        !is_released(&deployer, &s),
-        "a refused application releases nothing"
-    );
-    assert_weights_unchanged(&deployer, &s, TAG);
-    eprintln!("[{TAG}] passed");
-}
-
-// ── Scenario 3: a refused vector releases nothing ─────────────────────────────
-
-/// governance_apply_receipt_refused_vector_releases_nothing — the router refuses a duplicate vault, so
-/// the whole call reverts: the receipt stays unreleased, and the same receipt then applies.
-#[test]
-fn governance_apply_receipt_refused_vector_releases_nothing() {
-    const TAG: &str = "governance_apply_receipt_refused_vector_releases_nothing";
-    skip_if_no_fork!();
-    let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[{TAG}] {}", fx.summary_line());
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    let deployer = fx
-        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
-        .expect("fund deployer");
-    let s = deploy_stack(TAG, &deployer);
-
-    // A duplicate vault (PortfolioRouter DuplicateVault, QA plan v1 C1): the release inside the same
-    // call must roll back with it.
-    assert_reverted(
-        deployer.send(
-            s.governance,
-            &IRouterGovernance::applyReceiptCall {
-                receiptId: receipt_id(),
-                payloadDigest: payload_digest(),
-                vaults: vec![s.vault_a, s.vault_a],
-                bps: vec![U256::from(5000u64), U256::from(5000u64)],
-            },
-            U256::ZERO,
-            800_000,
-        ),
-        "applyReceipt with a duplicate vault",
-    );
-    assert!(
-        !is_released(&deployer, &s),
-        "a vector the router refuses must release nothing"
-    );
-    assert_weights_unchanged(&deployer, &s, TAG);
-
-    // Nothing was consumed: the same receipt applies with a valid vector.
-    deployer
-        .send(
-            s.governance,
-            &IRouterGovernance::applyReceiptCall {
-                receiptId: receipt_id(),
-                payloadDigest: payload_digest(),
-                vaults: vec![s.vault_b],
-                bps: vec![U256::from(10_000u64)],
-            },
-            U256::ZERO,
-            800_000,
+            1_000_000,
         )
         .expect("applyReceipt with a valid vector after the refusal");
-    assert!(is_released(&deployer, &s), "the receipt is released now");
-    let (w_vaults, _) = read_router_weights(&deployer, s.router);
+    assert_eq!(r.status, 1, "the valid vector must apply");
+    assert!(s.is_released(receipt_id), "the receipt is released now");
+    let (w_vaults, _) = s.router_weights();
     assert_eq!(w_vaults, vec![s.vault_b], "the valid vector was applied");
-    eprintln!("[{TAG}] passed");
+    eprintln!("[{tag}] passed");
 }

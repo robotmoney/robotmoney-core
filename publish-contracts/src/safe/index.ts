@@ -3,14 +3,14 @@ export * from "./constants.ts";
 export * from "./errors.ts";
 export * from "./log.ts";
 export { assertChainAllowed, chainGuard, isLoopbackRpc, publicClientFor, rpcHost, type ChainOpts } from "./chain.ts";
+export { STALE_READ_DELAY_MS, STALE_READ_TRIES, readAfterWrite, settle, type ReadAfterWrite, type ReadVerdict, type StaleReadRetry } from "./read-after-write.ts";
 export { modeOf, recoverSafeSigner, splitSignature, toSafeSignature, verifySafeSignature, type SignMode } from "./sig.ts";
 export {
   addressOnlySigner, impersonatedSender, decryptKeystoreJson, keystoreSigner, keystoreSignerFromEnv, isHardwareSpecLike, ledgerSigner, ownerHardwareSigner, parseOwnerHardwareSpec, loopbackKeySigner, readPassphraseFile, resolvePassphrase,
-  signerFromSpec, trezorSigner, type CastRunner, type DevicePrompt, type DevicePromptRequest, type KeystoreSignerOpts, type LocalSimulationFork, type PassphraseSource, type SendRequest, type Signer,
+  signerFromSpec, trezorSigner, type CastRunner, type DevicePrompt, type DevicePromptRequest, type KeystoreSignerOpts, type PassphraseSource, type SendRequest, type Signer,
 } from "./signers.ts";
-export { READ_RETRY_DELAY_MS, READ_RETRY_TRIES, awaitRead, readUntil, type ReadOutcome, type ReadRetry } from "./read-after-write.ts";
 export {
-  PRODUCTION_ROSTER, awaitCreatedSafe, connectSafe, contractNetworksFor, createSafe, defaultSaltNonce, validateRoster, verifyCreatedSafe,
+  PRODUCTION_ROSTER, connectSafe, contractNetworksFor, createSafe, defaultSaltNonce, validateRoster, verifyCreatedSafe,
   type ConnectSafeOpts, type CreateSafeOpts, type CreateSafePlan, type CreateSafeResult, type RosterPolicy, type SafeHandle, type SafeManifest,
 } from "./safe.ts";
 export {

@@ -1,0 +1,247 @@
+---
+title: "GovernedUUPS"
+description: "The UUPS entry points every proxied Robot Money core contract inherits (issue 1808, docs/technical/contract-upgradeability-plan.md). Each core contract runs behind its own ERC-1967 proxy. The implementation is one artifact for every environment; only the initialized state (release mode, timelock) differs."
+---
+
+# GovernedUUPS
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/GovernedUUPS.sol)
+
+**Inherits:** Initializable, IERC1822Proxiable
+
+**Title:** GovernedUUPS
+
+The UUPS entry points every proxied Robot Money core contract inherits (issue 1808,
+docs/technical/contract-upgradeability-plan.md). Each core contract runs behind its
+own ERC-1967 proxy. The implementation is one artifact for every environment; only
+the initialized state (release mode, timelock) differs.
+
+- The implementation's constructor disables initializers, so nobody can initialize
+or take over the implementation contract itself.
+- `upgradeToAndCall` and `freezeUpgrades` only run through an active ERC-1967 proxy
+that points at this implementation, and only for `upgradeTimelock()`. Their rules
+are in [GovernedUpgrade](/contracts/lib/library.GovernedUpgrade); these entry points forward the exact calldata to it.
+- The release mode is a required initializer argument with no default.
+`Undeclared` (the zero value) reverts. `FrozenAtDeploy` sets the one-way flag
+inside the atomic proxy initialization, before any public call reaches the proxy.
+- `freezeUpgrades` also disables every initializer and reinitializer on the proxy.
+
+## Constants
+
+### __self
+
+```solidity
+address private immutable __self = address(this);
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+<i>
+
+Lock the implementation: no initializer can ever run on it directly.
+
+</i>
+
+```solidity
+constructor();
+```
+
+<a id="__governeduups_init-address-upgrademode"></a>
+
+### __GovernedUUPS_init
+
+<i>
+
+Record the upgrade timelock and apply the release mode. Called once from the
+inheriting contract's `initialize`.
+
+</i>
+
+```solidity
+function __GovernedUUPS_init(address timelock, UpgradeMode mode) internal onlyInitializing;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `UpgradeMode` |  |
+
+<a id="upgradetimelock"></a>
+
+### upgradeTimelock
+
+The only account that can upgrade or freeze this proxy.
+
+```solidity
+function upgradeTimelock() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="upgradesfrozen"></a>
+
+### upgradesFrozen
+
+True once upgrades are permanently disabled. There is no unset.
+
+```solidity
+function upgradesFrozen() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="proxiableuuid"></a>
+
+### proxiableUUID
+
+<i>
+
+Returns the storage slot that the proxiable contract assumes is being used to store the implementation
+address.
+
+IMPORTANT: A proxy pointing at a proxiable contract should not be considered proxiable itself, because this risks
+bricking a proxy that upgrades to it, by delegating to itself until out of gas. Thus it is critical that this
+function revert if invoked through a proxy.
+
+</i>
+
+```solidity
+function proxiableUUID() external view returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="upgradetoandcall-address-bytes"></a>
+
+### upgradeToAndCall
+
+Upgrade the proxy to `newImplementation` and, when `data` is not empty, run it
+there. Timelock only, never once frozen (`GovernedUpgrade.upgradeToAndCall`).
+
+```solidity
+function upgradeToAndCall(address newImplementation, bytes calldata data) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newImplementation | `address` |  |
+| data | `bytes` |  |
+
+<a id="freezeupgrades-address-bytes32"></a>
+
+### freezeUpgrades
+
+Permanently disable upgrades, bound to the reviewed implementation and its
+runtime code hash. Timelock only (`GovernedUpgrade.freezeUpgrades`).
+
+```solidity
+function freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expectedImplementation | `address` |  |
+| expectedCodeHash | `bytes32` |  |
+
+<a id="_forwardtogovernedupgrade"></a>
+
+### _forwardToGovernedUpgrade
+
+<i>
+
+Require an active proxy pointing at this implementation, then DELEGATECALL the
+linked [GovernedUpgrade](/contracts/lib/library.GovernedUpgrade) library with this call's exact calldata (same selector)
+and return or revert with its result.
+
+</i>
+
+```solidity
+function _forwardToGovernedUpgrade() private;
+```
+
+## Events
+
+### Upgraded
+
+ERC-1967 `Upgraded`, emitted by [GovernedUpgrade](/contracts/lib/library.GovernedUpgrade) in the proxy's context.
+
+```solidity
+event Upgraded(address indexed implementation);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| implementation | `address` |  |
+
+### UpgradesFrozen
+
+Upgrades on this proxy are permanently disabled. Emitted by [GovernedUpgrade](/contracts/lib/library.GovernedUpgrade).
+
+```solidity
+event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| implementation | `address` |  |
+| codeHash | `bytes32` |  |
+
+## Errors
+
+### UUPSUnauthorizedCallContext
+
+Called on the implementation directly, or through a proxy that does not point at it.
+
+```solidity
+error UUPSUnauthorizedCallContext();
+```
+
+## Enums
+
+### UpgradeMode
+
+Release mode chosen at initialization. There is no default.
+
+```solidity
+enum UpgradeMode {
+        Undeclared,
+        Upgradeable,
+        FrozenAtDeploy
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Undeclared |  |
+| Upgradeable |  |
+| FrozenAtDeploy |  |
+

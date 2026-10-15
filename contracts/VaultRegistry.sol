@@ -2,12 +2,11 @@
 // Canonical: docs/architecture.md §4.2, §10 — Vault Registry
 // (See also: docs/prd.md §11 — Vault Catalog;
 //            docs/adr/ADR-0002-router-default-weights-on-chain.md — the
-//            router-eligible count and stale-defaultWeights-length guard;
-//            docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
+//            router-eligible count and stale-defaultWeights-length guard)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {GovernedUpgrade} from "./lib/GovernedUpgrade.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 
 /// @dev Minimal view the registry needs from `PortfolioRouter` to keep the
 ///      default weight vector's length consistent with router eligibility.
@@ -53,11 +52,10 @@ interface IRetirableVault {
 /// so the deployer is the sole initial admin, matching the gateway's
 /// access-control pattern.
 ///
-/// Upgradeability (ADR-0014): deployed as an implementation behind its own
-/// ERC1967Proxy and initialized in the proxy's deployment transaction. Only the
-/// timelock named at `initialize` can upgrade it (`GovernedUpgrade`), and
-/// `freezeUpgrades` ends upgrades forever. No role confers upgrade power.
-contract VaultRegistry is AdminFloorAccessControl, GovernedUpgrade {
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `ADMIN_ROLE` carries no upgrade power.
+contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants/revokes other roles, registers vaults, changes vault status.
@@ -214,26 +212,21 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUpgrade {
     /// @param vault The still-router-eligible vault the caller tried to retire.
     error RetireWhileRouterEligible(address vault);
 
-    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
-    /// @dev The implementation is never initialized: only a proxy is.
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
-
-    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
-    /// @param admin            Address that receives `ADMIN_ROLE`.
-    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
-    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
-    function initialize(address admin, address upgradeAuthority, UpgradeMode mode)
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param admin Address that receives `ADMIN_ROLE` at deploy time.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(address admin, address upgradeTimelock_, UpgradeMode upgradeMode_)
         external
         initializer
     {
+        __AccessControlEnumerable_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (admin == address(0)) revert ZeroAddress();
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, admin);
-        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     // ─── Write surface ───────────────────────────────────────────────────────

@@ -197,15 +197,14 @@ export function pauseUnrecorded(report: PauseAllReport, prefix = ""): PublishErr
 }
 
 /**
- * The error for a pause-all that did not leave all four vaults paused. Issue 1701: when the pause could not be recorded in the run manifest either, the error says so
- * and carries the cancel-pending-unpauses instruction of pauseUnrecorded, because exit 25 names only one cause and govern cannot see this pause.
+ * The error for a pause-all that did not leave all four vaults paused. Issue 1701: when the pause could not be recorded either, the message also carries the
+ * cancel-pending-unpauses instruction of `pauseUnrecorded` (govern cannot see an unrecorded pause) and the details say `manifest_recorded: false`.
  */
 export function pauseIncomplete(report: PauseAllReport, prefix = ""): PublishError {
-  const unrecorded = report.manifestRecorded === false
-    ? " The pause could NOT be recorded in the run manifest either, so govern will not refuse an unpause scheduled before it. Cancel every pending unpause operation through the Safe by hand now."
-    : "";
-  const recorded = report.manifestRecorded === false ? { manifest_recorded: false } : {};
-  if (report.blocked) return new PublishError("PAUSE", `${prefix}pause-all could not send: ${report.blocked}${unrecorded}`, { unpaused: report.vaults.filter((v) => v.depositsPaused !== true).map((v) => v.vault), blocked: true, ...recorded });
+  const unrecorded = report.manifestRecorded === false;
+  const cancel = unrecorded ? " The pause could NOT be recorded in the run manifest either, so govern will not refuse an unpause scheduled before it. Cancel every pending unpause operation through the Safe by hand now." : "";
+  const rec = unrecorded ? { manifest_recorded: false } : {};
+  if (report.blocked) return new PublishError("PAUSE", `${prefix}pause-all could not send: ${report.blocked}${cancel}`, { unpaused: report.vaults.filter((v) => v.depositsPaused !== true).map((v) => v.vault), blocked: true, ...rec });
   const bad = report.vaults.filter((v) => v.depositsPaused !== true);
-  return new PublishError("PAUSE", `${prefix}pause-all left ${bad.length} of ${report.vaults.length} vaults NOT confirmed paused: ${bad.map((v) => `${v.vault}${v.error ? ` (${v.error})` : ""}`).join(", ")}. Pause them by hand now.${unrecorded}`, { unpaused: bad.map((v) => v.vault), ...recorded });
+  return new PublishError("PAUSE", `${prefix}pause-all left ${bad.length} of ${report.vaults.length} vaults NOT confirmed paused: ${bad.map((v) => `${v.vault}${v.error ? ` (${v.error})` : ""}`).join(", ")}. Pause them by hand now.${cancel}`, { unpaused: bad.map((v) => v.vault), ...rec });
 }

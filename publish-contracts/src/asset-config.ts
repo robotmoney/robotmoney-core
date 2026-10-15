@@ -3,7 +3,7 @@
 // the adapter is deployed per run, so callers add it from the vault manifest.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ASSET_CONFIG_FILES, BASKET_DEFAULT_SLIPPAGE_BPS, VENUE_INDEX, VENUE_V4 } from "./core-wiring.ts";
+import { ASSET_CONFIG_FILES, VENUE_INDEX, VENUE_V4 } from "./core-wiring.ts";
 import { PublishError } from "./errors.ts";
 import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import type { Address, ExpectedV4 } from "./verify/types.ts";
@@ -56,24 +56,6 @@ export function loadConfigAssets(coreDir: string, key: VaultKey): ConfigAsset[] 
   });
 }
 
-/**
- * Issue 1705 C4: the swap bound a basket's deploy leaves on the vault (`maxSlippageBps`): the config file's root `maxSlippageBps` when set and above zero
- * (BasketVaultDeployBase applies it before the handover), else the vault constructor's default (core-wiring BASKET_DEFAULT_SLIPPAGE_BPS). Read from core's
- * config at the DEPLOY_SHA, never from the chain it is checked against. Undefined for a vault with no asset config (rmUSDC has no swap bound).
- */
-export function expectedMaxSlippageBps(coreDir: string, key: VaultKey): bigint | undefined {
-  const spec = ASSET_CONFIG_FILES[key];
-  if (!spec) return undefined;
-  const p = join(coreDir, spec.file);
-  if (!existsSync(p)) throw new PublishError("INPUT_MISSING", `${spec.file} is missing in the core checkout: the expected maxSlippageBps of ${VAULT_NAME[key]} is read from it (nothing is skipped)`, { path: p });
-  const raw = (JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>).maxSlippageBps;
-  if (raw !== undefined && (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0)) throw new PublishError("INPUT_MISSING", `${spec.file}: maxSlippageBps is not a non-negative integer`, { key });
-  if (typeof raw === "number" && raw > 0) return BigInt(raw);
-  const fallback = BASKET_DEFAULT_SLIPPAGE_BPS[key];
-  if (fallback === undefined) throw new PublishError("INPUT_MISSING", `${VAULT_NAME[key]} has no vault default maxSlippageBps in core-wiring BASKET_DEFAULT_SLIPPAGE_BPS and ${spec.file} sets none`, { key });
-  return fallback;
-}
-
 /** BasketVault.sol and RobotMoneyVault.sol define the same constant: the highest exit fee a vault accepts. */
 export const VAULT_MAX_EXIT_FEE_FILES = ["contracts/RobotMoneyVault.sol", "contracts/vaults/BasketVault.sol"] as const;
 /** Used only when core does not define MAX_EXIT_FEE_BPS in those files (the value core defines today). */
@@ -98,4 +80,24 @@ export function assertExitFeeBound(coreDir: string, vaults: Record<VaultKey, { e
     if (v.exitFeeBps > max) throw new PublishError("FLOOR", `VAULT_${k}_EXIT_FEE_BPS ${v.exitFeeBps} is above the vault maximum MAX_EXIT_FEE_BPS ${max} read from the core contracts`, { vault: k, exitFeeBps: Number(v.exitFeeBps), max: Number(max) });
   }
   return max;
+}
+
+/**
+ * The maxSlippageBps a basket vault reads after its stage (issue 1705 C4): the config file's `maxSlippageBps` when it sets one (the stage calls setMaxSlippageBps),
+ * else the vault contract's constructor default `_DEFAULT_SLIPPAGE_BPS`, both read from the core checkout. Undefined for a vault with no asset config (rmUSDC).
+ */
+export function loadExpectedMaxSlippageBps(coreDir: string, key: VaultKey, artifact: string): bigint | undefined {
+  const spec = ASSET_CONFIG_FILES[key];
+  if (!spec) return undefined;
+  const p = join(coreDir, spec.file);
+  if (!existsSync(p)) throw new PublishError("INPUT_MISSING", `${spec.file} is missing in the core checkout: the expected maxSlippageBps of ${VAULT_NAME[key]} is read from it`, { path: p });
+  const j = JSON.parse(readFileSync(p, "utf8")) as { maxSlippageBps?: unknown };
+  if (j.maxSlippageBps !== undefined) {
+    if (typeof j.maxSlippageBps !== "number" || !Number.isInteger(j.maxSlippageBps) || j.maxSlippageBps <= 0) throw new PublishError("INPUT_MISSING", `${spec.file}: maxSlippageBps is not a positive integer`, { key });
+    return BigInt(j.maxSlippageBps);
+  }
+  const src = join(coreDir, "contracts", "vaults", `${artifact}.sol`);
+  const m = existsSync(src) ? /_DEFAULT_SLIPPAGE_BPS\s*=\s*([\d_]+)\s*;/.exec(readFileSync(src, "utf8")) : null;
+  if (!m) throw new PublishError("INPUT_MISSING", `${spec.file} sets no maxSlippageBps and contracts/vaults/${artifact}.sol has no _DEFAULT_SLIPPAGE_BPS: the expected maxSlippageBps of ${VAULT_NAME[key]} is unknown`, { key });
+  return BigInt(m[1]!.replaceAll("_", ""));
 }

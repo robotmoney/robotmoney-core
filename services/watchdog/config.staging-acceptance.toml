@@ -15,7 +15,7 @@
 # a pinned profile in place would destroy the very evidence the run collects.
 #
 # WHAT DIFFERS FROM config.staging.toml. Exactly three values, all in
-# [consensus_receipts], plus the [governance] section:
+# [consensus_receipts]:
 #   expected_cadence_secs  86400 -> 300
 #   grace_secs             21600 ->  60
 #   (budget 28 h -> 6 min)
@@ -61,9 +61,10 @@ grace_secs = 60
 # Router weights change only through RouterGovernance.applyReceipt on a
 # Safe-scheduled timelock operation. The check pages when the router's
 # WEIGHT_SETTER_ROLE is held by anyone but the weight setter, or the weight
-# setter's ADMIN_ROLE by anyone but the timelock: a grant executed after the
-# stage 12 verifier ran. It replaced the quorumThreshold() floor check, whose
-# view issue 1698 deleted with the voting path.
+# setter's WEIGHT_SETTER_ROLE (applyReceipt) or ADMIN_ROLE by anyone but the
+# timelock: a grant executed after the stage 12 verifier ran. It replaced the
+# quorumThreshold() floor check, whose view issue 1698 deleted with the voting
+# path.
 #
 # The three addresses are left unset here on purpose: the Deploy phase fills
 # them in from the run's own deployment manifests (router.json, governance.json,

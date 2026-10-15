@@ -43,9 +43,6 @@ describe("keys", () => {
     // the deploy authorizes no agent (core 1527): no AGENT key is minted and the fragment has no AGENT line
     expect(k.names).not.toContain("AGENT");
     expect(sheet).not.toMatch(/AGENT/);
-    // issue 1698 deleted router voting: no VOTER key is minted and the fragment has no VOTER_ADDRESSES line
-    expect(k.names.filter((n) => n.startsWith("VOTER"))).toEqual([]);
-    expect(sheet).not.toMatch(/VOTER/);
   }, 120_000);
   test("refuses existing name, bad name, short passphrase, loose password file; writes nothing", () => {
     const s = setup();
@@ -101,15 +98,10 @@ describe("keys on the hidden-prompt path keep the passphrase in memory only (cor
     for (const f of files) expect(f.bytes.includes(Buffer.from(HPW))).toBe(false);
     expect(r.out + r.err).not.toContain(HPW);
     expect(r.out).toMatch(/CHAIN_ID=8453/);
-    expect(r.out).not.toMatch(/VOTER/);
+    expect(r.out).not.toContain("VOTER");
     // the keystores open under the typed passphrase (so the passphrase really was used) and under no other
     expect(decryptKeystore(readFileSync(join(dir, "DEPLOYER"), "utf8"), HPW).length).toBe(32);
     expect(() => decryptKeystore(readFileSync(join(dir, "DEPLOYER"), "utf8"), HPW + "x")).toThrow();
-  });
-  test("issue 1698: the deleted --voters flag is refused before any prompt, key or file exists", async () => {
-    const d = mkdtempSync(join(tmpdir(), "rehearsal-hidden-"));
-    await expect(runHidden(["--dir", join(d, "keys"), "--voters", "2"], HPW)).rejects.toThrow(/--voters is gone/);
-    expect(readdirSync(d)).toEqual([]);
   });
   test("a short typed passphrase is refused before any key or file exists", async () => {
     const d = mkdtempSync(join(tmpdir(), "rehearsal-hidden-"));

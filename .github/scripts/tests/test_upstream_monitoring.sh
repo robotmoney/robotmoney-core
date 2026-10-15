@@ -184,6 +184,60 @@ test_usdc_alert_contains_event_type() {
 }
 
 # ---------------------------------------------------------------------------
+# require-rpc preflight tests (suite-18-live-monitoring.yml)
+# ---------------------------------------------------------------------------
+
+test_require_rpc_schedule_no_rpc_fails() {
+    # The scheduled nightly must fail loudly when BASE_RPC_URL is missing,
+    # never report success while running no monitors.
+    local output exit_code
+    output=$(env -u RPC_URL GITHUB_EVENT_NAME=schedule bash "$REPO_ROOT/scripts/monitor-require-rpc.sh" 2>&1) && exit_code=$? || exit_code=$?
+    if (( exit_code != 0 )) && grep -q '^::error::.*BASE_RPC_URL' <<<"$output"; then
+        return 0
+    fi
+    echo "  require-rpc schedule/no-rpc: exit=$exit_code output=$output" >&2
+    return 1
+}
+
+test_require_rpc_schedule_empty_rpc_fails() {
+    local output exit_code
+    output=$(RPC_URL="" GITHUB_EVENT_NAME=schedule bash "$REPO_ROOT/scripts/monitor-require-rpc.sh" 2>&1) && exit_code=$? || exit_code=$?
+    if (( exit_code != 0 )) && grep -q '^::error::.*BASE_RPC_URL' <<<"$output"; then
+        return 0
+    fi
+    echo "  require-rpc schedule/empty-rpc: exit=$exit_code output=$output" >&2
+    return 1
+}
+
+test_require_rpc_schedule_with_rpc_passes() {
+    local exit_code
+    RPC_URL="http://127.0.0.1:1" GITHUB_EVENT_NAME=schedule bash "$REPO_ROOT/scripts/monitor-require-rpc.sh" >/dev/null 2>&1 && exit_code=$? || exit_code=$?
+    if (( exit_code == 0 )); then
+        return 0
+    fi
+    echo "  require-rpc schedule/with-rpc: exit=$exit_code" >&2
+    return 1
+}
+
+test_require_rpc_dispatch_no_rpc_warns_only() {
+    local output exit_code
+    output=$(env -u RPC_URL GITHUB_EVENT_NAME=workflow_dispatch bash "$REPO_ROOT/scripts/monitor-require-rpc.sh" 2>&1) && exit_code=$? || exit_code=$?
+    if (( exit_code == 0 )) && grep -q '^::warning::' <<<"$output"; then
+        return 0
+    fi
+    echo "  require-rpc dispatch/no-rpc: exit=$exit_code output=$output" >&2
+    return 1
+}
+
+test_live_workflow_runs_require_rpc_preflight() {
+    if grep -q 'bash scripts/monitor-require-rpc.sh' "$REPO_ROOT/.github/workflows/suite-18-live-monitoring.yml" 2>/dev/null; then
+        return 0
+    fi
+    echo "  suite-18-live-monitoring.yml does not call scripts/monitor-require-rpc.sh" >&2
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Runbook existence check
 # ---------------------------------------------------------------------------
 
@@ -242,6 +296,12 @@ run_test "usdc: upgrade event → alert fires"           test_usdc_upgrade_fires
 run_test "usdc: no-rpc → valid JSON, no alert"         test_usdc_upgrade_no_rpc_outputs_valid_json
 run_test "usdc: alert JSON has runbook reference"      test_usdc_json_has_runbook_ref
 run_test "usdc: alert JSON contains event_type"        test_usdc_alert_contains_event_type
+
+run_test "require-rpc: schedule + unset RPC_URL → exit 1 + ::error" test_require_rpc_schedule_no_rpc_fails
+run_test "require-rpc: schedule + empty RPC_URL → exit 1 + ::error" test_require_rpc_schedule_empty_rpc_fails
+run_test "require-rpc: schedule + RPC_URL set → exit 0"  test_require_rpc_schedule_with_rpc_passes
+run_test "require-rpc: dispatch + unset RPC_URL → warn, exit 0" test_require_rpc_dispatch_no_rpc_warns_only
+run_test "require-rpc: live workflow calls the preflight" test_live_workflow_runs_require_rpc_preflight
 
 run_test "runbook: file exists"                        test_runbook_exists
 run_test "runbook: has venue-offline/compound/aave section" test_runbook_has_venue_offline_section

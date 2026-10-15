@@ -61,7 +61,7 @@ export const FAUCET_DRIP_AMOUNT_LABEL = "100 USDC";
 
 /**
  * Native Base ETH gas drip amount for the Faucet tab (issue #466). Sized to
- * cover a handful of transactions (approve, deposit, redeem) on devnet without
+ * cover a handful of transactions on devnet without
  * draining the harness holder's genesis ETH allocation; 0.01 ETH leaves
  * comfortable headroom against the 1000-ETH genesis grant
  * (`DEFAULT_HARNESS_ETH_WEI`). Single source of truth for the Get Base

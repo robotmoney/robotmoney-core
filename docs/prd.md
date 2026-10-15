@@ -194,13 +194,11 @@ changes any Robot Money contract configuration, router weights included.
 `WEIGHT_SETTER_ROLE` is the only authority over router weights. It
 submits the Investment Committee's consensus receipt, and that submission
 is the rebalance: one timelock operation releases the receipt and applies
-its weights (govern row `apply-receipt`, core 1696). The weight setter's
-`applyReceipt` call releases the receipt and writes its weights in the same
-transaction (issue 1698). There is no voting by token holders or anyone
-else: no voter set, no voting power, no quorum, no voting period, no
-propose, vote or execute, and the contracts carry no voting path. There is
-no tier system (Observer / Participant / Analyst / Strategist) and no
-activity gate.
+its weights (govern row `apply-receipt`, core 1696). There is no voting by
+token holders or anyone else: no voter set, no voting power, no quorum,
+no voting period, no propose, vote or execute. `RouterGovernance` has no
+voting function (issue 1698): the weight setter's one call is `applyReceipt`. There is no tier system
+(Observer / Participant / Analyst / Strategist) and no activity gate.
 
 1. The Investment Committee records a consensus receipt with a weight
    vector over the router-eligible vaults.
@@ -387,12 +385,14 @@ Common edge cases:
   management fee and swap-fee share are deferred to a future phase.
 - Vaults must disclose risk labels, fees, caps, availability, and
   retirement or pause state.
-- Future proxy-backed contracts must disclose their current implementation
+- Proxy-backed contracts must disclose their current implementation
   and whether upgrades remain possible. A final mainnet release must offer a
   freeze-at-deploy choice or an explicitly governed, time-bounded proving
   period followed by irreversible freeze; see
   `docs/technical/contract-upgradeability-plan.md`. Current direct
-  deployments have no in-place upgrade path.
+  deployments have no in-place upgrade path. The contracts expose both
+  facts on chain (`upgradesFrozen()` and the ERC-1967 implementation slot,
+  issue 1808); surfacing them to users is upgradeability stage 3.
 - Accessibility expectations apply to human-facing flows, including
   readable previews, keyboard-accessible controls, and clear status and
   error messaging.
@@ -482,12 +482,12 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) deploy paused, and the
-Safe unpauses each one through the timelock in stage 13. rmUSDC pauses right
-after its seed deposit. Each unpause is its own timelock operation, executed
-after the timelock delay, so deposits open on day 2 of the mainnet launch
-(stage 13: four unpause rows, core #1710). The per-vault rule is the stage
-table's (`scripts/deploy/stage-table.json` `vaults[]`, issue 1705).
+**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
+All four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA) open deposits on day 2
+of the mainnet launch. All four vaults are deployed paused (rmUSDC pauses
+right after its seed deposit) and are unpaused only by Safe → Timelock
+governance, one timelock operation per vault, executed after the timelock
+delay (stage 13: four unpause rows, core #1710).
 The timelock's proposer and canceller is the Safe (2-of-3), any address may
 execute a ready operation after the delay, and the delay floor on Base is
 48 hours (core #1521: `DeployTimelock` opens `EXECUTOR_ROLE` to
@@ -496,8 +496,9 @@ eligible for Portfolio Router allocation — four initially, extensible to
 more — weighted by recommendation, once each passes its readiness review.
 The router default weights at
 launch are rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0 bps; later changes
-come from consensus receipts the Safe applies through the timelock (govern
-row `apply-receipt`, issue 1698). The
+come only from the Safe applying an Investment Committee consensus receipt
+through the weight setter (`RouterGovernance.applyReceipt`, through the
+timelock, core #1698). There is no voting. The
 stable-yield product's single-transaction redemption is met through
 proportional withdrawal across all active strategies in one transaction.
 If any strategy cannot fulfil its proportional share, the product covers

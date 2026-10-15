@@ -4,7 +4,7 @@ title: "VaultRegistryTest"
 
 # VaultRegistryTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:** Test
 
@@ -77,13 +77,6 @@ function setUp() public;
 <a id="test_constructor_revertsonzeroadmin"></a>
 
 ### test_constructor_revertsOnZeroAdmin
-
-<i>
-
-ADR-0014: the check runs in `initialize`, inside the proxy's deployment. The
-implementation is deployed first, so the armed `expectRevert` meets the proxy's CREATE.
-
-</i>
 
 ```solidity
 function test_constructor_revertsOnZeroAdmin() public;

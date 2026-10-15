@@ -24,7 +24,7 @@ use explorer_api::{router, AppState};
 
 const PRIMARY_CHAIN_ID: i64 = 8453;
 
-/// All migrations in order. The consensus receipt migration (0015) is last.
+/// All migrations in order (the consensus receipt migrations are 0015 and 0016).
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0001_minimum_tables.sql"),
     include_str!("../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql"),
@@ -59,9 +59,32 @@ const MIGRATIONS: &[&str] = &[
     ),
     // Issue 1741: vault_snapshots.tvl_cap nullable, per_deposit_cap.
     include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
+    // Issue 1810: admin_events admits contract_kind 'proxy'.
+    include_str!("../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql"),
     // DI-10 (QA plan v1 X4): committee_votes keyed by the emitting policy.
     include_str!(
-        "../../../services/explorer-indexer/migrations/0019_committee_votes_contract_scope.sql"
+        "../../../services/explorer-indexer/migrations/0020_committee_votes_contract_scope.sql"
+    ),
+    // DI-8 (QA plan v1 X7): append-only committee registration history.
+    include_str!("../../../services/explorer-indexer/migrations/0021_committee_agent_events.sql"),
+    // QA plan v1 X7, core issue 1820: exclusion records.
+    include_str!("../../../services/explorer-indexer/migrations/0022_exclusion_records.sql"),
+    // QA plan v1 X8, core issue 1795: vault_snapshots.preview_redeem_total.
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0023_vault_snapshot_preview_redeem.sql"
+    ),
+    // Issue 1698: RouterGovernance voting tables dropped.
+    include_str!("../../../services/explorer-indexer/migrations/0024_drop_governance_voting.sql"),
+    // Security rounds 1-3: exclusion ledgers, position log index, snapshot progress, vote retries.
+    include_str!("../../../services/explorer-indexer/migrations/0025_vault_exclusion_ledgers.sql"),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0026_wallet_position_log_index.sql"
+    ),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0027_exclusion_snapshot_progress.sql"
+    ),
+    include_str!(
+        "../../../services/explorer-indexer/migrations/0028_committee_votes_verify_attempts.sql"
     ),
 ];
 

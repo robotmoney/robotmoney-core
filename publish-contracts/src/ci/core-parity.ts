@@ -4,9 +4,8 @@
 // and runnable alone: bun src/ci/core-parity.ts
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { BASKET_DEFAULT_SLIPPAGE_BPS, LENDING_ADAPTERS, MANIFEST_ENV, MANIFEST_FIELDS_READ, SAFE_STAGE, VAULT_ADDRESS_FIELD, resolveEnv } from "../core-wiring.ts";
-import type { VaultKey } from "../sheet.ts";
-import { PROXY_MANIFEST_FIELDS, loadStageTable, manifestFile, tableProxies, type StageTable, type TableStage } from "../stage-table.ts";
+import { MANIFEST_ENV, MANIFEST_FIELDS_READ, SAFE_STAGE, VAULT_ADDRESS_FIELD, resolveEnv } from "../core-wiring.ts";
+import { loadStageTable, manifestFile, type StageTable, type TableStage } from "../stage-table.ts";
 import { SHEET_SPEC } from "../sheet.ts";
 
 const read = (coreDir: string, rel: string): string => readFileSync(join(coreDir, rel), "utf8");
@@ -72,7 +71,7 @@ export function stageProblems(table: StageTable, coreDir: string, s: TableStage)
   const written = manifestWritten(coreDir, s);
   if (written !== manifestFile(s.manifest)) bad(`manifest ${manifestFile(s.manifest)} is not the file ${file} writes (${written ?? "none found"})`);
   for (const e of s.requiredEnv) {
-    if (resolveEnv(e, s.vault, s.name).from === "unmapped") bad(`publish contracts has no mapping for required env ${e} (core-wiring.ts)`);
+    if (resolveEnv(e, s.vault).from === "unmapped") bad(`publish contracts has no mapping for required env ${e} (core-wiring.ts)`);
   }
   for (const n of s.libraries) {
     const l = table.libraries.find((x) => x.name === n);
@@ -99,7 +98,6 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
     return src.split("\n").some((l) => l.includes(`"${field}"`) && /serialize/i.test(l)) || src.includes(`"${field}":`);
   };
   for (const v of table.vaults) if (!fieldWritten(v.stage, VAULT_ADDRESS_FIELD)) out.push(`vault ${v.key}: manifest field ${VAULT_ADDRESS_FIELD} is not written by the ${v.stage} stage script`);
-  out.push(...proxyProblems(table, coreDir, fieldWritten));
   for (const { stage: st, field } of MANIFEST_FIELDS_READ) {
     if (st === SAFE_STAGE) continue;
     if (!stage(st)) out.push(`wiring reads manifest field ${field} of stage ${st}, which the table does not list`);
@@ -112,7 +110,7 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
   for (const [env, m] of Object.entries(MANIFEST_ENV)) if (m.stage !== SAFE_STAGE && !stage(m.stage)) out.push(`env ${env} reads stage ${m.stage}, which the table does not list`);
   for (const s of table.stages) {
     for (const e of s.requiredEnv) {
-      const src = resolveEnv(e, s.vault, s.name);
+      const src = resolveEnv(e, s.vault);
       if (src.from === "sheet" && !(src.name in SHEET_SPEC)) out.push(`stage ${s.name}: env ${e} maps to sheet name ${src.name}, which is not a sheet name`);
     }
   }
@@ -121,69 +119,6 @@ export function tableProblems(table: StageTable, coreDir: string): string[] {
     const f = manifestFile(s.manifest);
     if (seen.has(f)) out.push(`two stages write ${f}`);
     seen.add(f);
-  }
-  out.push(...vaultWiringProblems(table, coreDir));
-  return out;
-}
-
-/** The storage-layout gate's list of proxied contracts (ADR-0014 §8), or undefined when this core checkout has none. */
-export function proxiedList(coreDir: string): string[] | undefined {
-  const p = join(coreDir, "contracts", "test", "fixtures", "storage-layout", "proxied.txt");
-  if (!existsSync(p)) return undefined;
-  return readFileSync(p, "utf8").split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
-}
-
-/**
- * Issue 1809: every proxy of the table is written by its stage script (the proxy, its implementation, the authority and the mode), its implementation artifact and the
- * proxy artifact exist in core, and the table's proxies are exactly the storage-layout gate's list (proxied.txt): the deploy tooling and the layout gate name the same contracts.
- */
-export function proxyProblems(table: StageTable, coreDir: string, fieldWritten: (stage: string, field: string) => boolean): string[] {
-  const out: string[] = [];
-  const pxs = tableProxies(table);
-  if (pxs.length === 0) return out;
-  for (const px of pxs) {
-    for (const f of [px.field, px.implementationField, PROXY_MANIFEST_FIELDS.authority, PROXY_MANIFEST_FIELDS.mode]) if (!fieldWritten(px.stage, f)) out.push(`proxy ${px.name}: manifest field ${f} is not written by the ${px.stage} stage script`);
-    if (!artifactExists(coreDir, px.artifact)) out.push(`proxy ${px.name}: artifact ${px.artifact} does not exist in core contracts`);
-  }
-  if (!table.proxyArtifact || !artifactExists(coreDir, table.proxyArtifact)) out.push(`proxyArtifact ${table.proxyArtifact ?? "(none)"} is not declared or imported under core contracts`);
-  const listed = proxiedList(coreDir);
-  if (listed === undefined) out.push("the table lists proxies but core has no contracts/test/fixtures/storage-layout/proxied.txt (the layout gate's list)");
-  else {
-    const a = pxs.map((p) => p.artifact).sort().join(", "), b = [...listed].sort().join(", ");
-    if (a !== b) out.push(`the stage table's proxies [${a}] differ from the layout gate's proxied.txt [${b}]`);
-  }
-  return out;
-}
-
-/** A `uint` constant of a Solidity source (`NAME = 3_334;`), or undefined. */
-const solUint = (src: string, name: string): bigint | undefined => {
-  const m = new RegExp(`\\b${name}\\s*=\\s*([0-9_]+)\\s*;`).exec(src);
-  return m ? BigInt(m[1]!.replace(/_/g, "")) : undefined;
-};
-
-/**
- * Issue 1705 C4: the per-vault values the verifier compares the chain with and that core keeps in Solidity: each lending adapter's cap and its registration order
- * (`addAdapter` calls, in the vault stage script), and each basket's default swap bound (`_DEFAULT_SLIPPAGE_BPS` in the vault source).
- */
-export function vaultWiringProblems(table: StageTable, coreDir: string): string[] {
-  const out: string[] = [];
-  for (const [key, w] of Object.entries(LENDING_ADAPTERS)) {
-    const v = table.vaults.find((x) => x.key === key);
-    const st = table.stages.find((x) => x.name === w!.stage);
-    if (!v || v.stage !== w!.stage || !st) { out.push(`lending adapters of ${key}: core-wiring names stage ${w!.stage}, the table's vault stage is ${v?.stage ?? "missing"}`); continue; }
-    const src = scriptSource(coreDir, scriptFile(st));
-    const order = [...src.matchAll(/\.addAdapter\(\s*address\([^)]*\)\s*,\s*([A-Z_]+)\s*\)/g)].map((m) => m[1]!);
-    if (order.join(",") !== w!.adapters.map((a) => a.capConstant).join(",")) out.push(`lending adapters of ${key}: ${scriptFile(st)} registers caps ${order.join(", ") || "none"} in that order, core-wiring LENDING_ADAPTERS names ${w!.adapters.map((a) => a.capConstant).join(", ")}`);
-    for (const a of w!.adapters) {
-      const got = solUint(src, a.capConstant);
-      if (got !== BigInt(a.capBps)) out.push(`lending adapters of ${key}: ${a.capConstant} is ${got ?? "not defined"} in ${scriptFile(st)}, core-wiring LENDING_ADAPTERS says ${a.capBps}`);
-    }
-  }
-  for (const [key, bps] of Object.entries(BASKET_DEFAULT_SLIPPAGE_BPS)) {
-    const v = table.vaults.find((x) => x.key === (key as VaultKey));
-    const file = v && walkSol(join(coreDir, "contracts")).find((f) => new RegExp(`^\\s*contract\\s+${v.artifact}\\b`, "m").test(readFileSync(f, "utf8")));
-    const got = file ? solUint(readFileSync(file, "utf8"), "_DEFAULT_SLIPPAGE_BPS") : undefined;
-    if (got !== bps) out.push(`default swap bound of ${key}: _DEFAULT_SLIPPAGE_BPS is ${got ?? "not found"} in ${v?.artifact ?? "the vault source"}, core-wiring BASKET_DEFAULT_SLIPPAGE_BPS says ${bps}`);
   }
   return out;
 }

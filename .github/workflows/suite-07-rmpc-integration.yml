@@ -407,7 +407,7 @@ jobs:
         include:
           # min_executed (issue 1656) is the executed count of the binary in a green run.
           - { binary: smoke, min_executed: 1 }
-          - { binary: scenarios, min_executed: 10 }
+          - { binary: scenarios, min_executed: 11 }
           - { binary: window_cap, min_executed: 1 }
           - { binary: withdraw, min_executed: 4 }
     steps:

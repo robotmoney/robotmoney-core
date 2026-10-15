@@ -1,22 +1,33 @@
 ---
 title: "DeployRouterGovernanceDefaultsTest"
+description: "What the governance stage leaves behind, read from the chain: the weight setter holds router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the receipt register's ADMIN_ROLE; the deployer's router WEIGHT_SETTER_ROLE is gone; the deployer holds the governance contract's ADMIN_ROLE and WEIGHT_SETTER_ROLE until the timelock stage hands them over."
 ---
 
 # DeployRouterGovernanceDefaultsTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployRouterGovernanceDefaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployRouterGovernanceDefaults.t.sol)
 
 **Inherits:** Test
 
-<i>
+What the governance stage leaves behind, read from the chain: the weight
+setter holds router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the receipt
+register's ADMIN_ROLE; the deployer's router WEIGHT_SETTER_ROLE is gone; the
+deployer holds the governance contract's ADMIN_ROLE and WEIGHT_SETTER_ROLE
+until the timelock stage hands them over.
 
-What the governance stage (DeployRouterGovernance) leaves on a fresh
-router: the weight setter holds both router roles, the deployer keeps
-router ADMIN_ROLE until stage 11 and no WEIGHT_SETTER_ROLE, and the
-deployed bytecode carries no voting surface. The quorum-floor tests this
-file used to hold went with the quorum (issue #1698).
+## Constants
 
-</i>
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+```
 
 ## State Variables
 
@@ -30,6 +41,12 @@ DeployRouterGovernance internal script;
 
 ```solidity
 PortfolioRouter internal router;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
 ```
 
 ### admin
@@ -48,86 +65,40 @@ address internal admin = makeAddr("gov-admin");
 function setUp() public;
 ```
 
-<a id="test_stage7_grantsweightsetterroletogovernance"></a>
+<a id="test_stage_wirestheweightsetter"></a>
 
-### test_stage7_grantsWeightSetterRoleToGovernance
-
-The stage grants WEIGHT_SETTER_ROLE to RouterGovernance, the sole setWeights gate.
+### test_stage_wiresTheWeightSetter
 
 ```solidity
-function test_stage7_grantsWeightSetterRoleToGovernance() public;
+function test_stage_wiresTheWeightSetter() public;
 ```
 
-<a id="test_stage7_grantsrouteradminroletogovernance"></a>
+<a id="test_stage_deployerholdsnorouterweightsetterrole"></a>
 
-### test_stage7_grantsRouterAdminRoleToGovernance
+### test_stage_deployerHoldsNoRouterWeightSetterRole
 
-The stage grants router ADMIN_ROLE to RouterGovernance (setDefaultWeights,
-clearVotedWeights) and reads it back.
+The router constructor seeds the deployer with the role. The stage drops it.
 
 ```solidity
-function test_stage7_grantsRouterAdminRoleToGovernance() public;
+function test_stage_deployerHoldsNoRouterWeightSetterRole() public;
 ```
 
-<a id="test_stage7_deployerholdsnoweightsetterrole"></a>
+<a id="test_stage_refuseswithoutreceiptadmin"></a>
 
-### test_stage7_deployerHoldsNoWeightSetterRole
+### test_stage_refusesWithoutReceiptAdmin
 
-The router constructor seeds the deployer with the setter. The stage drops it.
+A deployer that does not administer the receipt register cannot wire the
+release grant, and the stage stops instead of leaving applyReceipt dead.
 
 ```solidity
-function test_stage7_deployerHoldsNoWeightSetterRole() public;
+function test_stage_refusesWithoutReceiptAdmin() public;
 ```
 
-<a id="test_stage7_governanceadministhedeployer"></a>
+<a id="test_inprocess_refuseszeroinputs"></a>
 
-### test_stage7_governanceAdminIsTheDeployer
-
-The governance contract's ADMIN_ROLE is the deployer's until stage 11.
+### test_inProcess_refusesZeroInputs
 
 ```solidity
-function test_stage7_governanceAdminIsTheDeployer() public;
-```
-
-<a id="test_stage7_leavesthereceiptregisterforstage11"></a>
-
-### test_stage7_leavesTheReceiptRegisterForStage11
-
-The register is not known at this stage (it is deployed later), so
-`applyReceipt` refuses until stage 11 wires it.
-
-```solidity
-function test_stage7_leavesTheReceiptRegisterForStage11() public;
-```
-
-<a id="test_stage7_refuseswhencallerlacksrouteradminrole"></a>
-
-### test_stage7_refusesWhenCallerLacksRouterAdminRole
-
-The stage refuses to wire a weight setter when the caller cannot grant
-router ADMIN_ROLE: a governance contract that cannot act is a broken
-deployment, not a safer one.
-
-```solidity
-function test_stage7_refusesWhenCallerLacksRouterAdminRole() public;
-```
-
-<a id="test_stage7_refuseszeroaddresses"></a>
-
-### test_stage7_refusesZeroAddresses
-
-```solidity
-function test_stage7_refusesZeroAddresses() public;
-```
-
-<a id="test_deployedgovernancehasnovotingsurface"></a>
-
-### test_deployedGovernanceHasNoVotingSurface
-
-Issue #1698: the bytecode the stage deploys answers none of the
-voting selectors. A missing selector reverts with empty data.
-
-```solidity
-function test_deployedGovernanceHasNoVotingSurface() public;
+function test_inProcess_refusesZeroInputs() public;
 ```
 

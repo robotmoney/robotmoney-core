@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -111,6 +111,17 @@ function _implementationCodeHashOf(address proxy) internal view returns (bytes32
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes32` |  |
 
+<a id="test_manifestrecordsthereceiptregistergovernanceappliesfrom"></a>
+
+### test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom
+
+Issue #1698: the manifest records the receipt register the weight setter applies
+from, read back from the governance contract (`receipts()` is immutable).
+
+```solidity
+function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view;
+```
+
 <a id="test_manifestrecordsther7roleconditions"></a>
 
 ### test_manifestRecordsTheR7RoleConditions
@@ -144,17 +155,14 @@ shared variable lets one test write to another test's path.
 function test_manifestTests_passAnExplicitPath_neverSetDeploymentOut() public view;
 ```
 
-<a id="test_manifestrecordsthereceiptregistergovernanceappliesfrom"></a>
+<a id="test_manifestrecordsnoquorum"></a>
 
-### test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom
+### test_manifestRecordsNoQuorum
 
-Issue #1698: the manifest records the receipt register the weight
-setter applies from. This fixture runs the ceremony without a
-register, so both the address and the release-role row read
-empty; the wired case is DeployTimelockCommittee.t.sol.
+There is no voting (issue 1698), so the manifest records no quorum.
 
 ```solidity
-function test_manifestRecordsTheReceiptRegisterGovernanceAppliesFrom() public view;
+function test_manifestRecordsNoQuorum() public view;
 ```
 
 <a id="test_manifestrecordszerolistedagents_whennonelisted"></a>

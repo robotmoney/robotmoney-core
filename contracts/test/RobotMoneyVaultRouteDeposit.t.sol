@@ -22,8 +22,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
-import {Proxied} from "./helpers/Proxied.sol";
-import {ExclusionLedgerFactory} from "../ExclusionLedgerFactory.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
@@ -132,6 +132,27 @@ contract ReadCountingAdapter is IStrategyAdapter {
 
 // ─── Vault harness ───────────────────────────────────────────────────────────
 
+/// @dev A `RouteHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the
+///      arguments the harness constructor took.
+function newRouteHarness(
+    IERC20 asset_,
+    uint256 tvlCap_,
+    uint256 perDepositCap_,
+    address feeRecipient_,
+    address admin_
+) returns (RouteHarness) {
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    return RouteHarness(
+        CoreProxies.proxy(
+            address(new RouteHarness()),
+            abi.encodeCall(
+                RobotMoneyVault.initialize,
+                (asset_, tvlCap_, perDepositCap_, 0, feeRecipient_, admin_, admin_, t, m)
+            )
+        )
+    );
+}
+
 /// @dev Exposes the allocator on its own so a test can count the adapter reads
 ///      `_routeDeposit` makes, without the surrounding `deposit()` NAV reads.
 contract RouteHarness is RobotMoneyVault {
@@ -194,21 +215,8 @@ contract RobotMoneyVaultRouteDepositTest is Test {
 
     function setUp() public {
         usdc = new RouteUSDC();
-        vault = RouteHarness(
-            Proxied.proxy(
-                address(new RouteHarness()),
-                Proxied.robotMoneyVaultInit(
-                    IERC20(address(usdc)),
-                    TVL_CAP,
-                    PER_DEPOSIT_CAP,
-                    0,
-                    feeRecipient,
-                    admin,
-                    admin,
-                    new ExclusionLedgerFactory()
-                )
-            )
-        );
+        vault =
+            newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
 
         for (uint256 i = 0; i < 3; i++) {
             adapters[i] = new ReadCountingAdapter(address(usdc), address(vault));
@@ -783,21 +791,8 @@ contract RobotMoneyVaultRouteDepositTest is Test {
     ///         `MorphoAdapter._deposit` reverted `ExposureCapExceeded`, and so did every
     ///         deposit, every keeper `rebalance` and every router deposit with an rmUSDC leg.
     function test_maxExposureBelowTargetRoutesAroundMorpho() public {
-        RouteHarness v = RouteHarness(
-            Proxied.proxy(
-                address(new RouteHarness()),
-                Proxied.robotMoneyVaultInit(
-                    IERC20(address(usdc)),
-                    TVL_CAP,
-                    PER_DEPOSIT_CAP,
-                    0,
-                    feeRecipient,
-                    admin,
-                    admin,
-                    new ExclusionLedgerFactory()
-                )
-            )
-        );
+        RouteHarness v =
+            newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
         ReadCountingAdapter aave = new ReadCountingAdapter(address(usdc), address(v));
         ReadCountingAdapter compound = new ReadCountingAdapter(address(usdc), address(v));
         MorphoAdapter morpho = new MorphoAdapter(
@@ -862,21 +857,7 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         internal
         returns (VenueSet memory s)
     {
-        s.v = RouteHarness(
-            Proxied.proxy(
-                address(new RouteHarness()),
-                Proxied.robotMoneyVaultInit(
-                    IERC20(address(usdc)),
-                    TVL_CAP,
-                    PER_DEPOSIT_CAP,
-                    0,
-                    feeRecipient,
-                    admin,
-                    admin,
-                    new ExclusionLedgerFactory()
-                )
-            )
-        );
+        s.v = newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
         TestERC20 aToken = new TestERC20();
         s.pool = new CappedAavePool(address(usdc), address(aToken), aaveHeadroom);
         s.comet = new PausableComet(address(usdc));

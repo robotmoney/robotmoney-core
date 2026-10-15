@@ -144,10 +144,7 @@ export const gatewayAbi = [
   },
   // Permissionless two-step commit/reveal authorization (AZ-DAPP-1).
   // commitAuthorization takes keccak256(abi.encode(agent, caller, salt));
-  // revealAuthorization re-derives the hash and authorizes the agent. Its
-  // fourth argument is the agent's EIP-712 AgentConsent signature (issue
-  // 1791): required when the agent is not the revealer, empty ("0x") when a
-  // depositor binds itself.
+  // revealAuthorization re-derives the hash and authorizes the agent.
   {
     type: "function",
     name: "commitAuthorization",
@@ -178,44 +175,7 @@ export const gatewayAbi = [
           { name: "allowedSourceVaults", type: "address[]" },
         ],
       },
-      { name: "agentConsent", type: "bytes" },
     ],
-    outputs: [],
-  },
-  // Agent consent (issue 1791). The nonce a consent is signed at; each
-  // successful reveal advances it, so one signature authorizes once.
-  {
-    type: "function",
-    name: "agentConsentNonce",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "address" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  // The consent's EIP-712 domain version: the live gateway implementation's
-  // version (ADR-0014 §10, QA plan Decisions D5). An upgrade that bumps it
-  // voids every consent signed before it.
-  {
-    type: "function",
-    name: "implementationVersion",
-    stateMutability: "pure",
-    inputs: [],
-    outputs: [{ name: "", type: "string" }],
-  },
-  // True for a binding the agent consented to (or made itself). Only an
-  // unconsented binding (made by an ADMIN_ROLE holder) can be released.
-  {
-    type: "function",
-    name: "agentConsented",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "address" }],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  // Called by the agent itself to undo a binding made without its consent.
-  {
-    type: "function",
-    name: "releaseAgent",
-    stateMutability: "nonpayable",
-    inputs: [],
     outputs: [],
   },
 ] as const;
@@ -744,21 +704,13 @@ export const EXCLUSION_LEDGER_ABI = [
 ] as const;
 
 /**
- * The upgrade views every proxied contract inherits from `GovernedUpgrade`
- * (ADR-0014 §3, QA plan P3): the one upgrade authority (the timelock) and the
- * one-way freeze bit. The vault page reads them next to the ERC-1967
- * implementation slot (`upgradeState.ts`). A direct deployment has neither
- * function, so both reads revert there. `tests/unit/abi-parity.test.ts`
- * checks this fragment against the RobotMoneyVault and gateway artifacts.
+ * The upgrade-disclosure views every proxied core contract inherits from
+ * `contracts/lib/GovernedUUPS.sol` (issue 1808): the freeze flag and the only
+ * account that can upgrade or freeze. Read by the gateway verifier to show
+ * the live freeze state (issue 1810). Checked against the gateway and the
+ * vault artifacts by `abi-parity.test.ts`.
  */
-export const GOVERNED_UPGRADE_ABI = [
-  {
-    type: "function",
-    name: "upgradeAuthority",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "address" }],
-  },
+export const GOVERNED_UUPS_ABI = [
   {
     type: "function",
     name: "upgradesFrozen",
@@ -766,26 +718,9 @@ export const GOVERNED_UPGRADE_ABI = [
     inputs: [],
     outputs: [{ name: "", type: "bool" }],
   },
-] as const;
-
-/**
- * The gateway's pointers to the committee contracts (`icPolicy()`,
- * `consensusReceipt()`). `ProtocolUpgradesPanel` reads them to find the IC
- * policy and receipt proxies whose upgrade state it shows (issue 1810).
- * `tests/unit/abi-parity.test.ts` checks this fragment against the gateway
- * artifact.
- */
-export const GATEWAY_COMMITTEE_ABI = [
   {
     type: "function",
-    name: "icPolicy",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "address" }],
-  },
-  {
-    type: "function",
-    name: "consensusReceipt",
+    name: "upgradeTimelock",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "address" }],

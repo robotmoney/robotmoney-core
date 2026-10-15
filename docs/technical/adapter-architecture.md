@@ -218,7 +218,7 @@ A venue that refuses a supply (security round 2):
 - The single-argument `deploy` of all three lending adapters now catches
   the venue's revert, sends the USDC back to the vault and emits
   `DeployRefused(amount, reason)`. The vault measures what each adapter
-  kept by its own USDC balance (`VaultAdapterOps._allocate`), reports only
+  kept by its own USDC balance (`RobotMoneyVaultOps._allocate`), reports only
   that with `Allocated`, does not ask a refusing adapter again in the
   same routing call, and leaves what no adapter takes idle in NAV with
   `UnroutedDeposit`. The next deposit or `rebalance` routes it once the
@@ -237,7 +237,7 @@ A venue that shuts withdrawals too (security round 3):
 - The Aave and Compound adapters implement
   `IVenueHealthAdapter.venueWithdrawable()`. While any active adapter
   reports false, `RobotMoneyVault.maxDeposit` and `maxMint` read 0
-  (`VaultAdapterOps.anyActiveBlocked`), so a deposit reverts and the
+  (`RobotMoneyVaultOps.anyActiveBlocked`), so a deposit reverts and the
   router skips the rmUSDC leg. A missing or reverting view reads as
   open. Deposits reopen with the venue, or once the adapter leaves the
   active set.

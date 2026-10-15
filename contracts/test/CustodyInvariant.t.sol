@@ -26,7 +26,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract InvUSDC is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
@@ -266,7 +266,7 @@ contract CustodyInvariantTest is StdInvariant, Test {
     function setUp() public {
         usdc = new InvUSDC();
         foreign = new InvForeignToken();
-        vault = Proxied.robotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)),
             type(uint256).max, // tvlCap
             type(uint256).max, // perDepositCap

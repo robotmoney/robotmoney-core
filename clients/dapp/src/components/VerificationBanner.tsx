@@ -30,6 +30,9 @@ export function VerificationBanner({ state, refresh }: Props) {
             <span data-testid="gateway-verification-cause" data-cause={state.cause}>
               {describeVerificationCause(state.cause)}
             </span>{" "}
+            {state.detail && (
+              <span data-testid="gateway-verification-refused-detail">({state.detail}) </span>
+            )}
             <button type="button" data-testid="gateway-verification-retry" onClick={refresh}>
               Re-verify
             </button>

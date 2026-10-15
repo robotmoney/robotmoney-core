@@ -171,7 +171,9 @@ jobs:
 
       - name: Alert webhook integration test
         env:
-          # Floor = the executed count in the last green dev run (7).
+          # Floor = the target's test count (7). Issue 1698 deleted the quorum-floor
+          # page test with RouterGovernance voting; the weight-setter path drift page
+          # test (QA plan v1 C1) took its place.
           CARGO_TEST_MIN_EXECUTED: 7
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
@@ -201,7 +203,9 @@ jobs:
 
       - name: Watchdog profiles integration test
         env:
-          # Floor = the executed count in the last green dev run (5).
+          # Floor = the target's test count (5). Issue 1698 deleted the quorum-check
+          # startup test with RouterGovernance voting; the weight-setter check's
+          # startup refusal test (QA plan v1 C1) took its place.
           CARGO_TEST_MIN_EXECUTED: 5
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
@@ -225,6 +229,18 @@ jobs:
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \
             --test cursor_and_volume -- --test-threads=1 --nocapture
+
+      # Issue 1810: governed upgrades and freezes of proxied core contracts are
+      # paged once, from the indexer's admin_events proxy rows; deployments are
+      # not paged and a failed delivery is retried. Postgres testcontainer plus a
+      # mock webhook. Floor = the two tests the target holds.
+      - name: Proxy upgrade and freeze alert integration test (issue 1810)
+        env:
+          CARGO_TEST_MIN_EXECUTED: 2
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test proxy_upgrades -- --test-threads=1 --nocapture
 
       # Issue #1378: a dead watchdog must be distinguishable from a quiet
       # market. Drives the real `watchdog` and `watchdog-liveness` binaries

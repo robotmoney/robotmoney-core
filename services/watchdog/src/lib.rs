@@ -22,23 +22,19 @@
 //! - [`pager_state`] — durable per-incident pager state, so a restart mid-incident
 //!   still sends the matching resolve (task T08).
 //! - [`governance`] — standing weight-setter-path check (issue 1698): the
-//!   router's `WEIGHT_SETTER_ROLE` and the weight setter's `ADMIN_ROLE` each
-//!   have exactly the configured holder. Read-only; it never pauses the gateway.
-//! - [`freeze_deadline`] — missed freeze-deadline alert (issue 1809, ADR-0014
-//!   §5): once the release's freeze deadline passes, every proxy must read
-//!   `upgradesFrozen()`. Read-only; it never pauses, upgrades or freezes.
-//! - [`upgrade_events`] — one page per executed proxy upgrade or freeze (issue
-//!   1810, ADR-0014 §3, §5), read from the indexer's `proxy_upgrade_events`.
-//!   Read-only; it never pauses, upgrades or freezes.
+//!   router's `WEIGHT_SETTER_ROLE` is held only by the weight setter, and the
+//!   weight setter's `WEIGHT_SETTER_ROLE` (`applyReceipt`) and `ADMIN_ROLE`
+//!   only by the timelock. Read-only; it never pauses the gateway.
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
 //!   by the `watchdog-liveness` binary (issue #1378), and the explorer-indexer
 //!   lag budget that decides whether a quiet poll may refresh it (DI-5).
+//! - [`upgrade_monitor`] — pages each governed upgrade or freeze of a proxied
+//!   core contract once, from the indexed proxy events (issue 1810). Alert-only.
 
 #![warn(missing_docs)]
 
 pub mod alert;
 pub mod config;
-pub mod freeze_deadline;
 pub mod governance;
 pub mod liveness;
 pub mod pager_state;
@@ -52,7 +48,7 @@ pub mod scan_remediation_seams;
 /// Documentation-only, no runtime code; the bug it describes is still present
 /// at HEAD.
 pub mod scan_residual_seams;
-pub mod upgrade_events;
+pub mod upgrade_monitor;
 pub mod volume;
 pub mod watchdog;
 

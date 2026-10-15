@@ -5,9 +5,9 @@ description: "Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight ta
 
 # RobotMoneyVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/RobotMoneyVault.sol)
 
-**Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
+**Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** RobotMoneyVault
 
@@ -22,10 +22,10 @@ The v1 vault is the one exception to "withdrawals are never frozen": never call
 v1 `pause()` (core 1494). This source is the code every new deployment ships.
 Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
 
-Upgradeability (ADR-0014): every new deployment is this implementation behind its own
-ERC1967Proxy, initialized in the proxy's deployment transaction. Only the timelock named at
-`initialize` can upgrade it (`GovernedUpgrade`), and `freezeUpgrades` ends upgrades forever.
-Neither touches `redeem` or `withdraw`: they have no upgrade- or freeze-dependent branch.
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). ADMIN_ROLE, EMERGENCY_ROLE and KEEPER_ROLE carry no upgrade power.
+Freezing upgrades never pauses or alters withdrawals.
 
 ## Constants
 
@@ -175,20 +175,28 @@ uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
 
 ## State Variables
 
-### _book
+### adapters
 
-<i>
-
-The adapter registry, the two eligibility allowlists and the open exclusion record per
-index, as one `VaultAdapterOps.Book` so each linked-library call takes one storage
-reference (ADR-0014 §9). The types are declared once, in that library (ADR-0014 §8).
-Read them through `adapters`, `adapterAllowed`, `adapterCodeHashAllowed` and
-`openExclusionOf`, which keep the ABI of the former public state variables.
-
-</i>
+Ordered registry of all strategy adapters (active and inactive).
 
 ```solidity
-VaultAdapterOps.Book internal _book;
+AdapterInfo[] public adapters;
+```
+
+### adapterAllowed
+
+Exact adapter instances approved by vault governance to receive this vault's USDC.
+
+```solidity
+mapping(address adapter => bool allowed) public adapterAllowed;
+```
+
+### adapterCodeHashAllowed
+
+Runtime bytecode hashes approved by vault governance for adapter onboarding.
+
+```solidity
+mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed;
 ```
 
 ### tvlCap
@@ -309,29 +317,6 @@ Timestamp of the most recent completed rebalance.
 uint256 public lastRebalanceAt;
 ```
 
-### exclusionLedger
-
-The exclusion record of this vault: holds recovered USDC and pays snapshot
-holders. Created by `initialize` through `ExclusionLedgerFactory`, one per vault,
-and written once (a constructor immutable before ADR-0014); no setter exists.
-
-```solidity
-ExclusionLedger public exclusionLedger;
-```
-
-### _exclusionSnapshots
-
-<i>
-
-True once the first record opened. From then on `_update` checkpoints every share
-balance change in the ledger before it happens.
-
-</i>
-
-```solidity
-bool private _exclusionSnapshots;
-```
-
 ## Functions
 
 <a id="_requiregas-uint256"></a>
@@ -348,29 +333,18 @@ function _requireGas(uint256 floor) private view;
 | ---- | ---- | ----------- |
 | floor | `uint256` |  |
 
-<a id="constructor"></a>
-
-### constructor
-
-<i>
-
-The implementation is never initialized: only a proxy is.
-
-</i>
-
-**Note:**
-
-- **oz-upgrades-unsafe-allow:** constructor
-
-```solidity
-constructor();
-```
-
-<a id="initialize-ierc20-uint256-uint256-uint256-address-address-address-exclusionledgerfactory-address-upgrademode"></a>
+<a id="initialize-ierc20-uint256-uint256-uint256-address-address-address-address-upgrademode"></a>
 
 ### initialize
 
-Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+Atomic proxy initialization (the ERC1967Proxy constructor calls it). Takes the
+arguments the constructor took, plus the upgrade authority and release mode.
+
+<i>
+
+Also creates this vault's `ExclusionLedger` (`exclusionLedger()`, core 1820).
+
+</i>
 
 ```solidity
 function initialize(
@@ -381,9 +355,8 @@ function initialize(
         address _feeRecipient,
         address _admin,
         address _emergencyResponder,
-        ExclusionLedgerFactory _ledgerFactory,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer;
 ```
 
@@ -391,37 +364,15 @@ function initialize(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| _asset | `IERC20` | USDC. |
-| _tvlCap | `uint256` | Initial TVL cap. |
-| _perDepositCap | `uint256` | Initial per-deposit cap (at most `_tvlCap` when that is non-zero). |
-| _exitFeeBps | `uint256` | Initial exit fee, bounded by `MAX_EXIT_FEE_BPS` as in `setExitFeeBps`. |
-| _feeRecipient | `address` | Exit-fee recipient. |
-| _admin | `address` | Receives `ADMIN_ROLE`. |
-| _emergencyResponder | `address` | Receives `EMERGENCY_ROLE`. |
-| _ledgerFactory | `ExclusionLedgerFactory` | Creates this vault's `ExclusionLedger` (bound to this proxy). |
-| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
-| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
-
-<a id="_initledger-exclusionledgerfactory"></a>
-
-### _initLedger
-
-<i>
-
-core 1820 / ADR-0014 §9: the factory holds the ledger's creation code, so it is not in
-this vault's EIP-170 runtime. The ledger is bound to its caller, this proxy.
-
-</i>
-
-```solidity
-function _initLedger(ExclusionLedgerFactory factory) private;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| factory | `ExclusionLedgerFactory` |  |
+| _asset | `IERC20` | The vault asset (USDC). |
+| _tvlCap | `uint256` | Maximum total assets, 6-decimal units (0 = no cap). |
+| _perDepositCap | `uint256` | Maximum single deposit; must not exceed a non-zero `_tvlCap`. |
+| _exitFeeBps | `uint256` | Exit fee in basis points, at most `MAX_EXIT_FEE_BPS`. |
+| _feeRecipient | `address` | Receives exit fees. Not zero. |
+| _admin | `address` | Receives ADMIN_ROLE. Not zero. |
+| _emergencyResponder | `address` | Receives EMERGENCY_ROLE. Not zero. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="decimals"></a>
 
@@ -520,7 +471,7 @@ its self-reported balance would let a compromised/lying adapter inflate the shar
 price (and, on the withdrawal side, drain honest holders' idle USDC). An entry under
 an open exclusion record is not counted either, even if its eligibility returned.
 Exclusion is not confiscation (core 1820): whatever is recovered from the adapter
-goes to `exclusionLedger`, never to idle, and is paid pro rata to the holders at
+goes to `exclusionLedger()`, never to idle, and is paid pro rata to the holders at
 the moment of exclusion. So recovery never raises this NAV, and the ledger's USDC
 is never part of it.
 
@@ -667,7 +618,7 @@ function _routeDeposit(uint256 amount) internal;
 
 Two passes over the adapters (fill toward `min(equal-weight slice, capBps)`, then spread
 the leftover into absolute `capBps` headroom), in the linked
-`VaultAdapterOps.routeDeposit` (ADR-0014 §9; see there for the full rationale, #1391).
+`RobotMoneyVaultOps.routeDeposit` (issue 1808; see there for the full rationale, #1391).
 Adapters whose eligibility was revoked while still active are skipped, not reverted on,
 so depositing never bricks when governance quarantines one adapter (audit 2026-06-09,
 L-4); `addAdapter` and `adminRebalance` keep the hard eligibility revert. USDC that no
@@ -815,7 +766,7 @@ adapter's venue refuses withdrawals (Aave reserve paused or inactive, Comet
 `isWithdrawPaused` set; security round 3): NAV still counts that balance at face, so
 minting against it would let early exits take full NAV from the new USDC while a
 haircut falls on the holders who stay. Body in the linked
-`VaultAdapterOps.anyActiveBlocked`.
+`RobotMoneyVaultOps.anyActiveBlocked`.
 
 </i>
 
@@ -1074,7 +1025,7 @@ idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity
 
 </i>
 
-Only eligible-and-active adapters (`VaultAdapterOps.isCounted`) are pulled from: a revoked
+Only eligible-and-active adapters (`RobotMoneyVaultOps.isCounted`) are pulled from: a revoked
 adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —
 otherwise the proportional denominator would not match NAV and a revoked adapter
 could still receive/return withdrawal flow (ADP-2 / F-14).
@@ -1147,7 +1098,7 @@ are paid from eligible adapters and idle USDC only.
 </i>
 
 Exclusion record (core 1820, owner decision 2026-10-13): in the same call the vault
-opens a record in `exclusionLedger` with a snapshot of every holder's shares (skipped
+opens a record in `exclusionLedger()` with a snapshot of every holder's shares (skipped
 when no shares exist). Every USDC later recovered from the adapter is credited to
 that record, never to idle, by every recovery path: `emergencyWithdrawAdapter`
 (and `emergencyWithdraw`), `adminRebalance`, restoration here, and, after a
@@ -1731,7 +1682,7 @@ function _setDepositsPaused(bool paused_) internal;
 <i>
 
 core 1820: open or restore exclusion records to match adapter eligibility. The loop
-runs in the linked `VaultAdapterOps.syncExclusions` (see there); the share supply is the
+runs in the linked `RobotMoneyVaultOps.syncExclusions` (see there); the share supply is the
 snapshot of every record it opens.
 
 </i>
@@ -1766,6 +1717,48 @@ function _markExclusionOpened(bool opened) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | opened | `bool` |  |
+
+<a id="_book"></a>
+
+### _book
+
+<i>
+
+The adapter registry (`adapters`, `adapterAllowed`, `adapterCodeHashAllowed`, three
+consecutive slots) as the layout-identical `RobotMoneyVaultOps.Book` the linked library
+takes. Only the nominal type differs.
+
+</i>
+
+```solidity
+function _book() internal view returns (RobotMoneyVaultOps.Book storage b);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `RobotMoneyVaultOps.Book` |  |
+
+<a id="_ledger"></a>
+
+### _ledger
+
+<i>
+
+This vault's `ExclusionLedger` (core 1820).
+
+</i>
+
+```solidity
+function _ledger() internal view returns (ExclusionLedger);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `ExclusionLedger` |  |
 
 <a id="_isadaptereligible-address"></a>
 
@@ -1862,77 +1855,6 @@ function adapterCount() external view returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="adapters-uint256"></a>
-
-### adapters
-
-Registry entry `index` (active and inactive). Same ABI as the former public array.
-
-```solidity
-function adapters(uint256 index)
-        external
-        view
-        returns (IStrategyAdapter adapter, uint16 capBps, bool active);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| index | `uint256` | Registry index. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| adapter | `IStrategyAdapter` | The adapter contract. |
-| capBps | `uint16` |  Maximum allocation cap in basis points (also acts as ramp control). |
-| active | `bool` |  Whether the entry is active. |
-
-<a id="adapterallowed-address"></a>
-
-### adapterAllowed
-
-Whether governance approved this exact adapter instance to receive the vault's USDC.
-
-```solidity
-function adapterAllowed(address adapter) external view returns (bool);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| adapter | `address` | The adapter instance to look up. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `bool` |  |
-
-<a id="adaptercodehashallowed-bytes32"></a>
-
-### adapterCodeHashAllowed
-
-Whether governance approved this runtime bytecode hash for adapter onboarding.
-
-```solidity
-function adapterCodeHashAllowed(bytes32 codeHash) external view returns (bool);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| codeHash | `bytes32` | The runtime code hash to look up. |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `bool` |  |
-
 <a id="openexclusionof-uint256"></a>
 
 ### openExclusionOf
@@ -1955,6 +1877,23 @@ function openExclusionOf(uint256 index) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="exclusionledger"></a>
+
+### exclusionLedger
+
+The exclusion record of this vault (core 1820): holds recovered USDC and pays
+snapshot holders. Created once by `initialize`; no setter exists.
+
+```solidity
+function exclusionLedger() external view returns (ExclusionLedger);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `ExclusionLedger` |  |
 
 <a id="isshutdown"></a>
 
@@ -2623,19 +2562,17 @@ error MaxAdaptersReached();
 
 ### AdapterAlreadyActive
 
-`addAdapter` named an address that an ACTIVE registry entry already holds.
-A second active entry would count one balance twice in NAV (core 1789).
+The adapter is already an active registry entry; a second entry would count its balance twice in NAV.
 
 ```solidity
-error AdapterAlreadyActive(address adapter, uint256 index);
+error AdapterAlreadyActive(address adapter);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| adapter | `address` | Adapter address that is already registered and active. |
-| index | `uint256` | Registry index of the active entry that holds it. |
+| adapter | `address` | The adapter address that is already active. |
 
 ### AdapterNotFound
 
@@ -2817,4 +2754,32 @@ error NoOpenExclusion(uint256 index);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index that was named. |
+
+## Structs
+
+### AdapterInfo
+
+<i>
+
+Layout-identical to `RobotMoneyVaultOps.AdapterInfo`. The three registry variables
+below sit in consecutive slots and are read and written by the linked library as one
+`RobotMoneyVaultOps.Book` (`_book`).
+
+</i>
+
+```solidity
+struct AdapterInfo {
+        IStrategyAdapter adapter;
+        uint16 capBps; // max allocation % out of MAX_BPS — also acts as ramp control
+        bool active;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `IStrategyAdapter` |  |
+| capBps | `uint16` |  |
+| active | `bool` |  |
 

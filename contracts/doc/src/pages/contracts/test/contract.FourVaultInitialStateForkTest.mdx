@@ -1,0 +1,139 @@
+---
+title: "FourVaultInitialStateForkTest"
+description: "Issue 1705: the four production vault deploy scripts run in process, and each vault's `depositsPaused()` right after its stage equals the stage table's `deployPaused` for that vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path the broadcast run takes (the pause follows the seed), the baskets run their in-process entry point. The table row is matched to the script by its `stage` name."
+---
+
+# FourVaultInitialStateForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5e8d7ba6023ed2e0672e3841daf7b7ba268ac6ed/contracts/test/FourVaultInitialState.t.sol)
+
+**Inherits:** Test
+
+Issue 1705: the four production vault deploy scripts run in process, and each vault's
+`depositsPaused()` right after its stage equals the stage table's `deployPaused` for that
+vault (scripts/deploy/stage-table.json, the one rule table). rmUSDC runs the seeded path
+the broadcast run takes (the pause follows the seed), the baskets run their in-process
+entry point. The table row is matched to the script by its `stage` name.
+
+Runs on the Twin chain (a pinned lazy anvil fork of real Base state): the vault scripts
+need the real USDC, lending venues and pools. CI runs it in forge-fork-vault-regressions
+through scripts/devnet/forge-fork-tests.ts, which fails a run in which nothing executed.
+With FORK_RPC_URL unset the test skips with a named reason.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### TABLE
+
+```solidity
+string internal constant TABLE = "scripts/deploy/stage-table.json";
+```
+
+## State Variables
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### selected
+
+```solidity
+bool internal selected;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_basketparams-vaultregistry"></a>
+
+### _basketParams
+
+```solidity
+function _basketParams(VaultRegistry registry)
+        internal
+        returns (BasketVaultDeployBase.Params memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| registry | `VaultRegistry` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
+
+<a id="_agentcfg"></a>
+
+### _agentCfg
+
+<i>
+
+rmAGENT's launch asset is RM on Uniswap V4, priced by the recorder stage's history. The
+pause is the same base-contract step for every asset list, so this run gives the agent
+script the real V3 wETH pool (as BasketVaultRedeemGas.t.sol does).
+
+</i>
+
+```solidity
+function _agentCfg() internal pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_deploy-string-vaultregistry"></a>
+
+### _deploy
+
+<i>
+
+Runs the vault stage named `stage` in process and returns the vault it deployed.
+
+</i>
+
+```solidity
+function _deploy(string memory stage, VaultRegistry registry) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| stage | `string` |  |
+| registry | `VaultRegistry` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="test_fork_eachvaultdeployswiththetablesdepositstate"></a>
+
+### test_fork_eachVaultDeploysWithTheTablesDepositState
+
+```solidity
+function test_fork_eachVaultDeploysWithTheTablesDepositState() public;
+```
+

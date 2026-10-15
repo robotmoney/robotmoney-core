@@ -8,9 +8,6 @@ import { readFileSync } from "node:fs";
 export const PARAMETER_KEYS = new Set([
   "CHAIN_ID",
   "TIMELOCK_MIN_DELAY",
-  "VOTING_PERIOD",
-  "EXECUTION_DELAY",
-  "QUORUM_THRESHOLD",
   "TVL_CAP",
   "PER_DEPOSIT_CAP",
   "SEED_DEPOSIT_USDC",
@@ -19,7 +16,7 @@ export const PARAMETER_KEYS = new Set([
   "AGENT_MAX_PER_WINDOW",
   "AGENT_WINDOW_SECONDS",
   "SAFE_THRESHOLD",
-  // issue 1809 (ADR-0014 §5): the release mode is initialized state of one artifact: a rehearsal is upgradeable, a final release may be frozen-at-deploy
+  // issue 1809 (ADR-0014 §4 Freeze and release modes): the release mode is initialized state of one artifact: a rehearsal is upgradeable, a final release may be frozen-at-deploy
   "UPGRADE_MODE",
 ]);
 
@@ -35,7 +32,6 @@ export const IDENTITY_KEYS = new Set([
   "FEE_RECIPIENT",
   "SEED_SHARE_RECEIVER",
   "SAFE_OWNERS",
-  "VOTER_ADDRESSES",
 ]);
 
 /** Keys that must never appear in any sheet: they are escape hatches the one scheme removes. */

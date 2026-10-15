@@ -163,9 +163,9 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Read RouterGovernance state: the router weights the weight setter last
-    /// applied, the receipt register it applies receipts from, and its router
-    /// (issue #308 / §5.1). There is no proposal or voter state (issue 1698).
+    /// Read RouterGovernance state: the active and default router weight
+    /// vectors, the router and receipt register it is bound to, and who holds
+    /// `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` (issue #1698).
     GetGovernance {
         #[arg(long, short = 'c')]
         config: PathBuf,
@@ -421,31 +421,6 @@ pub enum Command {
         subcommand: ReceiptSubcommand,
         /// Pretty-print the JSON output.
         #[arg(long, global = true)]
-        pretty: bool,
-    },
-    /// Sign the gateway's EIP-712 `AgentConsent` with this agent's key so a
-    /// depositor can bind it (issue #1791). Prints the 65-byte signature the
-    /// depositor passes as `agentConsent` to
-    /// `RobotMoneyGateway.revealAuthorization`. Reads
-    /// `agentConsentNonce(agent)` from the gateway; sends no transaction.
-    /// One signature authorizes one reveal, by `--owner` only, on this chain
-    /// and gateway only.
-    AgentConsent {
-        /// Path to the operator config TOML. The agent is the keystore's
-        /// address; the passphrase comes from `RMPC_KEYSTORE_PASSPHRASE`.
-        #[arg(long, short = 'c')]
-        config: PathBuf,
-        /// The depositor that will call `revealAuthorization` and own the
-        /// binding (0x-prefixed address).
-        #[arg(long)]
-        owner: String,
-        /// The share receiver of the policy the depositor will reveal.
-        /// Defaults to `--owner`: a depositor without ADMIN_ROLE must name
-        /// itself.
-        #[arg(long = "share-receiver")]
-        share_receiver: Option<String>,
-        /// Pretty-print the JSON output.
-        #[arg(long)]
         pretty: bool,
     },
     /// Manage the local Investment Swarm signing identity — the

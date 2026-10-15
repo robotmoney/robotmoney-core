@@ -2,7 +2,7 @@
 //
 // 1. PRIVATE, before anything is public: the submitter Safe authorizes ITSELF on the gateway and hands the agent to the timelock. Three submitter-Safe transactions:
 //      RobotMoneyGateway.commitAuthorization(keccak256(abi.encode(submitter, submitter, salt)))   the commit names no agent (a random salt hides it)
-//      RobotMoneyGateway.revealAuthorization(submitter, salt, policy, "")   at least one block later: the Safe owns its own agent and holds AGENT_ROLE
+//      RobotMoneyGateway.revealAuthorization(submitter, salt, policy)       at least one block later: the Safe owns its own agent and holds AGENT_ROLE
 //      RobotMoneyGateway.transferAgentOwnership(submitter, timelock)    the timelock (an ADMIN_ROLE holder) owns it from here on
 //    The commitment is bound to the committer (the hash carries msg.sender), so nobody else can reveal it. The reveal policy pays shares to the Safe itself (a caller
 //    without ADMIN_ROLE must name itself, RobotMoneyGateway._validatePolicy); the public batch moves them to the timelock.
@@ -11,8 +11,8 @@
 //      RobotMoneyGateway.committeeRegister(submitter, label)     forwards to InvestmentCommitteePolicy.registerAgent: gives COMMITTEE_AGENT_ROLE (the receipt contract checks it)
 // WHY. The old batch scheduled authorizeAgent(submitter) in public. During the timelock delay anyone could commit and reveal an authorization for that address first:
 // the batch then reverted AgentAlreadyOwned after the whole delay, and the squatter, as the agent owner, could revokeAgent at will (the gateway has no seize path).
-// Two layers close it. The gateway's agent-consent check (issue 1791) refuses a stranger's reveal for an address other than itself without that address's signature,
-// and a Safe has no key to sign with. And the batch carries no first-time authorization at all: the timelock owns the agent before the batch is visible, so no write
+// Two layers close it. The gateway's agent-consent check (issue 1791) refuses a stranger's reveal for an address other than itself unless that address made its own
+// consent commitment (commitAuthorization from the agent's own account), which a stranger cannot make for a Safe. And the batch carries no first-time authorization at all: the timelock owns the agent before the batch is visible, so no write
 // a stranger can make breaks it (contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun). An address another account already
 // owns is caught before anything is scheduled (selfAuthStateOf "squatted": no timelock round is spent, the operator creates a new submitter Safe).
 // Those two roles together are the whole authority to anchor a receipt (docs/technical/consensus-receipt-submitter-runbook.md section 1; rotation step 2). The old `rmpc committee register` is gone.
@@ -40,8 +40,8 @@ export const GATEWAY_REGISTER_ABI = parseAbi([
   `function setPolicy(address agent, ${POLICY} p)`,
   "function committeeRegister(address agent, string agentId_)",
   "function commitAuthorization(bytes32 commitHash)",
-  // issue 1791: the agent's consent signature is the fourth argument; an agent revealing for itself (the Safe here) passes empty bytes
-  `function revealAuthorization(address agent, bytes32 salt, ${POLICY} p, bytes agentConsent)`,
+  // issue 1791: a reveal for another address needs that address's own consent commitment; an agent revealing for itself (the Safe here) consents by calling
+  `function revealAuthorization(address agent, bytes32 salt, ${POLICY} p)`,
   "function transferAgentOwnership(address agent, address newOwner)",
   "function commitments(bytes32 key) view returns (address committer, uint64 blockNumber)",
   "function agents(address agent) view returns (bool active, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver, address assetRecipient, uint256 maxWithdrawPerPayment, uint256 maxWithdrawPerWindow)",
@@ -100,7 +100,7 @@ export const selfAuthCommitmentKey = (commitHash: Hex, committer: Address): Hex 
 export function buildSelfAuthCalls(gateway: Address, timelock: Address, submitter: Address, salt: Hex, validUntil: bigint): { commit: RegisterCall; reveal: RegisterCall; handOver: RegisterCall } {
   return {
     commit: { label: `gateway.commitAuthorization(<hidden agent>)`, target: gateway, data: encodeFunctionData({ abi: GATEWAY_REGISTER_ABI, functionName: "commitAuthorization", args: [selfAuthCommitHash(submitter, salt)] }) },
-    reveal: { label: `gateway.revealAuthorization(${submitter})`, target: gateway, data: encodeFunctionData({ abi: GATEWAY_REGISTER_ABI, functionName: "revealAuthorization", args: [submitter, salt, submitterPolicy(submitter, validUntil), "0x"] }) },
+    reveal: { label: `gateway.revealAuthorization(${submitter})`, target: gateway, data: encodeFunctionData({ abi: GATEWAY_REGISTER_ABI, functionName: "revealAuthorization", args: [submitter, salt, submitterPolicy(submitter, validUntil)] }) },
     handOver: { label: `gateway.transferAgentOwnership(${submitter}, ${timelock})`, target: gateway, data: encodeFunctionData({ abi: GATEWAY_REGISTER_ABI, functionName: "transferAgentOwnership", args: [submitter, timelock] }) },
   };
 }

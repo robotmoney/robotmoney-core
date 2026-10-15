@@ -9,18 +9,18 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
-import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {ProposerFloorTimelock} from "../ProposerFloorTimelock.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title ISafe — minimal interface for the Safe (Gnosis Safe) multisig contract.
 ///
@@ -236,41 +236,6 @@ contract SafeIntegrationTest is Test {
         script = new DeployTimelock();
         deployer = address(script);
 
-        vault = Proxied.robotMoneyVault(
-            usdc,
-            type(uint256).max, // tvlCap
-            type(uint256).max, // perDepositCap
-            0, // exitFeeBps
-            makeAddr("feeRecipient"),
-            deployer,
-            deployer
-        );
-
-        gateway = Proxied.robotMoneyGateway(
-            usdc,
-            vault,
-            deployer,
-            makeAddr("pauser"),
-            address(0) // no router yet
-        );
-
-        registry = Proxied.vaultRegistry(deployer);
-
-        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
-
-        governance = new RouterGovernance(address(router), deployer);
-
-        // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
-        // before the handover: without them every receipt the Safe schedules reverts
-        // inside applyReceipt(). DeployRouterGovernance performs these grants for a
-        // real deployment; this fixture constructs RouterGovernance directly, so it
-        // must do the same. DeployTimelock's R7 precondition asserts it below.
-        vm.prank(deployer);
-        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
-        vm.prank(deployer);
-        IAccessControl(address(router))
-            .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
-
         // Deploy 2-of-3 Safe proxy via the canonical factory on Base mainnet.
         // Owners must be sorted ascending for the Safe setup call.
         address[] memory owners = _sortedOwners();
@@ -292,6 +257,47 @@ contract SafeIntegrationTest is Test {
         address safeProxy = ISafeProxyFactory(SAFE_PROXY_FACTORY)
             .createProxyWithNonce(SAFE_SINGLETON_L2, safeSetup, uint256(keccak256("safe-salt-422")));
         safe = ISafe(safeProxy);
+        // Issue 1808: the Safe comes first, so every proxy names the timelock the handover
+        // deploys for it as its upgrade authority.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
+
+        vault = CoreProxies.robotMoneyVault(
+            usdc,
+            type(uint256).max, // tvlCap
+            type(uint256).max, // perDepositCap
+            0, // exitFeeBps
+            makeAddr("feeRecipient"),
+            deployer,
+            deployer
+        );
+
+        gateway = CoreProxies.robotMoneyGateway(
+            usdc,
+            vault,
+            deployer,
+            makeAddr("pauser"),
+            address(0) // no router yet
+        );
+
+        registry = CoreProxies.vaultRegistry(deployer);
+
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
+
+        governance = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
+
+        // RouterGovernance must hold the router's ADMIN_ROLE and WEIGHT_SETTER_ROLE
+        // before the handover: WEIGHT_SETTER_ROLE gates setWeights (applyReceipt)
+        // and ADMIN_ROLE gates the two fallbacks. DeployRouterGovernance performs
+        // this grant for a real deployment; this fixture constructs RouterGovernance
+        // directly, so it must do the same. DeployTimelock's R7 precondition asserts
+        // it below.
+        vm.prank(deployer);
+        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(governance));
+        vm.prank(deployer);
+        IAccessControl(address(router))
+            .grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(governance));
 
         // Verify the Safe from the Safe itself, never from what this test asked
         // for (governance-isomorphism.md R12).
@@ -661,21 +667,22 @@ contract SafeIntegrationTest is Test {
         assertEq(router.routerCap(), 1_000_000e6, "router cap should be updated");
     }
 
-    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (setReceiptContract,
-    ///         the register the weight setter's applyReceipt releases from; issue #1698).
-    function test_happyPath_routerGovernance_setReceiptContract() public withSnap {
-        ConsensusRecommendationReceipt register = Proxied.consensusRecommendationReceipt(
-            deployer, address(gateway), makeAddr("ic-policy-stand-in")
-        );
-        bytes memory callData =
-            abi.encodeCall(RouterGovernance.setReceiptContract, (address(register)));
+    /// @notice AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
+    function test_happyPath_routerGovernance_clearVotedWeights() public withSnap {
+        bytes memory callData = abi.encodeCall(RouterGovernance.clearVotedWeights, ());
+        vm.recordLogs();
         _scheduleAndExecute(address(governance), callData);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 cleared;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(router)
+                    && logs[i].topics[0] == PortfolioRouter.VotedWeightsCleared.selector
+            ) cleared++;
+        }
+        assertEq(cleared, 1, "the timelock cleared the active vector once");
 
-        assertEq(
-            address(governance.receiptContract()),
-            address(register),
-            "receipt register should be updated"
-        );
+        assertFalse(router.votedWeightsActive(), "active vector should be cleared");
     }
 
     /// @notice AC1d: Full Safe+timelock path on RobotMoneyVault (setExitFeeBps).
@@ -1075,7 +1082,7 @@ contract SafeIntegrationTest is Test {
             )
         );
         vm.prank(address(safe));
-        governance.setReceiptContract(address(router));
+        governance.clearVotedWeights();
     }
 
     /// @notice AC6d: Direct ADMIN_ROLE call on RobotMoneyVault reverts.
@@ -1401,7 +1408,7 @@ contract SafeIntegrationTest is Test {
     }
 
     function _replacementGovernance() internal returns (RouterGovernance) {
-        return new RouterGovernance(address(router), address(this));
+        return CoreProxies.routerGovernance(address(router), makeAddr("receipts"), address(this));
     }
 
     /// @notice The stage 11 handover leaves the Safe as the only rotator and the timelock as the only executor.

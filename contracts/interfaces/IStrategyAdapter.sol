@@ -13,7 +13,7 @@ interface IStrategyAdapter {
     ///      inactive, Comet withdraw pause) reverts `VenueWithdrawalsClosed` instead (security
     ///      round 3, `IVenueHealthAdapter`). The vault measures what the adapter kept by its own
     ///      USDC balance, never by a return value, and leaves the rest idle
-    ///      (`VaultAdapterOps._allocate`).
+    ///      (`RobotMoneyVaultOps._allocate`).
     /// @param amount Amount of USDC (6-decimal units) to deploy into the protocol.
     function deploy(uint256 amount) external;
 

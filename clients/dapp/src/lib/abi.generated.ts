@@ -13,26 +13,8 @@
  */
 export const gatewayAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "AGENT_CONSENT_TYPEHASH",
     inputs: [],
     outputs: [
       {
@@ -123,19 +105,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "WINDOW_SECONDS",
     inputs: [],
     outputs: [
@@ -143,44 +112,6 @@ export const gatewayAbiGenerated = [
         name: "",
         type: "uint64",
         internalType: "uint64",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "agentConsentNonce",
-    inputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "agentConsented",
-    inputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
       },
     ],
     stateMutability: "view",
@@ -801,19 +732,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "implementationVersion",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
-      },
-    ],
-    stateMutability: "pure",
-  },
-  {
-    type: "function",
     name: "initialize",
     inputs: [
       {
@@ -842,14 +760,14 @@ export const gatewayAbiGenerated = [
         internalType: "address",
       },
       {
-        name: "upgradeAuthority",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -874,13 +792,6 @@ export const gatewayAbiGenerated = [
       },
     ],
     stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "releaseAgent",
-    inputs: [],
-    outputs: [],
-    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -970,11 +881,6 @@ export const gatewayAbiGenerated = [
             internalType: "address[]",
           },
         ],
-      },
-      {
-        name: "agentConsent",
-        type: "bytes",
-        internalType: "bytes",
       },
     ],
     outputs: [],
@@ -1179,7 +1085,7 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -1206,7 +1112,7 @@ export const gatewayAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -1987,11 +1893,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "AgentNotReleasable",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "AgentPolicyExpired",
     inputs: [],
   },
@@ -2062,22 +1963,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },
@@ -2085,22 +1970,6 @@ export const gatewayAbiGenerated = [
     type: "error",
     name: "FeeOnTransferDetected",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
   },
   {
     type: "error",
@@ -2122,11 +1991,6 @@ export const gatewayAbiGenerated = [
         internalType: "uint256",
       },
     ],
-  },
-  {
-    type: "error",
-    name: "InvalidAgentConsent",
-    inputs: [],
   },
   {
     type: "error",
@@ -2181,6 +2045,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "NotInitializing",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "OwnerConsentMissing",
     inputs: [],
   },
   {
@@ -2241,50 +2110,7 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "UnexpectedAssetsReceived",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
     inputs: [],
   },
   {
@@ -3325,11 +3151,6 @@ export const vaultAbiGenerated = [
  */
 export const robotMoneyVaultAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
     inputs: [],
@@ -3448,19 +3269,6 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "activeAdapterCount",
     inputs: [],
     outputs: [
@@ -3484,7 +3292,7 @@ export const robotMoneyVaultAbiGenerated = [
     ],
     outputs: [
       {
-        name: "",
+        name: "allowed",
         type: "bool",
         internalType: "bool",
       },
@@ -3503,7 +3311,7 @@ export const robotMoneyVaultAbiGenerated = [
     ],
     outputs: [
       {
-        name: "",
+        name: "allowed",
         type: "bool",
         internalType: "bool",
       },
@@ -3528,7 +3336,7 @@ export const robotMoneyVaultAbiGenerated = [
     name: "adapters",
     inputs: [
       {
-        name: "index",
+        name: "",
         type: "uint256",
         internalType: "uint256",
       },
@@ -4043,19 +3851,14 @@ export const robotMoneyVaultAbiGenerated = [
         internalType: "address",
       },
       {
-        name: "_ledgerFactory",
-        type: "address",
-        internalType: "contract ExclusionLedgerFactory",
-      },
-      {
-        name: "upgradeAuthority",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -4898,7 +4701,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -4925,7 +4728,7 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -5784,11 +5587,6 @@ export const robotMoneyVaultAbiGenerated = [
         type: "address",
         internalType: "address",
       },
-      {
-        name: "index",
-        type: "uint256",
-        internalType: "uint256",
-      },
     ],
   },
   {
@@ -5906,22 +5704,6 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "DepositsArePaused",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
     inputs: [],
   },
   {
@@ -6106,22 +5888,6 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "InsufficientAdapterLiquidity",
     inputs: [
       {
@@ -6272,50 +6038,7 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "UnauthorizedRebalancer",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
     inputs: [],
   },
   {
@@ -6350,11 +6073,6 @@ export const robotMoneyVaultAbiGenerated = [
  */
 export const registryAbiGenerated = [
   {
-    type: "constructor",
-    inputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
     type: "function",
     name: "ADMIN_ROLE",
     inputs: [],
@@ -6376,19 +6094,6 @@ export const registryAbiGenerated = [
         name: "",
         type: "bytes32",
         internalType: "bytes32",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
       },
     ],
     stateMutability: "view",
@@ -6566,14 +6271,14 @@ export const registryAbiGenerated = [
         internalType: "address",
       },
       {
-        name: "upgradeAuthority",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -6845,7 +6550,7 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -6872,7 +6577,7 @@ export const registryAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -7143,56 +6848,8 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
-    name: "AddressEmptyCode",
-    inputs: [
-      {
-        name: "target",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "AlreadyRegistered",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "FailedInnerCall",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
   },
   {
     type: "error",
@@ -7264,49 +6921,6 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -7316,11 +6930,6 @@ export const registryAbiGenerated = [
  * Full PortfolioRouter ABI — generated from Foundry artifact.
  */
 export const routerAbiGenerated = [
-  {
-    type: "constructor",
-    inputs: [],
-    stateMutability: "nonpayable",
-  },
   {
     type: "function",
     name: "ADMIN_ROLE",
@@ -7356,19 +6965,6 @@ export const routerAbiGenerated = [
         name: "",
         type: "bytes32",
         internalType: "bytes32",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
       },
     ],
     stateMutability: "view",
@@ -7719,14 +7315,14 @@ export const routerAbiGenerated = [
         internalType: "address",
       },
       {
-        name: "upgradeAuthority",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -8093,7 +7689,7 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -8120,7 +7716,7 @@ export const routerAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -8593,40 +8189,8 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "FailedInnerCall",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
   },
   {
     type: "error",
@@ -8824,17 +8388,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "UnauthorizedRedeemer",
     inputs: [
       {
@@ -8848,38 +8401,6 @@ export const routerAbiGenerated = [
         internalType: "address",
       },
     ],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
-    inputs: [],
   },
   {
     type: "error",
@@ -9158,19 +8679,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "activeAssetCount",
     inputs: [],
     outputs: [
@@ -9228,7 +8736,7 @@ export const agentTokenVaultAbiGenerated = [
       {
         name: "venue_",
         type: "uint8",
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     outputs: [],
@@ -9408,7 +8916,7 @@ export const agentTokenVaultAbiGenerated = [
       {
         name: "venue",
         type: "uint8",
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     stateMutability: "view",
@@ -9535,6 +9043,62 @@ export const agentTokenVaultAbiGenerated = [
         name: "",
         type: "uint32",
         internalType: "uint32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "emergencyTwapUsdcValue",
+    inputs: [
+      {
+        name: "assetInfo",
+        type: "tuple",
+        internalType: "struct BasketVault.AssetInfo",
+        components: [
+          {
+            name: "token",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "pool",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "swapFee",
+            type: "uint24",
+            internalType: "uint24",
+          },
+          {
+            name: "active",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "adapter",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "venue",
+            type: "uint8",
+            internalType: "enum BasketVault.Venue",
+          },
+        ],
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
       },
     ],
     stateMutability: "view",
@@ -9698,54 +9262,61 @@ export const agentTokenVaultAbiGenerated = [
     name: "initialize",
     inputs: [
       {
-        name: "usdc_",
-        type: "address",
-        internalType: "contract IERC20",
+        name: "p",
+        type: "tuple",
+        internalType: "struct BasketVault.InitParams",
+        components: [
+          {
+            name: "usdc",
+            type: "address",
+            internalType: "contract IERC20",
+          },
+          {
+            name: "swapRouter",
+            type: "address",
+            internalType: "contract ISwapRouter",
+          },
+          {
+            name: "tvlCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "perDepositCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "exitFeeBps",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "feeRecipient",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "admin",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "emergencyResponder",
+            type: "address",
+            internalType: "address",
+          },
+        ],
       },
       {
-        name: "swapRouter_",
-        type: "address",
-        internalType: "contract ISwapRouter",
-      },
-      {
-        name: "tvlCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "perDepositCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "exitFeeBps_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "feeRecipient_",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "admin_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "emergencyResponder_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "upgradeAuthority",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -10662,7 +10233,7 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -10689,7 +10260,7 @@ export const agentTokenVaultAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -10815,7 +10386,7 @@ export const agentTokenVaultAbiGenerated = [
         name: "venue",
         type: "uint8",
         indexed: false,
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     anonymous: false,
@@ -11577,22 +11148,6 @@ export const agentTokenVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "ERC20InsufficientAllowance",
     inputs: [
       {
@@ -11802,22 +11357,6 @@ export const agentTokenVaultAbiGenerated = [
     type: "error",
     name: "FailedInnerCall",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
   },
   {
     type: "error",
@@ -12077,49 +11616,6 @@ export const agentTokenVaultAbiGenerated = [
   {
     type: "error",
     name: "UUPSUnauthorizedCallContext",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
     inputs: [],
   },
   {
@@ -12297,19 +11793,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "UPGRADE_INTERFACE_VERSION",
-    inputs: [],
-    outputs: [
-      {
-        name: "",
-        type: "string",
-        internalType: "string",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "activeAssetCount",
     inputs: [],
     outputs: [
@@ -12367,7 +11850,7 @@ export const protocolAssetVaultAbiGenerated = [
       {
         name: "venue_",
         type: "uint8",
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     outputs: [],
@@ -12547,7 +12030,7 @@ export const protocolAssetVaultAbiGenerated = [
       {
         name: "venue",
         type: "uint8",
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     stateMutability: "view",
@@ -12674,6 +12157,62 @@ export const protocolAssetVaultAbiGenerated = [
         name: "",
         type: "uint32",
         internalType: "uint32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "emergencyTwapUsdcValue",
+    inputs: [
+      {
+        name: "assetInfo",
+        type: "tuple",
+        internalType: "struct BasketVault.AssetInfo",
+        components: [
+          {
+            name: "token",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "pool",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "swapFee",
+            type: "uint24",
+            internalType: "uint24",
+          },
+          {
+            name: "active",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "adapter",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "venue",
+            type: "uint8",
+            internalType: "enum BasketVault.Venue",
+          },
+        ],
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
       },
     ],
     stateMutability: "view",
@@ -12837,54 +12376,61 @@ export const protocolAssetVaultAbiGenerated = [
     name: "initialize",
     inputs: [
       {
-        name: "usdc_",
-        type: "address",
-        internalType: "contract IERC20",
+        name: "p",
+        type: "tuple",
+        internalType: "struct BasketVault.InitParams",
+        components: [
+          {
+            name: "usdc",
+            type: "address",
+            internalType: "contract IERC20",
+          },
+          {
+            name: "swapRouter",
+            type: "address",
+            internalType: "contract ISwapRouter",
+          },
+          {
+            name: "tvlCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "perDepositCap",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "exitFeeBps",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "feeRecipient",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "admin",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "emergencyResponder",
+            type: "address",
+            internalType: "address",
+          },
+        ],
       },
       {
-        name: "swapRouter_",
-        type: "address",
-        internalType: "contract ISwapRouter",
-      },
-      {
-        name: "tvlCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "perDepositCap_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "exitFeeBps_",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "feeRecipient_",
+        name: "upgradeTimelock_",
         type: "address",
         internalType: "address",
       },
       {
-        name: "admin_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "emergencyResponder_",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "upgradeAuthority",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "mode",
+        name: "upgradeMode_",
         type: "uint8",
-        internalType: "enum GovernedUpgrade.UpgradeMode",
+        internalType: "enum GovernedUUPS.UpgradeMode",
       },
     ],
     outputs: [],
@@ -13801,7 +13347,7 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "upgradeAuthority",
+    name: "upgradeTimelock",
     inputs: [],
     outputs: [
       {
@@ -13828,7 +13374,7 @@ export const protocolAssetVaultAbiGenerated = [
       },
     ],
     outputs: [],
-    stateMutability: "payable",
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -13954,7 +13500,7 @@ export const protocolAssetVaultAbiGenerated = [
         name: "venue",
         type: "uint8",
         indexed: false,
-        internalType: "enum BasketAssetConfigGuard.Venue",
+        internalType: "enum BasketVault.Venue",
       },
     ],
     anonymous: false,
@@ -14716,22 +14262,6 @@ export const protocolAssetVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "ERC1967InvalidImplementation",
-    inputs: [
-      {
-        name: "implementation",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "ERC1967NonPayable",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "ERC20InsufficientAllowance",
     inputs: [
       {
@@ -14941,22 +14471,6 @@ export const protocolAssetVaultAbiGenerated = [
     type: "error",
     name: "FailedInnerCall",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "FreezeTargetMismatch",
-    inputs: [
-      {
-        name: "live",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "liveCodeHash",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
   },
   {
     type: "error",
@@ -15216,49 +14730,6 @@ export const protocolAssetVaultAbiGenerated = [
   {
     type: "error",
     name: "UUPSUnauthorizedCallContext",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UUPSUnsupportedProxiableUUID",
-    inputs: [
-      {
-        name: "slot",
-        type: "bytes32",
-        internalType: "bytes32",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeAuthorityNotContract",
-    inputs: [
-      {
-        name: "authority",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradeModeUnset",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "UpgradeNotAuthorized",
-    inputs: [
-      {
-        name: "caller",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "UpgradesAreFrozen",
     inputs: [],
   },
   {

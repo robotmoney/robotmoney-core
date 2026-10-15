@@ -54,12 +54,11 @@ fn workspace_root() -> PathBuf {
     p
 }
 
-// ── VaultRegistry deployment ─────────────────────────────────────────────────
+// ── VaultRegistry deploy ─────────────────────────────────────────────────────
 //
-// ADR-0014: VaultRegistry runs behind its own ERC1967Proxy, initialized in the proxy's
-// deployment. `rmpc_fork_e2e::proxied::deploy_vault_registry` deploys the implementation from the
-// Foundry build artefact (`out/VaultRegistry.sol/VaultRegistry.json`, so `forge build` must run
-// first) and the proxy with `initialize(admin, upgradeAuthority, mode)`.
+// Core 1808: VaultRegistry is a governed proxy. Each test deploys it through
+// `rmpc_fork_e2e::governed` (linked implementation plus an initialized ERC1967Proxy).
+// Requires `forge build` to have run first.
 
 // ── Event signature hashes ───────────────────────────────────────────────────
 
@@ -174,8 +173,14 @@ fn registry_register_list() {
         .expect("fund deployer");
 
     // Deploy VaultRegistry with deployer as admin.
-    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
-        .expect("deploy VaultRegistry");
+    let registry_addr = rmpc_fork_e2e::governed::deploy_governed_with_address_args(
+        &deployer,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &[deployer.address],
+        3_000_000,
+    )
+    .expect("deploy VaultRegistry");
     eprintln!("[registry_register_list] registry deployed at {registry_addr:#x}");
 
     // Use a stable fake vault address — just a non-zero address. VaultRegistry
@@ -352,8 +357,14 @@ fn registry_status_change() {
         .expect("fund deployer");
 
     // Deploy and register.
-    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
-        .expect("deploy VaultRegistry");
+    let registry_addr = rmpc_fork_e2e::governed::deploy_governed_with_address_args(
+        &deployer,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &[deployer.address],
+        3_000_000,
+    )
+    .expect("deploy VaultRegistry");
 
     let fake_vault: Address = "0x0000000000000000000000000000000000000002"
         .parse()
@@ -562,8 +573,14 @@ fn registry_empty_list() {
         .expect("fund deployer");
 
     // Deploy a fresh registry — no vaults registered.
-    let registry_addr = rmpc_fork_e2e::proxied::deploy_vault_registry(&deployer, deployer.address)
-        .expect("deploy VaultRegistry");
+    let registry_addr = rmpc_fork_e2e::governed::deploy_governed_with_address_args(
+        &deployer,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &[deployer.address],
+        3_000_000,
+    )
+    .expect("deploy VaultRegistry");
     eprintln!("[registry_empty_list] registry deployed at {registry_addr:#x}");
 
     // listVaults() must return an empty array.

@@ -113,11 +113,6 @@
           "allOf": [{ "$ref": "#/$defs/address" }],
           "description": "Must equal the address of the safe_signers entry whose role is \"approver\" — the relayer every Safe call is sent from."
         },
-        "voters": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/address" },
-          "description": "OPTIONAL and legacy (issue 1698, decision 2026-10-15): router voting is deleted, the rehearsal keys mint no voter and no stage reads a voter set, so core no longer requires this field. `core-stack.ts record write` copies the sheet's legacy VOTER_ADDRESSES line here only when the sheet still carries one (the committed Twin sheet does, for this consumer). fusion-qa's src/phases/core-e2e.ts parseRecord still requires voters[0] and uses it only as an address that holds no submitter role (FUSION_UNAUTHORIZED_SUBMITTER). That consumer must stop reading it before the Twin sheet drops the line."
-        },
         "emergency": { "$ref": "#/$defs/address" },
         "keystore_dir": {
           "type": "string",

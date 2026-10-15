@@ -7,24 +7,26 @@ pragma solidity ^0.8.24;
 import {SecurityReviewRecheckCommitteePoc} from "./SecurityReviewRecheckCommitteePoc.t.sol";
 import {SecurityReviewRecheckVaultPoc} from "./SecurityReviewRecheckVaultPoc.t.sol";
 import {UniswapV4PriceRecorderTest} from "./UniswapV4PriceRecorder.t.sol";
-import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
 import {MockAdapter} from "./RobotMoneyVault.t.sol";
 
 contract RevisionCommitteeAssessment is SecurityReviewRecheckCommitteePoc {
-    /// At baseline the attacker squatted the member's address and the member still
-    /// joined the committee and voted while the attacker owned its policy. Since
-    /// issue #1791 the squat itself reverts `InvalidAgentConsent`; the member binds
-    /// its own address (the reveal is its consent), joins the committee and votes.
-    function test_assessment_squatRefusedAndMemberJoinsCommitteeAndVotes() public {
+    /// Core 1791: an address that never consented cannot be squatted, so it cannot be
+    /// registered by the attacker's ownership and the member's own onboarding still works.
+    function test_assessment_unconsentedAgentCannotBeSquattedIntoCommittee() public {
         address victim = address(0xD1);
         bytes32 salt = keccak256("assessment");
-        _commitAndRoll(attacker, victim, salt);
         vm.prank(attacker);
-        vm.expectRevert(RobotMoneyGateway.InvalidAgentConsent.selector);
-        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker), "");
+        gateway.commitAuthorization(keccak256(abi.encode(victim, attacker, salt)));
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
+        assertEq(gateway.agentOwner(victim), address(0));
 
-        _selfReveal(victim, victim, keccak256("assessment-own"));
+        // The member's address is onboarded by its own key and registers.
+        _selfReveal(victim, victim, keccak256("assessment-self"));
         vm.prank(admin);
         gateway.committeeRegister(victim, "new-member");
         IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();

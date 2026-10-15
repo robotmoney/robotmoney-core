@@ -4,7 +4,7 @@
 > `Plan tracking issue #109`. Resolves all open schema questions that gate
 > any indexer code change or migration file: the `vault_snapshots`
 > generalization strategy, three new tables (`router_weight_snapshots`,
-> `governance_proposals`, `governance_votes`; migration 0023 later dropped the
+> `governance_proposals`, `governance_votes`; migration 0024 later dropped the
 > last two with the voting path, issue 1698), the `account_positions` query
 > shape, which existing API queries break after migration, and the indexer
 > poll-loop extension points. No schema migration SQL or indexer code changes
@@ -49,7 +49,7 @@ updated to iterate over all registered vaults. As a result:
 - Only the single config vault gets snapshots. New vaults added via
   `VaultRegistered` are never snapshotted.
 - The Portfolio Router's weight state is invisible to the explorer.
-- Governance proposal and vote events are not ingested.
+- `RouterGovernance` has no proposal or vote events to ingest (issue 1698).
 - The API's `vault_snapshots`-dependent queries (`/v1/vault/snapshot/latest`,
   `/v1/vault/snapshots`, `/v1/vaults` TVL join, `/v1/vaults/:address` TVL
   history) all return data for one vault only.
@@ -208,128 +208,24 @@ deleted; nothing emits it now.
 The `PortfolioRouter` address must be registered in `contracts` with
 `kind = 'portfolio_router'` before the FK insert.
 
-**No heartbeat.** Weights change only via governance execution; an event-driven
+**No heartbeat.** Weights change only via a timelock call; an event-driven
 snapshot is sufficient. A heartbeat snapshot would add rows without data value.
 
 ### 5.2 `governance_proposals`
 
-> **Dropped (issue 1698, QA plan v1 C1).** `RouterGovernance` has no voting path, so it emits no
-> proposal or vote events. Migration `0023_drop_governance_voting.sql` drops `governance_votes`
-> and `governance_proposals`, and explorer-api no longer serves `/v1/governance/proposals`. The
-> weight change arrives as the router's `WeightsSet` and stays in `router_weight_snapshots`. The
-> specification below is kept as the record of what 0005 created.
-
-One row per `ProposalCreated` event from `RouterGovernance.sol`, updated
-atomically on terminal events (`ProposalPassed`, `ProposalRejected`,
-`ProposalExecuted`, `ProposalExpired`).
-
-```sql
--- Canonical: docs/technical/multi-vault-explorer-decisions.md §5.2
--- Events sourced from RouterGovernance.sol per
--- docs/technical/governance-decisions.md §3.5.
-
-CREATE TABLE IF NOT EXISTS governance_proposals (
-    chain_id            BIGINT          NOT NULL REFERENCES chains(chain_id),
-    governance_address  BYTEA           NOT NULL,
-    -- on-chain uint256 proposalId; fits in NUMERIC(78,0) but proposals are
-    -- sequential so BIGINT is sufficient in practice.
-    proposal_id         BIGINT          NOT NULL,
-
-    -- From ProposalCreated
-    proposer            BYTEA           NOT NULL,
-    snapshot_block      BIGINT          NOT NULL,
-    -- Parallel JSON arrays mirroring router_weight_snapshots for the proposed weights.
-    proposed_vaults     JSONB           NOT NULL,
-    proposed_bps        JSONB           NOT NULL,
-    created_block       BIGINT          NOT NULL,
-    created_log_index   INTEGER         NOT NULL,
-    created_tx          BYTEA           NOT NULL,
-
-    -- Lifecycle state: 'open' | 'passed' | 'rejected' | 'executed' | 'expired'
-    -- Updated by the indexer on each terminal event.
-    state               TEXT            NOT NULL DEFAULT 'open',
-
-    -- Filled in on ProposalPassed / ProposalRejected
-    yes_votes           NUMERIC(78, 0),
-    no_votes            NUMERIC(78, 0),
-    total_supply_at_snapshot NUMERIC(78, 0),
-    resolved_block      BIGINT,
-    resolved_log_index  INTEGER,
-    resolved_tx         BYTEA,
-
-    -- Filled in on ProposalExecuted
-    executed_block      BIGINT,
-    executed_log_index  INTEGER,
-    executed_tx         BYTEA,
-
-    indexed_at          TIMESTAMPTZ     NOT NULL DEFAULT now(),
-    PRIMARY KEY (chain_id, governance_address, proposal_id),
-    FOREIGN KEY (chain_id, governance_address)
-        REFERENCES contracts(chain_id, address)
-);
-
-CREATE INDEX IF NOT EXISTS governance_proposals_state_idx
-    ON governance_proposals(chain_id, governance_address, state);
-CREATE INDEX IF NOT EXISTS governance_proposals_proposer_idx
-    ON governance_proposals(chain_id, proposer);
-```
-
-**Idempotency.** The `ProposalCreated` row uses `ON CONFLICT (chain_id,
-governance_address, proposal_id) DO NOTHING` for the initial insert.
-Lifecycle-state updates use `UPDATE … WHERE chain_id = $1 AND
-governance_address = $2 AND proposal_id = $3` keyed by the same composite.
-Re-indexing the same event range is idempotent because the `UPDATE` is a
-no-op when the state column already carries the terminal value.
+The indexer no longer writes this table. `RouterGovernance` has no voting, so
+it emits no proposal events (issue 1698). Migration
+`0024_drop_governance_voting.sql` drops the table that migration 0005 created
+(QA plan v1 C1), and explorer-api no longer serves `/v1/governance/proposals`.
+Weight history comes from the router's `WeightsSet` and `DefaultWeightsSet`
+events (§5.1). `RouterGovernance` emits `ReceiptApplied` when the Safe applies
+a receipt, which ties an active vector to its receipt.
 
 ### 5.3 `governance_votes`
 
-> **Dropped (issue 1698, QA plan v1 C1).** `RouterGovernance` has no voting path, so it emits no
-> proposal or vote events. Migration `0023_drop_governance_voting.sql` drops `governance_votes`
-> and `governance_proposals`, and explorer-api no longer serves `/v1/governance/proposals`. The
-> weight change arrives as the router's `WeightsSet` and stays in `router_weight_snapshots`. The
-> specification below is kept as the record of what 0005 created.
-
-One row per `VoteCast` event from `RouterGovernance.sol`. Append-only; no
-update path.
-
-```sql
--- Canonical: docs/technical/multi-vault-explorer-decisions.md §5.3
--- Event-sourced from RouterGovernance.VoteCast per
--- docs/technical/governance-decisions.md §3.5.
-
-CREATE TABLE IF NOT EXISTS governance_votes (
-    chain_id            BIGINT          NOT NULL REFERENCES chains(chain_id),
-    governance_address  BYTEA           NOT NULL,
-    proposal_id         BIGINT          NOT NULL,
-    block_number        BIGINT          NOT NULL,
-    log_index           INTEGER         NOT NULL,
-    tx_hash             BYTEA           NOT NULL,
-    voter               BYTEA           NOT NULL,
-    support             BOOLEAN         NOT NULL,   -- true = yes, false = no
-    power               NUMERIC(78, 0)  NOT NULL,
-    indexed_at          TIMESTAMPTZ     NOT NULL DEFAULT now(),
-    PRIMARY KEY (chain_id, block_number, log_index),
-    FOREIGN KEY (chain_id, governance_address, proposal_id)
-        REFERENCES governance_proposals(chain_id, governance_address, proposal_id)
-);
-
-CREATE INDEX IF NOT EXISTS governance_votes_proposal_idx
-    ON governance_votes(chain_id, governance_address, proposal_id, block_number DESC);
-CREATE INDEX IF NOT EXISTS governance_votes_voter_idx
-    ON governance_votes(chain_id, voter);
-```
-
-**FK dependency.** The `governance_votes` table has a FK into
-`governance_proposals`. This means a `VoteCast` event can only be inserted
-after its `ProposalCreated` row exists. The indexer must process events in
-block order (already guaranteed by the `eth_getLogs` ordering); within the
-same block, `ProposalCreated` must be processed before `VoteCast`. The
-existing `handle_log` loop iterates logs in `log_index` order, which satisfies
-this as long as governance contracts emit `ProposalCreated` before any same-block
-`VoteCast` (contractually impossible: a `VoteCast` needs an open proposal, which
-starts in a separate block). Issue 1698 deleted the contract's proposal, vote and execute
-functions with the voter set, and the weight setter's `applyReceipt` call replaced them, so these
-tables are dropped (migration 0023).
+The indexer no longer writes this table, for the same reason as §5.2: there is
+no vote event to index (issue 1698). Migration
+`0024_drop_governance_voting.sql` drops it with `governance_proposals`.
 
 ---
 
@@ -468,21 +364,10 @@ No heartbeat is needed for router weights (see §5.1).
 
 ### 8.3 Governance event ingestion
 
-> **Superseded (issue 1698).** `RouterGovernance` now emits only `ReceiptContractSet` and
-> `ReceiptApplied`, and the indexer no longer subscribes to the proposal and vote events. The
-> plan below is the pre-1698 record.
-
-`RouterGovernance.sol` emitted seven events (per
-`docs/technical/governance-decisions.md` §3.5). The indexer had to:
-
-1. Add `cfg.governance: Option<Address>` to `IndexerConfig`.
-2. Register the governance contract in `contracts` with `kind = 'governance'`.
-3. Add all seven `RouterGovernance` event topics to `Topics::new()`.
-4. In `handle_log`:
-   - `ProposalCreated` → `db.insert_governance_proposal(…)` (initial insert).
-   - `VoteCast` → `db.insert_governance_vote(…)`.
-   - `ProposalPassed` / `ProposalRejected` / `ProposalExecuted` / `ProposalExpired`
-     → `db.update_governance_proposal_state(proposal_id, new_state, …)`.
+`RouterGovernance.sol` has no proposal or vote events (issue 1698). The
+indexer writes no proposal or vote rows. Its one event is `ReceiptApplied`
+(`docs/technical/governance-decisions.md` §3.2). The weight change itself is
+visible as the router's `WeightsSet` event (§8.2).
 
 ### 8.4 `wallet_positions` multi-vault extension
 
@@ -513,10 +398,11 @@ The correct order is:
 1. **Data-repair migration** (`0003_register_all_vaults.sql`): ensure all
    `vaults` rows have a matching `contracts` row. No schema change.
 2. **New table migration** (e.g. `0004_multi_vault_tables.sql`): add
-   `router_weight_snapshots`, `governance_proposals`, `governance_votes`, and
-   the `account_positions` view. Depends on: step 1 (FK into `contracts`).
+   `router_weight_snapshots` and the `account_positions` view. The
+   `governance_proposals` and `governance_votes` tables exist but are not
+   written (issue 1698). Depends on: step 1 (FK into `contracts`).
 3. **Indexer poll-loop update**: replace single-vault snapshot loop with
-   multi-vault loop; add router and governance event handlers. Depends on:
+   multi-vault loop; add router event handlers. Depends on:
    step 2 (tables must exist before inserts).
 4. **API extension**: add new endpoints for router weights, governance, and
    account positions. Deprecate or fix `/v1/vault/snapshot/latest`. Depends
@@ -534,7 +420,7 @@ the same or separate PRs but must not land before step 2.
 - `docs/technical/portfolio-router-decisions.md` — the router's `WeightsSet` and
   `DefaultWeightsSet`, the event source for `router_weight_snapshots`.
 - `docs/technical/governance-decisions.md` — the receipt application path.
-  Migration `0023_drop_governance_voting.sql` dropped the `governance_proposals`
+  Migration `0024_drop_governance_voting.sql` dropped the `governance_proposals`
   and `governance_votes` tables with the voting path (issue 1698).
 - `services/explorer-indexer/src/indexer.rs` — Single-vault hardcoding audit
   (§3.1).

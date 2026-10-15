@@ -16,12 +16,12 @@
 //! Each leg prints `[gas_estimate_reality_check] <leg> gasUsed=N
 //! budget=M` after its assertion passes.
 //!
-//! ADR-0014 (Consequences: "P1 re-measures the deposit and redeem gas
-//! budgets"): rmUSDC runs behind an `ERC1967Proxy` and calls the linked
-//! `VaultAdapterOps` library by DELEGATECALL. The test first proves the vault
-//! it measures is that proxy (a non-zero ERC-1967 implementation slot), so the
-//! 920,000 ceiling is enforced on the proxied path, the proxy hop and the
-//! library calls included, and never on a direct vault. Suite 05 lists the deposit
+//! Core 1808 (ADR-0014, governed UUPS upgrades): rmUSDC runs behind a governed
+//! `ERC1967Proxy` and calls its linked `RobotMoneyVaultOps` library by
+//! DELEGATECALL. The test first proves the vault it measures is that proxy (a
+//! non-zero ERC-1967 implementation slot), so the 920,000 ceiling is enforced
+//! on the proxied path, the proxy hop and the library calls included, and never
+//! on a direct vault. Suite 05 lists the deposit
 //! line in `required_markers` (QA plan T3), so a run where the deposit
 //! assertion never executed is red even when the slot's other tests
 //! keep the executed count up.
@@ -56,7 +56,7 @@ fn gas_estimate_reality_check() {
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[gas_estimate_reality_check] {}", fx.summary_line());
 
-    // ADR-0014: the budgets are measured on the proxied vault, never on a direct one.
+    // Core 1808: the budgets are measured on the proxied vault, never on a direct one.
     let slot = fx
         .rpc()
         .get_storage_at(fx.vault(), ERC1967_IMPLEMENTATION_SLOT)
@@ -66,7 +66,7 @@ fn gas_estimate_reality_check() {
         implementation,
         Address::ZERO,
         "the measured vault {:#x} is not an ERC-1967 proxy: the gas budgets must be measured on the \
-         proxied path (ADR-0014)",
+         proxied path (core 1808)",
         fx.vault()
     );
     eprintln!(

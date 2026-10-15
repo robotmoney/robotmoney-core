@@ -8,18 +8,18 @@ import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AgentPolicy, type PreviewContext } from "../lib/preview";
 import {
   commitAuthorizationCall,
+  computeConsentHash,
   generateSalt,
+  policyTuple,
   revealAuthorizationCall,
   type CommitInputs,
   type RevealInputs,
 } from "../lib/commitReveal";
 import { markRegistered } from "../lib/useVaultRegistration";
-import { useAgentConsent } from "../lib/useAgentConsent";
-import { NO_AGENT_CONSENT } from "../lib/agentConsent";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
 import { WriteStatus } from "./WriteStatus";
-import { AgentConsentField } from "./AgentConsentField";
+import { AgentConsentNotice } from "./AgentConsentNotice";
 
 type AuthPhase = "commit" | "reveal";
 
@@ -80,16 +80,6 @@ export function AuthorizeTab(props: Props) {
         }
       : null;
 
-  // An agent other than this wallet must consent (issue 1791). The consent is
-  // collected before the commit, so no commit is spent on a reveal that would
-  // revert InvalidAgentConsent, and the step-2 preview already carries it.
-  const agentConsent = useAgentConsent({
-    gateway: props.gatewayAddress,
-    agent: props.agent,
-    revealer: address,
-    shareReceiver: props.shareReceiver,
-  });
-
   // Step 1 signs commitAuthorization; step 2 signs revealAuthorization. Each
   // preview is built from the same inputs its write uses (QA plan U4, DR-4).
   const commitInputs: CommitInputs | null =
@@ -97,15 +87,7 @@ export function AuthorizeTab(props: Props) {
       ? { agent: props.agent as Address, committer: address, salt }
       : null;
   const revealInputs: RevealInputs | null =
-    committed ??
-    (validAgent && policy
-      ? {
-          agent: props.agent as Address,
-          salt,
-          policy,
-          agentConsent: agentConsent.consent ?? NO_AGENT_CONSENT,
-        }
-      : null);
+    committed ?? (validAgent && policy ? { agent: props.agent as Address, salt, policy } : null);
 
   const commitPreview = commitInputs
     ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
@@ -155,7 +137,6 @@ export function AuthorizeTab(props: Props) {
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
-    if (agentConsent.consent === null) return;
     // Freeze what this commit binds: a later edit of the shared agent field
     // must not change the reveal that follows it.
     const snapshot = revealInputs;
@@ -208,6 +189,20 @@ export function AuthorizeTab(props: Props) {
             <TxPreview preview={revealPreview} />
           </div>
         )}
+        {/* Core 1791: the agent consents from its own key to exactly this reveal. */}
+        <AgentConsentNotice
+          testId="authorize-consent-hash"
+          hash={
+            address && committed
+              ? computeConsentHash(
+                  address,
+                  committed.agent,
+                  committed.salt,
+                  policyTuple(committed.policy),
+                )
+              : null
+          }
+        />
         <button
           type="submit"
           data-testid="authorize-reveal-submit"
@@ -271,7 +266,6 @@ export function AuthorizeTab(props: Props) {
         shareReceiver={props.shareReceiver}
         setShareReceiver={props.setShareReceiver}
       />
-      <AgentConsentField testIdPrefix="authorize" consent={agentConsent} />
       {commitPreview && (
         <div data-testid="authorize-commit-preview">
           <TxPreview preview={commitPreview} />
@@ -293,7 +287,6 @@ export function AuthorizeTab(props: Props) {
           !validAgent ||
           !validReceiver ||
           isPending ||
-          agentConsent.consent === null ||
           commitPreview?.ok !== true ||
           revealPreview?.ok !== true
         }

@@ -5,7 +5,7 @@ description: "The exclusion record of one `RobotMoneyVault`. When the vault excl
 
 # ExclusionLedger
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/ExclusionLedger.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/ExclusionLedger.sol)
 
 **Title:** ExclusionLedger
 
@@ -24,7 +24,7 @@ share price never rises from a recovery.
 It can be claimed any number of times as more recovery arrives. Rounding dust
 stays here. No one can sweep unclaimed USDC: a claim never expires.
 
-The vault creates this contract through `ExclusionLedgerFactory` in its initializer and is its only writer
+The vault creates this contract in its initializer (`RobotMoneyVaultOps.createLedger`) and is its only writer
 (`open`, `credit`, `finalize`, `checkpoint`). `claim` is permissionless and always
 pays the holder, never the caller.
 
@@ -120,7 +120,7 @@ constructor(address vault_, IERC20 usdc_);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| vault_ | `address` | The vault this ledger belongs to: its only writer. `ExclusionLedgerFactory.create`<br/>passes its caller, the vault proxy, during the vault's initializer (ADR-0014 §9). |
+| vault_ | `address` | The vault this ledger belongs to: its only writer. `RobotMoneyVaultOps.createLedger`<br/>passes the vault proxy, during the vault's initializer (issue 1808). |
 | usdc_ | `IERC20` | The vault's asset. |
 
 <a id="open-uint256-address-uint256"></a>

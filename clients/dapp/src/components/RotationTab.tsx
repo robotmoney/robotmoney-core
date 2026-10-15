@@ -1,6 +1,7 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 // Canonical: docs/technical/dapp-credential-decisions.md §3.2 (2026-10-06 amendment)
 
+import { AgentConsentNotice } from "./AgentConsentNotice";
 import type { FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
@@ -9,7 +10,6 @@ import { useRotationState } from "../lib/useRotationState";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
 import { WriteStatus } from "./WriteStatus";
-import { AgentConsentField } from "./AgentConsentField";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -86,15 +86,6 @@ export function RotationTab(props: Props) {
         shareReceiver={r.shareReceiver}
         setShareReceiver={r.setShareReceiver}
       />
-      {/* The new agent's consent (issue 1791), before step 1: a rotation that revokes
-          the old agent and then cannot reveal the new one would leave no agent. */}
-      {depositor && (
-        <AgentConsentField
-          testIdPrefix="rotation"
-          consent={r.agentConsent}
-          disabled={r.step !== "idle"}
-        />
-      )}
 
       <form
         data-testid="rotation-step1"
@@ -150,6 +141,7 @@ export function RotationTab(props: Props) {
           <p>Enabled one block after the commit transaction mines.</p>
           {/* The policy preview for the call step 3 signs (QA plan U4). */}
           {r.revealPreview && <TxPreview preview={r.revealPreview} />}
+          <AgentConsentNotice testId="rotation-consent-hash" hash={r.consentHash} />
           <button type="submit" data-testid="rotation-reveal-submit" disabled={disableReveal}>
             Step 3 — Sign revealAuthorization(new) with wallet
           </button>

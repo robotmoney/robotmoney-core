@@ -5,18 +5,13 @@ import {RobotMoneyVaultTest, MockAdapter} from "./RobotMoneyVault.t.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 
 contract SecurityReviewPoc is RobotMoneyVaultTest {
-    /// Finding 2 of docs/code-review/20261012-security-review.md. At baseline this PoC proved
-    /// the duplicate add landed, NAV counted one balance twice and the full redemption
-    /// reverted. Issue #1789 refuses an address an ACTIVE entry already holds, so the same
-    /// path now pins `AdapterAlreadyActive` and a full redemption at par.
-    function test_duplicateAdapterRefused_fullRedemptionPaysPar() public {
+    /// Remediated by core 1789: a duplicate add reverts, so NAV is never double counted.
+    function test_duplicateAdapterAddReverts() public {
         vm.prank(alice);
         vault.deposit(1_000 * ONE_USDC, alice);
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 0
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
         );
         vault.addAdapter(address(adapter), 10_000);
 

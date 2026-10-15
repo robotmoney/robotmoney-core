@@ -5,7 +5,7 @@ description: "Strategy adapter that supplies USDC to Compound V3 (Comet) on Base
 
 # CompoundV3Adapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/adapters/CompoundV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/adapters/CompoundV3Adapter.sol)
 
 **Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter), [IVenueHealthAdapter](/contracts/interfaces/interface.IVenueHealthAdapter)
 
@@ -159,7 +159,7 @@ function deploy(uint256 amount) external onlyVault;
 ### venueWithdrawable
 
 False while the venue refuses withdrawals: an Aave reserve that is paused or
-inactive, a Comet whose withdrawals are paused.
+inactive, a Comet that refuses withdrawals at the venue.
 
 <i>
 

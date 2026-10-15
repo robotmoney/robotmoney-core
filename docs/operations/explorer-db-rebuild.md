@@ -8,7 +8,7 @@ discovering it during an incident.
 the first migration in this service that deliberately **refuses to run** against
 a populated table. The procedure generalises to any later one that does.
 
-**Also used by** migration `0019_committee_votes_contract_scope.sql` (QA plan v1
+**Also used by** migration `0020_committee_votes_contract_scope.sql` (QA plan v1
 task X4, finding DI-10). It refuses a populated `committee_votes` table for the
 same reason: `vote_id` is an index into one InvestmentCommitteePolicy
 deployment's votes, so a redeployed policy reuses every id, and the emitting

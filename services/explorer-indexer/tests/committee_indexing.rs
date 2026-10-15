@@ -1047,7 +1047,7 @@ async fn vote_from_unindexed_member_does_not_wedge_the_tick() {
 /// _votes.length`). Under the 0014 key `(chain_id, vote_id)` the new policy's
 /// vote 0 hit the old policy's vote 0, and `ON CONFLICT DO NOTHING` dropped it
 /// with no error, so the tilt kept the superseded policy's view (DI-10). Keyed
-/// by the emitting contract (migration 0019), both votes are stored, the tilt
+/// by the emitting contract (migration 0020), both votes are stored, the tilt
 /// follows the member's newest signal, and the track record tells them apart.
 #[tokio::test]
 async fn votes_from_two_policy_deployments_both_persist() {

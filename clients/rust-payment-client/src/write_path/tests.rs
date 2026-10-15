@@ -45,11 +45,10 @@ fn config(max_fee_cap: u64) -> Config {
         timelock_from_block: None,
         gateway_from_block: None,
         ic_policy_address: None,
-        receipt_address: None,
-        vault_addresses: None,
         share_receiver: None,
         agent_owner: None,
-        gateway_implementation_hashes: None,
+        gateway_implementation: None,
+        gateway_implementation_runtime_hash: None,
         proxy_implementation_hashes: None,
         signer: SignerConfig {
             allow_software_fallback: true,

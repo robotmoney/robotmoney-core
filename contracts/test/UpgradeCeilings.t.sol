@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/adr/ADR-0014-governed-upgrades-and-freeze.md §7 — fixed ceilings stay constants
+// Canonical: docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md — fixed ceilings stay constants
 // Canonical: docs/technical/smart-contract-invariants.md — UPG-6 (an upgrade never loosens a ceiling)
 // Implements: core issue 1808 (QA plan v1 P1)
 pragma solidity ^0.8.24;
@@ -14,8 +14,7 @@ import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ExclusionLedgerFactory} from "../ExclusionLedgerFactory.sol";
-import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @dev Test-only probes for the `internal` ceilings (no public getter in the EIP-170-tight code).
 contract RobotMoneyVaultCeilingProbe is RobotMoneyVault {
@@ -40,10 +39,6 @@ contract RobotMoneyVaultCeilingProbe is RobotMoneyVault {
 contract BasketVaultCeilingProbe is BasketVault {
     function maxAssets() public pure override returns (uint256) {
         return 1;
-    }
-
-    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
-        return ("probe", "probe", 0);
     }
 
     function maxNavDeviationBps() external pure returns (uint256) {
@@ -159,9 +154,8 @@ contract UpgradeCeilingsTest is Test {
                 address(2),
                 address(3),
                 address(4),
-                ExclusionLedgerFactory(address(5)),
                 address(this),
-                GovernedUpgrade.UpgradeMode.Upgradeable
+                GovernedUUPS.UpgradeMode.Upgradeable
             )
         );
         vm.expectRevert(RobotMoneyVault.InvalidFee.selector);

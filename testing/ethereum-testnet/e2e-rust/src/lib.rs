@@ -144,9 +144,8 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         self.devnet.gateway_runtime_hash()
     }
-    /// The gateway implementation's code hash rmpc pins (QA plan P3); `None` for a direct gateway.
-    pub fn gateway_implementation_hash(&self) -> Option<&str> {
-        self.devnet.gateway_implementation_hash()
+    pub fn gateway_implementation_hex(&self) -> &str {
+        self.devnet.gateway_implementation_hex()
     }
     /// The vault and router implementation code hashes rmpc pins (issue 1810).
     pub fn proxy_implementation_hashes(&self) -> &[String] {
@@ -346,7 +345,9 @@ gateway_address       = "{gateway}"
 usdc_address          = "{usdc}"
 vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
-{implementation_pin}{proxy_pin}max_fee_per_gas_cap   = 100000000000
+gateway_implementation = "{implementation}"
+gateway_implementation_runtime_hash = "{implementation_hash}"
+{proxy_pin}max_fee_per_gas_cap   = 100000000000
 gateway_from_block    = {from_block}
 
 [signer]
@@ -360,11 +361,8 @@ keystore_path           = "{keystore}"
         usdc = devnet.usdc_hex(),
         vault = devnet.vault_hex(),
         hash = devnet.gateway_runtime_hash(),
-        // QA plan P3: rmpc signs against a proxied gateway only with its implementation pinned.
-        implementation_pin = devnet
-            .gateway_implementation_hash()
-            .map(|h| format!("gateway_implementation_hashes = [\"{h}\"]\n"))
-            .unwrap_or_default(),
+        implementation = devnet.gateway_implementation_hex(),
+        implementation_hash = devnet.gateway_implementation_runtime_hash(),
         // Issue 1810: the vaults and the router are proxies too; rmpc pins their logic as well.
         proxy_pin = if devnet.proxy_implementation_hashes().is_empty() {
             String::new()

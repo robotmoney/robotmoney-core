@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
-import { EMERGENCY_ROLE, pauseIncomplete, pauseSignerRole, rolloutReportPath, type PauseAllReport } from "../src/pause-all.ts";
+import { EMERGENCY_ROLE, pauseSignerRole, rolloutReportPath } from "../src/pause-all.ts";
 import { spawnTool, type ProcessRunner } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { manifestBase } from "../src/stage-table.ts";
@@ -22,6 +22,8 @@ const DEPLOYER_KS = "/dev/shm/stub/DEPLOYER"; // the world's default --signer
 const DEPLOYER_SPEC = `keystore:${DEPLOYER_KS}`;
 const EMERGENCY_SPEC = "keystore:/k/EMERGENCY";
 const vaultAddr = (i: number): string => `0x00000000000000000000000000000000000b${(i + 1).toString(16).padStart(3, "0")}`;
+/** rmUSDC's strategy adapters in the vault stage manifest: the verifier sheet reads them (issue 1705 C4). */
+const STRATEGY_ADAPTERS = { aave_adapter: "0x00000000000000000000000000000000000000e1", compound_adapter: "0x00000000000000000000000000000000000000e2", moonwell_flagship_adapter: "0x00000000000000000000000000000000000000e3" };
 const VAULTS = getStageTable().vaults;
 
 /** A signer that names its keystore in the flags, so a test reads WHICH key `cast send` was given. */
@@ -64,7 +66,7 @@ function seed(w: ReturnType<typeof world>, stages: Record<string, unknown>): voi
   const m = join(w.coreDir, "deployments", "918453");
   mkdirSync(m, { recursive: true });
   writeFileSync(join(m, "safe.json"), JSON.stringify({ safe: "0x00000000000000000000000000000000000050fe" }));
-  VAULTS.forEach((v, i) => writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: vaultAddr(i), adapter: MANIFEST_ADAPTER })));
+  VAULTS.forEach((v, i) => writeFileSync(join(m, `${manifestBase(v.manifest)}.json`), JSON.stringify({ chain_id: 918453, vault: vaultAddr(i), adapter: MANIFEST_ADAPTER, ...(v.artifact === "RobotMoneyVault" ? STRATEGY_ADAPTERS : {}) })));
   mkdirSync(w.evidence, { recursive: true });
   writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages }));
 }
@@ -319,6 +321,27 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     expect(lastError(w).message).toContain("could NOT be recorded");
   });
 
+  test("issue 1701: a pause that is both incomplete and unrecorded names the vault left open AND tells the operator to cancel every pending unpause", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    c.failSendTo = vaultAddr(1);
+    mkdirSync(join(w.evidence, `publish-run.json.${process.pid}.tmp`)); // every manifest write fails
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(EXIT_CODES.PAUSE);
+    const err = lastError(w);
+    expect(err.message).toContain("NOT confirmed paused");
+    expect(err.message).toContain("could NOT be recorded");
+    expect(err.message).toContain("Cancel every pending unpause operation through the Safe by hand now");
+    expect(report(w).pauseAll).toMatchObject({ allPaused: false, manifestRecorded: false });
+    // the automatic pause after a failed verify says the same
+    const v = world({ writeSafeManifest: true }), cv = newChain();
+    seed(v, BEFORE_HANDOVER);
+    cv.failSendTo = vaultAddr(1);
+    mkdirSync(join(v.evidence, `publish-run.json.${process.pid}.tmp`));
+    expect(await v.run(["verify"], { ...deps(cv), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
+    expect(lastError(v).message).toContain("NOT confirmed paused");
+    expect(lastError(v).message).toContain("Cancel every pending unpause operation through the Safe by hand now");
+  });
+
   test("issue 1688: a recorded pause-all reports manifestRecorded true and exits 0", async () => {
     const w = world({ writeSafeManifest: true }), c = newChain();
     seed(w, AFTER_HANDOVER);
@@ -450,27 +473,5 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
     expect(c.sends).toEqual([]);
     expect(report(w).pauseAll).toMatchObject({ allPaused: true });
-  });
-});
-
-describe("issue 1701: a pause that is both incomplete and unrecorded", () => {
-  const rep = (manifestRecorded: boolean): PauseAllReport => ({
-    trigger: "manual", reason: "pause-all was run by hand", at: "2026-10-14T00:00:00.000Z", allPaused: false, manifestRecorded,
-    vaults: [
-      { vault: "rmUSDC", key: "USDC", address: "0x0000000000000000000000000000000000003001", signerRole: "emergency", signer: "0x000000000000000000000000000000000000e3e5", depositsPaused: true },
-      { vault: "rmPROTO", key: "PROTO", address: "0x0000000000000000000000000000000000003002", signerRole: "emergency", signer: "0x000000000000000000000000000000000000e3e5", depositsPaused: false },
-    ],
-  });
-  test("the PAUSE error names the open vault AND carries the cancel-pending-unpauses instruction, which a recorded pause does not need", () => {
-    const both = pauseIncomplete(rep(false));
-    expect(both.kind).toBe("PAUSE");
-    expect(both.message).toContain("rmPROTO");
-    expect(both.message).toContain("Pause them by hand now");
-    expect(both.message).toContain("could NOT be recorded");
-    expect(both.message).toContain("Cancel every pending unpause");
-    expect(both.details).toMatchObject({ unpaused: ["rmPROTO"], manifest_recorded: false });
-    const recorded = pauseIncomplete(rep(true));
-    expect(recorded.message).not.toContain("Cancel every pending unpause");
-    expect(recorded.details).not.toHaveProperty("manifest_recorded");
   });
 });

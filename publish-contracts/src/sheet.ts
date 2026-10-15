@@ -5,10 +5,10 @@
 //   - Values that a stage produces (REGISTRY_ADDRESS, IC_POLICY_ADDRESS, DEPLOYMENT_OUT ...) are refused: they come from manifests.
 // Plan: one-deployment-scheme principles 16, 18, 19, 20 (devops issue 53); issue devops 55 (S6).
 import { USDC_ADDRESS } from "./usdc.ts";
+import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
-import { ROUTER_STAGE_ELIGIBLE, STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 
 export type Address = `0x${string}`;
 export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
@@ -40,12 +40,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   EMERGENCY_ADDRESS: { kind: "address" },
   SHARE_RECEIVER_ADDRESS: { kind: "address" },
   RECEIPT_ADMIN_ADDRESS: { kind: "address" },
-  // LEGACY VOTING NAMES (issue 1698). VOTER_ADDRESSES, VOTER_POWER, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY were constructor arguments of the pre-1698
-  // RouterGovernance bytecode. Voting is deleted: the weight setter applies a consensus receipt in one call, no stage reads these names and no contract function
-  // answers them. A sheet may still carry them (the rehearsal key fragment prints VOTER_ADDRESSES, older sheets list all five): each is checked for shape only and
-  // ignored. None is required. Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt, core 1696).
-  VOTER_ADDRESSES: { kind: "address-list" },
-  VOTER_POWER: { kind: "uint" },
   SAFE_OWNERS: { kind: "address-list" },
   SAFE_THRESHOLD: { kind: "uint" },
   SAFE_VERSION: { kind: "string" },
@@ -54,15 +48,20 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   USDC_ADDRESS: { kind: "address" },
   FEE_RECIPIENT_ADDRESS: { kind: "address-or-safe" },
   SEED_DEPOSIT_USDC: { kind: "uint" },
-  /** The name the rmUSDC vault is registered under in the registry (core registry stage env VAULT_NAME; from the frozen sheet, no default). */
-  VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
-  // legacy voting names (see the note above): shape-checked when present, ignored, never required (issue 1698)
-  QUORUM_THRESHOLD: { kind: "uint" },
-  VOTING_PERIOD: { kind: "uint" },
-  EXECUTION_DELAY: { kind: "uint" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
+  /**
+   * Issue 1809 (upgradeability stage 2): the release mode of every core proxy, `upgradeable` or `frozen`. Required, no default: no sheet can leave a final
+   * deployment upgradeable by omission. `frozen` freezes upgrades inside each proxy's atomic initialization.
+   */
+  UPGRADE_MODE: { kind: "string" },
+  /**
+   * Issue 1809: the proving-period freeze deadline of an `upgradeable` release, an ISO 8601 UTC time (2027-01-31T00:00:00Z). Required for an upgradeable PRODUCTION
+   * release on 8453, refused with `frozen`. It is an operational commitment of the Safe signers, never an on-chain freeze: verify fails once it has passed with a proxy
+   * still upgradeable (docs/operations/contract-release-runbooks.md 4.12).
+   */
+  UPGRADE_FREEZE_DEADLINE: { kind: "string" },
   /** Issue 1727: `production` (the default when the line is absent) or `rehearsal` (a Base mainnet rehearsal with a 900 s timelock). Sheet only: never an environment variable, never a CLI flag. */
   DEPLOYMENT_KIND: { kind: "string" },
   // deploy-time router configuration, set by the deployer in the basket vault stages (before the timelock handover). Lists of vault keys, or the word none.
@@ -71,20 +70,18 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   // govern stage (stage 13): the unpauses of the four vaults are the only mainnet operation after the handover. GOVERN_NEW_DELAY feeds the Twin-only update-delay demonstration.
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
-  /**
-   * ADR-0014 §5 (issue 1809): the release mode every proxy is initialized with (core env UPGRADE_MODE of each proxy stage): `upgradeable` (Twin, demo, rehearsal,
-   * contained mainnet test, and a final release with a proving period) or `frozen-at-deploy` (a final release fixed at launch). Required, no default: a deployment
-   * must state its mode, and the initializer reverts on an unset one. The verifier compares every proxy's upgradesFrozen() with it.
-   */
-  UPGRADE_MODE: { kind: "string" },
 };
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
 
-/** The pre-1698 voting names: accepted for shape, ignored, never required (issue 1698). Nothing reads them. */
-export const LEGACY_VOTING_NAMES: readonly string[] = ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"];
-/** Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production), USDC_ADDRESS (a constant: when present it must equal it) and the legacy voting names are the only optional names. */
-export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND", ...LEGACY_VOTING_NAMES]);
+/**
+ * Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production), USDC_ADDRESS (a constant: when present it must equal it) and
+ * UPGRADE_FREEZE_DEADLINE (its presence is ruled by UPGRADE_MODE) are the only optional names.
+ */
+export const OPTIONAL_NAMES = new Set(["SAFE_VERSION", "SAFE_SALT_NONCE", "USDC_ADDRESS", "DEPLOYMENT_KIND", "UPGRADE_FREEZE_DEADLINE"]);
+/** The release modes (issue 1809). The words are the deploy scripts' (UpgradeAuthority.parseUpgradeMode in core). */
+export const UPGRADE_MODES = ["upgradeable", "frozen"] as const;
+export type UpgradeMode = (typeof UPGRADE_MODES)[number];
 export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n));
 
 /** Refused by name with a reason. Anything else not in the whitelist is refused as unknown. */
@@ -95,7 +92,9 @@ const REFUSED: [RegExp, string][] = [
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine or an encrypted keystore with a typed passphrase"],
   [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|IC_POLICY_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
-  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*); there is no voting (issue 1698), so no voter, quorum or voting period exists to govern. Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
+  [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
+  [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
+  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all four vaults). Delete the line"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];
@@ -107,10 +106,6 @@ export interface SheetVault {
   /** Baskets only: the floor for the in-range liquidity (uint128 L) of every configured pool. Above 0. */
   minPoolLiquidity?: bigint;
 }
-
-/** ADR-0014 §5: the two release modes a deployment may state (`unset` reverts in every initializer). */
-export const UPGRADE_MODES = ["upgradeable", "frozen-at-deploy"] as const;
-export type UpgradeMode = (typeof UPGRADE_MODES)[number];
 
 export interface Sheet {
   /** Normalised raw values by name, exactly what the sheet said (addresses checksummed). */
@@ -133,6 +128,8 @@ export interface Sheet {
   feeRecipient: Address | "@safe";
   seedDeposit: bigint;
   timelockMinDelay: bigint;
+  /** Issue 1809: the release mode of every core proxy, and the freeze deadline of an upgradeable release (ISO 8601 UTC, normalised). */
+  upgrade: { mode: UpgradeMode; freezeDeadline?: string };
   vaults: Record<VaultKey, SheetVault>;
   /** Baskets made router-eligible by the deployer in the basket vault stages (rmUSDC is eligible from the router stage). */
   eligibleVaults: VaultKey[];
@@ -144,8 +141,6 @@ export interface Sheet {
     /** Twin-only update-delay demonstration target. */
     newDelay: bigint;
   };
-  /** ADR-0014 §5 (issue 1809): the release mode every proxy is born with (UPGRADE_MODE). */
-  upgradeMode: UpgradeMode;
 }
 
 const err = (message: string, details: Record<string, unknown> = {}) => new PublishError("SHEET", message, details);
@@ -251,9 +246,6 @@ export function parseSheet(text: string): Sheet {
   const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
   const shareReceiver = asAddress("SHARE_RECEIVER_ADDRESS", v.SHARE_RECEIVER_ADDRESS!);
   const receiptAdmin = asAddress("RECEIPT_ADMIN_ADDRESS", v.RECEIPT_ADMIN_ADDRESS!);
-  // issue 1698: the legacy voting names are shape-checked when present (a typo is still a typo) and ignored: no floor, no role check, no output field
-  if (v.VOTER_ADDRESSES !== undefined && v.VOTER_ADDRESSES !== "") asList("VOTER_ADDRESSES", v.VOTER_ADDRESSES);
-  for (const n of ["VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) if (v[n] !== undefined && v[n] !== "") asUint(n, v[n]!);
   const safeOwners = asList("SAFE_OWNERS", v.SAFE_OWNERS!);
   const safeThreshold = asSafeInt("SAFE_THRESHOLD", v.SAFE_THRESHOLD!);
   if (v.SAFE_VERSION !== undefined && v.SAFE_VERSION !== "1.4.1") throw err(`SAFE_VERSION must be 1.4.1 (the only supported version), got '${v.SAFE_VERSION}'`);
@@ -291,6 +283,9 @@ export function parseSheet(text: string): Sheet {
     // a rehearsal reuses the first rehearsal's keys, so the same owners and threshold would predict the Safe that already exists: a new salt is always explicit
     if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
   }
+
+  const upgrade = parseUpgrade(v, chainId, kind);
+
   const vaults = {} as Record<VaultKey, SheetVault>;
   for (const k of VAULT_KEYS) {
     const [t, p, f] = vaultSheetNames(k) as [string, string, string];
@@ -300,7 +295,7 @@ export function parseSheet(text: string): Sheet {
     if (perDepositCap > tvlCap) throw err(`${p} exceeds ${t}: the per-deposit cap is never above the TVL cap`);
     if (exitFeeBps > 10000n) throw err(`${f} is above 10000`);
     const vault: SheetVault = { tvlCap, perDepositCap, exitFeeBps };
-    if ((BASKET_KEYS as readonly VaultKey[]).includes(k)) {
+    if (k !== "USDC") {
       const [g, l] = basketSheetNames(k) as [string, string];
       const nav = asUint(g, v[g]!), floor = asUint(l, v[l]!);
       // issue 1666: 0 disables ORA-4 (BasketViews.checkNavDeviation), above 2000 is refused by the vault setter. Refuse both before any transaction.
@@ -315,20 +310,18 @@ export function parseSheet(text: string): Sheet {
 
   // deploy-time router configuration
   const eligibleVaults = asVaultKeys("ELIGIBLE_VAULTS", v.ELIGIBLE_VAULTS!);
-  // issue 1705: which vault the router stage makes eligible is the stage table's eligibilitySource (rmUSDC today), never a sheet value
-  const fromRouterStage = eligibleVaults.filter((k) => ROUTER_STAGE_ELIGIBLE.includes(k));
-  if (fromRouterStage.length > 0) throw err(`ELIGIBLE_VAULTS lists baskets only: ${fromRouterStage.map((k) => VAULT_NAME[k]).join(", ")} is eligible from the router stage`);
+  if (eligibleVaults.includes("USDC")) throw err("ELIGIBLE_VAULTS lists baskets only: rmUSDC is eligible from the router stage");
   // govern matrix inputs
   const unpauseVaults = asVaultKeys("GOVERN_UNPAUSE_VAULTS", v.GOVERN_UNPAUSE_VAULTS!);
   // issue 1520 (amended 2026-10-06, rmUSDC added 2026-10-09 by issue 1710): no stage 13 step may be skipped on a mainnet deploy. A vault left out would stay paused.
-  // The stage 13 set is the stage table's unpauseInStage13 (issue 1705).
   if (chainId === MAINNET_CHAIN_ID) {
+    // The stage 13 vaults are the stage table's vault rules (unpauseInStage13, issue 1705).
     const missing = STAGE13_UNPAUSE_VAULTS.filter((k) => !unpauseVaults.includes(k));
-    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list ${andList(STAGE13_UNPAUSE_VAULTS)} on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
+    if (missing.length > 0) throw err(`GOVERN_UNPAUSE_VAULTS must list ${STAGE13_UNPAUSE_VAULTS.join(", ")} on chain 8453: no stage 13 step may be skipped (missing ${missing.join(", ")})`, { name: "GOVERN_UNPAUSE_VAULTS" });
   }
   const weights = parseWeights(v.ROUTER_WEIGHTS!);
   const weightKeys = weights.map((w) => w.key).sort().join(",");
-  const wantKeys = [...ROUTER_STAGE_ELIGIBLE, ...eligibleVaults].sort().join(",");
+  const wantKeys = ["USDC", ...eligibleVaults].sort().join(",");
   if (weightKeys !== wantKeys) throw err(`ROUTER_WEIGHTS must name exactly rmUSDC and the eligible baskets (${wantKeys}), got ${weightKeys}`);
   // issue 1580 (owner amendment 2026-10-06 on the stage 13 issue): mainnet launches on exactly this vector. Twin sheets keep their own weights.
   if (chainId === MAINNET_CHAIN_ID) {
@@ -343,22 +336,35 @@ export function parseSheet(text: string): Sheet {
     if (why) throw err(`GOVERN_NEW_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "GOVERN_NEW_DELAY" });
   }
 
-  // ADR-0014 §5 (issue 1809): every proxy is born in the mode the sheet states. Anything else (unset included) is refused before any stage runs.
-  const upgradeMode = v.UPGRADE_MODE!;
-  if (!(UPGRADE_MODES as readonly string[]).includes(upgradeMode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")} (ADR-0014 §5), got '${upgradeMode}'. A deployment states its mode: there is no default and no unset mode`, { name: "UPGRADE_MODE" });
-
   const values: Record<string, string> = {};
   for (const [k, val] of Object.entries(raw)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
 
   return {
     values, chainId, expectedChainId, kind, admin, pauser, emergency, shareReceiver, receiptAdmin, safeOwners, safeThreshold,
-    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, vaults,
-    eligibleVaults, weights, govern: { unpauseVaults, newDelay }, upgradeMode: upgradeMode as UpgradeMode,
+    safeSalt: v.SAFE_SALT_NONCE, usdc, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade, vaults,
+    eligibleVaults, weights, govern: { unpauseVaults, newDelay },
   };
 }
 
-/** "USDC, PROTO, AGENT and RWA". */
-const andList = (xs: readonly string[]): string => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+const DEADLINE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
+/**
+ * Issue 1809. UPGRADE_MODE is required and is one of the two words. An upgradeable PRODUCTION release on 8453 is the proving period: it needs UPGRADE_FREEZE_DEADLINE, the
+ * time by which the Safe signers have frozen every proxy. A frozen release has nothing to freeze later, so a deadline there is refused as a contradiction.
+ */
+export function parseUpgrade(v: Record<string, string | undefined>, chainId: number, kind: DeploymentKind): Sheet["upgrade"] {
+  const mode = v.UPGRADE_MODE ?? "";
+  if (!(UPGRADE_MODES as readonly string[]).includes(mode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")}, got '${mode}'. There is no default: the release mode of every core proxy is declared (docs/technical/contract-upgradeability-plan.md, Release modes).`, { name: "UPGRADE_MODE" });
+  const raw = v.UPGRADE_FREEZE_DEADLINE;
+  if (raw === undefined || raw === "") {
+    if (mode === "upgradeable" && chainId === MAINNET_CHAIN_ID && kind === "production") throw err("UPGRADE_MODE=upgradeable on a production release on chain 8453 is the proving period: UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC, for example 2027-01-31T00:00:00Z) names when the Safe signers have frozen every proxy", { name: "UPGRADE_FREEZE_DEADLINE" });
+    return { mode: mode as UpgradeMode };
+  }
+  if (mode === "frozen") throw err("UPGRADE_FREEZE_DEADLINE is set but UPGRADE_MODE is frozen: every proxy is frozen in its initializer, there is nothing to freeze later. Delete the line", { name: "UPGRADE_FREEZE_DEADLINE" });
+  const m = DEADLINE.exec(raw);
+  const t = m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : Number.NaN;
+  if (!m || Number.isNaN(t) || new Date(t).toISOString().replace(".000Z", "Z") !== raw) throw err(`UPGRADE_FREEZE_DEADLINE must be an ISO 8601 UTC time such as 2027-01-31T00:00:00Z, got '${raw}'`, { name: "UPGRADE_FREEZE_DEADLINE" });
+  return { mode: mode as UpgradeMode, freezeDeadline: raw };
+}
 
 const LAUNCH_ROUTER_WEIGHTS_8453 = ["USDC:9500", "PROTO:500", "AGENT:0", "RWA:0"].sort().join(",");
 
@@ -401,7 +407,7 @@ export function eligibilityBps(sheet: Pick<Sheet, "eligibleVaults" | "weights">,
   const eligible = eligibleInOrder(sheet);
   const step = eligible.indexOf(basket);
   if (step < 0) return undefined;
-  const keys = ([...ROUTER_STAGE_ELIGIBLE, ...eligible] as VaultKey[]).slice(0, ROUTER_STAGE_ELIGIBLE.length + step + 1);
+  const keys = (["USDC", ...eligible] as VaultKey[]).slice(0, step + 2);
   const w = new Map(sheet.weights.map((x) => [x.key, x.bps]));
   const final = keys.map((k) => w.get(k) ?? 0);
   if (step === eligible.length - 1) return final;

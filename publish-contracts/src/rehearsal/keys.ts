@@ -12,16 +12,10 @@ export const SAFE_OWNER_COUNT = 3;
 export const SAFE_THRESHOLD = 2;
 export const KEY_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
-/**
- * Key names for one rehearsal: deployer, pauser, emergency and three Safe owners. No agent: the deploy authorizes none. No voter: issue 1698 deleted
- * router voting, so no stage, contract or sheet name needs a voter key (the sheet's VOTER_ADDRESSES is a legacy name, checked for shape and ignored).
- */
+/** Key names for one rehearsal: deployer, pauser, emergency (no agent: the deploy authorizes none; no voter: there is no voting, issue 1698) and three Safe owners. */
 export function defaultKeyNames(): string[] {
   return ["DEPLOYER", "PAUSER", "EMERGENCY", "SAFE_OWNER_A", "SAFE_OWNER_B", "SAFE_OWNER_C"];
 }
-
-/** The refusal for the deleted `--voters N` flag (issue 1698): a rehearsal mints no voter key. */
-export const VOTERS_FLAG_GONE = "--voters is gone: issue 1698 deleted router voting, so a rehearsal mints no voter key and the fragment prints no VOTER_ADDRESSES";
 
 /** Reads the password from a file that only its owner can read. Refuses a short one. */
 export function readPasswordFile(path: string): string {
@@ -72,9 +66,6 @@ export function makeRehearsalKeys(o: MakeKeysOptions): RehearsalKeys {
  * Sheet fragment: addresses and numbers only. Names follow the frozen sheet role vocabulary; the operator pastes it
  * into the rehearsal sheet. Safe owner order is the order of the keystores.
  */
-/** The registered name of the rmUSDC vault in the registry (a label, not a secret). */
-export const REHEARSAL_VAULT_NAME = "Robot Money USDC";
-
 export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
   const a = k.addresses;
   const get = (n: string) => { const v = a[n]; if (!v) throw new Error(`no key named ${n}`); return v; };
@@ -87,7 +78,6 @@ export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
     `EMERGENCY_ADDRESS=${get("EMERGENCY")}`,
     `SAFE_OWNERS=${owners.join(",")}`,
     `SAFE_THRESHOLD=${SAFE_THRESHOLD}`,
-    `VAULT_NAME=${REHEARSAL_VAULT_NAME}`,
   ];
   return lines.join("\n") + "\n";
 }

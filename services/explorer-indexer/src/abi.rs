@@ -18,8 +18,10 @@
 //! deliberately left frozen so the record still reads as the snapshot it was.
 //! The `AgentAuthorized` / `AgentRevoked` / `VaultRegistered` /
 //! `VaultStatusChanged` drifts below were all corrected by issue #366 (closed)
-//! and no longer exist.  The **live, maintained** citations are the ones on the
-//! `sol!` declarations, the `Topics` fields, and the `abi_drift_gate` table
+//! and no longer exist. The `RouterGovernance` voting events the record also
+//! covered were deleted from the contract with its voting (issue #1698), so the
+//! indexer no longer decodes any `RouterGovernance` event. The **live,
+//! maintained** citations are the ones on the `sol!` declarations, the `Topics` fields, and the `abi_drift_gate` table
 //! further down this file — those were re-derived from the current sources in
 //! issue #1346 and are the ones to trust.
 //!
@@ -73,18 +75,6 @@
 //! - **Fields changed:** `newStatus` is now `indexed`; `timestamp` is `uint256` not `uint64`.
 //! - **Topic-0 impact:** All `VaultStatusChanged` events silently dropped.
 //!
-//! ## RouterGovernance — no events indexed (issue 1698, QA plan C1)
-//!
-//! `RouterGovernance` voting was deleted: there is no propose, vote or execute,
-//! so `ProposalCreated`, `VoteCast`, `ProposalExecuted` and `WeightsApplied`
-//! can never be emitted. The indexer no longer declares or subscribes to them,
-//! and migration 0023 dropped the `governance_proposals` / `governance_votes`
-//! tables they fed. The contract now emits `ReceiptContractSet` and
-//! `ReceiptApplied`; neither is indexed. The weight change `applyReceipt`
-//! makes arrives as the router's `WeightsSet` (stored in
-//! `router_weight_snapshots`), and the receipt release arrives as
-//! `ConsensusRecommendationReceipt.ReceiptReleased`.
-//!
 //! # Deposit pause only; withdrawals are never frozen (issue #368, core 1494)
 //!
 //! Issue #368 found that an emergency drain left USDC idle in the vault while a
@@ -122,13 +112,6 @@
 //!   "When empty, only the pinned vault (`vault()`) and the portfolio router (`router()`) are
 //!   accepted." No contract logic change is required for Option A.
 //!
-//! # Router weight changes (issue 1698)
-//!
-//! `RouterGovernance.sol` has no voting. The Safe applies one consensus receipt
-//! through the timelock with `applyReceipt`, which calls
-//! `PortfolioRouter.setWeights`. The router's `WeightsSet` event is therefore
-//! the one on-chain signal that the active weight vector changed.
-
 use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
 
@@ -296,9 +279,8 @@ sol! {
     /// Event surface from `PortfolioRouter`.  The `RouterDeposit` event is
     /// emitted once per vault leg on every successful `deposit()` call.
     /// `WeightsSet` and `DefaultWeightsSet` are emitted by `setWeights()` and
-    /// `setDefaultWeights()` respectively. `RouterGovernance.applyReceipt` calls
-    /// `setWeights()`, so `WeightsSet` is the event an applied receipt produces
-    /// (issue 1698).
+    /// `setDefaultWeights()` respectively; `RouterGovernance.applyReceipt` sets
+    /// a receipt's vector through `setWeights()`.
     ///
     /// Signatures match `PortfolioRouter.sol` exactly so that
     /// `SolEvent::SIGNATURE_HASH` agrees with the on-chain topic-0.
@@ -315,12 +297,12 @@ sol! {
             uint256 weightBps
         );
 
-        /// Emitted when the weight setter sets the active weight vector
-        /// (`RouterGovernance.applyReceipt`). PortfolioRouter.sol:133
+        /// Emitted when the active weight vector is set.
+        /// PortfolioRouter.sol:133
         event WeightsSet(address[] vaults, uint256[] bps);
 
-        /// Emitted when the default (fallback) weight vector is set by
-        /// ADMIN_ROLE.
+        /// Emitted when the default (fallback) weight vector is
+        /// set by ADMIN_ROLE.
         /// PortfolioRouter.sol:139
         event DefaultWeightsSet(address[] vaults, uint256[] bps);
     }
@@ -406,6 +388,27 @@ sol! {
         event ReceiptReleased(bytes32 indexed receiptId, address indexed releasedBy, uint64 releasedAt);
     }
 
+    /// Upgrade and freeze events every proxied core contract emits from its own
+    /// address (contracts/lib/GovernedUUPS.sol, issue 1808): the gateway, the
+    /// vaults, the registry, the router, RouterGovernance, the IC policy and the
+    /// receipt register. Indexed into `admin_events` with `contract_kind =
+    /// 'proxy'` (issue 1810).
+    #[sol(abi)]
+    #[allow(missing_docs)]
+    interface IGovernedUpgradeEvents {
+        /// ERC-1967 `Upgraded`, emitted by the proxy constructor and by every
+        /// governed upgrade.
+        event Upgraded(address indexed implementation);
+        /// Upgrades on this proxy are permanently disabled. GovernedUUPS.sol.
+        event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
+        /// OpenZeppelin `Initializable` (v5), emitted by each `initializer` and
+        /// `reinitializer(n)` run. An upgrade installed without a call leaves its
+        /// reinitializer to a later timelock operation, which emits only this event,
+        /// so it is read to re-check a vault's `exclusionLedger()` (security round 3).
+        /// Never stored.
+        event Initialized(uint64 version);
+    }
+
     /// Event surface of OpenZeppelin `TimelockController`, the contract the Safe schedules every
     /// governed change through. Signatures are OpenZeppelin's, so there is no Robot Money source file to
     /// check them against.
@@ -434,7 +437,7 @@ sol! {
 
     /// Event surface of `ExclusionLedger`, the exclusion record of a
     /// `RobotMoneyVault` (core issue 1820, QA plan D3 / X7). The vault's
-    /// initializer has `ExclusionLedgerFactory` create it (ADR-0014 §9).
+    /// initializer creates it (`contracts/RobotMoneyVault.sol`).
     ///
     /// Signatures match `contracts/ExclusionLedger.sol` exactly. The two enum
     /// parameters (`RecoverySource`, `FinalizeReason`) ABI-encode as `uint8`.
@@ -471,25 +474,9 @@ sol! {
         event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint256 amount);
     }
 
-    /// Event surface every proxied Robot Money contract emits (ADR-0014 §3,
-    /// QA plan P3, core issue 1810). `Upgraded` is OpenZeppelin's
-    /// (`ERC1967Utils`, emitted by the proxy's constructor and by each
-    /// `upgradeToAndCall`); `UpgradesFrozen` is `contracts/lib/GovernedUpgrade.sol`'s
-    /// one-way freeze. `Initialized` is OpenZeppelin's (`Initializable`, emitted by
-    /// each `initializer` and `reinitializer(n)` run): an upgrade installed without a
-    /// call leaves its reinitializer to a later timelock operation, which emits only
-    /// this event (security round 3). All three come from the proxy's own address.
-    #[sol(abi)]
-    #[allow(missing_docs)]
-    interface IUpgradeEvents {
-        event Upgraded(address indexed implementation);
-        event UpgradesFrozen(address indexed proxy, address indexed implementation, bytes32 codeHash);
-        event Initialized(uint64 version);
-    }
-
-    /// The `RobotMoneyVault` getter that names its `ExclusionLedger`. The ledger sits at
-    /// the CREATE address of `ExclusionLedgerFactory`, never at an address derived from
-    /// the vault, so the indexer reads it once per vault, and again at the block of each
+    /// The `RobotMoneyVault` getter that names its `ExclusionLedger`. The vault's
+    /// initializer creates the ledger, so no address derived from the vault is the
+    /// ledger, and the indexer reads it once per vault, and again at the block of each
     /// `Upgraded` or `Initialized` of the vault (security rounds 2 and 3). A `BasketVault`
     /// has no such getter: the call reverts, and that vault has no ledger.
     #[allow(missing_docs)]
@@ -581,14 +568,15 @@ pub struct Topics {
     pub safe_removed_owner: B256,
     pub safe_changed_threshold: B256,
     // ExclusionLedger events — core issue 1820, QA plan X7. Emitted by the ledger each
-    // `RobotMoneyVault` deploys, never by the vault itself.
+    // `RobotMoneyVault` creates, never by the vault itself.
     pub exclusion_opened: B256,
     pub exclusion_recovery_credited: B256,
     pub exclusion_finalized: B256,
     pub exclusion_claimed: B256,
-    // Proxy upgrade and freeze — ADR-0014, QA plan P3 (core issue 1810). Emitted by every
-    // proxied contract the indexer watches (gateway, vaults, registry, router, IC policy, receipt).
+    // GovernedUUPS proxy events (issue 1810), emitted by every proxied core contract.
+    /// ERC-1967 `Upgraded(address)`.
     pub proxy_upgraded: B256,
+    /// `UpgradesFrozen(address,address,bytes32)`.
     pub proxy_upgrades_frozen: B256,
     /// OpenZeppelin `Initialized(uint64)`: an initializer or reinitializer ran. Only read to
     /// trigger a vault's `exclusionLedger()` re-read (security round 3); never stored.
@@ -671,7 +659,6 @@ impl Topics {
             ),
             exclusion_finalized: keccak256(b"ExclusionFinalized(uint256,uint8,uint256)"),
             exclusion_claimed: keccak256(b"ExclusionClaimed(uint256,address,uint256)"),
-            // ADR-0014 — QA plan P3.
             proxy_upgraded: keccak256(b"Upgraded(address)"),
             proxy_upgrades_frozen: keccak256(b"UpgradesFrozen(address,address,bytes32)"),
             proxy_initialized: keccak256(b"Initialized(uint64)"),
@@ -732,7 +719,6 @@ impl Topics {
             self.exclusion_recovery_credited,
             self.exclusion_finalized,
             self.exclusion_claimed,
-            // Proxy upgrade and freeze — ADR-0014, QA plan P3.
             self.proxy_upgraded,
             self.proxy_upgrades_frozen,
             // A (re)initializer run — security round 3: a reinitializer that moves a vault's
@@ -886,7 +872,7 @@ mod tests {
             IInvestmentCommitteePolicyEvents,
             IConsensusRecommendationReceiptEvents,
             IExclusionLedgerEvents,
-            IUpgradeEvents,
+            IGovernedUpgradeEvents,
         );
         out
     }
@@ -1249,8 +1235,8 @@ mod tests {
                 "ExclusionClaimed",
                 t.exclusion_claimed,
             ),
-            // Proxy upgrade and freeze — ADR-0014, QA plan P3. Taken from two proxied kinds:
-            // `Upgraded` comes from OpenZeppelin's ERC1967Utils, `UpgradesFrozen` from GovernedUpgrade.
+            // GovernedUUPS proxy events — issue 1810. Declared once on the
+            // shared base, so the gateway's and the vault's artifacts carry them.
             (
                 "RobotMoneyGateway.sol",
                 "RobotMoneyGateway",
@@ -1342,8 +1328,10 @@ mod tests {
             checks.len(),
             "not every entry in the artifact cross-check table was evaluated"
         );
+        // 26 since issue #1698 deleted the four RouterGovernance voting events;
+        // 30 since issue 1810 added the two proxy events on two artifacts.
         assert!(
-            checked >= 27,
+            checked >= 30,
             "artifact cross-check covered only {checked} events — entries were removed \
              from the table without removing the corresponding topic from `Topics`"
         );
@@ -1495,15 +1483,18 @@ mod tests {
             t.consensus_receipt_released,
             IConsensusRecommendationReceiptEvents::ReceiptReleased::SIGNATURE_HASH
         );
-        // Proxy upgrade and freeze — ADR-0014, QA plan P3.
-        assert_eq!(t.proxy_upgraded, IUpgradeEvents::Upgraded::SIGNATURE_HASH);
+        // GovernedUUPS proxy events — issue 1810.
+        assert_eq!(
+            t.proxy_upgraded,
+            IGovernedUpgradeEvents::Upgraded::SIGNATURE_HASH
+        );
         assert_eq!(
             t.proxy_upgrades_frozen,
-            IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH
+            IGovernedUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH
         );
         assert_eq!(
             t.proxy_initialized,
-            IUpgradeEvents::Initialized::SIGNATURE_HASH
+            IGovernedUpgradeEvents::Initialized::SIGNATURE_HASH
         );
         let all = t.all_topic0();
         assert!(
@@ -1733,22 +1724,22 @@ mod tests {
                 b"ExclusionClaimed(uint256,address,uint256)",
                 IExclusionLedgerEvents::ExclusionClaimed::SIGNATURE_HASH,
             ),
-            // ADR-0014 — QA plan P3 (core issue 1810).
+            // contracts/lib/GovernedUUPS.sol — issue 1810.
             (
                 "Upgraded",
                 b"Upgraded(address)",
-                IUpgradeEvents::Upgraded::SIGNATURE_HASH,
+                IGovernedUpgradeEvents::Upgraded::SIGNATURE_HASH,
             ),
             (
                 "UpgradesFrozen",
                 b"UpgradesFrozen(address,address,bytes32)",
-                IUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH,
+                IGovernedUpgradeEvents::UpgradesFrozen::SIGNATURE_HASH,
             ),
             // OpenZeppelin Initializable (v5) — security round 3.
             (
                 "Initialized",
                 b"Initialized(uint64)",
-                IUpgradeEvents::Initialized::SIGNATURE_HASH,
+                IGovernedUpgradeEvents::Initialized::SIGNATURE_HASH,
             ),
         ];
 

@@ -1,33 +1,85 @@
 ---
 title: "RouterGovernanceTest"
+description: "Unit tests of the weight setter before any handover: constructor checks, role administration, the admin fallbacks and the router's duplicate-vault refusal. The governed path (Safe -> timelock -> applyReceipt) is proved in RouterGovernanceApplyReceipt.t.sol."
 ---
 
 # RouterGovernanceTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/RouterGovernance.t.sol)
 
-**Inherits:** [RouterGovernanceFixture](/contracts/test/abstract.RouterGovernanceFixture)
+**Inherits:** Test
 
-## Constants
-
-### RECEIPT_ID
-
-```solidity
-bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
-```
-
-### DIGEST
-
-```solidity
-bytes32 internal constant DIGEST = keccak256("payload-1");
-```
+Unit tests of the weight setter before any handover: constructor checks,
+role administration, the admin fallbacks and the router's duplicate-vault
+refusal. The governed path (Safe -> timelock -> applyReceipt) is proved in
+RouterGovernanceApplyReceipt.t.sol.
 
 ## State Variables
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
 
 ### govAdmin
 
 ```solidity
 address internal govAdmin = makeAddr("govAdmin");
+```
+
+### routerAdmin
+
+```solidity
+address internal routerAdmin = makeAddr("routerAdmin");
+```
+
+### registryAdmin
+
+```solidity
+address internal registryAdmin = makeAddr("registryAdmin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
 ```
 
 ## Functions
@@ -40,260 +92,109 @@ address internal govAdmin = makeAddr("govAdmin");
 function setUp() public;
 ```
 
-<a id="test_constructor_revertsonzerorouter"></a>
+<a id="_vector-address-address-uint256-uint256"></a>
 
-### test_constructor_revertsOnZeroRouter
+### _vector
 
 ```solidity
-function test_constructor_revertsOnZeroRouter() public;
+function _vector(address a, address b, uint256 bpsA, uint256 bpsB)
+        internal
+        pure
+        returns (address[] memory vaults, uint256[] memory bps);
 ```
 
-<a id="test_constructor_revertsonzeroadmin"></a>
+**Parameters**
 
-### test_constructor_revertsOnZeroAdmin
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| b | `address` |  |
+| bpsA | `uint256` |  |
+| bpsB | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="test_constructor_revertsonzeroaddress"></a>
+
+### test_constructor_revertsOnZeroAddress
 
 ```solidity
-function test_constructor_revertsOnZeroAdmin() public;
+function test_constructor_revertsOnZeroAddress() public;
 ```
 
-<a id="test_constructor_grantsselfadministeredadminrole"></a>
+<a id="test_constructor_storeswiringandseedsbothrolestoadmin"></a>
 
-### test_constructor_grantsSelfAdministeredAdminRole
+### test_constructor_storesWiringAndSeedsBothRolesToAdmin
 
 ```solidity
-function test_constructor_grantsSelfAdministeredAdminRole() public view;
+function test_constructor_storesWiringAndSeedsBothRolesToAdmin() public view;
 ```
 
-<a id="test_constructor_leavestheregisterunset"></a>
+<a id="test_adminrolecannotgrantweightsetter"></a>
 
-### test_constructor_leavesTheRegisterUnset
+### test_adminRoleCannotGrantWeightSetter
+
+An ADMIN_ROLE holder that is not the weight setter cannot grant itself
+the weight-setter role.
 
 ```solidity
-function test_constructor_leavesTheRegisterUnset() public;
+function test_adminRoleCannotGrantWeightSetter() public;
 ```
 
-<a id="test_setreceiptcontract_setsandemits"></a>
+<a id="test_applyreceipt_revertsforstranger"></a>
 
-### test_setReceiptContract_setsAndEmits
+### test_applyReceipt_revertsForStranger
 
 ```solidity
-function test_setReceiptContract_setsAndEmits() public;
+function test_applyReceipt_revertsForStranger() public;
 ```
 
-<a id="test_setreceiptcontract_revertsonzeroaddress"></a>
+<a id="test_setdefaultweights_adminonlyandforwards"></a>
 
-### test_setReceiptContract_revertsOnZeroAddress
+### test_setDefaultWeights_adminOnlyAndForwards
 
 ```solidity
-function test_setReceiptContract_revertsOnZeroAddress() public;
+function test_setDefaultWeights_adminOnlyAndForwards() public;
 ```
 
-<a id="test_setreceiptcontract_revertsonaddresswithoutcode"></a>
+<a id="test_setdefaultweights_rejectsbadsumandlength"></a>
 
-### test_setReceiptContract_revertsOnAddressWithoutCode
+### test_setDefaultWeights_rejectsBadSumAndLength
 
 ```solidity
-function test_setReceiptContract_revertsOnAddressWithoutCode() public;
+function test_setDefaultWeights_rejectsBadSumAndLength() public;
 ```
 
-<a id="test_setreceiptcontract_revertsfornonadmin"></a>
+<a id="test_clearvotedweights_adminonlyandrevertstodefault"></a>
 
-### test_setReceiptContract_revertsForNonAdmin
+### test_clearVotedWeights_adminOnlyAndRevertsToDefault
 
 ```solidity
-function test_setReceiptContract_revertsForNonAdmin() public;
+function test_clearVotedWeights_adminOnlyAndRevertsToDefault() public;
 ```
 
-<a id="test_applyreceipt_releasesandsetsweightsinonetransaction"></a>
+<a id="test_router_rejectsduplicatevaultonbothsetters"></a>
 
-### test_applyReceipt_releasesAndSetsWeightsInOneTransaction
+### test_router_rejectsDuplicateVaultOnBothSetters
 
-One call releases the receipt and writes its vector: both halves
-land, in one transaction, with the register, router and weight
-setter events in that order.
+The router refuses a vector naming one vault twice on both setters,
+whoever holds the role. The governed-path version is in
+RouterGovernanceApplyReceipt.t.sol.
 
 ```solidity
-function test_applyReceipt_releasesAndSetsWeightsInOneTransaction() public;
+function test_router_rejectsDuplicateVaultOnBothSetters() public;
 ```
 
-<a id="test_applyreceipt_revertsfornonweightsetter"></a>
+<a id="test_lastadminfloor_governance_cannotdropsoleadmin"></a>
 
-### test_applyReceipt_revertsForNonWeightSetter
-
-```solidity
-function test_applyReceipt_revertsForNonWeightSetter() public;
-```
-
-<a id="test_applyreceipt_revertswhenregisterunset"></a>
-
-### test_applyReceipt_revertsWhenRegisterUnset
+### test_lastAdminFloor_governance_cannotDropSoleAdmin
 
 ```solidity
-function test_applyReceipt_revertsWhenRegisterUnset() public;
-```
-
-<a id="test_applyreceipt_revertsonunrecordedreceipt"></a>
-
-### test_applyReceipt_revertsOnUnrecordedReceipt
-
-```solidity
-function test_applyReceipt_revertsOnUnrecordedReceipt() public;
-```
-
-<a id="test_applyreceipt_revertsonreleasedreceipt"></a>
-
-### test_applyReceipt_revertsOnReleasedReceipt
-
-```solidity
-function test_applyReceipt_revertsOnReleasedReceipt() public;
-```
-
-<a id="test_applyreceipt_revertsonreceiptreleasedelsewhere"></a>
-
-### test_applyReceipt_revertsOnReceiptReleasedElsewhere
-
-```solidity
-function test_applyReceipt_revertsOnReceiptReleasedElsewhere() public;
-```
-
-<a id="test_applyreceipt_revertsondigestmismatch"></a>
-
-### test_applyReceipt_revertsOnDigestMismatch
-
-```solidity
-function test_applyReceipt_revertsOnDigestMismatch() public;
-```
-
-<a id="test_applyreceipt_revertsonduplicatevault"></a>
-
-### test_applyReceipt_revertsOnDuplicateVault
-
-A digest binds a vector but does not prove it is unique: the
-router's duplicate check holds on the receipt path too (CS-5).
-
-```solidity
-function test_applyReceipt_revertsOnDuplicateVault() public;
-```
-
-<a id="test_applyreceipt_revertsoninvalidweightsum_andreleasesnothing"></a>
-
-### test_applyReceipt_revertsOnInvalidWeightSum_andReleasesNothing
-
-```solidity
-function test_applyReceipt_revertsOnInvalidWeightSum_andReleasesNothing() public;
-```
-
-<a id="test_applyreceipt_revertsonlengthmismatch"></a>
-
-### test_applyReceipt_revertsOnLengthMismatch
-
-```solidity
-function test_applyReceipt_revertsOnLengthMismatch() public;
-```
-
-<a id="test_applyreceipt_revertsonpausedvault_andreleasesnothing"></a>
-
-### test_applyReceipt_revertsOnPausedVault_andReleasesNothing
-
-GOV-4 on the receipt path: a vector naming a paused vault is refused
-by the router, and the receipt stays applicable for a later round.
-
-```solidity
-function test_applyReceipt_revertsOnPausedVault_andReleasesNothing() public;
-```
-
-<a id="test_applyreceipt_revertswhenweightsettercannotrelease"></a>
-
-### test_applyReceipt_revertsWhenWeightSetterCannotRelease
-
-Without the register's ADMIN_ROLE the weight setter cannot release,
-so the whole call reverts: stage 11's grant is load-bearing.
-
-```solidity
-function test_applyReceipt_revertsWhenWeightSetterCannotRelease() public;
-```
-
-<a id="test_applyreceipt_revertswhenrotatedout_andreleasesnothing"></a>
-
-### test_applyReceipt_revertsWhenRotatedOut_andReleasesNothing
-
-Without the router's WEIGHT_SETTER_ROLE (rotated away) the apply
-reverts inside setWeights, and the release is rolled back with it.
-
-```solidity
-function test_applyReceipt_revertsWhenRotatedOut_andReleasesNothing() public;
-```
-
-<a id="test_applyreceipt_secondreceiptreplacesthevector"></a>
-
-### test_applyReceipt_secondReceiptReplacesTheVector
-
-```solidity
-function test_applyReceipt_secondReceiptReplacesTheVector() public;
-```
-
-<a id="test_setdefaultweights_forwardstotherouter"></a>
-
-### test_setDefaultWeights_forwardsToTheRouter
-
-```solidity
-function test_setDefaultWeights_forwardsToTheRouter() public;
-```
-
-<a id="test_setdefaultweights_revertsfornonadmin"></a>
-
-### test_setDefaultWeights_revertsForNonAdmin
-
-```solidity
-function test_setDefaultWeights_revertsForNonAdmin() public;
-```
-
-<a id="test_setdefaultweights_rejectsduplicatevaultthroughtheweightsetter"></a>
-
-### test_setDefaultWeights_rejectsDuplicateVaultThroughTheWeightSetter
-
-```solidity
-function test_setDefaultWeights_rejectsDuplicateVaultThroughTheWeightSetter() public;
-```
-
-<a id="test_clearvotedweights_returnsroutingtothedefault"></a>
-
-### test_clearVotedWeights_returnsRoutingToTheDefault
-
-```solidity
-function test_clearVotedWeights_returnsRoutingToTheDefault() public;
-```
-
-<a id="test_clearvotedweights_revertsfornonadmin"></a>
-
-### test_clearVotedWeights_revertsForNonAdmin
-
-```solidity
-function test_clearVotedWeights_revertsForNonAdmin() public;
-```
-
-<a id="test_novotingsurface"></a>
-
-### test_noVotingSurface
-
-Issue #1698: the deployed bytecode has no propose, vote, execute,
-cancel, setVotingPower, quorum, voting period or execution delay.
-A missing selector reverts with EMPTY data (the contract has no
-fallback); a function that still existed would either succeed or
-revert with a custom error, so the empty-data check is what
-distinguishes "deleted" from "refused".
-
-```solidity
-function test_noVotingSurface() public;
-```
-
-<a id="test_routerhasnovotingsurface"></a>
-
-### test_routerHasNoVotingSurface
-
-The router keeps no voting surface either: no proposal, no quorum.
-
-```solidity
-function test_routerHasNoVotingSurface() public;
+function test_lastAdminFloor_governance_cannotDropSoleAdmin() public;
 ```
 

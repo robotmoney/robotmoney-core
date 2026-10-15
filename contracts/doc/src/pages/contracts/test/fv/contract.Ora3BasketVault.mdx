@@ -4,7 +4,7 @@ title: "Ora3BasketVault"
 
 # Ora3BasketVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/fv/DeployAssertions.t.sol)
 
 **Inherits:** [BasketVault](/contracts/vaults/abstract.BasketVault)
 
@@ -15,6 +15,24 @@ Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
 </i>
 
 ## Functions
+
+<a id="initialize-initparams-address-upgrademode"></a>
+
+### initialize
+
+```solidity
+function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `InitParams` |  |
+| upgradeTimelock_ | `address` |  |
+| upgradeMode_ | `UpgradeMode` |  |
 
 <a id="maxassets"></a>
 
@@ -30,27 +48,5 @@ function maxAssets() public pure override returns (uint256);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="_kindconfig"></a>
-
-### _kindConfig
-
-<i>
-
-The kind's share-token name and symbol and its starting `maxSlippageBps`.
-
-</i>
-
-```solidity
-function _kindConfig() internal pure override returns (string memory, string memory, uint256);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `string` |  |
-| &lt;none&gt; | `string` |  |
 | &lt;none&gt; | `uint256` |  |
 

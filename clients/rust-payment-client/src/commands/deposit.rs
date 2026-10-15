@@ -299,17 +299,22 @@ pub fn run(args: Args) -> i32 {
         gas.router_legs
     );
 
-    // -- The router and every leg vault it deposits into (ADR-0014) -------
+    // -- The router and every leg vault it deposits into (issue 1808) -----
     // Check 5c covered the gateway's own vault. A router deposit also reaches
     // the router and each vault of its effective weight vector; each must be
     // a direct contract or a proxy whose implementation is pinned in
     // `proxy_implementation_hashes`.
     if let (Some(router), Some(_)) = (destination, gas.router_legs) {
-        if let Err(err) = session.rt.block_on(crate::upgrade::verify_router_and_legs(
-            &session.rpc,
-            &cfg,
-            router,
-        )) {
+        if let Err(err) =
+            session
+                .rt
+                .block_on(crate::policy::implementation::verify_router_and_legs(
+                    &session.rpc,
+                    &cfg,
+                    router,
+                    &format!("0x{:x}", report.block_number),
+                ))
+        {
             session.record(AuditDecision::Refused, Some(err.name().to_string()));
             return session
                 .refusal(err.name())
@@ -414,6 +419,7 @@ pub fn run(args: Args) -> i32 {
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
             checks: &|| ChecksOutput::from_report(&report),
+            gateway_implementation: report.gateway_implementation,
         },
     ) {
         Ok(c) => c,

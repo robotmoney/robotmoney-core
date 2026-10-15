@@ -1,16 +1,8 @@
 // Redeploy ONE vault (rmPROTO) into a live deployment (issue 1796, owner decision 2026-10-13). Two halves, one record in the run manifest:
 //   1. the `redeploy-vault` verb (runRedeployVault): the DEPLOYER signs the vault deploy script contracts/script/RedeployProtocolAssetVault.s.sol. The new vault is
-//      deployed CLOSED, UNREGISTERED and UNLINKED (registry() is zero), with ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched.
-//   2. the govern row `redeploy-vault` (govern.ts): the Safe, through the timelock, in ONE batch of seven calls: new.setRegistry(registry), registerVault(new),
-//      router.setVaultCap(new, vaultCap(old)), migrateEligibility(new, true, ...), migrateEligibility(old, false, ...), retire(old), new.unpauseDeposits(). This module builds
-//      the calls, plans the vectors and checks the read-back.
-// WHY THE LINK IS IN THE BATCH. `setRegistry` is set-once and ADMIN_ROLE-gated, and no vault deploy script may call it (core S5, scripts/ci/check-set-registry-owner.ts:
-// DeployTimelock is the one script that links). The timelock holds ADMIN_ROLE on the new vault after the deploy, so it links as the first call of the batch: the vault is
-// bound to the registry before it is registered, and the registry can retire it from then on.
-// WHY THE CAP IS IN THE BATCH (QA plan v1 E3, review F2/E7/QD-7). `PortfolioRouter.vaultCap` is keyed by address and 0 means uncapped, so a new address starts with no per-leg
-// cap at all. The batch copies the old vault's cap (read when the round is planned) to the new vault before the new vault becomes eligible, so no routed deposit ever reaches
-// the new vault uncapped. The timelock holds the router's ADMIN_ROLE after stage 11 (DeployTimelock), which `setVaultCap` needs. The order is the spec's
-// (docs/technical/single-vault-redeploy.md section 4): link, register, cap, eligibility, retire, open.
+//      deployed CLOSED and UNREGISTERED, linked to the registry, with ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched.
+//   2. the govern row `redeploy-vault` (govern.ts): the Safe, through the timelock, in ONE batch: registerVault(new), migrateEligibility(new, true, ...),
+//      migrateEligibility(old, false, ...), retire(old), new.unpauseDeposits(). This module builds the calls, plans the vectors and checks the read-back.
 // WHY ONE BATCH. The registry refuses to retire a router-eligible vault (RetireWhileRouterEligible), and the router refuses a default vector whose length differs from
 // the registry's eligible count. So the order is forced: make the NEW vault eligible first (a five-leg default vector: the old leg keeps its weight, the new leg takes 0),
 // then drop the OLD vault (a four-leg vector: the new vault takes the old vault's weight in the old vault's slot), then retire the old vault, then open the new one.
@@ -18,21 +10,23 @@
 // The deliberate departure from the one-scheme rule (owner decision 2026-10-13): this path is an EXPERIMENT on a Base mainnet REHEARSAL deployment (sheet
 // DEPLOYMENT_KIND=rehearsal, 900 s timelock). It is refused on 8453 in production. Whether the final deployment may use it is decided after the experiment.
 // The pure parts (vectors, calls, read-back) read no chain and send nothing. runRedeployVault is the only function that spawns forge.
+// QA plan v1 additions on top of the issue 1796 design: the sha model of the govern row and the verify after a round at another sha (E1), the `started` record saved
+// only after the confirmation (E2), the timelock's router admin checked before the round (E3), the new vault bound to the deploy's CREATE receipt (C2, issue 1701)
+// and the post-broadcast reads re-read on a load-balanced RPC (E6, issue 1723, with dev's safe/read-after-write.ts).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 import type { DeploymentKind } from "./chains.ts";
 import { PublishError } from "./errors.ts";
 import { BASE_CHAIN_ID } from "./rehearsal/twin.ts";
-import { awaitRead, rpcHost } from "./safe/index.ts";
+import { SafeToolError, readAfterWrite, rpcHost, type StaleReadRetry } from "./safe/index.ts";
 import {
   broadcastFile, castOut, childEnv, confirmStage, deployerNonce, forgeFailureTail, failedBroadcastDetail, libraryArgs, loadRunManifest, manifestDir, manifestFilePath,
   outputSecrets, readTxCount, saveRunManifest, stageEnv, vaultConfigGate, type RunContext, type RunManifest,
 } from "./runner.ts";
-import { VAULT_NAME } from "./sheet.ts";
+import { VAULT_NAME, type VaultKey } from "./sheet.ts";
 import { getStageTable, type StageRow } from "./stages.ts";
-import { PROXY_MANIFEST_FIELDS, manifestBase, manifestFile, redeployRow as tableRedeployRow, tableProxies } from "./stage-table.ts";
-import { proxyChecks, proxyProblems, proxyRecordOf, readProxyState, type ProxyRecord, type ProxyState, type ProxyWant } from "./proxies.ts";
+import { manifestBase, manifestFile, redeployRow as tableRedeployRow } from "./stage-table.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
 import { ADMIN_ROLE } from "./verify/constants.ts";
@@ -53,6 +47,7 @@ export const REGISTRY_REDEPLOY_ABI = parseAbi([
   "function registerVault(address vault, (string name, address asset, uint256 registeredAt) metadata)",
   "function migrateEligibility(address vault, bool eligible, address[] defaultVaults, uint256[] defaultBps)",
   "function retire(address vault)",
+  "function reactivate(address vault)",
   "function getVault(address vault) view returns ((string name, address asset, uint256 registeredAt) metadata, uint8 status)",
   "function listVaults() view returns (address[])",
   "function isRouterEligible(address vault) view returns (bool)",
@@ -61,7 +56,6 @@ export const REGISTRY_REDEPLOY_ABI = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 export const VAULT_REDEPLOY_ABI = parseAbi([
-  "function setRegistry(address newRegistry)",
   "function unpauseDeposits()",
   "function depositsPaused() view returns (bool)",
   "function retired() view returns (bool)",
@@ -69,18 +63,16 @@ export const VAULT_REDEPLOY_ABI = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 export const ROUTER_REDEPLOY_ABI = parseAbi([
-  "function setVaultCap(address vault, uint256 cap)",
-  "function vaultCap(address vault) view returns (uint256)",
   "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)",
   "function getEffectiveWeights() view returns (address[] vaults, uint256[] bps)",
   "function votedWeightsActive() view returns (bool)",
+  "function vaultCap(address vault) view returns (uint256)",
+  "function setVaultCap(address vault, uint256 cap)",
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 
 const lc = (x: string): string => x.toLowerCase();
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
-/** What `registry()` reads on a vault nobody has linked yet. */
-export const ZERO = "0x0000000000000000000000000000000000000000" as Address;
 
 /** The run-manifest key and the salt input of one redeploy round of a vault (`redeploy-vault-PROTO-1`). */
 export const redeployRecordKey = (key: RedeployKey, ordinal: number): string => `${REDEPLOY_ROW}-${key}-${ordinal}`;
@@ -118,28 +110,19 @@ export interface RedeployRecord {
   deploy_end_nonce?: number;
   deploy_count?: number;
   deploy_tx_hashes?: string[];
-  /** Per deploy transaction, the status of the receipt forge's broadcast file holds (1 success, 0 anything else): read, never assumed. */
+  /** Per deploy transaction, the status of the receipt forge's broadcast file holds (1 success, 0 anything else): read, never assumed (QA plan v1 C2). */
   deploy_receipt_statuses?: number[];
   deploy_first_block?: number;
   deploy_last_block?: number;
   /** The file the old vault's manifest was kept as (a name in the manifest directory). */
   retired_manifest?: string;
-  /**
-   * Issue 1809 (ADR-0014), QA plan v1 L1: the new vault's proxy as the verb read it back after the deploy (implementation slot, admin and beacon slots, authority,
-   * mode, frozen flag, the implementation code hash). The same record the runner's proxy gate keeps per proxy stage.
-   */
-  proxy?: ProxyRecord;
+  replacement_manifest?: string;
   started_at: string;
   deployed_at?: string;
   // ---- govern half
   /** The registry name and asset the old vault was registered with. The new vault is registered with the same ones. */
   registry_name?: string;
   asset?: Address;
-  /**
-   * QA plan v1 E3: `router.vaultCap(old)` when the round was planned, a decimal uint256 string (0 is uncapped). The batch's `router.setVaultCap(new, ...)` carries it, so the
-   * evidence chain check rebuilds that call from it.
-   */
-  router_vault_cap?: string;
   /** The default vector the router holds after the round (four legs, the new vault in the old vault's slot). */
   vaults?: Address[];
   bps?: number[];
@@ -164,19 +147,6 @@ export interface RedeployRecord {
 }
 
 export const redeploysOf = (m: Pick<RunManifest, "vault_redeploys">): RedeployRecord[] => (Array.isArray(m.vault_redeploys) ? (m.vault_redeploys as RedeployRecord[]) : []);
-
-/**
- * Security round 1 (review: SECURITY_LIFECYCLE_GAP): the vaults a redeploy replaced, still proxies of this deployment. Once the round is deployed the vault's own
- * manifest names the NEW vault, so the stage table's proxy name (rmPROTO) reaches the new one only, while holders keep withdraw-only shares in the old proxy, whose
- * upgrade authority is still the timelock. Each old vault is named `<vault>.retired-<ordinal>` (rmPROTO.retired-1): `freeze-proxy proxy=all` freezes it with the
- * table's proxies, it can be named on its own, and the verify record and evidence-check count it before any claim that core logic is immutable.
- */
-export const retiredProxyName = (key: RedeployKey, ordinal: number): string => `${VAULT_NAME[key]}.retired-${ordinal}`;
-export function retiredProxiesOf(m: Pick<RunManifest, "vault_redeploys">): { name: string; key: RedeployKey; ordinal: number; address: Address }[] {
-  return redeploysOf(m)
-    .filter((r) => (r.status === "deployed" || r.status === "governed") && typeof r.old_vault === "string" && ADDR.test(r.old_vault))
-    .map((r) => ({ name: retiredProxyName(r.key, r.ordinal), key: r.key, ordinal: r.ordinal, address: r.old_vault }));
-}
 
 // ---- the sha model (QA plan v1 E1, review DT-2 and QD-6) --------------------------------------------------------------------
 // The deployment ran at the ORIGINAL sha: the run manifest names it, its frozen counts belong to it, and every contract it created runs its build. The verb runs at the
@@ -333,34 +303,41 @@ export function planRedeployVectors(i: { defaultVaults: readonly string[]; defau
 
 export interface RedeployCall { label: string; target: Address; data: Hex }
 
-export interface RedeployCallInputs {
-  registry: Address; router: Address; oldVault: Address; newVault: Address; registryName: string; asset: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[];
-  /** QA plan v1 E3: `router.vaultCap(old)`, a bigint read or the decimal string the plan and the evidence keep. */
-  vaultCap: bigint | number | string;
-}
+export interface RedeployCallInputs { router: Address; routerVaultCap: bigint; registry: Address; oldVault: Address; newVault: Address; registryName: string; asset: Address; finalVaults: readonly string[]; finalBps: readonly (bigint | number)[] }
 
-const UINT256_MAX = (1n << 256n) - 1n;
-/** A router vault cap as the batch carries it: a uint256 from a chain read (bigint) or from the plan and the evidence (a decimal string). Anything else is refused. */
-export function asVaultCap(x: bigint | number | string | undefined, what = "router.vaultCap(old)"): bigint {
-  const n = typeof x === "bigint" ? x : typeof x === "number" && Number.isSafeInteger(x) ? BigInt(x) : typeof x === "string" && /^(0|[1-9][0-9]*)$/.test(x) ? BigInt(x) : undefined;
-  if (n === undefined || n < 0n || n > UINT256_MAX) throw new PublishError("GOVERN", `${what}: ${String(x)} is not a uint256`);
-  return n;
-}
-
-/** The seven calls of the round, in the one order the contracts allow (see the header): the registry link first. The same builder serves govern and the evidence chain check. */
+/** The six calls of the round, in the one order the contracts allow (see the header). The same builder serves govern and the evidence chain check. */
 export function buildRedeployCalls(i: RedeployCallInputs): RedeployCall[] {
+  if (typeof i.routerVaultCap !== "bigint" || i.routerVaultCap < 0n) throw new PublishError("GOVERN", "router vault cap must be an explicitly recorded non-negative bigint");
   const v = vectorsFromFinal({ finalVaults: i.finalVaults, finalBps: i.finalBps, oldVault: i.oldVault, newVault: i.newVault });
-  const cap = asVaultCap(i.vaultCap);
   const reg = (functionName: "registerVault" | "migrateEligibility" | "retire", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
   return [
-    { label: "new.setRegistry(registry)", target: i.newVault, data: encodeFunctionData({ abi: VAULT_REDEPLOY_ABI, functionName: "setRegistry", args: [i.registry] }) },
     { label: "registry.registerVault(new)", target: i.registry, data: reg("registerVault", [i.newVault, { name: i.registryName, asset: i.asset, registeredAt: 0n }]) },
-    // QA plan v1 E3: a new address reads vaultCap 0 (uncapped). The cap is copied before the new vault becomes eligible, so no routed deposit reaches it uncapped.
-    { label: "router.setVaultCap(new, vaultCap(old))", target: i.router, data: encodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, functionName: "setVaultCap", args: [i.newVault, cap] }) },
+    { label: "router.setVaultCap(new, approved old cap)", target: i.router, data: encodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, functionName: "setVaultCap", args: [i.newVault, i.routerVaultCap] }) },
     { label: "registry.migrateEligibility(new, true, five legs)", target: i.registry, data: reg("migrateEligibility", [i.newVault, true, v.fiveVaults, v.fiveBps.map(BigInt)]) },
     { label: "registry.migrateEligibility(old, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
     { label: "registry.retire(old)", target: i.registry, data: reg("retire", [i.oldVault]) },
     { label: "new.unpauseDeposits()", target: i.newVault, data: encodeFunctionData({ abi: VAULT_REDEPLOY_ABI, functionName: "unpauseDeposits" }) },
+  ];
+}
+
+export interface RestoreOldInputs { registry: Address; oldVault: Address; newVault: Address; currentVaults: readonly string[]; currentBps: readonly (bigint | number)[] }
+
+/**
+ * The approved RESTORE-OLD recovery (issue 1796): the inverse of the six-call batch, never automatic because the old vault keeps the known redeem defect. Four calls, one atomic
+ * timelock batch, in the one order the contracts allow: reactivate(old) FIRST (Retired -> Active, deposits reopened), then TWO matching eligibility migrations (old in beside the
+ * new vault at 0 bps, then the new vault out with the old vault back in its slot at the unchanged weight), then retire(new). Retiring the new vault halts its deposits only: its
+ * holders keep redeem and redeemInKind. The same vector helper serves both directions with the roles swapped, so the two migrations mirror the forward ones exactly.
+ */
+export function buildRestoreOldCalls(i: RestoreOldInputs): RedeployCall[] {
+  if (i.currentVaults.some((v) => lc(v) === lc(i.oldVault))) throw new PublishError("GOVERN", `restore-old: the router's default vector already holds the old vault ${i.oldVault}`);
+  const restored = i.currentVaults.map((v) => (lc(v) === lc(i.newVault) ? i.oldVault : v));
+  const v = vectorsFromFinal({ finalVaults: restored, finalBps: i.currentBps, oldVault: i.newVault, newVault: i.oldVault });
+  const reg = (functionName: "migrateEligibility" | "retire" | "reactivate", args: unknown[]): Hex => encodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, functionName, args } as never);
+  return [
+    { label: "registry.reactivate(old)", target: i.registry, data: reg("reactivate", [i.oldVault]) },
+    { label: "registry.migrateEligibility(old, true, five legs)", target: i.registry, data: reg("migrateEligibility", [i.oldVault, true, v.fiveVaults, v.fiveBps.map(BigInt)]) },
+    { label: "registry.migrateEligibility(new, false, four legs)", target: i.registry, data: reg("migrateEligibility", [i.newVault, false, v.finalVaults, v.finalBps.map(BigInt)]) },
+    { label: "registry.retire(new)", target: i.registry, data: reg("retire", [i.newVault]) },
   ];
 }
 
@@ -375,8 +352,11 @@ export interface RedeployBefore {
   router: string;
   /** Does the timelock hold ADMIN_ROLE on the registry (the batch runs as the timelock). */
   timelockIsRegistryAdmin: boolean;
-  /** QA plan v1 E3: does the timelock hold ADMIN_ROLE on the router (the batch's `setVaultCap` needs it; DeployTimelock grants it at stage 11). */
-  timelockIsRouterAdmin: boolean;
+  /**
+   * QA plan v1 E3: does the timelock hold ADMIN_ROLE on the router (the batch's `setVaultCap` needs it; DeployTimelock grants it at stage 11). Optional: a caller that
+   * did not read it checks nothing here, and the batch's setVaultCap would revert after the delay instead of before the schedule.
+   */
+  timelockIsRouterAdmin?: boolean;
   votedWeightsActive: boolean;
   defaultVaults: readonly string[];
   defaultBps: readonly (bigint | number)[];
@@ -393,7 +373,7 @@ export function redeployBeforeProblems(oldVault: string, newVault: string | unde
   if (!b.oldEligible) bad.push("the old vault is not router-eligible: there is no router slot to move");
   if (lc(b.registryRouter) !== lc(b.router)) bad.push(`registry.router() is ${b.registryRouter}, not the deployment's router ${b.router}: migrateEligibility would revert RouterNotLinked`);
   if (!b.timelockIsRegistryAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the registry: the batch would revert");
-  if (!b.timelockIsRouterAdmin) bad.push("the timelock does not hold ADMIN_ROLE on the router: the batch's router.setVaultCap(new, vaultCap(old)) would revert");
+  if (b.timelockIsRouterAdmin === false) bad.push("the timelock does not hold ADMIN_ROLE on the router: the batch's router.setVaultCap(new, approved old cap) would revert");
   if (b.votedWeightsActive) bad.push("router.votedWeightsActive() is true: an applied receipt vector (which still names the old vault) overrides the default, so the split the batch keeps is not the split deposits use. Run --row clear-voted-weights first, then apply a receipt over the new vault set afterwards");
   if (!b.defaultVaults.some((v) => lc(v) === lc(oldVault))) bad.push(`the router's default vector does not hold the old vault: [${b.defaultVaults.join(", ")}]`);
   return bad;
@@ -413,13 +393,8 @@ export interface RedeployAfter {
   effectiveVaults: readonly string[];
   effectiveBps: readonly (bigint | number)[];
   newPaused: boolean;
-  /** `new.registry()` equals the deployment's registry: the batch's first call linked it. */
-  newLinked: boolean;
   oldRetiredFlag: boolean;
   oldHasCode: boolean;
-  /** QA plan v1 E3: `router.vaultCap(new)` and `router.vaultCap(old)`, read after the batch. They must be equal (0 on both is an uncapped leg kept uncapped). */
-  newVaultCap: bigint;
-  oldVaultCap: bigint;
 }
 
 const vkey = (v: readonly string[], b: readonly (bigint | number)[]): string => v.map((a, k) => `${lc(a)}:${b[k]}`).join(",");
@@ -437,17 +412,16 @@ export function redeployReadBackProblems(v: RedeployVectors, a: RedeployAfter): 
   if (vkey(a.defaultVaults, a.defaultBps) !== want) bad.push(`router.getDefaultWeights() is [${vkey(a.defaultVaults, a.defaultBps)}], want [${want}]`);
   if (vkey(a.effectiveVaults, a.effectiveBps) !== want) bad.push(`router.getEffectiveWeights() is [${vkey(a.effectiveVaults, a.effectiveBps)}], want [${want}]`);
   if (a.newPaused) bad.push("the new vault still reads depositsPaused true");
-  if (!a.newLinked) bad.push("the new vault is not linked to the registry: the batch's setRegistry did not land");
   if (!a.oldRetiredFlag) bad.push("the old vault's retired() flag is false: its deposit halt did not run");
   if (!a.oldHasCode) bad.push("the old vault has no code: it must keep serving redeem and redeemInKind");
-  if (a.newVaultCap !== a.oldVaultCap) bad.push(`router.vaultCap(new) is ${a.newVaultCap}, router.vaultCap(old) is ${a.oldVaultCap}: the replacing vault must carry the old vault's per-leg cap`);
   return bad;
 }
 
 // ---- the new vault is the contract the deploy created (QA plan v1 C2, issue 1701) -----------------------------------------
 // The run manifest and the vault manifest are files an operator can edit. The address the round registers, opens and routes deposits to is therefore bound to the
 // chain: it must be the `contractAddress` of a successful CREATE receipt, sent by the deployer, among the round's recorded deploy transactions. The verb reads the
-// receipts forge wrote into its broadcast file, the govern row and the evidence chain check read them from the chain.
+// receipts forge wrote into its broadcast file, the govern row and the evidence chain check read them from the chain. The new vault is an ERC1967Proxy the deployer
+// creates with a plain CREATE (UpgradeAuthority._deployProxy), so its receipt names it.
 
 /** The receipt of one deploy transaction: from forge's broadcast file (the verb) or from the chain (the govern row, the evidence chain check). */
 export interface DeployReceipt {
@@ -530,6 +504,8 @@ export function redeployStageRow(key: RedeployKey): StageRow {
 const readJson = (p: string): Record<string, unknown> => JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
 /** The RPC host for a message (a URL may carry an API key in its path). Never throws: a message is not where a bad URL is refused. */
 const rpcHostOf = (url: string): string => { try { return rpcHost(url); } catch { return "the RPC"; } };
+/** The bound of the reads right after the broadcast (QA plan v1 E6, issue 1723): the run's `readRetry` (a test passes a sleep that does not wait), else the default bound. */
+const readRetryOf = (ctx: RunContext): StaleReadRetry => ctx.readRetry ?? {};
 
 /**
  * The `redeploy-vault` verb. Needs the run manifest of the live deployment (its timelock stage done) and a signer that is the deployer (ADMIN_ADDRESS).
@@ -556,7 +532,9 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   if (open?.status === "deployed") throw new PublishError("RESUME", `${VAULT_NAME[key]} was already redeployed to ${open.new_vault} (round ${open.ordinal}) and the govern row has not run: bun publish-contracts/src/cli.ts govern --row ${REDEPLOY_ROW} --chain ${ctx.chainId} --core-sha ${ctx.coreSha} (plus the same arguments). Nothing was sent.`);
   if (open?.status === "started" && !ctx.resume) throw new PublishError("RESUME", `an earlier ${REDEPLOY_VERB} of ${VAULT_NAME[key]} started at nonce ${open.deploy_start_nonce} and did not finish: continue it with --resume and the same arguments, never a fresh run`);
   if (!existsSync(finalPath)) throw new PublishError("MANIFEST", `${finalPath} is missing: the vault manifest of the live ${VAULT_NAME[key]}`);
-  const current = readJson(finalPath);
+  const latest = [...mine].reverse().find((r) => r.status === "governed");
+  const currentPath = latest?.replacement_manifest ? join(dir, latest.replacement_manifest) : finalPath;
+  const current = readJson(currentPath);
   const oldVault = (open?.old_vault ?? current.vault) as Address;
   if (typeof oldVault !== "string" || !ADDR.test(oldVault)) throw new PublishError("MANIFEST", `${finalPath} has no vault address`);
   const registry = String(readJson(join(dir, `${manifestBase(t.stages.find((s) => s.name === "registry")!.manifest)}.json`)).registry) as Address;
@@ -565,7 +543,7 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   const deployer = await ctx.signer.address();
   if (deployer.toLowerCase() !== ctx.sheet.admin.toLowerCase()) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}`);
 
-  // The deployment must be in the state the round starts from: the old vault live and eligible, no voted vector, the timelock the registry and the router admin.
+  // The deployment must be in the state the round starts from: the old vault live and eligible, no voted vector, the timelock the registry admin.
   const chain = (ctx.chainReader ?? viemReader)(ctx.rpc);
   const before = await readRedeployBefore(chain, { registry, router, timelock, oldVault });
   const problems = redeployBeforeProblems(oldVault, undefined, before);
@@ -625,15 +603,22 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   const sent = readTxCount(broadcastFile(ctx, script, false));
   if (!sent) throw new PublishError("MANIFEST", `forge wrote no broadcast file for ${row.name}`, { stage: row.name });
   // QA plan v1 E6 (issue 1723): forge saw every receipt, but a load-balanced RPC may answer `cast nonce` from a node behind the last deploy block, with the nonce from
-  // before the broadcast: a false COUNT_MISMATCH on a round that landed. The nonce is read again, bounded, until it shows the broadcast's count. A nonce above it stops at
-  // once (another transaction moved the deployer). A delta that still differs after the last read fails as before, naming the reads and the RPC host.
+  // before the broadcast: a false COUNT_MISMATCH on a round that landed. The nonce is read again (safe/read-after-write.ts, bounded) until it shows the broadcast's
+  // count. A nonce above it is returned at once (another transaction moved the deployer). A nonce that never shows it is COUNT_MISMATCH as before, naming the reads.
   const host = rpcHostOf(ctx.rpc);
-  const nonceReads = await awaitRead(() => deployerNonce(ctx, deployer), (n) => n === startNonce + sent.count, ctx.readRetry, (n) => n > startNonce + sent.count);
-  if (nonceReads.error !== undefined) throw nonceReads.error;
-  const nonce1 = nonceReads.last!;
+  const target = startNonce + sent.count;
+  let nonce1: number;
+  try {
+    nonce1 = await readAfterWrite({
+      what: `the deployer ${deployer} nonce after ${row.name}`, expected: String(target), rpcUrl: ctx.rpc, read: () => deployerNonce(ctx, deployer),
+      judge: (n) => (n === target ? "fresh" : n < target ? "stale" : "wrong"), logger: ctx.log,
+    }, readRetryOf(ctx));
+  } catch (e) {
+    if (!(e instanceof SafeToolError) || e.code !== "STALE_READ_TIMEOUT") throw e;
+    throw new PublishError("COUNT_MISMATCH", `${row.name}: broadcast count ${sent.count}, simulated count ${dry.count}, and the deployer nonce never showed ${target} (RPC ${host}): ${e.message} The chain has changed or the RPC is behind: stop and read it.`, { stage: row.name, broadcast: sent.count, simulated: dry.count, expected_nonce: target, last: e.details.last });
+  }
   const delta = nonce1 - startNonce;
-  const nonceSeen = nonceReads.reads > 1 ? ` (the deployer nonce read ${nonceReads.seen.join(", ")} in ${nonceReads.reads} reads from RPC ${host})` : "";
-  if (sent.count !== delta || (!open && sent.count !== dry.count)) throw new PublishError("COUNT_MISMATCH", `${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, simulated count ${dry.count}${nonceSeen}. The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, simulated: dry.count, nonce_reads: nonceReads.seen });
+  if (sent.count !== delta || (!open && sent.count !== dry.count)) throw new PublishError("COUNT_MISMATCH", `${row.name}: broadcast count ${sent.count}, nonce delta ${delta}, simulated count ${dry.count}. The chain has changed: stop and read it.`, { stage: row.name, broadcast: sent.count, delta, simulated: dry.count });
   if (!existsSync(tmpPath) || readFileSync(tmpPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${tmpPath} was not written by ${row.name}`, { stage: row.name });
   const written = readJson(tmpPath);
   const newVault = written.vault as Address;
@@ -645,51 +630,43 @@ export async function runRedeployVault(ctx: RunContext, key: RedeployKey): Promi
   const unbound = createdVaultProblems(newVault, deployer, deployReceipts);
   if (unbound.length > 0) throw new PublishError("MANIFEST", `${tmpPath} names the new vault ${newVault}, but the broadcast receipts do not show the deployer created it: ${unbound.join("; ")}. The old vault was not touched. Do not run the govern row.`, { stage: row.name, newVault, problems: unbound });
 
-  // What the deploy must have left: a closed vault, no role on the deployer, the timelock admin, NO registry link (the batch's first call sets it), and not listed yet.
+  // What the deploy must have left: a closed vault, no role on the deployer, the timelock admin, the registry link, and not listed yet.
   // QA plan v1 E6 (issue 1723): the deploy landed moments ago. A load-balanced RPC node behind it has no code at the new vault (every read reverts), or sits between two of
   // its transactions (the deployer's role not yet renounced, the vault not yet paused). So the checks are read again, bounded, until they all pass. What still fails after
   // the last read is refused as before, and a read that still throws is refused the same way, never passed through as a raw RPC error.
   const rd = async <T,>(sig: string, args: unknown[] = []): Promise<T> => chain.read(newVault, sig, args) as Promise<T>;
-  // Issue 1809 (ADR-0014), left for later by P2 and closed by QA plan v1 L1: the new vault is a governed proxy, read back the way the runner's gate reads a proxy
-  // stage (runner.ts proxyStageGate): the ERC-1967 slot names the manifest's implementation, no admin and no beacon, upgradeAuthority() is the timelock the script
-  // was given (TIMELOCK_ADDRESS, ADR-0014 §4), the manifest's mode is the sheet's UPGRADE_MODE, upgradesFrozen() matches it, the proxy is initialized and the
-  // implementation's initializers are locked. The verify after the round reads it again.
-  const tableProxy = tableProxies(t).find((x) => x.name === VAULT_NAME[key]);
-  if (!tableProxy) throw new PublishError("MANIFEST", `the stage table lists no proxy named ${VAULT_NAME[key]}: the redeployed vault cannot be read back as a governed proxy`, { stage: row.name });
-  const newImplementation = written[tableProxy.implementationField];
-  if (typeof newImplementation !== "string" || !ADDR.test(newImplementation)) throw new PublishError("MANIFEST", `${tmpPath} names no ${tableProxy.implementationField}: the implementation behind the new ${VAULT_NAME[key]} proxy. The old vault was not touched. Do not run the govern row.`, { stage: row.name });
-  const proxyWant: ProxyWant = { name: VAULT_NAME[key], implementation: newImplementation as Address, authority: timelock, mode: ctx.sheet.upgradeMode, frozenByRow: false };
-  const manifestProxy = {
-    manifestMode: typeof written[PROXY_MANIFEST_FIELDS.mode] === "string" ? (written[PROXY_MANIFEST_FIELDS.mode] as string) : undefined,
-    manifestAuthority: typeof written[PROXY_MANIFEST_FIELDS.authority] === "string" ? (written[PROXY_MANIFEST_FIELDS.authority] as string) : undefined,
-  };
-  let proxyState: ProxyState | undefined;
+  let lastBad: string[] | undefined;
   const deployLeft = async (): Promise<string[]> => {
+    lastBad = undefined; // a read that throws part-way leaves no verdict: the refusal then names the read error, never an older pass's problems
     const bad: string[] = [];
     if (!(await rd<boolean>("function depositsPaused() view returns (bool)"))) bad.push("the new vault is not deposit-paused");
     if (!(await rd<boolean>("function hasRole(bytes32 role, address account) view returns (bool)", [ADMIN_ROLE, timelock]))) bad.push("the timelock does not hold ADMIN_ROLE on the new vault");
     if (await rd<boolean>("function hasRole(bytes32 role, address account) view returns (bool)", [ADMIN_ROLE, deployer])) bad.push("the deployer still holds ADMIN_ROLE on the new vault");
-    const link = await rd<string>("function registry() view returns (address)");
-    if (lc(link) !== lc(ZERO)) bad.push(`the new vault is already linked to ${link}: the govern batch links the registry (set-once), the deploy must leave it unlinked`);
+    if (lc(await rd<string>("function registry() view returns (address)")) !== lc(registry)) bad.push("the new vault is not linked to the registry");
     if ((await chain.read(registry, "function listVaults() view returns (address[])") as string[]).some((v) => lc(v) === lc(newVault))) bad.push("the registry already lists the new vault");
-    proxyState = await readProxyState(chain, newVault);
-    bad.push(...proxyProblems(proxyChecks(proxyState, proxyWant, manifestProxy)).map((x) => `proxy: ${x}`));
+    lastBad = bad;
     return bad;
   };
-  const left = await awaitRead(deployLeft, (b) => b.length === 0, ctx.readRetry);
-  if (!left.ok) {
-    const bad = left.error !== undefined ? [`the new vault cannot be read (${left.error instanceof Error ? left.error.message : String(left.error)})`] : left.last!;
-    throw new PublishError("VERIFY", `the new ${VAULT_NAME[key]} ${newVault} is not in the state the deploy must leave: ${bad.join("; ")} (${left.reads} reads from RPC ${host}). The old vault was not touched. Do not run the govern row.`, { newVault, bad, reads: left.reads });
+  try {
+    await readAfterWrite({
+      what: `the state the deploy left on the new ${VAULT_NAME[key]} ${newVault}`, expected: "closed, timelock admin, no deployer admin, linked, not listed", rpcUrl: ctx.rpc,
+      read: deployLeft, judge: (b) => (b.length === 0 ? "fresh" : "stale"), show: (b) => b.join("; "), logger: ctx.log,
+    }, readRetryOf(ctx));
+  } catch (e) {
+    if (!(e instanceof SafeToolError) || e.code !== "STALE_READ_TIMEOUT") throw e;
+    const bad = lastBad && lastBad.length > 0 ? lastBad : [`the new vault cannot be read (${String(e.details.last)})`];
+    throw new PublishError("VERIFY", `the new ${VAULT_NAME[key]} ${newVault} is not in the state the deploy must leave: ${bad.join("; ")} (${String(e.details.tries)} reads from RPC ${host}). The old vault was not touched. Do not run the govern row.`, { newVault, bad, reads: e.details.tries });
   }
 
   // The old vault's manifest is kept, then the new vault takes the vault's own manifest.
   const retiredName = `${manifestBase(own.manifest)}.retired-${ordinal}.json`;
-  copyFileSync(finalPath, join(dir, retiredName));
-  renameSync(tmpPath, finalPath);
+  copyFileSync(currentPath, join(dir, retiredName));
+  const replacementName = `${manifestBase(own.manifest)}.replacement-${ordinal}.json`;
+  if (existsSync(join(dir, replacementName))) throw new PublishError("MANIFEST", "replacement manifest already exists; reconcile interrupted broadcast before retry");
+  renameSync(tmpPath, join(dir, replacementName));
   Object.assign(rec, {
     status: "deployed" as const, new_vault: newVault, deploy_end_nonce: nonce1, deploy_count: sent.count, deploy_tx_hashes: sent.hashes, deploy_receipt_statuses: deployReceipts.map((r) => deployReceiptStatus(r.status)),
-    deploy_first_block: sent.firstBlock, deploy_last_block: sent.lastBlock, retired_manifest: retiredName, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
-    proxy: proxyRecordOf(VAULT_NAME[key], proxyState!, manifestProxy.manifestMode),
+    deploy_first_block: sent.firstBlock, deploy_last_block: sent.lastBlock, retired_manifest: retiredName, replacement_manifest: replacementName, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
   });
   saveRunManifest(ctx.evidenceDir, manifest);
   ctx.log.log("info", "stage.done", { stage: row.name, new_vault: newVault, old_vault: oldVault, start_nonce: startNonce, end_nonce: nonce1, count: sent.count });

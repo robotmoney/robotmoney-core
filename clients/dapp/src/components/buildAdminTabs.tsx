@@ -56,11 +56,11 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   gatewayRuntimeHash?: string;
   /**
-   * Code hash of the implementation behind a proxied gateway (QA plan P3),
-   * passed to ConfigExportPanel so the export pins it for rmpc. Set only when
-   * it matched one of the build's reviewed implementation pins (issue 1810).
+   * The verified implementation behind a proxied gateway and its code hash
+   * (issue 1810), exported beside `gatewayRuntimeHash`.
    */
-  gatewayImplementationHash?: string;
+  gatewayImplementation?: string;
+  gatewayImplementationRuntimeHash?: string;
   /** The vault is an ERC-1967 proxy: the export names `proxy_implementation_hashes` (issue 1810). */
   vaultIsProxy?: boolean;
   /** Reviewed vault and router implementation hashes the build pins, for the rmpc export. */
@@ -209,7 +209,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           vault={a.vaultAddress}
           usdcAddress={a.usdcAddress}
           gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
-          gatewayImplementationHash={a.gatewayImplementationHash}
+          gatewayImplementation={a.gatewayImplementation}
+          gatewayImplementationRuntimeHash={a.gatewayImplementationRuntimeHash}
           vaultIsProxy={a.vaultIsProxy}
           proxyImplementationHashes={a.proxyImplementationHashes}
           chainId={a.chainId}

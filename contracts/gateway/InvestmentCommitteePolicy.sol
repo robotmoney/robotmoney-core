@@ -2,14 +2,13 @@
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3 — New contract + refactor
 // Canonical: docs/architecture.md — Investment Committee Policy
 // Implements: issue #1044 — Investment Committee v0
-// (See also: docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title InvestmentCommitteePolicy
 /// @notice Registry of admin-allowlisted committee agents and their signed
@@ -32,13 +31,13 @@ import {
 ///
 /// Emits: `AgentRegistered`, `AgentRevoked`, `VoteSubmitted`.
 ///
-/// Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
-/// in the proxy's deployment transaction. Only the timelock named at `initialize`
-/// can upgrade it, and `freezeUpgrades` ends upgrades forever.
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `gateway` is set once at initialization and has no setter.
 contract InvestmentCommitteePolicy is
     AdminFloorAccessControl,
     ReentrancyGuardUpgradeable,
-    GovernedUpgrade
+    GovernedUUPS
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
@@ -134,7 +133,6 @@ contract InvestmentCommitteePolicy is
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @notice The RobotMoneyGateway address. All committee writes must originate here.
-    ///         Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
     address public gateway;
 
     /// @notice Human-readable label for each registered agent.
@@ -143,27 +141,23 @@ contract InvestmentCommitteePolicy is
     /// @notice Ordered list of all submitted votes (append-only).
     Vote[] private _votes;
 
-    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
-    /// @dev The implementation is never initialized: only a proxy is.
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
-
-    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
-    /// @param admin_           Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE.
-    /// @param gateway_         Address of the deployed RobotMoneyGateway.
-    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
-    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param admin_    Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE.
+    /// @param gateway_  Address of the deployed RobotMoneyGateway.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
     function initialize(
         address admin_,
         address gateway_,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer {
-        if (admin_ == address(0) || gateway_ == address(0)) revert ZeroAddress();
+        __AccessControlEnumerable_init();
         __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+        if (admin_ == address(0) || gateway_ == address(0)) revert ZeroAddress();
         gateway = gateway_;
 
         // Pin COMMITTEE_AGENT_ROLE administration to ADMIN_ROLE so it survives
@@ -172,7 +166,6 @@ contract InvestmentCommitteePolicy is
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
-        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by

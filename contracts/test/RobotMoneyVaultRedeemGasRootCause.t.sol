@@ -12,6 +12,7 @@ import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {CoreStages} from "./helpers/CoreStages.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Test-local harness: rewrites immediates in deployed runtime bytecode. Used to build the
 ///         unfixed vault (every gas floor zeroed) and a vault with only the entry floor zeroed,
@@ -177,23 +178,13 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
     uint24 internal constant ADAPTER_FLOOR = 400_000;
     uint24 internal constant TAIL_FLOOR = 150_000;
 
-    /// @dev Replace the vault's runtime code with the same code, gas floors zeroed as asked.
-    ///      Storage and immutables are unchanged (the floors are constants, not storage).
-    ///      ADR-0014: `vault` is an ERC1967Proxy, so the code patched is the implementation's.
-    ///      The adapter floor reaches the linked `VaultAdapterOps` as an argument pushed by the
-    ///      vault, so zeroing the vault's constant zeroes the floor the library checks.
+    /// @dev Replace the vault implementation's runtime code with the same code, gas floors zeroed
+    ///      as asked. The vault is an ERC-1967 proxy (issue 1808), so the floors live in the code of
+    ///      the implementation it delegates to. Storage and immutables are unchanged (the floors
+    ///      are constants, not storage).
     function _zeroFloors(bool entry, bool midPath) internal {
-        address implementation = address(
-            uint160(
-                uint256(
-                    vm.load(
-                        address(vault),
-                        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
-                    )
-                )
-            )
-        );
-        bytes memory code = implementation.code;
+        address impl = CoreProxies.implementationOf(address(vault));
+        bytes memory code = impl.code;
         if (entry) {
             assertGt(BytecodePatch.patchPush3(code, ENTRY_FLOOR, 0), 0, "entry floor not found");
         }
@@ -201,7 +192,7 @@ contract RobotMoneyVaultRedeemGasRootCauseTest is Test {
             assertGt(BytecodePatch.patchPush3(code, ADAPTER_FLOOR, 0), 0, "adapter floor not found");
             assertGt(BytecodePatch.patchPush3(code, TAIL_FLOOR, 0), 0, "tail floor not found");
         }
-        vm.etch(implementation, code);
+        vm.etch(impl, code);
     }
 
     function _laterBlock() internal {

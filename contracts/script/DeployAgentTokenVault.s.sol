@@ -11,8 +11,8 @@
 // Router eligibility is deploy-time configuration (issue 1520): after registering, the broadcast
 // path calls `registry.migrateEligibility` once when `ROUTER_DEFAULT_BPS` is a vector (it also sets
 // the router default weights), and leaves the vault ineligible when it is `none`. The deployer
-// holds ADMIN_ROLE on the registry until the timelock stage. The vault deploys paused, and the Safe unpauses it through the
-// timelock in stage 13 (scripts/deploy/stage-table.json `vaults[]`, issue 1705).
+// holds ADMIN_ROLE on the registry until the timelock stage. After the handover stage 13 unpauses the
+// vault through the Safe and the timelock (scripts/deploy/stage-table.json vault rules, issue 1705).
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
@@ -62,18 +62,31 @@ contract DeployAgentTokenVault is BasketVaultDeployBase {
         returns (Deployed memory d)
     {
         Cfg memory cfg = _parseCfg(json, "shortlist");
-        _useInProcessUpgradeConfig();
+        _vaultUpgrade = _inProcessUpgradeConfig();
         vm.startPrank(p.admin);
         d = _deployAll(p, cfg);
         vm.stopPrank();
     }
 
-    function _newImplementation() internal override returns (BasketVault) {
-        return new AgentTokenVault();
-    }
-
-    function _layoutArtifact() internal pure override returns (string memory) {
-        return "AgentTokenVault";
+    function _newVault(Params memory p, address emergencyResponder)
+        internal
+        override
+        returns (BasketVault)
+    {
+        address impl = address(new AgentTokenVault());
+        return BasketVault(
+            _deployProxy(
+                impl,
+                abi.encodeCall(
+                    AgentTokenVault.initialize,
+                    (
+                        _basketInitParams(p, emergencyResponder),
+                        _vaultUpgrade.timelock,
+                        _vaultUpgrade.mode
+                    )
+                )
+            )
+        );
     }
 
     function _requiredVenue(address token) internal pure override returns (string memory) {

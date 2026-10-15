@@ -102,13 +102,12 @@
 //!
 //! ## B2. IDX-5 — vote tally counted voters, not voting power (Med)
 //!
-//! **Superseded (issue 1698, QA plan C1):** RouterGovernance voting was
-//! deleted. `insert_vote`, `governance_votes` and `governance_proposals` no
-//! longer exist (migration 0023 dropped both tables). The record below is kept
-//! as history.
+//! *Historical: `insert_vote`, its tally and the `VoteCast` branch were deleted
+//! with `RouterGovernance` voting (issue #1698), and migration 0024 dropped
+//! `governance_votes` and `governance_proposals`.*
 //!
-//! `Db::insert_vote` inserted the `governance_votes` row (which stored the
-//! per-vote `weight: U256`) and updated the running tally on
+//! `Db::insert_vote` inserted the `governance_votes` row (which
+//! stores the per-vote `weight: U256`) and updated the running tally on
 //! `governance_proposals`.
 //!
 //! **What was wrong:** the tally `UPDATE` set `{votes_for|votes_against} = {col}

@@ -4,7 +4,7 @@ title: "AccessRolesHarness"
 
 # AccessRolesHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/AccessRoles.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/AccessRoles.t.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles)
 
@@ -13,6 +13,21 @@ title: "AccessRolesHarness"
 Concrete harness exposing AccessRoles internals for test purposes.
 
 </i>
+
+## Constants
+
+### AC_STORAGE
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.AccessControl")) - 1)) & ~0xff
+
+</i>
+
+```solidity
+bytes32 internal constant AC_STORAGE =
+        0x02dd7bc7dec4dceedda775e58dd541e08a116c6c53815c0bd028192f7b626800;
+```
 
 ## Functions
 
@@ -57,9 +72,10 @@ slipped past the grant-time check (defense-in-depth).
 
 </i>
 
-OZ AccessControl stores `mapping(bytes32 => RoleData) _roles`
-at slot 0; `RoleData.hasRole[address]` lives at
-`keccak256(account || keccak256(role || 0))`.
+OZ AccessControlUpgradeable (issue 1808) stores
+`mapping(bytes32 => RoleData) _roles` at its ERC-7201 namespace
+`AC_STORAGE`; `RoleData.hasRole[address]` lives at
+`keccak256(account || keccak256(role || AC_STORAGE))`.
 
 ```solidity
 function unsafe_forgeRole(bytes32 role, address account) external;

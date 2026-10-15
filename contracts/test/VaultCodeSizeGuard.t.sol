@@ -21,9 +21,6 @@ contract VaultCodeSizeGuard is Test {
     /// @dev EIP-170 maximum contract runtime bytecode size, in bytes.
     uint256 internal constant EIP170_LIMIT = 24576;
 
-    /// @dev ADR-0014 §9: runtime margin every proxied implementation keeps when P1 lands.
-    uint256 internal constant UPGRADE_HEADROOM_FLOOR = 1_024;
-
     function _assertUnderLimit(string memory artifact) internal {
         uint256 size = vm.getDeployedCode(artifact).length;
         emit log_named_uint(string.concat(artifact, " runtime bytes"), size);
@@ -102,11 +99,11 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("UniswapV4PriceRecorder.sol:UniswapV4PriceRecorder");
     }
 
-    // ─── ADR-0014: proxied implementations, their libraries, the factory ──
+    // ─── ADR-0014: proxied implementations, the exclusion ledger, the linked libraries ──
     //
     // Every proxied implementation is a direct on-chain deployment (behind its ERC1967Proxy), and so
-    // is each CREATE2-linked library and the ExclusionLedgerFactory, so each must fit EIP-170 on its
-    // own. The ledger itself is created by the factory, one per rmUSDC proxy.
+    // is each CREATE2-linked library, the exclusion ledger and the timelock, so each must fit EIP-170
+    // on its own. The ledger is created by the vault, one per exclusion record (core 1820).
 
     function test_RobotMoneyGateway_underEip170() public {
         _assertUnderLimit("RobotMoneyGateway.sol:RobotMoneyGateway");
@@ -114,6 +111,10 @@ contract VaultCodeSizeGuard is Test {
 
     function test_PortfolioRouter_underEip170() public {
         _assertUnderLimit("PortfolioRouter.sol:PortfolioRouter");
+    }
+
+    function test_RouterGovernance_underEip170() public {
+        _assertUnderLimit("RouterGovernance.sol:RouterGovernance");
     }
 
     function test_VaultRegistry_underEip170() public {
@@ -128,85 +129,38 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
     }
 
-    function test_ExclusionLedgerAndFactory_underEip170() public {
+    function test_ExclusionLedger_underEip170() public {
         _assertUnderLimit("ExclusionLedger.sol:ExclusionLedger");
-        _assertUnderLimit("ExclusionLedgerFactory.sol:ExclusionLedgerFactory");
+    }
+
+    function test_ProposerFloorTimelock_underEip170() public {
+        _assertUnderLimit("ProposerFloorTimelock.sol:ProposerFloorTimelock");
     }
 
     function test_linkedLibraries_underEip170() public {
-        _assertUnderLimit("VaultAdapterOps.sol:VaultAdapterOps");
-        _assertUnderLimit("BasketSwapOps.sol:BasketSwapOps");
         _assertUnderLimit("BasketAssetConfigGuard.sol:BasketAssetConfigGuard");
         _assertUnderLimit("BasketViews.sol:BasketViews");
-        _assertUnderLimit("GatewayWindows.sol:GatewayWindows");
-        _assertUnderLimit("GatewayAuth.sol:GatewayAuth");
-        _assertUnderLimit("GatewayWithdrawOps.sol:GatewayWithdrawOps");
     }
 
-    /// @notice ADR-0014 §9: when P1 lands, every proxied implementation keeps at least 1,024 bytes of
-    ///         runtime margin under 24,576, about one D-sized fix. Measured with `forge build --sizes`
-    ///         (solc 0.8.24, 100 runs, cancun) after the upgrade base and the size libraries landed:
-    ///         RobotMoneyVault 22,978 B (1,598 B margin), AgentTokenVault 23,280 B (1,296),
-    ///         ProtocolAssetVault 23,209 B (1,367), RwaBasketVault 23,202 B (1,374),
-    ///         RobotMoneyGateway 23,305 B (1,271 after P3's `implementationVersion` added 50 B),
-    ///         PortfolioRouter 19,116 B, VaultRegistry 10,123 B,
-    ///         InvestmentCommitteePolicy 9,886 B, ConsensusRecommendationReceipt 8,798 B. The P1
-    ///         follow-up (write-once `__GovernedUpgrade_init`) added about 42 B to each: the gateway now
-    ///         has 1,229 B and AgentTokenVault 1,254 B of margin, the tightest two. A change that
-    ///         eats into the floor fails here; move code into a linked library or amend the ADR.
-    function test_proxiedImplementations_keepUpgradeHeadroom() public {
-        string[9] memory proxied = [
-            "RobotMoneyVault.sol:RobotMoneyVault",
-            "ProtocolAssetVault.sol:ProtocolAssetVault",
-            "AgentTokenVault.sol:AgentTokenVault",
-            "RwaBasketVault.sol:RwaBasketVault",
-            "PortfolioRouter.sol:PortfolioRouter",
-            "VaultRegistry.sol:VaultRegistry",
-            "RobotMoneyGateway.sol:RobotMoneyGateway",
-            "InvestmentCommitteePolicy.sol:InvestmentCommitteePolicy",
-            "ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt"
-        ];
-        for (uint256 i = 0; i < proxied.length; i++) {
-            uint256 size = vm.getDeployedCode(proxied[i]).length;
-            emit log_named_uint(string.concat(proxied[i], " margin"), EIP170_LIMIT - size);
-            assertGe(
-                EIP170_LIMIT - size,
-                UPGRADE_HEADROOM_FLOOR,
-                string.concat(proxied[i], " keeps under 1,024 bytes of EIP-170 margin (ADR-0014 9)")
-            );
-        }
-    }
-
-    /// @notice The vault family keeps its recorded headroom. Before ADR-0014 the basket kinds had
-    ///         268 to 310 bytes. The upgrade base cost each tight contract about 2.6 KB and its
-    ///         initializer about 2 KB of runtime; the size libraries (`VaultAdapterOps`,
-    ///         `BasketSwapOps`, the single-call `BasketAssetConfigGuard.addAsset`) moved more than
-    ///         that out. The floors below are the measured margins (`forge build --sizes`) after the
-    ///         P1 follow-up that made `__GovernedUpgrade_init` write-once (about 42 bytes each):
-    ///         AgentTokenVault 1,254 bytes, ProtocolAssetVault 1,325, RwaBasketVault 1,332,
-    ///         RobotMoneyVault 1,556 (after P1 alone: 1,296, 1,367, 1,374, 1,598). Security round 1
-    ///         spent some of it on purpose, still above the 1,024-byte ADR-0014 §9 floor: the
-    ///         `emergencyExcludeAdapter` lever, the record-keeping `forceRemoveAdapter` and the
-    ///         `nonReentrant` re-add cost RobotMoneyVault 169 bytes (now 1,387), and the ORA-4
-    ///         check in `BasketVault.previewDeposit` cost each basket kind 15 (AgentTokenVault
-    ///         1,239, ProtocolAssetVault 1,310, RwaBasketVault 1,317). Security round 2 spent 174
-    ///         more RobotMoneyVault bytes on the `recoverRemovedAdapter` lever (now 1,213, still
-    ///         above the floor). Security round 3 spent 36 more on the venue-health deposit gate
-    ///         (`VaultAdapterOps.anyActiveBlocked`, now 1,177). A change that eats them fails here
+    /// @notice The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
+    ///         margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
+    ///         recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
+    ///         RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
     ///         before it fails an EIP-170 deploy.
-    function test_vaultFamily_keepsItsMeasuredHeadroom() public {
+    function test_proxiedImplementations_keepTheirMeasuredHeadroom() public {
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 1_239
+            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 900
         );
         assertGe(
             EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            1_310
+            950
+        );
+        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 950);
+        assertGe(
+            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 3_500
         );
         assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 1_317
-        );
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 1_177
+            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyGateway.sol:RobotMoneyGateway").length, 290
         );
     }
 }

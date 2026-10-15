@@ -114,8 +114,8 @@
 | Admin / fee recipient (Safe) | [`0x88bA7364cC6cE5054981d571b33f8fb3E91475A0`](https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0) |
 
 **Notes:**
-- The retired v1 RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not.
-- A release built from this tree deploys the nine stateful core contracts (RobotMoneyVault, the three basket kinds, PortfolioRouter, VaultRegistry, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt) each behind its own `ERC1967Proxy` (ADR-0014, §3.11). The address a client calls is the proxy; the code that runs is the implementation in its ERC-1967 slot. Adapters, `RouterGovernance`, `ExclusionLedger` and the libraries stay direct.
+- RobotMoneyVault and its adapters are direct (non-proxy) deployments on mainnet. CompoundV3Adapter was compiled with `viaIR: true`; the others were not. Every address in this section is a direct deployment and cannot be upgraded in place.
+- From issue 1808 the source deploys every core contract (rmUSDC, the three basket vaults, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt, RouterGovernance) behind its own ERC-1967 proxy ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md)). No proxied deployment is on 8453 yet. When one is, this section lists the proxy address (the address users and clients call), the implementation address and code hash, the upgrade timelock and the freeze state, and keeps the direct addresses above as the legacy deployment.
 - VaultRegistry, PortfolioRouter, RouterGovernance, and basket vaults are deployed to Base mainnet by the publish-contracts CLI (`publish-contracts/`). The demo deploy path is retired.
 - Basket vault mainnet addresses are intentionally excluded here (out of scope); they will be added once they reach production status and mainnet deployment.
 
@@ -127,15 +127,15 @@
 
 ```
 RobotMoneyVault
-  ├── ERC4626Upgradeable   (OpenZeppelin v5.0.2 upgradeable — ERC-20 shares + ERC-4626 accounting)
-  ├── AdminFloorAccessControlCounter (AccessControlUpgradeable; three roles: ADMIN, EMERGENCY, KEEPER)
+  ├── ERC4626Upgradeable   (OpenZeppelin v5.0.2 — ERC-20 shares + ERC-4626 accounting, ERC-7201 storage)
+  ├── AdminFloorAccessControlCounter → AccessControlUpgradeable (three roles: ADMIN, EMERGENCY, KEEPER)
   ├── ReentrancyGuardUpgradeable
-  └── GovernedUpgrade      (UUPSUpgradeable + one timelock authority + one-way freeze, §3.11)
+  └── GovernedUUPS   (upgrade and freeze entry points; the rules are the linked GovernedUpgrade library)
 ```
 
-The vault runs behind an `ERC1967Proxy`. Its constructor only calls `_disableInitializers()`; `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, ledgerFactory, upgradeAuthority, mode)` runs once, inside the proxy's deployment transaction (ADR-0014 §3). The retired v1 vault is a direct deployment with a constructor.
-
 The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (core 1494). The deployed v1 vault predates this and still inherits OZ Pausable.
+
+Since issue 1808 the source runs behind an ERC-1967 proxy: `initialize(asset, tvlCap, perDepositCap, exitFeeBps, feeRecipient, admin, emergencyResponder, upgradeTimelock, upgradeMode)` replaces the constructor (same arguments plus the upgrade authority and the release mode; the vault creates its own `ExclusionLedger` inside `initialize`, core 1820) and runs inside the proxy's constructor. The retired v1 vault is a direct deployment with a constructor. Only `upgradeTimelock()` (the Safe-controlled timelock) can `upgradeToAndCall` or `freezeUpgrades`; no role below carries upgrade power. The emergency drains, the `adminRebalance` pull, `getAdapterInfo` and `getAdapterDrift` run in the linked `RobotMoneyVaultOps` library, unchanged. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 
 ### 3.2 Access control roles
 
@@ -149,7 +149,7 @@ The deposit pause is the vault's own `depositsPaused` flag, not OZ Pausable (cor
 
 ### 3.3 Fixed constants (cannot be changed by any role)
 
-These are `constant`s in the implementation's bytecode: never storage, never an initializer argument, never behind a setter. Behind a proxy the ADR-0014 §7 rule holds: no role, setter or initializer can change one; an upgrade may keep or tighten a ceiling and may never loosen one; every upgrade sits in public view for the full timelock delay with withdrawals open; after a freeze the ceiling is fixed forever. `contracts/test/UpgradeCeilings.t.sol::test_ceilingsNeverLoosened` pins each value.
+These are `constant`s in the implementation's bytecode: never storage, never an initializer argument, never behind a setter. Behind a proxy constants stay constants ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §2): no role, setter or initializer can change one. Only a new implementation can, and that upgrade sits in public view for the full timelock delay with withdrawals open and needs the layout gate and implementation review (ADR-0014, Consequences). After a freeze the value is fixed forever.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -282,6 +282,18 @@ must supply a fresh cap rather than silently reusing a stale value:
 |---|---|---|
 | `restoreVault(uint256 newTvlCap)` | ADMIN | Reverts with `NotShutdown()` unless `shutdown == true`. Requires `newTvlCap > 0` (else `InvalidCap()`) and `perDepositCap <= newTvlCap` (else `InvalidParam()`). Clears `shutdown`, sets `tvlCap = newTvlCap`, emits `VaultRestored(newTvlCap)` and `TvlCapUpdated(old, newTvlCap)`. Deposits resume under the new cap. |
 
+#### Emergency levers per vault and the adapter write-off rule (issue 1705)
+
+One table names every emergency lever per vault: `scripts/deploy/stage-table.json` `vaults[].emergencyLevers`, each an `EMERGENCY_ROLE` function with no timelock (`scripts/deploy/stage-table.test.ts` fails when a vault contract gains or loses one). rmUSDC: `pauseDeposits`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault`. rmPROTO, rmAGENT and rmRWA: `pauseDeposits`, `emergencyUnwind`, `emergencyUnwindWithOverride`, `shutdownVault`. None freezes a withdrawal.
+
+The rule for the mainnet test (issue 1705 Q2 (a); narrowing the levers is decided before the final deployment):
+
+- **Who writes off a position.** Only `EMERGENCY_ROLE` (the emergency key), through `forceRemoveAdapter` on rmUSDC. It drops the adapter from NAV and pauses deposits, so nobody buys shares at the written-down price. `ADMIN_ROLE` (the timelock) can only remove an empty adapter (`removeAdapter`). The baskets have no write-off lever: `removeAsset` (ADMIN) refuses a held asset.
+- **Who recovers.** Only `ADMIN_ROLE`, the Safe through the timelock: it adds the adapter back (`addAdapter`) and reopens deposits (`unpauseDeposits`). The emergency key can do neither.
+- **How a recovery is attributed.** Pro rata to whoever holds shares when it lands. A holder who exits during the write-off is paid at the reduced NAV and keeps no claim on the recovery. On a basket, a balance that reappears on a removed asset is swapped back into NAV by the permissionless `reabsorbRemovedAsset`, credited the same way.
+
+`contracts/test/AdapterWriteOffRule.t.sol` shows the rmUSDC rule on a real vault.
+
 #### 3.8.1 Pause names (core 1494)
 
 Owner decision 2026-10-05: withdrawals are never frozen. A pause stops new deposits only, and the names say so. This is the one rename table. It covers RobotMoneyVault, the unified `Vault`, the BasketVault family (rmPROTO, rmAGENT, rmRWA), `RobotMoneyGateway` / `IGateway`, `VaultRegistry` and `PortfolioRouter`.
@@ -321,18 +333,18 @@ Additional read-only helpers: `getAdapterDrift()`, `isRebalanceAvailable()`, `ne
 
 ### 3.11 Upgrade and freeze (every proxied contract)
 
-RobotMoneyVault, the three basket kinds, PortfolioRouter, VaultRegistry, RobotMoneyGateway, InvestmentCommitteePolicy and ConsensusRecommendationReceipt each inherit `contracts/lib/GovernedUpgrade.sol` (OZ `UUPSUpgradeable` 5.0.2) and run behind their own `ERC1967Proxy` (ADR-0014). The list is pinned in `contracts/test/fixtures/storage-layout/proxied.txt`. The surface is the same on all nine:
+RobotMoneyVault, the three basket kinds, VaultRegistry, PortfolioRouter, RobotMoneyGateway, InvestmentCommitteePolicy, ConsensusRecommendationReceipt and RouterGovernance each inherit `GovernedUUPS` (`contracts/lib/GovernedUUPS.sol`) and run behind their own `ERC1967Proxy` ([ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) §1). The upgrade and freeze rules live once, in the linked `GovernedUpgrade` library, which runs by DELEGATECALL in the proxy's storage (ERC-7201 namespace `robotmoney.storage.GovernedUUPS`). The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`, ADR-0014 §5) pins each contract's layout. The surface is the same on all ten:
 
 | Function | Caller | Notes |
 |---|---|---|
-| `initialize(…, upgradeAuthority, mode)` | the proxy constructor, once | Every former constructor argument, then the upgrade authority (the deployment's `ProposerFloorTimelock`, must have code, else `UpgradeAuthorityNotContract`) and the `UpgradeMode` (`Upgradeable` or `FrozenAtDeploy`; `Unset` reverts `UpgradeModeUnset`). A second call reverts. The implementation's own initializers are disabled in its constructor. |
-| `upgradeAuthority()` | view | The one address that may upgrade or freeze. Stored once; no setter; no role changes it. |
+| `initialize(…, upgradeTimelock_, upgradeMode_)` | the proxy constructor, once | Every former constructor argument, then the upgrade timelock (the CREATE2 address of the deployment's Safe-proposer `TimelockController`, `contracts/script/UpgradeAuthority.sol`; zero reverts `InvalidUpgradeTimelock`) and the `UpgradeMode` (`Upgradeable` or `FrozenAtDeploy`; `Undeclared` reverts `UpgradeModeUndeclared`). `FrozenAtDeploy` freezes inside the atomic initialization. A second call reverts. The implementation's constructor disables its own initializers. |
+| `upgradeTimelock()` | view | The only account that may upgrade or freeze. Written once at initialization, no setter, not an AccessControl role: no grant, revoke, renounce or reinitializer moves it. |
 | `upgradesFrozen()` | view | True once frozen. It never becomes false again. |
-| `upgradeToAndCall(address newImplementation, bytes data)` | upgrade authority only | OZ UUPS upgrade, with an optional reinitializer as `data`, in one transaction. Every reinitializer carries `onlyUpgradeAuthority`, so one left pending by an upgrade without `data` runs only through a later timelock operation, and none can rotate the authority (`__GovernedUpgrade_init` is write-once, UPG-3). Reverts `UpgradeNotAuthorized(caller)` for anyone else (any role holder included) and `UpgradesAreFrozen()` once frozen. Govern row `upgrade-proxy` (Safe → timelock). |
-| `freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)` | upgrade authority only | Sets the frozen bit forever and emits `UpgradesFrozen(proxy, implementation, codeHash)`. Reverts `FreezeTargetMismatch(live, liveCodeHash)` unless the live implementation and its code hash equal the arguments, and `UpgradesAreFrozen()` when already frozen. Govern row `freeze-proxy` (Safe → timelock). |
-| `proxiableUUID()` | view | OZ UUPS: the ERC-1967 implementation slot. An upgrade to a non-UUPS implementation is refused. |
+| `upgradeToAndCall(address newImplementation, bytes data)` | upgrade timelock only | Replace the implementation and, when `data` is not empty, run it (a reinitializer) in the same transaction. Only through an active proxy pointing at this implementation (`UUPSUnauthorizedCallContext` otherwise). Reverts `NotUpgradeTimelock(caller)` for anyone else (any role holder included), `UpgradesAreFrozen()` once frozen, and `ERC1967InvalidImplementation` for an implementation with no code or a wrong `proxiableUUID`. Scheduled through the Safe and the timelock. |
+| `freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)` | upgrade timelock only | Sets the frozen flag forever, disables every later initializer and reinitializer, and emits `UpgradesFrozen(proxy, implementation, codeHash)`. Reverts `FreezeTargetMismatch(live, liveCodeHash)` unless the live implementation and its runtime code hash equal the arguments, so a freeze queued before an intervening upgrade cannot lock in the other version, and `UpgradesAreFrozen()` when already frozen. Scheduled through the Safe and the timelock (`docs/operations/contract-release-runbooks.md` §4.12). |
+| `proxiableUUID()` | view | UUPS: the ERC-1967 implementation slot. Reverts when called on anything but the implementation itself. |
 
-`RobotMoneyGateway` also exposes `implementationVersion()` (`"1"`), the EIP-712 domain version of every `AgentConsent`; an implementation that changes what a consent means bumps it (ADR-0014 P3 record, invariant UPG-8). A freeze never pauses or alters `redeem`, `withdraw`, `redeemInKind` or the gateway withdraw paths (ADR-0014 §6, invariants UPG-1..UPG-8 in `smart-contract-invariants.md`).
+A freeze never pauses or alters `redeem`, `withdraw`, `redeemInKind` or the gateway withdraw paths (ADR-0014 §4; the freeze invariants in `smart-contract-invariants.md`).
 
 ---
 
@@ -398,9 +410,9 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
-| Upgradeability | The nine stateful core contracts run behind per-instance `ERC1967Proxy`s with UUPS logic from `GovernedUpgrade` (ADR-0014, §3.11). The one upgrade authority is the Safe-run timelock, upgrades and freezes go Safe → timelock (delay) → execute, and the freeze is one-way and bound to the reviewed implementation. Test, demo and rehearsal deploy `Upgradeable`; a final mainnet release deploys `FrozenAtDeploy` or freezes after a bounded proving period. Contracts deployed before ADR-0014 (the retired v1 vault, Deploy 2) are direct and have no in-place upgrade path. See ADR-0014 and `docs/technical/contract-upgradeability-plan.md` |
-| Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` under the ADR-0014 §7 rule (§3.3). `setExitFeeBps` and `initialize` revert above this |
-| Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are `constant` floors/ceilings (§3.3) |
+| Upgradeability | The deployed 8453 contracts are direct and have no in-place upgrade path. The source (issue 1808) runs every core contract behind its own ERC-1967 proxy: only the Safe-controlled timelock (`upgradeTimelock()`, not a role) can upgrade or freeze; `freezeUpgrades(expectedImplementation, expectedCodeHash)` is one-way and bound to the reviewed implementation; the release mode is a required initializer argument (`Upgradeable` or `FrozenAtDeploy`, no default). Not deployed on 8453. See [ADR-0014](../adr/ADR-0014-governed-uups-upgrades-and-freeze.md) and `docs/technical/contract-upgradeability-plan.md` |
+| Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
+| Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
 | Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
 
 ---
@@ -411,7 +423,7 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 | Prior claim | Actual (from source) |
 |---|---|
-| "Whether the vault is upgradeable is unknown" | The retired v1 vault and Deploy 2: no proxy — direct deployment confirmed. A release from this tree deploys the vault behind a governed UUPS proxy (ADR-0014, §3.11) |
+| "Whether the vault is upgradeable is unknown" | Existing vault: no proxy — direct deployment confirmed. The source now deploys a governed UUPS proxy (issue 1808, ADR-0014); no proxied vault is live on 8453 |
 | "Management fee accrual mechanism unknown (3 candidates)" | No on-chain management fee at all. Exit fee only |
 | "Withdraw routing algorithm — proportional vs. greedy unknown" | Confirmed proportional: `pull_i = assetsNeeded × balance_i / total` |
 | "targetBps is stored or derived — unknown" | Derived: `MAX_BPS / activeAdapterCount`. Not stored |
@@ -491,7 +503,9 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 
 Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply == 0` and `totalAssets == 0` has a share price backed only by virtual shares. The seed deposit ensures that real capital anchors the price before any public depositor arrives.
 
-**Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01).
+**Seed amount:** the stage sheet's `SEED_DEPOSIT_USDC` (6-decimal units, must be above 0). The decided production seed is 1 USDC (`1_000_000`), rmUSDC only (runbook D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (`scripts/deploy/stage-table.json` `vaults[].seed`, issue 1705 Q6).
+
+**Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock.
 
 **Seed share receiver:** the sheet's `SHARE_RECEIVER_ADDRESS`, passed to the script as `SEED_SHARE_RECEIVER`. It is never zero and never the deployer or admin (the sheet's `ADMIN_ADDRESS` is the deployer, which holds admin until the timelock handover). The deployer holds no seed shares (core 1503, fixed on PR 1505).
 
@@ -566,12 +580,14 @@ The legs that run execute atomically: if any of them reverts, the entire deposit
 
 The router maintains two weight vectors:
 
-- **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. `RouterGovernance.applyReceipt` writes it when the Safe applies a consensus receipt (govern row `apply-receipt`, issue 1698). While `votedWeightsActive` is true this vector is the source of truth. The storage keeps its pre-1698 "voted" name; there is no voting.
-- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock), and by `migrateEligibility` through `applyMigrationDefaultWeights`. The router routes by it whenever `votedWeightsActive` is false (ADR-0002). Its length must equal `VaultRegistry.routerEligibleCount()`.
+- **Active weights**: Written by `setWeights(vaults, bps)`, gated by `WEIGHT_SETTER_ROLE`. While `votedWeightsActive` is true this vector is the source of truth. `RouterGovernance.applyReceipt` writes it (the `apply-receipt` govern row, core 1696).
+- **Default weights**: Written by `setDefaultWeights(vaults, bps)` through `RouterGovernance.setDefaultWeights` (ADMIN_ROLE, held by the timelock), and by `migrateEligibility` through `applyMigrationDefaultWeights`. The router routes by it whenever `votedWeightsActive` is false. It is the fallback (ADR-0002). The `apply-receipt` govern row does not write it. Its length must equal `VaultRegistry.routerEligibleCount()`.
 
-At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. An active vector written at deploy would override every later default; a router that already carries one is cleared with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
+At deploy, `contracts/script/DeployPortfolioRouter.s.sol` marks rmUSDC router-eligible and writes the initial DEFAULT vector with `setDefaultWeights`: rmUSDC 10000 bps, the only router-eligible vault at that point. It never calls `setWeights`, so `votedWeightsActive` stays false from deploy (issue 1743). The basket stages then flip each basket eligible with one atomic `migrateEligibility`, which re-sets the default to the sheet's launch vector (`ROUTER_WEIGHTS`, rmUSDC 9500, rmPROTO 500, rmAGENT 0, rmRWA 0). The effective routing after the deploy is that launch vector, and the stage 12 verifier asserts both `votedWeightsActive()` false and `getEffectiveWeights()` equal to the sheet. A voted vector written at deploy would override every later default change. A router that carries an active vector is returned to the default with `govern --row clear-voted-weights` (`RouterGovernance.clearVotedWeights()`, `ADMIN_ROLE`).
 
-The Safe multisig, through the TimelockController, is the only body that changes router weights. `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6). The timelock reaches the active vector through one call, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, which releases the receipt and calls `setWeights` in the same transaction (govern row `apply-receipt`, issue 1698).
+The Safe multisig, through the TimelockController, is the only body that changes router weights. `PortfolioRouter.setWeights` is gated by `WEIGHT_SETTER_ROLE`, held by RouterGovernance, and stage 11 grants the timelock router `ADMIN_ROLE` only (core 1522, `docs/technical/governance-decisions.md` §3.6). The timelock reaches the weights through `RouterGovernance.applyReceipt`, gated by `RouterGovernance`'s own `WEIGHT_SETTER_ROLE`, which the timelock holds. `applyReceipt` calls `setWeights`.
+
+`setWeights` and `setDefaultWeights` revert `DuplicateVault(vault)` when a vault appears twice in the list (security review 2026-10-12, finding 8).
 
 #### Routing eligibility
 
@@ -606,9 +622,9 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 | Function | Role | Effect |
 |---|---|---|
 | `deposit(uint256 amount, uint256[] minSharesPerLeg)` | anyone | Skip non-depositable legs, split the full amount pro rata across the rest, call vault.deposit per leg, return shares per leg. All-or-revert across the legs that run; reverts `NoWeightsSet` when no leg is depositable. |
-| `setWeights(address[] vaults, uint256[] bps)` | `WEIGHT_SETTER_ROLE` (RouterGovernance, inside `applyReceipt`; core 1522, issue 1698) | Set the active weight vector. Overwrites the current active vector and sets `votedWeightsActive = true`. |
-| `clearVotedWeights()` | ADMIN | Deactivate the active vector; revert to default weights. |
-| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. |
+| `setWeights(address[] vaults, uint256[] bps)` | `WEIGHT_SETTER_ROLE` (RouterGovernance) | Set the active weight vector. Overwrites the current active weights and sets `votedWeightsActive = true`. Reverts `DuplicateVault` on a repeated vault. |
+| `clearVotedWeights()` | ADMIN | Deactivate the voted vector; revert to default weights. |
+| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN | Update fallback weight vector. Reverts `DuplicateVault` on a repeated vault. |
 | `setRouterCap(uint256)` | ADMIN | Set global deposit cap. |
 | `setVaultCap(address, uint256)` | ADMIN | Set per-vault leg cap. |
 | `previewDeposit(uint256 amount)` | view | Return per-vault estimated shares, weights, net amounts, and per-leg unavailable status without executing. |
@@ -627,36 +643,41 @@ A vault is **eligible for routing** only when its `VaultRegistry` status is `Act
 
 ### 9.2.1 Purpose and scope
 
-`RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock operation releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696). That operation is one call, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, which calls `ConsensusRecommendationReceipt.releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` in the same transaction (issue 1698). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
+`RouterGovernance` is the contract that holds `WEIGHT_SETTER_ROLE` on `PortfolioRouter` and the only path by which router weights change. The Safe multisig, through the TimelockController, is the only body that changes any Robot Money contract configuration, router weights included. `WEIGHT_SETTER_ROLE` is the only authority over router weights. It submits the Investment Committee's consensus receipt, and that submission is the rebalance: one timelock call, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, releases the receipt and applies its weights (publish-contracts govern row `apply-receipt`, core 1696). There is no voting by token holders or anyone else: no voter set, no voting power, no quorum, no voting period, no execution delay, no propose, vote or execute.
 
-Issue 1698 deleted the contract's proposal, vote and execute functions with the voter set, voting power, quorum, voting period and execution delay. The weight setter's `applyReceipt` call replaced them.
+`RouterGovernance` has no propose, vote or execute function and no voting event (issue 1698). The mainnet test deployment ran the earlier bytecode with voter addresses nobody holds. The final deployment's verifier asserts that the runtime code has no voting function.
 
 **Design constraints** (docs/architecture.md §2.3):
 - Controls router weights only; cannot govern vault internals, agent permissions, or protocol admin operations.
 - Exposes the resulting weights for rmpc and dapp reads.
-- `ADMIN_ROLE` is held by the timelock after stage 11; the deployer holds nothing.
+- `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE` (both self-administered) are held by the timelock after stage 11; the deployer holds nothing.
+- `RouterGovernance` holds router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` and the receipt register's `ADMIN_ROLE`, so it can release a receipt in the same call that applies it.
 
 ### 9.2.2 Applying a receipt
 
 1. **Record**: the committee submitter records the consensus receipt through the gateway (`ConsensusRecommendationReceipt.recordReceipt`).
-2. **Schedule**: the Safe schedules one timelock call, `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
+2. **Schedule**: the Safe schedules one timelock call: `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)` with the receipt's weight vector. The govern row checks before sending that the receipt is recorded, its digest equals `keccak256` of the payload, it is not yet released, the bps sum to 10000 and the vault list equals the registry's router-eligible list in order.
 3. **Delay**: the timelock delay elapses (172800 s on 8453).
-4. **Execute**: the Safe executes the call. On chain, `applyReceipt` refuses a receipt that is not recorded, one already released and a digest that differs from the recorded one, then releases the receipt and calls `PortfolioRouter.setWeights` in the same transaction. A vector the router refuses releases nothing; partial state is impossible.
-5. **Read back**: the tool reads `isReleased(receiptId)` and the router weights and fails on any difference.
+4. **Execute**: the Safe executes the call. `applyReceipt` checks that the receipt is recorded, not released and that `payloadDigest` equals the stored digest. It then calls `releaseReceipt(receiptId)` and `PortfolioRouter.setWeights(vaults, bps)` and emits `ReceiptApplied`. Release and weights land in one call; partial state is impossible.
+5. **Read back**: the tool reads `isReleased(receiptId)`, `votedWeightsActive()` and the router's active and effective weights, and fails on any difference.
 
 ### 9.2.3 Key functions
 
 | Function | Role | Effect |
 |---|---|---|
-| `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | ADMIN (timelock) | The rebalance (govern row `apply-receipt`, issue 1698). Release the receipt and call `router.setWeights(vaults, bps)` in one transaction. Reverts `ReceiptContractNotSet`, `ReceiptNotRecorded`, `ReceiptAlreadyReleased` or `ReceiptDigestMismatch`; the router refuses a duplicate, ineligible or non-Active vault and a bps sum other than 10000. Emits `ReceiptApplied`. |
-| `setReceiptContract(address receipt)` | ADMIN | Name the receipt register `applyReceipt` releases from. Stage 11 sets it while the deployer still holds `ADMIN_ROLE`. |
-| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum, rejects a duplicate vault and requires the length to equal the registry's router-eligible count. The fallback vector, not the receipt path. |
-| `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. |
+| `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | WEIGHT_SETTER (timelock) | Release a recorded, unreleased receipt whose stored digest equals `payloadDigest`, then call `router.setWeights(vaults, bps)`, in one call. Sets the router's active vector. Emits `ReceiptApplied(receiptId, payloadDigest, vaults, bps)`. Reverts `ReceiptNotRecorded`, `ReceiptAlreadyReleased` or `PayloadDigestMismatch`; any router refusal reverts the whole call. |
+| `setDefaultWeights(address[] vaults, uint256[] bps)` | ADMIN (timelock) | Forward to `router.setDefaultWeights`. The router checks the bps sum and that the length equals the registry's router-eligible count. Sets the fallback vector. |
+| `clearVotedWeights()` | ADMIN (timelock) | Clear the router's active vector so routing follows the default vector. The emergency lever. |
+| `currentWeights()` | view | The router's active weight vector (empty until a receipt is applied). |
+| `router()`, `receipts()` | view | The immutable `PortfolioRouter` and `ConsensusRecommendationReceipt` addresses. |
+| `ADMIN_ROLE`, `WEIGHT_SETTER_ROLE` | constants | Both self-administered. The constructor grants both to `_admin` (the deployer); the timelock stage hands both to the timelock. |
+
+Errors: `ZeroAddress` (a zero constructor argument), `ReceiptNotRecorded(receiptId)`, `ReceiptAlreadyReleased(receiptId)`, `PayloadDigestMismatch(receiptId, stored, given)`.
 
 ### 9.2.4 Key invariants
 
-- **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance`'s admin calls.
-- **Atomic rebalance**: a receipt's release and its weights are one timelock operation.
+- **One path to weights**: only the holder of `WEIGHT_SETTER_ROLE` can call `PortfolioRouter.setWeights`, and only the timelock can reach `RouterGovernance.applyReceipt` and its admin calls.
+- **Atomic rebalance**: a receipt's release and its weights are one call.
 - **Timelock delay enforcement**: no weight change lands before the timelock delay elapses.
 
 ---
@@ -714,7 +735,7 @@ Newly registered assets use `DEFAULT_TWAP_WINDOW` until ADMIN_ROLE raises or low
 | Role | Powers |
 |---|---|
 | ADMIN_ROLE | Add/remove/activate assets, set TWAP windows, adjust TVL and per-deposit caps, set exit fee (max 1%), set fee recipient, set max slippage, `unpauseDeposits()` (also clears the deposit halt `emergencyUnwind` sets), set the emergency-unwind guard. |
-| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to sell the basket back to USDC on a fast path if normal withdrawal is blocked (oracle failure, liquidity crash). Each leg is floored at the higher of its TWAP value less `maxSlippageBps` and the `minUsdcOut` of its emergency-unwind guard (the guard alone when the oracle is unavailable). `emergencyUnwindWithOverride()` sells only tokens whose guard allows an override, floored at `minUsdcOut` less `maxLossBps`. |
+| EMERGENCY_ROLE | `pauseDeposits()` (blocks new deposits only; `redeem` stays open, core 1494), `shutdownVault()`, and `emergencyUnwind()` to liquidate the basket in a fast path if normal withdrawal is blocked (oracle failure, liquidity crash). Each leg is floored at its TWAP value less `maxSlippageBps`, or at the configured `minUsdcOut` when that is higher; with no oracle the configured floor is required. `emergencyUnwindWithOverride()` is oracle-independent and allowed only if loss is within `maxLossBps` of the configured `minUsdcOut`. |
 
 ### 9.3.6 Subclasses: ProtocolAssetVault, AgentTokenVault, RwaBasketVault
 
@@ -738,7 +759,7 @@ All three subclasses inherit BasketVault behavior and are configured with:
 - **Proportional withdrawal**: Withdrawals pull from each active asset proportionally to balance; no rebalancing occurs on withdrawal.
 - **Equal-weight deposit split** (current): Each deposit splits equally across active assets. Future versions may allow weight vectors (not yet shipped).
 - **No oracle-based frontrunning**: TWAP is arithmetic-mean tick over a window (not spot price), making it resistant to single-block manipulation on slow-moving assets.
-- **Exit fee fixed ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` under the ADR-0014 §7 rule; setters and `initialize` revert above this.
+- **Exit fee fixed ceiling**: Like RobotMoneyVault, `MAX_EXIT_FEE_BPS = 100` (1%) is a `constant` (ADR-0014 §2: constants stay constants); setters and `initialize` revert above this.
 
 ### 9.3.8 Deployed basket vaults
 

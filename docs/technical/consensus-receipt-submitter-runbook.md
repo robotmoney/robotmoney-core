@@ -66,10 +66,10 @@ submitter can and cannot do holds unchanged for a contract account: the contract
 - **Registration has no public window (QA plan v1 B6, security review CS-2).** The row works in two halves.
   - **Private half, first.** The submitter Safe authorizes itself on the gateway in three Safe transactions. Its owners sign with `--owner-signer` and `--signer` pays the gas.
     1. `commitAuthorization(keccak256(abi.encode(safe, safe, salt)))` with a random salt. The commit does not name the agent.
-    2. `revealAuthorization(safe, salt, policy, "")` at least one block later. The Safe reveals for itself, so it passes no consent signature. The Safe now owns its own agent.
+    2. `revealAuthorization(safe, salt, policy)` at least one block later. The Safe reveals for itself, so it needs no consent commitment (issue 1791 asks for one only when the agent is not the caller). The Safe now owns its own agent.
     3. `transferAgentOwnership(safe, timelock)`. The timelock now owns the agent.
   - **Public half, second.** Only then does the governing Safe schedule the timelock batch: `gateway.setPolicy` (the 1-unit signalling-only policy, shares to the timelock) and `gateway.committeeRegister`.
-  - **Why the order matters.** The old batch scheduled `authorizeAgent(safe)` in public for the whole delay. A squatter could commit and reveal an authorization for the published address first. The batch then reverted `AgentAlreadyOwned`, and the squatter could `revokeAgent` at will, because the gateway has no seize path. Two layers now close it. The gateway refuses a stranger's reveal for another address unless that address signed its consent (issue 1791), and a Safe has no key to sign with. The new batch also carries no first-time authorization, so nothing a stranger does can break it (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun`).
+  - **Why the order matters.** The old batch scheduled `authorizeAgent(safe)` in public for the whole delay. A squatter could commit and reveal an authorization for the published address first. The batch then reverted `AgentAlreadyOwned`, and the squatter could `revokeAgent` at will, because the gateway has no seize path. Two layers now close it. The gateway refuses a stranger's reveal for another address unless that address first committed its consent from its own account (issue 1791, `OwnerConsentMissing`), and for a Safe that takes a transaction its owners sign. The new batch also carries no first-time authorization, so nothing a stranger does can break it (`contracts/test/ConsensusReceiptSafeSubmitter.t.sol::test_publicRegisterBatchCannotBeFrontRun`).
   - **If the address is already owned.** The tool refuses with `GOVERN` and schedules nothing. Create a new submitter Safe and run the row with it. Against a gateway with the issue 1791 consent check a stranger cannot own a Safe's address at all. Against an older gateway a stranger could claim a published address in advance, such as the old governance Safe below, or win the one-block race between the commit and the reveal. The tool catches both before any timelock round is spent.
   - **A row that stops part-way resumes from the chain.** The agent owner shows which steps are done. A stored commitment is revealed while its 256-block window lasts. After that the tool commits again with a new salt.
 - **Record with it:** `record-receipt --submitter 0x<Safe> --signer <deployer> --owner-signer <owner> ...`. The verb proposes `consensusRecordReceipt` through the Safe, `threshold` owners
@@ -324,26 +324,27 @@ A fourth, `watch-released-drafts.sh`, drafted a proposal per released receipt.
 Issue 1698 retired it and QA plan v1 (leftovers L1) deleted it with its systemd
 units: a receipt is now released only inside `RouterGovernance.applyReceipt`,
 which applies its weights in the same transaction, so there is nothing left to
-draft, and `rmpc governance draft-proposal` is deleted. A host that still runs
-it is decommissioned per `docs/operations/fusion-draft-watcher.md`.
+draft, and `rmpc governance draft-proposal` is deleted. A host installed from an
+older checkout still runs the units and pages `fusion_draft_watcher_stalled`
+every cycle. Decommission it: `systemctl disable --now fusion-draft-watcher.service`,
+remove `fusion-draft-watcher.service` and `fusion-draft-watcher-failed.service`
+from `/etc/systemd/system/`, run `systemctl daemon-reload`, delete
+`/etc/fusion/draft-watcher.env` and `/var/lib/fusion-draft-watcher`, then resolve
+any open `fusion_draft_watcher_*` incident by hand.
 
 | Script | What it does | Idempotency / restart rule |
 |---|---|---|
 | `submit-receipt-worker.sh` | Verifies the receipt, then retries submission until the **exact** `(receiptId, payloadDigest)` pair is readable on chain. | Re-reads the chain before and after every attempt. An already-anchored id with the same digest exits `0` without broadcasting; an already-anchored id with a *different* digest is fatal and is never overwritten. |
-| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, requires four bucket weights totalling 10000 bps, submits, releases, checks that the weight setter applies receipts from this register (`receiptContract()`), and asserts INV-4. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison, the apply-path read and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
+| `cross-repo-acceptance.sh` | The AC-E2E-05 seam: consumes a *frontend-generated* receipt, verifies the **public URL** and the local bytes and proves they agree, requires four bucket weights totalling 10000 bps, submits, releases, and asserts INV-4. It drafts nothing. | Both write stages are idempotent. The worker reports `already_anchored` and broadcasts nothing; the release stage reads `isReleased(bytes32)` **before** the send and records a named `already_released` no-op, so a second run still reaches the INV-4 comparison and the evidence JSON instead of aborting at a `ReceiptAlreadyReleased` revert. INV-4 witnesses come from the shared `lib/inv4.sh`. |
 | `devnet-acceptance.sh` | The AC-E2E-05 **run**: takes one frontend receipt URL and drives `verify → negative → record → index → release → dapp → govern`, writing a machine-readable result file. Exits non-zero on any failed assertion **and on any selected-but-unconfigured stage**. | Stage selection is explicit (`--stages`, `--no-anchor`). Every `SKIP` carries a `reason`: `not_selected` (green), `unconfigured` (**not** green), `prerequisite_failed`, `delegated`. An unknown stage name and a missing witness address refuse to start. |
 
-**The draft was bound to the on-chain commitment (pre-1698).** The deleted
-`rmpc governance draft-proposal` command read the anchored tuple with
-`getReceiptById`, fetches the bytes from the **anchored
-`payloadUri`** (a `--receipt-url` that disagrees is refused, not preferred),
-and refuses unless `keccak256(domain line + canonical_bytes) == payloadDigest` and every
-analyst signature verifies — the same checks `rmpc receipt submit` runs before
-anchoring. Without that comparison a weights-only edit of the published receipt
-produced an identical `receipt_id`, signatures still `verified:true`, and a
-`ready_for_review` draft whose calldata moved the treasury wherever the editor
-chose: `receipt_id` is `keccak256(sep + session_id + subject_id)` and `weights`
-is not in that preimage.
+**The harnesses draft nothing.** `RouterGovernance` has no proposal function
+(issue 1698), and a released receipt is already applied:
+`RouterGovernance.applyReceipt` releases it and sets the weights in one call.
+The harnesses assert record and release. The `govern` stage of
+`devnet-acceptance.sh` only proves the converse of applying: the release-only
+path it ran set no router weights, so `RouterGovernance.currentWeights()` reads
+the same before and after (AC-E2E-04).
 
 **The submitter distinguishes "no anchor" from "cannot read the chain."** The
 read RPC is a different endpoint from the write path's failover client, so those
@@ -353,14 +354,14 @@ re-broadcasts on an unknown anchor state, and the post-submit confirmation has
 its own bounded read loop so a transient read failure after a successful submit
 cannot report the anchor as missing.
 
-Issue 1698 retired the draft path (QA plan v1 C1). `RouterGovernance` has no
-proposal, vote or execute function, and a receipt is released only inside the
-one `RouterGovernance.applyReceipt` call the Safe schedules through the timelock
-(govern row `apply-receipt`), which writes its weights in the same transaction.
+Issue 1698 retired the draft path. `RouterGovernance` has no proposal, vote or
+execute function. The weight path is the one `RouterGovernance.applyReceipt`
+call the Safe schedules through the timelock (govern row `apply-receipt`), which
+releases the receipt and writes its weights in the same transaction.
 `rmpc governance draft-proposal` is deleted with it. The digest binding it
-carried now lives in the govern row, which refuses a payload whose digest
-differs from the recorded one, and in `applyReceipt`, which refuses
-`ReceiptDigestMismatch` on chain (`docs/technical/governance-decisions.md` §3.7).
+carried now lives in the govern row, which names the stored digest, and in
+`applyReceipt`, which reverts `PayloadDigestMismatch` on chain
+(`docs/technical/governance-decisions.md` §3.7).
 
 **Why the orchestrator is separate from `cross-repo-acceptance.sh`.** The older
 script is one straight line from artifact to release and always anchors. The
@@ -380,6 +381,13 @@ harnesses enforce it on the receipt bytes: the verify stage of
 `devnet-acceptance.sh` requires four bucket weights totalling exactly 10000 bps,
 and `cross-repo-acceptance.sh` refuses the same receipt before it submits.
 
+**The negative bundle keeps a weights-tampered case.** The weights are the one
+field that becomes treasury calldata and the one the analyst signature check
+cannot cover. The negative stage rewrites them to 10000/0/0/0 and asserts that
+the stack refuses the receipt against the anchored digest. The apply path
+carries the same binding: govern row `apply-receipt` names the stored digest,
+and `applyReceipt` reverts `PayloadDigestMismatch`.
+
 **The verdict derives from every SELECTED stage, not from the FAIL count.**
 `devnet-acceptance.sh` used to compute `ok` as "no assertion is FAIL" and exit on
 the same number, so four stages selected with none of their config supplied
@@ -388,22 +396,6 @@ dropped export after a host rebuild or a credential rotation was enough. A stage
 the operator **asked for** whose configuration is missing is now recorded as
 `SKIP` with `reason: "unconfigured"`, and `ok` requires both
 `summary.failed == 0` **and** `summary.skipped_unconfigured == 0`.
-
-**The govern stage proves the apply path, with `eth_call` only (issue 1698).**
-The stage used to assert on the draft `rmpc governance draft-proposal` built.
-That command is deleted, so the stage now proves three properties against the
-deployed contracts and changes nothing: `RouterGovernance.receiptContract()` is
-the receipt contract that holds this receipt; `applyReceipt` sent from an
-account that is not the timelock (`FUSION_UNAUTHORIZED_RELEASER`, or
-`FUSION_UNAUTHORIZED_SUBMITTER`) reverts `AccessControlUnauthorizedAccount`; and,
-once the receipt is released, `applyReceipt` sent from the timelock
-(`FUSION_TIMELOCK_ADDRESS`) reverts `ReceiptAlreadyReleased`, so a released
-receipt can never move weights later. An unreleased receipt with the release
-stage not selected records the last probe as a `not_selected` skip. The
-weights-tampered negative case (10000/0/0/0) stays: the stack must refuse it
-against the anchored digest. The apply path carries the same binding: govern row
-`apply-receipt` refuses a payload whose digest differs, and `applyReceipt`
-reverts `ReceiptDigestMismatch`.
 
 **The anchored digest is compared FIELD-EXACTLY.** `getReceiptById` returns
 `(receiptId, payloadDigest, payloadUri, …)` and the explorer API echoes
@@ -415,11 +407,9 @@ require `^0x[0-9a-f]{64}$`, and compare the API's `payload_digest` and
 `payload_uri` as JSON fields.
 
 **INV-4 witnesses come from one shared reader and fail loudly.**
-`scripts/fusion/lib/inv4.sh` reads all four quantities —
-`PortfolioRouter.getEffectiveWeights()` (what deposits route by; it took the
-slot of `RouterGovernance.currentProposalId()`, which issue 1698 deleted),
-`PortfolioRouter.getWeights()`, and per
-mapped vault `totalAssets()` **and** `totalSupply()` — with no `2>&1` anywhere
+`scripts/fusion/lib/inv4.sh` reads the INV-4 quantities (the router weights,
+the receipt's release state, the role holders, and per mapped vault
+`totalAssets()` **and** `totalSupply()`) with no `2>&1` anywhere
 near a compared value and every `cast call` exit status checked. A read that did
 not answer emits a sentinel that the comparison records as a **FAILED**
 assertion; it can never diff clean against another unreadable snapshot. The
@@ -456,11 +446,9 @@ round-2 guards above, an unreadable chain that must record the INV-4 assertion a
 `FAIL` (with a readable-chain control that must record `PASS`), a one-unit witness
 drift that both harnesses must reach the same verdict on, a selected-but-
 unconfigured stage that must exit non-zero with `failed == 0`, a govern stage
-whose three apply-path probes must PASS against a bound, timelock-only weight
-setter and FAIL against one bound to another register or with no guards at all,
-a receipt with no weights array that `cross-repo-acceptance.sh` must refuse, a
-stub `rmpc` with no `governance` subcommand so a harness that still calls the
-deleted draft command fails, a wrong `payloadDigest` hidden behind a content-addressed
+that must PASS while the weight setter's `currentWeights()` is unchanged and
+FAIL when it moves or cannot be read, a receipt with no weights array that
+`cross-repo-acceptance.sh` must refuse, a wrong `payloadDigest` hidden behind a content-addressed
 `payloadUri` in both the tuple and the API body, a second `cross-repo-acceptance.sh`
 run that must broadcast nothing and still produce its evidence JSON, and the alert
 path's startup refusal, resolve and delivery-failure logging, driven through the
@@ -468,8 +456,7 @@ submit worker. Every one of them has a negative control that must FAIL — again
 `cast` binaries — retry-then-succeed, already-anchored no-op, conflicting-digest
 refusal (including a conflicting digest whose `payloadUri` embeds the derived
 digest, which a substring comparison would wrongly accept), a submit that
-reports success without anchoring, a malformed `getReceiptById` tuple, and —
-for `devnet-acceptance.sh` — an unknown stage name, a
+reports success without anchoring, a malformed `getReceiptById` tuple, and — for `devnet-acceptance.sh` — an unknown stage name, a
 missing INV-4 witness address, a missing receipt URL, an unfetchable receipt URL
 that must fail rather than pass vacuously, the negative control that
 `--no-anchor` reaches no write subcommand, and the assertion that unselected

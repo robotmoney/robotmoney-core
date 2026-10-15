@@ -6,16 +6,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { keccak256, pad, toHex } from "viem";
+import { keccak256, pad, toFunctionSelector, toHex } from "viem";
 import { RECORDER_RING_SLOTS, verifyDeployment } from "../../src/verify/index.ts";
 import {
   ADMIN_ROLE, AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, EMERGENCY_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, EXECUTOR_ROLE, CANCELLER_ROLE, SAFE_GUARD_SLOT, SAFE_FALLBACK_SLOT, SAFE_PROBE_ADDRESS,
-  KEEPER_ROLE, SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
+  SAFE_PROBE_ADDRESS_2, SIG_AGENT_AUTHORIZED, Z32, ZERO,
 } from "../../src/verify/constants.ts";
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
-import { buildWorld, failed, addr, implementationOf, DEPLOYER, IMPLEMENTATIONS, PROXIES, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
-import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT } from "../../src/proxies.ts";
+import { ERC1967_ADMIN_SLOT } from "../../src/verify/upgradeability.ts";
+import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
 const CORE: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, timelock: TIMELOCK, recorder: RECORDER };
@@ -52,22 +52,21 @@ const RULES: Rule[] = [
   [/^usdc: code hash equals pinned FiatTokenProxy$/, (w) => { w.chain.codes.set(USDC_ADDRESS.toLowerCase(), "0x6000"); }],
   [/^libraries: recorded in libs\.json$/, (w) => editManifest(w, "libs.json", (o) => { delete o.tick_math; })],
   [/^deployer: nonce equals sum of frozen counts$/, (w) => { w.chain.noncesMap.set(DEPLOYER.toLowerCase(), 1); }],
-  // issue 1809 (ADR-0014): the authority stage's timelock, and each governed proxy (the proxy build, the ERC-1967 slots, initialization, authority, mode, freeze)
-  [/^upgrade authority: the authority stage's timelock is the handover timelock$/, (w) => editManifest(w, "upgrade-authority.json", (o) => { o.timelock = OTHER; })],
-  [/^proxy\[(\w+)\]: runtime code equals the ERC1967Proxy build \(masked\)$/, (w, m) => { w.chain.codes.set(PROXIES[m[1]!]!.toLowerCase(), "0x6000"); }],
-  [/^proxy\[(\w+)\]: implementation slot equals the deployed or last upgraded implementation$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_IMPLEMENTATION_SLOT}`, pad(OTHER, { size: 32 })); }],
-  [/^proxy\[(\w+)\]: ERC-1967 admin slot is empty$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_ADMIN_SLOT}`, pad(OTHER, { size: 32 })); }],
-  [/^proxy\[(\w+)\]: ERC-1967 beacon slot is empty$/, (w, m) => { w.chain.storage.set(`${PROXIES[m[1]!]!.toLowerCase()}|${ERC1967_BEACON_SLOT}`, pad(OTHER, { size: 32 })); }],
-  // an implementation deployed without _disableInitializers: anyone could initialize it
-  [/^proxy\[(\w+)\]: initialized, and the implementation's initializers are locked$/, (w, m) => { w.chain.storage.set(`${IMPLEMENTATIONS[m[1]!]!.toLowerCase()}|${INITIALIZABLE_SLOT}`, Z32); }],
-  [/^proxy\[(\w+)\]: upgradeAuthority is the timelock$/, (w, m) => w.chain.set(PROXIES[m[1]!]!, "upgradeAuthority", OTHER)],
-  // the sheet states no UPGRADE_MODE: an undeclared mode fails every proxy
-  [/^proxy\[(\w+)\]: upgrade mode is declared and equals the sheet$/, (w) => { w.sheet.upgradeMode = undefined; }],
-  // frozen with no freeze row and an upgradeable sheet
-  [/^proxy\[(\w+)\]: upgradesFrozen matches the mode and the executed freezes$/, (w, m) => w.chain.set(PROXIES[m[1]!]!, "upgradesFrozen", true)],
-  // code present and code equals the build (issue 1809: a proxied contract's build runs in the implementation behind its proxy)
+  // code present and code equals the build
   [/^(.+): has code$/, (w, m) => { w.chain.codes.delete(subject(m[1]).toLowerCase()); }],
-  [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(implementationOf(subject(m[1])).toLowerCase(), "0x6000"); }],
+  [/^(.+): runtime code equals build artifact \(masked\)$/, (w, m) => { w.chain.codes.set(subject(m[1]).toLowerCase(), "0x6000"); }],
+  // upgradeability (issue 1809): each proxy label, the release mode, the freeze deadline and the immutability claim
+  [/^(.+): is the build's proxy with no admin and no beacon$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${ERC1967_ADMIN_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^(.+): implementation slot equals the manifest$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${IMPL_SLOT}`, pad(OTHER, { size: 32 })); }],
+  [/^(.+): implementation links the build's libraries$/, (w) => { w.chain.codes.set(GOVERNED_UPGRADE_LIB.toLowerCase(), "0x6000"); }],
+  [/^(.+): upgradeTimelock\(\) is the deployed timelock$/, (w, m) => w.chain.set(subject(m[1]), "upgradeTimelock", OTHER)],
+  [/^(.+): initialized once and not initializing$/, (w, m) => { w.chain.storage.set(`${subject(m[1]).toLowerCase()}|${INIT_SLOT}`, Z32); }],
+  [/^(.+): upgradesFrozen\(\) agrees with the release mode$/, (w, m) => w.chain.set(subject(m[1]), "upgradesFrozen", false)],
+  [/^(.+): manifest upgrade_mode equals the release sheet$/, (w) => { w.sheet.upgradeMode = "upgradeable"; }],
+  [/^(.+): storage layout identifier recorded$/, (w) => { delete w.opts.coreDir; }],
+  [/^upgrades: the sheet declares the release mode$/, (w) => { delete w.sheet.upgradeMode; }],
+  [/^upgrades: the freeze deadline is not missed$/, (w) => { w.sheet.upgradeMode = "upgradeable"; }],
+  [/^upgrades: core immutability is claimed only when the full core set verifies frozen on chain$/, (w) => w.chain.set(ROUTER, "upgradesFrozen", false)],
   // timelock (these come before the generic role rules: the subject is the timelock itself)
   [/^timelock: min delay at least chain floor$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
   [/^deployment kind: the timelock delay agrees with the kind$/, (w) => w.chain.set(TIMELOCK, "getMinDelay", 60n)],
@@ -93,7 +92,7 @@ const RULES: Rule[] = [
   [/^router: WEIGHT_SETTER_ROTATOR_ROLE not held by (timelock|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATOR_ROLE, { timelock: TIMELOCK, governance: GOV, ...WHO }[m[1]]!)],
   [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE held by timelock$/, (w) => w.chain.revoke(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, TIMELOCK)],
   [/^router: WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE not held by (safe|deployer|governance|pauser|emergency)$/, (w, m) => w.chain.grant(ROUTER, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, { governance: GOV, ...WHO }[m[1]]!)],
-  // QA plan v1 C3 (CS-6): a second ADMIN_ROLE member on the weight setter can apply weights without a timelock operation, so the setter is not timelock-gated
+  // QA plan v1 C3 (CS-6): a second ADMIN_ROLE member on the weight setter can move weights without a timelock operation, so the setter is not timelock-gated
   [/^router: every WEIGHT_SETTER_ROLE holder is timelock-gated$/, (w) => w.chain.grant(GOV, ADMIN_ROLE, OTHER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE held by pauser$/, (w) => w.chain.revoke(GATEWAY, DEPOSIT_PAUSER_ROLE, PAUSER)],
   [/^gateway: DEPOSIT_PAUSER_ROLE not held by deployer$/, (w) => w.chain.grant(GATEWAY, DEPOSIT_PAUSER_ROLE, DEPLOYER)],
@@ -106,27 +105,20 @@ const RULES: Rule[] = [
   [/^(.+): ADMIN_ROLE not held by (deployer|pauser|emergency|safe)$/, (w, m) => w.chain.grant(subject(m[1]), ADMIN_ROLE, WHO[m[2]])],
   [/^(.+): EMERGENCY_ROLE held by emergency key$/, (w, m) => w.chain.revoke(subject(m[1]), EMERGENCY_ROLE, EMERGENCY)],
   [/^(.+): EMERGENCY_ROLE not held by deployer$/, (w, m) => w.chain.grant(subject(m[1]), EMERGENCY_ROLE, DEPLOYER)],
-  // issue 1705 C5: a second emergency key (the pauser, an expected account, so the roles enumeration label stays green), and a rebalance keeper on rmUSDC
-  [/^(vault\[\w+\]): EMERGENCY_ROLE has exactly one holder$/, (w, m) => { w.chain.grant(subject(m[1]), EMERGENCY_ROLE, PAUSER); w.chain.roleGrantedLog(subject(m[1]), EMERGENCY_ROLE, PAUSER, 4100n); }],
-  [/^vault\[rmUSDC\]: KEEPER_ROLE has no holder$/, (w) => { w.chain.grant(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE); w.chain.roleGrantedLog(VAULTS.rmUSDC.address, KEEPER_ROLE, SAFE, 4100n); }],
-  // deploy-time configuration (issue 1520) and the weight setter's stage 11 wiring (issue 1698: no voting surface, the receipt register and the router instead)
-  [/^governance: receiptContract\(\) equals the consensus receipt$/, (w) => w.chain.set(GOV, "receiptContract", OTHER)],
+  // deploy-time configuration (issue 1520)
+  // the weight setter (issue 1698)
+  [/^governance: WEIGHT_SETTER_ROLE \(applyReceipt\) held by timelock$/, (w) => w.chain.revoke(GOV, WEIGHT_SETTER_ROLE, TIMELOCK)],
+  [/^governance: WEIGHT_SETTER_ROLE \(applyReceipt\) has exactly one holder$/, (w) => w.chain.grant(GOV, WEIGHT_SETTER_ROLE, OTHER)],
   [/^governance: router\(\) equals the deployed router$/, (w) => w.chain.set(GOV, "router", OTHER)],
-  [/^receipt: ADMIN_ROLE held by governance$/, (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
+  [/^governance: receipts\(\) equals the deployed receipt register$/, (w) => w.chain.set(GOV, "receipts", OTHER)],
+  [/^receipt: ADMIN_ROLE held by governance \(applyReceipt releases\)$/, (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
+  [/^governance: runtime code has no voting function$/, (w) => w.chain.codes.set(GOV.toLowerCase(), `0x63${toFunctionSelector("quorumThreshold()").slice(2)}${w.chain.codes.get(GOV.toLowerCase())!.slice(2)}` as `0x${string}`)],
   [/^router: default weights equal sheet$/, (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [5000n, 5000n, 0n, 0n]])],
-  // issue 1743: an active (applied receipt) vector on the router overrides the default vector; the deploy leaves none
-  [/^router: votedWeightsActive is false after deploy, true after an applied receipt$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+  // issue 1743: a voted vector on the router overrides the default vector
+  [/^router: votedWeightsActive is true only after an applied receipt$/, (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
   [/^router: effective weights equal the sheet's launch vector$/, (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
   // issue 1696: a receipt the run manifest says the Safe applied reads not released
-  // QA plan v1 C2: the application is on chain (ReceiptApplied) and recorded, the router routes by it, and the receipt reads not released
-  [/^receipt: applied receipt is released and its weights are on the router$/, (w) => {
-    const vs = Object.values(VAULTS).map((v) => v.address), bps = [9500, 500, 0, 0], rid = `0x${"ab".repeat(32)}` as `0x${string}`;
-    w.chain.receiptAppliedLog(rid, vs, bps);
-    w.opts.appliedReceipt = { receiptId: rid, vaults: vs, bps };
-    w.chain.set(ROUTER, "votedWeightsActive", true);
-    w.chain.set(ROUTER, "getEffectiveWeights", [vs, bps.map((x) => BigInt(x))]);
-    w.chain.set(REC, "isReleased", () => false);
-  }],
+  [/^receipt: applied receipt is released and its weights are on the router$/, (w) => { w.opts.appliedReceipt = { receiptId: `0x${"ab".repeat(32)}`, vaults: Object.values(VAULTS).map((v) => v.address), bps: [9500, 500, 0, 0] }; w.chain.set(REC, "isReleased", () => false); }],
   [/^(vault\[\w+\]): router eligibility equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].routerEligible = false; }],
   // vault facts
   [/^(vault\[\w+\]): registry link$/, (w, m) => w.chain.set(subject(m[1]), "registry", OTHER)],
@@ -167,14 +159,12 @@ const RULES: Rule[] = [
   [/^(vault\[\w+\]): feeRecipient equals sheet$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", OTHER)],
   [/^(vault\[\w+\]): feeRecipient is not deployer$/, (w, m) => w.chain.set(subject(m[1]), "feeRecipient", DEPLOYER)],
   [/^(vault\[\w+\]): paused state equals sheet$/, (w, m) => { const a = subject(m[1]); const was = w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].expectPaused; w.chain.set(a, "depositsPaused", !was); }],
-  // issue 1705 C4 (core 1695 for rmAGENT, whose pool fee alone is 291 bps): the vault bound moved off the config value
-  [/^(vault\[\w+\]): maxSlippageBps equals config$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 499n)],
-  // issue 1705 C4: the second lending adapter registered at another cap than the deploy script sets
-  [/^vault\[rmUSDC\]: adapter set, caps and code-hash allowlist equal the deploy script$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "adapters", (a: any[]) => {
-    const x = w.sheet.vaults.rmUSDC!.adapters![Number(a[0])];
-    if (!x) throw new Error("execution reverted");
-    return [x.address, Number(a[0]) === 1 ? 5000 : x.capBps, true];
-  })],
+  // core 1695: the vault bound moved off the launch value (the pool fee alone is 291 bps)
+  [/^(vault\[\w+\]): maxSlippageBps equals config$/, (w, m) => w.chain.set(subject(m[1]), "maxSlippageBps", 1n)],
+  // issue 1705 C5: a keeper, a second emergency holder; C4: an rmUSDC adapter cap off the deploy script
+  [/^(vault\[\w+\]): KEEPER_ROLE has no holder$/, (w, m) => { const k = keccak256(toHex("KEEPER_ROLE")); w.chain.grant(subject(m[1]), k, OTHER); w.chain.roleGrantedLog(subject(m[1]), k, OTHER, 400n); }],
+  [/^(vault\[\w+\]): EMERGENCY_ROLE has exactly one holder$/, (w, m) => { w.chain.grant(subject(m[1]), EMERGENCY_ROLE, OTHER); w.chain.roleGrantedLog(subject(m[1]), EMERGENCY_ROLE, OTHER, 400n); }],
+  [/^vault\[rmUSDC\]: adapter set, caps and code-hash allowlist equal the deploy script$/, (w) => { w.sheet.vaults.rmUSDC.adapters![0]!.capBps = 1; }],
   [/^vault\[rmAGENT\]: asset config equals sheet$/, (w) => { w.sheet.vaults.rmAGENT.assets = [{ token: addr(0xe7), pool: addr(0xf001), swapFee: 500, adapter: addr(0xad01) }]; }],
   [/^(vault\[\w+\]): asset config equals sheet$/, (w, m) => { w.sheet.vaults[/\[(\w+)\]/.exec(m[1])![1]].assets = []; }],
   [/^vault\[rmUSDC\]: seed present$/, (w) => w.chain.set(VAULTS.rmUSDC.address, "totalAssets", 0n)],

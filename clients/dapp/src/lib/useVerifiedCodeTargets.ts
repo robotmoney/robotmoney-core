@@ -36,11 +36,12 @@ import { depositsReadAllowed } from "./useVaultsDepositsPaused";
 import {
   DEFINITE_PIN_REFUSALS,
   parseCodePins,
+  parseImplementationAddressPins,
   parseImplementationPinMap,
   verifyPinnedTarget,
   type PinnedTargetReads,
 } from "./codePins";
-import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./upgradeState";
+import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./gatewayVerifier";
 
 /** How often the pinned addresses are read again, so an upgrade is noticed on an open tab. */
 const REVERIFY_MS = 60_000;
@@ -56,6 +57,7 @@ export function useCodeTargetVerification(): CodeTargetVerification {
   const env = useRuntimeConfig();
   const pins = useMemo(() => parseCodePins(env), [env]);
   const implementationPins = useMemo(() => parseImplementationPinMap(env), [env]);
+  const implementationAddressPins = useMemo(() => parseImplementationAddressPins(env), [env]);
   const { state } = useWriteChainGuard();
   const allowed = depositsReadAllowed(state);
   const chainId = state.kind === "ok" ? state.targetChainId : undefined;
@@ -79,7 +81,7 @@ export function useCodeTargetVerification(): CodeTargetVerification {
             const codeHex = code ?? "0x";
             const implementation = typeof slot === "string" ? implementationFromSlot(slot) : null;
             const implementationCode =
-              implementation === null
+              implementation === null || implementation === undefined
                 ? null
                 : ((await client.getCode({ address: implementation, blockNumber })) ?? "0x");
             return { code: codeHex, slot, implementationCode };
@@ -100,12 +102,18 @@ export function useCodeTargetVerification(): CodeTargetVerification {
     addresses.forEach((a, i) => {
       const reads = data?.[i];
       if (!reads) return;
-      const result = verifyPinnedTarget(a, reads, pins, implementationPins);
+      const result = verifyPinnedTarget(
+        a,
+        reads,
+        pins,
+        implementationPins,
+        implementationAddressPins,
+      );
       if (result.ok) verified.add(a);
       else if (DEFINITE_PIN_REFUSALS.has(result.cause)) refused.add(a);
     });
     return { verified, refused };
-  }, [addresses, data, pins, implementationPins]);
+  }, [addresses, data, pins, implementationPins, implementationAddressPins]);
 }
 
 /** The verified half of `useCodeTargetVerification`: what the preview badges read. */

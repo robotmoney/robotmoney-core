@@ -19,7 +19,7 @@ use explorer_api::{router, AppState};
 
 const PRIMARY_CHAIN_ID: i64 = 8453;
 
-/// Migrations in order, through 0019, which keys `committee_votes` by the
+/// Migrations in order, through 0020, which keys `committee_votes` by the
 /// emitting policy (DI-10). The track-record route reads that column.
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0001_minimum_tables.sql"),
@@ -52,8 +52,9 @@ const MIGRATIONS: &[&str] = &[
         "../../../services/explorer-indexer/migrations/0017_admin_events_and_chain_head.sql"
     ),
     include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
+    include_str!("../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql"),
     include_str!(
-        "../../../services/explorer-indexer/migrations/0019_committee_votes_contract_scope.sql"
+        "../../../services/explorer-indexer/migrations/0020_committee_votes_contract_scope.sql"
     ),
 ];
 

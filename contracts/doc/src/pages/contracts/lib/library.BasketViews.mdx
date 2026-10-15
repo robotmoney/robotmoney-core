@@ -5,7 +5,7 @@ description: "Off-chain weight-preview views for `BasketVault`, extracted into a
 
 # BasketViews
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/lib/BasketViews.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/lib/BasketViews.sol)
 
 **Title:** BasketViews
 
@@ -163,7 +163,7 @@ to last `SELL_ANCHOR_WINDOW` instead. Only the sell side is gated: a live price 
 redeemer more, and deposits keep the ORA-4 guard (`checkNavDeviation`). Only V4 legs are gated: V3 and
 Aerodrome pools write their own per-block observations and are deeper. A leg the vault holds none of is
 skipped, because the redeem sells none of it. So is a leg the vault holds only dust of (QA plan D6): a balance
-whose TWAP sale floor rounds to zero USDC units, which `BasketSwapOps.sellProportional` (`_sellLeg`) never sells. Without
+whose TWAP sale floor rounds to zero USDC units, which `BasketVault._sellProportional` never sells. Without
 that, one donated wei after an unwind would refuse every USDC redeem while the price sits below the anchor.
 The dust test prices the balance only on the refusal path, so a normal redeem pays no extra TWAP read.
 `redeemInKind` never calls this, so the holder's oracle-free exit stays open (ADR-0007, core 1665).

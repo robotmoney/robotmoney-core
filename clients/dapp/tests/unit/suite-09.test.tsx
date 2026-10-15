@@ -25,9 +25,6 @@ import { VaultDetail } from "../../src/components/VaultDetail";
 vi.mock("wagmi", () => ({
   // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
   useReadContracts: () => ({ data: undefined }),
-  // QA plan P3: the vault page's upgrade reads; no live chain in this test.
-  useStorageAt: () => ({ data: undefined, isError: false }),
-  useBytecode: () => ({ data: undefined }),
   useAccount: () => ({ address: undefined, isConnected: false, chainId: undefined }),
   useWriteContract: () => ({ writeContract: () => undefined, isPending: false, data: undefined }),
   useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
@@ -191,9 +188,8 @@ function makeFetch(body: unknown, ok = true, status = 200): FetchLike {
 }
 
 /**
- * RouterView calls two URLs: /v1/router/weights and /v1/vaults. Any other URL
- * is a 404, so a reintroduced call to the deleted /v1/governance/proposals
- * route (issue 1698) turns the tab into its error state and fails these tests.
+ * RouterView calls two URLs: /v1/router/weights and /v1/vaults.
+ * Any other URL (a governance proposal list, say) fails the fetch.
  */
 function makeRouterFetch(
   weights: RouterWeightsResponse = routerWeightsFixture,

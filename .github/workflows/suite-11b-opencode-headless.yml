@@ -358,7 +358,8 @@ jobs:
       # The deploy authorizes no agent (core 1527; architecture 5.2 and 6.3). Read the stage manifests, assert
       # on-chain that the generated key holds no authorization yet, then have the depositor (the share
       # receiver, an unlocked Anvil account) authorize it the way any depositor does: commitAuthorization,
-      # then revealAuthorization in a later block, carrying the generated key's EIP-712 consent (issue #1791).
+      # then revealAuthorization in a later block, after the generated key committed its consent to that
+      # exact reveal (issue #1791).
       # Finally assert agentOwner and AGENT_ROLE (issue #469: the create-key -> authorize path is real, before
       # any deposit is attempted).
       - name: Depositor authorizes the generated agent on-chain
@@ -377,16 +378,9 @@ jobs:
           echo "VAULT_ADDRESS=$VAULT" >> $GITHUB_ENV
           GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
           echo "GATEWAY_RUNTIME_HASH=$GATEWAY_RUNTIME_HASH" >> $GITHUB_ENV
-          # QA plan P3: the gateway is a proxy (ADR-0014); rmpc signs only against the
-          # implementation whose code hash the config pins.
-          GATEWAY_IMPLEMENTATION_HASH=$(jq -r '.gateway_implementation_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")
-          echo "GATEWAY_IMPLEMENTATION_HASH=$GATEWAY_IMPLEMENTATION_HASH" >> $GITHUB_ENV
-          # Issue 1810: the vault the deposit lands in is a proxy too; rmpc pins its logic in
-          # proxy_implementation_hashes. Read its ERC-1967 implementation and hash that code.
-          VAULT_IMPL_WORD=$(cast storage "$VAULT" 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url "$RPC")
-          VAULT_IMPL="0x${VAULT_IMPL_WORD: -40}"
-          VAULT_IMPLEMENTATION_HASH=$(cast keccak "$(cast code "$VAULT_IMPL" --rpc-url "$RPC")")
-          echo "VAULT_IMPLEMENTATION_HASH=$VAULT_IMPLEMENTATION_HASH" >> $GITHUB_ENV
+          # Issue 1810: the gateway is an ERC-1967 proxy; rmpc signs only for the approved implementation.
+          echo "GATEWAY_IMPLEMENTATION=$(jq -er '.gateway_implementation' "$TWIN_MANIFEST_DIR/gateway.json")" >> $GITHUB_ENV
+          echo "GATEWAY_IMPLEMENTATION_RUNTIME_HASH=$(jq -er '.gateway_implementation_runtime_hash' "$TWIN_MANIFEST_DIR/gateway.json")" >> $GITHUB_ENV
           AGENT_ROLE=$(cast call "$GATEWAY" "AGENT_ROLE()(bytes32)" --rpc-url "$RPC")
 
           # 1. The deploy authorized nothing: the generated key has no owner and no AGENT_ROLE.
@@ -407,28 +401,15 @@ jobs:
           COMMIT=$(cast keccak "$(cast abi-encode 'f(address,address,bytes32)' "$AGENT_ADDRESS" "$DEPOSITOR" "$SALT")")
           cast send "$GATEWAY" "commitAuthorization(bytes32)" "$COMMIT" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
           POLICY="(true,4102444800,10000000000,100000000000,$DEPOSITOR,[],$DEPOSITOR,10000000000,100000000000,[])"
-          # The depositor is not the agent and holds no ADMIN_ROLE, so the reveal carries the agent's EIP-712
-          # consent (issue #1791, QA plan v1 D2): AgentConsent(agent, owner, shareReceiver, nonce) in the domain
-          # (RobotMoneyGateway, 1, chain id, gateway), owner = shareReceiver = the depositor, nonce =
-          # agentConsentNonce(agent). The digest is built the way RobotMoneyGateway._requireAgentConsent builds
-          # it and signed raw (--no-hash) by the generated agent key: r || s || v, low-s.
-          CHAIN_ID=$(cast chain-id --rpc-url "$RPC")
-          CONSENT_NONCE=$(cast call "$GATEWAY" "agentConsentNonce(address)(uint256)" "$AGENT_ADDRESS" --rpc-url "$RPC" | awk '{print $1}')
-          CONSENT_TYPEHASH=$(cast call "$GATEWAY" "AGENT_CONSENT_TYPEHASH()(bytes32)" --rpc-url "$RPC")
-          if [ "$CONSENT_TYPEHASH" != "$(cast keccak 'AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)')" ]; then
-            echo "FAIL: gateway AGENT_CONSENT_TYPEHASH = $CONSENT_TYPEHASH is not the AgentConsent type this step signs" >&2
-            exit 1
-          fi
-          DOMAIN_SEPARATOR=$(cast keccak "$(cast abi-encode 'f(bytes32,bytes32,bytes32,uint256,address)' \
-            "$(cast keccak 'EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)')" \
-            "$(cast keccak 'RobotMoneyGateway')" "$(cast keccak '1')" "$CHAIN_ID" "$GATEWAY")")
-          STRUCT_HASH=$(cast keccak "$(cast abi-encode 'f(bytes32,address,address,address,uint256)' \
-            "$CONSENT_TYPEHASH" "$AGENT_ADDRESS" "$DEPOSITOR" "$DEPOSITOR" "$CONSENT_NONCE")")
-          CONSENT_DIGEST=$(cast keccak "0x1901${DOMAIN_SEPARATOR#0x}${STRUCT_HASH#0x}")
-          AGENT_CONSENT=$(cast wallet sign --no-hash "$CONSENT_DIGEST" --private-key "$AGENT_PRIVKEY")
-          cast send "$GATEWAY" \
-            "revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]),bytes)" \
-            "$AGENT_ADDRESS" "$SALT" "$POLICY" "$AGENT_CONSENT" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
+          # The depositor is not the agent, so the agent consents first (issue #1791): from its own key it
+          # commits keccak256(abi.encode(owner, keccak256(callData))) through commitAuthorization, where
+          # callData is the exact revealAuthorization(agent, salt, policy) calldata the depositor sends next.
+          # The reveal consumes that consent; without it the reveal reverts OwnerConsentMissing.
+          REVEAL_SIG="revealAuthorization(address,bytes32,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))"
+          REVEAL_CALLDATA=$(cast calldata "$REVEAL_SIG" "$AGENT_ADDRESS" "$SALT" "$POLICY")
+          CONSENT_HASH=$(cast keccak "$(cast abi-encode 'f(address,bytes32)' "$DEPOSITOR" "$(cast keccak "$REVEAL_CALLDATA")")")
+          cast send "$GATEWAY" "commitAuthorization(bytes32)" "$CONSENT_HASH" --private-key "$AGENT_PRIVKEY" --rpc-url "$RPC"
+          cast send "$GATEWAY" "$REVEAL_SIG" "$AGENT_ADDRESS" "$SALT" "$POLICY" --unlocked --from "$DEPOSITOR" --rpc-url "$RPC"
 
           # 3. agentOwner is the depositor and the agent holds AGENT_ROLE.
           OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" --rpc-url "$RPC")
@@ -479,8 +460,8 @@ jobs:
           usdc_address          = "$USDC_ADDRESS"
           vault_address         = "$VAULT_ADDRESS"
           gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
-          gateway_implementation_hashes = ["$GATEWAY_IMPLEMENTATION_HASH"]
-          proxy_implementation_hashes = ["$VAULT_IMPLEMENTATION_HASH"]
+          gateway_implementation = "$GATEWAY_IMPLEMENTATION"
+          gateway_implementation_runtime_hash = "$GATEWAY_IMPLEMENTATION_RUNTIME_HASH"
           state_dir             = "$STATE_DIR"
 
           [signer]

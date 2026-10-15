@@ -227,20 +227,14 @@ export async function signerFromSpec(spec: string, hdPath?: string): Promise<Sig
 }
 
 
-/** What the one caller of impersonatedSender states (runner.ts createSafeOnSimulationChain): the RPC is the preflight's own local anvil fork. */
-export interface LocalSimulationFork { readonly localSimulationFork: true }
-
 /**
  * An address-only signer that can SEND, for the preflight's local simulation chain only: the node itself signs for the unlocked
- * (impersonated) account, so no key exists anywhere. It cannot sign a Safe hash.
- * Issue 1720 (QA plan v1 E5): the guard is the RPC, never the chain id. The simulation anvil is a lazy fork of the target and reports the
- * target's chain id (8453 for a mainnet sheet), so a chain-id refusal failed every --dry-run of an 8453 sheet at the safe stage. A real node
- * is a non-loopback RPC: refused at every chain id, 8453 and 918453 included, here and again at send. The caller must also say it is the
- * local simulation fork (`sim`), so no other path picks this signer up by accident. The runner refuses a non-loopback simRpc before this,
- * and its anvil_impersonateAccount call fails on any node that is not anvil.
+ * (impersonated) account, so no key exists anywhere. Refused against any RPC that is not loopback, at every chain id.
+ * The guard is the RPC, not the chain id: the simulation anvil is a fork of the target, so a dry run of an 8453 sheet
+ * legitimately reports chain id 8453 on a loopback URL (issue 1720). A real node is never loopback.
+ * It cannot sign a Safe hash.
  */
-export function impersonatedSender(address: Address, chain: ChainOpts, sim: LocalSimulationFork): Signer {
-  if (sim?.localSimulationFork !== true) throw new SafeToolError("BAD_INPUT", "an impersonated sender is built only for the preflight's local simulation fork: the caller must say so.");
+export function impersonatedSender(address: Address, chain: ChainOpts): Signer {
   if (!isLoopbackRpc(chain.rpcUrl)) {
     throw new SafeToolError("BAD_INPUT", "an impersonated sender is accepted only against the local simulation anvil (a loopback RPC).");
   }
@@ -249,7 +243,6 @@ export function impersonatedSender(address: Address, chain: ChainOpts, sim: Loca
     async address() { return address; },
     async signSafeHash() { throw new SafeToolError("BAD_INPUT", "an impersonated sender cannot sign a Safe hash"); },
     async send(req, c) {
-      if (!isLoopbackRpc(c.rpcUrl)) throw new SafeToolError("BAD_INPUT", "an impersonated sender sends only to the local simulation anvil (a loopback RPC).");
       const wallet = createWalletClient({ account: address, chain: viemChain(c), transport: http(c.rpcUrl) });
       return wallet.sendTransaction({ to: req.to, data: req.data, value: req.value ?? 0n, ...(req.gas ? { gas: req.gas } : {}) });
     },

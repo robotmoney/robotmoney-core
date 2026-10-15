@@ -30,11 +30,12 @@
 //! role, not a governance role. `ic_policy_address` is still required so the
 //! command fails closed before signing when the committee is not configured.
 //!
-//! Before it signs, `vote-submit` runs checks 1, 2 and 2b of the write
-//! preflight (issue 1810, `crate::upgrade::verify_gateway_before_signing`):
-//! the RPC serves `chain_id`, the gateway's code hashes to
-//! `gateway_runtime_hash`, and a proxied gateway runs an implementation pinned
-//! in `gateway_implementation_hashes`. A mismatch exits 2, a failed read 3;
+//! Before it signs, `vote-submit` verifies the gateway proxy code and its
+//! live implementation at one pinned block (issue 1810,
+//! `policy::implementation::verify_gateway_code_now`): the gateway's code
+//! hashes to `gateway_runtime_hash`, and a proxied gateway runs the approved
+//! `gateway_implementation` with code hash
+//! `gateway_implementation_runtime_hash`. A mismatch or a failed read exits 2;
 //! neither signs.
 //!
 //! Exit codes:
@@ -59,6 +60,7 @@ use crate::gateway::{GatewayVoteParams, InvestmentCommitteePolicy, RobotMoneyGat
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::implementation::{check_executed_under, verify_gateway_code_now};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{Keystore, SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::AgentSigner;
@@ -301,27 +303,24 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
-    // Checks 1, 2 and 2b before anything is signed (issue 1810): the RPC
-    // serves `chain_id`, the gateway's code is `gateway_runtime_hash`, and a
-    // proxied gateway runs an implementation pinned in
-    // `gateway_implementation_hashes`. A failed read refuses too.
-    if let Err(err) = rt.block_on(crate::upgrade::verify_gateway_before_signing(
-        &rpc,
-        &cfg,
-        gateway_addr,
-    )) {
-        log::error!("rmpc committee vote-submit: gateway check refused: {err}");
-        emit_failure(
-            &CommitteeFailure {
-                ok: false,
-                error: err.name().to_string(),
-                message: Some(format!("{err}")),
-                tx_hash: None,
-            },
-            args.pretty,
-        );
-        return gateway_check_exit_code(&err);
-    }
+    // The gateway proxy and its live implementation must be the approved
+    // ones before anything is signed (issue 1810).
+    let gateway_implementation = match rt.block_on(verify_gateway_code_now(&rpc, &cfg)) {
+        Ok(i) => i,
+        Err(e) => {
+            log::error!("rmpc committee vote-submit: {e}");
+            emit_failure(
+                &CommitteeFailure {
+                    ok: false,
+                    error: e.name().to_string(),
+                    message: Some(format!("{e}")),
+                    tx_hash: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
 
     let fees = match fetch_fees(
         &rt,
@@ -456,6 +455,28 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
+    // The vote is a success only if it executed under the implementation it
+    // was signed against (issue 1810).
+    if let Err(e) = rt.block_on(check_executed_under(
+        &rpc,
+        gateway_addr,
+        gateway_implementation,
+        receipt.block_number,
+        &format!("{tx_hash:#x}"),
+    )) {
+        log::error!("rmpc committee vote-submit: {e}");
+        emit_failure(
+            &CommitteeFailure {
+                ok: false,
+                error: e.name().to_string(),
+                message: Some(format!("{e}")),
+                tx_hash: Some(format!("{tx_hash:#x}")),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+
     let block_number = receipt.block_number.unwrap_or(0);
     log::info!("rmpc committee vote-submit: ok tx_hash={tx_hash:#x} block={block_number}");
     emit_output(
@@ -469,18 +490,6 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         args.pretty,
     );
     EXIT_OK
-}
-
-/// Exit code of a failed gateway check: a mismatch the chain answered is a
-/// refusal (2); a read that did not complete is a startup failure (3).
-/// Neither signs anything.
-fn gateway_check_exit_code(err: &RmpcError) -> i32 {
-    match err {
-        RmpcError::ErrChainIdMismatch
-        | RmpcError::ErrCodeHashMismatch
-        | RmpcError::ErrImplementationNotApproved { .. } => EXIT_REFUSAL,
-        _ => EXIT_STARTUP_FAIL,
-    }
 }
 
 /// Run `rmpc committee check-agent`. Returns the process exit code.

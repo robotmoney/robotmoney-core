@@ -5,9 +5,9 @@ description: "On-chain registry of authorised Robot Money vaults."
 
 # VaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/VaultRegistry.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** VaultRegistry
 
@@ -23,10 +23,9 @@ Access model: `ADMIN_ROLE` is required for `registerVault` and
 so the deployer is the sole initial admin, matching the gateway's
 access-control pattern.
 
-Upgradeability (ADR-0014): deployed as an implementation behind its own
-ERC1967Proxy and initialized in the proxy's deployment transaction. Only the
-timelock named at `initialize` can upgrade it (`GovernedUpgrade`), and
-`freezeUpgrades` ends upgrades forever. No role confers upgrade power.
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `ADMIN_ROLE` carries no upgrade power.
 
 ## Constants
 
@@ -135,32 +134,14 @@ IRouterDefaultWeights public router;
 
 ## Functions
 
-<a id="constructor"></a>
-
-### constructor
-
-<i>
-
-The implementation is never initialized: only a proxy is.
-
-</i>
-
-**Note:**
-
-- **oz-upgrades-unsafe-allow:** constructor
-
-```solidity
-constructor();
-```
-
 <a id="initialize-address-address-upgrademode"></a>
 
 ### initialize
 
-Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
-function initialize(address admin, address upgradeAuthority, UpgradeMode mode)
+function initialize(address admin, address upgradeTimelock_, UpgradeMode upgradeMode_)
         external
         initializer;
 ```
@@ -169,9 +150,9 @@ function initialize(address admin, address upgradeAuthority, UpgradeMode mode)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| admin | `address` | Address that receives `ADMIN_ROLE`. |
-| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
-| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
+| admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="registervault-address-vaultmetadata"></a>
 

@@ -4,26 +4,23 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadStageTable } from "../stage/stage-table";
-import { loadStageTable as cliLoadStageTable, VAULT_RULE_FIELDS, differingRuleFields, parseStageTable } from "../../publish-contracts/src/stage-table";
+import { loadStageTable as cliLoadStageTable, VAULT_RULE_FIELDS, vaultRules } from "../../publish-contracts/src/stage-table";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const table = loadStageTable();
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-/**
- * Source of a script plus the shared bases it inherits env readers and manifest names from: the basket base, the proxy base (issue 1809: UPGRADE_AUTHORITY and
- * UPGRADE_MODE are read in GovernedProxyDeploy) and the handover script the authority stage inherits (DeployUpgradeAuthority is DeployTimelock).
- */
+/** Source of a script plus the shared bases it inherits env readers and manifest names from. */
 function scriptSource(path: string): string {
   const own = read(path);
   const base = path.replace(/[^/]+$/, "");
-  const basket = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
-  const proxy = /GovernedProxyDeploy/.test(own + basket) ? read(`${base}GovernedProxyDeploy.sol`) : "";
-  const handover = /\bis DeployTimelock\b/.test(own) ? read(`${base}DeployTimelock.s.sol`) : "";
-  return own + basket + proxy + handover + read(`${base}ExpectedChainGuard.sol`);
+  const extra = /BasketVaultDeployBase/.test(own) ? read(`${base}BasketVaultDeployBase.sol`) : "";
+  // Issue 1808: the proxy stages read SAFE_ADDRESS, TIMELOCK_MIN_DELAY and UPGRADE_MODE through UpgradeAuthority.
+  const upgrade = /UpgradeAuthority|BasketVaultDeployBase/.test(own) ? read(`${base}UpgradeAuthority.sol`) : "";
+  return own + extra + upgrade + read(`${base}ExpectedChainGuard.sol`);
 }
 
-const EXPECTED = ["libs", "recorder", "authority", "vault", "registry", "router", "gateway", "governance", "ic-policy", "proto", "agent", "rwa", "timelock"];
+const EXPECTED = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa", "timelock"];
 
 describe("stage-table.json", () => {
   test("version 1 with every stage, in deploy order", () => {
@@ -33,7 +30,7 @@ describe("stage-table.json", () => {
 
   test("every non-script deploy script in contracts/script has a stage", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
-    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row (the stale basket eligibility script is deleted, issue 1705)
+    // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row
     const skip = new Set(["RedeployProtocolAssetVault.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
@@ -101,16 +98,37 @@ describe("stage-table.json", () => {
     }
   });
 
-  test("create2Libraries name real library sources, and a stage lists them only if it deploys a vault that links them (issue 1721)", () => {
+  test("create2Libraries name real library sources, and a stage lists exactly the libraries the contracts it deploys link (issues 1721, 1808)", () => {
     const c2 = (table as any).create2Libraries as { name: string; artifact: string; path: string }[];
-    expect(c2.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews"]);
+    expect(c2.map((l) => l.artifact)).toEqual([
+      "BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows",
+    ]);
     for (const l of c2) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
-    for (const s of table.stages as any[]) for (const n of s.create2Libraries ?? []) {
-      expect(c2.map((l) => l.name)).toContain(n);
-      expect(s.vault && s.vault !== "USDC").toBe(true);
-      expect(read("contracts/vaults/BasketVault.sol")).toMatch(new RegExp(`import \\{[^}]*\\b${n}\\b`));
+    // The sources of the proxied contracts each stage deploys. A library is linked when one of them imports from its file
+    // (GovernedUpgrade is linked through the GovernedUUPS base, declared in the same file).
+    const sources: Record<string, string[]> = {
+      vault: ["contracts/RobotMoneyVault.sol"],
+      registry: ["contracts/VaultRegistry.sol"],
+      router: ["contracts/PortfolioRouter.sol"],
+      gateway: ["contracts/gateway/RobotMoneyGateway.sol"],
+      "ic-policy": ["contracts/gateway/InvestmentCommitteePolicy.sol", "contracts/gateway/ConsensusRecommendationReceipt.sol"],
+      governance: ["contracts/RouterGovernance.sol"],
+      proto: ["contracts/vaults/BasketVault.sol"],
+      agent: ["contracts/vaults/BasketVault.sol"],
+      rwa: ["contracts/vaults/BasketVault.sol"],
+    };
+    const fileOf = (n: string) => c2.find((l) => l.name === n)!.path.split("/").pop()!;
+    for (const s of table.stages as any[]) {
+      const listed: string[] = s.create2Libraries ?? [];
+      for (const n of listed) expect(c2.map((l) => l.name)).toContain(n);
+      const src = (sources[s.name] ?? []).map(read).join("\n");
+      const imported = c2.filter((l) => new RegExp(`import \\{[^}]*\\} from "[^"]*/${fileOf(l.name)}"`).test(src)).map((l) => l.name);
+      expect([s.name, [...listed].sort()]).toEqual([s.name, [...imported].sort()]);
     }
-    expect((table.stages as any[]).filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["proto", "agent", "rwa"]);
+    // Every proxied core contract links GovernedUpgrade (issue 1808): every stage that deploys one lists it.
+    expect((table.stages as any[]).filter((s) => s.create2Libraries?.includes("GovernedUpgrade")).map((s) => s.name)).toEqual([
+      "vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa",
+    ]);
   });
 
   test("artifacts name contracts that exist under contracts/", () => {
@@ -120,6 +138,7 @@ describe("stage-table.json", () => {
       );
     const src = all("contracts").join("\n");
     for (const [k, name] of Object.entries(table.artifacts)) {
+      if (name === "TimelockController") continue; // OpenZeppelin, deployed by DeployTimelock
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
@@ -133,16 +152,12 @@ describe("stage-table.json", () => {
     expect(g.description).toContain("only mainnet operation is the unpause of each of the four vaults");
     expect(g.description).toContain("deploy-time configuration set by the deployer in stages 4 to 10");
     expect(g.description).toContain("Twin-only");
-    // issue 1698: router weights change through the one applyReceipt call (release and weights together), never a vote and never a two-call batch
-    expect(g.description).toContain("one RouterGovernance.applyReceipt call through the timelock");
-    expect(g.description).toContain("no voting surface");
-    for (const old of ["setDefaultWeights", "releaseReceipt", "scheduleBatch", "propose", "quorum"]) expect(g.description).not.toContain(old);
     // no 13-row list survives: none of the old matrix rows is named
     for (const old of ["voting-power-quorum", "other-setters", "migrate-eligibility", "router-weights"]) expect(JSON.stringify(g)).not.toContain(old);
     // the deploy-time configuration is read by the stages that set it
     const env = (n: string) => table.stages.find((s) => s.name === n)!.requiredEnv;
-    // issue 1698: the governance stage deploys the weight setter with no voting surface, so no voter or quorum input exists
-    expect(env("governance")).toEqual(["ADMIN_ADDRESS", "ROUTER_ADDRESS", "DEPLOYMENT_OUT"]);
+    // issue 1698: RouterGovernance has no voting, so the governance stage reads no voter, quorum or period, and it needs the receipt register
+    expect(env("governance")).toContain("CONSENSUS_RECEIPT_ADDRESS");
     for (const gone of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(env("governance")).not.toContain(gone);
     for (const n of ["proto", "agent", "rwa"]) expect(env(n)).toContain("ROUTER_DEFAULT_BPS");
   });
@@ -165,8 +180,9 @@ describe("stage-table.json", () => {
       });
       test(`${r.vault}: the redeploy reads the same sheet inputs as the vault's launch stage, plus the timelock and the emergency key`, () => {
         const stage = table.stages.find((s) => s.vault === r.vault)!;
-        // issue 1809: the redeployed vault's upgrade authority is TIMELOCK_ADDRESS itself, so the redeploy reads no UPGRADE_AUTHORITY (it reads UPGRADE_MODE like the launch stage)
-        const launch = stage.requiredEnv.filter((n) => n !== "ROUTER_DEFAULT_BPS" && n !== "UPGRADE_AUTHORITY");
+        // Issue 1808: the redeploy names the live timelock (TIMELOCK_ADDRESS) as the proxy's upgrade authority, so it reads no
+        // SAFE_ADDRESS or TIMELOCK_MIN_DELAY to predict one. It still declares UPGRADE_MODE.
+        const launch = stage.requiredEnv.filter((n) => !["ROUTER_DEFAULT_BPS", "SAFE_ADDRESS", "TIMELOCK_MIN_DELAY"].includes(n));
         expect([...r.requiredEnv].sort()).toEqual([...launch, "TIMELOCK_ADDRESS", "EMERGENCY_ADDRESS"].sort());
         expect(r.libraries).toEqual(stage.libraries);
         expect(r.create2Libraries).toEqual(stage.create2Libraries);
@@ -178,89 +194,130 @@ describe("stage-table.json", () => {
     }
   });
 
-  // Issue 1705 (QA plan v1 E9 a): one table holds the per-vault rule for every dimension the four vaults are governed by. Every field is present on every
-  // vault, a field on which the vaults differ names its decision, and each rule is what the scripts and contracts do.
-  describe("vault rules (issue 1705)", () => {
-    const vaultSource = (artifact: string): string =>
-      artifact === "RobotMoneyVault" ? read("contracts/RobotMoneyVault.sol") : read("contracts/vaults/BasketVault.sol") + read(`contracts/vaults/${artifact}.sol`);
-    const stageOf = (key: string) => table.stages.find((s) => s.vault === key)!;
-    const govern = (table as unknown as { govern: { mainnetRows: string[] } }).govern;
-
-    test("vault rules: every rule field is present on all four vaults, and the parser refuses a row without one", () => {
-      expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
-      for (const v of table.vaults) for (const f of VAULT_RULE_FIELDS) expect([v.key, f, (v as unknown as Record<string, unknown>)[f] !== undefined]).toEqual([v.key, f, true]);
-      const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
+  // Issue 1705: one table holds the per-vault deploy and governance rule. A field that differs between the vaults names its reason and decision link.
+  describe("vault rules", () => {
+    const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
+    const rules = vaultRules(raw);
+    test("every rule field is present on all four vaults", () => {
+      expect(rules.map((v) => v.key)).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+      for (const v of rules) for (const f of VAULT_RULE_FIELDS) expect([v.key, f, f in v]).toEqual([v.key, f, true]);
+    });
+    test("a field that differs between vaults names a reason and a decision link, and a uniform field has no decision", () => {
+      const decisions = raw.vaultRuleDecisions as Record<string, { reason: string; decision: string }>;
       for (const f of VAULT_RULE_FIELDS) {
-        const t = JSON.parse(JSON.stringify(raw));
-        delete t.vaults[2][f];
-        expect(() => parseStageTable(t), f).toThrow(`vault AGENT: ${f}`);
+        const values = new Set(rules.map((v) => JSON.stringify(f === "unpauseRow" ? (v[f] as string).replace(v.key, "<KEY>") : v[f])));
+        if (values.size > 1) {
+          expect([f, decisions[f]?.reason.length > 0]).toEqual([f, true]);
+          expect([f, decisions[f]?.decision]).toEqual([f, expect.stringMatching(/^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/)]);
+        } else expect([f, decisions[f]]).toEqual([f, undefined]);
+      }
+      // The recorded differences today: the seed, the eligibility source and the emergency levers. The registry name has one source (C9).
+      expect(Object.keys(decisions).sort()).toEqual(["eligibilitySource", "emergencyLevers", "seed"]);
+    });
+    test("the loader refuses a difference with no decision, a stale decision and a missing field", () => {
+      const copy = () => JSON.parse(JSON.stringify(raw));
+      const noDecision = copy(); delete noDecision.vaultRuleDecisions.seed;
+      expect(() => vaultRules(noDecision)).toThrow(/vault rule seed differs between vaults/);
+      const stale = copy(); stale.vaultRuleDecisions.deployPaused = { reason: "r", decision: "https://github.com/robotmoney/robotmoney-core/issues/1" };
+      expect(() => vaultRules(stale)).toThrow(/vaultRuleDecisions.deployPaused is stale/);
+      const split = copy(); split.vaults[0].deployPaused = false; split.vaults[0].unpauseInStage13 = false;
+      expect(() => vaultRules(split)).toThrow(/vault rule deployPaused differs between vaults/);
+      const missing = copy(); delete missing.vaults[2].emergencyLevers;
+      expect(() => vaultRules(missing)).toThrow(/vault AGENT has no emergencyLevers/);
+    });
+    test("all four vaults deploy paused and stage 13 unpauses all four, each by its own row (issue 1705 Q1)", () => {
+      for (const v of rules) expect([v.key, v.deployPaused, v.unpauseInStage13, v.unpauseRow]).toEqual([v.key, true, true, `unpause-${v.key}`]);
+      const g = (table as unknown as { govern: { mainnetRows: string[] } }).govern;
+      expect(g.mainnetRows).toEqual(rules.filter((v) => v.unpauseInStage13).map((v) => v.unpauseRow));
+    });
+    test("the seed sheet name is the vault stage's required env, and only the seeded vault's stage reads one", () => {
+      for (const v of rules) {
+        const env = table.stages.find((s) => s.name === v.stage)!.requiredEnv;
+        if (v.seed) expect(env).toContain(v.seed);
+        else expect(env.filter((n) => n.startsWith("SEED_"))).toEqual([]);
       }
     });
-
-    test("vault rules: a field that differs between vaults names a decision link, and the parser refuses a difference without one", () => {
-      const decisions = table.vaultRuleDecisions as Record<string, string>;
-      const differing = differingRuleFields(table.vaults);
-      expect(differing.length).toBeGreaterThan(0);
-      for (const f of differing) expect([f, decisions[f] ?? ""]).toEqual([f, expect.stringMatching(/\b(?:issue|core) \d{3,5}\b|owner decision/i)]);
-      for (const f of Object.keys(decisions)) expect(VAULT_RULE_FIELDS as readonly string[]).toContain(f);
-      const t = JSON.parse(read("scripts/deploy/stage-table.json"));
-      delete t.vaultRuleDecisions[differing[0]!];
-      expect(() => parseStageTable(t)).toThrow(`the vaults differ on ${differing[0]}`);
-      const u = JSON.parse(read("scripts/deploy/stage-table.json"));
-      u.vaults[1].deployPaused = false; u.vaults[1].unpauseInStage13 = false; // rmPROTO open at deploy, with no decision for the difference
-      delete u.vaultRuleDecisions.deployPaused; delete u.vaultRuleDecisions.unpauseInStage13;
-      expect(() => parseStageTable(u)).toThrow("the vaults differ on deployPaused");
+    test("eligibility: the router-stage vault is the one the router stage makes eligible, every other vault stage reads ROUTER_DEFAULT_BPS", () => {
+      const router = read("contracts/script/DeployPortfolioRouter.s.sol");
+      expect(router).toContain("setRouterEligible(vault_, true)");
+      for (const v of rules) {
+        const env = table.stages.find((s) => s.name === v.stage)!.requiredEnv;
+        if (v.eligibilitySource === "router-stage") expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, false]);
+        else expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, true]);
+      }
+      expect(rules.filter((v) => v.eligibilitySource === "router-stage").map((v) => v.key)).toEqual(["USDC"]);
     });
-
-    test("vault rules: deployPaused is what each vault stage script does (pauseDeposits in the stage)", () => {
-      for (const v of table.vaults) expect([v.key, /\.pauseDeposits\(\)/.test(scriptSource(stageOf(v.key).script.split(":")[0]!))]).toEqual([v.key, v.deployPaused]);
-    });
-
-    test("vault rules: the unpause rows are unpause-<KEY>, and stage 13 (govern.mainnetRows) is exactly the rows the table puts in stage 13", () => {
-      for (const v of table.vaults) expect(v.unpauseRow).toBe(`unpause-${v.key}`);
-      expect(govern.mainnetRows).toEqual(table.vaults.filter((v) => v.unpauseInStage13).map((v) => v.unpauseRow));
-    });
-
-    test("vault rules: the seed is the env name the vault stage requires, and a vault with no seed requires none", () => {
-      for (const v of table.vaults) {
-        const env = stageOf(v.key).requiredEnv;
-        if (v.seed === "none") expect([v.key, env.filter((e) => e.startsWith("SEED_"))]).toEqual([v.key, []]);
-        else expect([v.key, env]).toEqual([v.key, expect.arrayContaining([v.seed.slice("sheet:".length), "SEED_SHARE_RECEIVER"])]);
+    test("emergencyLevers is every EMERGENCY_ROLE function of the vault contract, so a lever cannot be added unnamed", () => {
+      const src = (artifact: string) => read(artifact === "RobotMoneyVault" ? "contracts/RobotMoneyVault.sol" : "contracts/vaults/BasketVault.sol");
+      for (const v of rules) {
+        const levers = [...src(v.artifact).matchAll(/function (\w+)\([^)]*\)[^{;]*onlyRole\(EMERGENCY_ROLE\)/g)].map((m) => m[1]);
+        expect([v.key, [...levers].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
       }
     });
+    test("registry name: one source for all four vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
+      expect(new Set(rules.map((v) => v.registryNameSource))).toEqual(new Set(["script-constant"]));
+      // each vault script holds its name as a constant: VAULT_NAME = "<name>", or for rmUSDC VAULT_NAME = RMUSDC_VAULT_NAME, a file-level constant of the same script
+      const nameOf = (src: string) => /string public constant VAULT_NAME = "([^"]+)";/.exec(src)?.[1] ?? (/string public constant VAULT_NAME = RMUSDC_VAULT_NAME;/.test(src) ? /string constant RMUSDC_VAULT_NAME = "([^"]+)";/.exec(src)?.[1] : undefined);
+      const names = rules.map((v) => nameOf(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)));
+      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money Agent Tokens", "Robot Money RWA"]);
+      for (const s of table.stages) expect([s.name, s.requiredEnv.includes("VAULT_NAME")]).toEqual([s.name, false]);
+      // the registry stage registers rmUSDC under DeployVault's constant, not an env read
+      const reg = read("contracts/script/DeployVaultRegistry.s.sol");
+      expect(reg).toMatch(/import \{RMUSDC_VAULT_NAME\} from "\.\/DeployVault\.s\.sol";/);
+      expect(reg).toContain("vaultName = RMUSDC_VAULT_NAME");
+      expect(reg).not.toContain('"VAULT_NAME"');
+    });
+  });
 
-    test("vault rules: router eligibility comes from the router stage (setRouterEligible on the vault stage's address) or from the vault's own stage (ROUTER_DEFAULT_BPS, migrateEligibility)", () => {
-      const router = table.stages.find((s) => s.name === "router")!;
-      for (const v of table.vaults) {
-        if (v.eligibilitySource === "router-stage") {
-          // the router stage reads VAULT_ADDRESS, the vault stage manifest's address, and marks it eligible
-          expect([v.key, v.stage, router.requiredEnv.includes("VAULT_ADDRESS"), /setRouterEligible\(vault_, true\)/.test(read(router.script.split(":")[0]!))]).toEqual([v.key, "vault", true, true]);
-          expect(stageOf(v.key).requiredEnv).not.toContain("ROUTER_DEFAULT_BPS");
-        } else {
-          expect([v.key, stageOf(v.key).requiredEnv.includes("ROUTER_DEFAULT_BPS"), /migrateEligibility/.test(scriptSource(stageOf(v.key).script.split(":")[0]!))]).toEqual([v.key, true, true]);
+  // Issue 1809 (upgradeability stage 2): the proxy rows and the upgrade authority agree with the scripts, the layout gate and the CREATE2 prediction.
+  describe("proxies and the upgrade authority", () => {
+    const cli = cliLoadStageTable(ROOT);
+    const u = cli.upgradeAuthority!;
+    const proxyStages = cli.stages.filter((s) => s.proxies);
+    test("every stage that reads UPGRADE_MODE lists its proxies, and the timelock stage, deployed last, lists none", () => {
+      expect(u.modeEnv).toBe("UPGRADE_MODE");
+      expect(proxyStages.map((s) => s.name)).toEqual(cli.stages.filter((s) => s.requiredEnv.includes("UPGRADE_MODE")).map((s) => s.name));
+      expect(proxyStages.map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
+      expect(cli.stages[cli.stages.length - 1]!.name).toBe(u.stage);
+      expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
+    });
+    test("the ten proxied core contracts are exactly the contracts the storage-layout gate snapshots", () => {
+      const gate = read("scripts/ci/check-core-storage-layout.sh");
+      const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
+      const listed = proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)).sort();
+      expect(listed).toEqual(gated);
+      expect(listed).toHaveLength(10);
+      for (const s of proxyStages) for (const p of s.proxies!) {
+        expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
+        expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);
+      }
+      expect(existsSync(join(ROOT, u.layoutPins))).toBe(true);
+    });
+    test("each proxy stage's script writes the proxy and implementation manifest fields the table names, and the mode and authority", () => {
+      for (const s of proxyStages) {
+        const src = scriptSource(s.script.split(":")[0]!);
+        for (const p of s.proxies!) {
+          for (const f of [p.field, p.implementationField, "upgrade_timelock", "upgrade_mode"]) expect(src, `${s.name} ${f}`).toMatch(new RegExp(`"${f}"|'"${f}"|"${f}":|,"${f}":"|"${f}":"`));
+          expect(src, `${s.name} ${p.contract}`).toContain(p.contract);
         }
       }
     });
-
-    test("vault rules: emergencyLevers is exactly the vault contract's EMERGENCY_ROLE functions", () => {
-      for (const v of table.vaults) {
-        const src = vaultSource(v.artifact);
-        const levers = [...src.matchAll(/function\s+(\w+)\s*\([^)]*\)([^{;]*)\{/g)].filter((m) => /onlyRole\(EMERGENCY_ROLE\)/.test(m[2]!)).map((m) => m[1]!);
-        expect([v.key, [...new Set(levers)].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
-      }
+    test("the CREATE2 prediction the table states is the one the scripts compute", () => {
+      const auth = read("contracts/script/UpgradeAuthority.sol");
+      expect(auth).toContain(`keccak256("${u.salt}")`);
+      expect(auth).toContain("predictTimelock(address safe, uint256 minDelay)");
+      expect(u.inputs).toEqual(["SAFE_ADDRESS", "TIMELOCK_MIN_DELAY"]);
+      for (const i of u.inputs) expect(auth).toContain(`"${i}"`);
+      expect(u.factory.toLowerCase()).toBe("0x4e59b44847b379578588920ca78fbf26c0b4956c");
+      expect(u.modes.sort()).toEqual(["frozen", "upgradeable"]);
+      for (const m of u.modes) expect(auth).toContain(`keccak256("${m}")`);
+      expect(read(cli.stages.find((s) => s.name === u.stage)!.script.split(":")[0]!)).toContain(u.contract);
     });
-
-    test("vault rules: registryNameSource is where the registered name comes from (a sheet env a stage reads, or the vault script's constant)", () => {
-      for (const v of table.vaults) {
-        const [where, name] = v.registryNameSource.split(":") as [string, string];
-        if (where === "sheet") {
-          const reg = table.stages.find((s) => s.requiredEnv.includes(name) && /registerVault/.test(read(s.script.split(":")[0]!)));
-          expect([v.key, reg?.name]).toEqual([v.key, "registry"]);
-        } else {
-          const own = read(stageOf(v.key).script.split(":")[0]!);
-          expect([v.key, new RegExp(`string public constant ${name} = "`).test(own), new RegExp(`_registryName\\(\\)[^{]*\\{\\s*return ${name};`).test(own)]).toEqual([v.key, true, true]);
-        }
-      }
+    test("one implementation and one initializing proxy per proxied contract: the stated transactions per proxy", () => {
+      expect(u.transactionsPerProxy).toBe(2);
+      const auth = read("contracts/script/UpgradeAuthority.sol");
+      // the proxy constructor runs the initializer (no separate initialize transaction) and the mode only feeds that initializer
+      expect(auth).toContain("proxy = address(new ERC1967Proxy(implementation, initData));");
     });
   });
 
@@ -268,56 +325,5 @@ describe("stage-table.json", () => {
     const cli = cliLoadStageTable(ROOT);
     expect(cli.stages.map((s) => s.name)).toEqual(EXPECTED);
     expect(cli.stages.map((s) => s.script)).toEqual(table.stages.map((s) => s.script));
-  });
-  // Issue 1809 (ADR-0014): the stage table deploys the timelock before every proxy, each proxy stage states the authority and the release mode it deploys with, and the
-  // proxies the deploy tooling verifies are exactly the contracts the storage-layout gate snapshots.
-  describe("proxies (issue 1809)", () => {
-    const t = table as unknown as { proxies?: { name: string; stage: string; field: string; implementationField: string; artifact: string }[]; proxyArtifact?: string };
-    const proxies = t.proxies ?? [];
-    const names = table.stages.map((s) => s.name);
-
-    test("the nine proxied contracts are the layout gate's proxied.txt, with ERC1967Proxy as the proxy build", () => {
-      const listed = read("contracts/test/fixtures/storage-layout/proxied.txt").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-      expect(proxies.map((p) => p.artifact).sort()).toEqual([...listed].sort());
-      expect(proxies.map((p) => p.name)).toEqual(["rmUSDC", "registry", "router", "gateway", "icpolicy", "receipt", "rmPROTO", "rmAGENT", "rmRWA"]);
-      expect(t.proxyArtifact).toBe("ERC1967Proxy");
-      for (const v of table.vaults) expect(proxies.find((p) => p.stage === v.stage)?.artifact).toBe(v.artifact);
-    });
-
-    test("the authority stage deploys the upgrade-authority timelock before every proxy stage, and the handover reuses it", () => {
-      const auth = table.stages.find((s) => s.name === "authority")!;
-      expect(auth.script).toBe("contracts/script/DeployUpgradeAuthority.s.sol:DeployUpgradeAuthority");
-      expect(auth.manifest).toBe("deployments/<chain>/upgrade-authority.json");
-      for (const p of proxies) expect([p.name, names.indexOf(auth.name) < names.indexOf(p.stage)]).toEqual([p.name, true]);
-      expect(read("contracts/script/DeployUpgradeAuthority.s.sol")).toMatch(/_runAuthorityFrom\(""\)/);
-      expect(scriptSource("contracts/script/DeployUpgradeAuthority.s.sol")).toContain('vm.serializeAddress(obj, "timelock"');
-      expect(table.stages.find((s) => s.name === "timelock")!.requiredEnv).toContain("TIMELOCK_ADDRESS");
-    });
-
-    test("every proxy stage requires UPGRADE_AUTHORITY and UPGRADE_MODE, and its script writes the proxy, the implementation, the authority and the mode", () => {
-      for (const p of proxies) {
-        const st = table.stages.find((s) => s.name === p.stage)!;
-        expect([p.name, st.requiredEnv.includes("UPGRADE_AUTHORITY"), st.requiredEnv.includes("UPGRADE_MODE")]).toEqual([p.name, true, true]);
-        const src = scriptSource(st.script.split(":")[0]!);
-        for (const f of [p.field, p.implementationField, "upgrade_authority", "upgrade_mode"]) expect([p.name, f, src.includes(`"${f}"`)]).toEqual([p.name, f, true]);
-      }
-      expect(table.stages.find((s) => s.name === "vault")!.requiredEnv).toContain("EXCLUSION_LEDGER_FACTORY");
-      expect(read("contracts/script/DeployLibs.s.sol")).toContain('"exclusion_ledger_factory"');
-    });
-
-    test("the parser refuses a proxy whose stage could deploy it with an undeclared mode or authority", () => {
-      for (const env of ["UPGRADE_MODE", "UPGRADE_AUTHORITY"]) {
-        const raw = JSON.parse(read("scripts/deploy/stage-table.json"));
-        const st = raw.stages.find((s: { name: string }) => s.name === "gateway");
-        st.requiredEnv = st.requiredEnv.filter((e: string) => e !== env);
-        expect(() => parseStageTable(raw)).toThrow(`proxy gateway: stage gateway must require ${env}`);
-      }
-      const noArtifact = JSON.parse(read("scripts/deploy/stage-table.json"));
-      delete noArtifact.proxyArtifact;
-      expect(() => parseStageTable(noArtifact)).toThrow("proxies need proxyArtifact");
-      const twice = JSON.parse(read("scripts/deploy/stage-table.json"));
-      twice.proxies.push({ ...twice.proxies[0] });
-      expect(() => parseStageTable(twice)).toThrow("is listed twice");
-    });
   });
 });

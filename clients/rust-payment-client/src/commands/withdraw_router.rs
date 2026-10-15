@@ -379,7 +379,13 @@ pub fn run(args: Args) -> i32 {
     for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
         let leg_result = session.rt.block_on(async {
             Preflight::new(&session.rpc, &cfg)
-                .run_withdraw_vault(*vault, gateway_addr, share_holder, *leg_shares)
+                .run_withdraw_vault(
+                    *vault,
+                    gateway_addr,
+                    share_holder,
+                    *leg_shares,
+                    report.block_number,
+                )
                 .await
         });
         if let Err(err) = leg_result {
@@ -392,15 +398,19 @@ pub fn run(args: Args) -> i32 {
         }
     }
 
-    // -- The router the gateway redeems through (ADR-0014) ---------------
+    // -- The router the gateway redeems through (issue 1808) -------------
     // `run_withdraw_vault` checked each leg vault's implementation. The
     // router is a proxy too: refuse unless its implementation is pinned in
     // `proxy_implementation_hashes`.
-    if let Err(err) = session.rt.block_on(crate::upgrade::verify_gateway_router(
-        &session.rpc,
-        &cfg,
-        gateway_addr,
-    )) {
+    if let Err(err) = session
+        .rt
+        .block_on(crate::policy::implementation::verify_gateway_router(
+            &session.rpc,
+            &cfg,
+            gateway_addr,
+            &format!("0x{:x}", report.block_number),
+        ))
+    {
         session.record(AuditDecision::Refused, Some(err.name().to_string()));
         return session
             .refusal(err.name())
@@ -503,6 +513,7 @@ pub fn run(args: Args) -> i32 {
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
             checks: &|| ChecksOutput::from_report(&report),
+            gateway_implementation: report.gateway_implementation,
         },
     ) {
         Ok(c) => c,

@@ -23,13 +23,13 @@
  *         commitHash = keccak256(abi.encode(agent, caller, salt)), and calls
  *         commitAuthorization(commitHash). This does NOT require ADMIN_ROLE.
  *      b. Reveal — after at least one block has passed, calls
- *         revealAuthorization(agent, salt, policy, agentConsent). Once its
+ *         revealAuthorization(agent, salt, policy). Once its
  *         receipt says success (never on wallet acceptance alone, QA plan U5)
  *         we mark this wallet registered (see useVaultRegistration) and
  *         unmount.
- *      An agent other than this wallet must consent (issue 1791): step 3
- *      collects its EIP-712 AgentConsent signature before the commit is
- *      enabled (`AgentConsentField`).
+ *      An agent other than this wallet must consent (core 1791): the reveal
+ *      screen shows the consent hash the agent commits from its own key
+ *      (`AgentConsentNotice`) before the reveal can succeed.
  *      Each step previews the call it signs, built from the same inputs as
  *      the write (QA plan U4): the commit screen shows commitAuthorization and
  *      the reveal it leads to, and the reveal screen shows the reveal again.
@@ -52,14 +52,15 @@ import { gatewayAbi, erc20Abi } from "../lib/abi";
 import { buildPreview, type AgentPolicy, type PreviewContext } from "../lib/preview";
 import {
   commitAuthorizationCall,
+  computeConsentHash,
   generateSalt,
+  policyTuple,
   revealAuthorizationCall,
   type CommitInputs,
   type RevealInputs,
 } from "../lib/commitReveal";
 import { markRegistered } from "../lib/useVaultRegistration";
-import { useAgentConsent } from "../lib/useAgentConsent";
-import { NO_AGENT_CONSENT } from "../lib/agentConsent";
+import { AgentConsentNotice } from "./AgentConsentNotice";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
@@ -74,7 +75,6 @@ import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
 import { TxPreview } from "./TxPreview";
 import { WriteStatus } from "./WriteStatus";
-import { AgentConsentField } from "./AgentConsentField";
 
 type DripStatus =
   | { kind: "idle" }
@@ -253,28 +253,11 @@ export function OnboardingWizard(props: Props) {
         }
       : null;
 
-  // An agent other than this wallet must consent (issue 1791), collected
-  // before the commit so the step-2 preview already carries it.
-  const agentConsent = useAgentConsent({
-    gateway: props.gatewayAddress,
-    agent,
-    revealer: address,
-    shareReceiver,
-  });
-
   // Each preview is built from the same inputs its write uses (QA plan U4, DR-4).
   const commitInputs: CommitInputs | null =
     address && validAgent && policy ? { agent: agent as Address, committer: address, salt } : null;
   const revealInputs: RevealInputs | null =
-    committed ??
-    (validAgent && policy
-      ? {
-          agent: agent as Address,
-          salt,
-          policy,
-          agentConsent: agentConsent.consent ?? NO_AGENT_CONSENT,
-        }
-      : null);
+    committed ?? (validAgent && policy ? { agent: agent as Address, salt, policy } : null);
 
   const commitPreview = commitInputs
     ? buildPreview({ kind: "commitAuthorization", ...commitInputs }, props.ctx)
@@ -318,7 +301,6 @@ export function OnboardingWizard(props: Props) {
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!commitInputs || !revealInputs || commitPreview?.ok !== true) return;
-    if (agentConsent.consent === null) return;
     // Captured in the closure: onSuccess freezes exactly what this commit bound.
     const snapshot = revealInputs;
     commitWrite.writeContract(
@@ -524,7 +506,6 @@ export function OnboardingWizard(props: Props) {
             commitment transaction. After it confirms, you will sign the reveal transaction in the
             next step.
           </p>
-          <AgentConsentField testIdPrefix="wizard" consent={agentConsent} />
           {commitPreview && (
             <div data-testid="wizard-commit-preview">
               <TxPreview preview={commitPreview} />
@@ -551,7 +532,6 @@ export function OnboardingWizard(props: Props) {
                   isPending ||
                   !validAgent ||
                   !validReceiver ||
-                  agentConsent.consent === null ||
                   commitPreview?.ok !== true ||
                   revealPreview?.ok !== true
                 }
@@ -588,6 +568,20 @@ export function OnboardingWizard(props: Props) {
               <TxPreview preview={revealPreview} />
             </div>
           )}
+          {/* Core 1791: the agent consents from its own key to exactly this reveal. */}
+          <AgentConsentNotice
+            testId="wizard-consent-hash"
+            hash={
+              address && committed
+                ? computeConsentHash(
+                    address,
+                    committed.agent,
+                    committed.salt,
+                    policyTuple(committed.policy),
+                  )
+                : null
+            }
+          />
           <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
             <div className="wizard-nav">
               <button

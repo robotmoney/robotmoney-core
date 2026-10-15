@@ -14,7 +14,6 @@ import { buildAdminTabs } from "./buildAdminTabs";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
 import { useCodeTargetVerification } from "../lib/useVerifiedCodeTargets";
 import { describeVerificationCause } from "../lib/gatewayVerifier";
-import { useUpgradeState } from "../lib/useUpgradeState";
 import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
 import { parseImplementationPinMap } from "../lib/codePins";
 
@@ -78,18 +77,15 @@ export function AdminFlow(props: Props) {
           : "The gateway's code has not been verified yet.",
   };
 
-  // QA plan P3, issue 1810: the implementation behind a proxied gateway, for the rmpc export's
-  // pin. The verifier sets it only when the live implementation is one of this build's reviewed
-  // pins (VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH), so the export never pins whatever happens to
-  // be live (no trust on first use).
-  const gatewayImplementationHash =
-    gatewayVerificationState.status === "verified"
-      ? gatewayVerificationState.implementationHash
-      : undefined;
-  // The vaults and the router are proxies too: rmpc then needs `proxy_implementation_hashes`. The
-  // export takes the reviewed implementation hashes this build pins for them (ADR-0014), never the
-  // live ones. Without such pins it names the key and the release-record fields to copy.
-  const vaultUpgrade = useUpgradeState(props.vaultAddress);
+  // The vaults and the router are proxies too (issue 1808): rmpc then needs
+  // `proxy_implementation_hashes`. The export takes the reviewed implementation hashes this build
+  // pins for them, never the live ones (security review 009). Without such pins it names the key
+  // and the release-record fields to copy. A deployment whose gateway is a verified proxy is a
+  // proxied deployment, so its vault is taken to be a proxy too.
+  const deploymentIsProxied =
+    gatewayVerificationState.status === "verified" &&
+    gatewayVerificationState.implementation !== undefined &&
+    gatewayVerificationState.implementation !== null;
   const runtimeEnv = useRuntimeConfig();
   const proxyImplementationHashes = useMemo(() => {
     const gateway = props.gatewayAddress.toLowerCase();
@@ -128,8 +124,15 @@ export function AdminFlow(props: Props) {
       gatewayVerificationState.status === "verified"
         ? gatewayVerificationState.computedHash
         : undefined,
-    gatewayImplementationHash,
-    vaultIsProxy: vaultUpgrade.kind === "proxy" || vaultUpgrade.kind === "indexed",
+    gatewayImplementation:
+      gatewayVerificationState.status === "verified"
+        ? (gatewayVerificationState.implementation ?? undefined)
+        : undefined,
+    gatewayImplementationRuntimeHash:
+      gatewayVerificationState.status === "verified"
+        ? gatewayVerificationState.implementationCodeHash
+        : undefined,
+    vaultIsProxy: deploymentIsProxied,
     proxyImplementationHashes,
   });
 

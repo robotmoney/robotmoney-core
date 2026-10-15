@@ -213,9 +213,18 @@ fn agent_deposit_routed_topic0() -> alloy_primitives::B256 {
 
 // ── Contract deployment helpers ──────────────────────────────────────────────
 
-/// Deploy `VaultRegistry` behind its proxy (ADR-0014) with `admin` as the admin.
+/// Deploy `VaultRegistry` with `admin` as the admin.
 fn deploy_registry(deployer: &rmpc_fork_e2e::Account<'_>, admin: Address) -> Address {
-    rmpc_fork_e2e::proxied::deploy_vault_registry(deployer, admin).expect("deploy VaultRegistry")
+    let mut code: Vec<u8> = Vec::new();
+    code.extend_from_slice(&encode_address_arg(admin));
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "VaultRegistry.sol",
+        "VaultRegistry",
+        &code,
+        3_000_000,
+    )
+    .expect("deploy VaultRegistry")
 }
 
 /// Deploy `MockVault` with `asset_` = USDC address.
@@ -227,21 +236,36 @@ fn deploy_mock_vault(deployer: &rmpc_fork_e2e::Account<'_>, usdc: Address) -> Ad
         .expect("deploy MockVault")
 }
 
-/// Deploy `PortfolioRouter` behind its proxy (ADR-0014) with the given usdc, registry, and
-/// admin: `initialize(usdc, registry, admin, upgradeAuthority, mode)`.
+/// Deploy `PortfolioRouter` with the given usdc, registry, and admin.
+///
+/// Constructor: `(address _usdc, address _registry, address _admin)` — 3 × 32 bytes.
 fn deploy_portfolio_router(
     deployer: &rmpc_fork_e2e::Account<'_>,
     usdc: Address,
     registry: Address,
     admin: Address,
 ) -> Address {
-    rmpc_fork_e2e::proxied::deploy_portfolio_router(deployer, usdc, registry, admin)
-        .expect("deploy PortfolioRouter")
+    let mut code: Vec<u8> = Vec::new();
+    // 3 × address args
+    let mut args = [0u8; 96];
+    args[12..32].copy_from_slice(usdc.as_slice());
+    args[44..64].copy_from_slice(registry.as_slice());
+    args[76..96].copy_from_slice(admin.as_slice());
+    code.extend_from_slice(&args);
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "PortfolioRouter.sol",
+        "PortfolioRouter",
+        &code,
+        4_000_000,
+    )
+    .expect("deploy PortfolioRouter")
 }
 
-/// Deploy `RobotMoneyGateway` behind its proxy (ADR-0014), its linked libraries first:
-/// `initialize(usdc, vault, admin, pauser, router, upgradeAuthority, mode)`.
-/// `pauser` receives DEPOSIT_PAUSER_ROLE: it pauses deposits only.
+/// Deploy `RobotMoneyGateway`.
+///
+/// Constructor: `(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_)`.
+/// `pauser_` receives DEPOSIT_PAUSER_ROLE: it pauses deposits only.
 #[allow(clippy::too_many_arguments)]
 fn deploy_gateway(
     deployer: &rmpc_fork_e2e::Account<'_>,
@@ -251,8 +275,25 @@ fn deploy_gateway(
     pauser: Address,
     router: Address,
 ) -> Address {
-    rmpc_fork_e2e::proxied::deploy_robot_money_gateway(deployer, usdc, vault, admin, pauser, router)
-        .expect("deploy RobotMoneyGateway")
+    let mut code: Vec<u8> = Vec::new();
+    // 5 × address args
+    let mut args = [0u8; 160];
+    args[12..32].copy_from_slice(usdc.as_slice());
+    args[44..64].copy_from_slice(vault.as_slice());
+    args[76..96].copy_from_slice(admin.as_slice());
+    args[108..128].copy_from_slice(pauser.as_slice());
+    args[140..160].copy_from_slice(router.as_slice());
+    code.extend_from_slice(&args);
+    // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
+    // committee routing additions in issue #1049 (deployment cost ~5.15M).
+    rmpc_fork_e2e::governed::deploy_governed(
+        deployer,
+        "RobotMoneyGateway.sol",
+        "RobotMoneyGateway",
+        &code,
+        8_000_000,
+    )
+    .expect("deploy RobotMoneyGateway")
 }
 
 /// Register `vault_addr` in `registry` with a minimal metadata struct.
@@ -985,6 +1026,15 @@ const ERC1967_IMPLEMENTATION_SLOT: alloy_primitives::B256 =
     alloy_primitives::b256!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
 
 /// An operator config for `rmpc deposit` against this test's own gateway.
+///
+/// Core 1810: the gateway is a governed ERC-1967 proxy, so rmpc refuses to sign unless the
+/// operator TOML names the approved implementation and its runtime code hash
+/// (`gateway_implementation`, `gateway_implementation_runtime_hash`). Both are read from the
+/// gateway's implementation slot. A direct gateway (empty slot) takes neither.
+///
+/// Issue 1810: rmpc also pins the logic behind every other proxy the deposit reaches, in
+/// `proxy_implementation_hashes`: the gateway's vault and every `proxy_targets` entry (the router
+/// and its legs). A direct contract (empty slot) takes no pin.
 fn write_rmpc_deposit_config(
     dir: &Path,
     fx: &ForkFixture,
@@ -995,8 +1045,6 @@ fn write_rmpc_deposit_config(
 ) -> PathBuf {
     let code = fx.rpc().get_code(gateway).expect("eth_getCode gateway");
     assert!(!code.is_empty(), "the gateway must have code");
-    // QA plan P3: rmpc signs against a proxied gateway only when its implementation's code hash
-    // is pinned. A direct gateway (empty ERC-1967 slot) takes no pin.
     let slot = fx
         .rpc()
         .get_storage_at(gateway, ERC1967_IMPLEMENTATION_SLOT)
@@ -1010,14 +1058,10 @@ fn write_rmpc_deposit_config(
             .get_code(implementation)
             .expect("eth_getCode gateway implementation");
         format!(
-            "gateway_implementation_hashes = [\"{:#x}\"]\n",
+            "gateway_implementation = \"{implementation:#x}\"\ngateway_implementation_runtime_hash = \"{:#x}\"\n",
             keccak256(&impl_code)
         )
     };
-    // Issue 1810: rmpc also pins the logic behind every other proxy the deposit reaches: the
-    // gateway's vault, the router (`gateway.router()`, read from the slot of each candidate) and
-    // each leg vault. Pin every implementation found behind the gateway's vault and the router's
-    // effective legs; a direct contract (empty slot) takes no pin.
     let mut proxy_hashes: Vec<String> = Vec::new();
     let mut pin = |addr: Address| {
         let slot = fx

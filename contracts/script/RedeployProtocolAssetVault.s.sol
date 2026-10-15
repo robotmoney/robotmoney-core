@@ -5,25 +5,21 @@
 //
 // Deploys a NEW `ProtocolAssetVault` (rmPROTO) into a deployment whose timelock handover has already happened. It differs from
 // `DeployProtocolAssetVault` in three ways, all of them forced by the handover:
-//   1. It does NOT register the vault, does NOT link the registry and does NOT touch router eligibility. The deployer holds no role on
-//      the registry any more: the Safe, through the timelock, links the registry (the set-once ADMIN_ROLE link, which the timelock holds
-//      after step 2), registers, migrates eligibility and retires the old vault, all in ONE batch (govern row `redeploy-vault`). Only
-//      `DeployTimelock` links the registry from a script (core S5, `scripts/ci/check-set-registry-owner.ts`).
-//   2. It hands the new vault over itself, the way `DeployTimelock` does for the four launch vaults: it moves EMERGENCY_ROLE to the
-//      independent emergency key, grants ADMIN_ROLE to the timelock and drops both roles from the deployer.
-//   3. The vault is paused right after it is created, before its first asset is added (QA plan v1 E3), so no direct deposit can land
-//      while it is configured, and it is left paused. The govern row opens it in the same timelock batch that moves the router weights
-//      and copies the old vault's router cap to it.
+//   1. It does NOT register the vault and does NOT touch router eligibility. The deployer holds no role on the registry any more: the
+//      Safe, through the timelock, registers, migrates eligibility and retires the old vault (govern row `redeploy-vault`).
+//   2. It hands the new vault over itself, the way `DeployTimelock` does for the four launch vaults: it links the registry (`setRegistry`),
+//      moves EMERGENCY_ROLE to the independent emergency key, grants ADMIN_ROLE to the timelock and drops both roles from the deployer.
+//   3. The vault is left paused. The govern row opens it in the same timelock batch that moves the router weights.
 // Same vault class, same config file, same sheet inputs as the launch deploy: the new vault is configured exactly like the one it replaces.
 pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {DeployProtocolAssetVault} from "./DeployProtocolAssetVault.s.sol";
-import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 
-/// @dev Read side of a vault's registry link. The link itself is set by the timelock in the govern batch, never here.
-interface IVaultRegistryView {
+/// @dev Registry link surface of a vault: set once, ADMIN_ROLE only.
+interface IVaultRegistryLink {
+    function setRegistry(address newRegistry) external;
     function registry() external view returns (address);
 }
 
@@ -35,9 +31,8 @@ interface IVaultRegistryView {
 ///           NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
 ///           TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
 ///           EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
-///           UPGRADE_MODE       `upgradeable` or `frozen-at-deploy` (ADR-0014 §5). The new vault's upgrade authority is
-///                              TIMELOCK_ADDRESS itself (ADR-0014 §4), so no separate UPGRADE_AUTHORITY is read.
-///         REGISTRY_ADDRESS is read and checked for code only: the vault is left unlinked for the govern batch.
+///           UPGRADE_MODE       `upgradeable` or `frozen` (issue 1808). The new vault proxy's upgrade authority is TIMELOCK_ADDRESS,
+///                              the deployment's live timelock.
 contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
@@ -49,8 +44,8 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address timelock = _envAddressRequired("TIMELOCK_ADDRESS");
         address emergency = _envAddressRequired("EMERGENCY_ADDRESS");
         Cfg memory cfg = _parseCfg(vm.readFile(CONFIG_FILE), "assets");
-        _upgrade = UpgradeConfig({
-            authority: timelock, mode: parseUpgradeMode(_envStringRequired("UPGRADE_MODE"))
+        _vaultUpgrade = UpgradeConfig({
+            timelock: timelock, mode: parseUpgradeMode(_envStringRequired("UPGRADE_MODE"))
         });
 
         vm.startBroadcast();
@@ -69,8 +64,7 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         address emergency
     ) external returns (Deployed memory d) {
         Cfg memory cfg = _parseCfg(json, "assets");
-        _upgrade =
-            UpgradeConfig({authority: timelock, mode: GovernedUpgrade.UpgradeMode.Upgradeable});
+        _vaultUpgrade = UpgradeConfig({timelock: timelock, mode: _inProcessUpgradeConfig().mode});
         vm.startPrank(p.admin);
         d = _redeploy(p, cfg, timelock, emergency);
         vm.stopPrank();
@@ -90,25 +84,33 @@ contract RedeployProtocolAssetVault is DeployProtocolAssetVault {
         require(emergency != address(0), "EMERGENCY_ADDRESS=0");
         require(emergency != p.admin, "EMERGENCY_ADDRESS == deployer");
         require(timelock != p.admin, "TIMELOCK_ADDRESS == deployer");
+        // The binding target must be the deployment's real registry: a contract that answers hasRole and already gives the timelock ADMIN_ROLE. A wrong
+        // address (another contract, a registry the timelock does not govern) reverts here, before anything is deployed. The timelock is never used to
+        // grant itself a role: the deployer, still the vault's admin, grants it (_handOver).
+        require(
+            IAccessControl(p.registry).hasRole(ADMIN_ROLE, timelock),
+            "timelock lacks ADMIN_ROLE on REGISTRY_ADDRESS"
+        );
 
-        d = _deployConfigured({p: p, cfg: cfg, pauseBeforeAssets: true});
+        d = _deployConfigured(p, cfg);
         _assertTickMathLinkIntegrity(d.vault, p.tvlCap);
-        _handOver(d.vault, p.admin, timelock, emergency);
+        _handOver(d.vault, p.registry, p.admin, timelock, emergency);
         // Left unregistered on purpose: only the Safe, through the timelock, registers it (govern row `redeploy-vault`).
         d.registered = false;
     }
 
-    /// @dev Mirrors the role block of `DeployTimelock._deployAndWire` without the registry link: move EMERGENCY_ROLE to the emergency
-    ///      key, then grant ADMIN_ROLE to the timelock and revoke it from the deployer. The registry link is the timelock's first call in
-    ///      the govern batch, so the vault must leave here unlinked. Every step is read back, so a half-finished handover reverts the
-    ///      whole deploy.
-    function _handOver(address vault, address deployer, address timelock, address emergency)
-        internal
-    {
-        require(
-            IVaultRegistryView(vault).registry() == address(0),
-            "vault registry link is the govern batch's, not the deploy's"
-        );
+    /// @dev Mirrors the per-vault block of `DeployTimelock._deployAndWire`: link the registry while the deployer still holds ADMIN_ROLE,
+    ///      move EMERGENCY_ROLE to the emergency key, then grant ADMIN_ROLE to the timelock and revoke it from the deployer. Every step is
+    ///      read back, so a half-finished handover reverts the whole deploy.
+    function _handOver(
+        address vault,
+        address registry,
+        address deployer,
+        address timelock,
+        address emergency
+    ) internal {
+        IVaultRegistryLink(vault).setRegistry(registry);
+        require(IVaultRegistryLink(vault).registry() == registry, "vault registry link not set");
 
         IAccessControl ac = IAccessControl(vault);
         ac.grantRole(EMERGENCY_ROLE, emergency);

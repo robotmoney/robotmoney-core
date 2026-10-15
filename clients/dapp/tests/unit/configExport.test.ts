@@ -117,28 +117,6 @@ describe("exportRmpcConfig", () => {
     expect(parsed.usdc_address).toBe("0x2222222222222222222222222222222222222222");
   });
 
-  // QA plan P3: a proxied gateway's export pins the implementation's code hash, which rmpc
-  // requires before it signs. A direct gateway's export carries no such key.
-  it("pins gateway_implementation_hashes for a proxied gateway, and nothing for a direct one", () => {
-    const implHash = "0x" + "cd".repeat(32);
-    const proxied = parse(
-      exportRmpcConfig({
-        ...baseInputs,
-        gateway_implementation_hashes: [implHash],
-        signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
-      }),
-    ) as Record<string, unknown>;
-    expect(proxied.gateway_implementation_hashes).toEqual([implHash]);
-    const direct = parse(
-      exportRmpcConfig({
-        ...baseInputs,
-        gateway_implementation_hashes: [],
-        signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
-      }),
-    ) as Record<string, unknown>;
-    expect(direct.gateway_implementation_hashes).toBeUndefined();
-  });
-
   // Issue 1810: a proxied vault needs proxy_implementation_hashes in rmpc, and so does the router
   // a withdraw or router deposit reaches. A build without reviewed implementation pins names the
   // key commented out, with the release-record fields for the vault AND the router, and never a
@@ -203,5 +181,28 @@ describe("exportRmpcConfig", () => {
     // Must still be valid TOML
     const parsed = parse(toml) as Record<string, unknown>;
     expect(parsed.chain_id).toBe(31337);
+  });
+
+  it("emits the gateway implementation pin for a proxied gateway (issue 1810)", () => {
+    const impl = "0x00000000000000000000000000000000000a11ce";
+    const implHash = "0x" + "cd".repeat(32);
+    const parsed = parse(
+      exportRmpcConfig({
+        ...baseInputs,
+        gateway_implementation: impl,
+        gateway_implementation_runtime_hash: implHash,
+        signer: { kind: "encrypted_keystore", keystore_path: "./k.json" },
+      }),
+    ) as Record<string, unknown>;
+    expect(parsed.gateway_implementation).toBe(impl);
+    expect(parsed.gateway_implementation_runtime_hash).toBe(implHash);
+  });
+
+  it("omits the implementation pin for a direct gateway (issue 1810)", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "encrypted_keystore", keystore_path: "./k.json" },
+    });
+    expect(toml).not.toContain("gateway_implementation");
   });
 });

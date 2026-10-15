@@ -38,9 +38,7 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
     function _addDuplicateRefused() internal {
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter), 0
-            )
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(adapter))
         );
         vault.addAdapter(address(adapter), 10_000);
         assertEq(vault.adapterCount(), 1, "one registry entry");
@@ -329,6 +327,23 @@ contract SecurityReviewRecheckVaultPoc is RobotMoneyVaultTest {
 
         assertEq(vault.totalAssets(), 1_000 * ONE_USDC, "NAV correct, nothing to repair");
         assertFalse(vault.depositsPaused(), "no pause side effect");
+    }
+
+    /// Reactivating a deliberately removed (inactive) adapter still works.
+    function test_f2_reactivatingInactiveAdapterStillWorks() public {
+        MockAdapter second = _secondAdapter();
+        vm.prank(admin);
+        vault.removeAdapter(1);
+        assertEq(vault.activeAdapterCount(), 1);
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
+        assertEq(vault.activeAdapterCount(), 2, "re-added");
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterAlreadyActive.selector, address(second))
+        );
+        vault.addAdapter(address(second), 10_000);
     }
 
     // ─── SR-1012-5 (issue 1705 finding 5): EMERGENCY force-remove keeps exit claims ──

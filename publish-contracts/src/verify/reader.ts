@@ -45,7 +45,7 @@ export function viemReader(rpcUrl: string): ChainReader {
         method: "eth_getLogs",
         params: [{ address, topics, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}` } as any],
       } as any) as any[];
-      return logs.map((l): LogEntry => ({ address: l.address as Address, topics: l.topics, data: l.data, blockNumber: BigInt(l.blockNumber), ...(l.logIndex != null ? { logIndex: Number(BigInt(l.logIndex)) } : {}) }));
+      return logs.map((l): LogEntry => ({ address: l.address as Address, topics: l.topics, data: l.data, blockNumber: BigInt(l.blockNumber) }));
     },
   };
 }

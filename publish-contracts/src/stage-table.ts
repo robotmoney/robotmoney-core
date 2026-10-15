@@ -23,37 +23,56 @@ export interface TableStage {
   /** Names from the top-level `create2Libraries` that forge deploys by itself (CREATE2 through the factory, ahead of the stage's first transaction) because the stage deploys a contract that links them (issue 1721). Absent: none. */
   create2Libraries?: string[];
   vault: TableVaultKey | null;
+  /** The ERC-1967 proxies the stage deploys (upgradeability stage 2, issue 1809). Absent: the stage deploys no proxy. */
+  proxies?: TableProxy[];
 }
 /**
- * One vault row, and its rule for every dimension the four vaults are governed by (issue 1705, QA plan v1 E9). The deploy tooling, the verifier's sheet,
- * the govern rows and the evidence steps derive the per-vault behaviour from these fields (src/vault-rules.ts), never from a vault literal.
+ * One proxied core contract a stage deploys (issue 1809): the manifest field of the proxy and of its implementation, the build artifact of the implementation and the
+ * committed storage-layout snapshot (contracts/test/fixtures/storage-layout, gated by scripts/ci/check-core-storage-layout.sh) whose bytes identify its layout.
  */
-export interface TableVault {
-  key: TableVaultKey; stage: string; artifact: string; manifest: string;
+export interface TableProxy { field: string; implementationField: string; contract: string; layout: string }
+/**
+ * How every proxy is governed (issue 1809): the timelock stage deploys the one upgrade and freeze authority LAST, at a CREATE2 address predicted from the inputs, and
+ * each proxy is two deployer transactions (implementation, then the proxy whose constructor initializes it). The mode env carries the release mode.
+ */
+export interface UpgradeAuthority {
+  stage: string;
+  contract: string;
+  address: "create2";
+  factory: string;
+  salt: string;
+  inputs: string[];
+  modeEnv: string;
+  modes: string[];
+  transactionsPerProxy: number;
+  layoutPins: string;
+  note: string;
+}
+export interface TableVault extends Partial<VaultRules> { key: TableVaultKey; stage: string; artifact: string; manifest: string }
+/**
+ * The per-vault deploy and governance rule (issue 1705), one row per vault in the table's `vaults[]`. Every tool that treats the vaults differently reads the
+ * difference from here (vault-rules.ts), never from a literal vault key. A field whose value differs between vaults names its reason and decision in `vaultRuleDecisions`.
+ */
+export interface VaultRules {
   /** The vault stage leaves deposits paused. */
   deployPaused: boolean;
-  /** The govern row that opens the vault through the Safe and the timelock: always `unpause-<key>`. */
+  /** The govern row that unpauses the vault through the Safe and the timelock: `unpause-<KEY>`. */
   unpauseRow: `unpause-${TableVaultKey}`;
-  /** Stage 13 runs the unpause row (on 8453 no stage 13 row may be skipped). */
+  /** The unpause row is a stage 13 row (scheduled in the one sitting, required on 8453). */
   unpauseInStage13: boolean;
-  /** `none`, or `sheet:<ENV>`: the vault stage reads the seed amount from that env name. */
-  seed: string;
-  /** `router-stage` (the router stage makes the vault eligible) or `sheet:ELIGIBLE_VAULTS` (the vault's own stage, from the sheet). */
-  eligibilitySource: VaultEligibilitySource;
-  /** Every EMERGENCY_ROLE function of the vault contract: the levers that change state without the timelock. */
+  /** The sheet name of the seed deposit the vault stage makes, or null for no seed. */
+  seed: string | null;
+  /** Where router eligibility comes from: the router stage (the base leg) or the vault stage's ROUTER_DEFAULT_BPS sheet value. */
+  eligibilitySource: "router-stage" | "sheet:ROUTER_DEFAULT_BPS";
+  /** Every function EMERGENCY_ROLE may call on the vault, with no timelock. */
   emergencyLevers: string[];
-  /** `sheet:<ENV>` (a stage registers the vault under that env value) or `script:<CONSTANT>` (the vault stage script's own constant). */
+  /** Where the registry name comes from: a sheet name (`sheet:<NAME>`) or the vault script's constant. */
   registryNameSource: string;
 }
-export type VaultEligibilitySource = "router-stage" | "sheet:ELIGIBLE_VAULTS";
-/** The rule fields of a vault row, in table order. A field whose value differs between vaults names its decision in `vaultRuleDecisions`. */
 export const VAULT_RULE_FIELDS = ["deployPaused", "unpauseRow", "unpauseInStage13", "seed", "eligibilitySource", "emergencyLevers", "registryNameSource"] as const;
 export type VaultRuleField = (typeof VAULT_RULE_FIELDS)[number];
-/** A rule value with the vault's own key written as `<key>`, so `unpause-USDC` and `unpause-PROTO` are the same rule. */
-export const ruleValueOf = (v: TableVault, f: VaultRuleField): string => JSON.stringify(v[f]).replaceAll(v.key, "<key>");
-/** The rule fields whose value is not the same on every vault. */
-export const differingRuleFields = (vaults: readonly TableVault[]): VaultRuleField[] =>
-  VAULT_RULE_FIELDS.filter((f) => new Set(vaults.map((v) => ruleValueOf(v, f))).size > 1);
+/** Why a rule field differs between vaults, and the issue that decided it. */
+export interface VaultRuleDecision { reason: string; decision: string }
 export interface TableLibrary { name: string; artifact: string; manifestKey: string; path: string }
 /** A library forge deploys through the CREATE2 factory inside a stage (not linked with `--libraries`, no manifest key). It may link other `create2Libraries`. */
 export interface TableCreate2Library { name: string; artifact: string; path: string }
@@ -71,30 +90,18 @@ export interface TableRedeploy {
   libraries: string[];
   create2Libraries?: string[];
 }
-/**
- * One proxied contract (ADR-0014 §1, issue 1809): the stage that deploys it (implementation, then an ERC1967Proxy whose constructor runs `initialize`), the
- * manifest field of the proxy address and of the implementation behind it, and the implementation's build artifact. The proxy stage also writes `upgrade_authority`
- * and `upgrade_mode` (PROXY_MANIFEST_FIELDS). `name` is the verifier label (`proxy[<name>]`) and the `--admin-arg proxy=<name>` of the upgrade and freeze rows.
- */
-export interface TableProxy { name: string; stage: string; field: string; implementationField: string; artifact: string }
-/** The manifest fields every proxy stage writes next to its proxies (GovernedProxyDeploy): the authority the proxies were born with and the release mode. */
-export const PROXY_MANIFEST_FIELDS = { authority: "upgrade_authority", mode: "upgrade_mode" } as const;
-/** The env names every proxy stage reads (GovernedProxyDeploy._useEnvUpgradeConfig), with no default: the authority stage's timelock and the sheet's release mode. */
-export const PROXY_STAGE_ENV = ["UPGRADE_AUTHORITY", "UPGRADE_MODE"] as const;
 export interface StageTable {
   version: 1;
   stages: TableStage[];
+  /** Upgradeability stage 2 (issue 1809). Absent: the table deploys no proxy (a core checkout from before issue 1808). */
+  upgradeAuthority?: UpgradeAuthority;
   vaults: TableVault[];
-  /** Issue 1705: the decision behind each rule field on which the vaults differ (an issue or owner decision and the reason). */
-  vaultRuleDecisions: Partial<Record<VaultRuleField, string>>;
   libraries: TableLibrary[];
   create2Libraries?: TableCreate2Library[];
   /** Single-vault redeploys into a live deployment (issue 1796). Absent: none. */
   redeploys?: TableRedeploy[];
-  /** ADR-0014 §1 (issue 1809): the proxied contracts. Absent (a core sha before the proxies): every contract is a direct deployment. */
-  proxies?: TableProxy[];
-  /** The build artifact every proxy's runtime code must equal (OpenZeppelin ERC1967Proxy). Required when `proxies` lists any. */
-  proxyArtifact?: string;
+  /** One entry per vault rule field whose value differs between vaults (issue 1705). */
+  vaultRuleDecisions?: Partial<Record<VaultRuleField, VaultRuleDecision>>;
   artifacts: Record<string, string>;
 }
 
@@ -103,25 +110,6 @@ const strList = (v: unknown, what: string): string[] => {
   if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) bad(`${what} must be a list of strings`);
   return v as string[];
 };
-
-/** A decision link: an issue number (`issue 1705`, `core 1619`, `#1520`) or a named owner decision. */
-const DECISION_LINK = /\b(?:issue|core)\s+\d{3,5}\b|#\d{3,5}\b|\bowner decision\b/i;
-const SOURCE = /^(?:sheet|script):[A-Z][A-Z0-9_]*$/;
-
-/** The rule fields of one vault row that are missing or malformed (issue 1705: every field is present on every vault, nothing defaults). */
-export function vaultRuleProblems(v: Partial<TableVault>): string[] {
-  const out: string[] = [];
-  if (typeof v.deployPaused !== "boolean") out.push("deployPaused must be true or false");
-  if (v.unpauseRow !== `unpause-${String(v.key)}`) out.push(`unpauseRow must be unpause-${String(v.key)} (the govern row name), got ${JSON.stringify(v.unpauseRow)}`);
-  if (typeof v.unpauseInStage13 !== "boolean") out.push("unpauseInStage13 must be true or false");
-  if (v.unpauseInStage13 && v.deployPaused === false) out.push("unpauseInStage13 is set on a vault that deploys open: there is nothing for stage 13 to unpause");
-  if (typeof v.seed !== "string" || !(v.seed === "none" || (SOURCE.test(v.seed) && v.seed.startsWith("sheet:")))) out.push(`seed must be none or sheet:<ENV>, got ${JSON.stringify(v.seed)}`);
-  if (v.eligibilitySource !== "router-stage" && v.eligibilitySource !== "sheet:ELIGIBLE_VAULTS") out.push(`eligibilitySource must be router-stage or sheet:ELIGIBLE_VAULTS, got ${JSON.stringify(v.eligibilitySource)}`);
-  if (!Array.isArray(v.emergencyLevers) || v.emergencyLevers.length === 0 || v.emergencyLevers.some((x) => typeof x !== "string" || !/^[a-z]\w*$/.test(x))) out.push("emergencyLevers must list the vault's EMERGENCY_ROLE functions by name");
-  else if (!v.emergencyLevers.includes("pauseDeposits")) out.push("emergencyLevers must include pauseDeposits (the one lever every vault shares)");
-  if (typeof v.registryNameSource !== "string" || !SOURCE.test(v.registryNameSource)) out.push(`registryNameSource must be sheet:<ENV> or script:<CONSTANT>, got ${JSON.stringify(v.registryNameSource)}`);
-  return out;
-}
 
 /** Validates the shape the rest of publish contracts relies on. A wrong shape is an error here, never a silent default. */
 export function parseStageTable(json: unknown, where = "stage-table.json"): StageTable {
@@ -148,6 +136,7 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
   const c2Names = new Set(c2.map((l) => l.name));
   for (const s of t.stages) if (s.create2Libraries !== undefined) { strList(s.create2Libraries, `stage ${s.name} create2Libraries`); for (const l of s.create2Libraries) if (!c2Names.has(l)) bad(`stage ${s.name} lists unknown create2 library '${l}'`); }
   for (const l of t.libraries) if (!l.name || !l.artifact || !l.manifestKey || !l.path) bad(`library ${String(l.name)} needs name, artifact, manifestKey and path`);
+  upgradeProblems(t as StageTable);
   const redeploys: unknown = t.redeploys;
   if (redeploys !== undefined) {
     if (!Array.isArray(redeploys)) bad("redeploys must be a list");
@@ -169,45 +158,69 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
     const st = t.stages.find((s) => s.name === v.stage);
     if (!st) bad(`vault ${v.key} names unknown stage '${v.stage}'`);
     else if (st.vault !== v.key || st.manifest !== v.manifest) bad(`vault ${v.key} disagrees with its stage ${v.stage}`);
-    vaultRuleProblems(v).forEach((p) => bad(`vault ${v.key}: ${p}`));
   }
-  const proxies: unknown = t.proxies;
-  if (proxies !== undefined) {
-    if (!Array.isArray(proxies)) bad("proxies must be a list");
-    const seen = new Set<string>();
-    for (const x of proxies as TableProxy[]) {
-      if (!x || typeof x.name !== "string" || !/^[A-Za-z][A-Za-z0-9-]*$/.test(x.name)) bad(`a proxy has no usable name (letters, digits and dashes): ${JSON.stringify(x?.name)}`);
-      if (seen.has(x.name)) bad(`proxy ${x.name} is listed twice`);
-      seen.add(x.name);
-      for (const f of ["stage", "field", "implementationField", "artifact"] as const) if (typeof x[f] !== "string" || x[f] === "") bad(`proxy ${x.name} needs ${f}`);
-      const st = t.stages.find((s) => s.name === x.stage);
-      if (!st) return bad(`proxy ${x.name} names unknown stage '${x.stage}'`);
-      // issue 1809: a proxy stage must state the authority and the mode it deploys with. A stage that could run without them would deploy an undeclared mode.
-      for (const e of PROXY_STAGE_ENV) if (!st.requiredEnv.includes(e)) bad(`proxy ${x.name}: stage ${st.name} must require ${e} (a proxy is never deployed with an undeclared authority or mode)`);
-      const v = t.vaults.find((y) => y.stage === x.stage);
-      if (v && x.field === "vault" && v.artifact !== x.artifact) bad(`proxy ${x.name}: artifact ${x.artifact} differs from vault ${v.key}'s artifact ${v.artifact}`);
-    }
-    if ((proxies as unknown[]).length > 0 && (typeof t.proxyArtifact !== "string" || t.proxyArtifact === "")) bad("proxies need proxyArtifact: the build artifact every proxy's runtime code must equal");
-  }
-  const decisions: unknown = t.vaultRuleDecisions;
-  if (!decisions || typeof decisions !== "object" || Array.isArray(decisions)) return bad(`${where} needs vaultRuleDecisions (issue 1705): the decision behind each rule on which the vaults differ`);
-  for (const [f, d] of Object.entries(decisions)) {
-    if (!(VAULT_RULE_FIELDS as readonly string[]).includes(f)) bad(`vaultRuleDecisions names '${f}', which is not a vault rule field (${VAULT_RULE_FIELDS.join(", ")})`);
-    if (typeof d !== "string" || !DECISION_LINK.test(d)) bad(`vaultRuleDecisions.${f} must name its decision (an issue number or an owner decision)`);
-  }
-  for (const f of differingRuleFields(t.vaults)) if (!(decisions as Record<string, unknown>)[f]) bad(`the vaults differ on ${f} and vaultRuleDecisions names no decision for it (issue 1705: a difference is recorded with its decision, never carried silently)`);
   return t as StageTable;
 }
 
-/** The proxied contracts of a table (none for a core sha before ADR-0014). */
-export const tableProxies = (t: Pick<StageTable, "proxies">): TableProxy[] => t.proxies ?? [];
-/** The proxies a stage deploys, in table order. */
-export const proxiesOfStage = (t: Pick<StageTable, "proxies">, stage: string): TableProxy[] => tableProxies(t).filter((p) => p.stage === stage);
-/** The proxy row of a name, or USAGE naming the known ones. */
-export function proxyByName(t: Pick<StageTable, "proxies">, name: string): TableProxy {
-  const p = tableProxies(t).find((x) => x.name === name);
-  if (!p) throw new PublishError("USAGE", `'${name}' is not a proxied contract of this core checkout (${tableProxies(t).map((x) => x.name).join(", ") || "none: the stage table lists no proxies"})`, { proxy: name });
-  return p;
+const LAYOUT = /^contracts\/test\/fixtures\/storage-layout\/\w+\.json$/;
+/**
+ * Issue 1809: the proxy rows and the upgrade authority agree. A stage with proxies reads the authority's inputs and mode env; a stage that reads the mode env deploys a
+ * proxy; the authority's stage exists and runs after every proxy stage (the timelock is deployed last); every proxy names a field, an implementation field, an artifact
+ * and a layout snapshot.
+ */
+function upgradeProblems(t: StageTable): void {
+  const proxyStages = t.stages.filter((s) => s.proxies !== undefined);
+  const u = t.upgradeAuthority;
+  if (!u) { if (proxyStages.length > 0) bad("stages list proxies but the table has no upgradeAuthority"); return; }
+  if (typeof u.stage !== "string" || typeof u.contract !== "string" || u.address !== "create2" || !/^0x[0-9a-fA-F]{40}$/.test(String(u.factory)) || typeof u.salt !== "string" || u.salt === "") bad("upgradeAuthority needs stage, contract, address create2, a factory address and a salt");
+  strList(u.inputs, "upgradeAuthority inputs"); strList(u.modes, "upgradeAuthority modes");
+  if (typeof u.modeEnv !== "string" || u.modeEnv === "") bad("upgradeAuthority needs modeEnv");
+  if (!Number.isInteger(u.transactionsPerProxy) || u.transactionsPerProxy < 1) bad("upgradeAuthority transactionsPerProxy must be a positive integer");
+  if (typeof u.layoutPins !== "string" || !LAYOUT.test(u.layoutPins)) bad("upgradeAuthority layoutPins must be a file under contracts/test/fixtures/storage-layout");
+  const at = t.stages.findIndex((s) => s.name === u.stage);
+  if (at < 0) bad(`upgradeAuthority names unknown stage '${u.stage}'`);
+  for (const s of t.stages) {
+    const reads = s.requiredEnv.includes(u.modeEnv);
+    if (reads !== (s.proxies !== undefined && s.proxies.length > 0)) bad(`stage ${s.name}: ${reads ? `reads ${u.modeEnv} but lists no proxies` : `lists proxies but does not read ${u.modeEnv}`}`);
+    if (!s.proxies) continue;
+    for (const i of u.inputs) if (!s.requiredEnv.includes(i)) bad(`stage ${s.name} deploys a proxy but does not read ${i}`);
+    if (t.stages.indexOf(s) > at) bad(`stage ${s.name} deploys a proxy after the ${u.stage} stage: the upgrade authority is deployed last`);
+    for (const p of s.proxies) {
+      if (!p || typeof p.field !== "string" || typeof p.implementationField !== "string" || typeof p.contract !== "string" || p.field === "" || p.implementationField === "" || p.contract === "") bad(`stage ${s.name}: a proxy needs field, implementationField and contract`);
+      if (typeof p.layout !== "string" || !LAYOUT.test(p.layout)) bad(`stage ${s.name} proxy ${p.field}: layout must be a snapshot under contracts/test/fixtures/storage-layout`);
+    }
+  }
+}
+
+const DECISION_LINK = /^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/;
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The vault rows with every rule field (issue 1705), or INPUT_MISSING naming what is wrong. A field that differs between vaults must name its reason and a decision
+ * link in `vaultRuleDecisions`; a decision for a field every vault agrees on is stale and is refused too.
+ */
+export function vaultRules(t: Pick<StageTable, "vaults" | "vaultRuleDecisions">, where = "stage-table.json"): (TableVault & VaultRules)[] {
+  for (const v of t.vaults) {
+    for (const f of VAULT_RULE_FIELDS) if (!(f in v)) bad(`${where}: vault ${v.key} has no ${f} (issue 1705 vault rules)`);
+    if (typeof v.deployPaused !== "boolean" || typeof v.unpauseInStage13 !== "boolean") bad(`${where}: vault ${v.key} deployPaused and unpauseInStage13 must be booleans`);
+    if (v.unpauseRow !== `unpause-${v.key}`) bad(`${where}: vault ${v.key} unpauseRow must be unpause-${v.key}`);
+    if (v.unpauseInStage13 && !v.deployPaused) bad(`${where}: vault ${v.key} deploys open, so stage 13 has nothing to unpause`);
+    if (v.seed !== null && (typeof v.seed !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(v.seed))) bad(`${where}: vault ${v.key} seed must be a sheet name or null`);
+    if (v.eligibilitySource !== "router-stage" && v.eligibilitySource !== "sheet:ROUTER_DEFAULT_BPS") bad(`${where}: vault ${v.key} eligibilitySource must be router-stage or sheet:ROUTER_DEFAULT_BPS`);
+    strList(v.emergencyLevers, `vault ${v.key} emergencyLevers`);
+    if (typeof v.registryNameSource !== "string" || !/^(?:sheet:[A-Z][A-Z0-9_]*|script-constant)$/.test(v.registryNameSource)) bad(`${where}: vault ${v.key} registryNameSource must be sheet:<NAME> or script-constant`);
+  }
+  const decisions = t.vaultRuleDecisions ?? {};
+  for (const f of VAULT_RULE_FIELDS) {
+    // unpauseRow names the vault's own key by construction (checked above): the rule is the same when every row is unpause-<KEY>.
+    const norm = (v: TableVault): unknown => (f === "unpauseRow" ? "unpause-<KEY>" : v[f]);
+    const differs = t.vaults.some((v) => !sameValue(norm(v), norm(t.vaults[0]!)));
+    const d = decisions[f];
+    if (differs && (!d || typeof d.reason !== "string" || d.reason === "" || typeof d.decision !== "string" || !DECISION_LINK.test(d.decision))) bad(`${where}: vault rule ${f} differs between vaults, so vaultRuleDecisions.${f} must give a reason and a decision link (an issue URL)`);
+    if (!differs && d) bad(`${where}: vaultRuleDecisions.${f} is stale: every vault has the same ${f}`);
+  }
+  for (const k of Object.keys(decisions)) if (!(VAULT_RULE_FIELDS as readonly string[]).includes(k)) bad(`${where}: vaultRuleDecisions names unknown field ${k}`);
+  return t.vaults as (TableVault & VaultRules)[];
 }
 
 /** The redeploy row of a vault, or INPUT_MISSING naming the checkout that lacks it. */

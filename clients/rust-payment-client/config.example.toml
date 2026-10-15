@@ -49,21 +49,22 @@ vault_address = "0xYOUR_VAULT_ADDRESS"
 # upgrade does not change: gateway.json's `gateway_runtime_hash`.
 gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 
-# ── Implementation pins (ADR-0014, issue 1810) ────────────────────────────────
-# Every Robot Money core contract is deployed behind an ERC-1967 proxy. The
-# address and runtime-hash pins above do not pin the logic behind a proxy, so
-# every write reads the live implementation and refuses with
-# `ErrImplementationNotApproved` unless its code hash is listed here. Leave a
-# key out only when no contract it covers is a proxy.
-#
-# The gateway's implementation: gateway.json's `gateway_implementation_runtime_hash`,
-# or: cast keccak $(cast code $(cast implementation $GATEWAY_ADDRESS))
-gateway_implementation_hashes = ["0xYOUR_GATEWAY_IMPLEMENTATION_HASH"]
-#
-# The vault(s) a deposit lands in or a withdraw redeems from, every router leg,
-# and the router itself. For each: cast keccak $(cast code $(cast implementation $ADDR))
-# List the next reviewed implementation before its timelock upgrade executes.
-proxy_implementation_hashes = ["0xYOUR_VAULT_IMPLEMENTATION_HASH"]
+# The approved ERC-1967 implementation behind a proxied gateway, from the
+# gateway manifest (`gateway_implementation`, `gateway_implementation_runtime_hash`).
+# The proxy's own code hash above never changes on an upgrade, so every write
+# also checks the live implementation slot and refuses an unapproved one.
+# Set both or neither. Leave both out only for a direct (non-proxy) gateway.
+# gateway_implementation = "0xYOUR_GATEWAY_IMPLEMENTATION"
+# gateway_implementation_runtime_hash = "0xYOUR_GATEWAY_IMPLEMENTATION_RUNTIME_HASH"
+
+# The vaults and the router are ERC-1967 proxies too. The address pins do not
+# pin the logic behind them, so every write also reads the implementation of
+# each one it reaches (the vault a deposit lands in or a withdraw redeems from,
+# the router, every router leg) and refuses with `ErrImplementationNotApproved`
+# unless its code hash is listed here. Copy the reviewed implementation code
+# hashes from the release record, never from the live chain. Leave it out only
+# when none of them is a proxy.
+# proxy_implementation_hashes = ["0xYOUR_VAULT_IMPLEMENTATION_HASH", "0xYOUR_ROUTER_IMPLEMENTATION_HASH"]
 
 # ── Optional contract addresses ───────────────────────────────────────────────
 

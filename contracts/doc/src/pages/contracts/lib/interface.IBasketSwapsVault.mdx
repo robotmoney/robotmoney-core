@@ -1,0 +1,79 @@
+---
+title: "IBasketSwapsVault"
+---
+
+# IBasketSwapsVault
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/BasketSwaps.sol)
+
+<i>
+
+The vault getters the emergency unwind reads from `address(this)` (the vault).
+
+</i>
+
+## Functions
+
+<a id="emergencyunwindguard-address"></a>
+
+### emergencyUnwindGuard
+
+```solidity
+function emergencyUnwindGuard(address token)
+        external
+        view
+        returns (uint256 minUsdcOut, bool overrideAllowed, uint256 maxLossBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| minUsdcOut | `uint256` |  |
+| overrideAllowed | `bool` |  |
+| maxLossBps | `uint256` |  |
+
+<a id="maxslippagebps"></a>
+
+### maxSlippageBps
+
+```solidity
+function maxSlippageBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="emergencytwapusdcvalue-basketassetconfigguard-assetinfo-uint256"></a>
+
+### emergencyTwapUsdcValue
+
+```solidity
+function emergencyTwapUsdcValue(BasketAssetConfigGuard.AssetInfo calldata a, uint256 amount)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `BasketAssetConfigGuard.AssetInfo` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

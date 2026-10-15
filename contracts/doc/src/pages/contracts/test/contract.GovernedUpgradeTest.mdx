@@ -1,0 +1,739 @@
+---
+title: "GovernedUpgradeTest"
+description: "Issue 1808: the ten proxied core contracts, their one upgrade authority (the Safe-controlled timelock) and the one-way, target-bound freeze. Every governed call here goes through a real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape. The populated v1 -> v2 upgrade of the deployed stack on the Base fork is UpgradeLifecycleFork.t.sol."
+---
+
+# GovernedUpgradeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/GovernedUpgrade.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+Issue 1808: the ten proxied core contracts, their one upgrade authority (the Safe-controlled
+timelock) and the one-way, target-bound freeze. Every governed call here goes through a
+real SafeL2 1.4.1 (2-of-3) and a real `TimelockController` with the production shape.
+The populated v1 -> v2 upgrade of the deployed stack on the Base fork is
+UpgradeLifecycleFork.t.sol.
+
+## Constants
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### N
+
+```solidity
+uint256 internal constant N = 10;
+```
+
+### CAP
+
+```solidity
+uint256 internal constant CAP = 1_000_000e6;
+```
+
+### INITIALIZABLE_SLOT
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.Initializable")) - 1)) & ~0xff
+
+</i>
+
+```solidity
+bytes32 internal constant INITIALIZABLE_SLOT =
+        0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+```
+
+### REENTRANCY_SLOT
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.ReentrancyGuard")) - 1)) & ~0xff
+
+</i>
+
+```solidity
+bytes32 internal constant REENTRANCY_SLOT =
+        0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00;
+```
+
+## State Variables
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### admin
+
+```solidity
+address internal admin = makeAddr("admin");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("pauser");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### swapRouter
+
+```solidity
+address internal swapRouter = makeAddr("swapRouter");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("agent");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("submitter");
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### proto
+
+```solidity
+ProtocolAssetVault internal proto;
+```
+
+### agentVault
+
+```solidity
+AgentTokenVault internal agentVault;
+```
+
+### rwa
+
+```solidity
+RwaBasketVault internal rwa;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy internal ic;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+### saltNonce
+
+```solidity
+uint256 internal saltNonce;
+```
+
+### positionAdapter
+
+```solidity
+address internal positionAdapter;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_proxies"></a>
+
+### _proxies
+
+```solidity
+function _proxies() internal view returns (address[N] memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `address[N]` |  |
+
+<a id="_name-uint256"></a>
+
+### _name
+
+```solidity
+function _name(uint256 i) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_basket"></a>
+
+### _basket
+
+```solidity
+function _basket() internal view returns (BasketVault.InitParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault.InitParams` |  |
+
+<a id="_init-uint256-address-governeduups-upgrademode"></a>
+
+### _init
+
+<i>
+
+The initializer call of contract `i`, with the same arguments its proxy was built with.
+
+</i>
+
+```solidity
+function _init(uint256 i, address t, GovernedUUPS.UpgradeMode m)
+        internal
+        view
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| t | `address` |  |
+| m | `GovernedUUPS.UpgradeMode` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_newimpl-uint256"></a>
+
+### _newImpl
+
+<i>
+
+A fresh v1 implementation of contract `i`.
+
+</i>
+
+```solidity
+function _newImpl(uint256 i) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_newv2-uint256"></a>
+
+### _newV2
+
+<i>
+
+The v2 implementation of contract `i`.
+
+</i>
+
+```solidity
+function _newV2(uint256 i) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_salt"></a>
+
+### _salt
+
+```solidity
+function _salt() internal returns (bytes32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_governed-address-bytes"></a>
+
+### _governed
+
+<i>
+
+Safe -> timelock.schedule -> delay -> timelock.execute of `target.call(data)`.
+
+</i>
+
+```solidity
+function _governed(address target, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+<a id="_upgradecall-address-bytes"></a>
+
+### _upgradeCall
+
+```solidity
+function _upgradeCall(address impl, bytes memory data) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_freezecall-address"></a>
+
+### _freezeCall
+
+```solidity
+function _freezeCall(address proxy) internal view returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_initializedversion-address"></a>
+
+### _initializedVersion
+
+```solidity
+function _initializedVersion(address target) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="test_everycorecontract_isaninitializedproxynamingthetimelock"></a>
+
+### test_everyCoreContract_isAnInitializedProxyNamingTheTimelock
+
+Each core contract is an initialized ERC-1967 proxy that names the timelock, is not
+frozen, and points at an implementation with code. `proxiableUUID` answers only on
+the implementation.
+
+```solidity
+function test_everyCoreContract_isAnInitializedProxyNamingTheTimelock() public;
+```
+
+<a id="test_everyparentisinitialized"></a>
+
+### test_everyParentIsInitialized
+
+Every parent is initialized by the one `initialize` call: the ERC-20 / ERC-4626
+state, the roles, the reentrancy guard and the upgrade authority are all set.
+
+```solidity
+function test_everyParentIsInitialized() public view;
+```
+
+<a id="test_implementationtakeover_isimpossible"></a>
+
+### test_implementationTakeover_isImpossible
+
+No implementation can be initialized, upgraded or frozen directly.
+
+```solidity
+function test_implementationTakeover_isImpossible() public;
+```
+
+<a id="test_initializerreplay_reverts"></a>
+
+### test_initializerReplay_reverts
+
+An initializer runs once: a replay reverts for every caller, including the timelock.
+
+```solidity
+function test_initializerReplay_reverts() public;
+```
+
+<a id="test_missinginitialization_leavesnoupgradeauthority"></a>
+
+### test_missingInitialization_leavesNoUpgradeAuthority
+
+A proxy built without its initializer call names no authority: nobody can upgrade
+or freeze it. The deploy scripts never build one (the init call is in the proxy's
+constructor), and the timelock stage refuses any proxy that does not name it.
+
+```solidity
+function test_missingInitialization_leavesNoUpgradeAuthority() public;
+```
+
+<a id="test_doubleparentinitialization_reverts"></a>
+
+### test_doubleParentInitialization_reverts
+
+A parent initializer outside an initializer reverts, and the upgrade authority
+cannot be initialized a second time by a later reinitializer.
+
+```solidity
+function test_doubleParentInitialization_reverts() public;
+```
+
+<a id="test_reinitializer_runsonceinsidethegovernedupgrade"></a>
+
+### test_reinitializer_runsOnceInsideTheGovernedUpgrade
+
+A reinitializer runs once, inside the governed upgrade call. Anyone calling it
+again, or the v1 initializer, is refused.
+
+```solidity
+function test_reinitializer_runsOnceInsideTheGovernedUpgrade() public;
+```
+
+<a id="test_releasemode_isrequired_andthetimelocknonzero"></a>
+
+### test_releaseMode_isRequired_andTheTimelockNonZero
+
+The release mode has no default: `Undeclared` reverts, and so does a zero timelock.
+
+```solidity
+function test_releaseMode_isRequired_andTheTimelockNonZero() public;
+```
+
+<a id="test_freezeatdeploy_isfrozenfromthefirstblock"></a>
+
+### test_freezeAtDeploy_isFrozenFromTheFirstBlock
+
+Freeze at deploy: the flag is set inside the atomic initialization (with the event),
+so not even the timelock can ever upgrade the proxy.
+
+```solidity
+function test_freezeAtDeploy_isFrozenFromTheFirstBlock() public;
+```
+
+<a id="_sawlog-address-bytes32-bytes32"></a>
+
+### _sawLog
+
+```solidity
+function _sawLog(address emitter, bytes32 topic0, bytes32 topic1) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| emitter | `address` |  |
+| topic0 | `bytes32` |  |
+| topic1 | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_sawfrozen-address-address"></a>
+
+### _sawFrozen
+
+```solidity
+function _sawFrozen(address proxy, address impl) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| impl | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_onlythetimelock_canupgradeorfreeze"></a>
+
+### test_onlyTheTimelock_canUpgradeOrFreeze
+
+Only the timelock upgrades or freezes. The admin, the emergency key, the deposit
+pauser, the deployer, RouterGovernance, the Safe itself and a stranger are refused.
+
+```solidity
+function test_onlyTheTimelock_canUpgradeOrFreeze() public;
+```
+
+<a id="test_safedirectupgrade_isrefused"></a>
+
+### test_safeDirectUpgrade_isRefused
+
+A direct, two-signature Safe call to upgrade is refused: the Safe is the
+timelock's proposer, not the upgrade authority.
+
+```solidity
+function test_safeDirectUpgrade_isRefused() public;
+```
+
+<a id="test_rolechanges_donotmoveupgradeauthority"></a>
+
+### test_roleChanges_doNotMoveUpgradeAuthority
+
+No role change moves the upgrade authority: granting every role to a stranger and
+revoking the admin's leaves `upgradeTimelock` as it was and the stranger refused.
+
+```solidity
+function test_roleChanges_doNotMoveUpgradeAuthority() public;
+```
+
+<a id="_populate"></a>
+
+### _populate
+
+<i>
+
+Populates v1 state on the non-vault contracts the unit fixture can reach without venues.
+
+</i>
+
+```solidity
+function _populate() internal;
+```
+
+<a id="test_upgradeeveryproxy_throughsafeandtimelock_keepsstate"></a>
+
+### test_upgradeEveryProxy_throughSafeAndTimelock_keepsState
+
+Every proxy goes v1 -> v2 through Safe -> timelock with its address, implementation
+slot history and state intact: balances, allowances, roles, caps, fees, weights,
+gateway policies, IC agents and receipts read the same before and after, and the
+redeem path still pays.
+
+```solidity
+function test_upgradeEveryProxy_throughSafeAndTimelock_keepsState() public;
+```
+
+<a id="test_upgrade_refusesincompatibleimplementations"></a>
+
+### test_upgrade_refusesIncompatibleImplementations
+
+Upgrades refuse an implementation that is not UUPS, answers the wrong UUID, or has
+no code: a proxy can never point at an incompatible implementation shape.
+
+```solidity
+function test_upgrade_refusesIncompatibleImplementations() public;
+```
+
+<a id="test_incompatiblelayout_iswhatthelayoutgatecatches"></a>
+
+### test_incompatibleLayout_isWhatTheLayoutGateCatches
+
+Incompatible storage layouts. A v2 of the same contract keeps every committed
+snapshot slot (contracts/test/fixtures/storage-layout, the CI layout gate). A
+different contract's implementation is still UUPS-valid, so only the layout review
+stops it: its committed layout differs at slot 0, and installed it misreads the
+registry's state. This is why every upgrade passes the layout gate first.
+
+```solidity
+function test_incompatibleLayout_isWhatTheLayoutGateCatches() public;
+```
+
+<a id="test_delayedfreeze_isoneway"></a>
+
+### test_delayedFreeze_isOneWay
+
+The delayed freeze through Safe -> timelock, bound to the live implementation and
+its code hash: afterwards no upgrade, no initializer and no reinitializer can run.
+
+```solidity
+function test_delayedFreeze_isOneWay() public;
+```
+
+<a id="test_freeze_wrongtarget_reverts"></a>
+
+### test_freeze_wrongTarget_reverts
+
+A freeze naming the wrong implementation or the wrong code hash reverts.
+
+```solidity
+function test_freeze_wrongTarget_reverts() public;
+```
+
+<a id="test_interveningupgrade_beforeaqueuedfreeze_blocksthefreeze"></a>
+
+### test_interveningUpgrade_beforeAQueuedFreeze_blocksTheFreeze
+
+A freeze queued for v1, then an intervening upgrade to v2 that executes first: the
+queued freeze can no longer execute, so it never locks in a version nobody reviewed.
+
+```solidity
+function test_interveningUpgrade_beforeAQueuedFreeze_blocksTheFreeze() public;
+```
+
+<a id="test_pendingupgrade_afterthefreeze_fails"></a>
+
+### test_pendingUpgrade_afterTheFreeze_fails
+
+An upgrade queued before the freeze cannot execute after it, through the timelock
+or through the Safe. The operation stays pending (not Done) and keeps failing.
+
+```solidity
+function test_pendingUpgrade_afterTheFreeze_fails() public;
+```
+
+<a id="test_noroleorinitializerroute_clearsthefreeze"></a>
+
+### test_noRoleOrInitializerRoute_clearsTheFreeze
+
+No role change and no initializer or reinitializer route clears the freeze.
+
+```solidity
+function test_noRoleOrInitializerRoute_clearsTheFreeze() public;
+```
+
+<a id="test_freeze_neverblockswithdrawals"></a>
+
+### test_freeze_neverBlocksWithdrawals
+
+Freezing upgrades never pauses or alters withdrawals.
+
+```solidity
+function test_freeze_neverBlocksWithdrawals() public;
+```
+
+<a id="test_storagenamespace_istheerc7201location"></a>
+
+### test_storageNamespace_isTheErc7201Location
+
+The GovernedUUPS namespace is the ERC-7201 location of its id.
+
+```solidity
+function test_storageNamespace_isTheErc7201Location() public pure;
+```
+

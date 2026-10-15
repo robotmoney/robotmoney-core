@@ -7,7 +7,7 @@
 // `UniswapV3SwapAdapter`. There is no chain-id branch and no devnet-only input.
 pragma solidity ^0.8.24;
 
-import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
@@ -21,7 +21,6 @@ import {TickMath} from "../lib/TickMath.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IPoolManagerV4} from "../interfaces/IPoolManagerV4.sol";
 import {IUniswapV4PriceRecorder} from "../interfaces/IUniswapV4PriceRecorder.sol";
-import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 
 /// @dev Shared flow: validate sheet inputs, deploy the vault, check each configured pool,
 ///      add each configured asset, pause, register, write the manifest.
@@ -30,11 +29,7 @@ import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 ///      deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
 ///      EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
 ///      deployer (core 1487). This script never grants a role to anyone else.
-///
-///      Proxy (ADR-0014). The vault is the kind's implementation behind an ERC1967Proxy whose
-///      constructor runs `BasketVault.initialize`, naming `UPGRADE_AUTHORITY` (the timelock deployed
-///      first) and `UPGRADE_MODE`. The broadcast run reads both, required on every chain.
-abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
+abstract contract BasketVaultDeployBase is UpgradeAuthority {
     using stdJson for string;
 
     /// @notice Sheet inputs for one deploy.
@@ -88,10 +83,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
 
     /// @notice Result returned to in-process callers (forge tests, stage driver).
     struct Deployed {
-        /// @dev The proxy.
         address vault;
-        /// @dev The implementation behind `vault` (ADR-0014).
-        address implementation;
         address registry;
         address adapter;
         /// @dev The V4 swap adapter, zero when the config lists no V4 asset (issue 1676).
@@ -101,22 +93,28 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
         address[] tokens;
         bool registered;
         bool paused;
+        address implementation;
+        UpgradeConfig upgrade;
     }
+
+    /// @dev The upgrade authority and release mode `_newVault` initializes the vault proxy with
+    ///      (issue 1808). Each entry point sets it before deploying: `run()` from the env
+    ///      (`UpgradeAuthority._readUpgradeConfig`), an in-process run from the test seam.
+    UpgradeConfig internal _vaultUpgrade;
 
     // ─── Per-vault hooks ──────────────────────────────────────────────────────
 
-    /// @dev Construct the concrete kind's implementation (ADR-0014: no constructor arguments). The
-    ///      base deploys the proxy over it and runs `BasketVault.initialize`.
-    function _newImplementation() internal virtual returns (BasketVault);
+    /// @dev Construct the concrete vault. `emergencyResponder` is the deployer for this run.
+    function _newVault(Params memory p, address emergencyResponder)
+        internal
+        virtual
+        returns (BasketVault);
 
     /// @dev Name stored in the registry.
     function _registryName() internal pure virtual returns (string memory);
 
     /// @dev Manifest object key and log label.
     function _label() internal pure virtual returns (string memory);
-
-    /// @dev The kind's build artifact, whose storage-layout snapshot names its layout (ADR-0014 §8).
-    function _layoutArtifact() internal pure virtual returns (string memory);
 
     /// @dev True when assets route through a deployed `UniswapV3SwapAdapter`. False uses the
     ///      built-in SwapRouter02 path (adapter address 0).
@@ -155,13 +153,14 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
         _requireExpectedChain(prefix);
         Params memory p = _readParamsFrom(prefix);
         uint256[] memory eligibilityBps = _readEligibilityBps(prefix);
-        _useEnvUpgradeConfig(prefix);
         Cfg memory cfg = _parseCfg(vm.readFile(configFile), arrayKey);
+        _vaultUpgrade = _readUpgradeConfig(prefix);
 
         vm.startBroadcast();
         d = _deployAll(p, cfg);
         // Deploy-time router configuration (issue 1520): eligibility and the default weights are set here, by the deployer, before the
-        // timelock handover. Stage 13 then unpauses all four vaults through the Safe and the timelock (scripts/deploy/stage-table.json `vaults[]`, issue 1705).
+        // timelock handover. After it, stage 13 unpauses all four vaults and router weights change only when the Safe applies a
+        // consensus receipt through the timelock (apply-receipt, core 1698).
         _makeRouterEligible(VaultRegistry(p.registry), d.vault, eligibilityBps);
         vm.stopBroadcast();
 
@@ -308,7 +307,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
     /// @dev Validates inputs, deploys, adds assets, pauses and registers. The caller owns the
     ///      broadcast (or prank) context: every call below is made as `p.admin`.
     function _deployAll(Params memory p, Cfg memory cfg) internal returns (Deployed memory d) {
-        d = _deployConfigured({p: p, cfg: cfg, pauseBeforeAssets: false});
+        d = _deployConfigured(p, cfg);
 
         _registerIfAbsent(VaultRegistry(p.registry), d.vault, p.usdc);
         d.registered = true;
@@ -321,11 +320,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
     /// @dev The part of `_deployAll` before registration: validates inputs, deploys the vault, adds the assets, sets the guards
     ///      and pauses deposits. The vault is not registered. A redeploy into a live deployment (issue 1796) stops here: the registry
     ///      is governed by the timelock after the handover, so the registration is a govern row, not a deployer call.
-    ///      `pauseBeforeAssets` (QA plan v1 E3, review F2): pause right after creation, before the first `addAsset`, instead of after
-    ///      the guards. The redeploy passes true: once an asset is active `maxDeposit` opens, and a direct `deposit` into a vault of a
-    ///      live deployment would mint shares before the ORA-4 guard is set. The launch path passes false and keeps its broadcast
-    ///      order (and so the adapter addresses a launch run creates); the same window exists there, for a vault no router routes to yet.
-    function _deployConfigured(Params memory p, Cfg memory cfg, bool pauseBeforeAssets)
+    function _deployConfigured(Params memory p, Cfg memory cfg)
         internal
         returns (Deployed memory d)
     {
@@ -351,13 +346,15 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
 
         BasketVault vault = _newVault(p, p.admin);
         d.vault = address(vault);
-        d.implementation = _implementationOf(address(vault));
+        d.implementation = _implementationOf(d.vault);
+        d.upgrade = _vaultUpgrade;
+        require(vault.upgradeTimelock() == _vaultUpgrade.timelock, "vault upgrade timelock differs");
         d.registry = p.registry;
         d.tokens = new address[](cfg.assets.length);
 
-        // The deployer holds EMERGENCY_ROLE until the handover (`_newVault(p, p.admin)`), so it can pause here.
-        if (pauseBeforeAssets) vault.pauseDeposits();
-
+        // Close the bootstrap deposit window before any active asset is installed.
+        vault.pauseDeposits();
+        d.paused = true;
         _addAssets(vault, p, cfg, d);
 
         // Issue 1666: the ORA-4 deposit guard is nonzero before the timelock handover, on every chain. The vault default is 0, which
@@ -378,35 +375,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
             );
         }
 
-        // Deployed paused. The govern stage unpauses after the checks pass.
-        if (!pauseBeforeAssets) vault.pauseDeposits();
-        d.paused = true;
-    }
-
-    /// @dev The kind's implementation and its initialized proxy. `emergencyResponder` is the deployer for
-    ///      this run (the timelock stage hands EMERGENCY_ROLE to the emergency key).
-    function _newVault(Params memory p, address emergencyResponder) internal returns (BasketVault) {
-        BasketVault implementation = _newImplementation();
-        return BasketVault(
-            _deployProxy(
-                address(implementation),
-                abi.encodeCall(
-                    BasketVault.initialize,
-                    (
-                        IERC20(p.usdc),
-                        ISwapRouter(p.swapRouter),
-                        p.tvlCap,
-                        p.perDepositCap,
-                        p.exitFeeBps,
-                        p.feeRecipient,
-                        p.admin,
-                        emergencyResponder,
-                        _upgrade.authority,
-                        _upgrade.mode
-                    )
-                )
-            )
-        );
+        // Remains paused through configuration and handover.
     }
 
     /// @dev QA plan D4 (E6): the ORA-4 guard must sit above the fee of every configured pool. Spot can rest anywhere inside the fee
@@ -432,6 +401,24 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
     ///      linked into this script: a correctly linked vault points at the same instance with
     ///      the same runtime codehash. Also probes `totalAssets()`: it must not revert and must
     ///      stay far below a sane ceiling (1000 times the TVL cap).
+    /// @dev The per-instance initializer arguments (what the constructor took before issue 1808).
+    function _basketInitParams(Params memory p, address emergencyResponder)
+        internal
+        pure
+        returns (BasketVault.InitParams memory)
+    {
+        return BasketVault.InitParams({
+            usdc: IERC20(p.usdc),
+            swapRouter: ISwapRouter(p.swapRouter),
+            tvlCap: p.tvlCap,
+            perDepositCap: p.perDepositCap,
+            exitFeeBps: p.exitFeeBps,
+            feeRecipient: p.feeRecipient,
+            admin: p.admin,
+            emergencyResponder: emergencyResponder
+        });
+    }
+
     function _assertTickMathLinkIntegrity(address vault, uint256 tvlCap) internal view {
         address canonicalLib = address(TickMath);
         require(canonicalLib != address(0), "TickMath: zero linked library");
@@ -462,7 +449,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
                     d.adapter = adapter;
                 }
                 _checkPool(a, p.minPoolLiquidity);
-                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketAssetConfigGuard.Venue.V3);
+                vault.addAsset(a.token, a.pool, a.poolFee, adapter, BasketVault.Venue.V3);
             }
             d.tokens[i] = a.token;
         }
@@ -488,7 +475,7 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
         address adapterV4 =
             address(new UniswapV4SwapAdapter(a.poolManager, a.key, p.recorder, p.usdc));
         vault.setAdapterCodeHashAllowed(adapterV4.codehash, true);
-        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketAssetConfigGuard.Venue.V4);
+        vault.addAsset(a.token, p.recorder, a.poolFee, adapterV4, BasketVault.Venue.V4);
         d.adapterV4 = adapterV4;
         d.recorder = p.recorder;
     }
@@ -596,12 +583,12 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
             vm.toString(block.chainid),
             ',"vault":"',
             vm.toString(d.vault),
-            '","vault_implementation":"',
+            '","implementation":"',
             vm.toString(d.implementation),
-            '","upgrade_authority":"',
-            vm.toString(_upgrade.authority),
+            '","upgrade_timelock":"',
+            vm.toString(d.upgrade.timelock),
             '","upgrade_mode":"',
-            upgradeModeName(_upgrade.mode),
+            upgradeModeName(d.upgrade.mode),
             '","registry":"',
             vm.toString(d.registry),
             '","adapter":"',
@@ -616,16 +603,9 @@ abstract contract BasketVaultDeployBase is GovernedProxyDeploy {
             d.paused ? "true" : "false",
             ',"assets":',
             assetsJson,
-            ',"vault_layout_id":"0x0000000000000000000000000000000000000000000000000000000000000000"}'
+            "}"
         );
         vm.writeFile(outPath, json);
-        // ADR-0014 §8: the implementation's storage-layout identifier. Written into the placeholder
-        // above in a second step: one more argument in the concat is one stack slot too deep.
-        vm.writeJson(
-            string.concat('"', vm.toString(_layoutId(_layoutArtifact())), '"'),
-            outPath,
-            ".vault_layout_id"
-        );
         console2.log(string.concat("Wrote ", _label(), " manifest to"), outPath);
     }
 }

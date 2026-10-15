@@ -8,8 +8,8 @@
 //!
 //! Plan: core issue 1499 (S9, core 1488).
 //!
-//! Secrets: this module never holds a private key. The deployer, pauser, Safe
-//! owners and emergency key are encrypted Foundry keystores minted by the
+//! Secrets: this module never holds a private key. The deployer, Safe owners,
+//! pauser and emergency key are encrypted Foundry keystores minted by the
 //! rehearsal key helper (`publish-contracts/src/rehearsal`) in a fresh 0700 directory per run (a
 //! redeploy gets a fresh keystore from the new SHA). The keystore passphrase is random, lives
 //! in a 0600 file next to the keystores, and is never an argument or an
@@ -44,11 +44,8 @@ pub const MANIFEST_DIR_ENV: &str = "PUBLISH_MANIFEST_DIR";
 pub const DEPLOYER_KEY_NAME: &str = "DEPLOYER";
 
 /// Sheet keys the harness may add to the stage sheet from its caller (for
-/// example a cap or the timelock delay). Anything else
+/// example the timelock delay). Anything else
 /// is refused, so a test can only change a parameter, never the scheme.
-/// The legacy voting names (`QUORUM_THRESHOLD`, `VOTING_PERIOD`,
-/// `EXECUTION_DELAY`) are not here: issue 1698 deleted the voting path, the
-/// sheet parser accepts and ignores them, so an override of one changes nothing.
 pub const OVERRIDABLE_SHEET_KEYS: &[&str] = &["TVL_CAP", "PER_DEPOSIT_CAP", "TIMELOCK_MIN_DELAY"];
 
 #[derive(Debug, Clone)]
@@ -689,6 +686,11 @@ pub fn check_govern_rows(rows: &[GovernRow]) -> Result<(), HarnessError> {
 #[derive(Debug, Clone)]
 pub struct Topology {
     pub gateway: String,
+    /// The ERC-1967 implementation behind the gateway proxy, and its runtime
+    /// code hash, from the gateway manifest: the approved pair an rmpc config
+    /// pins (issue 1810).
+    pub gateway_implementation: String,
+    pub gateway_implementation_runtime_hash: String,
     pub usdc: String,
     pub vault: String,
     pub aave_adapter: String,
@@ -768,6 +770,12 @@ pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, Ha
     };
     Ok(Topology {
         gateway: field(&gw_j, &gw_f, "gateway")?,
+        gateway_implementation: field(&gw_j, &gw_f, "gateway_implementation")?,
+        gateway_implementation_runtime_hash: field(
+            &gw_j,
+            &gw_f,
+            "gateway_implementation_runtime_hash",
+        )?,
         usdc,
         vault: field(&vault_j, &vault_f, "vault")?,
         aave_adapter: opt_field(&vault_j, "aave_adapter"),
@@ -859,6 +867,8 @@ mod tests {
         assert!(s.contains("export TIMELOCK_MIN_DELAY=60"));
         assert!(s.contains("export TVL_CAP=5"));
         assert!(render_sheet("", &id, &[("REHEARSAL", "1")]).is_err());
+        // issue 1698: there is no voting, so the voting names are no longer overridable
+        assert!(render_sheet("", &id, &[("QUORUM_THRESHOLD", "5")]).is_err());
     }
 
     #[test]
@@ -919,7 +929,7 @@ mod tests {
     #[test]
     fn govern_rows_need_tx_hash_and_status_one() {
         let ok = format!(
-            "{{\"row\":\"set-quorum\",\"txHash\":\"0x{}\",\"status\":1}}\nnoise\n",
+            "{{\"row\":\"unpause-USDC\",\"txHash\":\"0x{}\",\"status\":1}}\nnoise\n",
             "ab".repeat(32)
         );
         let rows = parse_govern_output(&ok).unwrap();
@@ -986,7 +996,16 @@ mod tests {
                 std::fs::write(dir.join(n(t.manifest_of(stage).unwrap())), body).unwrap();
             };
             w("vault", format!("{{\"vault\":\"{}\"}}", a('1')));
-            w("gateway", format!("{{\"gateway\":\"{}\"}}", a('2')));
+            w(
+                "gateway",
+                format!(
+                    "{{\"gateway\":\"{}\",\"gateway_implementation\":\"{}\",\
+                     \"gateway_implementation_runtime_hash\":\"0x{}\"}}",
+                    a('2'),
+                    a('b'),
+                    "cd".repeat(32)
+                ),
+            );
             w("registry", format!("{{\"registry\":\"{}\"}}", a('3')));
             w("router", format!("{{\"router\":\"{}\"}}", a('4')));
             w("governance", format!("{{\"governance\":\"{}\"}}", a('5')));
@@ -1014,6 +1033,11 @@ mod tests {
         let d = write(&table, false);
         let topo = load_topology_with(&d, &table).unwrap();
         assert_eq!(topo.gateway, a('2'));
+        assert_eq!(topo.gateway_implementation, a('b'));
+        assert_eq!(
+            topo.gateway_implementation_runtime_hash,
+            format!("0x{}", "cd".repeat(32))
+        );
         assert_eq!(topo.safe, a('9'));
         assert_eq!(topo.vaults.len(), 4);
         assert_eq!(topo.vaults["rmUSDC"], a('1'));

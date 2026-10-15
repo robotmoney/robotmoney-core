@@ -13,7 +13,7 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Minimal stand-in for `PortfolioRouter` exposing only the
 ///         `defaultWeightsLength()` view the registry's stale-length guard
@@ -109,17 +109,14 @@ contract VaultRegistryTest is Test {
     // ─── setUp ────────────────────────────────────────────────────────────────
 
     function setUp() public {
-        registry = Proxied.vaultRegistry(admin);
+        registry = CoreProxies.vaultRegistry(admin);
     }
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    /// @dev ADR-0014: the check runs in `initialize`, inside the proxy's deployment. The
-    ///      implementation is deployed first, so the armed `expectRevert` meets the proxy's CREATE.
     function test_constructor_revertsOnZeroAdmin() public {
-        address implementation = address(new VaultRegistry());
         vm.expectRevert(VaultRegistry.ZeroAddress.selector);
-        Proxied.proxy(implementation, Proxied.vaultRegistryInit(address(0)));
+        CoreProxies.vaultRegistry(address(0));
     }
 
     function test_constructor_grantsAdminRole() public view {
@@ -771,12 +768,12 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("retire-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            Proxied.robotMoneyVault(
+            CoreProxies.robotMoneyVault(
                 usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
             )
         );
         vaults[1] = address(
-            Proxied.protocolAssetVault(
+            CoreProxies.protocolAssetVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -788,7 +785,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[2] = address(
-            Proxied.agentTokenVault(
+            CoreProxies.agentTokenVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -800,7 +797,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[3] = address(
-            Proxied.rwaBasketVault(
+            CoreProxies.rwaBasketVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -838,12 +835,12 @@ contract VaultRegistryTest is Test {
         address swapRouter = makeAddr("allExact-swap-router");
         address[] memory vaults = new address[](4);
         vaults[0] = address(
-            Proxied.robotMoneyVault(
+            CoreProxies.robotMoneyVault(
                 usdc, type(uint256).max, type(uint256).max, 0, admin, admin, admin
             )
         );
         vaults[1] = address(
-            Proxied.protocolAssetVault(
+            CoreProxies.protocolAssetVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -855,7 +852,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[2] = address(
-            Proxied.agentTokenVault(
+            CoreProxies.agentTokenVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,
@@ -867,7 +864,7 @@ contract VaultRegistryTest is Test {
             )
         );
         vaults[3] = address(
-            Proxied.rwaBasketVault(
+            CoreProxies.rwaBasketVault(
                 IERC20(address(usdc)),
                 ISwapRouter(swapRouter),
                 type(uint256).max,

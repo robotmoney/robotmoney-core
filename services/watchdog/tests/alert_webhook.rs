@@ -376,6 +376,10 @@ async fn a_weight_setter_path_drift_pages_with_the_observed_holders() {
             count: 2,
             members: vec![setter.clone(), stranger.clone()],
         },
+        weight_setter_appliers: RoleMembers {
+            count: 1,
+            members: vec![timelock.clone()],
+        },
         weight_setter_admins: RoleMembers {
             count: 1,
             members: vec![timelock.clone()],
@@ -395,6 +399,8 @@ async fn a_weight_setter_path_drift_pages_with_the_observed_holders() {
     assert_eq!(d["alert_kind"], "weight_setter_path_drift");
     assert_eq!(d["weight_setter_role_count"], 2);
     assert_eq!(d["weight_setter_role_holders"][1], stranger);
+    assert_eq!(d["apply_receipt_role_count"], 1);
+    assert_eq!(d["apply_receipt_role_holders"][0], timelock);
     assert_eq!(d["expected_weight_setter"], setter);
     assert_eq!(d["expected_timelock"], timelock);
     assert_eq!(d["router_address"], breach.router_address);

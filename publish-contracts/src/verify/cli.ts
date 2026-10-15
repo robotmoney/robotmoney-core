@@ -1,5 +1,6 @@
 // CLI: bun src/verify/cli.ts --rpc URL --manifests DIR --sheet-json FILE --artifacts out --frozen FILE --deploy-sha SHA --from-block N --core-dir CORE [--sources]
-// The sheet JSON is the whitelist-parsed sheet in VerifySheet shape (bigints as decimal strings). No secret is read or written here.
+// The sheet JSON is the whitelist-parsed sheet in VerifySheet shape (bigints as decimal strings), with `upgradeMode` (issue 1809: the release mode; absent fails the
+// upgradeability labels) and, for an upgradeable release, `freezeDeadline`. The core dir also holds the storage-layout snapshots. No secret is read or written here.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { loadStageTable } from "../stage-table.ts";
@@ -11,12 +12,10 @@ export function parseSheetJson(text: string): VerifySheet {
   const j = JSON.parse(text);
   for (const v of Object.values<any>(j.vaults ?? {})) {
     for (const k of ["tvlCap", "perDepositCap", "exitFeeBps"]) v[k] = BigInt(v[k]);
-    for (const k of ["navDeviationBps", "minPoolLiquidity"]) if (v[k] !== undefined) v[k] = BigInt(v[k]);
+    for (const k of ["navDeviationBps", "minPoolLiquidity", "maxSlippageBps"]) if (v[k] !== undefined) v[k] = BigInt(v[k]);
     if (v.seed !== undefined) v.seed = BigInt(v.seed);
     v.assets ??= [];
   }
-  // issue 1698: a `governance` block (voters, quorum, periods) in an older sheet JSON is ignored, the weight setter has no voting surface to compare it with
-  delete j.governance;
   return j as VerifySheet;
 }
 
@@ -33,7 +32,7 @@ async function main() {
   const table = loadStageTable(values["core-dir"]!);
   const sheet = parseSheetJson(readFileSync(values["sheet-json"]!, "utf8"));
   const report = await verifyDeployment({
-    chain: viemReader(values.rpc!), manifestDir: values.manifests!, table, sheet, artifactsDir: values.artifacts!,
+    chain: viemReader(values.rpc!), manifestDir: values.manifests!, table, sheet, artifactsDir: values.artifacts!, coreDir: values["core-dir"]!,
     fromBlock: BigInt(values["from-block"]!), logChunk: values["log-chunk"] ? Number(values["log-chunk"]) : undefined,
     frozenCounts: loadFrozenCounts(values.frozen!, values["deploy-sha"]!),
   });

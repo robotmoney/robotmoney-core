@@ -20,7 +20,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title ConsensusRecommendationReceiptTest
 /// @notice Full on-chain path for the consensus receipt anchor:
@@ -71,10 +71,10 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
 
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
-        ic = Proxied.investmentCommitteePolicy(admin, address(gateway));
+        ic = CoreProxies.investmentCommitteePolicy(admin, address(gateway));
 
         // Timelock that will hold ADMIN_ROLE on the receipt contract (INV-3). The Safe is its
         // only proposer and canceller and EXECUTOR_ROLE is open, as in DeployTimelock.
@@ -86,7 +86,7 @@ contract ConsensusRecommendationReceiptTest is SafeGovernance {
         // else — deliberately NOT to the gateway, because a gateway-routed
         // release would need the gateway to hold it (see docs/architecture.md
         // §4.9, "why release is not a gateway entrypoint").
-        receipts = Proxied.consensusRecommendationReceipt(
+        receipts = CoreProxies.consensusRecommendationReceipt(
             address(timelock), address(gateway), address(ic)
         );
 

@@ -219,9 +219,9 @@ impl RpcClient {
             .await
     }
 
-    /// `eth_getStorageAt` — one 32-byte storage word at `address` at the
-    /// given block tag. `tag` defaults to `"latest"`. Used to read the
-    /// ERC-1967 implementation slot of a proxied gateway (QA plan P3).
+    /// `eth_getStorageAt` — one 32-byte storage word at `address` and `slot`.
+    /// `tag` defaults to `"latest"`. Used to read the ERC-1967 implementation
+    /// slot behind a proxy (issue 1810).
     pub async fn get_storage_at(
         &self,
         address: Address,

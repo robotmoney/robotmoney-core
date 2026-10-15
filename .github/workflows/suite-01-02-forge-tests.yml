@@ -153,59 +153,41 @@ jobs:
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
+
+      # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
+      # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
+      # deploy and delayed, queued upgrades after a freeze) and the timelock-last stage order.
+      # Named so the log proves both files ran (22 + 5 tests).
+      - name: forge test (governed upgrades, freeze and the upgrade authority — issue 1808)
+        run: FORGE_TEST_MIN_EXECUTED=27 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{GovernedUpgrade,UpgradeAuthorityStages}.t.sol"
+
+      # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
+      - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
+        run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
 
       # Fusion's named evidence files need an execution boundary in the CI log.
       # A whole-suite `forge test` is not enough for a fail-closed external
       # evidence reader to know that an individual file actually ran.
       - name: Fusion contract evidence targets
         run: |
-          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant RouterGovernance GatewayAgentPolicyAuthorization; do
+          for f in ConsensusRecommendationReceipt InvestmentCommitteePolicy AccessRoles GovernanceSeparationInvariant RouterGovernanceApplyReceipt RouterGovernance GatewayAgentPolicyAuthorization; do
             echo "::group::contracts/test/${f}.t.sol:"
             bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
           done
 
-      - name: Upgradeable storage-layout gate (ADR-0014)
-        # Every proxied contract (contracts/test/fixtures/storage-layout/proxied.txt)
-        # may only append state, or take slots from a `__gap`. The gate diffs each
-        # one's layout from `forge inspect` (variables and storage-struct members
-        # with type labels that keep their defining contract, the inheritance
-        # linearization, every linked library's code hash, the OpenZeppelin
-        # submodule commits) against its committed snapshot, and checks
-        # proxied.txt against the sources and the ADR-0014 §1 table. It replaces
-        # the gateway-only gate of issue 1476. The self-test runs first and proves
-        # every rule fires on a mutated record.
-        # The same-tree compare requires the committed snapshot to equal the
-        # code's layout exactly, so an append that skips --write fails: the
-        # layout identifier a release records is that snapshot's sha256, and the
-        # upgrade-proxy row trusts it (security round 3). It reads its snapshot
-        # from the change under test, so a change that reruns --write passes it
-        # whatever it did to the layout.
-        # `--base` then holds the committed snapshots to the same storage rules
-        # against the base branch's: the PR base on a pull request, the previous
-        # tip on a push, and dev on a manual dispatch.
-        # The parent alone launders a red commit: X1 rewrites a snapshot with
-        # --write and its run is red, X2 compares X1 with X2, finds them equal and
-        # goes green, and so does every commit after it. `--release-anchor` closes
-        # that: it runs the same compare against every annotated production
-        # release/<version> tag, the layout a release put live, which the change
-        # under test cannot rewrite. Those tags are fetched here because the
-        # checkout is shallow and tagless.
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - name: Core storage-layout gate (issues 1476, 1808)
+        # Every proxied core contract (the four vaults, registry, router, gateway, IC policy,
+        # receipt register, RouterGovernance) keeps its storage across upgrades only if the
+        # layout never moves. The gate diffs, per contract, the AST-id-free (label, slot,
+        # offset, type) of every state variable and storage-struct member from `forge inspect`,
+        # the linked libraries and the ERC-7201 namespaces against the committed snapshots,
+        # plus the pinned OpenZeppelin submodule commits. The self-test runs first and proves
+        # the gate fails on mutated snapshots.
         run: |
-          set -euo pipefail
-          scripts/ci/check-storage-layout.sh --selftest
-          scripts/ci/check-storage-layout.sh
-          if [ -n "${BASE_SHA:-}" ] && [ "${BASE_SHA}" != "0000000000000000000000000000000000000000" ]; then
-            git fetch --no-tags --depth=1 origin "${BASE_SHA}"
-          else
-            git fetch --no-tags --depth=1 origin dev
-          fi
-          scripts/ci/check-storage-layout.sh --base FETCH_HEAD
-          git fetch --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
-          scripts/ci/check-storage-layout.sh --release-anchor
+          scripts/ci/check-core-storage-layout.sh --selftest
+          scripts/ci/check-core-storage-layout.sh
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for
@@ -403,6 +385,8 @@ jobs:
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
       - name: forge test (a held RM price drags the recorder sell floor; the USDC sell anchor bounds it, live RM pool — core 1793)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RecorderManipulationFork.t.sol"
+      - name: forge test (V4 recorder sampling cannot distort the deployed rmAGENT NAV profitably — core 1793)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/V4RecorderSamplingEconomicsFork.t.sol"
       - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
 
@@ -415,6 +399,15 @@ jobs:
           echo "::group::contracts/test/WithdrawalsNeverFrozen.t.sol:"
           bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
           echo "::endgroup::"
+
+      - name: forge test (every proxy upgraded v1 -> v2 through the real Safe and timelock, state kept, freeze blocks a queued upgrade — issue 1808)
+        run: |
+          echo "::group::contracts/test/UpgradeLifecycleFork.t.sol:"
+          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UpgradeLifecycleFork.t.sol"
+          echo "::endgroup::"
+
+      - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
+        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
 
       - name: forge test (split-stage router deposit and withdraw on the fork — core 1485)
         run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
@@ -539,7 +532,7 @@ jobs:
           forge coverage --report lcov
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,UpgradeLifecycleFork}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

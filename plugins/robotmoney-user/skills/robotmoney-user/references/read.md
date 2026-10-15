@@ -107,14 +107,17 @@ rmpc get-governance --config ./config.toml [--pretty]
 Reads the configured `RouterGovernance` contract (requires `governance_address`
 in the operator config). Returns:
 
-- `router` — the Portfolio Router it sets weights on.
-- `receipt_contract` — the receipt register `applyReceipt` releases from;
-  `null` until stage 11 sets it.
-- `current_weights` — the last applied weight vector (vault addresses + bps).
-  Router weights change only when `WEIGHT_SETTER_ROLE` applies the Investment
-  Committee's consensus receipt through the Safe and the timelock, in one
-  `applyReceipt` call. There is no voting by anyone (issue 1698), so there is
-  no proposal, voter, quorum or voting-period field.
+- `router` and `receipts` — the router and receipt-register addresses the
+  contract is bound to.
+- `current_weights` — the router's active weight vector (vault addresses +
+  bps), set by the last applied receipt. Router weights change only when
+  `RouterGovernance.applyReceipt` applies the Investment Committee's consensus
+  receipt through the Safe and the timelock.
+- `default_weights` — the router's fallback vector.
+- `admin_role` and `weight_setter_role` — the holders of each role.
+
+There is no proposal or voting field: `RouterGovernance` has no voting
+(issue 1698).
 
 All reads are pinned to a single `eth_blockNumber` snapshot. Partial envelopes
 are supported; exit code is 0 even for partial results.
@@ -132,11 +135,11 @@ configured USDC and vault addresses, the runtime code hash (compared against
 `gateway_runtime_hash` in config), and the deposit-pause flag (`deposits_paused`,
 from `depositsPaused()`). It stops deposits only. A withdrawal still works. A code-hash mismatch is
 a hard refusal at write time (see `references/safety.md`). For a proxied gateway it also returns
-`implementation` and `implementation_code_hash` (read at the same block), the configured
-`configured_implementation_hashes`, `implementation_approved` (false means every write is refused
-with `ErrImplementationNotApproved`), `implementation_version` (the version an agent consent is
-signed under), `upgrade_authority` (the timelock) and `upgrades_frozen` (true means no upgrade can
-ever run again). A direct gateway reports `implementation: null`.
+`implementation` and `implementation_code_hash` (read at the same block), the approved
+pair from config (`configured_implementation`, `configured_implementation_code_hash`; a
+mismatch refuses every write with `ErrImplementationNotApproved`), `upgrade_timelock` (the
+only account that can upgrade or freeze the proxy) and `upgrades_frozen` (true means no
+upgrade can ever run again). A direct gateway reports `implementation: null`.
 
 ---
 
@@ -217,10 +220,11 @@ operator config.
 rmpc get-governance --config ./config.toml [--pretty]
 ```
 
-Reads the RouterGovernance state: `router`, `receipt_contract` and the
-router weight vector it last applied (`current_weights`). There is no
-proposal or voting field (issue 1698). Requires `governance_address` in the
-operator config.
+Reads the RouterGovernance state. Returns the router and receipt-register
+addresses, the router's active (`current_weights`) and fallback
+(`default_weights`) vectors, and the `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`
+holders. There is no voting field (issue 1698). Requires `governance_address`
+in the operator config.
 
 ---
 

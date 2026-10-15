@@ -4,8 +4,9 @@
 //! Router weights change only through `RouterGovernance.applyReceipt` on a
 //! Safe-scheduled timelock operation. The stage 12 verifier checks, once, that
 //! the router's `WEIGHT_SETTER_ROLE` is held only by the weight setter and that
-//! the weight setter's `ADMIN_ROLE` is held only by the timelock. Only a
-//! standing monitor catches a grant executed after that. This replaced the
+//! the weight setter's own `WEIGHT_SETTER_ROLE` (`applyReceipt`) and its
+//! `ADMIN_ROLE` are held only by the timelock. Only a standing monitor catches a
+//! grant executed after that. This replaced the
 //! `quorumThreshold()` floor check, whose view issue 1698 deleted.
 //!
 //! No Docker and no chain: a tiny in-process JSON-RPC server answers each
@@ -137,7 +138,14 @@ fn role_rules(contract: &str, role: &str, members: &[&str]) -> Vec<Rule> {
 }
 
 fn path_rules(setters: &[&str], admins: &[&str]) -> Vec<Rule> {
+    applier_rules(setters, &[TIMELOCK], admins)
+}
+
+/// Like [`path_rules`], with the weight setter's own `WEIGHT_SETTER_ROLE`
+/// (who may call `applyReceipt`) set explicitly.
+fn applier_rules(setters: &[&str], appliers: &[&str], admins: &[&str]) -> Vec<Rule> {
     let mut rules = role_rules(ROUTER, WEIGHT_SETTER_ROLE, setters);
+    rules.extend(role_rules(SETTER, WEIGHT_SETTER_ROLE, appliers));
     rules.extend(role_rules(SETTER, ADMIN_ROLE, admins));
     rules
 }
@@ -204,6 +212,26 @@ async fn a_weight_setter_admin_other_than_the_timelock_is_a_drift() {
         other => {
             panic!("an ADMIN_ROLE holder that is not the timelock must be a drift, got {other:?}")
         }
+    }
+    let _ = rpc.shutdown.send(());
+}
+
+#[tokio::test]
+async fn an_apply_receipt_holder_other_than_the_timelock_is_a_drift() {
+    let rpc = StubRpc::start(applier_rules(&[SETTER], &[TIMELOCK, STRANGER], &[TIMELOCK])).await;
+    let client = reqwest::Client::new();
+    match check_weight_setter_path(&client, &cfg(&rpc.url), 918_453).await {
+        Ok(WeightSetterStatus::Drifted(b)) => {
+            assert_eq!(
+                b.weight_setter_appliers.members,
+                vec![TIMELOCK.to_owned(), STRANGER.to_owned()]
+            );
+            assert!(b.weight_setter_role.is_exactly(SETTER));
+            assert!(b.weight_setter_admins.is_exactly(TIMELOCK));
+        }
+        other => panic!(
+            "a second RouterGovernance WEIGHT_SETTER_ROLE holder must be a drift, got {other:?}"
+        ),
     }
     let _ = rpc.shutdown.send(());
 }

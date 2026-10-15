@@ -28,10 +28,16 @@ contract ProtocolAssetVault is BasketVault {
     uint256 private constant _MAX_ASSETS = 10;
     uint256 private constant _DEFAULT_SLIPPAGE_BPS = 100; // 1%
 
-    /// @dev ADR-0014: no constructor arguments. `BasketVault.initialize` runs once on the proxy and
-    ///      takes this kind's name, symbol and starting slippage from here.
-    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
-        return ("Robot Money Protocol", "rmPROTO", _DEFAULT_SLIPPAGE_BPS);
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param p The arguments the constructor took before issue 1808.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("Robot Money Protocol", "rmPROTO", _DEFAULT_SLIPPAGE_BPS, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
     }
 
     function maxAssets() public pure override returns (uint256) {

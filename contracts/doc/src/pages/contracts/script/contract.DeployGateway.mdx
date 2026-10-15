@@ -5,9 +5,9 @@ description: "Stage 5 of the core deploy (libs, vault, registry, router, gateway
 
 # DeployGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployGateway.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployGateway.s.sol)
 
-**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployGateway
 
@@ -31,15 +31,15 @@ SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
 VAULT_ADDRESS         — the rmUSDC RobotMoneyVault
 ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
 DEPLOYMENT_OUT        — output JSON path
-UPGRADE_AUTHORITY     — the deployment's timelock, deployed first (ADR-0014 §4)
-UPGRADE_MODE          — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
 USDC is the canonical Base USDC constant on every chain.
-The gateway is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
-`initialize` in its constructor. `gateway_runtime_hash` stays the code hash AT the gateway
-address (the proxy, which clients compare with `eth_getCode`); the implementation and its
-code hash are recorded next to it.
 
 </i>
+
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode of
+the gateway proxy (`UpgradeAuthority`, issue 1808). The manifest `gateway` is the
+ERC-1967 proxy and `gateway_runtime_hash` is the code at that address (the proxy).
+`gateway_implementation` and `gateway_implementation_runtime_hash` name the logic the
+proxy runs: a signing client must check both (upgradeability stage 3).
 
 ## Constants
 
@@ -146,12 +146,14 @@ function _readEnvParamsFrom(string memory prefix) internal view returns (Params 
 | ---- | ---- | ----------- |
 | p | `Params` |  |
 
-<a id="_deploygateway-params"></a>
+<a id="_deploygateway-params-upgradeconfig"></a>
 
 ### _deployGateway
 
 ```solidity
-function _deployGateway(Params memory p) internal returns (Deployed memory d);
+function _deployGateway(Params memory p, UpgradeConfig memory u)
+        internal
+        returns (Deployed memory d);
 ```
 
 **Parameters**
@@ -159,6 +161,7 @@ function _deployGateway(Params memory p) internal returns (Deployed memory d);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | p | `Params` |  |
+| u | `UpgradeConfig` |  |
 
 **Returns**
 
@@ -217,11 +220,10 @@ struct Deployed {
         address admin;
         address pauser;
         address shareReceiver;
-        /// keccak256 of the runtime code AT the gateway address: the ERC1967Proxy (ADR-0014).
         bytes32 gatewayRuntimeHash;
-        /// The implementation behind the gateway proxy and its runtime code hash (ADR-0014).
-        address implementation;
-        bytes32 implementationRuntimeHash;
+        address gatewayImplementation;
+        bytes32 gatewayImplementationRuntimeHash;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -237,6 +239,7 @@ struct Deployed {
 | pauser | `address` |  |
 | shareReceiver | `address` |  |
 | gatewayRuntimeHash | `bytes32` |  |
-| implementation | `address` |  |
-| implementationRuntimeHash | `bytes32` |  |
+| gatewayImplementation | `address` |  |
+| gatewayImplementationRuntimeHash | `bytes32` |  |
+| upgrade | `UpgradeConfig` |  |
 

@@ -6,92 +6,51 @@ import { keccak256 } from "viem";
 import type { Hex } from "./types.ts";
 
 export interface Ref { start: number; length: number }
-/** One library the artifact links, with every byte range forge fills with its address. */
-export interface Link { name: string; refs: Ref[] }
-export interface Artifact { object: string; refs: Ref[]; links?: Link[] }
-
-/** The file of `name` in a forge out/: `<out>/<Name>.sol/<Name>.json`, else the first directory holding `<Name>.json`. Throws when there is none. */
-export function artifactPathOf(outDir: string, name: string): string {
-  const path = join(outDir, `${name}.sol`, `${name}.json`);
-  if (existsSync(path)) return path;
-  const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
-  if (!hit) throw new Error(`no build artifact for ${name} under ${outDir}`);
-  return join(outDir, hit, `${name}.json`);
-}
+export interface Artifact { object: string; refs: Ref[] }
 
 /** Load `<out>/<Name>.sol/<Name>.json` (forge layout). Falls back to any directory holding `<Name>.json`. */
+function artifactJson(outDir: string, name: string): any {
+  let path = join(outDir, `${name}.sol`, `${name}.json`);
+  if (!existsSync(path)) {
+    const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
+    if (!hit) throw new Error(`no build artifact for ${name} under ${outDir}`);
+    path = join(outDir, hit, `${name}.json`);
+  }
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/**
+ * Issue 1809: the libraries an artifact's runtime code links externally (DELEGATECALL targets), each with the byte offset of every 20-byte address slot. The code
+ * comparison masks those slots, so the verifier reads the linked addresses from the chain and compares each library's own code with the build.
+ */
+export function linkedLibraries(outDir: string, name: string): { name: string; start: number }[] {
+  const out: { name: string; start: number }[] = [];
+  for (const file of Object.values<any>(artifactJson(outDir, name).deployedBytecode?.linkReferences ?? {})) {
+    for (const [lib, list] of Object.entries<any>(file)) for (const r of list) out.push({ name: lib, start: r.start });
+  }
+  return out;
+}
+
 export function loadArtifact(outDir: string, name: string): Artifact {
-  const j = JSON.parse(readFileSync(artifactPathOf(outDir, name), "utf8"));
+  const j = artifactJson(outDir, name);
   const d = j.deployedBytecode;
   if (!d?.object) throw new Error(`artifact ${name} has no deployedBytecode`);
   const refs: Ref[] = [];
   for (const list of Object.values<any>(d.immutableReferences ?? {})) refs.push(...list);
-  const links: Link[] = [];
-  for (const file of Object.values<any>(d.linkReferences ?? {})) {
-    for (const [libName, list] of Object.entries<any>(file)) { refs.push(...list); links.push({ name: libName, refs: [...list] }); }
-  }
+  for (const file of Object.values<any>(d.linkReferences ?? {})) for (const list of Object.values<any>(file)) refs.push(...list);
   const object = String(d.object);
-  refs.push(...implicitRefs(object, refs.length > 0 && Object.keys(d.linkReferences ?? {}).length > 0));
-  return { object, refs, links };
-}
-
-/** The address forge linked at `ref` in on-chain runtime code. */
-export function linkedAddressAt(onchain: Hex, ref: Ref): Hex {
-  const hex = onchain.replace(/^0x/, "");
-  return (`0x${hex.slice(ref.start * 2, (ref.start + ref.length) * 2).toLowerCase()}`) as Hex;
-}
-
-/**
- * Issue 1809/1810 (ADR-0014 §9): `compareCode` masks every link reference, so on its own it would pass an implementation that links any library code at all.
- * This follows each link: every byte range of one library must hold the same address, the code at that address must equal the library's build artifact (masked),
- * and the same holds for every library that library links, recursively. A missing library artifact or an unreadable address is a failure, never a pass.
- */
-export async function compareLinkedLibraries(
-  getCode: (address: Hex) => Promise<Hex>,
-  onchain: Hex,
-  art: Artifact,
-  dir: string,
-  seen: Set<string> = new Set(),
-): Promise<CodeHashResult> {
-  const checked: string[] = [];
-  for (const link of art.links ?? []) {
-    const addrs = [...new Set(link.refs.map((r) => linkedAddressAt(onchain, r)))];
-    if (addrs.length !== 1 || !/^0x[0-9a-f]{40}$/.test(addrs[0]!)) return { ok: false, detail: `library ${link.name}: the linked address is not one address (${addrs.join(", ")})` };
-    const at = addrs[0]!;
-    if (seen.has(`${link.name}@${at}`)) continue;
-    seen.add(`${link.name}@${at}`);
-    let libArt: Artifact;
-    try { libArt = loadArtifact(dir, link.name); } catch (e) { return { ok: false, detail: `library ${link.name} at ${at}: no build to compare with: ${(e as Error).message}` }; }
-    const libCode = await getCode(at);
-    // A library a stage deploys by forge's CREATE2 deployment is compiled with that stage's `--libraries` settings, which change only its CBOR metadata
-    // trailer (nothing executable). Mask the trailer for every linked library, as for a contract that links libraries.
-    const r = compareCode(libCode, { ...libArt, refs: [...libArt.refs, ...implicitRefs(libArt.object, true)] });
-    if (!r.ok) return { ok: false, detail: `library ${link.name} at ${at}: ${r.detail}` };
-    const nested = await compareLinkedLibraries(getCode, libCode, libArt, dir, seen);
-    if (!nested.ok) return nested;
-    checked.push(`${link.name}@${at}`);
-  }
-  return { ok: true, detail: checked.length ? `linked libraries equal their builds: ${checked.join(", ")}` : "links no library" };
-}
-
-/** `compareCode`, then `compareLinkedLibraries`: the code and every library it links are the reviewed build. */
-export async function compareCodeAndLinks(
-  getCode: (address: Hex) => Promise<Hex>,
-  onchain: Hex,
-  art: Artifact,
-  dir: string,
-): Promise<CodeHashResult> {
-  const r = compareCode(onchain, art);
-  if (!r.ok) return r;
-  const l = await compareLinkedLibraries(getCode, onchain, art, dir);
-  return l.ok ? { ...r, detail: `${r.detail}; ${l.detail}` } : { ok: false, detail: l.detail, maskedHash: r.maskedHash };
+  // Issue 1808: the stages compile with different `--libraries` settings (libs and recorder without, every proxy stage and the timelock with
+  // tick_math), and the setting changes the metadata hash of everything compiled, linked or not. The verifier's out/ holds one of the two, so
+  // the CBOR trailer is masked for every artifact; the executable bytes are still compared exactly.
+  refs.push(...implicitRefs(object, true));
+  return { object, refs };
 }
 
 /**
  * Two byte ranges the compiler fills in that no reference list names.
  *  - A library's own address: its runtime code starts with PUSH20 <address(this)> (0x73 and 20 zero bytes in the artifact, the deployed address on chain).
- *  - The CBOR metadata trailer of a contract that links libraries: `forge script --libraries` compiles with the libraries in the settings, which
- *    changes the metadata hash (the last bytes) and nothing executable. Contracts that link nothing keep their trailer in the comparison.
+ *  - The CBOR metadata trailer (when `linksLibraries`): `forge script --libraries` compiles with the libraries in the settings, which
+ *    changes the metadata hash (the last bytes) and nothing executable. `loadArtifact` masks it for every artifact (issue 1808).
  */
 export function implicitRefs(object: string, linksLibraries: boolean): Ref[] {
   const hex = object.replace(/^0x/, "");
@@ -121,4 +80,55 @@ export function compareCode(onchain: Hex, art: Artifact): CodeHashResult {
   if (a.length !== b.length) return { ok: false, detail: `runtime length ${(b.length - 2) / 2} bytes, build ${(a.length - 2) / 2} bytes` };
   const ha = keccak256(a), hb = keccak256(b);
   return { ok: ha === hb, detail: ha === hb ? `masked hash ${ha}` : `masked hash on chain ${hb}, build ${ha}`, maskedHash: hb };
+}
+
+/** ERC-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1. */
+export const ERC1967_IMPLEMENTATION_SLOT: Hex = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+/** The OpenZeppelin proxy every core contract runs behind since issue 1808. */
+export const ERC1967_PROXY_ARTIFACT = "ERC1967Proxy";
+
+/**
+ * True when `code` is the build's ERC1967Proxy runtime. The CBOR metadata trailer is masked: the deploy stages compile with `--libraries`
+ * (which changes every contract's metadata hash, the proxy's too) and the verifier's build may not, while the proxy's executable bytes are fixed.
+ */
+export function isProxyCode(code: Hex, proxyArt: Artifact | undefined): boolean {
+  if (proxyArt === undefined) return false;
+  return compareCode(code, { object: proxyArt.object, refs: [...proxyArt.refs, ...implicitRefs(proxyArt.object, true)] }).ok;
+}
+
+/** `loadArtifact`, or undefined when the build has no artifact of that name. */
+export function tryLoadArtifact(outDir: string, name: string): Artifact | undefined {
+  try { return loadArtifact(outDir, name); } catch { return undefined; }
+}
+
+/**
+ * Issue 1808: the code check of a core contract that may run behind an ERC-1967 proxy. When the code at `address` is the build's ERC1967Proxy, the
+ * implementation its ERC-1967 slot names must equal the artifact (the proxy's own code is compared too, exactly). Otherwise the code at the address
+ * itself must equal the artifact (a direct deployment, as before). Which form a release must use, and its freeze state, is the release sheet's
+ * business (upgradeability stage 2); this check proves the logic at the address is the reviewed build either way.
+ */
+export async function compareDeployedCode(
+  chain: { getCode(a: Hex): Promise<Hex>; getStorageAt(a: Hex, slot: Hex): Promise<Hex> },
+  address: Hex,
+  art: Artifact,
+  proxyArt: Artifact | undefined,
+): Promise<CodeHashResult & { implementation?: Hex }> {
+  const code = await chain.getCode(address);
+  if (!isProxyCode(code, proxyArt)) return compareCode(code, art);
+  const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+  const implementation = (`0x${word.slice(24)}`).toLowerCase() as Hex;
+  const r = compareCode(await chain.getCode(implementation), art);
+  return { ...r, implementation, detail: `ERC-1967 proxy, implementation ${implementation}: ${r.detail}` };
+}
+
+/** The code that runs at `address`: the implementation's when it is the build's ERC1967Proxy (issue 1808), else the code at the address. */
+export async function logicCode(
+  chain: { getCode(a: Hex): Promise<Hex>; getStorageAt(a: Hex, slot: Hex): Promise<Hex> },
+  address: Hex,
+  proxyArt: Artifact | undefined,
+): Promise<Hex> {
+  const code = await chain.getCode(address);
+  if (!isProxyCode(code, proxyArt)) return code;
+  const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+  return chain.getCode(`0x${word.slice(24)}` as Hex);
 }

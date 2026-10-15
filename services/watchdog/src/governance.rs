@@ -15,16 +15,20 @@
 //! # What it watches now
 //!
 //! Router weights change only through `RouterGovernance.applyReceipt`, which the
-//! Safe schedules through the timelock. Two role sets make that true:
+//! Safe schedules through the timelock. Three role sets make that true:
 //!
 //! 1. The router's `WEIGHT_SETTER_ROLE` is held by exactly one account, the
 //!    configured weight setter (`RouterGovernance`). Any other holder can call
 //!    `PortfolioRouter.setWeights` directly, with no receipt and no delay.
-//! 2. The weight setter's `ADMIN_ROLE` is held by exactly one account, the
-//!    configured `TimelockController`. Any other holder can call `applyReceipt`
-//!    or `setDefaultWeights` without waiting the timelock delay.
+//! 2. The weight setter's own `WEIGHT_SETTER_ROLE` (the only role that may call
+//!    `applyReceipt`, self-administered) is held by exactly one account, the
+//!    configured `TimelockController`. Any other holder can apply a recorded
+//!    receipt without waiting the timelock delay.
+//! 3. The weight setter's `ADMIN_ROLE` is held by exactly one account, the
+//!    timelock. Any other holder can call `setDefaultWeights` or
+//!    `clearVotedWeights` without waiting the timelock delay.
 //!
-//! The stage 12 verifier checks both once, at deploy. A grant executed after
+//! The stage 12 verifier checks these once, at deploy. A grant executed after
 //! that undoes the evidence, and only a standing check notices it. A deliberate
 //! weight-setter rotation (ADR-0002) also fires this page until the operator
 //! updates `weight_setter_address`; the page names the new holder.
@@ -47,7 +51,8 @@ pub const GET_ROLE_MEMBER_COUNT_SELECTOR: &str = "0xca15c873";
 /// `keccak256("getRoleMember(bytes32,uint256)")[0..4]`.
 pub const GET_ROLE_MEMBER_SELECTOR: &str = "0x9010d07c";
 
-/// `keccak256("WEIGHT_SETTER_ROLE")`, hex without `0x`: `PortfolioRouter.WEIGHT_SETTER_ROLE`.
+/// `keccak256("WEIGHT_SETTER_ROLE")`, hex without `0x`: `PortfolioRouter.WEIGHT_SETTER_ROLE`
+/// and `RouterGovernance.WEIGHT_SETTER_ROLE` (same role id on both contracts).
 pub const WEIGHT_SETTER_ROLE: &str =
     "a2edfd05c0c1cda238b1c99a8a31252998b19153c63b3f9e5b7048bc4b5f4a3f";
 
@@ -79,8 +84,8 @@ pub struct WeightSetterMonitorConfig {
     /// `RouterGovernance` address: the one expected `WEIGHT_SETTER_ROLE` holder.
     #[serde(default)]
     pub weight_setter_address: Option<String>,
-    /// `TimelockController` address: the one expected `ADMIN_ROLE` holder on
-    /// the weight setter.
+    /// `TimelockController` address: the one expected `WEIGHT_SETTER_ROLE` and
+    /// `ADMIN_ROLE` holder on the weight setter.
     #[serde(default)]
     pub timelock_address: Option<String>,
     /// Floor between two pages for the same standing drift.
@@ -180,7 +185,7 @@ impl RoleMembers {
 /// What one weight-setter-path cycle observed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeightSetterStatus {
-    /// Both role sets are exactly the configured path.
+    /// All three role sets are exactly the configured path.
     Ok,
     /// At least one role set differs from the configured path.
     Drifted(WeightSetterBreach),
@@ -195,24 +200,32 @@ pub struct WeightSetterBreach {
     pub router_address: String,
     /// Expected sole `WEIGHT_SETTER_ROLE` holder (`RouterGovernance`).
     pub weight_setter_address: String,
-    /// Expected sole `ADMIN_ROLE` holder on the weight setter (the timelock).
+    /// Expected sole `WEIGHT_SETTER_ROLE` and `ADMIN_ROLE` holder on the weight
+    /// setter (the timelock).
     pub timelock_address: String,
     /// The router's `WEIGHT_SETTER_ROLE` members as read.
     pub weight_setter_role: RoleMembers,
+    /// The weight setter's own `WEIGHT_SETTER_ROLE` members as read: who may
+    /// call `applyReceipt`.
+    pub weight_setter_appliers: RoleMembers,
     /// The weight setter's `ADMIN_ROLE` members as read.
     pub weight_setter_admins: RoleMembers,
 }
 
-/// Pure classifier: is this pair of role sets the configured path?
+/// Pure classifier: are these three role sets the configured path?
 pub fn classify_weight_setter_path(
     cfg: &WeightSetterMonitorConfig,
     chain_id: i64,
     weight_setter_role: RoleMembers,
+    weight_setter_appliers: RoleMembers,
     weight_setter_admins: RoleMembers,
 ) -> WeightSetterStatus {
     let setter = cfg.weight_setter_address.clone().unwrap_or_default();
     let timelock = cfg.timelock_address.clone().unwrap_or_default();
-    if weight_setter_role.is_exactly(&setter) && weight_setter_admins.is_exactly(&timelock) {
+    if weight_setter_role.is_exactly(&setter)
+        && weight_setter_appliers.is_exactly(&timelock)
+        && weight_setter_admins.is_exactly(&timelock)
+    {
         return WeightSetterStatus::Ok;
     }
     WeightSetterStatus::Drifted(WeightSetterBreach {
@@ -221,6 +234,7 @@ pub fn classify_weight_setter_path(
         weight_setter_address: setter,
         timelock_address: timelock,
         weight_setter_role,
+        weight_setter_appliers,
         weight_setter_admins,
     })
 }
@@ -272,8 +286,7 @@ pub fn decode_address_word(raw: &str, what: &str) -> Result<String, WatchdogErro
     Ok(format!("0x{}", addr.to_ascii_lowercase()))
 }
 
-/// One `eth_call` at `latest`; returns the `result` hex string. Shared with
-/// the missed freeze-deadline check ([`crate::freeze_deadline`]).
+/// One `eth_call` at `latest`; returns the `result` hex string.
 pub(crate) async fn eth_call(
     client: &Client,
     rpc_url: &str,
@@ -334,7 +347,7 @@ pub async fn read_role_members(
     Ok(RoleMembers { count, members })
 }
 
-/// Read both role sets and classify them in one call.
+/// Read the three role sets and classify them in one call.
 pub async fn check_weight_setter_path(
     client: &Client,
     cfg: &WeightSetterMonitorConfig,
@@ -362,6 +375,14 @@ pub async fn check_weight_setter_path(
         "PortfolioRouter WEIGHT_SETTER_ROLE",
     )
     .await?;
+    let appliers = read_role_members(
+        client,
+        rpc_url,
+        setter,
+        WEIGHT_SETTER_ROLE,
+        "RouterGovernance WEIGHT_SETTER_ROLE",
+    )
+    .await?;
     let admins = read_role_members(
         client,
         rpc_url,
@@ -370,7 +391,9 @@ pub async fn check_weight_setter_path(
         "RouterGovernance ADMIN_ROLE",
     )
     .await?;
-    Ok(classify_weight_setter_path(cfg, chain_id, role, admins))
+    Ok(classify_weight_setter_path(
+        cfg, chain_id, role, appliers, admins,
+    ))
 }
 
 #[cfg(test)]
@@ -407,7 +430,13 @@ mod tests {
     #[test]
     fn the_configured_path_is_quiet() {
         assert_eq!(
-            classify_weight_setter_path(&cfg(), 918_453, only(SETTER), only(TIMELOCK)),
+            classify_weight_setter_path(
+                &cfg(),
+                918_453,
+                only(SETTER),
+                only(TIMELOCK),
+                only(TIMELOCK)
+            ),
             WeightSetterStatus::Ok
         );
     }
@@ -416,7 +445,7 @@ mod tests {
     fn the_comparison_ignores_address_case() {
         let upper = format!("0x{}", "AB".repeat(20));
         assert_eq!(
-            classify_weight_setter_path(&cfg(), 1, only(&upper), only(TIMELOCK)),
+            classify_weight_setter_path(&cfg(), 1, only(&upper), only(TIMELOCK), only(TIMELOCK)),
             WeightSetterStatus::Ok
         );
     }
@@ -427,7 +456,7 @@ mod tests {
             count: 2,
             members: vec![SETTER.into(), STRANGER.into()],
         };
-        match classify_weight_setter_path(&cfg(), 918_453, two, only(TIMELOCK)) {
+        match classify_weight_setter_path(&cfg(), 918_453, two, only(TIMELOCK), only(TIMELOCK)) {
             WeightSetterStatus::Drifted(b) => {
                 assert_eq!(b.chain_id, 918_453);
                 assert_eq!(b.weight_setter_role.count, 2);
@@ -444,11 +473,11 @@ mod tests {
             members: vec![],
         };
         assert!(matches!(
-            classify_weight_setter_path(&cfg(), 1, none, only(TIMELOCK)),
+            classify_weight_setter_path(&cfg(), 1, none, only(TIMELOCK), only(TIMELOCK)),
             WeightSetterStatus::Drifted(_)
         ));
         assert!(matches!(
-            classify_weight_setter_path(&cfg(), 1, only(STRANGER), only(TIMELOCK)),
+            classify_weight_setter_path(&cfg(), 1, only(STRANGER), only(TIMELOCK), only(TIMELOCK)),
             WeightSetterStatus::Drifted(_)
         ));
     }
@@ -460,11 +489,32 @@ mod tests {
             members: vec![TIMELOCK.into(), STRANGER.into()],
         };
         assert!(matches!(
-            classify_weight_setter_path(&cfg(), 1, only(SETTER), two),
+            classify_weight_setter_path(&cfg(), 1, only(SETTER), only(TIMELOCK), two),
             WeightSetterStatus::Drifted(_)
         ));
         assert!(matches!(
-            classify_weight_setter_path(&cfg(), 1, only(SETTER), only(STRANGER)),
+            classify_weight_setter_path(&cfg(), 1, only(SETTER), only(TIMELOCK), only(STRANGER)),
+            WeightSetterStatus::Drifted(_)
+        ));
+    }
+
+    #[test]
+    fn an_apply_receipt_holder_other_than_the_timelock_is_a_drift() {
+        // RouterGovernance.applyReceipt is gated by the weight setter's own
+        // WEIGHT_SETTER_ROLE: a second holder applies receipts with no delay.
+        let two = RoleMembers {
+            count: 2,
+            members: vec![TIMELOCK.into(), STRANGER.into()],
+        };
+        match classify_weight_setter_path(&cfg(), 1, only(SETTER), two, only(TIMELOCK)) {
+            WeightSetterStatus::Drifted(b) => {
+                assert_eq!(b.weight_setter_appliers.count, 2);
+                assert!(b.weight_setter_admins.is_exactly(TIMELOCK));
+            }
+            other => panic!("a second applyReceipt holder must page, got {other:?}"),
+        }
+        assert!(matches!(
+            classify_weight_setter_path(&cfg(), 1, only(SETTER), only(STRANGER), only(TIMELOCK)),
             WeightSetterStatus::Drifted(_)
         ));
     }

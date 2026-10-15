@@ -106,8 +106,10 @@ jobs:
           passed="$(sed -E 's/.* ([0-9]+) passed.*/\1/' <<<"$line")"
           ignored="$(sed -E 's/.* ([0-9]+) ignored.*/\1/' <<<"$line")"
           echo "rmpc lib: $passed passed, $ignored ignored"
-          if [[ "$passed" -lt 275 ]]; then
-            echo "::error::only $passed lib tests executed (expected >= 275) — a suite that asserts nothing is a false green"
+          # Lowered 275 -> 257 by issue 1698: rmpc governance draft-proposal and
+          # its 18 lib tests were deleted with RouterGovernance's propose/vote.
+          if [[ "$passed" -lt 257 ]]; then
+            echo "::error::only $passed lib tests executed (expected >= 257) — a suite that asserts nothing is a false green"
             exit 1
           fi
           # An #[ignore] is how the v0.4.0-rc.9 red hid the one assertion that

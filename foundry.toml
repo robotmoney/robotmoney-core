@@ -9,9 +9,6 @@ optimizer_runs = 100
 evm_version = "cancun"
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-    # ADR-0014: the upgradeable twins (ERC20/ERC4626/AccessControl/ReentrancyGuard, UUPS,
-    # Initializable) at the same v5.0.2 release. Its own `@openzeppelin/contracts` imports
-    # resolve to the pinned lib above, so both packages share one copy of every interface.
     "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
     "forge-std/=lib/forge-std/src/",
     "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
@@ -38,8 +35,8 @@ fs_permissions = [
     # DERIVE the anchoring digest by hashing the committed golden canonical
     # bytes rather than transcribing a constant (issue #1247 AC11, #1280).
     { access = "read", path = "./tests" },
-    # Read-only access to the stage table so FourVaultInitialState.t.sol (issue 1705) can
-    # compare each vault stage's paused state with the table's `vaults[].deployPaused`.
+    # Read-only access to the stage table so FourVaultInitialState.t.sol compares each vault's
+    # deposit state after its deploy script with the table's deployPaused (issue 1705).
     { access = "read", path = "./scripts/deploy" },
 ]
 

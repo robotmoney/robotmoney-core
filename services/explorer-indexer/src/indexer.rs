@@ -22,11 +22,11 @@
 //!    those vaults' ExclusionLedger (X7)), fetch the header of each block
 //!    that has one, and the receipt of each
 //!    transaction that carries one (never the block's other transactions, X6),
-//!    upsert blocks/transactions/events. When those
-//!    logs register a vault the address set did not hold, fetch that vault's
-//!    own logs and its ledger's from its registration block to `target` in a
-//!    second call and apply them after the registration, in the same tick
-//!    (DI-1).
+//!    upsert blocks/transactions/events. Before that fetch, the registry's
+//!    `VaultRegistered` logs of the same range are read first, so a vault
+//!    registered inside the range is in the address set and its own logs from
+//!    the registration block on are fetched in the same tick (issue 1796,
+//!    DI-1). Its ledger is read at its registration block.
 //! 5. State snapshots — for every contract whose events touched a block
 //!    in this range, take a snapshot at that block. Sampling cadence
 //!    (issues 1768, 1781): a vault with no row gets one at the target block.
@@ -42,7 +42,7 @@
 //!    per-tick read once the caps answer, without repeated identical rows.
 //!    The exit value is `previewRedeem(totalSupply())`, what redeeming every
 //!    share pays after the exit costs; the API prices a position with it
-//!    (core 1795, QA plan X8). A row without it (older than migration 0022)
+//!    (core 1795, QA plan X8). A row without it (older than migration 0023)
 //!    is filled the same way.
 //!    Committee regime snapshots are re-derived at the target block as well,
 //!    so a signal that ages out of the freshness window leaves
@@ -57,8 +57,8 @@
 
 use crate::abi::{
     IConsensusRecommendationReceiptEvents, IExclusionLedgerEvents, IExclusionLedgerReads,
-    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents,
-    IRobotMoneyVaultReads, ITimelockEvents, IUpgradeEvents, IVaultEvents, IVaultReads,
+    IGatewayEvents, IGovernedUpgradeEvents, IInvestmentCommitteePolicyEvents,
+    IPortfolioRouterEvents, IRobotMoneyVaultReads, ITimelockEvents, IVaultEvents, IVaultReads,
     IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
@@ -91,11 +91,12 @@ pub struct IndexerConfig {
     /// indexer calls `listVaults()` on each tick and ingests
     /// `VaultRegistered` / `VaultStatusChanged` events from the registry.
     pub registry: Option<Address>,
-    /// Optional RouterGovernance (weight setter) contract address. When set,
-    /// it is registered in `contracts` and bounds deploy-block detection. It
-    /// is not watched: RouterGovernance has no voting since issue 1698 and
-    /// emits no event the indexer stores. The weights an applied receipt
-    /// writes arrive as the router's `WeightsSet`.
+    /// Optional RouterGovernance (the router's weight setter) address. When
+    /// set, the indexer registers it in `contracts` (kind `router_governance`)
+    /// and counts it toward the deploy-block floor. Its voting events were
+    /// deleted with its voting (issue #1698), and the weights it sets are
+    /// indexed from the router's own `WeightsSet`. It is watched for its proxy
+    /// `Upgraded` / `UpgradesFrozen` events only (issue 1810).
     pub router_governance: Option<Address>,
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
@@ -155,8 +156,6 @@ impl IndexerConfig {
                 addrs.push(reg);
             }
         }
-        // `router_governance` is deliberately absent: it emits no indexed event
-        // (issue 1698 deleted its voting events).
         if let Some(pr) = self.portfolio_router {
             if !addrs.contains(&pr) {
                 addrs.push(pr);
@@ -172,7 +171,10 @@ impl IndexerConfig {
                 addrs.push(cr);
             }
         }
-        for a in [self.timelock, self.safe].into_iter().flatten() {
+        for a in [self.router_governance, self.timelock, self.safe]
+            .into_iter()
+            .flatten()
+        {
             if !addrs.contains(&a) {
                 addrs.push(a);
             }
@@ -1080,9 +1082,8 @@ pub fn classify_ledger_read(reply: Result<Bytes, RpcError>) -> Result<LedgerRead
 /// The `ExclusionLedger`s of each vault in `vaults` that has one, read from the chain (QA plan X7,
 /// core 1820; security rounds 1 to 3), oldest first.
 ///
-/// ADR-0014 put every vault behind a proxy. Its initializer has `ExclusionLedgerFactory` create the
-/// ledger (`RobotMoneyVault._initLedger`), so the ledger sits at the factory's CREATE address and
-/// nothing about the vault's own address predicts it. The indexer used to derive it as the vault's
+/// Every vault is a governed proxy (ADR-0014). Its initializer creates the ledger
+/// (`contracts/RobotMoneyVault.sol`), so nothing about the vault's own address predicts it. The indexer used to derive it as the vault's
 /// CREATE address at nonce 1 (true while the vault constructor ran `new ExclusionLedger`): on a
 /// proxy that address holds no code, and no exclusion record was ever indexed.
 ///
@@ -1227,7 +1228,7 @@ async fn read_exclusion_ledger(
 /// upgrade kept its "no ledger" row the same way.
 ///
 /// Security round 3: an upgrade installed without a call leaves its reinitializer pending
-/// (`GovernedUpgrade`, runbook §4.12), and a later timelock operation runs it. That transaction
+/// (an upgrade whose call data is empty), and a later timelock operation runs it. That transaction
 /// emits `Initialized(uint64)`, not `Upgraded`, so `Initialized` is a trigger too. Each trigger is
 /// read at its own block ([`read_ledger_at`]), not at the safe head: two moves in one range, or a
 /// rebuild that reaches a move long after it happened, name each ledger in turn. A vault's own
@@ -1521,31 +1522,6 @@ async fn exclusion_balance_at(
     call_u256(rpc, ledger, data, block).await
 }
 
-/// Every vault a `VaultRegistered` in `logs` names that `watched` does not hold, with the block
-/// of its earliest registration in `logs` (DI-1). These vaults were not in the `eth_getLogs`
-/// filter that produced `logs`, so none of their own logs are in it. A decode failure is returned
-/// rather than skipped: `handle_log` would fail the tick on the same log anyway.
-fn vaults_registered_outside(
-    topics: &Topics,
-    logs: &[LogEntry],
-    watched: &[Address],
-) -> Result<BTreeMap<Address, u64>, IndexerError> {
-    let mut out: BTreeMap<Address, u64> = BTreeMap::new();
-    for log in logs {
-        if log.topics.first() != Some(&topics.vault_registered) {
-            continue;
-        }
-        let decoded = IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(log), true)
-            .map_err(|e| IndexerError::Decode(format!("VaultRegistered: {e}")))?;
-        if watched.contains(&decoded.vault) {
-            continue;
-        }
-        let first = out.entry(decoded.vault).or_insert(log.block_number);
-        *first = (*first).min(log.block_number);
-    }
-    Ok(out)
-}
-
 async fn run_inner(
     db: &Db,
     rpc: &JsonRpc,
@@ -1643,7 +1619,7 @@ async fn run_inner(
     };
 
     // Static watched set (gateway, pinned vault, registry, router) plus every
-    // registry-discovered vault. Without the latter, ERC-4626
+    // registry-discovered vault, including paused and retired generations. Without the latter, ERC-4626
     // `Deposit`/`Withdraw` logs emitted by vaults learned from `VaultRegistered`
     // are never fetched, so their burn volume is invisible to the watchdog
     // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
@@ -1657,13 +1633,45 @@ async fn run_inner(
     // old rmPROTO after its redeploy) stayed as its TVL forever. Status is a product
     // question (`/v1/stats.total_tvl` leaves Retired vaults out), never an indexing one.
     let mut watched = cfg.watched_addresses();
-    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
+    let mut registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT vault_address FROM vaults WHERE chain_id = $1 ORDER BY vault_address",
     )
     .bind(cfg.chain_id)
     .fetch_all(db.pool())
     .await
     .map_err(DbError::from)?;
+    // Discover registrations in this very interval before requesting vault logs.
+    // This includes standalone exits in the registration/cutover block and the
+    // interval before the next tick discovers the new generation (issue 1796, DI-1).
+    // `registered_in_range` keeps the block of each newly found vault's registration: its
+    // ExclusionLedger is read there (X7), not at the range's first block, where the vault may
+    // not exist yet.
+    let mut registered_in_range: BTreeMap<Address, u64> = BTreeMap::new();
+    if let Some(registry) = cfg.registry {
+        let discovery = rpc
+            .get_logs(
+                from_block as u64,
+                target,
+                &[registry],
+                &[topics.vault_registered],
+            )
+            .await?;
+        for log in discovery {
+            if log.address != registry || log.topics.first() != Some(&topics.vault_registered) {
+                continue;
+            }
+            let event =
+                IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(&log), true)
+                    .map_err(|e| IndexerError::Decode(format!("VaultRegistered discovery: {e}")))?;
+            let address = event.vault.as_slice().to_vec();
+            if !registered_vaults.contains(&address) {
+                registered_vaults.push(address);
+                registered_in_range.insert(event.vault, log.block_number);
+            } else if let Some(first) = registered_in_range.get_mut(&event.vault) {
+                *first = (*first).min(log.block_number);
+            }
+        }
+    }
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
             let address = Address::from(bytes);
@@ -1684,10 +1692,17 @@ async fn run_inner(
                 .map(Address::from),
         )
         .collect();
-    // Each vault with no stored answer is read at the first block of the range (security round 3).
+    // Each vault with no stored answer is read at the first block of the range (security round 3),
+    // or, for a vault registered inside the range, at its registration block (DI-1).
     let first_reads: Vec<(Address, u64)> = ledger_vaults
         .iter()
-        .map(|&vault| (vault, from_block as u64))
+        .map(|&vault| {
+            let block = registered_in_range
+                .get(&vault)
+                .copied()
+                .unwrap_or(from_block as u64);
+            (vault, block)
+        })
         .collect();
     let ledgers = exclusion_ledgers_of(db, rpc, cfg.chain_id, &first_reads, safe_head).await?;
     for ledger in ledgers.into_values().flatten() {
@@ -1700,64 +1715,13 @@ async fn run_inner(
         .get_logs(from_block as u64, target, &watched, &topic0)
         .await?;
 
-    // Discovery-tick refetch (DI-1). `watched` was read from `vaults` before any of these logs
-    // were applied, so a vault whose `VaultRegistered` is in `logs` was not in the filter, and the
-    // node returned none of that vault's own Deposit/Withdraw logs between its registration block
-    // and `target`. The next tick starts at `target + 1`, so they would never be fetched (a fresh
-    // rebuild from the deploy floor drops them the same way). Ask for them now, before the cursor
-    // advances: one extra `eth_getLogs`, only on a tick that registers a vault. They are appended,
-    // so `handle_log` applies the `VaultRegistered` (and the `contracts` row `wallet_positions`
-    // references) first, and every step below (block rows, pause snapshots) sees them like any
-    // other log.
-    let discovered = vaults_registered_outside(&topics, &logs, &watched)?;
-    if let Some(&first_registration) = discovered.values().min() {
-        let new_vaults: Vec<Address> = discovered.keys().copied().collect();
-        // Each new vault and its ExclusionLedger (X7), both from the vault's registration block.
-        // The ledger is read from the new vault now, at that block, before its events are fetched.
-        let registrations: Vec<(Address, u64)> = discovered
-            .iter()
-            .map(|(&vault, &registered)| (vault, registered))
-            .collect();
-        let new_ledgers =
-            exclusion_ledgers_of(db, rpc, cfg.chain_id, &registrations, safe_head).await?;
-        let mut refetch_from: BTreeMap<Address, u64> = BTreeMap::new();
-        let mut refetch: Vec<Address> = Vec::with_capacity(2 * new_vaults.len());
-        for (&vault, &registered) in &discovered {
-            let ledgers = new_ledgers.get(&vault).into_iter().flatten().copied();
-            for address in std::iter::once(vault).chain(ledgers) {
-                refetch_from.insert(address, registered);
-                refetch.push(address);
-            }
-        }
-        let mut late = rpc
-            .get_logs(first_registration, target, &refetch, &topic0)
-            .await?;
-        // Each address from its vault's registration block. A provider that ignores the address
-        // filter must not replay the logs fetched above.
-        late.retain(|l| {
-            refetch_from
-                .get(&l.address)
-                .is_some_and(|&registered| l.block_number >= registered)
-        });
-        tracing::info!(
-            vaults = new_vaults.len(),
-            first_registration,
-            target,
-            late_logs = late.len(),
-            "vaults registered in this tick; fetched their own logs before advancing the cursor"
-        );
-        logs.extend(late);
-    }
-
     // Ledger moves (security rounds 2 and 3). A vault that emitted `Upgraded` or `Initialized` in
     // this range is read again at that block: a reinitializer is the one way to point it at a new
     // ExclusionLedger, and it runs either in the upgrade's own transaction or in a later timelock
     // operation that emits only `Initialized`. The new ledger was not in the filter above, so its
-    // logs from that block to `target` are fetched now, before the cursor advances, the way the
-    // discovery refetch fetches a new vault's. They are appended, so `handle_log` applies the
-    // upgrade and stores nothing out of order.
-    let mut upgrade_vaults: BTreeSet<Address> = ledger_vaults.iter().copied().collect();
-    upgrade_vaults.extend(discovered.keys().copied());
+    // logs from that block to `target` are fetched now, before the cursor advances. They are
+    // appended, so `handle_log` applies the upgrade and stores nothing out of order.
+    let upgrade_vaults: BTreeSet<Address> = ledger_vaults.iter().copied().collect();
     let moved = exclusion_ledgers_moved_by_upgrades(
         db,
         rpc,
@@ -1921,13 +1885,6 @@ async fn run_inner(
             }
         }
     }
-    // A vault registered in this tick takes its first row at `target` now, after the deposits the
-    // refetch above applied, rather than one tick later (DI-1).
-    for vault in discovered.keys() {
-        if !heartbeat_vaults.contains(vault) {
-            heartbeat_vaults.push(*vault);
-        }
-    }
 
     // State snapshots — event-driven (one per touched vault contract per
     // touched block). Heartbeat handled below.
@@ -1947,9 +1904,9 @@ async fn run_inner(
         None => BTreeSet::new(),
     };
     for (bn, contract) in &event_blocks_per_contract {
-        if *contract == cfg.vault {
+        if heartbeat_vaults.contains(contract) {
             rows_inserted +=
-                snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn, None).await;
+                snapshot_vault_or_skip(db, rpc, cfg.chain_id, *contract, *bn, None).await;
         }
     }
     // A DepositsPaused or DepositsUnpaused log from a vault changes what `/v1/vaults` reports as
@@ -2038,8 +1995,12 @@ async fn run_inner(
     })
 }
 
-/// Decode a Timelock or Safe log into an `admin_events` row. `None` when the log is not one of these events
-/// or was not emitted by the configured Timelock or Safe.
+/// Decode a Timelock, Safe or proxy-upgrade log into an `admin_events` row. `None` when the log is not one
+/// of these events, or a Timelock or Safe event not emitted by the configured Timelock or Safe.
+///
+/// Proxy events (issue 1810): `Upgraded` and `UpgradesFrozen` from any other watched contract (every proxied
+/// core contract emits them from its own address) become `contract_kind = 'proxy'` rows. The Timelock and
+/// the Safe are not Robot Money proxies, so the same topics from them are not recorded.
 pub fn admin_event_of(
     cfg: &IndexerConfig,
     topics: &Topics,
@@ -2149,42 +2110,21 @@ pub fn admin_event_of(
             detail,
         }));
     }
-    Ok(None)
-}
-
-/// One proxy upgrade or freeze, ready for `Db::insert_proxy_upgrade_event` (QA plan P3).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProxyUpgradeEvent {
-    /// `upgraded` or `frozen` (the `kind` column of migration 0024).
-    pub kind: &'static str,
-    /// The implementation the proxy runs from this event on, or the one it froze on.
-    pub implementation: Address,
-    /// `UpgradesFrozen` only: that implementation's runtime code hash.
-    pub code_hash: Option<[u8; 32]>,
-}
-
-/// Decode an `Upgraded` or `UpgradesFrozen` log (ADR-0014, QA plan P3). `None` for any other
-/// log, and for an `UpgradesFrozen` whose `proxy` is not the emitter: `GovernedUpgrade` always
-/// names itself, so a mismatch is not one of ours and is not recorded.
-pub fn proxy_upgrade_event_of(
-    topics: &Topics,
-    log: &LogEntry,
-) -> Result<Option<ProxyUpgradeEvent>, IndexerError> {
-    let Some(&topic0) = log.topics.first() else {
-        return Ok(None);
-    };
     if topic0 == topics.proxy_upgraded {
-        let d = IUpgradeEvents::Upgraded::decode_log(&into_alloy_log(log), true)
+        let d = IGovernedUpgradeEvents::Upgraded::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("Upgraded: {e}")))?;
-        return Ok(Some(ProxyUpgradeEvent {
-            kind: "upgraded",
-            implementation: d.implementation,
-            code_hash: None,
+        return Ok(Some(AdminEvent {
+            contract_kind: "proxy",
+            event_name: "Upgraded",
+            op_id: None,
+            detail: serde_json::json!({ "implementation": format!("{:#x}", d.implementation) }),
         }));
     }
     if topic0 == topics.proxy_upgrades_frozen {
-        let d = IUpgradeEvents::UpgradesFrozen::decode_log(&into_alloy_log(log), true)
+        let d = IGovernedUpgradeEvents::UpgradesFrozen::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("UpgradesFrozen: {e}")))?;
+        // GovernedUUPS always names the proxy itself (`address(this)` under DELEGATECALL), so a
+        // freeze that names another proxy than its emitter is not one of ours and is not recorded.
         if d.proxy != log.address {
             tracing::warn!(
                 log_address = %log.address,
@@ -2194,16 +2134,20 @@ pub fn proxy_upgrade_event_of(
             );
             return Ok(None);
         }
-        return Ok(Some(ProxyUpgradeEvent {
-            kind: "frozen",
-            implementation: d.implementation,
-            code_hash: Some(d.codeHash.0),
+        return Ok(Some(AdminEvent {
+            contract_kind: "proxy",
+            event_name: "UpgradesFrozen",
+            op_id: None,
+            detail: serde_json::json!({
+                "implementation": format!("{:#x}", d.implementation),
+                "code_hash": format!("{:#x}", d.codeHash),
+            }),
         }));
     }
     Ok(None)
 }
 
-/// One Timelock or Safe event, ready for `Db::insert_admin_event`.
+/// One Timelock, Safe or proxy-upgrade event, ready for `Db::insert_admin_event`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdminEvent {
     pub contract_kind: &'static str,
@@ -2784,10 +2728,9 @@ async fn handle_log_within(
         return Ok(r);
     }
 
-    // WeightsSet — PortfolioRouter.setWeights() by the weight setter.
+    // WeightsSet — PortfolioRouter.setWeights(), called by
+    // RouterGovernance.applyReceipt (and by the demo seed script).
     // Signature: WeightsSet(address[] vaults, uint256[] bps).
-    // RouterGovernance.applyReceipt calls setWeights(), so this is the event an
-    // applied consensus receipt produces (issue 1698).
     if topic0 == topics.weights_set {
         let decoded = IPortfolioRouterEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;
@@ -3019,7 +2962,7 @@ async fn handle_log_within(
         }
 
         // The emitting policy is part of the vote key: a redeployed policy restarts `voteId`
-        // (DI-10, migration 0019).
+        // (DI-10, migration 0020).
         let inserted = db
             .insert_committee_vote(
                 cfg.chain_id,
@@ -3064,7 +3007,7 @@ async fn handle_log_within(
     }
 
     // ─── ExclusionLedger event handlers ───────────────────────────────────────────
-    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0021.
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0022.
     //
     // Four events, each one append-only row: ExclusionOpened (the record and its snapshot
     // supply), ExclusionRecoveryCredited, ExclusionFinalized, ExclusionClaimed. The holders'
@@ -3167,7 +3110,7 @@ async fn handle_log_within(
     // T20 — GATE ON THE EMITTING CONTRACT.
     //
     // `handle_log` dispatches on `topic0` alone, over a watched-address set that
-    // also carries the gateway, the vaults, the registry, the router, governance
+    // also carries the gateway, the vaults, the registry, the router
     // and the IC policy. `ReceiptRecorded`'s topic0 is just a hash: ANY watched
     // contract that emits an event with that signature lands in the branches
     // below. Only the configured ConsensusRecommendationReceipt deployment may
@@ -3176,25 +3119,6 @@ async fn handle_log_within(
     // Timelock and Safe governance events (issue #1731). The topic-0s are generic hashes, so the emitter
     // must be the configured Timelock or Safe before anything is written.
     if let Some(n) = handle_admin_log(db, cfg, topics, log).await? {
-        return Ok(n);
-    }
-
-    // Proxy upgrades and freezes (ADR-0014, QA plan P3, core 1810). Every watched address is a
-    // configured or registered Robot Money contract, so an emitter here is a proxy of ours.
-    if topic0 == topics.proxy_upgraded || topic0 == topics.proxy_upgrades_frozen {
-        let Some(ev) = proxy_upgrade_event_of(topics, log)? else {
-            return Ok(0);
-        };
-        let n = db
-            .insert_proxy_upgrade_event(
-                cfg.chain_id,
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                log.address.into_array(),
-                &ev,
-            )
-            .await?;
         return Ok(n);
     }
 
@@ -3965,7 +3889,7 @@ pub enum SnapshotRead {
 ///   purpose (issue 1768).
 /// - Otherwise read, writing only a change, when the vault emitted a watched log in this tick
 ///   (`emitted_log`), holds nothing (`total_assets` 0, so its first deposit shows within a tick),
-///   has an unknown cap (the issue 1741 retry), or has no exit value (a row older than migration 0022,
+///   has an unknown cap (the issue 1741 retry), or has no exit value (a row older than migration 0023,
 ///   or a failed `previewRedeem` read; core 1795).
 /// - Any other vault is not read. Its state changes only through its own watched events, or through
 ///   yield and prices, which the heartbeat samples.
@@ -4636,6 +4560,20 @@ mod tests {
         );
     }
 
+    /// RouterGovernance's voting events are gone (issue #1698), but as a proxied
+    /// core contract it emits `Upgraded` / `UpgradesFrozen` (issue 1810), so it
+    /// is registered AND watched.
+    #[test]
+    fn router_governance_is_registered_and_watched_for_proxy_events() {
+        let gov = Address::from([0x66u8; 20]);
+        let mut cfg = admin_cfg();
+        cfg.router_governance = Some(gov);
+        assert!(cfg.watched_addresses().contains(&gov));
+        assert!(cfg
+            .configured_contracts()
+            .contains(&(gov, "router_governance")));
+    }
+
     #[test]
     fn configured_start_block_is_the_floor_and_first_block_honours_it() {
         let mut cfg = IndexerConfig {
@@ -4726,7 +4664,7 @@ mod tests {
             snapshot_read(Some((recent, &vault_state("5", None))), target, false),
             SnapshotRead::WriteIfChanged
         );
-        // A row without an exit value (older than migration 0022, or a failed previewRedeem read) is
+        // A row without an exit value (older than migration 0023, or a failed previewRedeem read) is
         // read on the next tick too, so the positions API is not left without a value (core 1795).
         let mut no_exit_value = funded.clone();
         no_exit_value.preview_redeem_total = None;
@@ -4856,6 +4794,55 @@ mod tests {
             ld.data.to_vec(),
         );
         assert_eq!(admin_event_of(&cfg, &topics, &other).unwrap(), None);
+    }
+
+    /// Issue 1810: a proxied core contract's `Upgraded` and `UpgradesFrozen`
+    /// become `proxy` rows naming the implementation (and the frozen code
+    /// hash). The same topics from the Timelock or the Safe are not recorded.
+    #[test]
+    fn proxy_upgrade_and_freeze_events_decode_as_proxy_rows() {
+        use alloy_primitives::{FixedBytes, B256};
+        use alloy_sol_types::SolEvent as _;
+        let cfg = admin_cfg();
+        let topics = Topics::new();
+        let gateway = cfg.gateway;
+        let implementation = Address::from([0x1c; 20]);
+
+        let up = IGovernedUpgradeEvents::Upgraded { implementation }.encode_log_data();
+        let log = raw_log(gateway, up.topics().to_vec(), up.data.to_vec());
+        let got = admin_event_of(&cfg, &topics, &log)
+            .unwrap()
+            .expect("decoded");
+        assert_eq!((got.contract_kind, got.event_name), ("proxy", "Upgraded"));
+        assert_eq!(got.op_id, None);
+        assert_eq!(got.detail["implementation"], format!("{implementation:#x}"));
+
+        let frozen = IGovernedUpgradeEvents::UpgradesFrozen {
+            proxy: gateway,
+            implementation,
+            codeHash: FixedBytes([0x77; 32]),
+        }
+        .encode_log_data();
+        let log = raw_log(gateway, frozen.topics().to_vec(), frozen.data.to_vec());
+        let got = admin_event_of(&cfg, &topics, &log)
+            .unwrap()
+            .expect("decoded");
+        assert_eq!(
+            (got.contract_kind, got.event_name),
+            ("proxy", "UpgradesFrozen")
+        );
+        assert_eq!(got.detail["implementation"], format!("{implementation:#x}"));
+        assert_eq!(
+            got.detail["code_hash"],
+            format!("{:#x}", B256::from([0x77; 32]))
+        );
+
+        for not_a_proxy in [cfg.timelock.unwrap(), cfg.safe.unwrap()] {
+            let log = raw_log(not_a_proxy, up.topics().to_vec(), up.data.to_vec());
+            assert_eq!(admin_event_of(&cfg, &topics, &log).unwrap(), None);
+        }
+        assert!(topics.all_topic0().contains(&topics.proxy_upgraded));
+        assert!(topics.all_topic0().contains(&topics.proxy_upgrades_frozen));
     }
 
     #[test]

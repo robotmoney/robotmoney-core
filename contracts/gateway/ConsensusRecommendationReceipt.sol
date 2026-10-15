@@ -2,14 +2,13 @@
 // Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
-// (See also: docs/adr/ADR-0014-governed-upgrades-and-freeze.md — UUPS proxy, timelock upgrades, freeze)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -54,22 +53,20 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 ///
 /// Emits: `ReceiptRecorded`, `ReceiptReleased`.
 ///
-/// Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
-/// in the proxy's deployment transaction. Only the timelock named at `initialize`
-/// can upgrade it, and `freezeUpgrades` ends upgrades forever. Recorded receipts
-/// and their release state survive every upgrade.
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `gateway` and `icPolicy` are set once at initialization and have no setter.
 contract ConsensusRecommendationReceipt is
     AdminFloorAccessControl,
     ReentrancyGuardUpgradeable,
-    GovernedUpgrade,
+    GovernedUUPS,
     IConsensusRecommendationReceipt
 {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
-    /// @notice Releases receipts. Held by the `TimelockController` (INV-3) and,
-    ///         since issue #1698, by the weight setter (`RouterGovernance`),
-    ///         whose `applyReceipt` releases a receipt and writes its weights
-    ///         in one transaction. Stage 11 grants both.
+    /// @notice Releases receipts. Held by the `TimelockController` (INV-3) and
+    ///         by RouterGovernance, whose `applyReceipt` releases a receipt in
+    ///         the same call that sets its weights (issue 1698).
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /// @notice Mirror of `InvestmentCommitteePolicy.COMMITTEE_AGENT_ROLE`. This
@@ -86,11 +83,9 @@ contract ConsensusRecommendationReceipt is
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    /// @dev Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
     address public gateway;
 
     /// @inheritdoc IConsensusRecommendationReceipt
-    /// @dev Written once by `initialize`; no setter.
     address public icPolicy;
 
     /// @dev Append-only receipt log.
@@ -99,40 +94,35 @@ contract ConsensusRecommendationReceipt is
     /// @dev `receiptId` → 1-based index into `_receipts` (0 means absent).
     mapping(bytes32 => uint256) private _indexPlusOne;
 
-    // ─── Initializer (ADR-0014) ──────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
-    /// @dev The implementation is never initialized: only a proxy is.
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
-
-    /// @notice Initialize the proxy. Runs once, inside the proxy's deployment transaction.
-    /// @param admin_           Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
-    ///                         In every non-test deployment this is the
-    ///                         `TimelockController` (INV-3).
-    /// @param gateway_         Deployed `RobotMoneyGateway`; sole permitted writer.
-    /// @param icPolicy_        Deployed `InvestmentCommitteePolicy`; the single source
-    ///                         of `COMMITTEE_AGENT_ROLE` membership.
-    /// @param upgradeAuthority The deployment's timelock: the only address that may upgrade or freeze.
-    /// @param mode             `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts.
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param admin_     Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    ///                   In every non-test deployment this is the
+    ///                   `TimelockController` (INV-3).
+    /// @param gateway_   Deployed `RobotMoneyGateway`; sole permitted writer.
+    /// @param icPolicy_  Deployed `InvestmentCommitteePolicy`; the single source
+    ///                   of `COMMITTEE_AGENT_ROLE` membership.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
     function initialize(
         address admin_,
         address gateway_,
         address icPolicy_,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (admin_ == address(0) || gateway_ == address(0) || icPolicy_ == address(0)) {
             revert ZeroAddress();
         }
-        __ReentrancyGuard_init();
         gateway = gateway_;
         icPolicy = icPolicy_;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
-        __GovernedUpgrade_init(upgradeAuthority, mode);
     }
 
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
@@ -248,8 +238,8 @@ contract ConsensusRecommendationReceipt is
     // This contract has NO treasury-spend function, NO router-weight setter, NO
     // `receive` and NO `fallback`. It holds no ERC-20 balance and cannot call
     // `RouterGovernance.applyReceipt()`, `PortfolioRouter.setWeights()` or
-    // `RobotMoneyGateway.deposit()`. The weight setter calls `releaseReceipt`
-    // on this contract inside `applyReceipt` (issue #1698); this contract never
-    // calls back. Verified by
-    // ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary.
+    // `RobotMoneyGateway.deposit()`. Verified by
+    // ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary. The
+    // weight setter calls `releaseReceipt` (it holds `ADMIN_ROLE` here), never
+    // the other way round.
 }

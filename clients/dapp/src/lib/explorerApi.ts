@@ -209,8 +209,7 @@ export interface RouterWeightsResponse {
 /**
  * The kinds of event in the per-account history feed, as the API serializes
  * `EventKind` (clients/explorer-api/src/model.rs). There is no governance-vote
- * kind: issue 1698 deleted RouterGovernance voting and migration 0023 removed
- * the old `governance_vote` rows.
+ * kind: issue 1698 deleted RouterGovernance voting and its indexed rows.
  */
 export type AccountEventKind = "deposit" | "withdrawal" | "fee_charged" | "policy_change";
 
@@ -293,6 +292,41 @@ export async function fetchVaultDetail(
   return (await res.json()) as VaultDetailResponse;
 }
 
+/**
+ * One contract from GET /v1/chains/:chain_id/contracts. `implementation`,
+ * `upgrade_state` and `frozen_at_block` come from the indexed proxy
+ * `Upgraded` / `UpgradesFrozen` events (issue 1810). Disclosure only: the
+ * index never authorizes a write.
+ */
+export interface ContractRow {
+  readonly chain_id: number;
+  readonly address: string;
+  readonly kind: string;
+  readonly implementation?: string | null;
+  readonly upgrade_state?: "frozen" | "upgradeable" | "unknown";
+  readonly frozen_at_block?: number | null;
+}
+
+export interface ContractsResponse {
+  readonly chain_id: number;
+  readonly contracts: readonly ContractRow[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+/** GET /v1/chains/:chain_id/contracts — the indexed contracts and their upgrade state. */
+export async function fetchContracts(
+  baseUrl: string,
+  chainId: number,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<ContractsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/chains/${chainId}/contracts`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as ContractsResponse;
+}
+
 /** GET /v1/router/weights — current weight vector and history. */
 export async function fetchRouterWeights(
   baseUrl: string,
@@ -315,44 +349,6 @@ export async function fetchStats(
   const res = await fetchImpl(url, { signal: options.signal });
   if (!res.ok) throw new Error(`explorer API ${res.status}`);
   return (await res.json()) as StatsResponse;
-}
-
-// ─── Proxy upgrades (ADR-0014, issue 1810) ──────────────────────────────────
-
-/** One proxy's indexed upgrade state (`ProxyUpgradeState` in clients/explorer-api/src/model.rs). */
-export interface ProxyUpgradeRow {
-  readonly chain_id: number;
-  readonly contract: string;
-  /** `gateway`, `vault`, `portfolio_router`, `vault_registry`, `investment_committee`, `consensus_receipt`; null for a registry-discovered vault. */
-  readonly contract_kind: string | null;
-  readonly implementation: string | null;
-  readonly upgraded_block: number | null;
-  readonly upgrades_frozen: boolean;
-  readonly frozen_block: number | null;
-  readonly frozen_code_hash: string | null;
-}
-
-/** Response of GET /v1/upgrades. `events` is not read by the dapp. */
-export interface UpgradesResponse {
-  readonly contracts: readonly ProxyUpgradeRow[];
-  readonly block_number: number;
-  readonly indexed_at: string;
-}
-
-/**
- * GET /v1/upgrades — the indexed implementation and freeze state of every proxy with an indexed
- * `Upgraded` or `UpgradesFrozen` event. Disclosure only: the dapp shows it when it cannot read the
- * chain (no wallet on the mainnet class), labelled as indexed, and never gates a write on it.
- */
-export async function fetchUpgrades(
-  baseUrl: string,
-  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
-): Promise<UpgradesResponse> {
-  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
-  const url = `${baseUrl.replace(/\/+$/, "")}/v1/upgrades`;
-  const res = await fetchImpl(url, { signal: options.signal });
-  if (!res.ok) throw new Error(`explorer API ${res.status}`);
-  return (await res.json()) as UpgradesResponse;
 }
 
 // ─── Fetch helpers (issue #319) ─────────────────────────────────────────────

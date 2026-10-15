@@ -43,7 +43,9 @@ import {InvariantRegistry} from "./InvariantRegistry.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
-import {Proxied} from "../helpers/Proxied.sol";
+import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Minimal USDC for the router-deposit FV harness.
 contract FvUSDC is ERC20 {
@@ -571,43 +573,50 @@ contract FvInvariantsTest is Test {
         router.deposit(amount, new uint256[](0));
     }
 
-    /// @notice GOV-4 (F-05/RTR-4) — an applied weight vector that would render router
-    ///         deposits non-executable can never be written. The weight setter
-    ///         (RouterGovernance, holder of WEIGHT_SETTER_ROLE) reaches the router
-    ///         only through `setWeights`, which rejects a vector containing a
-    ///         Paused/Retired vault, so a self-DoS vector never lands (issue #1698
-    ///         deleted the propose-time pre-check along with voting; the router's
-    ///         own guard is the one that holds).
-    function test_GOV4_appliedVectorCannotSelfDosRouter() public {
+    /// @notice GOV-4 (F-05/RTR-4) — a consensus receipt whose vector would render
+    ///         router deposits non-executable can never be applied. applyReceipt
+    ///         reverts on a vector containing a Paused/Retired vault (the router's
+    ///         `setWeights` refuses it), and the revert leaves the receipt
+    ///         unreleased, so a self-DoS vector never lands.
+    function test_GOV4_receiptCannotSelfDosRouter() public {
         (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vault) =
             _deployRouterStack();
 
-        // Stand up the weight setter and hand it the router roles so
-        // applyReceipt → setWeights is the only weight-setting path.
-        RouterGovernance gov = new RouterGovernance(address(router), address(this));
+        // Stand up the weight setter and the receipt register it applies, and
+        // hand it the router's weight role so applyReceipt -> setWeights is the
+        // only weight-setting path.
+        InvestmentCommitteePolicy ic =
+            CoreProxies.investmentCommitteePolicy(address(this), address(this));
+        address submitter = makeAddr("submitter");
+        ic.registerAgent(submitter, "submitter");
+        ConsensusRecommendationReceipt receipts =
+            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
+        RouterGovernance gov =
+            CoreProxies.routerGovernance(address(router), address(receipts), address(this));
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
-        router.revokeRole(router.WEIGHT_SETTER_ROLE(), address(this));
+        receipts.grantRole(receipts.ADMIN_ROLE(), address(gov));
 
         address[] memory vaults = new address[](1);
         uint256[] memory bps = new uint256[](1);
         vaults[0] = address(vault);
         bps[0] = 10_000;
+        bytes32 digest = keccak256("payload");
+        receipts.recordReceipt(submitter, keccak256("r1"), digest, "uri");
+        receipts.recordReceipt(submitter, keccak256("r2"), digest, "uri");
 
-        // While Active, the weight setter's vector lands.
-        vm.prank(address(gov));
-        router.setWeights(vaults, bps);
-        assertTrue(router.votedWeightsActive(), "vector written while Active");
+        // While Active, the receipt applies.
+        gov.applyReceipt(keccak256("r1"), digest, vaults, bps);
+        assertTrue(receipts.isReleased(keccak256("r1")), "receipt applied while Active");
 
-        // Pause the vault: a vector that would route deposits to it is rejected by
-        // the router (GOV-4) — the weight setter cannot write it.
+        // Pause the vault: a receipt that would route deposits to it is refused,
+        // and stays unreleased.
         registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.DepositsPaused);
         assertTrue(router.isRouterEligible(address(vault)), "still eligible");
         assertFalse(
             router.isRouterEligibleAndActive(address(vault)),
             "eligible but not Active means not routable"
         );
-        vm.prank(address(gov));
         vm.expectRevert(
             abi.encodeWithSelector(
                 PortfolioRouter.VaultNotActive.selector,
@@ -615,7 +624,8 @@ contract FvInvariantsTest is Test {
                 VaultRegistry.VaultStatus.DepositsPaused
             )
         );
-        router.setWeights(vaults, bps);
+        gov.applyReceipt(keccak256("r2"), digest, vaults, bps);
+        assertFalse(receipts.isReleased(keccak256("r2")), "refused receipt stays unreleased");
 
         // Silence unused-var warnings.
         usdc;
@@ -637,8 +647,8 @@ contract FvInvariantsTest is Test {
         )
     {
         usdc = new FvUSDC();
-        registry = Proxied.vaultRegistry(address(this));
-        router = Proxied.portfolioRouter(address(usdc), address(registry), address(this));
+        registry = CoreProxies.vaultRegistry(address(this));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
         vault = _addEligibleVault(registry, router, usdc);
     }
 

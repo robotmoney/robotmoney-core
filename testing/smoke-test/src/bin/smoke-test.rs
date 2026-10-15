@@ -267,11 +267,15 @@ fn run() -> i32 {
     println!("vault_addr={:#x}", fixture.vault());
     println!("agent_addr={:#x}", fixture.agent());
     println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
-    // Issue 1810: the implementation pins an rmpc config for this deployment needs.
     println!(
-        "gateway_implementation_hash={}",
-        fixture.gateway_implementation_hash().unwrap_or("")
+        "gateway_implementation={}",
+        fixture.gateway_implementation_hex()
     );
+    println!(
+        "gateway_implementation_runtime_hash={}",
+        fixture.gateway_implementation_runtime_hash()
+    );
+    // Issue 1810: rmpc also pins the logic behind the vault and router proxies a write reaches.
     println!(
         "proxy_implementation_hashes={}",
         fixture.proxy_implementation_hashes().join(",")
@@ -543,13 +547,17 @@ fn print_endpoint_summary(
         "gateway_runtime_hash={}",
         fixture.gateway_runtime_hash()
     );
-    // Issue 1810: rmpc refuses a proxied gateway, vault or router whose implementation is not
-    // pinned, so the deploy output carries both pins (empty for a direct deployment).
     let _ = writeln!(
         out,
-        "gateway_implementation_hash={}",
-        fixture.gateway_implementation_hash().unwrap_or("")
+        "gateway_implementation={}",
+        fixture.gateway_implementation_hex()
     );
+    let _ = writeln!(
+        out,
+        "gateway_implementation_runtime_hash={}",
+        fixture.gateway_implementation_runtime_hash()
+    );
+    // Issue 1810: rmpc refuses a proxied vault or router whose implementation is not pinned.
     let _ = writeln!(
         out,
         "proxy_implementation_hashes={}",

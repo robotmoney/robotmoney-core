@@ -16,9 +16,9 @@
 //! reads the live production v1 vault or any hard-coded Robot Money address. Every address comes
 //! from the manifests the publish run wrote.
 //!
-//! The second test (security round 1, core 1820, ADR-0014 §9) excludes and restores an adapter of
+//! The second test (security round 1, core 1820) excludes and restores an adapter of
 //! that vault through the real Safe and timelock, and checks that the indexer finds the exclusion
-//! record at the ledger `ExclusionLedgerFactory` created and that the explorer serves the holder's
+//! record at the ledger the vault's initializer created and that the explorer serves the holder's
 //! claim.
 
 mod common;
@@ -191,10 +191,10 @@ alloy_sol_types::sol! {
     }
 }
 
-/// Security round 1 (core 1820, ADR-0014 §9): the exclusion records of a proxy vault are indexed
-/// from the ledger `ExclusionLedgerFactory` created, and the holder's claim is served.
+/// Security round 1 (core 1820): the exclusion records of a proxy vault are indexed
+/// from the ledger its initializer created, and the holder's claim is served.
 ///
-/// Every vault is an ERC-1967 proxy, and its initializer has the factory create the ledger. The
+/// Every vault is an ERC-1967 proxy, and its initializer creates the ledger (`RobotMoneyVaultOps.createLedger`). The
 /// indexer used to derive the ledger as the vault's CREATE address at nonce 1, which holds no code
 /// on a proxy, so no record was ever indexed and `/v1/accounts/:holder/exclusion-claims` said
 /// nothing was owed. Here a holder deposits into the freshly published rmUSDC vault, governance

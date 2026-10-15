@@ -1,91 +1,95 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/technical/governance-decisions.md §3 — the Safe applies consensus receipts through the weight setter
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
-// Canonical: docs/technical/governance-decisions.md §3.2, §3.6, §3.7 — a receipt is applied, not voted on
 // Implements: issue #1698 — the weight setter applies a consensus receipt in one call; voting deleted
-// Implements: issue #309, issue #496 (router-weight authority lives behind the Safe and the timelock)
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 import {
     IConsensusRecommendationReceipt
 } from "./gateway/interfaces/IConsensusRecommendationReceipt.sol";
-import {BpsMath} from "./lib/BpsMath.sol";
 
 /// @title RouterGovernance
-/// @notice The weight setter of the Portfolio Router. It holds the router's
-///         `WEIGHT_SETTER_ROLE` (and `ADMIN_ROLE`) and acts only on a
-///         Safe-scheduled timelock operation: `ADMIN_ROLE` here is held by the
-///         `TimelockController` after the stage 11 handover.
+/// @notice The router's weight setter. It holds the Portfolio Router's
+///         `WEIGHT_SETTER_ROLE` (the only gate on `setWeights`) and moves the
+///         active weight vector in exactly one way: `applyReceipt`, which
+///         releases a recorded Investment Committee consensus receipt and sets
+///         the receipt's weight vector in the same call.
 ///
-///         There is no voting. The Investment Committee records a consensus
-///         receipt on `ConsensusRecommendationReceipt`; when the Safe decides
-///         to act on it, it schedules ONE call, `applyReceipt`, which releases
-///         the receipt and writes its weight vector to the router in the same
-///         transaction. So `applyReceipt` never leaves applied weights whose
-///         receipt is unreleased, nor a receipt it released without weights.
-///         The timelock ALSO holds the register's `ADMIN_ROLE` and can release a
-///         receipt directly (the standalone `release-receipt` govern row, issue
-///         1611). A receipt released that way carries no weights, and
-///         `applyReceipt` refuses it forever (`ReceiptAlreadyReleased`): the
-///         committee must record a new receipt (governance-decisions.md §3.2,
-///         §3.7). "Released" therefore does not mean "applied"; read
-///         `ReceiptApplied` for that. The propose/vote/execute path, the
-///         voter set, voting power, quorum, voting period and execution delay
-///         were deleted by issue #1698: nobody held the voter keys, and one
-///         voter met the example quorum (security review 2026-10-12 finding 4).
+///         `applyReceipt` is gated by this contract's own `WEIGHT_SETTER_ROLE`,
+///         held by the `TimelockController`. The Safe is the timelock's only
+///         proposer, so a receipt is applied only when the Safe schedules the
+///         call, the timelock delay passes and the call executes. There is no
+///         voting by anyone: no voter set, no voting power, no quorum, no voting
+///         period, no proposal. The voting functions this contract carried
+///         through the MVP were deleted (issue 1698) because nothing used them
+///         and every one of them was attack surface on the weight path
+///         (security review 2026-10-12 finding 4: one voter met quorum).
+///
+///         Payload-digest binding (docs/technical/governance-decisions.md §3.7):
+///         a receipt's `payloadDigest` commits to the canonical receipt bytes,
+///         which the EVM cannot parse into a router vector. The scheduled call
+///         therefore names the digest it was built from; `applyReceipt` reverts
+///         unless it equals the stored digest, and `ReceiptApplied` records the
+///         digest and the vector together so anyone can re-derive the vector
+///         from the public payload and compare.
+///
+///         Released is not applied (security review 2026-10-15, finding 023): the
+///         timelock also holds the register's `ADMIN_ROLE` and can release a
+///         receipt directly (the standalone `release-receipt` govern row). A
+///         receipt released that way carries no weights, and `applyReceipt`
+///         refuses it forever (`ReceiptAlreadyReleased`); the committee must
+///         record a new receipt. Read `ReceiptApplied` to learn what was applied.
 ///
 ///         Design constraints (docs/architecture.md §2.3):
 ///         - Controls router weights only; cannot govern vault internals,
 ///           agent permissions, or protocol admin operations.
-///         - Replaced, never upgraded: a new weight setter is rotated in through
-///           `PortfolioRouter.proposeWeightSetterRotation` (ADR-0002).
+///         - No token, no minting, no wrapping (§6.6 of the decision record).
 ///
-/// Boundary note (issue #942): the unified governance `retire()` (DI-2,
-/// decision #925; docs/architecture.md §4.7) does NOT belong here. `retire()`
-/// is a TimelockController-gated registry/vault action (`VaultRegistry.retire`),
-/// not a router-weight change. Dropping a retired vault to 0 bps is an ordinary
-/// receipt application, requiring NO new code in this contract.
+///         `ADMIN_ROLE` (the timelock) keeps the two router fallbacks:
+///         `setDefaultWeights` and the emergency `clearVotedWeights`.
 ///
-/// Emits: `ReceiptContractSet`, `ReceiptApplied`.
-contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
+/// Emits: `ReceiptApplied`.
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). This contract's own roles (ADMIN_ROLE, WEIGHT_SETTER_ROLE) carry no
+/// upgrade power, here or on any other proxy. `router` and `receipts` are set once at
+/// initialization and have no setter.
+contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable, GovernedUUPS {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
-    /// @notice Applies receipts and sets the default vector. Held by the
-    ///         `TimelockController` after the stage 11 handover (INV-3).
+    /// @notice Sets the router's default weights and clears the active vector.
+    ///         Held by the `TimelockController` after the deploy handover.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    // ─── Constants ───────────────────────────────────────────────────────────
-
-    /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
-    ///         shared `BpsMath.BPS_DENOMINATOR` so weight-sum math cannot drift.
-    uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
+    /// @notice The only role that can call `applyReceipt`. Held by the
+    ///         `TimelockController` after the deploy handover. Self-administered,
+    ///         so no `ADMIN_ROLE` holder can grant it.
+    bytes32 public constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
-    /// @notice The Portfolio Router whose `setWeights` is called on application.
-    PortfolioRouter public immutable router;
+    /// @notice The Portfolio Router whose `setWeights` `applyReceipt` calls.
+    PortfolioRouter public router;
 
-    /// @notice The receipt register `applyReceipt` releases from. Set by stage
-    ///         11 (`DeployTimelock`) once `ConsensusRecommendationReceipt` exists
-    ///         (it is deployed after this contract, in the ic-policy stage).
-    ///         Zero until then, and `applyReceipt` refuses while it is zero.
-    IConsensusRecommendationReceipt public receiptContract;
+    /// @notice The ConsensusRecommendationReceipt register whose receipts this
+    ///         contract applies. This contract holds `ADMIN_ROLE` there so it
+    ///         can release a receipt in the same call that applies it.
+    IConsensusRecommendationReceipt public receipts;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
-    /// @notice Emitted when the receipt register is set.
-    /// @param oldReceipt The previous register (zero on first set).
-    /// @param newReceipt The register `applyReceipt` releases from now.
-    event ReceiptContractSet(address indexed oldReceipt, address indexed newReceipt);
-
-    /// @notice Emitted when a receipt is applied: released and its vector written
-    ///         to the router in one transaction.
+    /// @notice A recorded receipt was released and its vector set on the router.
     /// @param receiptId     The applied receipt.
-    /// @param payloadDigest The receipt's stored payload digest, as the call named it.
-    /// @param vaults        New vault address list.
-    /// @param bps           New weight bps list (parallel to vaults).
+    /// @param payloadDigest The receipt's stored digest, which the call named.
+    /// @param vaults        The vault list set on the router.
+    /// @param bps           The weights set on the router (parallel to vaults).
     event ReceiptApplied(
         bytes32 indexed receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps
     );
@@ -93,101 +97,83 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Errors ──────────────────────────────────────────────────────────────
 
     error ZeroAddress();
-    /// @notice `applyReceipt` was called before stage 11 set the receipt register.
-    error ReceiptContractNotSet();
-    /// @notice `setReceiptContract` was given an address with no code.
-    error ReceiptContractNotContract(address receipt);
-    /// @notice The receipt id was never recorded on the register.
+
+    /// @notice `receiptId` was never recorded on the receipt register.
     error ReceiptNotRecorded(bytes32 receiptId);
-    /// @notice The receipt was already released: one operation per receipt. Raised both for an
-    ///         earlier `applyReceipt` and for a standalone timelock `releaseReceipt`; a receipt
-    ///         released either way can never be applied.
+
+    /// @notice `receiptId` is already released: applied earlier, or released
+    ///         directly by the timelock without weights. Either way it can never
+    ///         be applied (again).
     error ReceiptAlreadyReleased(bytes32 receiptId);
-    /// @notice The digest the call named is not the digest the receipt stored.
-    /// @param receiptId The receipt.
-    /// @param expected  The digest in the scheduled calldata.
-    /// @param stored    The digest the committee submitter recorded.
-    error ReceiptDigestMismatch(bytes32 receiptId, bytes32 expected, bytes32 stored);
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    /// @notice The call named `given`, but the receipt's stored digest is `stored`.
+    error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
 
-    /// @param _router Portfolio Router whose weights this contract controls.
-    /// @param _admin  Address that receives ADMIN_ROLE (the deployer until stage 11).
-    constructor(address _router, address _admin) {
-        if (_router == address(0) || _admin == address(0)) {
+    // ─── Initializer ─────────────────────────────────────────────────────────
+
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+    /// @param _router   Portfolio Router whose weights this contract sets.
+    /// @param _receipts ConsensusRecommendationReceipt register.
+    /// @param _admin    Receives `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`. The deploy
+    ///                  is the deployer; the timelock stage hands both to the
+    ///                  `TimelockController` and drops the deployer's copies.
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        address _router,
+        address _receipts,
+        address _admin,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+        if (_router == address(0) || _receipts == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
         router = PortfolioRouter(_router);
+        receipts = IConsensusRecommendationReceipt(_receipts);
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
-
-        // Operational note: only this contract (reached through Safe → Timelock)
-        // should hold WEIGHT_SETTER_ROLE on the Portfolio Router. If that role
-        // is held elsewhere, setWeights bypasses the receipt path entirely.
+        _setRoleAdmin(WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROLE);
+        _grantRole(WEIGHT_SETTER_ROLE, _admin);
     }
 
-    // ─── Admin: receipt register ─────────────────────────────────────────────
+    // ─── Weight setter: apply a consensus receipt ────────────────────────────
 
-    /// @notice Set the receipt register `applyReceipt` releases from. Restricted
-    ///         to ADMIN_ROLE. Stage 11 calls it with the deployed
-    ///         `ConsensusRecommendationReceipt` before handing ADMIN_ROLE to the
-    ///         timelock; afterwards only a Safe-scheduled timelock operation can
-    ///         change it. This contract must hold `ADMIN_ROLE` on the register
-    ///         (its `releaseReceipt` gate); stage 11 grants that too.
-    /// @param receipt_ The deployed `ConsensusRecommendationReceipt`.
-    function setReceiptContract(address receipt_) external onlyRole(ADMIN_ROLE) {
-        if (receipt_ == address(0)) revert ZeroAddress();
-        if (receipt_.code.length == 0) revert ReceiptContractNotContract(receipt_);
-        emit ReceiptContractSet(address(receiptContract), receipt_);
-        receiptContract = IConsensusRecommendationReceipt(receipt_);
-    }
-
-    // ─── Admin: apply a consensus receipt ────────────────────────────────────
-
-    /// @notice Apply one consensus receipt: release it on the register and write
-    ///         its weight vector to the router, atomically. Restricted to
-    ///         ADMIN_ROLE (the timelock), so the Safe applies a receipt by
-    ///         scheduling and executing this one call. This is the rebalance.
+    /// @notice Release `receiptId` and set its weight vector on the router, in
+    ///         one call. `WEIGHT_SETTER_ROLE` only (the timelock).
     ///
-    ///         Refuses a receipt that is not recorded, one that is already
-    ///         released, and a `payloadDigest` that differs from the digest the
-    ///         committee submitter recorded. The vector itself is validated by
-    ///         the router (`setWeights`: every vault router-eligible AND Active,
-    ///         no duplicate vault, bps sum == BPS_DENOMINATOR), so a vector the
-    ///         router would not route by releases nothing.
-    ///
-    ///         Digest binding (governance-decisions.md §3.7): the register stores
-    ///         `keccak256` of the receipt's canonical bytes, which the chain
-    ///         cannot parse into a vector. The scheduled calldata therefore
-    ///         names the digest beside the vector, and the chain checks the
-    ///         digest against the register; the vector-to-payload equality is
-    ///         checked by the govern tool before scheduling and attested by the
-    ///         Safe signatures over this calldata.
-    /// @param receiptId     The receipt to apply.
-    /// @param payloadDigest The receipt's payload digest, as recorded.
-    /// @param vaults        Ordered vault address list.
-    /// @param bps           Parallel weight array; must sum to BPS_DENOMINATOR.
+    ///         Reverts unless the receipt is recorded, is not released, and its
+    ///         stored digest equals `payloadDigest`. The router then refuses a
+    ///         vector whose lengths differ, whose bps do not sum to 10 000, that
+    ///         names a vault twice, or that names a vault that is not
+    ///         router-eligible and Active. Any refusal reverts the whole call, so
+    ///         a released receipt whose vector was not set cannot exist.
+    /// @param receiptId     The recorded receipt to apply.
+    /// @param payloadDigest The digest of the payload the vector was derived from.
+    /// @param vaults        Ordered vault list.
+    /// @param bps           Parallel weights in basis points.
     // slither-disable-start reentrancy-events
-    // `applyReceipt()` is `nonReentrant`; the event emission follows the guarded
-    // register and router calls and the detector is a false positive here.
+    // `applyReceipt` is `nonReentrant` and both external calls go to deploy-time
+    // immutable contracts; the event follows them so it records what landed.
     function applyReceipt(
         bytes32 receiptId,
         bytes32 payloadDigest,
         address[] calldata vaults,
         uint256[] calldata bps
-    ) external onlyRole(ADMIN_ROLE) nonReentrant {
-        IConsensusRecommendationReceipt register = receiptContract;
-        if (address(register) == address(0)) revert ReceiptContractNotSet();
-        if (!register.isRecorded(receiptId)) revert ReceiptNotRecorded(receiptId);
-        if (register.isReleased(receiptId)) revert ReceiptAlreadyReleased(receiptId);
-        bytes32 stored = register.getReceiptById(receiptId).payloadDigest;
-        if (stored != payloadDigest) {
-            revert ReceiptDigestMismatch(receiptId, payloadDigest, stored);
+    ) external onlyRole(WEIGHT_SETTER_ROLE) nonReentrant {
+        if (!receipts.isRecorded(receiptId)) {
+            revert ReceiptNotRecorded(receiptId);
+        }
+        IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(receiptId);
+        if (r.released) revert ReceiptAlreadyReleased(receiptId);
+        if (r.payloadDigest != payloadDigest) {
+            revert PayloadDigestMismatch(receiptId, r.payloadDigest, payloadDigest);
         }
 
-        // Release first, then the weights: both revert together, so neither
-        // half can land without the other.
-        register.releaseReceipt(receiptId);
+        receipts.releaseReceipt(receiptId);
         router.setWeights(vaults, bps);
 
         emit ReceiptApplied(receiptId, payloadDigest, vaults, bps);
@@ -195,21 +181,14 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
 
     // slither-disable-end reentrancy-events
 
-    // ─── Admin: default (fallback) weights ───────────────────────────────────
+    // ─── Admin: router fallbacks ─────────────────────────────────────────────
 
     /// @notice Set the router's default (fallback) weight vector, forwarding to
-    ///         `PortfolioRouter.setDefaultWeights`. This is the on-chain vector
-    ///         the router routes by — and the public allocation surface renders
-    ///         — whenever no applied receipt vector is active. An applied
-    ///         receipt overrides it; the default itself stays put as the
-    ///         fallback. Restricted to ADMIN_ROLE (Safe -> Timelock -> ADMIN_ROLE).
-    ///         ADR-0002.
-    ///
-    ///         The router enforces: ADMIN_ROLE on the router (this contract must
-    ///         hold it), bps sum == BPS_DENOMINATOR, no duplicate vault, and
-    ///         length == the registry's router-eligible vault count.
+    ///         `PortfolioRouter.setDefaultWeights`. The router routes by it
+    ///         until a receipt is applied, and again after `clearVotedWeights`.
+    ///         `ADMIN_ROLE` only (Safe -> Timelock -> ADMIN_ROLE). ADR-0002.
     /// @param vaults Ordered vault address list.
-    /// @param bps    Parallel weight array (must sum to BPS_DENOMINATOR).
+    /// @param bps    Parallel weight array (must sum to 10 000).
     function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
         external
         onlyRole(ADMIN_ROLE)
@@ -217,17 +196,15 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
         router.setDefaultWeights(vaults, bps);
     }
 
-    /// @notice Clear the router's applied (voted) weight vector and revert
-    ///         routing to the default vector. The emergency lever: a receipt
-    ///         vector that should no longer route is cleared here, through the
-    ///         timelock. Restricted to ADMIN_ROLE. ADR-0002.
+    /// @notice Clear the router's active weight vector so routing falls back to
+    ///         the default vector. The emergency lever. `ADMIN_ROLE` only. ADR-0002.
     function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
         router.clearVotedWeights();
     }
 
     // ─── Read surface ────────────────────────────────────────────────────────
 
-    /// @notice Return the current Portfolio Router weight vector directly.
+    /// @notice The router's active weight vector (empty until a receipt is applied).
     function currentWeights()
         external
         view

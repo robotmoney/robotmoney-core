@@ -22,8 +22,8 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
-import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 // ─── Minimal mock infrastructure ─────────────────────────────────────────────
 
@@ -104,40 +104,46 @@ contract MockSwapRouterForGuards is ISwapRouter {
     }
 }
 
-/// @dev Concrete BasketVault harness (BasketVault is abstract).
-contract BasketVaultHarnessForGuards is BasketVault {
-    function maxAssets() public pure override returns (uint256) {
-        return 4;
-    }
-
-    function _kindConfig() internal pure override returns (string memory, string memory, uint256) {
-        return ("GuardHarness", "gTEST", 100); // initialSlippageBps 1%
-    }
-}
-
-/// @dev The guard harness behind its own initialized ERC1967Proxy (ADR-0014): uncapped, no exit
-///      fee, `admin_` as fee recipient and admin.
-function deployBasketVaultHarnessForGuards(
+/// @dev A `BasketVaultHarnessForGuards` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
+///      the harness constructor took.
+function newBasketVaultHarnessForGuards(
     IERC20 usdc_,
     ISwapRouter swapRouter_,
     address admin_,
     address emergency_
 ) returns (BasketVaultHarnessForGuards) {
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    BasketVault.InitParams memory p = BasketVault.InitParams({
+        usdc: usdc_,
+        swapRouter: swapRouter_,
+        tvlCap: type(uint256).max,
+        perDepositCap: type(uint256).max,
+        exitFeeBps: 0,
+        feeRecipient: admin_,
+        admin: admin_,
+        emergencyResponder: emergency_
+    });
     return BasketVaultHarnessForGuards(
-        Proxied.proxy(
+        CoreProxies.proxy(
             address(new BasketVaultHarnessForGuards()),
-            Proxied.basketInit(
-                usdc_,
-                swapRouter_,
-                type(uint256).max,
-                type(uint256).max,
-                0,
-                admin_,
-                admin_,
-                emergency_
-            )
+            abi.encodeCall(BasketVaultHarnessForGuards.initialize, (p, t, m))
         )
     );
+}
+
+/// @dev Concrete BasketVault harness (BasketVault is abstract).
+contract BasketVaultHarnessForGuards is BasketVault {
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("GuardHarness", "gTEST", 100, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+    }
+
+    function maxAssets() public pure override returns (uint256) {
+        return 4;
+    }
 }
 
 // ─── Gateway authority invariant tests ───────────────────────────────────────
@@ -167,7 +173,7 @@ contract ConfusedDeputyGuardsTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)),
             IERC4626(address(vault)),
             admin,
@@ -426,15 +432,13 @@ contract BasketVaultSwapGuardsTest is Test {
         basketToken = new TestERC20();
         swapRouter = new MockSwapRouterForGuards();
         pool = new MockPoolForGuards(address(basketToken), address(usdc));
-        vault = deployBasketVaultHarnessForGuards(
+        vault = newBasketVaultHarnessForGuards(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergency
         );
 
         // Register the valid pool.
         vm.prank(admin);
-        vault.addAsset(
-            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
         vm.warp(1_700_000_000);
     }
@@ -454,9 +458,7 @@ contract BasketVaultSwapGuardsTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
-        vault.addAsset(
-            address(newAsset), address(badPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice addAsset also rejects a pool that pairs the basket token with the
@@ -470,9 +472,7 @@ contract BasketVaultSwapGuardsTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
-        vault.addAsset(
-            address(newAsset), address(badPool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice addAsset rejects a pool with cardinality < the window floor (901).
@@ -493,11 +493,7 @@ contract BasketVaultSwapGuardsTest is Test {
             )
         );
         vault.addAsset(
-            address(newAsset),
-            address(lowCardPool),
-            500,
-            address(0),
-            BasketAssetConfigGuard.Venue.V3
+            address(newAsset), address(lowCardPool), 500, address(0), BasketVault.Venue.V3
         );
     }
 
@@ -618,8 +614,8 @@ contract PortfolioRouterRuntimeEligibilityTest is Test {
 
     function setUp() public {
         usdc = new TestERC20();
-        registry = Proxied.vaultRegistry(admin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         vaultA = new MockVault(address(usdc));
 

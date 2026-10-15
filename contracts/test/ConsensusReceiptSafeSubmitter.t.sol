@@ -17,7 +17,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title ConsensusReceiptSafeSubmitterTest
 /// @notice The consensus receipt SUBMITTER is a real SafeL2 1.4.1 proxy (a second Safe, separate from the governing Safe). It holds
@@ -42,15 +42,15 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
-        ic = Proxied.investmentCommitteePolicy(admin, address(gateway));
+        ic = CoreProxies.investmentCommitteePolicy(admin, address(gateway));
         _installSafeSet();
         governingSafe = _newDefaultSafe();
         submitterSafe = _newDefaultSafe(); // a SECOND Safe: same owner keys, a different address and its own nonce
         timelock = _newGovTimelock(governingSafe, 1 hours);
-        receipts = Proxied.consensusRecommendationReceipt(
+        receipts = CoreProxies.consensusRecommendationReceipt(
             address(timelock), address(gateway), address(ic)
         );
 
@@ -171,7 +171,7 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     //
     // `govern --row register-committee` used to schedule authorizeAgent(submitter) + committeeRegister in public for the whole timelock delay. Anyone could
     // read the submitter address from that batch, authorize it first through commit/reveal, and own its agent for good (review CS-2). Two layers close it:
-    // the gateway refuses a stranger's reveal for another address without that address's consent signature (issue #1791; a Safe has no key), and the tool
+    // the gateway refuses a stranger's reveal for another address unless that address committed to the owner and the exact reveal first (issue #1791; a Safe makes no such commit), and the tool
     // runs a PRIVATE half first: the submitter Safe commits (the commit names no agent), reveals its own authorization a block later and hands the agent to
     // the timelock. The PUBLIC batch is then setPolicy + committeeRegister (publish-contracts/src/committee-register.ts) and carries no first-time
     // authorization. Every Safe step below is a real two-signature execTransaction; only the squatter, an EOA, is a prank. The timelock receives the
@@ -207,7 +207,7 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     }
 
     /// @dev The PRIVATE half: three transactions of the submitter Safe itself. A caller without ADMIN_ROLE must name itself as shareReceiver; an agent
-    ///      revealing for itself consents by the call, so the consent argument is empty (issue #1791).
+    ///      revealing for itself consents by the call (issue #1791).
     function _selfAuthorize(address safe_, bytes32 salt) internal {
         bytes32 commitHash = keccak256(abi.encode(safe_, safe_, salt));
         assertTrue(
@@ -221,9 +221,7 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
             _safeExec(
                 safe_,
                 address(gateway),
-                abi.encodeCall(
-                    IGateway.revealAuthorization, (safe_, salt, _submitterPolicy(safe_), bytes(""))
-                )
+                abi.encodeCall(IGateway.revealAuthorization, (safe_, salt, _submitterPolicy(safe_)))
             ),
             "reveal"
         );
@@ -277,12 +275,12 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     /// The register batch is public on the timelock for the whole delay. With the submitter Safe's private self-authorization done first, the batch is
     /// setPolicy + committeeRegister and carries no first-time authorization. A squatter who reads the submitter address from the scheduled batch can
     /// neither authorize it (AgentAlreadyOwned) nor revoke, re-point or take it (NotAgentOwner), and the batch executes after the delay. Before the
-    /// private half a squatter cannot claim the Safe's address either: it has no key to consent with (InvalidAgentConsent, issue #1791).
+    /// private half a squatter cannot claim the Safe's address either: it never committed to the squatter (OwnerConsentMissing, issue #1791).
     function test_publicRegisterBatchCannotBeFrontRun() public {
         address fresh = _newDefaultSafe();
         _handOverGatewayAdmin();
 
-        // 0. A squatter who guesses the address early cannot claim it: the Safe has no key to consent with.
+        // 0. A squatter who guesses the address early cannot claim it: the Safe never committed to the squatter.
         _assertSquatterCannotClaim(fresh);
 
         // 1. PRIVATE: nothing public names this Safe as the submitter yet.
@@ -297,10 +295,6 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
         );
         assertFalse(
             ic.hasRole(ic.COMMITTEE_AGENT_ROLE(), fresh), "not a committee agent before the batch"
-        );
-        assertTrue(
-            gateway.agentConsented(fresh),
-            "a consented binding: only its owner, the timelock, can end it"
         );
 
         // 2. PUBLIC: the governing Safe schedules the batch. From here anyone can read the submitter address.
@@ -338,7 +332,7 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
     }
 
     /// @dev Before the private half: a squatter commits and reveals for `agent` with no consent. A caller without ADMIN_ROLE binds another address only
-    ///      with that address's EIP-712 signature (issue #1791), and a Safe has no key, so the reveal is refused and `agent` stays unowned.
+    ///      when that address committed to this caller and this exact reveal (issue #1791). The Safe made no such commit, so the reveal is refused and `agent` stays unowned.
     function _assertSquatterCannotClaim(address agent) internal {
         address squatter = makeAddr("squatter");
         IGateway.AgentPolicy memory squat = _submitterPolicy(squatter);
@@ -347,8 +341,8 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
         gateway.commitAuthorization(keccak256(abi.encode(agent, squatter, salt)));
         vm.roll(block.number + 1);
         vm.prank(squatter);
-        vm.expectRevert(RobotMoneyGateway.InvalidAgentConsent.selector);
-        gateway.revealAuthorization(agent, salt, squat, "");
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(agent, salt, squat);
         assertEq(gateway.agentOwner(agent), address(0), "the squatter could not claim the Safe");
     }
 
@@ -363,7 +357,7 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
         vm.roll(block.number + 1);
         vm.startPrank(squatter);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.revealAuthorization(agent, salt, squat, "");
+        gateway.revealAuthorization(agent, salt, squat);
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.revokeAgent(agent);
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
@@ -398,22 +392,16 @@ contract ConsensusReceiptSafeSubmitterTest is SafeGovernance {
         IGateway.AgentPolicy memory wp = _submitterPolicy(watcher);
         vm.prank(watcher);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(fresh, salt, wp, "");
+        gateway.revealAuthorization(fresh, salt, wp);
         assertEq(gateway.agentOwner(fresh), address(0), "nobody owns it yet");
         assertTrue(
             _safeExec(
                 fresh,
                 address(gateway),
-                abi.encodeCall(
-                    IGateway.revealAuthorization, (fresh, salt, _submitterPolicy(fresh), bytes(""))
-                )
+                abi.encodeCall(IGateway.revealAuthorization, (fresh, salt, _submitterPolicy(fresh)))
             )
         );
         assertEq(gateway.agentOwner(fresh), fresh, "the Safe's own reveal lands");
-        assertTrue(
-            gateway.agentConsented(fresh),
-            "revealing for itself is consent: the Safe cannot release its binding later"
-        );
     }
 
     function _nonce(address safe_) internal view returns (uint256) {

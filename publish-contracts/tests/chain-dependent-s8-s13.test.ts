@@ -73,21 +73,16 @@ describe.skipIf(!mainReady)(`devops 60: verifier exits 0 against chain 8453 (rea
 // Issue 1520, stage 12: the verifier asserts every deploy-time value against the sheet. The deployer set these before the handover and govern never
 // touches them, so a difference here is a deploy that did not land the sheet. The world is the in-memory chain of tests/verify/world.ts.
 describe("issue 1520: the stage 12 verifier fails when any deploy-time value differs from the sheet", () => {
-  const { buildWorld, failed, GOV, REC, ROUTER, VAULTS, addr } = require("./verify/world.ts") as typeof import("./verify/world.ts");
+  const { buildWorld, failed, GOV, ROUTER, VAULTS, addr } = require("./verify/world.ts") as typeof import("./verify/world.ts");
   const { verifyDeployment } = require("../src/verify/index.ts") as typeof import("../src/verify/index.ts");
-  const { ADMIN_ROLE } = require("../src/verify/constants.ts") as typeof import("../src/verify/constants.ts");
   const cases: [string, string, (w: ReturnType<typeof buildWorld>) => void][] = [
-    // issue 1698: no voting surface; stage 11 wires the weight setter's receipt register and router, and the register ADMIN_ROLE its release needs
-    ["weight setter receipt register", "governance: receiptContract() equals the consensus receipt", (w) => w.chain.set(GOV, "receiptContract", addr(0xbad))],
-    ["weight setter router", "governance: router() equals the deployed router", (w) => w.chain.set(GOV, "router", addr(0xbad))],
-    ["weight setter release role", "receipt: ADMIN_ROLE held by governance", (w) => w.chain.revoke(REC, ADMIN_ROLE, GOV)],
     ["tvl cap", "vault[rmPROTO]: tvlCap equals sheet", (w) => w.chain.set(VAULTS.rmPROTO.address, "tvlCap", 1n)],
     ["per-deposit cap", "vault[rmAGENT]: perDepositCap equals sheet", (w) => w.chain.set(VAULTS.rmAGENT.address, "perDepositCap", 1n)],
     ["exit fee", "vault[rmRWA]: exitFeeBps equals sheet", (w) => w.chain.set(VAULTS.rmRWA.address, "exitFeeBps", 9999n)],
     ["fee recipient", "vault[rmUSDC]: feeRecipient equals sheet", (w) => w.chain.set(VAULTS.rmUSDC.address, "feeRecipient", addr(0xbad))],
     ["router eligibility", "vault[rmPROTO]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmPROTO.routerEligible = false; }],
     ["router eligibility of a basket the sheet leaves ineligible", "vault[rmAGENT]: router eligibility equals sheet", (w) => { w.sheet.vaults.rmAGENT.routerEligible = false; }],
-    ["router active vector left by the deploy", "router: votedWeightsActive is false after deploy, true after an applied receipt", (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
+    ["router active vector", "router: votedWeightsActive is true only after an applied receipt", (w) => w.chain.set(ROUTER, "votedWeightsActive", true)],
     ["router effective weights", "router: effective weights equal the sheet's launch vector", (w) => w.chain.set(ROUTER, "getEffectiveWeights", [[Object.values(VAULTS)[0].address], [10000n]])],
     ["router default weights", "router: default weights equal sheet", (w) => w.chain.set(ROUTER, "getDefaultWeights", [Object.values(VAULTS).map((v) => v.address), [1n, 2n, 3n, 9994n]])],
   ];

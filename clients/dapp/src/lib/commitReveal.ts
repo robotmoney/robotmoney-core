@@ -11,7 +11,15 @@
  * objects, so the preview and the signing prompt cannot name different
  * functions or arguments (QA plan U4, finding DR-4).
  */
-import { encodeAbiParameters, getAddress, keccak256, type Address, type Hex } from "viem";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  getAddress,
+  keccak256,
+  type Address,
+  type Hex,
+} from "viem";
+import { gatewayAbi } from "./abi";
 import type { AgentPolicy } from "./preview";
 
 export function computeCommitHash(agent: Address, caller: Address, salt: Hex): Hex {
@@ -42,11 +50,6 @@ export interface RevealInputs {
   agent: Address;
   salt: Hex;
   policy: AgentPolicy;
-  /**
-   * The agent's EIP-712 AgentConsent signature (65 bytes), or `"0x"` when the
-   * revealer is the agent (issue 1791, `agentConsent.ts`).
-   */
-  agentConsent: Hex;
 }
 
 /** The `commitAuthorization(commitHash)` call the wallet signs for `c`. */
@@ -57,11 +60,15 @@ export function commitAuthorizationCall(c: CommitInputs) {
   } as const;
 }
 
-/** The `revealAuthorization(agent, salt, policy, agentConsent)` call the wallet signs for `r`. */
+/**
+ * The `revealAuthorization(agent, salt, policy)` call the wallet signs for `r`. When the agent is
+ * not the revealer, the agent must first have committed `computeConsentHash` from its own key
+ * (core 1791), or this call reverts `OwnerConsentMissing`.
+ */
 export function revealAuthorizationCall(r: RevealInputs) {
   return {
     functionName: "revealAuthorization",
-    args: [getAddress(r.agent), r.salt, policyTuple(r.policy), r.agentConsent],
+    args: [getAddress(r.agent), r.salt, policyTuple(r.policy)],
   } as const;
 }
 
@@ -79,4 +86,31 @@ export function policyTuple(p: AgentPolicy): AgentPolicy {
     maxWithdrawPerWindow: p.maxWithdrawPerWindow,
     allowedSourceVaults: p.allowedSourceVaults,
   };
+}
+
+type RevealPolicy = Parameters<
+  typeof encodeFunctionData<typeof gatewayAbi, "revealAuthorization">
+>[0]["args"][2];
+
+/**
+ * The hash the agent address must submit through `commitAuthorization`, from its own key,
+ * before `owner` can reveal (core 1791). It is
+ * `keccak256(abi.encode(owner, keccak256(revealAuthorization calldata)))`, so the consent
+ * covers one agent, one salt and one policy. Without it the reveal reverts
+ * `OwnerConsentMissing`.
+ */
+export function computeConsentHash(
+  owner: Address,
+  agent: Address,
+  salt: Hex,
+  policy: RevealPolicy,
+): Hex {
+  const callData = encodeFunctionData({
+    abi: gatewayAbi,
+    functionName: "revealAuthorization",
+    args: [agent, salt, policy],
+  });
+  return keccak256(
+    encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [owner, keccak256(callData)]),
+  );
 }

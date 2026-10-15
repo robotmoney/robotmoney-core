@@ -176,7 +176,7 @@ jobs:
           - group: anvil-governance
             cargo_tests: --test governance
             mode: fork
-            min_executed: 3
+            min_executed: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -262,7 +262,7 @@ jobs:
       # network skip gate tests of QA plan v1 T5 included.
       - name: fork-e2e-rust lib unit tests (cargo test --lib)
         run: |
-          CARGO_TEST_MIN_EXECUTED=26 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=28 bash .github/scripts/cargo_test_require_executed.sh \
             --manifest-path testing/fork-e2e-rust/Cargo.toml --release --lib -- --nocapture
 
       # Issue 1643: skip_if_no_fork! must be RED in CI when no fork is available, never a quiet pass.

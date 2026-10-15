@@ -19,7 +19,7 @@
 //   - the dapp stack is docker-compose.dapp.yaml plus docker-compose.dapp.stage.yaml (project robotmoney-dapp),
 //     started from the environment the deploy job wrote.
 // The deploy, the real Safe handover, the verifier and the stage 13 govern matrix all run through publish
-// contracts and the Safe SDK tool. Voting power, quorum, agent registration and weights are govern rows executed
+// contracts and the Safe SDK tool. There is no voting (issue 1698). Agent registration and weights are govern rows executed
 // through the real Safe and the timelock, never set by a deployer. The passphrase stays in a 0600 file: only its
 // PATH is passed, never its content.
 //
@@ -97,11 +97,7 @@ export const SAFE_SET: [string, string][] = [
   ["CompatibilityFallbackHandler", "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"],
 ];
 
-/**
- * The exhaustive required-field set. The schema's `required` array must equal it (drift guard). `.ephemeral.voters` is not in it: issue 1698
- * deleted router voting, so no stage needs a voter set. The record copies a legacy VOTER_ADDRESSES sheet line into the optional `.ephemeral.voters`
- * when the sheet still carries one (schemas/fusion-stage-record.schema.json says why).
- */
+/** The exhaustive required-field set. The schema's `required` array must equal it (drift guard). */
 export const RECORD_REQUIRED_FIELDS = [
   ".chain_id", ".run_id", ".core_tag", ".core_sha", ".generated_at", ".min_delay", ".deployer",
   ".addresses.gateway", ".addresses.vault", ".addresses.registry", ".addresses.router", ".addresses.governance",
@@ -118,7 +114,7 @@ const USAGE_TEXT = `usage: core-stack <noun> <verb> [flags]
   governance preflight|ensure|verify|release [--receipt-id ID] [--out-dir DIR]
   parity labels --mainnet FILE [--stage-labels FILE] | parity sheet --production FILE
   dapp status
-  dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U] [--upgrade-evidence FILE]
+  dapp up --chain 8453 --rpc URL --manifests DIR --start-block N [--logs-rpc URL] [--max-block-range N] [--dapp-port P] [--explorer-port P] [--public-dapp-url U --public-explorer-url U]
   dapp down|status --chain 8453 [--dapp-port P] [--explorer-port P]
   rmpc check
   record write|show [--record FILE] [--path] [--list-required-fields]`;
@@ -251,8 +247,6 @@ export interface Opts {
   explorerPort: string;
   publicDappUrl: string;
   publicExplorerUrl: string;
-  /** Security round 2: the govern evidence whose executed upgrade-proxy rounds add implementation pins (mainnet-dapp.ts upgradedImplementationHashes). */
-  upgradeEvidence: string;
 }
 export interface Parsed {
   noun: string;
@@ -288,7 +282,6 @@ export function parseCli(argv: string[]): Parsed {
         "explorer-port": { type: "string" },
         "public-dapp-url": { type: "string" },
         "public-explorer-url": { type: "string" },
-        "upgrade-evidence": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -302,7 +295,7 @@ export function parseCli(argv: string[]): Parsed {
   const timeoutSecs = v.timeout === undefined ? 3600 : Number(v.timeout);
   if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1) throw usageError("--timeout must be a positive integer");
   const str = (x: string | undefined): string => x ?? "";
-  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"], "upgrade-evidence": v["upgrade-evidence"] })) {
+  for (const [name, val] of Object.entries({ ref: v.ref, record: v.record, "out-dir": v["out-dir"], mainnet: v.mainnet, production: v.production, "receipt-id": v["receipt-id"], "stage-labels": v["stage-labels"], chain: v.chain, rpc: v.rpc, "logs-rpc": v["logs-rpc"], manifests: v.manifests, "start-block": v["start-block"], "max-block-range": v["max-block-range"], "dapp-port": v["dapp-port"], "explorer-port": v["explorer-port"], "public-dapp-url": v["public-dapp-url"], "public-explorer-url": v["public-explorer-url"] })) {
     if (val !== undefined && val === "") throw usageError(`--${name} needs a value`);
   }
   return {
@@ -329,7 +322,6 @@ export function parseCli(argv: string[]): Parsed {
       explorerPort: str(v["explorer-port"]),
       publicDappUrl: str(v["public-dapp-url"]),
       publicExplorerUrl: str(v["public-explorer-url"]),
-      upgradeEvidence: str(v["upgrade-evidence"]),
     },
   };
 }
@@ -952,7 +944,6 @@ async function dappMainnetInner(s: Stack, verb: string): Promise<void> {
     explorerPort,
     publicDappUrl: o.publicDappUrl || undefined,
     publicExplorerUrl: o.publicExplorerUrl || undefined,
-    upgradeEvidence: o.upgradeEvidence ? resolve(o.upgradeEvidence) : undefined,
   });
   // The merged, interpolated config must publish loopback ports only and hold no deploy job.
   const cfg = await s.deps.run(mainnetCompose(s, ["config", "--format", "json"]), { env });
@@ -1028,9 +1019,6 @@ async function recordWrite(s: Stack): Promise<void> {
   const sheet = parseSheet(readFileSync(sheetPath, "utf8"));
   const sg = (k: string): string => (sheet.get(k) ?? "").replaceAll(" ", "");
   const owners = sg("SAFE_OWNERS").split(",");
-  // Legacy (issue 1698): voting is deleted and the rehearsal keys mint no voter. A sheet that still carries VOTER_ADDRESSES is copied into the optional
-  // `.ephemeral.voters`; a sheet without it gives a record without it.
-  const voters = sg("VOTER_ADDRESSES").split(",").filter(Boolean);
   const emergency = sg("EMERGENCY_ADDRESS");
   const stamp = new Date(s.deps.nowMs()).toISOString().replace(/\.\d+Z$/, "Z");
   const record = {
@@ -1058,7 +1046,6 @@ async function recordWrite(s: Stack): Promise<void> {
     vault_addresses: { rmUSDC: vaults.rmUSDC!.vault, rmPROTO: vaults.rmPROTO!.vault, rmAGENT: vaults.rmAGENT!.vault, rmRWA: vaults.rmRWA!.vault },
     ephemeral: {
       approver: owners[0],
-      ...(voters.length > 0 ? { voters } : {}),
       emergency,
       keystore_dir: s.sv("key_dir"),
       safe_signers: [
@@ -1096,12 +1083,6 @@ export function validateRecord(rec: Json, recordPath: string): void {
     ".vault_addresses.rmUSDC", ".vault_addresses.rmPROTO", ".vault_addresses.rmAGENT", ".vault_addresses.rmRWA",
     ".ephemeral.approver", ".ephemeral.emergency",
   ]) addr(f);
-  // `.ephemeral.voters` is optional (issue 1698). When present it is a list of non-zero addresses, nothing more.
-  const voters: unknown = rec.ephemeral?.voters;
-  if (voters !== undefined) {
-    if (!Array.isArray(voters)) throw recordBad("record-field-malformed", ".ephemeral.voters is not a list of addresses");
-    voters.forEach((_, i) => addr(`.ephemeral.voters[${i}]`));
-  }
   const hash = get(".code_hashes.gateway");
   if (!BYTES32.test(hash) || /^0x0{64}$/.test(hash)) throw recordBad("record-field-malformed", `.code_hashes.gateway is not a non-zero bytes32 ('${hash}')`);
   // The real 2-of-3 Safe: the three owner keys, each an address, with the approver (the relayer

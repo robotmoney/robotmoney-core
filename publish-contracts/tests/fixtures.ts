@@ -31,11 +31,8 @@ export function sheetText(over: Record<string, string | null> = {}, extra: strin
 export const SHA = "a".repeat(40);
 export const SHA2 = "b".repeat(40);
 
-/**
- * Frozen counts used across the tests. Deployer stages only. `authority` (issue 1809, the timelock before every proxy) is 0 here so the nonce arithmetic of the
- * tests written before it holds unchanged; a real run measures 1.
- */
-export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, authority: 0, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
+/** Frozen counts used across the tests. Deployer stages only. */
+export const COUNTS: Record<string, number> = { safe: 1, libs: 4, recorder: 6, vault: 18, registry: 2, router: 3, gateway: 3, governance: 2, "ic-policy": 5, proto: 6, agent: 6, rwa: 6, timelock: 25 };
 
 export function tmp(prefix = "pc-"): string { return mkdtempSync(join(tmpdir(), prefix)); }
 
@@ -65,6 +62,11 @@ export function writeCoreAssetConfig(coreDir: string, o: { proto?: object[]; rwa
   writeFileSync2(join2(coreDir, "config", "protocol-assets.json"), JSON.stringify({ ...head, assets: o.proto ?? [CONFIG_ASSET] }));
   writeFileSync2(join2(coreDir, "config", "rwa-assets.json"), JSON.stringify({ ...head, assets: o.rwa ?? [{ ...CONFIG_ASSET, symbol: "deSPXA", token: "0x9c5C365e764829876243d0b289733B9D2b729685", pool: "0x00000000000000000000000000000000000000a3" }] }));
   writeFileSync2(join2(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ ...head, shortlist: o.shortlist ?? [] }));
+  // issue 1705 C4: the verifier reads rmUSDC's adapter caps from the vault stage script and a basket's default maxSlippageBps from its contract, at the DEPLOY_SHA
+  for (const f of ["contracts/script/DeployVault.s.sol", "contracts/vaults/ProtocolAssetVault.sol", "contracts/vaults/AgentTokenVault.sol", "contracts/vaults/RwaBasketVault.sol"]) {
+    mkdirSync2(join2(coreDir, f, ".."), { recursive: true });
+    writeFileSync2(join2(coreDir, f), readFileSync(join2(REPO, f), "utf8"));
+  }
 }
 
 const OBSERVE_ABI = parseAbi2(["function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)"]);
@@ -86,46 +88,6 @@ export function healthyPoolReader(): ChainReader {
       }
       throw new Error("unexpected call " + data);
     },
-  };
-  return c as unknown as ChainReader;
-}
-
-// ---- the proxies of a stub deployment (issue 1809) ------------------------------------------------------------------------------
-
-import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT, ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
-
-const addrN = (n: number): Hex2 => `0x${n.toString(16).padStart(40, "0")}` as Hex2;
-const word = (v: bigint): Hex2 => `0x${v.toString(16).padStart(64, "0")}` as Hex2;
-/** The proxies the stub forge manifests name (tests/stubs/tool.ts) and the implementation each names: vault, registry, router, gateway, IC policy, receipt. */
-export const STUB_PROXY_IMPLEMENTATIONS: Record<string, Hex2> = {
-  [addrN(0x1001)]: addrN(0x2001), [addrN(0x1002)]: addrN(0x2002), [addrN(0x1003)]: addrN(0x2003), [addrN(0x1004)]: addrN(0x2004), [addrN(0x1006)]: addrN(0x2006), [addrN(0x1007)]: addrN(0x2007),
-};
-/** The authority stage's timelock in every stub manifest (`timelock`). */
-export const STUB_AUTHORITY = addrN(0x1008);
-
-/**
- * The chain a stub deployment's proxies read back as (runner.ts proxyStageGate): every ERC-1967 implementation slot names the manifest's implementation (a vault the
- * stub names elsewhere, a redeploy's new vault, names the vault implementation), the admin and beacon slots are empty, upgradeAuthority() is the stub timelock, every
- * proxy is initialized and every implementation's initializers are locked. `over` breaks one property, for the refusal tests.
- */
-export function healthyProxyReader(over: { frozen?: boolean; adminSlot?: Hex2; beaconSlot?: Hex2; authority?: Hex2; implementation?: Hex2; implementationUnlocked?: boolean } = {}): ChainReader {
-  const isImpl = (a: string): boolean => Object.values(STUB_PROXY_IMPLEMENTATIONS).includes(a.toLowerCase() as Hex2) || (over.implementation !== undefined && a.toLowerCase() === over.implementation.toLowerCase());
-  const c = {
-    chainId: async () => 918453, blockNumber: async () => 1n, nonce: async () => 0, getLogs: async () => [], getCode: async () => "0x6001" as Hex2,
-    getStorageAt: async (a: Hex2, slot: Hex2) => {
-      if (slot === ERC1967_IMPLEMENTATION_SLOT) return isImpl(a) ? word(0n) : word(BigInt(over.implementation ?? STUB_PROXY_IMPLEMENTATIONS[a.toLowerCase()] ?? addrN(0x2001)));
-      if (slot === ERC1967_ADMIN_SLOT) return isImpl(a) ? word(0n) : (over.adminSlot ?? word(0n));
-      if (slot === ERC1967_BEACON_SLOT) return isImpl(a) ? word(0n) : (over.beaconSlot ?? word(0n));
-      if (slot === INITIALIZABLE_SLOT) return isImpl(a) ? word(over.implementationUnlocked ? 0n : INITIALIZERS_LOCKED) : word(1n);
-      return word(0n);
-    },
-    read: async (a: Hex2, sig: string) => {
-      if (isImpl(a)) throw new Error("execution reverted: the implementation is not a proxy");
-      if (sig.includes("upgradeAuthority")) return over.authority ?? STUB_AUTHORITY;
-      if (sig.includes("upgradesFrozen")) return over.frozen ?? false;
-      throw new Error(`execution reverted: no ${sig}`);
-    },
-    callRaw: async () => ({ ok: false, data: "0x" as Hex2 }),
   };
   return c as unknown as ChainReader;
 }

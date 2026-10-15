@@ -2,16 +2,18 @@
 // Canonical: docs/technical/security-model.md (pause-key abuse and pause-trigger rows: unpause is the one operation after the handover)
 //            docs/operations/contract-release-runbooks.md section 4.3 (the deployer configures before the timelock handover)
 // Implements: issue 1520 (stage 13 is the basket unpauses only; router eligibility and default weights are deploy-time)
-// Implements: issue 1698 (there is no voting power to set: the governance stage's voter tests went with the voting)
 pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
 
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract EligibilityHarness is DeployProtocolAssetVault {
     function makeEligible(VaultRegistry registry, address vault, uint256[] memory bps) external {
@@ -34,7 +36,7 @@ contract DeployTimeEligibilityTest is BasketDeployFixture {
     function setUp() public {
         _fixtureSetUp();
         h = new EligibilityHarness();
-        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         string memory empty =
             string.concat('{"swapRouter02":"', vm.toString(router02), '","assets":[]}');
         protoVault = new DeployProtocolAssetVault().runInProcess(_params(), empty).vault;

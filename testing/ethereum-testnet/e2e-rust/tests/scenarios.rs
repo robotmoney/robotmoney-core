@@ -37,6 +37,11 @@
 //! 9. `unauthorized_agent_rejected` — agent without `AGENT_ROLE`
 //!    refused by preflight; test cleans up by re-granting
 //!    `AGENT_ROLE` so subsequent tests can deposit.
+//! 10. `implementation_swap_refused_with_unchanged_proxy_hash` (issue
+//!     1810) — the gateway proxy's ERC-1967 slot is pointed at another
+//!     contract while the proxy code stays byte-identical; the deposit is
+//!     refused with `ErrImplementationNotApproved` and nothing is sent. The
+//!     test restores the slot before returning.
 //!
 //! ## Boot model
 //!
@@ -732,4 +737,132 @@ fn agent_private_key_export_matches_address() {
     assert_eq!(agent_pk_bytes.len(), 32);
     let _hex = format!("0x{}", hex::encode(agent_pk_bytes));
     let _ = keccak256(agent_pk_bytes);
+}
+
+// ------------------------------------------------------------ scenario 10
+
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
+const ERC1967_IMPLEMENTATION_SLOT: &str =
+    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+/// `cast <args> --rpc-url <rpc>`, trimmed stdout. Panics with stderr.
+fn cast(rpc_url: &str, args: &[&str]) -> String {
+    let out = Command::new("cast")
+        .args(args)
+        .args(["--rpc-url", rpc_url])
+        .output()
+        .expect("run cast");
+    assert!(
+        out.status.success(),
+        "cast {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Puts the original implementation slot word back even if the test panics,
+/// so the scenarios after this one run against the deployed gateway.
+struct RestoreSlot<'a> {
+    rpc_url: &'a str,
+    gateway: String,
+    word: String,
+}
+
+impl Drop for RestoreSlot<'_> {
+    fn drop(&mut self) {
+        let _ = Command::new("cast")
+            .args([
+                "rpc",
+                "anvil_setStorageAt",
+                &self.gateway,
+                ERC1967_IMPLEMENTATION_SLOT,
+                &self.word,
+                "--rpc-url",
+                self.rpc_url,
+            ])
+            .status();
+    }
+}
+
+/// Issue 1810, on a real EVM: the gateway is the ERC-1967 proxy the publish
+/// tooling deployed. Point its implementation slot at another contract (the
+/// USDC token) with `anvil_setStorageAt`. The proxy's own runtime code — and
+/// so `gateway_runtime_hash` — is unchanged, which is exactly what the old
+/// code-hash pin alone could not see. The deposit must refuse before signing.
+#[test]
+fn implementation_swap_refused_with_unchanged_proxy_hash() {
+    require_prereqs("implementation_swap_refused_with_unchanged_proxy_hash");
+    with_fixture(|fx| {
+        let rpc = fx.rpc_url();
+        let gateway = format!("{:#x}", fx.gateway());
+        let original = cast(rpc, &["storage", &gateway, ERC1967_IMPLEMENTATION_SLOT]);
+        let live_impl = format!("0x{}", &original.trim_start_matches("0x")[24..]);
+        assert_eq!(
+            live_impl.to_lowercase(),
+            fx.gateway_implementation_hex().to_lowercase(),
+            "the deployed gateway is a proxy for the manifest's implementation"
+        );
+
+        fx.approve_usdc_from_agent(SMALL_DEPOSIT)
+            .expect("approve usdc");
+
+        let _restore = RestoreSlot {
+            rpc_url: rpc,
+            gateway: gateway.clone(),
+            word: original.clone(),
+        };
+        let swapped = format!("0x{:0>64}", format!("{:x}", fx.usdc()));
+        cast(
+            rpc,
+            &[
+                "rpc",
+                "anvil_setStorageAt",
+                &gateway,
+                ERC1967_IMPLEMENTATION_SLOT,
+                &swapped,
+            ],
+        );
+
+        // The proxy code hash still matches the pin.
+        let code = cast(rpc, &["code", &gateway]);
+        let code_hash = format!(
+            "{:#x}",
+            alloy_primitives::keccak256(
+                hex::decode(code.trim_start_matches("0x")).expect("cast code is hex")
+            )
+        );
+        assert_eq!(
+            code_hash.to_lowercase(),
+            fx.gateway_runtime_hash().to_lowercase(),
+            "the swap must leave the proxy runtime hash unchanged"
+        );
+
+        let oid = order_id("implementation_swap_refused_with_unchanged_proxy_hash");
+        let run = fx
+            .run_rmpc_deposit(deposit_args(SMALL_DEPOSIT, &oid))
+            .expect("run rmpc deposit");
+        assert_eq!(
+            run.status.code(),
+            Some(2),
+            "expected a refusal; stdout={} stderr={}",
+            run.stdout,
+            run.stderr
+        );
+        let v = parse_json(
+            &run.stdout,
+            "implementation_swap_refused_with_unchanged_proxy_hash",
+        );
+        assert_eq!(v["status"], "refused");
+        assert_eq!(
+            v["error"], "ErrImplementationNotApproved",
+            "stdout={}",
+            run.stdout
+        );
+        assert_eq!(v["checks"]["gateway_code_hash_match"], true);
+        assert!(
+            v.get("tx_hash").and_then(|x| x.as_str()).is_none(),
+            "refusal must not carry a tx_hash; got {}",
+            run.stdout
+        );
+    });
 }

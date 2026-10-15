@@ -5,7 +5,7 @@ description: "Stage 1 of the core deploy: libs, vault, registry, router, gateway
 
 # DeployLibs
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployLibs.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/DeployLibs.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -20,19 +20,6 @@ to exist, and be the audited code, before any vault stage runs (finding L3-D1).
 it. This script references TickMath through a real call, so the broadcast of this
 stage is exactly one library deployment. The later basket-vault stages link the
 address this stage writes to the manifest (`tick_math`).
-
-ADR-0014 §9 adds the libraries the proxied implementations link (VaultAdapterOps,
-GatewayWindows, GatewayAuth, GatewayWithdrawOps) and the stateless
-`ExclusionLedgerFactory` the rmUSDC initializer calls. This stage references each library
-so the broadcast deploys it once, and deploys the factory by CREATE2 (skipped when the
-deterministic address already holds it). The manifest records every address for the
-later stages and the verifier. forge deploys each library through the CREATE2 factory;
-the vault and gateway stages compile with the same settings (no `--libraries`), so forge
-finds the same addresses already deployed and links them (issue #1809).
-BasketSwapOps is NOT deployed here (issue #1809): it links BasketAssetConfigGuard, and the
-basket stages compile with `--libraries TickMath:&lt;address>`, which changes the metadata
-hash and so the CREATE2 address of both. The first basket stage deploys BasketSwapOps
-itself, like its other basket libraries; a copy built here would never run.
 
 Required env vars: EXPECTED_CHAIN_ID (mandatory and equal to 8453 on Base mainnet),
 DEPLOYMENT_OUT (output JSON path).
@@ -53,15 +40,6 @@ sqrt(1.0001^0) * 2^96: the canonical answer for tick 0.
 
 ```solidity
 uint160 public constant SQRT_RATIO_AT_TICK_ZERO = 79228162514264337593543950336;
-```
-
-### EXCLUSION_LEDGER_FACTORY_SALT
-
-CREATE2 salt of the `ExclusionLedgerFactory` (one per chain).
-
-```solidity
-bytes32 public constant EXCLUSION_LEDGER_FACTORY_SALT =
-        keccak256("robotmoney.ExclusionLedgerFactory.v1");
 ```
 
 ## Functions
@@ -112,28 +90,6 @@ function _deploy() internal view returns (Deployed memory d);
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_deployfactorycreate2"></a>
-
-### _deployFactoryCreate2
-
-<i>
-
-The one `ExclusionLedgerFactory` of this chain, at its deterministic CREATE2 address
-(the forge CREATE2 deployer, `EXCLUSION_LEDGER_FACTORY_SALT`). An existing deployment is
-reused, so a re-run of this stage never fails on it.
-
-</i>
-
-```solidity
-function _deployFactoryCreate2() internal returns (address factory);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| factory | `address` |  |
-
 <a id="_asserttickmathcanonical-address"></a>
 
 ### _assertTickMathCanonical
@@ -176,11 +132,6 @@ function _writeDeploymentJson(Deployed memory d) internal;
 ```solidity
 struct Deployed {
         address tickMath;
-        address vaultAdapterOps;
-        address gatewayWindows;
-        address gatewayAuth;
-        address gatewayWithdrawOps;
-        address exclusionLedgerFactory;
     }
 ```
 
@@ -189,9 +140,4 @@ struct Deployed {
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | tickMath | `address` |  |
-| vaultAdapterOps | `address` |  |
-| gatewayWindows | `address` |  |
-| gatewayAuth | `address` |  |
-| gatewayWithdrawOps | `address` |  |
-| exclusionLedgerFactory | `address` |  |
 

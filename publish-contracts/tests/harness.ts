@@ -8,10 +8,10 @@ import type { PublishSigner } from "../src/signer.ts";
 import { keccak256, toHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { BUNDLE_FORMAT, localSafeTxHash, signTx, type SafeHandle, type SafeTxBundle, type Signer } from "../src/safe/index.ts";
-import { parseSheet } from "../src/sheet.ts";
 import type { LandedTx, ProveApi, SafeExecution } from "../src/prove-control.ts";
+import { parseSheet } from "../src/sheet.ts";
 import { STUB_CODE } from "./stubs/tool.ts";
-import { COUNTS, SHA, healthyPoolReader, healthyProxyReader, sheetText, tmp, writeCoreAssetConfig, writeCounts } from "./fixtures.ts";
+import { COUNTS, SHA, healthyPoolReader, sheetText, tmp, writeCoreAssetConfig, writeCounts } from "./fixtures.ts";
 
 /** Three Safe owners with real keys (throwaway, never funded): the prove-control step recovers every signature, so the owners sign for real. */
 const PROVE_KEYS = [toHex(0xb1, { size: 32 }), toHex(0xb2, { size: 32 }), toHex(0xb3, { size: 32 })] as const;
@@ -35,11 +35,10 @@ export interface World {
   cfg: {
     counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[];
     emptyCode?: string[];
+    vaultOut?: Record<string, string>; createdOut?: Record<string, string>; revertedReceipt?: Record<string, number>;
     /** QA plan v1 E6: script file -> how many `cast nonce` reads after its broadcast answer the nonce from before it (a load-balanced RPC node behind the block). */
     staleNonceReads?: Record<string, number>;
-    vaultOut?: Record<string, string>; createdOut?: Record<string, string>; revertedReceipt?: Record<string, number>;
-    /** Issue 1809: the upgrade_mode the stub manifests name (default upgradeable). */
-    upgradeMode?: string;
+    manifestMode?: Record<string, string>;
     failBroadcastOutput?: { stdout?: string; stderr?: string }; castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>;
   };
   state(): any;
@@ -114,14 +113,12 @@ export function world(o: WorldOpts = {}): World {
       return {
         cwd: dir, logSink: (l) => w.lines.push(l), prompt: typedPrompt(), prove: { api: fakeProveApi(w), ownerSigners: PROVE_SIGNERS },
         makeSigner: () => fakeSigner(), coreConfigCheck: async (i) => { w.coreChecks.push({ outDir: i.outDir, rpc: i.rpc, chainId: i.chainId }); return w.coreCheckCode === 0 ? { code: 0, output: "PASS  fixture\nconfig-check: ok" } : { code: w.coreCheckCode, output: "FAIL  fixture  pool-fee-equals-config\nconfig-check: 1 failure(s)" }; }, chainReader: () => healthyPoolReader(),
-        // issue 1809: the proxies of the stub deployment read back as declared (runner.ts proxyStageGate); a frozen-at-deploy sheet reads frozen
-        proxyReader: () => healthyProxyReader({ frozen: (w.cfg.upgradeMode ?? "upgradeable") === "frozen-at-deploy" }),
         // The release gate's seams (core 1524). On 8453 every broadcasting run passes the gate since QA plan v1 E4, so the defaults are a passing gate: the world's SHA carries
         // a release tag of the sheet's own DEPLOYMENT_KIND, the remote holds it, CI is green, and the world's counts dir (a plain directory, no git checkout) counts as committed.
         // The real committed-dir proof runs where a test passes `frozenDirCommitted: undefined` against real git repositories (counts-layouts.test.ts, plan-gate.test.ts).
         releaseTag: async () => (parseSheet(readFileSync(sheetPath, "utf8")).kind === "rehearsal" ? "release/1.0.0-rehearsal" : "release/1.0.0"), remoteTag: async () => {}, checkShaGreen: async () => ({ code: 0, output: "GREEN" }), frozenDirCommitted: async () => {},
         usdcCodeHash: keccak256(STUB_CODE as `0x${string}`), safeApi: fakeSafeApi(w), startChain: fakeChain(w),
-        // QA plan v1 E6 (issue 1723): the reads after a landed transaction keep their bound (5 reads) but never really sleep in a test.
+        // QA plan v1 E6 (issue 1723): the reads after a landed transaction keep their bound but never really sleep in a test.
         readRetry: { sleep: async () => {} }, ...over,
       };
     },

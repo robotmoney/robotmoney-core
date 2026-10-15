@@ -47,14 +47,14 @@ contract DeployBasketVaultRwaTest is BasketDeployFixture {
             uint24 fee,
             bool active,
             address adapter,
-            BasketAssetConfigGuard.Venue venue
+            BasketVault.Venue venue
         ) = v.assets(0);
         assertEq(token, json.readAddress(".assets[0].token"), "deSPXA token from config");
         assertEq(json.readString(".assets[0].symbol"), "deSPXA");
         assertEq(pool, json.readAddress(".assets[0].pool"), "pool from config");
         assertEq(uint256(fee), 500, "fee 500");
         assertTrue(active);
-        assertEq(uint256(venue), uint256(BasketAssetConfigGuard.Venue.V3));
+        assertEq(uint256(venue), uint256(BasketVault.Venue.V3));
         assertEq(adapter, d.adapter);
         assertEq(address(UniswapV3SwapAdapter(adapter).ROUTER()), p.swapRouter, "router02");
         assertTrue(v.adapterCodeHashAllowed(adapter.codehash), "code hash allowed");

@@ -11,7 +11,7 @@ interface IExposureCappedAdapter {
     function setMaxExposure(uint256 cap) external;
 
     /// @notice The current cap in 6-decimal USDC units; 0 means uncapped.
-    /// @dev `VaultAdapterOps` routing reads it (a `staticcall` that tolerates its absence) so a
+    /// @dev `RobotMoneyVaultOps` routing reads it (a `staticcall` that tolerates its absence) so a
     ///      deposit never asks the adapter for more than the cap allows.
     function maxExposure() external view returns (uint256);
 }

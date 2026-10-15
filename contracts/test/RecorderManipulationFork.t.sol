@@ -22,7 +22,7 @@ import {UniswapV4PriceRecorder} from "../adapters/UniswapV4PriceRecorder.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {DeployUniswapV4PriceRecorder} from "../script/DeployUniswapV4PriceRecorder.s.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Runs on the Twin chain (a pinned lazy anvil fork of real Base). With FORK_RPC_URL unset the test skips with a
 ///         named reason (ForkSelect). Production configuration throughout: the shipped PoolKey, the recorder stage's
@@ -114,7 +114,7 @@ contract RecorderManipulationForkTest is Test {
 
     /// @dev rmAGENT as the agent stage builds it, on the recorder above, with a 2 USDC deposit from alice.
     function _deployVaultAndDeposit() internal {
-        vault = Proxied.agentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(USDC),
             ISwapRouter(swapRouter02),
             1_000e6,
@@ -126,9 +126,7 @@ contract RecorderManipulationForkTest is Test {
         );
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(
-            rmToken, address(rec), key.fee, address(adapter), BasketAssetConfigGuard.Venue.V4
-        );
+        vault.addAsset(rmToken, address(rec), key.fee, address(adapter), BasketVault.Venue.V4);
         vault.setMaxSlippageBps(500);
         vault.setNavDeviationGuardBps(GUARD_BPS);
         vm.stopPrank();

@@ -1,8 +1,6 @@
 // Floors: the plaintext refusal on a non-loopback RPC is a CLI behavior,
 // and core's stage signer string passes where it should. (devops 65)
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { ACTIONS_TOKEN_ENV, ACTIONS_URL_ENV, type ActionsProof } from "../src/actions-proof.ts";
 import { ownerSignerShortfall } from "../src/cli.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
@@ -54,6 +52,7 @@ describe("plaintext refusal on a non-loopback RPC (any chain)", () => {
 });
 
 describe("plaintext refusal through the CLI (main)", () => {
+  const quiet = async (f: () => Promise<number>) => { const l = console.log; console.log = () => {}; try { return await f(); } finally { console.log = l; } };
   test("a plaintext signer on a non-loopback RPC exits with the FLOOR code and a named error, before any signer or forge call", async () => {
     const w = world({ chainId: 918453 });
     let signerMade = false;
@@ -74,55 +73,20 @@ describe("plaintext refusal through the CLI (main)", () => {
   });
 });
 
-// Owner decision 2026-10-14 (qa-plan B1, DT-1, QD-1, T6, F1, issue 1669): hardware signing is optional, never required. The hardware-only
-// owner floor of core 1668 is reverted: on 8453 a keystore with a typed passphrase and a device bound to its owner both pass; plaintext, a raw
-// key and a passphrase file stay refused by the signer floor, and env:signer is refused as an owner (OWNER_SIGNER_REFUSED, exit 29).
-describe("Safe owner signers on 8453: keystores and bound devices pass, hardware is optional (B1)", () => {
+describe("Safe owner signers: hardware is optional on every chain (core 1668)", () => {
   const owner = (spec: string, chain = 8453, rpc = "https://mainnet.base.org") => refusal(() => assertOwnerSignerSpec(spec, { rpcChainId: chain, rpc, env: {} }));
-  const OWNER = `0x${"ab".repeat(20)}`;
-  test("keystore:PATH (passphrase typed at the hidden prompt) passes on 8453", () => {
-    expect(owner("keystore:/k/OWNER")).toBeUndefined();
+  test("a software keystore without a passphrase file, env:signer, ledger and trezor are accepted on 8453", () => {
+    for (const spec of ["keystore:/k/OWNER", "env:signer", "ledger", "trezor"]) expect(owner(spec)).toBeUndefined();
   });
-  test("ledger:PATH@0xOWNER and trezor:PATH@0xOWNER pass on 8453", () => {
-    expect(owner(`ledger:m/44'/60'/0'/0/1@${OWNER}`)).toBeUndefined();
-    expect(owner(`trezor:m/44'/60'/0'/0/0@${OWNER}`)).toBeUndefined();
+  test("a keystore with a passphrase file is still refused on 8453 by the plaintext floor", () => {
+    expect(owner("keystore:/k/OWNER:/k/pw")).toContain("passphrase");
   });
-  test("env:signer and env:funder are refused on 8453 with OWNER_SIGNER_REFUSED (exit 29), and the message names the family, never the spec", () => {
-    for (const spec of ["env:signer", "env:funder"]) {
-      expect(() => assertOwnerSignerSpec(spec, { rpcChainId: 8453, rpc: "https://mainnet.base.org", env: {} })).toThrow(expect.objectContaining({ kind: "OWNER_SIGNER_REFUSED" }));
-      expect(owner(spec)).not.toContain(spec);
-      expect(owner(spec)).toContain("never read from the environment");
-    }
-    expect(EXIT_CODES.OWNER_SIGNER_REFUSED).toBe(29);
+  test("a plaintext owner spec is refused on both chains", () => {
+    expect(owner("plaintext:KEY", 918453, "https://twin.example")).toContain("plaintext");
+    expect(owner("plaintext:KEY")).toContain("plaintext");
   });
-  test("a keystore with a passphrase file is refused on 8453 by the signer floor (FLOOR), not by an owner rule", () => {
-    const r = owner("keystore:/k/OWNER:/k/pw");
-    expect(r).toContain("FLOOR");
-    expect(r).toContain("passphrase");
-  });
-  test("plaintext and raw-key owner specs are refused on both chains (FLOOR)", () => {
-    for (const spec of ["plaintext:KEY", "0x" + "11".repeat(32)]) {
-      expect(owner(spec, 918453, "https://twin.example")).toContain("FLOOR");
-      expect(owner(spec)).toContain("FLOOR");
-    }
-  });
-  test("software owners, the engine hand-off, a passphrase file and both hardware grammars stay allowed on the Twin chain", () => {
-    for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer", "ledger", `ledger:m/44'/60'/0'/0/1@${OWNER}`]) expect(owner(spec, 918453, "https://twin.example")).toBeUndefined();
-  });
-  test("through main(): env:signer as an owner on 8453 exits OWNER_SIGNER_REFUSED before a signer is built or forge runs", async () => {
-    const w = world({ chainId: 8453 });
-    let signerMade = false;
-    const code = await quiet(() => w.run(["govern", "--environment", "base-mainnet", "--owner-signer", "keystore:/k/A", "--owner-signer", "env:signer"], { makeSigner: () => { signerMade = true; throw new Error("no signer"); } }));
-    expect(code).toBe(EXIT_CODES.OWNER_SIGNER_REFUSED);
-    expect(signerMade).toBe(false);
-    expect(forgeCalls(w)).toBe(0);
-  });
-  test("through main(): keystore owners on 8453 pass the owner floors (the run reaches run.checks_ok; the 1668 floor would have exited 29 first)", async () => {
-    const w = world({ chainId: 8453 });
-    const code = await quiet(() => w.run(["govern", "--environment", "base-mainnet", ...ownerArgs(3)], { ownerSigner: async (s: string) => PROVE_SIGNERS[Number(s.slice(-1))]! }));
-    expect(code).not.toBe(EXIT_CODES.OWNER_SIGNER_REFUSED);
-    expect(code).not.toBe(EXIT_CODES.FLOOR);
-    expect(w.logs().some((l) => l.event === "run.checks_ok")).toBe(true);
+  test("software owners stay allowed on the Twin chain", () => {
+    for (const spec of ["keystore:/k/OWNER", "keystore:/k/OWNER:/k/pw", "env:signer", "ledger"]) expect(owner(spec, 918453, "https://twin.example")).toBeUndefined();
   });
 });
 
@@ -357,25 +321,4 @@ describe("CONFIRM=environment on 8453 needs an Actions-only proof (qa-plan B2, D
       expect(lines.some((l) => l.includes("confirm.environment"))).toBe(true);
     });
   });
-});
-
-describe("docs: hardware is optional on 8453 and exit 29 is the owner-signer refusal (F1)", () => {
-  const ROOT = join(import.meta.dir, "..", "..");
-  const read = (...p: string[]) => readFileSync(join(ROOT, ...p), "utf8");
-  const README = read("publish-contracts", "README.md");
-  const DOCS: [string, string][] = [
-    ["README", README], ["release runbook", read("docs", "operations", "contract-release-runbooks.md")],
-    ["security model", read("docs", "technical", "security-model.md")], ["governance isomorphism", read("docs", "technical", "governance-isomorphism.md")],
-  ];
-  test("the README exit table names exit 29 as it is coded", () => {
-    expect(EXIT_CODES.OWNER_SIGNER_REFUSED).toBe(29);
-    expect(README).toContain("owner signer refused 29");
-  });
-  for (const [what, text] of DOCS) {
-    test(`the ${what} says hardware is optional and no longer names the hardware-only floor`, () => {
-      expect(text).not.toContain("OWNER_SIGNER_NOT_HARDWARE");
-      expect(text).not.toMatch(/must be `ledger` or `trezor`/);
-      expect(text).toMatch(/hardware[^.|]*optional|optional[^.|]*hardware/i);
-    });
-  }
 });

@@ -10,17 +10,15 @@ fail() { echo "fusion-cross-repo: $*" >&2; exit 1; }
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RECEIPT_ADDRESS:?set FUSION_RECEIPT_ADDRESS}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
-# The weight setter. Required: the apply-path stage reads which register it
-# applies receipts from (issue 1698).
-: "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance, the weight setter)}"
 # INV-4 witnesses. Required, not optional: "release changed no allocation state"
 # is an assertion this test makes, and an unset address would turn it into a
-# silent skip (AC-CORE-04, AC-E2E-03).
+# silent skip (AC-CORE-04, AC-E2E-03, AC-E2E-04).
+: "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance)}"
 : "${FUSION_ROUTER_ADDRESS:?set FUSION_ROUTER_ADDRESS (PortfolioRouter)}"
-# AC-CORE-04 names three witnesses — "vault balances, router weights, and
-# proposal count" — and AC-E2E-03 repeats them. Issue 1698 deleted proposals, so
-# the router's effective weights take that slot (lib/inv4.sh). Weights alone
-# would miss an asset movement, so the mapped vaults are required too:
+# AC-CORE-04 names "vault balances, router weights, and proposal count", and
+# AC-E2E-03 repeats them. The proposal count no longer exists (issue 1698
+# removed propose/vote/execute from RouterGovernance; see lib/inv4.sh). Weights
+# alone would miss an asset movement, so the mapped vaults are required too:
 # comma-separated rmUSDC,rmPROTO,rmAGENT,rmRWA addresses from the 2.7 manifest.
 : "${FUSION_VAULT_ADDRESSES:?set FUSION_VAULT_ADDRESSES (comma-separated mapped vault addresses)}"
 
@@ -79,7 +77,8 @@ url_digest="$(jq -er '.payload_digest' <<<"$verify_url")"
 # T15, AC-FMT-03. THE WEIGHTS ARE THE ALLOCATION. A receipt with no weights
 # array, or one that does not total 10000 bps over the four buckets, cannot
 # carry a recommendation, and runbook §5.5 says an absent `weights` array is a
-# FAILED assertion, never a skipped one. Checked on the bytes being submitted,
+# FAILED assertion, never a skipped one. Issue 1698 deleted the draft step that
+# used to check this, so it is checked here on the bytes being submitted,
 # before anything is anchored.
 jq -e '[.weights[]?.weight_bps] | length == 4 and add == 10000' \
   "$FUSION_FRONTEND_RECEIPT_FILE" >/dev/null 2>&1 \
@@ -90,7 +89,8 @@ IFS=',' read -r -a VAULTS <<<"$FUSION_VAULT_ADDRESSES"
 (( ${#VAULTS[@]} > 0 )) || fail "FUSION_VAULT_ADDRESSES is empty"
 
 witnesses() {
-  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
+  inv4_witnesses "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
+    "$FUSION_ROUTER_ADDRESS" "${VAULTS[@]}" || true
 }
 
 # THE INV-4 WINDOW BRACKETS THE WRITE STAGES, and opens here rather than at
@@ -152,17 +152,13 @@ released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool
   "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
 [[ "$released" == "true" ]] || fail "receipt is anchored but not released"
 
-# THE APPLY PATH (issue 1698). `rmpc governance draft-proposal` is deleted with
-# RouterGovernance's proposal, vote and execute functions, so a release no
-# longer produces a draft. A receipt moves router weights only through
-# RouterGovernance.applyReceipt, one call the Safe schedules through the
-# timelock (govern row apply-receipt), which releases the receipt and writes its
-# vector together. This seam never applies: it releases (signalling only) and
-# asserts INV-4 below. What it does assert is that the weight setter applies
-# receipts from the register that holds this receipt, so the receipt it just
-# anchored is one the apply path can act on.
-bound="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'receiptContract()(address)' \
-  --rpc-url "$FUSION_RPC_URL")" || fail "could not read receiptContract() on the weight setter $FUSION_GOVERNANCE_ADDRESS"
+# THE APPLY-PATH BINDING (issue 1698). A receipt moves router weights only
+# through RouterGovernance.applyReceipt, which releases a receipt recorded on
+# the weight setter's own register (`receipts()`). This seam never applies, but
+# it asserts the weight setter reads THIS register, so the receipt it just
+# anchored is one the apply path can act on. An eth_call: nothing moves.
+bound="$("$CAST_BIN" call "$FUSION_GOVERNANCE_ADDRESS" 'receipts()(address)' \
+  --rpc-url "$FUSION_RPC_URL")" || fail "could not read receipts() on the weight setter $FUSION_GOVERNANCE_ADDRESS"
 bound="$(tr -d '[:space:]' <<<"$bound")"
 [[ "${bound,,}" == "${FUSION_RECEIPT_ADDRESS,,}" ]] \
   || fail "the weight setter applies receipts from $bound, not from the receipt contract \
@@ -171,7 +167,11 @@ record "apply-path-receipt-contract.txt" "$bound"
 
 # INV-4 "after" witnesses, closing the window opened before the submit. Record
 # and release are signalling-only, and the apply-path read above is an eth_call,
-# so nothing here may have moved.
+# so nothing here may have moved. Issue 1698:
+# there is no draft step. A receipt reaches the router only through
+# RouterGovernance.applyReceipt (publish-contracts govern row apply-receipt),
+# which releases it and sets the weights in one call; this seam runs the
+# release-only row, so the router weights (both reads) must be unchanged.
 witnesses_after="$(witnesses)"
 record "inv4-witnesses-after.txt" "$witnesses_after"
 inv4_unreadable "$witnesses_after" \

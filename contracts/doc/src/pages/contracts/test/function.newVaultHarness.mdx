@@ -1,0 +1,49 @@
+---
+title: "newVaultHarness"
+---
+
+# newVaultHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RobotMoneyVault.t.sol)
+
+<a id="newvaultharness-ierc20-uint256-uint256-uint256-address-address-address"></a>
+
+### newVaultHarness
+
+<i>
+
+A `VaultHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the
+arguments the harness constructor took.
+
+</i>
+
+```solidity
+function newVaultHarness(
+    IERC20 asset_,
+    uint256 tvlCap_,
+    uint256 perDepositCap_,
+    uint256 exitFeeBps_,
+    address feeRecipient_,
+    address admin_,
+    address emergencyResponder_
+) returns (VaultHarness);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `IERC20` |  |
+| tvlCap_ | `uint256` |  |
+| perDepositCap_ | `uint256` |  |
+| exitFeeBps_ | `uint256` |  |
+| feeRecipient_ | `address` |  |
+| admin_ | `address` |  |
+| emergencyResponder_ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `VaultHarness` |  |
+

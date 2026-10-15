@@ -49,8 +49,6 @@ const REQUIRED_KEYS = [
   // Issue #320: vault-selector and router deposit flow.
   "registry_addr",
   "router_addr",
-  // Issue #477: governance fresh-account E2E.
-  "governance_addr",
   // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
   "ic_policy_addr",
   "consensus_receipt_addr",
@@ -202,8 +200,6 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     // Issue #320: vault-selector and router deposit flow.
     registry_addr: raw.registry_addr,
     router_addr: raw.router_addr,
-    // Issue #477: governance fresh-account E2E.
-    governance_addr: raw.governance_addr,
     // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
     ic_policy_addr: raw.ic_policy_addr,
     consensus_receipt_addr: raw.consensus_receipt_addr,

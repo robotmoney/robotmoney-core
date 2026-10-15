@@ -49,21 +49,22 @@ rmpc get-router --config <CONFIG> [--pretty]
 
 ### `rmpc get-governance`
 
-Read RouterGovernance state: the weights it last applied and the receipt
-register it applies receipts from. Requires `governance_address` in config.
+Read RouterGovernance state: router weights, bound contracts and role holders.
+Requires `governance_address` in config.
 
 ```
 rmpc get-governance --config <CONFIG> [--pretty]
 ```
 
-Output: `router`, `receipt_contract` (`null` until stage 11 sets it) and
-`current_weights` (the router's applied vector; empty while the router routes
-by its default vector). Router weights change only when `WEIGHT_SETTER_ROLE`
-applies the Investment Committee's consensus receipt through the Safe and the
-timelock, in one `RouterGovernance.applyReceipt` call (publish-contracts govern
-row `apply-receipt`, core 1696). There is no voting by anyone: issue 1698
-deleted the voting functions, so there is no proposal, voter, quorum or
-voting-period field. `rmpc` has no governance write or draft command.
+Output carries `router` and `receipts` (the PortfolioRouter and
+ConsensusRecommendationReceipt the contract is bound to), `current_weights`
+(the router's active vector, empty until a receipt is applied),
+`default_weights` (the router's fallback vector), and `admin_role` /
+`weight_setter_role` (each role's hash and holders). Router weights change only
+when `WEIGHT_SETTER_ROLE` (the timelock) calls `applyReceipt` with a recorded
+Investment Committee consensus receipt, scheduled by the Safe (publish-contracts
+govern row `apply-receipt`, core 1696). There is no voting by anyone, and `rmpc`
+has no governance write command.
 
 ### `rmpc get-timelock`
 
@@ -76,14 +77,14 @@ rmpc get-timelock --config <CONFIG> [--pretty]
 ### `rmpc get-gateway`
 
 Read gateway state directly from chain. For a proxied gateway (ADR-0014) the
-`data` also carries the live `implementation` and its `implementation_code_hash`,
-`implementation_approved` (false means every write refuses with
-`ErrImplementationNotApproved` until the operator adds that hash to
-`gateway_implementation_hashes`), `implementation_version`, `upgrade_authority`
-and `upgrades_frozen`, all at the envelope's block. Every write, the committee
+output also carries the live `implementation` and its `implementation_code_hash`,
+the approved pair from the config (`configured_implementation`,
+`configured_implementation_code_hash`), `upgrades_frozen` and `upgrade_timelock`.
+A direct gateway reports `null` for all of them. Every write, the committee
 `vote-submit` and `receipt submit` included, checks the gateway's
-implementation before it signs. Writes also check the vault, the router and
-each router leg they reach against `proxy_implementation_hashes`.
+implementation against that pair before it signs, and refuses with
+`ErrImplementationNotApproved` on a mismatch. Writes also check the vault, the
+router and each router leg they reach against `proxy_implementation_hashes`.
 
 ```
 rmpc get-gateway --config <CONFIG> [--pretty]
@@ -350,48 +351,6 @@ the nonce lock, before any RPC call — when:
 Other named errors: `ErrReceiptFetchFailed`, `ErrReceiptReadFailed`,
 `ErrReceiptDigestMalformed`, `ErrReceiptRecordReverted` (missing role, or a
 receipt id already recorded — one receipt per session per subject).
-
-## Agent consent
-
-### `rmpc agent-consent`
-
-Sign the gateway's EIP-712 `AgentConsent` with this agent's key, so a
-depositor can bind the agent (issue 1791). A depositor without `ADMIN_ROLE`
-binds an agent other than itself only with this signature, passed as the
-fourth argument (`agentConsent`) of `RobotMoneyGateway.revealAuthorization`.
-
-```
-rmpc agent-consent --config <CONFIG> --owner <0xDEPOSITOR>
-  [--share-receiver <0xADDRESS>] [--pretty]
-```
-
-`--owner` is the depositor that will reveal and own the binding.
-`--share-receiver` defaults to `--owner`; a depositor without `ADMIN_ROLE`
-must name itself, so leave it out. The agent is the keystore's address, and
-the passphrase comes from `RMPC_KEYSTORE_PASSPHRASE` (never a prompt).
-
-The command reads, at one block, the gateway's code and its ERC-1967
-implementation (refusing `ErrCodeHashMismatch` or `ErrImplementationNotApproved`
-as a write does), `implementationVersion()`, `agentConsentNonce(agent)` and
-`agentOwner(agent)`. It signs
-`AgentConsent(agent, owner, shareReceiver, nonce)` in the domain
-(`RobotMoneyGateway`, the live `implementationVersion()`, chain id, gateway
-address), and prints `agent`, `owner`, `share_receiver`, `nonce`, `chain_id`,
-`gateway`, `implementation_version`, `implementation` and
-`implementation_code_hash` (`null` for a direct gateway), `block_number`,
-`current_owner` (`null` when unbound), `digest` and `signature` (65 bytes,
-`r ‖ s ‖ v`). It sends no transaction.
-
-One signature authorizes one reveal: the gateway advances the nonce on use,
-and the consent never verifies for another owner, share receiver, chain,
-gateway or implementation version: an upgrade that bumps
-`implementationVersion()` voids it, and the agent signs again. A non-null `current_owner` means the reveal reverts
-`AgentAlreadyOwned` until that binding is revoked by its owner, or released
-by the agent with `releaseAgent` when it was made without consent.
-
-Refusals: `ErrChainIdMismatch` (the RPC serves another chain; exit 2),
-`ErrSoftwareSignerDisallowed` (exit 2). Config, keystore and RPC failures
-exit 3.
 
 ## Investment Swarm signing identity commands
 

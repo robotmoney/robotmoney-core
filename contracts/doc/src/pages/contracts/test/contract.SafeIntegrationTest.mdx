@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -689,15 +689,14 @@ AC1b: Full Safe+timelock path on PortfolioRouter (setRouterCap).
 function test_happyPath_portfolioRouter_setRouterCap() public withSnap;
 ```
 
-<a id="test_happypath_routergovernance_setreceiptcontract"></a>
+<a id="test_happypath_routergovernance_clearvotedweights"></a>
 
-### test_happyPath_routerGovernance_setReceiptContract
+### test_happyPath_routerGovernance_clearVotedWeights
 
-AC1c: Full Safe+timelock path on RouterGovernance (setReceiptContract,
-the register the weight setter's applyReceipt releases from; issue #1698).
+AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
 
 ```solidity
-function test_happyPath_routerGovernance_setReceiptContract() public withSnap;
+function test_happyPath_routerGovernance_clearVotedWeights() public withSnap;
 ```
 
 <a id="test_happypath_vault_setexitfeebps"></a>

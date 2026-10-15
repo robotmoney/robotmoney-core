@@ -83,10 +83,10 @@ struct Cli {
     #[arg(long, env = "INDEXER_REGISTRY")]
     registry: Option<String>,
 
-    /// Optional RouterGovernance (weight setter) contract address. When set,
-    /// it is registered in `contracts` and bounds deploy-block detection.
-    /// RouterGovernance has no voting (issue 1698) and emits no event the
-    /// indexer stores; an applied receipt arrives as the router's WeightsSet.
+    /// Optional RouterGovernance (weight setter) contract address. Registered
+    /// in `contracts` and watched only for its proxy `Upgraded` /
+    /// `UpgradesFrozen` events (issue 1810): it has no voting (issue #1698),
+    /// and an applied receipt arrives as the router's `WeightsSet`.
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 

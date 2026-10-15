@@ -166,7 +166,7 @@ describe("whitelist parser", () => {
   test("duplicate names, bad addresses, bad numbers and bad quoting are refused", () => {
     expect(() => parseSheetText("A=1\nA=2")).toThrow(PublishError);
     expect(refused(sheetText({ ADMIN_ADDRESS: "0x123" })).message).toContain("ADMIN_ADDRESS");
-    expect(refused(sheetText({ VOTER_POWER: "ten" })).message).toContain("VOTER_POWER");
+    expect(refused(sheetText({ SAFE_THRESHOLD: "ten" })).message).toContain("SAFE_THRESHOLD");
     expect(() => parseSheetText('A="unterminated')).toThrow(PublishError);
   });
 
@@ -184,25 +184,19 @@ describe("whitelist parser", () => {
     expect(refused(sheetText({ ROUTER_WEIGHTS: "USDC:6000,PROTO:4000" })).message).toContain("exactly");
   });
 
-  test("issue 1698: the legacy voting names are accepted and ignored, never required, and still shape-checked", () => {
-    // the example sheet carries them: nothing of them reaches the parsed sheet
-    const s = parseSheet(exampleText()) as unknown as Record<string, unknown>;
-    for (const k of ["voters", "voterPower", "quorum", "votingPeriod", "executionDelay"]) expect(s[k], k).toBeUndefined();
-    // a sheet without them parses the same
-    const bare = parseSheet(sheetText({ VOTER_ADDRESSES: null, VOTER_POWER: null, QUORUM_THRESHOLD: null, VOTING_PERIOD: null, EXECUTION_DELAY: null }));
-    expect(bare.safeOwners).toEqual(parseSheet(exampleText()).safeOwners);
-    for (const n of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) expect(REQUIRED_NAMES).not.toContain(n);
-    // the pre-1698 floors are gone: a quorum of 1, a voting period under 3600 and a voter that is also a role all pass
-    expect(() => parseSheet(sheetText({ QUORUM_THRESHOLD: "1", VOTING_PERIOD: "1", EXECUTION_DELAY: "1", VOTER_ADDRESSES: "0x000000000000000000000000000000000000a001" }))).not.toThrow();
-    // a value that is not of the name's shape is still a typo
-    expect(refused(sheetText({ VOTER_ADDRESSES: "0x123" })).message).toContain("VOTER_ADDRESSES");
-    expect(refused(sheetText({ QUORUM_THRESHOLD: "two" })).message).toContain("QUORUM_THRESHOLD");
-  });
-
   test("sheet diff lists only the names that differ", () => {
     const a = parseSheet(exampleText());
     const b = parseSheet(sheetText({ TIMELOCK_MIN_DELAY: "172800" }));
     expect(diffSheets(a, b).map((r) => r.name)).toEqual(["TIMELOCK_MIN_DELAY"]);
+  });
+});
+
+describe("there is no voting: the deleted voting names are refused by name (issue 1698)", () => {
+  test("VOTER_ADDRESSES, VOTER_POWER, QUORUM_THRESHOLD, VOTING_PERIOD and EXECUTION_DELAY are refused with the reason, and none is required", () => {
+    for (const name of ["VOTER_ADDRESSES", "VOTER_POWER", "QUORUM_THRESHOLD", "VOTING_PERIOD", "EXECUTION_DELAY"]) {
+      expect(refused(sheetText({}, [`${name}=2`])).message, name).toContain("there is no voting by anyone");
+      expect(REQUIRED_NAMES).not.toContain(name);
+    }
   });
 });
 
@@ -278,5 +272,79 @@ describe("govern carries the four vault unpauses only; the rest is deploy-time c
     // all-zero weights before the last flip fall back to an equal split that still sums to 10000
     const zero = parseSheet(sheetText({ ELIGIBLE_VAULTS: "PROTO,RWA", ROUTER_WEIGHTS: "USDC:10000,PROTO:0,RWA:0" }));
     expect(eligibilityBps(zero, "PROTO")).toEqual([10000, 0]);
+  });
+});
+
+// Issue 1705 Q4 (a), docs/technical/governance-isomorphism.md §1.1: the rehearsal may differ from production only in chain id, owner keys, key custody and the
+// timelock delay. Router eligibility, the router vector and the unpause set are none of those, so the Twin sheet carries the 8453 values.
+describe("rule b twin sheet", () => {
+  const ROUTER_NAMES = ["ELIGIBLE_VAULTS", "ROUTER_WEIGHTS", "GOVERN_UNPAUSE_VAULTS"] as const;
+  const values = (rel: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const line of readFileSync(join(REPO, rel), "utf8").split("\n")) {
+      const m = /^([A-Z][A-Z0-9_]*)=(\S*)/.exec(line.trim());
+      if (m) out[m[1]!] = m[2]!;
+    }
+    return out;
+  };
+  const twin = values("deployments/twin-918453/stage-sheet.env");
+  const mainnet = values("deployments/base-8453-rehearsal/stage-sheet.example.env");
+  const table = JSON.parse(readFileSync(join(REPO, "scripts", "deploy", "stage-table.json"), "utf8"));
+  test("the two sheets are the Twin chain and chain 8453", () => {
+    expect(twin.CHAIN_ID).toBe("918453");
+    expect(mainnet.CHAIN_ID).toBe("8453");
+  });
+  for (const name of ROUTER_NAMES) {
+    test(`${name} is equal on the Twin sheet and the 8453 example sheet`, () => {
+      expect(twin[name]).toBeDefined();
+      expect([name, twin[name]]).toEqual([name, mainnet[name]]);
+    });
+  }
+  test("the table records no Twin exception for these names, and the unpause set is the table's stage 13 vaults", () => {
+    expect(JSON.stringify(table)).not.toMatch(/twinSheetException/);
+    const stage13 = (table.vaults as { key: string; unpauseInStage13: boolean }[]).filter((v) => v.unpauseInStage13).map((v) => v.key);
+    expect(twin.GOVERN_UNPAUSE_VAULTS!.split(",")).toEqual(stage13);
+  });
+  test("the Twin sheet parses with the launch vector and the four unpauses", () => {
+    const s = parseSheet(readFileSync(join(REPO, "deployments/twin-918453/stage-sheet.env"), "utf8"));
+    expect(s.weights.map((w) => `${w.key}:${w.bps}`).join(",")).toBe("USDC:9500,PROTO:500,AGENT:0,RWA:0");
+    expect([...s.eligibleVaults]).toEqual(["PROTO", "AGENT", "RWA"]);
+    expect([...s.govern.unpauseVaults]).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
+  });
+});
+
+// Issue 1705 C9: every vault's registry name is a script constant, so the sheet carries no VAULT_NAME.
+test("VAULT_NAME is refused with the reason: one registry-name source for all four vaults", () => {
+  expect(() => parseSheet(sheetText({}, ['VAULT_NAME="Robot Money USDC"']))).toThrow(/VAULT_NAME is refused: .*one registry-name source/);
+});
+
+// Issue 1809 (upgradeability stage 2): the release mode of every core proxy is a required sheet name with no default; an upgradeable production release on 8453 names
+// its freeze deadline, a frozen one refuses one.
+describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
+  const MAIN = { CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
+  test("UPGRADE_MODE is required, has no default and takes only upgradeable or frozen", () => {
+    expect(REQUIRED_NAMES).toContain("UPGRADE_MODE");
+    expect(refused(sheetText({ UPGRADE_MODE: null })).message).toContain("missing required names: UPGRADE_MODE");
+    expect(refused(sheetText({ UPGRADE_MODE: "frozen-later" })).message).toContain("UPGRADE_MODE must be upgradeable or frozen");
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "frozen" })).upgrade).toEqual({ mode: "frozen" });
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" })).upgrade).toEqual({ mode: "upgradeable" });
+  });
+  test("an upgradeable production release on 8453 needs the freeze deadline; a rehearsal, the Twin chain and a frozen release do not", () => {
+    expect(refused(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" })).message).toContain("UPGRADE_FREEZE_DEADLINE");
+    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])).upgrade).toEqual({ mode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
+    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "frozen" })).upgrade).toEqual({ mode: "frozen" });
+    expect(parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" })).upgrade.freezeDeadline).toBeUndefined();
+  });
+  test("a deadline with the frozen mode is a contradiction, and a deadline that is not an ISO 8601 UTC time is refused", () => {
+    expect(refused(sheetText({ UPGRADE_MODE: "frozen" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])).message).toContain("nothing to freeze later");
+    for (const bad of ["2027-01-31", "2027-02-30T00:00:00Z", "2027-01-31T00:00:00+01:00", "tomorrow"]) {
+      expect(refused(sheetText({ UPGRADE_MODE: "upgradeable" }, [`UPGRADE_FREEZE_DEADLINE=${bad}`])).message, bad).toContain("ISO 8601 UTC");
+    }
+  });
+  test("every committed sheet declares its mode: the Twin sheet, the 8453 rehearsal example and the production fixture are frozen", () => {
+    for (const f of ["deployments/twin-918453/stage-sheet.env", "deployments/base-8453-rehearsal/stage-sheet.example.env"]) {
+      expect(parseSheet(readFileSync(join(REPO, f), "utf8")).upgrade, f).toEqual({ mode: "frozen" });
+    }
+    expect(parseSheet(exampleText()).upgrade).toEqual({ mode: "frozen" });
   });
 });

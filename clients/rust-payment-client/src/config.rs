@@ -6,7 +6,6 @@
 //! issue #7. Unknown fields are rejected (`deny_unknown_fields`) so that a
 //! typo in operator config fails loudly instead of silently using a default.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -120,19 +119,6 @@ pub struct Config {
     /// When absent that subcommand exits with `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub ic_policy_address: Option<String>,
-    /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex).
-    /// Optional, and read by no command since issue 1698 deleted
-    /// `rmpc governance draft-proposal`. Kept so an existing config that sets
-    /// it still loads (`deny_unknown_fields`).
-    #[serde(default)]
-    pub receipt_address: Option<String>,
-    /// Per-deployment vault-symbol → address table, keyed by the four
-    /// symbols in `tests/fixtures/consensus-receipt.bucket-vault-map.json`
-    /// (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`). Optional, and read by no
-    /// command since issue 1698 deleted `rmpc governance draft-proposal`.
-    /// Kept so an existing config that sets it still loads.
-    #[serde(default)]
-    pub vault_addresses: Option<BTreeMap<String, String>>,
     /// The address this agent's deposits must mint shares to (0x-prefixed
     /// hex). Optional. When set, every deposit and withdraw preflight
     /// refuses with `ErrAgentBindingMismatch` unless
@@ -150,31 +136,36 @@ pub struct Config {
     #[serde(default)]
     pub agent_owner: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
-    /// For a gateway behind an ERC-1967 proxy (ADR-0014) this is the proxy's
-    /// code, which an upgrade does not change; `gateway_implementation_hashes`
-    /// pins the logic behind it.
+    /// For a proxied gateway this is the hash of the ERC-1967 proxy code,
+    /// which does not change when the implementation behind it does.
     pub gateway_runtime_hash: String,
-    /// Runtime code hashes of the gateway implementations the operator
-    /// approved (0x-prefixed hex, `keccak256(eth_getCode(implementation))`),
-    /// QA plan P3. Required when the gateway is a proxy: every write and
-    /// `agent-consent` read the ERC-1967 implementation slot and that
-    /// implementation's code at one block and refuse with
-    /// `ErrImplementationNotApproved` unless its hash is listed. List the
-    /// next reviewed implementation before its timelock upgrade executes to
-    /// keep signing through the upgrade. Leave it out for a direct
-    /// (pre-proxy) gateway; set for one, it is refused.
+    /// The approved ERC-1967 implementation behind the gateway proxy
+    /// (0x-prefixed hex): the gateway manifest's `gateway_implementation`.
+    ///
+    /// Every write refuses unless the live implementation slot names exactly
+    /// this address and its code hashes to
+    /// [`Config::gateway_implementation_runtime_hash`] (issue 1810). Set both
+    /// or neither. Leave both out only for a direct (non-proxy) gateway: a
+    /// gateway whose implementation slot is set refuses every write when they
+    /// are absent.
     #[serde(default)]
-    pub gateway_implementation_hashes: Option<Vec<String>>,
+    pub gateway_implementation: Option<String>,
+    /// `keccak256(eth_getCode(gateway_implementation))` (0x-prefixed hex): the
+    /// gateway manifest's `gateway_implementation_runtime_hash`.
+    #[serde(default)]
+    pub gateway_implementation_runtime_hash: Option<String>,
     /// Runtime code hashes of the implementations the operator approved for
     /// the other proxies a write reaches through the gateway: the vault a
     /// deposit lands in or a withdraw redeems from, every router leg, and the
     /// router itself (0x-prefixed hex, `keccak256(eth_getCode(implementation))`).
-    /// Required as soon as one of them is an ERC-1967 proxy (ADR-0014): the
+    /// Required as soon as one of them is an ERC-1967 proxy (issue 1808): the
     /// address pins (`vault_address`, `gateway.vault()`, `gateway.router()`)
     /// do not pin the logic behind a proxy. A write reads each one's
     /// implementation slot and code at one block and refuses with
     /// `ErrImplementationNotApproved` unless the hash is listed. A direct
-    /// (pre-proxy) contract needs no entry.
+    /// (non-proxy) contract needs no entry. The gateway is pinned by
+    /// `gateway_implementation` + `gateway_implementation_runtime_hash`, never
+    /// by this list.
     #[serde(default)]
     pub proxy_implementation_hashes: Option<Vec<String>>,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.

@@ -418,8 +418,6 @@ pub enum CountTable {
     /// commitments (issue #1247, docs/architecture.md §4.9).
     ConsensusReceipts,
     AdminEvents,
-    /// Migration 0024 — QA plan P3 (core 1810).
-    ProxyUpgradeEvents,
 }
 
 impl CountTable {
@@ -448,7 +446,6 @@ impl CountTable {
             CountTable::RegimeSnapshots => "regime_snapshots",
             CountTable::ConsensusReceipts => "consensus_receipts",
             CountTable::AdminEvents => "admin_events",
-            CountTable::ProxyUpgradeEvents => "proxy_upgrade_events",
         }
     }
 }
@@ -490,7 +487,6 @@ impl TryFrom<&str> for CountTable {
             "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
             "consensus_receipts" => Ok(CountTable::ConsensusReceipts),
             "admin_events" => Ok(CountTable::AdminEvents),
-            "proxy_upgrade_events" => Ok(CountTable::ProxyUpgradeEvents),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -601,7 +597,7 @@ fn is_safe_identifier(name: &str) -> bool {
 /// references (Kahn's algorithm over the live foreign-key graph).
 ///
 /// A block-scoped child table with an FK to a block-scoped parent (the
-/// `governance_votes` → `governance_proposals` pair, until migration 0023
+/// `governance_votes` → `governance_proposals` pair, until migration 0024
 /// dropped both) must be cleared first: deleting the parent first raises a
 /// foreign-key violation when a child above the reorg root still points at
 /// it. The old literal
@@ -720,7 +716,7 @@ async fn derive_rollback_tables(conn: &mut sqlx::PgConnection) -> Result<Vec<Str
     Ok(fk_child_first_order(&tables, &edges))
 }
 
-/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0020).
+/// `committee_agent_events.kind` of an `AgentRegistered` (migration 0021).
 pub const AGENT_EVENT_REGISTERED: i16 = 0;
 /// `committee_agent_events.kind` of an `AgentRevoked`.
 pub const AGENT_EVENT_REVOKED: i16 = 1;
@@ -826,7 +822,7 @@ async fn derive_committee_agents(
 /// - A member left with neither is a row the orphaned blocks created. It is
 ///   deleted, unless a surviving vote still references it through the
 ///   `committee_votes` foreign key. That can only be a member whose earlier
-///   registration predates the migration-0020 backfill (which kept only the
+///   registration predates the migration-0021 backfill (which kept only the
 ///   newest one), and it becomes the inactive placeholder DI-4 would have
 ///   written for its earliest surviving vote.
 ///
@@ -1163,7 +1159,7 @@ impl Db {
     ///   rollback subsequently fails: the next [`Db::last_indexed_block`]
     ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
     /// - **`committee_agents` (X7, DI-8)** — the row is derived from the
-    ///   block-numbered `committee_agent_events` history (migration 0020). Every
+    ///   block-numbered `committee_agent_events` history (migration 0021). Every
     ///   member that lost a history entry above `root` is derived again from
     ///   what survives ([`reconcile_committee_agents`]): an orphaned
     ///   `AgentRevoked` is undone, an orphaned re-registration falls back to the
@@ -1507,7 +1503,7 @@ impl Db {
     /// migration). The flag stops deposits only; withdrawals are never frozen.
     ///
     /// `preview_redeem_total` is the vault's `previewRedeem(totalSupply())` reading: what redeeming every share
-    /// pays after the exit costs (migration 0022, core 1795). `None` is a read that failed, stored as NULL.
+    /// pays after the exit costs (migration 0023, core 1795). `None` is a read that failed, stored as NULL.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vault_snapshot(
         &self,
@@ -1782,8 +1778,8 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    /// Idempotent insert of a router weight snapshot row (`WeightsSet` or
-    /// `DefaultWeightsSet`).
+    /// Idempotent insert of a PortfolioRouter `WeightsSet` / `DefaultWeightsSet`
+    /// snapshot row.
     /// `vault_addresses` and `bps_values` are parallel arrays.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_router_weight_snapshot(
@@ -1824,7 +1820,7 @@ impl Db {
     ///
     /// `kind` must be one of: `"deposit"`, `"withdrawal"`, `"fee_charged"`,
     /// `"policy_change"`. There is no governance-vote kind: RouterGovernance
-    /// voting was deleted (issue 1698) and migration 0023 removed its rows.
+    /// voting was deleted (issue 1698) and migration 0024 removed its rows.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_history_event(
         &self,
@@ -1872,7 +1868,8 @@ impl Db {
         Ok(row.0)
     }
 
-    /// Insert a Timelock or Safe event into `admin_events` (migration 0017). Idempotent on the log position.
+    /// Insert a Timelock, Safe or proxy-upgrade event into `admin_events` (migrations 0017, 0019). Idempotent on
+    /// the log position.
     pub async fn insert_admin_event(
         &self,
         chain_id: i64,
@@ -1897,37 +1894,6 @@ impl Db {
         .bind(ev.event_name)
         .bind(ev.op_id.as_ref().map(|h| &h[..]))
         .bind(ev.detail.to_string())
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Insert a proxy's `Upgraded` or `UpgradesFrozen` event into `proxy_upgrade_events`
-    /// (migration 0024, QA plan P3). Idempotent on the log position.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_proxy_upgrade_event(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        contract: [u8; 20],
-        ev: &crate::indexer::ProxyUpgradeEvent,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "INSERT INTO proxy_upgrade_events \
-                 (chain_id, block_number, log_index, tx_hash, contract, kind, implementation, code_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
-        )
-        .bind(chain_id)
-        .bind(block_number)
-        .bind(log_index)
-        .bind(&tx_hash[..])
-        .bind(&contract[..])
-        .bind(ev.kind)
-        .bind(&ev.implementation.into_array()[..])
-        .bind(ev.code_hash.as_ref().map(|h| &h[..]))
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
@@ -2124,7 +2090,7 @@ impl Db {
     // every tick (freshness expiry has no event), DI-3.
     //
     // QA plan X7 (DI-8): each writer first appends the event to the
-    // block-numbered `committee_agent_events` history (migration 0020), and the
+    // block-numbered `committee_agent_events` history (migration 0021), and the
     // `committee_agents` row is derived from that history
     // ([`derive_committee_agents`]). A reorg rollback deletes the orphaned
     // history with its block and derives the row again, so an orphaned revoke
@@ -2257,7 +2223,7 @@ impl Db {
     /// Uses ON CONFLICT DO NOTHING for idempotent re-indexing.
     ///
     /// `contract_address` is the policy deployment that emitted the event, and
-    /// it is part of the key (migration 0019, DI-10). `vote_id` is an index
+    /// it is part of the key (migration 0020, DI-10). `vote_id` is an index
     /// into one deployment's vote array, so a redeployed policy reuses every
     /// id. Under the old `(chain_id, vote_id)` key the new policy's votes hit
     /// the conflict clause and were dropped with no error.
@@ -2738,7 +2704,7 @@ impl Db {
     // ─── End ConsensusRecommendationReceipt writers ────────────────────────────────
 
     // ─── ExclusionLedger writers ─────────────────────────────────────────────────
-    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0021.
+    // Implements: QA plan v1 task X7, core issue 1820 (indexer half). Migration 0022.
     //
     // Every writer appends a block-numbered row keyed on chain position or on the
     // record id, with ON CONFLICT DO NOTHING, so re-indexing a range is a no-op and a
@@ -3354,8 +3320,6 @@ mod count_guard_tests {
             "consensus_receipts",
             // Migration 0017 — issue #1731.
             "admin_events",
-            // Migration 0024 — QA plan P3.
-            "proxy_upgrade_events",
         ];
         for name in known {
             let variant = CountTable::try_from(name)

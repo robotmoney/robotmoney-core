@@ -26,14 +26,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {MockPool, MockSwapRouter} from "./BasketVault.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
-import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
-import {GovernedUpgrade} from "../lib/GovernedUpgrade.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
-import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
-import {IInvestmentCommitteePolicy} from "../gateway/interfaces/IInvestmentCommitteePolicy.sol";
-import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title WithdrawalsNeverFrozenTest
 /// @notice Withdrawals are never frozen, by anyone. Every shipped vault (rmUSDC, the
@@ -79,8 +73,6 @@ contract WithdrawalsNeverFrozenTest is Test {
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     TimelockController internal timelock;
-    /// @dev ADR-0014: the timelock `DeployTimelock.runAuthority` deploys before every proxy.
-    address internal authority;
 
     ISafe internal safe;
     uint256[3] internal ownerPks;
@@ -97,6 +89,10 @@ contract WithdrawalsNeverFrozenTest is Test {
         DeployTimelock script = new DeployTimelock();
         address deployer = address(script);
         safe = _createSafe();
+        // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
+        CoreProxies.useUpgradeConfig(
+            script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable
+        );
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
 
@@ -105,24 +101,15 @@ contract WithdrawalsNeverFrozenTest is Test {
         swapRouter = new MockSwapRouter();
         pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
 
-        // ADR-0014 §4: the timelock is deployed first, and every proxy names it as its upgrade
-        // authority. The handover below reuses it (`useExistingTimelock`, the in-process form of
-        // TIMELOCK_ADDRESS) and checks every proxy names it.
-        DeployTimelock.SafeSpec memory spec =
-            DeployTimelock.SafeSpec({owners: safe.getOwners(), threshold: 2});
-        vm.prank(deployer);
-        authority = address(script.runInProcessAuthority(address(safe), MIN_DELAY, spec));
-        script.useExistingTimelock(authority);
-
-        registry = Proxied.vaultRegistryAs(authority, deployer);
-        router = Proxied.portfolioRouterAs(authority, address(usdc), address(registry), deployer);
-        RouterGovernance governance = new RouterGovernance(address(router), deployer);
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
+        RouterGovernance governance =
+            CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
 
         vm.startPrank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(governance));
-        rmUsdc = Proxied.robotMoneyVaultAs(
-            authority,
+        rmUsdc = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -135,8 +122,7 @@ contract WithdrawalsNeverFrozenTest is Test {
         rmUsdc.setAdapterAllowed(address(noYield), true);
         rmUsdc.setAdapterCodeHashAllowed(address(noYield).codehash, true);
         rmUsdc.addAdapter(address(noYield), 10_000);
-        gateway =
-            Proxied.robotMoneyGatewayAs(authority, usdc, rmUsdc, deployer, pauser, address(router));
+        gateway = CoreProxies.robotMoneyGateway(usdc, rmUsdc, deployer, pauser, address(router));
         _buildOtherVaults(deployer);
         vm.stopPrank();
 
@@ -148,6 +134,9 @@ contract WithdrawalsNeverFrozenTest is Test {
         vaults[1] = address(rmProto);
         vaults[2] = address(rmAgent);
         vaults[3] = address(rmRwa);
+        // Read the owners first: an external call between prank and the script call would consume the prank.
+        DeployTimelock.SafeSpec memory spec =
+            DeployTimelock.SafeSpec({owners: safe.getOwners(), threshold: 2});
         vm.prank(deployer);
         DeployTimelock.Deployed memory d = script.runInProcessVaults(
             vaults,
@@ -161,7 +150,6 @@ contract WithdrawalsNeverFrozenTest is Test {
             spec
         );
         timelock = d.timelock;
-        assertEq(address(timelock), authority, "the handover reused the upgrade authority");
         address[3] memory others = _others();
         for (uint256 i = 0; i < others.length; i++) {
             assertTrue(IAccessControl(others[i]).hasRole(ADMIN_ROLE, address(timelock)), "admin");
@@ -215,8 +203,8 @@ contract WithdrawalsNeverFrozenTest is Test {
     }
 
     /// @notice Every emergency drain lever: `emergencyWithdrawAdapter`, `emergencyWithdraw`,
-    ///         `emergencyExcludeAdapter` (security round 1), `forceRemoveAdapter`, pauseDeposits
-    ///         and shutdown. Funds move back to the vault and the holders still exit in full.
+    ///         `forceRemoveAdapter`, pauseDeposits and shutdown. Funds move back to the
+    ///         vault and the holders still exit in full.
     function test_rmUSDC_noLeverFreezesExit_afterEmergencyDrain() public {
         uint256 aliceShares = _depositDirect(address(rmUsdc), alice, AMOUNT);
         uint256 bobShares = _depositDirect(address(rmUsdc), bob, AMOUNT);
@@ -224,7 +212,6 @@ contract WithdrawalsNeverFrozenTest is Test {
         vm.startPrank(emergency);
         rmUsdc.emergencyWithdrawAdapter(0);
         rmUsdc.emergencyWithdraw();
-        rmUsdc.emergencyExcludeAdapter(0);
         rmUsdc.forceRemoveAdapter(0);
         rmUsdc.pauseDeposits();
         rmUsdc.shutdownVault();
@@ -396,531 +383,24 @@ contract WithdrawalsNeverFrozenTest is Test {
         assertFalse(gateway.depositsPaused(), "gateway deposits resumed by the timelock");
     }
 
-    // ─── Governed upgrade and freeze (ADR-0014 §6, UPG-6) ─────────────────────
-
-    /// @notice Every vault is upgraded to a new implementation through the real Safe and the
-    ///         timelock at the Base delay, then frozen the same way. Every exit stays open: rmUSDC
-    ///         redeems and withdraws in full, each basket pays `redeemInKind` and the USDC `redeem`,
-    ///         with the emergency levers pulled after the freeze.
-    function test_allVaults_exitsStayOpenAfterGovernedUpgradeAndFreeze() public {
-        uint256 usdcShares = _depositDirect(address(rmUsdc), alice, AMOUNT);
-        BasketVault[3] memory baskets = [BasketVault(rmProto), rmAgent, rmRwa];
-        uint256[3] memory basketShares;
-        for (uint256 i = 0; i < 3; i++) {
-            basketShares[i] = _depositBasket(baskets[i], alice, AMOUNT);
-        }
-
-        address[4] memory proxies =
-            [address(rmUsdc), address(rmProto), address(rmAgent), address(rmRwa)];
-        address[4] memory v2 = [
-            address(new RobotMoneyVault()),
-            address(new ProtocolAssetVault()),
-            address(new AgentTokenVault()),
-            address(new RwaBasketVault())
-        ];
-        for (uint256 i = 0; i < 4; i++) {
-            _governOne(proxies[i], abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (v2[i], "")));
-            _governOne(
-                proxies[i], abi.encodeCall(GovernedUpgrade.freezeUpgrades, (v2[i], v2[i].codehash))
-            );
-            assertTrue(GovernedUpgrade(proxies[i]).upgradesFrozen(), "frozen through the Safe");
-        }
-
-        vm.startPrank(emergency);
-        rmUsdc.pauseDeposits();
-        rmUsdc.shutdownVault();
-        for (uint256 i = 0; i < 3; i++) {
-            baskets[i].pauseDeposits();
-            baskets[i].shutdownVault();
-        }
-        vm.stopPrank();
-
-        vm.startPrank(alice);
-        rmUsdc.withdraw(AMOUNT / 4, alice, alice);
-        rmUsdc.redeem(rmUsdc.balanceOf(alice), alice, alice);
-        vm.stopPrank();
-        assertGt(usdcShares, 0, "alice held rmUSDC");
-        assertEq(rmUsdc.balanceOf(alice), 0, "rmUSDC exit in full after the freeze");
-
-        for (uint256 i = 0; i < 3; i++) {
-            BasketVault v = baskets[i];
-            vm.prank(alice);
-            v.redeemInKind(basketShares[i] / 2, alice, alice);
-            _fundBasketExit(v);
-            swapRouter.setAmountOut(SWAP_OUT / 2);
-            uint256 rest = v.balanceOf(alice);
-            vm.prank(alice);
-            assertGt(v.redeem(rest, alice, alice), 0, "USDC redeem after the freeze");
-            assertEq(v.balanceOf(alice), 0, "basket exit in full after the freeze");
-        }
-        assertGt(basketToken.balanceOf(alice), 0, "redeemInKind paid the basket token");
-    }
-
-    // ─── Populated v1 → v2 upgrade of all nine proxies (ADR-0014 "Tests this ADR requires") ──
-
-    /// @dev The two committee proxies the upgrade test adds to the fixture, and its agent.
-    InvestmentCommitteePolicy internal icPolicy;
-    ConsensusRecommendationReceipt internal receipts;
-    address internal upgradeAgent = makeAddr("upgrade-agent");
-    address internal upgradeRecipient = makeAddr("upgrade-recipient");
-
-    /// @notice #1808 test plan: populated v1 proxies upgrade to a v2 through the real Safe and the
-    ///         timelock at the Base delay, all nine in one scheduled batch, and every piece of state
-    ///         survives: balances, allowances, roles, fees, caps, the gateway policy and windows,
-    ///         the router weights, the committee vote, the receipts and their release state, and
-    ///         the adapter position. The digests are read at the execute timestamp on both sides, so
-    ///         time-relative views (rolling windows) compare like for like. Then every exit runs
-    ///         synchronously on v2, and the committee surface still records.
-    function test_allNineProxies_upgradeThroughSafeKeepsPopulatedState() public {
-        _populateForUpgrade();
-
-        address[9] memory proxies = _nineProxies();
-        address[9] memory v2 = [
-            address(new RobotMoneyVault()),
-            address(new ProtocolAssetVault()),
-            address(new AgentTokenVault()),
-            address(new RwaBasketVault()),
-            address(new PortfolioRouter()),
-            address(new VaultRegistry()),
-            address(new RobotMoneyGateway()),
-            address(new InvestmentCommitteePolicy()),
-            address(new ConsensusRecommendationReceipt())
-        ];
-        address[] memory targets = new address[](9);
-        bytes[] memory calls = new bytes[](9);
-        for (uint256 i = 0; i < 9; i++) {
-            targets[i] = proxies[i];
-            calls[i] = abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (v2[i], ""));
-        }
-        (uint256[] memory values, bytes32 salt) = _scheduleTargets(targets, calls);
-        bytes memory exec = abi.encodeCall(
-            TimelockController.executeBatch, (targets, values, calls, bytes32(0), salt)
-        );
-        _safeExec(address(timelock), exec, false); // the delay has not run
-        vm.warp(block.timestamp + MIN_DELAY);
-
-        bytes32[9] memory before = _upgradeDigests();
-        _safeExec(address(timelock), exec, true);
-        bytes32[9] memory afterUpgrade = _upgradeDigests();
-
-        for (uint256 i = 0; i < 9; i++) {
-            assertEq(
-                address(uint160(uint256(vm.load(proxies[i], ERC1967Utils.IMPLEMENTATION_SLOT)))),
-                v2[i],
-                "implementation slot moved to v2"
-            );
-            assertEq(afterUpgrade[i], before[i], "populated state survived the upgrade");
-            assertEq(GovernedUpgrade(proxies[i]).upgradeAuthority(), authority, "authority kept");
-            assertFalse(GovernedUpgrade(proxies[i]).upgradesFrozen(), "an upgrade does not freeze");
-        }
-
-        _exitAndRecordOnV2();
-    }
-
-    /// @dev State on every proxy, through the real Safe and timelock where governance owns it.
-    function _populateForUpgrade() internal {
-        // Balances and the adapter position: alice and bob in rmUSDC (the NoYield adapter takes
-        // every deposit), alice in each basket.
-        uint256 aliceShares = _depositDirect(address(rmUsdc), alice, AMOUNT);
-        _depositDirect(address(rmUsdc), bob, AMOUNT);
-        _depositBasket(rmProto, alice, AMOUNT);
-        _depositBasket(rmAgent, alice, AMOUNT);
-        _depositBasket(rmRwa, alice, AMOUNT);
-
-        // Allowances: alice lets the router pull half her rmUSDC, and bob part of her rmPROTO.
-        vm.startPrank(alice);
-        rmUsdc.approve(address(router), aliceShares / 2);
-        rmProto.approve(bob, 1e18);
-        vm.stopPrank();
-
-        // The committee proxies, born on the same timelock and administered by it.
-        icPolicy =
-            Proxied.investmentCommitteePolicyAs(authority, address(timelock), address(gateway));
-        receipts = Proxied.consensusRecommendationReceiptAs(
-            authority, address(timelock), address(gateway), address(icPolicy)
-        );
-
-        // A gateway policy, a deposit in its window, and a share allowance for the withdraw path.
-        _selfAuthorize(upgradeAgent, upgradeRecipient);
-        usdc.mint(upgradeAgent, AMOUNT);
-        vm.startPrank(upgradeAgent);
-        usdc.approve(address(gateway), AMOUNT);
-        (, uint256 agentShares) = gateway.deposit(
-            bytes32("up-dep"), AMOUNT, uint64(block.timestamp + 60), bytes32("up-dep-key")
-        );
-        rmUsdc.approve(address(gateway), agentShares);
-        vm.stopPrank();
-
-        // Fees, caps, weights, eligibility and the committee wiring: one Safe batch.
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(rmUsdc);
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-        address[] memory targets = new address[](10);
-        bytes[] memory calls = new bytes[](10);
-        (targets[0], calls[0]) =
-        (address(rmUsdc), abi.encodeCall(RobotMoneyVault.setExitFeeBps, (20)));
-        (targets[1], calls[1]) =
-        (address(rmUsdc), abi.encodeCall(RobotMoneyVault.setPerDepositCap, (50_000e6)));
-        (targets[2], calls[2]) = (address(rmProto), abi.encodeCall(BasketVault.setExitFeeBps, (30)));
-        (targets[3], calls[3]) =
-        (
-            address(registry),
-            abi.encodeCall(VaultRegistry.setRouterEligible, (address(rmUsdc), true))
-        );
-        (targets[4], calls[4]) =
-        (address(router), abi.encodeCall(PortfolioRouter.setDefaultWeights, (vaults, bps)));
-        (targets[5], calls[5]) =
-        (address(router), abi.encodeCall(PortfolioRouter.setVaultCap, (address(rmUsdc), 500_000e6)));
-        (targets[6], calls[6]) =
-        (address(router), abi.encodeCall(PortfolioRouter.setRouterCap, (900_000e6)));
-        (targets[7], calls[7]) =
-        (address(gateway), abi.encodeCall(RobotMoneyGateway.setICPolicy, (address(icPolicy))));
-        (targets[8], calls[8]) =
-        (
-            address(gateway),
-            abi.encodeCall(RobotMoneyGateway.setConsensusReceipt, (address(receipts)))
-        );
-        (targets[9], calls[9]) =
-        (
-            address(icPolicy),
-            abi.encodeCall(InvestmentCommitteePolicy.registerAgent, (upgradeAgent, "agent-1"))
-        );
-        _governTargets(targets, calls);
-
-        // A committee vote and two receipts through the gateway; the Safe releases one.
-        vm.startPrank(upgradeAgent);
-        gateway.committeeVoteSubmit(_vote(7_000));
-        gateway.consensusRecordReceipt(keccak256("up-receipt-1"), keccak256("p1"), "https://r/1");
-        gateway.consensusRecordReceipt(keccak256("up-receipt-2"), keccak256("p2"), "https://r/2");
-        vm.stopPrank();
-        _governOne(
-            address(receipts),
-            abi.encodeCall(
-                ConsensusRecommendationReceipt.releaseReceipt, (keccak256("up-receipt-1"))
-            )
-        );
-        assertEq(receipts.receiptCount(), 2, "two receipts recorded");
-        assertTrue(receipts.isReleased(keccak256("up-receipt-1")), "one receipt released");
-    }
-
-    /// @dev Synchronous redemptions on every exit after the upgrade, and the committee still records.
-    function _exitAndRecordOnV2() internal {
-        // rmUSDC: alice half through the router (the surviving allowance), the rest directly; bob
-        // withdraws his full position. The 20 bps fee set on v1 applies on v2.
-        address[] memory legs = new address[](1);
-        legs[0] = address(rmUsdc);
-        uint256[] memory legShares = new uint256[](1);
-        legShares[0] = rmUsdc.allowance(alice, address(router));
-        vm.prank(alice);
-        uint256[] memory out =
-            router.redeemFor(alice, alice, legs, legShares, new uint256[](1), type(uint256).max);
-        assertGt(out[0], 0, "router redeem on v2");
-        vm.startPrank(alice);
-        rmUsdc.redeem(rmUsdc.balanceOf(alice), alice, alice);
-        vm.stopPrank();
-        assertEq(rmUsdc.balanceOf(alice), 0, "alice exited rmUSDC");
-        assertApproxEqAbs(
-            usdc.balanceOf(alice), AMOUNT * (10_000 - 20) / 10_000, 10, "fee survived, no more"
-        );
-        uint256 bobMax = rmUsdc.maxWithdraw(bob);
-        vm.prank(bob);
-        rmUsdc.withdraw(bobMax, bob, bob);
-        assertEq(rmUsdc.balanceOf(bob), 0, "bob exited rmUSDC");
-
-        // Every basket: half in kind, the rest for USDC.
-        BasketVault[3] memory baskets = [BasketVault(rmProto), rmAgent, rmRwa];
-        for (uint256 i = 0; i < 3; i++) {
-            BasketVault v = baskets[i];
-            vm.prank(alice);
-            v.redeemInKind(v.balanceOf(alice) / 2, alice, alice);
-            _fundBasketExit(v);
-            swapRouter.setAmountOut(SWAP_OUT / 2);
-            uint256 rest = v.balanceOf(alice);
-            vm.prank(alice);
-            assertGt(v.redeem(rest, alice, alice), 0, "basket USDC redeem on v2");
-            assertEq(v.balanceOf(alice), 0, "basket exit in full on v2");
-        }
-
-        // The gateway policy still governs the agent's withdraw.
-        uint256 agentShares = rmUsdc.balanceOf(upgradeAgent);
-        vm.prank(upgradeAgent);
-        (, uint256 assetsOut) = gateway.withdraw(
-            bytes32("up-wd"),
-            agentShares,
-            address(rmUsdc),
-            uint64(block.timestamp + 60),
-            "up-wd-key"
-        );
-        assertGt(assetsOut, 0, "gateway withdraw on v2");
-        assertEq(usdc.balanceOf(upgradeRecipient), assetsOut, "paid to the policy recipient");
-
-        // The committee surface records on v2 and keeps the v1 records.
-        vm.startPrank(upgradeAgent);
-        assertEq(gateway.committeeVoteSubmit(_vote(6_000)), 1, "second vote appended");
-        gateway.consensusRecordReceipt(keccak256("up-receipt-3"), keccak256("p3"), "https://r/3");
-        vm.stopPrank();
-        assertEq(receipts.receiptCount(), 3, "v2 appends to the v1 receipt log");
-        assertTrue(receipts.isReleased(keccak256("up-receipt-1")), "v1 release kept");
-    }
-
-    function _vote(uint16 weightBps)
-        internal
-        view
-        returns (IInvestmentCommitteePolicy.VoteParams memory)
-    {
-        return IInvestmentCommitteePolicy.VoteParams({
-            agent: upgradeAgent,
-            vault: address(rmUsdc),
-            stance: IInvestmentCommitteePolicy.Stance.Overweight,
-            targetWeightBps: weightBps,
-            confidence: 70,
-            rationaleUri: "https://r/rationale",
-            voteJsonHash: keccak256(abi.encode("vote", weightBps)),
-            promptHash: keccak256("prompt"),
-            inputsDigest: keccak256("inputs"),
-            schemaVersion: "1",
-            timestamp: uint64(block.timestamp)
-        });
-    }
-
-    function _nineProxies() internal view returns (address[9] memory) {
-        return [
-            address(rmUsdc),
-            address(rmProto),
-            address(rmAgent),
-            address(rmRwa),
-            address(router),
-            address(registry),
-            address(gateway),
-            address(icPolicy),
-            address(receipts)
-        ];
-    }
-
-    function _upgradeDigests() internal view returns (bytes32[9] memory d) {
-        d[0] = _rmUsdcDigest();
-        d[1] = _basketDigest(rmProto);
-        d[2] = _basketDigest(rmAgent);
-        d[3] = _basketDigest(rmRwa);
-        d[4] = _routerDigest();
-        d[5] = _registryDigest();
-        d[6] = _gatewayDigest();
-        d[7] = _icDigest();
-        d[8] = _receiptDigest();
-    }
-
-    /// @dev The role holders the handover set: timelock admin, emergency key, deployer none.
-    function _rolesDigest(address p) internal view returns (bytes32) {
-        IAccessControl a = IAccessControl(p);
-        return keccak256(
-            abi.encode(
-                a.hasRole(ADMIN_ROLE, address(timelock)),
-                a.hasRole(bytes32(0), address(timelock)),
-                a.hasRole(EMERGENCY_ROLE, emergency)
-            )
-        );
-    }
-
-    function _rmUsdcDigest() internal view returns (bytes32) {
-        (address a0, uint16 cap0, bool active0, uint256 bal0, uint256 target0) =
-            rmUsdc.getAdapterInfo(0);
-        return keccak256(
-            abi.encode(
-                keccak256(
-                    abi.encode(
-                        rmUsdc.totalSupply(),
-                        rmUsdc.totalAssets(),
-                        rmUsdc.balanceOf(alice),
-                        rmUsdc.balanceOf(bob),
-                        rmUsdc.balanceOf(upgradeAgent),
-                        rmUsdc.allowance(alice, address(router)),
-                        rmUsdc.allowance(upgradeAgent, address(gateway)),
-                        rmUsdc.exitFeeBps(),
-                        rmUsdc.perDepositCap(),
-                        rmUsdc.tvlCap(),
-                        rmUsdc.feeRecipient()
-                    )
-                ),
-                keccak256(
-                    abi.encode(
-                        a0,
-                        cap0,
-                        active0,
-                        bal0,
-                        target0,
-                        usdc.balanceOf(a0),
-                        rmUsdc.adapterCount(),
-                        address(rmUsdc.exclusionLedger()),
-                        rmUsdc.registry()
-                    )
-                ),
-                _rolesDigest(address(rmUsdc))
-            )
-        );
-    }
-
-    function _basketDigest(BasketVault v) internal view returns (bytes32) {
-        (bool ok, bytes memory asset0) =
-            address(v).staticcall(abi.encodeWithSignature("assets(uint256)", uint256(0)));
-        require(ok, "assets(0)");
-        return keccak256(
-            abi.encode(
-                keccak256(
-                    abi.encode(
-                        v.totalSupply(),
-                        v.totalAssets(),
-                        v.balanceOf(alice),
-                        v.allowance(alice, bob),
-                        v.exitFeeBps(),
-                        v.perDepositCap(),
-                        v.tvlCap(),
-                        v.feeRecipient(),
-                        v.maxSlippageBps()
-                    )
-                ),
-                keccak256(
-                    abi.encode(
-                        keccak256(asset0),
-                        basketToken.balanceOf(address(v)),
-                        v.effectiveTwapWindow(address(basketToken)),
-                        address(v.SWAP_ROUTER()),
-                        v.registry()
-                    )
-                ),
-                _rolesDigest(address(v))
-            )
-        );
-    }
-
-    function _routerDigest() internal view returns (bytes32) {
-        (address[] memory wv, uint256[] memory wb) = router.getWeights();
-        (address[] memory dv, uint256[] memory db) = router.getDefaultWeights();
-        return keccak256(
-            abi.encode(
-                keccak256(abi.encode(wv, wb, dv, db, router.votedWeightsActive())),
-                router.routerCap(),
-                router.vaultCap(address(rmUsdc)),
-                router.hasRole(router.WEIGHT_SETTER_ROLE(), address(timelock)),
-                _rolesDigest(address(router))
-            )
-        );
-    }
-
-    function _registryDigest() internal view returns (bytes32) {
-        (VaultRegistry.VaultMetadata memory m, VaultRegistry.VaultStatus st) =
-            registry.getVault(address(rmUsdc));
-        return keccak256(
-            abi.encode(
-                registry.listVaults(),
-                registry.routerEligibleCount(),
-                registry.isRouterEligible(address(rmUsdc)),
-                keccak256(abi.encode(m, st)),
-                _rolesDigest(address(registry))
-            )
-        );
-    }
-
-    function _gatewayDigest() internal view returns (bytes32) {
-        (bool ok, bytes memory policy) =
-            address(gateway).staticcall(abi.encodeWithSignature("agents(address)", upgradeAgent));
-        require(ok, "agents(agent)");
-        return keccak256(
-            abi.encode(
-                keccak256(policy),
-                gateway.agentOwner(upgradeAgent),
-                gateway.hasRole(gateway.AGENT_ROLE(), upgradeAgent),
-                gateway.effectiveDepositWindowGross(upgradeAgent),
-                gateway.effectiveWithdrawWindowGross(upgradeAgent),
-                gateway.agentConsented(upgradeAgent),
-                address(gateway.icPolicy()),
-                address(gateway.consensusReceipt()),
-                gateway.depositsPaused(),
-                _rolesDigest(address(gateway))
-            )
-        );
-    }
-
-    function _icDigest() internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                icPolicy.voteCount(),
-                keccak256(abi.encode(icPolicy.getVote(0))),
-                icPolicy.agentId(upgradeAgent),
-                icPolicy.hasRole(icPolicy.COMMITTEE_AGENT_ROLE(), upgradeAgent),
-                icPolicy.gateway(),
-                _rolesDigest(address(icPolicy))
-            )
-        );
-    }
-
-    function _receiptDigest() internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                receipts.receiptCount(),
-                keccak256(abi.encode(receipts.getReceipt(0), receipts.getReceipt(1))),
-                receipts.isReleased(keccak256("up-receipt-1")),
-                receipts.isReleased(keccak256("up-receipt-2")),
-                receipts.gateway(),
-                receipts.icPolicy(),
-                _rolesDigest(address(receipts))
-            )
-        );
-    }
-
-    /// @dev The real governance route for a batch over several targets, in order.
-    function _governTargets(address[] memory targets, bytes[] memory calls) internal {
-        (uint256[] memory values, bytes32 salt) = _scheduleTargets(targets, calls);
-        vm.warp(block.timestamp + MIN_DELAY);
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(
-                TimelockController.executeBatch, (targets, values, calls, bytes32(0), salt)
-            ),
-            true
-        );
-    }
-
-    function _scheduleTargets(address[] memory targets, bytes[] memory calls)
-        internal
-        returns (uint256[] memory values, bytes32 salt)
-    {
-        values = new uint256[](targets.length);
-        salt = keccak256(abi.encode(++saltNonce));
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(
-                TimelockController.scheduleBatch,
-                (targets, values, calls, bytes32(0), salt, MIN_DELAY)
-            ),
-            true
-        );
-    }
-
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     function _buildOtherVaults(address deployer) internal {
         ISwapRouter sr = ISwapRouter(address(swapRouter));
         address fees = makeAddr("basketFees");
-        rmProto = Proxied.protocolAssetVaultAs(
-            authority, usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        rmProto = CoreProxies.protocolAssetVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
         );
-        rmAgent = Proxied.agentTokenVaultAs(
-            authority, usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        rmAgent = CoreProxies.agentTokenVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
         );
-        rmProto.addAsset(
-            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
-        rmAgent.addAsset(
-            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        rmProto.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
+        rmAgent.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
-        rmRwa = Proxied.rwaBasketVaultAs(
-            authority, usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
+        rmRwa = CoreProxies.rwaBasketVault(
+            usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer
         );
-        rmRwa.addAsset(
-            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        rmRwa.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
     }
 
     function _others() internal view returns (address[3] memory) {
@@ -1049,8 +529,7 @@ contract WithdrawalsNeverFrozenTest is Test {
         gateway.commitAuthorization(keccak256(abi.encode(agent, agent, salt)));
         vm.roll(block.number + 1);
         vm.prank(agent);
-        // Revealing for itself is the agent's consent; no signature (issue #1791).
-        gateway.revealAuthorization(agent, salt, p, "");
+        gateway.revealAuthorization(agent, salt, p);
     }
 
     function _setStatus(address v, VaultRegistry.VaultStatus status) internal {

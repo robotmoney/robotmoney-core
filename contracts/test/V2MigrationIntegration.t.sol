@@ -38,7 +38,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ──────────────────────────────────────────────────────────
 
@@ -156,8 +156,8 @@ contract V2MigrationIntegrationTest is Test {
     ///      steady state the migration starts from.
     function setUp() public {
         usdc = new MigUsdc();
-        registry = Proxied.vaultRegistry(admin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         v1a = new MigVault(address(usdc), "V1A");
         v1b = new MigVault(address(usdc), "V1B");

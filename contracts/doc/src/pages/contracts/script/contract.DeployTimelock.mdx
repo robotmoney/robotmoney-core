@@ -5,9 +5,11 @@ description: "Deploy an OZ TimelockController and complete the privileged-role h
 
 # DeployTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/script/DeployTimelock.s.sol)
 
-**Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+
+**Title:** DeployTimelock
 
 Deploy an OZ TimelockController and complete the privileged-role
 handover on all five Robot Money contracts (RobotMoneyVault,
@@ -37,10 +39,6 @@ hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
 CANCELLER_ROLE on the TimelockController, and no other account
 does: no single signer can propose or cancel (security-model §4).
-- The timelock is a ProposerFloorTimelock (issue #1645 question 1,
-CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
-delay or renounced in an instant Safe transaction. The Safe gives
-up the role only after a second proposer holds it.
 - EXECUTOR_ROLE is open: it is held by address(0), so any address
 can execute an operation whose delay has elapsed. One policy, no
 switch (core 1521).
@@ -48,6 +46,11 @@ switch (core 1521).
 AccessControlUnauthorizedAccount.
 - Admin operations must be routed through
 TimelockController.schedule → delay → execute.
+
+- The timelock is a ProposerFloorTimelock (issue #1645 question 1,
+CS-3): the last PROPOSER_ROLE holder cannot be revoked through the
+delay or renounced in an instant Safe transaction. The Safe gives
+up the role only after a second proposer holds it.
 
 Required env vars:
 VAULT_ADDRESS          — RobotMoneyVault
@@ -79,12 +82,6 @@ committeeRegister calls — is untouched.
 CONSENSUS_RECEIPT_ADDRESS — ConsensusRecommendationReceipt (issue #1319,
 same rule). ADMIN_ROLE +
 DEFAULT_ADMIN_ROLE move to the timelock.
-Issue #1698: the weight setter
-(GOVERNANCE_ADDRESS) also gets ADMIN_ROLE on
-it (its `releaseReceipt` gate) and is pointed
-at it with `setReceiptContract`, so
-`applyReceipt` releases and sets weights in
-one call.
 AGENT_ADDRESSES        — comma-separated gateway agents the deployer
 owns (issue #1476): the deploy agent the
 gateway stage authorizes (DeployGateway.s.sol).
@@ -108,19 +105,6 @@ deployer EOA). Required on every chain together
 with CONSENSUS_RECEIPT_ADDRESS; revoked from
 here instead of msg.sender. No default.
 
-ADR-0014 §4 (the timelock is deployed before every proxy): `runAuthority` is the
-`authority` stage, the stage right before the first proxy stage (run through
-`DeployUpgradeAuthority`). It deploys the ProposerFloorTimelock alone (the Safe as sole proposer and
-canceller, open executor, no admin) and writes its address, which every proxy stage
-names as UPGRADE_AUTHORITY. This handover stage (`run`) then reuses that timelock:
-TIMELOCK_ADDRESS       — the timelock `runAuthority` deployed. Required on every
-chain. The script checks it is a ProposerFloorTimelock with
-the Safe as its one proposer and TIMELOCK_MIN_DELAY as its
-delay, and that every proxied contract handed over names it
-as `upgradeAuthority()`, so ADMIN_ROLE and upgrade power
-always land on one timelock. Only the in-process test entry
-points (nothing broadcast) may still deploy one here.
-
 <i>
 
 After deploying, the broadcaster (current ADMIN_ROLE holder) is no
@@ -128,6 +112,12 @@ longer the admin on any contract. Verify with:
 cast call &lt;vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") &lt;timelock>
 
 </i>
+
+Upgrade authority (issue 1808): every core contract is an ERC-1967 proxy whose only
+upgrade and freeze authority, `upgradeTimelock()`, was fixed at its initialization to
+the CREATE2 address of THIS timelock (`UpgradeAuthority.predictTimelock`). This stage
+deploys the timelock there through the canonical CREATE2 factory, checks its roles
+and delay, and asserts every handed-over contract names it, before any role moves.
 
 ## Constants
 
@@ -203,8 +193,7 @@ bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 <i>
 
 security-model.md §4: production timelock delay floor, 48 hours. Enforced
-by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin
-plus the last-proposer floor (ProposerFloorTimelock).
+by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
 
 </i>
 
@@ -300,21 +289,6 @@ bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
         0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 ```
 
-## State Variables
-
-### _existingTimelock
-
-<i>
-
-Test seam: the in-process handover entry points reuse this timelock instead of
-deploying one, the in-process form of TIMELOCK_ADDRESS (ADR-0014 §4).
-
-</i>
-
-```solidity
-address internal _existingTimelock;
-```
-
 ## Functions
 
 <a id="run"></a>
@@ -326,7 +300,7 @@ transfers ADMIN_ROLE on all five contracts (plus the optional
 IC policy / consensus receipt handover — issue #1319).
 
 ```solidity
-function run() external virtual returns (Deployed memory d);
+function run() external returns (Deployed memory d);
 ```
 
 **Returns**
@@ -334,96 +308,6 @@ function run() external virtual returns (Deployed memory d);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
-
-<a id="runauthority"></a>
-
-### runAuthority
-
-Body of the `authority` stage (ADR-0014 §4), before every proxy: deploy only the timelock
-every proxy names as its upgrade authority. Reads SAFE_ADDRESS, SAFE_OWNERS,
-SAFE_THRESHOLD, TIMELOCK_MIN_DELAY, DEPLOYMENT_KIND, EXPECTED_CHAIN_ID and
-DEPLOYMENT_OUT, with the same Safe and delay checks as the handover. Grants no role
-on any Robot Money contract (none exists yet). The stage driver runs it as the
-`authority` stage through `DeployUpgradeAuthority.run()` (its own script file and
-broadcast file; manifest `upgrade-authority.json`, issue #1809).
-
-```solidity
-function runAuthority() external returns (Authority memory a);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| a | `Authority` |  |
-
-<a id="_runauthorityfrom-string"></a>
-
-### _runAuthorityFrom
-
-<i>
-
-The body of `runAuthority`; `prefix` as in `_runFrom`.
-
-</i>
-
-```solidity
-function _runAuthorityFrom(string memory prefix) internal returns (Authority memory a);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| prefix | `string` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| a | `Authority` |  |
-
-<a id="runinprocessauthority-address-uint256-safespec"></a>
-
-### runInProcessAuthority
-
-In-process form of `runAuthority` for forge tests. Caller sets up prank context.
-
-```solidity
-function runInProcessAuthority(address safe_, uint256 minDelay_, SafeSpec memory safeSpec_)
-        external
-        returns (ProposerFloorTimelock timelock);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| safe_ | `address` |  |
-| minDelay_ | `uint256` |  |
-| safeSpec_ | `SafeSpec` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| timelock | `ProposerFloorTimelock` |  |
-
-<a id="useexistingtimelock-address"></a>
-
-### useExistingTimelock
-
-Test seam: make the next in-process handover reuse `timelock_` (zero clears it).
-
-```solidity
-function useExistingTimelock(address timelock_) external;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| timelock_ | `address` |  |
 
 <a id="_runfrom-string"></a>
 
@@ -778,35 +662,6 @@ function _validate(Deployed memory d, SafeSpec memory spec) internal view;
 | d | `Deployed` |  |
 | spec | `SafeSpec` | SAFE_OWNERS and SAFE_THRESHOLD: the owners and threshold the Safe must have. |
 
-<a id="_validateauthority-address-uint256-bool-safespec"></a>
-
-### _validateAuthority
-
-<i>
-
-The Safe and delay checks shared by the handover (`_validate`) and the authority stage
-(`runAuthority`, ADR-0014 §4).
-
-</i>
-
-```solidity
-function _validateAuthority(
-        address safe,
-        uint256 minDelay,
-        bool rehearsal,
-        SafeSpec memory spec
-    ) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| safe | `address` |  |
-| minDelay | `uint256` |  |
-| rehearsal | `bool` |  |
-| spec | `SafeSpec` |  |
-
 <a id="_requirerealsafe-address-address-uint256"></a>
 
 ### _requireRealSafe
@@ -834,86 +689,6 @@ function _requireRealSafe(address safe, address[] memory owners, uint256 thresho
 | owners | `address[]` |  |
 | threshold | `uint256` |  |
 
-<a id="_deploytimelock-uint256-address"></a>
-
-### _deployTimelock
-
-<i>
-
-Deploy the timelock: ProposerFloorTimelock, an OZ TimelockController whose
-_revokeRole refuses to drop the last PROPOSER_ROLE holder (revokeRole and renounceRole
-both; issue #1645 question 1, CS-3). proposers = [safe], executors = [address(0)],
-admin = address(0). OZ grants CANCELLER_ROLE to each proposer, so the Safe is the only
-proposer and canceller. address(0) as executor opens EXECUTOR_ROLE to any caller once
-the delay has elapsed (security-model §4; core 1521). admin = address(0) means the
-timelock is self-administered (the safe can change delay/roles only through the
-timelock). With the floor, the Safe can give up PROPOSER_ROLE only after another
-proposer holds it, so the governed contracts can never lose every proposer.
-
-</i>
-
-```solidity
-function _deployTimelock(uint256 minDelay, address safe)
-        internal
-        returns (ProposerFloorTimelock floored);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| minDelay | `uint256` |  |
-| safe | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| floored | `ProposerFloorTimelock` |  |
-
-<a id="_requireauthoritytimelock-proposerfloortimelock-deployed"></a>
-
-### _requireAuthorityTimelock
-
-<i>
-
-ADR-0014 §4: a reused timelock (TIMELOCK_ADDRESS, or the in-process seam) must be the
-authority stage's ProposerFloorTimelock: the Safe its one proposer and canceller, the
-executor open, the delay TIMELOCK_MIN_DELAY, and the deployer no admin. Every proxied
-contract this run hands over must name it as `upgradeAuthority()`, so the role
-handover and the upgrade authority land on the same timelock.
-
-</i>
-
-```solidity
-function _requireAuthorityTimelock(ProposerFloorTimelock t, Deployed memory d) internal view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| t | `ProposerFloorTimelock` |  |
-| d | `Deployed` |  |
-
-<a id="_requireupgradeauthority-address-address-string"></a>
-
-### _requireUpgradeAuthority
-
-```solidity
-function _requireUpgradeAuthority(address proxy, address timelock, string memory label)
-        internal
-        view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| proxy | `address` |  |
-| timelock | `address` |  |
-| label | `string` |  |
-
 <a id="_deployandwire-deployed"></a>
 
 ### _deployAndWire
@@ -933,6 +708,76 @@ function _deployAndWire(Deployed memory d) internal returns (TimelockController 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | timelock | `TimelockController` |  |
+
+<a id="_deploytimelockatprediction-address-uint256"></a>
+
+### _deployTimelockAtPrediction
+
+<i>
+
+Deploy the core timelock at `predictTimelock(safe, minDelay)` through the CREATE2
+factory. CREATE2 binds the init code, so code already at that address can only be
+this same timelock (anyone may have deployed it first): it is reused, and its roles
+and delay are checked either way.
+
+</i>
+
+```solidity
+function _deployTimelockAtPrediction(address safe, uint256 minDelay)
+        internal
+        returns (TimelockController timelock);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `TimelockController` |  |
+
+<a id="_requireupgradeauthority-deployed-address"></a>
+
+### _requireUpgradeAuthority
+
+<i>
+
+Issue 1808: every handed-over core proxy names this timelock as its only upgrade and
+freeze authority. A proxy that names any other address (the deployer, a placeholder,
+another deployment's timelock) stops the handover before any role moves.
+
+</i>
+
+```solidity
+function _requireUpgradeAuthority(Deployed memory d, address timelock) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| timelock | `address` |  |
+
+<a id="_requirenamestimelock-address-address"></a>
+
+### _requireNamesTimelock
+
+```solidity
+function _requireNamesTimelock(address proxy, address timelock) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| timelock | `address` |  |
 
 <a id="_transferagents-deployed-address"></a>
 
@@ -1317,26 +1162,4 @@ struct Deployed {
 | consensusReceipt | `address` |  |
 | receiptAdmin | `address` |  |
 | agents | `address[]` |  |
-
-### Authority
-
-What `runAuthority` deployed (ADR-0014 §4).
-
-```solidity
-struct Authority {
-        ProposerFloorTimelock timelock;
-        address safe;
-        uint256 minDelay;
-        bool rehearsal;
-    }
-```
-
-**Properties**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| timelock | `ProposerFloorTimelock` |  |
-| safe | `address` |  |
-| minDelay | `uint256` |  |
-| rehearsal | `bool` |  |
 

@@ -5,9 +5,9 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade), [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
 
 **Title:** ConsensusRecommendationReceipt
 
@@ -49,19 +49,17 @@ Payload contract: `tests/fixtures/consensus-receipt.schema.json` and
 
 Emits: `ReceiptRecorded`, `ReceiptReleased`.
 
-Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
-in the proxy's deployment transaction. Only the timelock named at `initialize`
-can upgrade it, and `freezeUpgrades` ends upgrades forever. Recorded receipts
-and their release state survive every upgrade.
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `gateway` and `icPolicy` are set once at initialization and have no setter.
 
 ## Constants
 
 ### ADMIN_ROLE
 
-Releases receipts. Held by the `TimelockController` (INV-3) and,
-since issue #1698, by the weight setter (`RouterGovernance`),
-whose `applyReceipt` releases a receipt and writes its weights
-in one transaction. Stage 11 grants both.
+Releases receipts. Held by the `TimelockController` (INV-3) and
+by RouterGovernance, whose `applyReceipt` releases a receipt in
+the same call that sets its weights (issue 1698).
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -92,12 +90,6 @@ string internal constant RECEIPT_ID_DOMAIN = "robotmoney:consensus-receipt-id:v1
 
 The RobotMoneyGateway. All receipt writes must originate here.
 
-<i>
-
-Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
-
-</i>
-
 ```solidity
 address public gateway;
 ```
@@ -111,12 +103,6 @@ address public gateway;
 ### icPolicy
 
 The InvestmentCommitteePolicy whose `COMMITTEE_AGENT_ROLE` gates submitters.
-
-<i>
-
-Written once by `initialize`; no setter.
-
-</i>
 
 ```solidity
 address public icPolicy;
@@ -154,37 +140,19 @@ mapping(bytes32 => uint256) private _indexPlusOne;
 
 ## Functions
 
-<a id="constructor"></a>
-
-### constructor
-
-<i>
-
-The implementation is never initialized: only a proxy is.
-
-</i>
-
-**Note:**
-
-- **oz-upgrades-unsafe-allow:** constructor
-
-```solidity
-constructor();
-```
-
 <a id="initialize-address-address-address-address-upgrademode"></a>
 
 ### initialize
 
-Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
 function initialize(
         address admin_,
         address gateway_,
         address icPolicy_,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer;
 ```
 
@@ -195,8 +163,8 @@ function initialize(
 | admin_ | `address` | Address granted `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.<br/>In every non-test deployment this is the<br/>`TimelockController` (INV-3). |
 | gateway_ | `address` | Deployed `RobotMoneyGateway`; sole permitted writer. |
 | icPolicy_ | `address` | Deployed `InvestmentCommitteePolicy`; the single source<br/>of `COMMITTEE_AGENT_ROLE` membership. |
-| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
-| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="_revokerole-bytes32-address"></a>
 

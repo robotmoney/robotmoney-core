@@ -5,12 +5,14 @@
 # --------------------
 # Runbook §5.5 said both harnesses raise pages. `submit-receipt-worker.sh` had no
 # alerting code at all — its "ALERT" was an `echo … >&2`, which under `nohup`
-# reaches nobody. `watch-released-drafts.sh` (deleted by issue 1698) posted only when FUSION_ALERT_WEBHOOK
-# was set AND curl AND jq happened to be on PATH, with no startup validation and
-# with delivery failure discarded by `|| true`; both of its conditions shared one
-# dedup key, collapsing a quarantined poison range and a wedged cursor into one
-# incident, and no resolve was ever sent — against the rule alert.rs enforces for
-# the watchdog ("Never silent: if there is nowhere to page, say so every cycle").
+# reaches nobody. The released-receipt draft watcher (deleted in issue 1698:
+# RouterGovernance.applyReceipt releases a receipt and sets its weights in one
+# call, so there is no proposal left to draft)
+# posted only when FUSION_ALERT_WEBHOOK was set AND curl AND jq happened to be on
+# PATH, with no startup validation and with delivery failure discarded by
+# `|| true`; it shared one dedup key across two conditions and never sent a
+# resolve — against the rule alert.rs enforces for the watchdog ("Never silent:
+# if there is nowhere to page, say so every cycle").
 #
 # THE RULES
 #   1. Validate at startup, the way rmpc/cast are validated: webhook set but

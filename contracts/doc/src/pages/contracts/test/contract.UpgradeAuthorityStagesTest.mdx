@@ -1,0 +1,207 @@
+---
+title: "UpgradeAuthorityStagesTest"
+description: "Issue 1808, the timelock-last stage order. Every proxy names the CREATE2 address of the Safe-proposer timelock from its first block; the timelock stage deploys the timelock there and refuses any proxy that names another authority. Until then nobody (the deployer included) can upgrade or freeze: there is no interim deployer authority."
+---
+
+# UpgradeAuthorityStagesTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/UpgradeAuthorityStages.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+Issue 1808, the timelock-last stage order. Every proxy names the CREATE2 address of the
+Safe-proposer timelock from its first block; the timelock stage deploys the timelock
+there and refuses any proxy that names another authority. Until then nobody (the
+deployer included) can upgrade or freeze: there is no interim deployer authority.
+
+## Constants
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+## State Variables
+
+### script
+
+```solidity
+DeployTimelock internal script;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### predicted
+
+```solidity
+address internal predicted;
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("authority-emergency");
+```
+
+### usdc
+
+```solidity
+TestERC20 internal usdc;
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_build-address-governeduups-upgrademode"></a>
+
+### _build
+
+```solidity
+function _build(address authority, GovernedUUPS.UpgradeMode mode) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| authority | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="_handover"></a>
+
+### _handover
+
+```solidity
+function _handover() internal returns (DeployTimelock.Deployed memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `DeployTimelock.Deployed` |  |
+
+<a id="_proxies"></a>
+
+### _proxies
+
+```solidity
+function _proxies() internal view returns (address[5] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[5]` |  |
+
+<a id="test_nointerimauthority_thenthehandoverdeploysthepredictedtimelock"></a>
+
+### test_noInterimAuthority_thenTheHandoverDeploysThePredictedTimelock
+
+Before the timelock stage the authority has no code and nobody can upgrade or
+freeze; the stage deploys the timelock at exactly the address every proxy named,
+and from then on the Safe, through it, can.
+
+```solidity
+function test_noInterimAuthority_thenTheHandoverDeploysThePredictedTimelock() public;
+```
+
+<a id="test_handover_refusesaproxynaminganotherauthority"></a>
+
+### test_handover_refusesAProxyNamingAnotherAuthority
+
+A proxy that names any other authority (a placeholder, the deployer, another
+deployment's timelock) stops the handover before any role moves.
+
+```solidity
+function test_handover_refusesAProxyNamingAnotherAuthority() public;
+```
+
+<a id="test_atimelockalreadyattheprediction_isreused"></a>
+
+### test_aTimelockAlreadyAtThePrediction_isReused
+
+CREATE2 binds the init code: whoever deploys the timelock at the prediction first,
+it is the same Safe-proposer timelock, and the stage reuses it after checking it.
+
+```solidity
+function test_aTimelockAlreadyAtThePrediction_isReused() public;
+```
+
+<a id="test_frozenstack_handsover_andstaysfrozen"></a>
+
+### test_frozenStack_handsOver_andStaysFrozen
+
+A stack deployed frozen hands over the same way; afterwards not even the timelock
+can upgrade it.
+
+```solidity
+function test_frozenStack_handsOver_andStaysFrozen() public;
+```
+
+<a id="test_stageenv_isrequired_andnamestheprediction"></a>
+
+### test_stageEnv_isRequired_andNamesThePrediction
+
+The stage env: SAFE_ADDRESS and TIMELOCK_MIN_DELAY name the timelock, UPGRADE_MODE is
+`upgradeable` or `frozen`. Every one is required; nothing has a default.
+
+```solidity
+function test_stageEnv_isRequired_andNamesThePrediction() public;
+```
+

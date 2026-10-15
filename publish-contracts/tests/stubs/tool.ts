@@ -20,12 +20,12 @@ interface Cfg {
   chainId: number;
   vaultOut?: Record<string, string>;       // script file -> the vault address the stub manifest holds (default 0x1001): a redeploy writes a NEW vault (issue 1796)
                                            // and its FIRST broadcast transaction is the deployer's CREATE of it (QA plan v1 C2: the receipt's contractAddress)
-  upgradeMode?: string;                    // the upgrade_mode every stub manifest names (default upgradeable, issue 1809)
   createdOut?: Record<string, string>;     // script file -> the address that CREATE receipt names instead (a manifest that is not the created contract)
   revertedReceipt?: Record<string, number>; // script file -> the index of a broadcast receipt whose status is 0x0 (forge still reported success)
   staleNonceReads?: Record<string, number>; // script file -> how many `cast nonce` reads of the sender after its successful broadcast answer the nonce from BEFORE it
                                            // (QA plan v1 E6, issue 1723: a load-balanced RPC node behind the broadcast block)
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
+  manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 
@@ -83,7 +83,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (n >= 0) {
       mkdirSync(dir, { recursive: true });
       const hash = (i: number) => `0x${(i + 1).toString(16).padStart(64, "0")}`;
-      // a redeploy (vaultOut) CREATEs its vault in its first transaction; forge copies each receipt's status, sender and created contract from the chain
+      // a redeploy (vaultOut) CREATEs its vault in its first transaction; forge copies each receipt's status, sender and created contract from the chain (QA plan v1 C2)
       const created = cfg.vaultOut?.[file] !== undefined ? (cfg.createdOut?.[file] ?? cfg.vaultOut[file]!) : undefined;
       writeFileSync(join(dir, "run-latest.json"), JSON.stringify({
         transactions: Array.from({ length: n }, (_, i) => ({
@@ -100,14 +100,15 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         vault: cfg.vaultOut?.[file] ?? addr(0x1001), registry: addr(0x1002), router: addr(0x1003), gateway: addr(0x1004), governance: addr(0x1005), policy: addr(0x1006),
         consensus_receipt: addr(0x1007), timelock: addr(0x1008), tick_math: cfg.libsAddress ?? addr(0x1009), adapter: addr(0xa2),
         recorder: addr(0x100a), adapter_v4: addr(0xa4),
-        // issue 1705 C4: the vault stage's three lending adapters (the verify sheet reads them from the vault manifest)
-        aave_adapter: addr(0xada1), compound_adapter: addr(0xada2), moonwell_flagship_adapter: addr(0xada3),
-        // issue 1809 (ADR-0014): each proxy stage names the implementation behind its proxy, the authority it was born with (the authority stage's timelock, the
-        // `timelock` above) and the release mode; the libs stage names the ExclusionLedgerFactory the vault stage reads. tests/harness.ts healthyProxyReader answers the read-back.
-        // The authority is the one the script was given, as the real scripts write it: UPGRADE_AUTHORITY on a proxy stage, TIMELOCK_ADDRESS on the single-vault
-        // redeploy (RedeployProtocolAssetVault.s.sol, QA plan v1 L1), the stub timelock otherwise.
-        vault_implementation: addr(0x2001), registry_implementation: addr(0x2002), router_implementation: addr(0x2003), gateway_implementation: addr(0x2004),
-        policy_implementation: addr(0x2006), consensus_receipt_implementation: addr(0x2007), upgrade_authority: process.env.UPGRADE_AUTHORITY || process.env.TIMELOCK_ADDRESS || addr(0x1008), upgrade_mode: cfg.upgradeMode ?? "upgradeable",
+        // issue 1808/1809: a proxy stage records each implementation, the upgrade authority and the release mode it read (UPGRADE_MODE)
+        ...(process.env.UPGRADE_MODE ? {
+          vault_implementation: addr(0x1101), registry_implementation: addr(0x1102), router_implementation: addr(0x1103), gateway_implementation: addr(0x1104),
+          governance_implementation: addr(0x1105), policy_implementation: addr(0x1106), consensus_receipt_implementation: addr(0x1107), implementation: addr(0x1108),
+          upgrade_timelock: addr(0x1008), upgrade_mode: cfg.manifestMode?.[file] ?? process.env.UPGRADE_MODE,
+        } : {}),
+        // the vault stage's three strategy adapters (issue 1705 C4: the verifier sheet reads them)
+        aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3),
+        // QA plan v1 D3 (core 1820): the libs stage names the ExclusionLedgerFactory the vault stage reads (EXCLUSION_LEDGER_FACTORY)
         exclusion_ledger_factory: addr(0x100b),
       }));
     }

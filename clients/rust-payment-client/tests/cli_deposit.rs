@@ -12,10 +12,11 @@
 mod common;
 
 use crate::common::{
-    enc_bool, install_happy_path_mocks, jrpc_result, jrpc_result_raw, match_eth_call_selector,
-    selector_hex_of, Fixture, GATEWAY, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE,
+    enc_bool, install_gateway_implementation, install_happy_path_mocks, jrpc_result,
+    jrpc_result_raw, match_eth_call_selector, selector_hex_of, Fixture, FIXTURE_BLOCK_TAG, GATEWAY,
+    GATEWAY_CODE, SHARE_RECEIVER, SIGNER_ADDRESS, TEST_PASSPHRASE,
 };
-use alloy_primitives::{b256, hex as ahex, Bytes, LogData, B256, U256};
+use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
 use alloy_sol_types::SolEvent;
 use assert_cmd::Command;
 use mockito::Matcher;
@@ -734,5 +735,198 @@ async fn deposit_reverted_tx_emits_err_tx_reverted() {
     assert_eq!(out.status.code(), Some(2));
     let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
     assert_eq!(v["error"], "ErrTxReverted");
+    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
+}
+
+// ── Gateway implementation binding (issue 1810) ─────────────────────────
+//
+// The fixture gateway is an ERC-1967 proxy. Its runtime code — and so the
+// pinned `gateway_runtime_hash` — never changes in these tests; only what the
+// implementation slot names does. The approved implementation is IMPL_A.
+
+const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0x60, 0x02, 0xaa];
+const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0x60, 0x02, 0xbb];
+/// The receipt bodies above mine the transaction in block 0x42.
+const RECEIPT_BLOCK_TAG: &str = "0x42";
+
+/// Run `rmpc deposit` against `fix` and return (exit code, stdout JSON).
+fn run_deposit(fix: &Fixture) -> (Option<i32>, Value) {
+    let out = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", unique_state_dir())
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            "1000",
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .output()
+        .expect("rmpc ran");
+    eprintln!("STDERR: {}", String::from_utf8_lossy(&out.stderr));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim())
+        .expect("stdout is JSON");
+    (out.status.code(), v)
+}
+
+/// `eth_sendRawTransaction` that must never be called.
+async fn forbid_broadcast(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await
+}
+
+/// The gateway-code mock, asserted hit: the proxy hash pin ran and passed.
+async fn proxy_code_read(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_getCode"})),
+            Matcher::Regex(format!(r#""params":\["{GATEWAY:#x}""#)),
+        ]))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(GATEWAY_CODE))))
+        .expect_at_least(1)
+        .create_async()
+        .await
+}
+
+#[tokio::test]
+async fn deposit_signs_and_succeeds_under_the_approved_implementation() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, None).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(0), "{v}");
+    assert_eq!(v["status"], "success");
+}
+
+/// The proxy hash is unchanged and passes; the slot names IMPL_B. The write
+/// refuses before anything is signed or sent.
+#[tokio::test]
+async fn deposit_refuses_a_swapped_implementation_while_the_proxy_hash_is_unchanged() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let proxy_code = proxy_code_read(&mut server).await;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, None).await;
+    let send = forbid_broadcast(&mut server).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    assert_eq!(v["checks"]["gateway_code_hash_match"], true);
+    assert_eq!(v["checks"]["gateway_implementation_match"], false);
+    proxy_code.assert_async().await;
+    send.assert_async().await;
+}
+
+/// The implementation slot cannot be read: refuse, never sign.
+#[tokio::test]
+async fn deposit_refuses_when_the_implementation_read_fails() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getStorageAt"})))
+        .with_status(200)
+        .with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"missing trie node"}}"#,
+        )
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let send = forbid_broadcast(&mut server).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationUnverified");
+    send.assert_async().await;
+}
+
+/// The preflight block (FIXTURE_BLOCK_TAG) shows IMPL_A; by `latest`, after
+/// signing, the slot names IMPL_B. The signed envelope is discarded unsent.
+#[tokio::test]
+async fn deposit_discards_the_signed_transaction_when_the_implementation_changes_before_broadcast()
+{
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, Some(FIXTURE_BLOCK_TAG)).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, Some("latest")).await;
+    let send = forbid_broadcast(&mut server).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationChanged");
+    assert!(
+        v["message"].as_str().unwrap().contains("discarded unsent"),
+        "{v}"
+    );
+    send.assert_async().await;
+}
+
+/// Verified and broadcast under IMPL_A, but the block the transaction
+/// executed in (0x42) shows IMPL_B. The write is not reported as a success.
+#[tokio::test]
+async fn deposit_is_not_a_success_when_it_executed_under_another_implementation() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(U256::from(1000u64), U256::from(1000u64)),
+    )
+    .await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, None).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, Some(RECEIPT_BLOCK_TAG)).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let (code, v) = run_deposit(&fix);
+    assert_eq!(code, Some(2), "{v}");
+    assert_eq!(v["error"], "ErrImplementationChanged");
     assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
 }

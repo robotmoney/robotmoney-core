@@ -45,16 +45,17 @@ pub struct Health {
     pub reorg_count: i32,
 }
 
-/// One Timelock or Safe event (`admin_events`).
+/// One Timelock, Safe or proxy-upgrade event (`admin_events`).
 #[derive(Debug, Serialize)]
 pub struct AdminEventEntry {
     pub chain_id: i64,
     pub block_number: i64,
     pub log_index: i32,
     pub tx_hash: String,
-    /// The Timelock or Safe that emitted it.
+    /// The Timelock, Safe or proxied core contract that emitted it.
     pub contract: String,
-    /// `timelock` or `safe`.
+    /// `timelock`, `safe`, or `proxy` (a core contract's `Upgraded` /
+    /// `UpgradesFrozen`, issue 1810).
     pub contract_kind: String,
     pub event_name: String,
     /// Timelock operation id, or Safe transaction hash.
@@ -72,63 +73,53 @@ pub struct AdminEventsResponse {
     pub freshness: Freshness,
 }
 
-/// One proxy `Upgraded` or `UpgradesFrozen` event (`proxy_upgrade_events`, migration 0024,
-/// QA plan P3).
-#[derive(Debug, Serialize)]
-pub struct ProxyUpgradeEventEntry {
-    pub chain_id: i64,
-    pub block_number: i64,
-    pub log_index: i32,
-    pub tx_hash: String,
-    /// The proxy that emitted it.
-    pub contract: String,
-    /// `upgraded` or `frozen`.
-    pub kind: String,
-    /// The implementation the proxy runs from this event on, or the one it froze on.
-    pub implementation: String,
-    /// `frozen` only: the implementation's runtime code hash.
-    pub code_hash: Option<String>,
-    pub indexed_at: DateTime<Utc>,
-}
-
-/// The indexed upgrade state of one proxy, folded from its events.
-#[derive(Debug, Serialize)]
-pub struct ProxyUpgradeState {
-    pub chain_id: i64,
-    /// The proxy address.
-    pub contract: String,
-    /// `contracts.kind` when the proxy is a configured contract (`gateway`, `vault`, ...); null for a
-    /// registry-discovered vault.
-    pub contract_kind: Option<String>,
-    /// The implementation of its newest `Upgraded` event.
-    pub implementation: Option<String>,
-    /// The block of that event.
-    pub upgraded_block: Option<i64>,
-    /// True once any `UpgradesFrozen` event is indexed. A freeze is one-way.
-    pub upgrades_frozen: bool,
-    /// The block of the freeze; null while upgradeable.
-    pub frozen_block: Option<i64>,
-    /// The runtime code hash the freeze named; null while upgradeable.
-    pub frozen_code_hash: Option<String>,
-}
-
-/// Response for GET /v1/upgrades.
-#[derive(Debug, Serialize)]
-pub struct ProxyUpgradesResponse {
-    /// One entry per proxy with an indexed upgrade event, ordered by address.
-    pub contracts: Vec<ProxyUpgradeState>,
-    /// The events themselves, newest first, at most 500.
-    pub events: Vec<ProxyUpgradeEventEntry>,
-    #[serde(flatten)]
-    pub freshness: Freshness,
-}
-
 #[derive(Debug, Serialize)]
 pub struct Contract {
     pub chain_id: i64,
     pub address: String,
     pub kind: String,
     pub label: Option<String>,
+    /// The implementation behind this ERC-1967 proxy, from its newest indexed
+    /// `Upgraded` event; null when none was indexed (issue 1810).
+    pub implementation: Option<String>,
+    /// [`UpgradeState`] as a string: `frozen`, `upgradeable` or `unknown`.
+    pub upgrade_state: &'static str,
+    /// Block of the indexed `UpgradesFrozen` event; null unless frozen.
+    pub frozen_at_block: Option<i64>,
+}
+
+/// Whether a contract can still be upgraded, as far as the indexed events
+/// show (issue 1810). Disclosure only: signing clients read the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeState {
+    /// An `UpgradesFrozen` event was indexed. Permanent: there is no unfreeze.
+    Frozen,
+    /// An `Upgraded` event was indexed and no freeze. The upgrade timelock can
+    /// still replace the implementation.
+    Upgradeable,
+    /// No upgrade event was indexed: a direct (non-proxy) deployment, a
+    /// non-core contract, or a proxy deployed before the indexer's first block.
+    Unknown,
+}
+
+impl UpgradeState {
+    /// Derive the state from the indexed events: a freeze wins, any upgrade
+    /// event without a freeze is upgradeable, nothing indexed is unknown.
+    pub fn of(has_upgraded: bool, frozen_at_block: Option<i64>) -> Self {
+        match (frozen_at_block, has_upgraded) {
+            (Some(_), _) => UpgradeState::Frozen,
+            (None, true) => UpgradeState::Upgradeable,
+            (None, false) => UpgradeState::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UpgradeState::Frozen => "frozen",
+            UpgradeState::Upgradeable => "upgradeable",
+            UpgradeState::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -236,14 +227,14 @@ pub fn headroom_of(
 
 /// The USDC a redeem of `shares` pays, priced from the vault's newest snapshot:
 /// `floor(shares * preview_redeem_total / total_supply)`, where `preview_redeem_total` is the
-/// vault's `previewRedeem(totalSupply())` at that block (migration 0022).
+/// vault's `previewRedeem(totalSupply())` at that block (migration 0023).
 ///
 /// `previewRedeem` is linear in the share count up to rounding, so this is the vault's own
 /// `previewRedeem(shares)` to within one unit: net of the exit fee and, on a BasketVault, of the
 /// `maxSlippageBps` floor. The gross `shares * total_assets / total_supply` (`convertToAssets`)
 /// overstated rmAGENT positions by about 3% against what a redeem paid (core 1795, QA plan X8).
 ///
-/// `None` when the snapshot has no exit value (a row older than migration 0022 or a failed read)
+/// `None` when the snapshot has no exit value (a row older than migration 0023 or a failed read)
 /// or a zero supply: the value is unknown, and the gross value is never served in its place.
 pub fn position_exit_value(
     shares: &BigDecimal,
@@ -581,7 +572,7 @@ pub fn exclusion_finalize_reason_label(reason: i16) -> &'static str {
 ///
 /// Architecture §5.4: deposits, withdrawals, fee events and policy changes.
 /// There is no governance-vote kind: RouterGovernance voting was deleted
-/// (issue 1698) and migration 0023 removed the old `governance_vote` rows.
+/// (issue 1698) and migration 0024 removed the old `governance_vote` rows.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -702,7 +693,7 @@ pub struct CommitteeVoteEntry {
     /// The InvestmentCommitteePolicy deployment that emitted `VoteSubmitted`,
     /// 0x-prefixed hex. `vote_id` is an index into one deployment's votes, so
     /// a redeployed policy reuses every id, and only this field tells two such
-    /// votes apart (DI-10, migration 0019).
+    /// votes apart (DI-10, migration 0020).
     pub contract_address: String,
     pub vote_id: i64,
     pub vault: String,
@@ -916,7 +907,7 @@ mod tests {
             position_exit_value(&d("2"), Some(&d("10")), Some(&d("3"))).map(|v| dec_to_string(&v)),
             Some("6".to_string())
         );
-        // No exit value on the snapshot (older than migration 0022): unknown, never the gross value.
+        // No exit value on the snapshot (older than migration 0023): unknown, never the gross value.
         assert_eq!(position_exit_value(&shares, None, Some(&supply)), None);
         // No snapshot, or a zero supply: unknown.
         assert_eq!(

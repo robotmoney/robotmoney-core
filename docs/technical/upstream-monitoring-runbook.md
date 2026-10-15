@@ -236,7 +236,10 @@ The workflow runs:
 3. **On `workflow_dispatch`** — for manual operator runs.
 
 The nightly run requires the `BASE_RPC_URL` secret to be set in the repository.
-If the secret is absent, the live-check steps are skipped and only the mock tests run.
+If the secret is absent on the scheduled run, the `Require BASE_RPC_URL on the nightly
+schedule` preflight step (`scripts/monitor-require-rpc.sh`) fails the job with `::error`, so
+the nightly never reports success while running no monitors. On `workflow_dispatch` without the
+secret it only warns and the live-check steps are skipped.
 
 The same workflow holds the job `recorder-keeper-fork` (core 1779, QA plan v1 E10). It runs
 only on schedule and on `workflow_dispatch`, never on a pull request or a push. It runs

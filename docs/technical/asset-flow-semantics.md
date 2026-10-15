@@ -1,6 +1,6 @@
 # Asset Flow Semantics — Implicit vs. Explicit Design
 
-> **Status (2026-10-15): the flows below trace the unified `Vault.sol`, which S10 deleted (ADR-0010 is Rejected).** The shipped USDC vault is `contracts/RobotMoneyVault.sol`. Its deposit routing and adapter allocation run in the linked library `contracts/lib/VaultAdapterOps.sol` (`routeDeposit`, then `_allocate` per adapter, ADR-0014 §9). Line numbers and helper names here are the deleted file's.
+> **Status (2026-10-15): the flows below trace the unified `Vault.sol`, which S10 deleted (ADR-0010 is Rejected).** The shipped USDC vault is `contracts/RobotMoneyVault.sol`. Its deposit routing and adapter allocation run in the linked library `contracts/lib/RobotMoneyVaultOps.sol` (`routeDeposit`, then `_allocate` per adapter, ADR-0014 §9). Line numbers and helper names here are the deleted file's.
 
 ## The Unspecified Gap
 
@@ -20,7 +20,7 @@ User calls deposit(assets, receiver)
   ├─ Route into adapters: _routeDeposit(assets) — flat equal-split across all adapters
   │   ├─ Each adapter receives equalShare = assets / n_adapters
   │   ├─ _allocateTo(i, allocation): safeTransfer(adptAddr, amount); adpt.deploy(amount, minValueOut)
-  │   │   └─ (today: VaultAdapterOps._allocate; safeTransfer then adpt.deploy(amount))
+  │   │   └─ (today: RobotMoneyVaultOps._allocate; safeTransfer then adpt.deploy(amount))
   │   │   └─ Inside adapter: USDC→token swap via Uniswap V4 Router
   │   │   └─ User receives token shares from the pool
   │   └─ Adapter's totalAssets() increments

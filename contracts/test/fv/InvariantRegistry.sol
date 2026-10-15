@@ -48,7 +48,7 @@ library InvariantRegistry {
     /// @dev The full catalogue. Order mirrors the spec's section order. NEVER
     ///      reorder-and-renumber; append-only like the spec's IDs.
     function entries() internal pure returns (Entry[] memory e) {
-        e = new Entry[](67);
+        e = new Entry[](65);
         uint256 i;
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
@@ -121,6 +121,14 @@ library InvariantRegistry {
         e[i++] = Entry("GOV-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("GOV-4", Status.HOLDS, "symbolic", 0); // F-05 / RTR-4 fixed (#968)
         e[i++] = Entry("GOV-5", Status.HOLDS, "static-guard", 0); // 🟡 trusted / operational
+        // Issue 1808: governed UUPS upgrades and the one-way freeze (GovernedUpgrade.t.sol,
+        // UpgradeAuthorityStages.t.sol, UpgradeLifecycleFork.t.sol, the CI layout gate).
+        e[i++] = Entry("GOV-6", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-7", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-8", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-9", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-10", Status.HOLDS, "deploy-assertion", 0);
+        e[i++] = Entry("GOV-11", Status.HOLDS, "static-guard", 0);
 
         // ── 9. Adapters (ADP) ────────────────────────────────────────────────
         e[i++] = Entry("ADP-1", Status.HOLDS, "static-guard", 0);
@@ -133,19 +141,6 @@ library InvariantRegistry {
         e[i++] = Entry("FEE-1", Status.HOLDS, "fuzz", 0);
         e[i++] = Entry("FEE-2", Status.HOLDS, "fuzz", 0); // NC-11 fixed (#971): fee on realised proceeds
         e[i++] = Entry("FEE-3", Status.HOLDS, "static-guard", 0);
-
-        // ── 11. Upgrades & freeze (UPG) — ADR-0014, QA plan v1 P1 (#1808) ────
-        // Deep proofs: GovernedUpgradeLifecycle.t.sol (every proxied kind),
-        // UpgradeCeilings.t.sol, scripts/ci/check-storage-layout.sh --selftest.
-        e[i++] = Entry("UPG-1", Status.HOLDS, "deploy-assertion", 0);
-        e[i++] = Entry("UPG-2", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("UPG-3", Status.HOLDS, "static-guard", 0);
-        e[i++] = Entry("UPG-4", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("UPG-5", Status.HOLDS, "fuzz", 0);
-        e[i++] = Entry("UPG-6", Status.HOLDS, "stateful-invariant", 0);
-        e[i++] = Entry("UPG-7", Status.HOLDS, "static-guard", 0);
-        // QA plan v1 P3 (#1810, Decisions D5): GatewayImplementationVersion.t.sol.
-        e[i++] = Entry("UPG-8", Status.HOLDS, "symbolic", 0);
 
         require(i == e.length, "InvariantRegistry: length mismatch");
     }

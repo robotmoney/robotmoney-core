@@ -203,7 +203,7 @@ fn deploy_mock_vault(deployer: &rmpc_fork_e2e::Account<'_>, usdc: Address) -> Ad
         .expect("deploy MockVault")
 }
 
-/// Deploy `RobotMoneyGateway` behind its proxy (ADR-0014), no router.
+/// Deploy `RobotMoneyGateway` (no router).
 fn deploy_gateway(
     deployer: &rmpc_fork_e2e::Account<'_>,
     usdc: Address,
@@ -211,13 +211,23 @@ fn deploy_gateway(
     admin: Address,
     pauser: Address,
 ) -> Address {
-    rmpc_fork_e2e::proxied::deploy_robot_money_gateway(
+    let mut code: Vec<u8> = Vec::new();
+    // 5 × address args: usdc, vault, admin, pauser, router=address(0)
+    let mut args = [0u8; 160];
+    args[12..32].copy_from_slice(usdc.as_slice());
+    args[44..64].copy_from_slice(vault.as_slice());
+    args[76..96].copy_from_slice(admin.as_slice());
+    args[108..128].copy_from_slice(pauser.as_slice());
+    // router = address(0) — slot 128..160 stays zero
+    code.extend_from_slice(&args);
+    // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
+    // committee routing additions in issue #1049 (deployment cost ~5.15M).
+    rmpc_fork_e2e::governed::deploy_governed(
         deployer,
-        usdc,
-        vault,
-        admin,
-        pauser,
-        Address::ZERO,
+        "RobotMoneyGateway.sol",
+        "RobotMoneyGateway",
+        &code,
+        8_000_000,
     )
     .expect("deploy RobotMoneyGateway")
 }
@@ -819,9 +829,19 @@ fn router_withdrawal() {
 
     // ── Deploy infrastructure ────────────────────────────────────────────────
 
-    // VaultRegistry behind its proxy (ADR-0014).
-    let registry = rmpc_fork_e2e::proxied::deploy_vault_registry(&admin, admin.address)
-        .expect("deploy VaultRegistry");
+    // VaultRegistry
+    let registry = {
+        let mut code: Vec<u8> = Vec::new();
+        code.extend_from_slice(&encode_address_arg(admin.address));
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "VaultRegistry.sol",
+            "VaultRegistry",
+            &code,
+            3_000_000,
+        )
+        .expect("deploy VaultRegistry")
+    };
 
     // Two 1:1 MockVaults
     let vault_a = {
@@ -892,10 +912,23 @@ fn router_withdrawal() {
             .expect("setRouterEligible B");
     }
 
-    // PortfolioRouter behind its proxy (ADR-0014), 60/40 split below.
-    let router =
-        rmpc_fork_e2e::proxied::deploy_portfolio_router(&admin, usdc, registry, admin.address)
-            .expect("deploy PortfolioRouter");
+    // PortfolioRouter (60/40 split)
+    let router = {
+        let mut code: Vec<u8> = Vec::new();
+        let mut args = [0u8; 96];
+        args[12..32].copy_from_slice(usdc.as_slice());
+        args[44..64].copy_from_slice(registry.as_slice());
+        args[76..96].copy_from_slice(admin.address.as_slice());
+        code.extend_from_slice(&args);
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "PortfolioRouter.sol",
+            "PortfolioRouter",
+            &code,
+            4_000_000,
+        )
+        .expect("deploy PortfolioRouter")
+    };
 
     // Set 60/40 weights.
     admin
@@ -910,17 +943,29 @@ fn router_withdrawal() {
         )
         .expect("setWeights");
 
-    // RobotMoneyGateway behind its proxy (ADR-0014), with the router.
+    // RobotMoneyGateway (with router)
+    // Constructor: (usdc, vault, admin, pauser, router) — 5 × address.
     // `vault` arg: use vault_a as the pinned vault (single-vault path still needs one).
-    let gateway = rmpc_fork_e2e::proxied::deploy_robot_money_gateway(
-        &admin,
-        usdc,
-        vault_a, // pinned vault
-        admin.address,
-        pauser.address,
-        router,
-    )
-    .expect("deploy RobotMoneyGateway");
+    let gateway = {
+        let mut code: Vec<u8> = Vec::new();
+        let mut args = [0u8; 160];
+        args[12..32].copy_from_slice(usdc.as_slice());
+        args[44..64].copy_from_slice(vault_a.as_slice()); // pinned vault
+        args[76..96].copy_from_slice(admin.address.as_slice());
+        args[108..128].copy_from_slice(pauser.address.as_slice());
+        args[140..160].copy_from_slice(router.as_slice());
+        code.extend_from_slice(&args);
+        // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
+        // committee routing additions in issue #1049 (deployment cost ~5.15M).
+        rmpc_fork_e2e::governed::deploy_governed(
+            &admin,
+            "RobotMoneyGateway.sol",
+            "RobotMoneyGateway",
+            &code,
+            8_000_000,
+        )
+        .expect("deploy RobotMoneyGateway")
+    };
 
     eprintln!(
         "[router_withdrawal] vaultA={vault_a:#x} vaultB={vault_b:#x} router={router:#x} gateway={gateway:#x}"

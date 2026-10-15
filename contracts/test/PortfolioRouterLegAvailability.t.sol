@@ -27,7 +27,7 @@ import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
@@ -127,7 +127,7 @@ contract PortfolioRouterLegAvailabilityTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        agent = Proxied.agentTokenVault(
+        agent = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("swapRouter02")),
             1_000_000e6,
@@ -138,8 +138,8 @@ contract PortfolioRouterLegAvailabilityTest is Test {
             admin
         );
         other = new MockVault(address(usdc));
-        registry = Proxied.vaultRegistry(admin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         // Ring at the 901-slot floor and one full 1800 s window of history before `addAsset`.
         rec.grow(901);
@@ -150,9 +150,7 @@ contract PortfolioRouterLegAvailabilityTest is Test {
 
         vm.startPrank(admin);
         agent.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        agent.addAsset(
-            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
-        );
+        agent.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
         // The 2.91 percent fee leaves the 300 bps default no room: the deploy script raises it to the 500 bps ceiling.
         agent.setMaxSlippageBps(500);
         agent.setNavDeviationGuardBps(SHEET_NAV_DEVIATION_BPS);
@@ -271,8 +269,8 @@ contract PortfolioRouterLegAvailabilityTest is Test {
     ///         1,000 USDC: Y never quotes, Z quotes 300 but not the 429 it gets once Y is gone, X takes everything.
     ///         Preview and execute agree on each round's result, and neither dropped leg is ever called.
     function test_RTR5_quoteRevertDropsLegAndResplitsUntilStable() public {
-        VaultRegistry reg = Proxied.vaultRegistry(admin);
-        PortfolioRouter r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
+        VaultRegistry reg = CoreProxies.vaultRegistry(admin);
+        PortfolioRouter r = CoreProxies.portfolioRouter(address(usdc), address(reg), admin);
         QuoteCeilingVault x = new QuoteCeilingVault(address(usdc));
         QuoteCeilingVault y = new QuoteCeilingVault(address(usdc));
         QuoteCeilingVault z = new QuoteCeilingVault(address(usdc));
@@ -401,9 +399,9 @@ contract PortfolioRouterLegAvailabilityTest is Test {
     ///         its deposit reverted inside `MorphoAdapter._deposit` (`ExposureCapExceeded`), and the whole routed deposit
     ///         reverted `UsdcLegTransferFailed(rmUSDC)`.
     function test_RTR5_rmUsdcLegWithCappedMorphoStillDeposits() public {
-        VaultRegistry reg = Proxied.vaultRegistry(admin);
-        PortfolioRouter r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
-        RobotMoneyVault rmUsdc = Proxied.robotMoneyVault(
+        VaultRegistry reg = CoreProxies.vaultRegistry(admin);
+        PortfolioRouter r = CoreProxies.portfolioRouter(address(usdc), address(reg), admin);
+        RobotMoneyVault rmUsdc = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), 1_000_000e6, 1_000_000e6, 0, makeAddr("fees"), admin, admin
         );
         NoYieldTestAdapter lending = new NoYieldTestAdapter(address(usdc), address(rmUsdc));
@@ -462,8 +460,8 @@ contract PortfolioRouterLegAvailabilityTest is Test {
         internal
         returns (PortfolioRouter r, MockVault second)
     {
-        VaultRegistry reg = Proxied.vaultRegistry(admin);
-        r = Proxied.portfolioRouter(address(usdc), address(reg), admin);
+        VaultRegistry reg = CoreProxies.vaultRegistry(admin);
+        r = CoreProxies.portfolioRouter(address(usdc), address(reg), admin);
         second = new MockVault(address(usdc));
         address[] memory vaults = new address[](2);
         vaults[0] = address(rmUsdc);
@@ -495,7 +493,7 @@ contract PortfolioRouterLegAvailabilityTest is Test {
     }
 
     function _rmUsdc(uint256 tvlCap) internal returns (RobotMoneyVault) {
-        return Proxied.robotMoneyVault(
+        return CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), tvlCap, tvlCap, 0, makeAddr("fees"), admin, admin
         );
     }

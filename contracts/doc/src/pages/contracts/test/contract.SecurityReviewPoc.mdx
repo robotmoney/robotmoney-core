@@ -4,23 +4,20 @@ title: "SecurityReviewPoc"
 
 # SecurityReviewPoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/SecurityReviewPoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a98efe2f1ff3a45c9c71e4fb73232795b566e34a/contracts/test/SecurityReviewPoc.t.sol)
 
 **Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
 
 ## Functions
 
-<a id="test_duplicateadapterrefused_fullredemptionpayspar"></a>
+<a id="test_duplicateadapteraddreverts"></a>
 
-### test_duplicateAdapterRefused_fullRedemptionPaysPar
+### test_duplicateAdapterAddReverts
 
-Finding 2 of docs/code-review/20261012-security-review.md. At baseline this PoC proved
-the duplicate add landed, NAV counted one balance twice and the full redemption
-reverted. Issue #1789 refuses an address an ACTIVE entry already holds, so the same
-path now pins `AdapterAlreadyActive` and a full redemption at par.
+Remediated by core 1789: a duplicate add reverts, so NAV is never double counted.
 
 ```solidity
-function test_duplicateAdapterRefused_fullRedemptionPaysPar() public;
+function test_duplicateAdapterAddReverts() public;
 ```
 
 <a id="test_revokedadapterwindowdepositblocked"></a>

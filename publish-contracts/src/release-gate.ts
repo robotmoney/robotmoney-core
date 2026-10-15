@@ -7,8 +7,7 @@
 //      Every baseline is held to that proof: a reconstructed one since issue 1740, a plain measured one since QA plan v1 E4 (a hand-edited or uncommitted file is refused).
 //   3. a GitHub token is present and scripts/ci/check-sha-green.ts <sha> --repo robotmoney/robotmoney-core exits 0 (CI_NOT_GREEN); the repository is never the caller's GITHUB_REPOSITORY
 //   Security round 2 (review: SECURITY_TRUST_ROOT): step 1 checks the tag on the canonical repository (the origin's effective URL must be robotmoney/robotmoney-core,
-//   release-tag.ts verifyCanonicalRemoteTag), and step 3 runs the check-sha-green.ts and required-checks.json of `ciDir`. The build gate of an upgrade or a freeze
-//   (build-provenance.ts) passes the deployment checkout there, so the build checkout under test never supplies the script or the list that decide "green".
+//   release-tag.ts verifyCanonicalRemoteTag).
 //   Security round 3 (review: SECURITY_TRUST_ROOT): step 1 reads the local tags with replace refs off and a scrubbed environment, and asks the canonical repository
 //   (its https URL, from outside the checkout) for the tag object and the commit it peels to, which must be the sha. A refs/replace ref, a GIT_DIR in the
 //   environment or a repo-local config of the checkout under test can no longer make an untagged commit pass.
@@ -32,7 +31,7 @@ export const CHECK_SHA_GREEN_SCRIPT = join("scripts", "ci", "check-sha-green.ts"
  */
 export const CORE_REPO = "robotmoney/robotmoney-core";
 export interface CiGreenResult { code: number; output: string }
-/** Test seam. The real one runs `bun scripts/ci/check-sha-green.ts <sha> --repo <repo>` in `coreDir` (the gate's `ciDir`) with the caller's GitHub token. */
+/** Test seam. The real one runs `bun scripts/ci/check-sha-green.ts <sha> --repo <repo>` in `coreDir` with the caller's GitHub token. */
 export type CheckShaGreen = (i: { coreDir: string; sha: string; repo: string; env: Record<string, string> }) => Promise<CiGreenResult>;
 
 /** The argv of one check-sha-green run: the script, the sha and the repository, always named. */
@@ -62,11 +61,6 @@ export interface ReleaseGateInput {
    * release-tag.ts verifyCanonicalRemoteTag; the canonical check since security round 2).
    */
   remoteTag?: RemoteTagCheck;
-  /**
-   * Security round 2: the checkout whose scripts/ci/check-sha-green.ts, and the required-checks.json beside it, decide that `sha` is green. Default `coreDir`. The build
-   * gate of an upgrade or a freeze names the deployment checkout the CLI gated, never the build checkout under test (its own script could exit 0 on anything).
-   */
-  ciDir?: string;
   /**
    * Issue 1733: re-verifies a RECONSTRUCTED baseline (counts-reconstruct.ts) against the build and the chain at plan time. Required when the frozen file is a reconstruction:
    * without it the gate refuses (COUNTS_MISSING), because an offline load proves only the arithmetic, not the adoption records.
@@ -199,8 +193,7 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const env: Record<string, string> = { GITHUB_TOKEN: token };
   // GITHUB_REPOSITORY is not forwarded: the repository is CORE_REPO, named on the command line (security round 1).
   for (const k of ["PATH", "HOME"]) if (i.env[k]) env[k] = i.env[k]!;
-  // security round 2: the script and its required-checks.json come from ciDir (the deployment checkout for a build gate), never from a build checkout under test
-  const r = await (i.checkShaGreen ?? spawnCheckShaGreen)({ coreDir: i.ciDir ?? i.coreDir, sha: i.sha, repo: CORE_REPO, env });
+  const r = await (i.checkShaGreen ?? spawnCheckShaGreen)({ coreDir: i.coreDir, sha: i.sha, repo: CORE_REPO, env });
   if (r.code !== 0) {
     const lines = r.output.split("\n").map((l) => l.trim()).filter((l) => l !== "");
     throw new PublishError("CI_NOT_GREEN", `CI is not green at ${i.sha} (check-sha-green exit ${r.code}): ${lines.slice(0, 12).join(" | ")}`, { sha: i.sha, exit: r.code });

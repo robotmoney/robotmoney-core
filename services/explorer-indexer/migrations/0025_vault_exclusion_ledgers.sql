@@ -1,16 +1,15 @@
 -- Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
---            docs/adr/ADR-0014-governed-upgrades-and-freeze.md §9 — the ledger factory
+--            docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md — proxied vaults
 -- Implements: QA plan v1 security round 1 (indexer lane), core issue 1820 —
 --             each vault's ExclusionLedger is read from the chain, never derived.
--- (See also: contracts/ExclusionLedgerFactory.sol; contracts/RobotMoneyVault.sol
---  `_initLedger`; services/explorer-indexer/src/indexer.rs `exclusion_ledgers_of`.)
+-- (See also: contracts/lib/RobotMoneyVaultOps.sol `createLedger`; services/explorer-indexer/src/indexer.rs `exclusion_ledgers_of`.)
 --
--- Migration 0021 indexed the ledger at an address the indexer derived: the
+-- Migration 0022 indexed the ledger at an address the indexer derived: the
 -- vault's CREATE address at nonce 1, which held while the vault constructor ran
 -- `new ExclusionLedger(asset)`. ADR-0014 put every vault behind a proxy whose
--- initializer asks `ExclusionLedgerFactory` to create the ledger. The ledger now
--- sits at the factory's CREATE address and the derived address holds no code, so
--- no exclusion record was ever indexed.
+-- initializer creates the ledger (`RobotMoneyVaultOps.createLedger`, run as the proxy
+-- by DELEGATECALL). The ledger now sits at an address that is not the one derived from
+-- the vault, so no exclusion record was ever indexed.
 --
 -- One row per answer of a watched vault's own `exclusionLedger()` getter:
 --   ledger_address  the vault's ledger, or NULL when the vault has no such getter

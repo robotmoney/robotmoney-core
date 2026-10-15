@@ -139,8 +139,6 @@ fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
-        freeze_deadline: Default::default(),
-        upgrade_events: Default::default(),
         indexer_lag: Default::default(),
     }
 }
@@ -260,8 +258,6 @@ fn config_missing_threshold_is_fatal() {
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
-        freeze_deadline: Default::default(),
-        upgrade_events: Default::default(),
         indexer_lag: Default::default(),
     };
 

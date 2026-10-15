@@ -21,14 +21,15 @@
 //!
 //! **Superseded in part (issue 1698, QA plan C1):** the governance-vote kind is
 //! gone. RouterGovernance voting was deleted, the indexer no longer reads
-//! `VoteCast`, and migration 0023 deleted the `governance_vote` rows.
+//! `VoteCast`, and migration 0024 deleted the `governance_vote` rows.
 //!
 //! **Seams to touch:**
 //! 1. `services/explorer-indexer/src/abi.rs` — add `AgentWithdrawal` to
 //!    `IGatewayEvents` sol! block (currently marked MISSING).
 //! 2. `services/explorer-indexer/src/indexer.rs` — add `handle_log` branches
 //!    for `AgentWithdrawal`, `ExitFeeCharged` (as history row), `AgentRevoked`
-//!    (policy_change), `VoteCast` (governance_vote); call
+//!    (policy_change), `VoteCast` (governance_vote, deleted with
+//!    `RouterGovernance` voting in issue #1698); call
 //!    `db.insert_account_history_event(...)` from each branch.
 //! 3. `services/explorer-indexer/src/db.rs` — implement
 //!    `insert_account_history_event` and `list_account_history` (stubs in

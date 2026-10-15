@@ -23,7 +23,6 @@ import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFroz
 import { codeWithRetry, verifyReconstructionOnChain } from "./counts-reconstruct.ts";
 import { buildLibraryArtifacts } from "./libs-build.ts";
 import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./stages.ts";
-import { vaultRulesProblem } from "./vault-rules.ts";
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
@@ -33,12 +32,11 @@ import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.
 import { APPLY_ROW } from "./apply-receipt.ts";
 import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
-import { FREEZE_KEYS, FREEZE_ROW, UPGRADE_KEYS, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
-import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, isSelfAdminRow, govRowRefusal, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
+import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
-import { runProveControl, type ProveOpts } from "./prove-control.ts";
+import { runProveControl, type LogScanOpts, type ProveOpts } from "./prove-control.ts";
 import { startAnvil, type ChainStarter } from "./preflight.ts";
 import { USDC_ADDRESS, assertUsdcCode } from "./usdc.ts";
 import { assertExitFeeBound } from "./asset-config.ts";
@@ -58,8 +56,8 @@ export const USAGE = `publish contracts
                        record-receipt = the registered committee SUBMITTER (a Safe: --submitter, executed by --signer = the deployer, signed by its --owner-signer owners) anchors one consensus receipt through the gateway (issue 1727): --receipt-id, --payload-digest and --payload-uri
                                  from 'rmpc receipt verify'. Rehearsal (sheet DEPLOYMENT_KIND=rehearsal) and Twin only: production records with 'rmpc receipt submit' and an HSM or KMS signer.
                        redeploy-vault = REDEPLOY ONE VAULT into the live deployment (issue 1796, an experiment on a Base mainnet REHEARSAL: refused on 8453 in production): --vault PROTO. The DEPLOYER (--signer) deploys a NEW rmPROTO from the
-                                 release tag that holds the fix: paused before its first asset is added, unregistered, UNLINKED (the govern batch links it), ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched. --evidence is the run that deployed
-                                 the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, links and registers it, gives it the old vault's router cap, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
+                                 release tag that holds the fix: closed, unregistered, linked to the registry, ADMIN_ROLE on the timelock and EMERGENCY_ROLE on the emergency key. The old vault is not touched. --evidence is the run that deployed
+                                 the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, registers it, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
                                  SHA MODEL (QA plan v1 E1): --core-sha is the REDEPLOY sha (the fix's tag), recorded as the round's core_sha; the run manifest keeps the ORIGINAL sha. The govern row and the
                                  verify after it run at that redeploy sha (the row also at the original sha), with no frozen counts file for it: see --row redeploy-vault and --prior-out.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
@@ -82,63 +80,38 @@ export const USAGE = `publish contracts
                      On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
                      (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
                      the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
-  --admin-arg K=V    govern with a self-administration row (Twin chain 918453 only, refused on 8453): safe-add-owner, safe-remove-owner, safe-swap-owner, safe-change-threshold
-                     (one Safe transaction to the Safe) and timelock-grant-role, timelock-revoke-role (a Safe -> Timelock round). Keys: owner, old-owner, new-owner, threshold, role, account.
-                     With --row set-unwind-guard (8453 and 918453, below) the keys are vault, token, min-usdc-out, max-loss-bps, override-allowed.
                      --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698): ONE timelock call,
-                     RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and writes the payload's vector to the router in one transaction.
-                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the
-                     vector sums to 10000 bps and lists the registry's router-eligible vaults in registry order. Refused with GOVERN (nothing sent, before the schedule and before the
-                     execute) unless governance.receiptContract() is that receipt contract and governance holds its ADMIN_ROLE. Not part of stage 13. After the delay the same command executes it and
-                     reads isReleased and the router's EFFECTIVE weights back. An applied vector already active is replaced, never a refusal.
+                     RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector in the same transaction.
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector
+                     sums to 10000 bps and lists the registry's router-eligible vaults in registry order. Not part of stage 13. After the delay the same command executes it and reads
+                     isReleased and the router's active and effective weights back.
                      --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
-                     so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is set. Production and rehearsal, never part of stage 13.
+                     so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
                      --row set-unwind-guard --admin-arg vault=PROTO|AGENT|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
                      [--admin-arg override-allowed=true|false] (QA plan v1 D7) sets a basket vault's emergency unwind guard: ONE timelock operation, BasketVault.setEmergencyUnwindGuard(token,
                      minUsdcOut, overrideAllowed, maxLossBps) for the one token or for every active asset (all). min-usdc-out is USDC (6 decimals) for the vault's whole balance of the token,
                      above zero; override-allowed defaults to true (Safe-only, issue 1705 Q2). Refused (nothing scheduled) for a token that is not an active asset; a guard already in effect is
                      recorded as skipped. Production and rehearsal, never part of stage 13. The stage 12 verifier requires it on every active asset of an open basket: run it with the unpauses.
-                     --row upgrade-proxy --admin-arg proxy=<name> --admin-arg implementation=0x<address> [--admin-arg call=0x<reinitializer calldata>] [--admin-arg build=DIR]
-                     (issue 1809, ADR-0014 §4) upgrades ONE governed proxy (the stage table's proxies: rmUSDC, registry, router, gateway, icpolicy, receipt, rmPROTO, rmAGENT, rmRWA):
-                     ONE timelock operation, proxy.upgradeToAndCall(implementation, call). Refused (GOVERN, nothing scheduled) when the proxy is frozen, its upgradeAuthority() is not the
-                     timelock, an ERC-1967 admin or beacon slot is set, or the implementation has no code, is no UUPS implementation, has unlocked initializers or differs from the build
-                     artifact of the proxy's contract in DIR (default: the checkout's out/). Every chain and kind, never part of stage 13; the same command executes it after the delay.
-                     DIR must sit in a git checkout (recorded as build_sha); on 8453 that checkout must be clean at a release-tagged, CI-green sha of the sheet's kind (its origin
-                     robotmoney/robotmoney-core), DIR must be its own out/, and each compared artifact must be compiled from the sources committed there, or the row refuses
-                     before the Safe is read. A build whose storage-layout snapshot moves a live variable or changes a stored enum's members is refused. The same build= rules
-                     hold for freeze-proxy. DIR is resolved against the working directory and recorded as an absolute build_dir; a later verify needs it there (or --upgrade-build).
-                     --row freeze-proxy --admin-arg proxy=<name>|all [--admin-arg build=DIR] (issue 1809, ADR-0014 §5) freezes governed proxies FOREVER: ONE timelock operation,
-                     freezeUpgrades(liveImplementation, liveCodeHash) per proxy not yet frozen (all: one batch). Refused when the live implementation is not the reviewed build, the
-                     authority is not the timelock, an admin or beacon slot is set, or an upgrade-proxy round of the proxy is scheduled and not executed. A frozen proxy is skipped.
                      --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727, QA plan v1 B6): first, in
                      private, the submitter Safe authorizes itself on the gateway (commitAuthorization, a block later revealAuthorization, then transferAgentOwnership to the
                      timelock; its owners sign through --owner-signer), then ONE timelock batch, gateway.setPolicy (the 1-unit signalling-only policy, shares to the timelock)
                      plus gateway.committeeRegister (COMMITTEE_AGENT_ROLE). The address is owned by the timelock before the batch is public, so no squatter can break it.
                      A submitter another account already owns is refused (GOVERN, nothing scheduled): use a new submitter Safe. Not part of stage 13.
                      Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only; refused on 8453 in production. Same two-step wait as every on-demand row.
+                      --row safe-add-owner|safe-remove-owner|safe-swap-owner|safe-change-threshold|timelock-grant-role|timelock-revoke-role --admin-arg K=V (Twin chain 918453 only, refused on 8453) runs a Safe or timelock self-administration row (issue 1645):
+                      the four safe-* rows are one Safe transaction to the Safe, the two timelock-* rows are a Safe -> Timelock round. Keys: owner, old-owner, new-owner, threshold, role, account.
                      In a REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) update-delay, batch and cancel also run on 8453, as explicit --row runs after the unpauses, in that order.
-                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of seven calls, new.setRegistry(registry), registry.registerVault(new),
-                     router.setVaultCap(new, vaultCap(old)), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old), new.unpauseDeposits().
-                     The new vault gets the old vault's router cap (a new address reads 0, uncapped). The old vault keeps its shares, redeem and redeemInKind.
-                     Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active, the
-                     timelock holds ADMIN_ROLE on the registry and the router, and the new
-                     vault is the closed, UNLINKED, timelock-governed one the verb left (the link is set-once: the timelock sets it as the batch's first call, no deploy script does)
-                     and the chain shows it is the contract the sheet's deployer CREATED in the round's recorded deploy transactions (the receipt's contractAddress, never the
-                     run manifest alone). The Safe transactions name the old and the new vault address. --core-sha is the round's core_sha (the sha the verb ran at) or the
-                     original deployment sha: both name the same operation (its salt is the round's sha), and neither needs a frozen counts file of its own (QA plan v1 E1).
+                     --row redeploy-vault (no other argument) replaces the vault the redeploy-vault verb deployed (issue 1796): ONE timelock batch of six calls, registry.registerVault(new),
+                     router.setVaultCap(new, the old vault's approved cap), registry.migrateEligibility(new, true, five legs), registry.migrateEligibility(old, false, four legs), registry.retire(old),
+                     new.unpauseDeposits(). The old vault keeps its shares, redeem and redeemInKind. Rehearsal (DEPLOYMENT_KIND=rehearsal) and Twin only, refused
+                     on 8453 in production. Refused (nothing scheduled) unless the old vault is Active and router-eligible, no voted vector is active and the new vault is the closed, linked, timelock-governed one the verb left.
+                     --core-sha is the round's core_sha (the sha the verb ran at) or the original deployment sha: neither needs a frozen counts file of its own (QA plan v1 E1).
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
                      build of the --core-sha checkout. After a round deployed at another sha (QA plan v1 E1) the verify runs ALONE at --core-sha <the round's core_sha> WITH --prior-out: at the
-                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. So is every other run that reaches the
-                     verify stage (the default set, --resume included, --stage all, a --stage list naming verify and another stage) at the original or the redeploy sha, and a --prior-out
-                     that is not a checkout of the original sha on any of them. The verify stage refuses a wrong build once more itself, and pauses nothing. The counts are the original sha's (its frozen file in the
-                     counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha. A passing verify records prior_out_sha and verified_at_sha on each governed round.
-  --upgrade-build PROXY=DIR
-                     verify, after an executed govern --row upgrade-proxy round: the forge out/ of a checkout at the round's build_sha, standing for the build_dir the round recorded
-                     (deleted, moved, checked out at another release, or on another machine). Repeat it per proxy. The verify stage checks every upgraded proxy's build BEFORE the
-                     verifier (the checkout's HEAD is build_sha; on 8453 DIR is that checkout's own out/ compiled from the committed sources, and its layout snapshot is the round's):
-                     a build that fails is refused (USAGE) and nothing is paused. It is never written into the run manifest.
+                     original sha, or without --prior-out, it is refused (USAGE) before any signer, so it never fails and pauses the four vaults. The counts are the original sha's (its frozen
+                     file in the counts dir, else the run manifest's per-stage counts): no frozen file for the redeploy sha.
   --receipt-id ID    govern with --row release-receipt or --row apply-receipt, and the record-receipt verb: the bytes32 receipt id.
   --payload-digest D record-receipt only: the bytes32 payload_digest of 'rmpc receipt verify' = keccak256("robotmoney:consensus-receipt:v1\n" + the canonical receipt bytes). A plain keccak256 of the served canonical file is WRONG.
   --payload-uri URL  record-receipt only: the public route that serves exactly those bytes.
@@ -149,23 +122,22 @@ export const USAGE = `publish contracts
   --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
-  --logs-rpc URL     a run that reaches prove-control (QA plan v1 E7): the RPC the --resume adoption reads the Safe's execution events from (eth_getLogs, after one eth_chainId read
-                     that must answer --chain); every other read stays on --rpc. The scan starts at the safe stage block in 2000-block windows, stops at the window that holds
-                     the proof, halves the window on a range-limit refusal, and reads a failed call again with a doubling wait (6 reads, 1 s to 16 s). A read refused after that
-                     exits SAFE (19) with RPC_REFUSED, the RPC host, the method and the block range; a scan that reaches its bound (2000 windows) exits SAFE with LOG_SCAN_LIMIT.
   --dry-run          the preflight: run every check and simulate EVERY deployer stage in order on a blank local anvil it starts itself
                      (no fork). Nothing is broadcast, nothing is sent to --rpc, the checkout is left as found.
   --core-dir DIR     core checkout (default: the repo root that holds scripts/deploy/stage-table.json, found by walking up; use it only for a checkout elsewhere)
   --evidence DIR     evidence directory (run manifest, isomorphism report)
   --counts-dir DIR   frozen counts directory (default: deployments/frozen-counts in the working directory if present, else this repo's). On 8453 the plan and every run that can
-                     broadcast (publish, a deployer stage, safe, prove-control, govern, redeploy-vault) pass the release gate first (QA plan v1 E4): the dir must be a clean dir of a git
+                     broadcast (publish, a deployer stage, safe, prove-control, govern, redeploy-vault) pass the release gate first (QA plan v1 E4, issue 1816): the dir must be a clean dir of a git
                      checkout at the release sha or a later commit that tracks <sha>.json with the same bytes, for a plain baseline as for a reconstructed one (COUNTS_MISSING).
   --counts-require-origin-dev  8453, any baseline: also refuse unless HEAD of the counts checkout is reachable from its local origin/dev (git fetch origin dev first). Required by the release runbook.
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
+  --logs-rpc URL     prove-control --resume only: a separate RPC for eth_getLogs (the scan for a landed proof). Every other read stays on --rpc.
+  --logs-window N    prove-control --resume: blocks per eth_getLogs call (default 2000), halved on a range-limit error
+  --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
-                     prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. env:signer is refused as an owner (exit 29). A run on 8453
-                     that reaches prove-control with fewer specs than the sheet has owners is refused before stage 1 (exit 24), never after stages 1-10 have broadcast.
+                     prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. A run on 8453 that reaches prove-control with fewer
+                     specs than the sheet has owners, the same spec twice, two specs claiming one owner, or a spec claiming an address outside SAFE_OWNERS is refused before stage 1 (exit 24).
   --emergency-signer S  pause-all, and the automatic pause after a failed verify: the EMERGENCY key signer spec, needed once the handover has begun. On the Twin chain with none given: the EMERGENCY keystore beside the DEPLOYER keystore. Never defaulted on mainnet.
   --compare-sheet F  a second sheet for the sheet diff in the isomorphism report
   --call-label L --call-target ADDR --call-data 0x..   govern, Twin chain 918453 only (refused on 8453): one generic Safe -> Timelock call (schedule, wait by warp, execute),
@@ -195,11 +167,9 @@ export interface CliDeps {
   pauseAll?: typeof pauseAll;
   /** Test seam: the read-only chain reader behind the config-check that runs before each vault stage. */
   chainReader?: RunContext["chainReader"];
-  /** Test seam (issue 1809): the chain reader behind the proxy read-back after each proxy stage. Default: viem over --rpc. */
-  proxyReader?: RunContext["proxyReader"];
   /** Injected for tests: the poll and the longest wait of the recorder gate before the agent stage (core 1676). */
   recorderWait?: RunContext["recorderWait"];
-  /** Test seam (issue 1723, QA plan v1 E6): the sleep and the bound of the reads after a landed transaction. Default: 5 reads, 1 s apart. */
+  /** Test seam (issue 1723, QA plan v1 E6): the sleep and the bound of the reads after a landed transaction. Default: the shared read-after-write bound. */
   readRetry?: RunContext["readRetry"];
   /** Test seam: core's own config-check (bun scripts/ci/config-check.ts, read-only against live Base). Default: the real spawn. */
   coreConfigCheck?: CoreConfigCheck;
@@ -232,8 +202,6 @@ export interface Parsed {
   verb?: Verb; row?: string; coreDir?: string; evidence?: string; countsDir?: string; countsRequireOriginDev?: boolean; measure: boolean; ownerSigners: string[]; emergencySigner?: string; compareSheet?: string; maxWait?: number; call?: { label: string; target: string; data: string };
   /** With --row release-receipt or --row apply-receipt: the receipt. */
   receiptId?: string;
-  /** With a self-administration row, --row set-unwind-guard (QA plan v1 D7), --row upgrade-proxy or --row freeze-proxy (issue 1809) only: the key=value pairs of --admin-arg. */
-  adminArgs?: Record<string, string>;
   /** With --row apply-receipt only: the receipt payload file. */
   payload?: string;
   /** With --row register-committee only: the submitter and its label. */
@@ -242,14 +210,14 @@ export interface Parsed {
   /** record-receipt only. */
   payloadDigest?: string;
   payloadUri?: string;
+  /** With a self-administration row or --row set-unwind-guard (QA plan v1 D7) only: the key=value pairs of --admin-arg. */
+  adminArgs?: Record<string, string>;
   /** redeploy-vault only: the vault key. */
   vault?: string;
   /** verify only (issue 1796): forge out/ of a checkout at the original deployment sha. */
   priorOut?: string;
-  /** verify only (security round 3): `--upgrade-build <proxy>=<dir>`, the forge out/ that stands for the build_dir of that proxy's last executed upgrade round. */
-  upgradeBuilds?: Record<string, string>;
-  /** QA plan v1 E7 (issue 1724): a run that reaches prove-control only: the RPC for the adoption's eth_getLogs. */
-  logsRpc?: string;
+  /** prove-control --resume (issue 1724): --logs-rpc, --logs-window, --logs-tries. Absent when none is given. */
+  logs?: LogScanOpts;
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -262,7 +230,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, "admin-arg": { type: "string", multiple: true }, vault: { type: "string" }, "prior-out": { type: "string" }, "upgrade-build": { type: "string", multiple: true }, "logs-rpc": { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "agent-label": { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -284,7 +252,7 @@ export function parseCli(argv: string[]): Parsed {
     if (!(verb === "govern" || stageNames === "govern")) throw new PublishError("USAGE", `--row applies to the govern verb (or --stage govern) only\n${USAGE}`);
     // An unknown row fails here, before any work. Whether update-delay, batch and cancel may run on 8453 depends on the sheet's DEPLOYMENT_KIND, so runGovern decides that.
     if (isSelfAdminRow(row)) assertSelfAdminAllowed(Number(chainRaw), row);
-    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW && row !== UPGRADE_ROW && row !== FREEZE_ROW) resolveGovernRow(row);
+    else if (row !== RECEIPT_ROW && row !== APPLY_ROW && row !== REGISTER_ROW && row !== CLEAR_ROW && row !== REDEPLOY_ROW && row !== UNWIND_GUARD_ROW) resolveGovernRow(row);
   }
   const vaultArg = v.vault as string | undefined;
   if (verb === REDEPLOY_VERB) {
@@ -292,19 +260,9 @@ export function parseCli(argv: string[]): Parsed {
     if (!isRedeployKey(vaultArg)) throw new PublishError("USAGE", `--vault '${vaultArg}' cannot be redeployed: only ${REDEPLOY_KEYS.join(", ")}\n${USAGE}`);
   } else if (vaultArg !== undefined) throw new PublishError("USAGE", `--vault goes with the ${REDEPLOY_VERB} verb only\n${USAGE}`);
   const priorOut = v["prior-out"] as string | undefined;
-  // --prior-out is read by the verify stage only: a run whose stages include verify (the verify verb, the default set, all, or a --stage list naming verify).
+  // --prior-out is read by the verify stage only: a run whose stages include verify (the verify verb, the default set, all, or a --stage list naming verify; QA plan v1 E1).
   const reachesVerify = verb === "verify" || (verb === undefined && (stage === undefined || stage === "all" || stage.split(",").map((x) => x.trim()).includes("verify")));
   if (priorOut !== undefined && !reachesVerify) throw new PublishError("USAGE", `--prior-out goes with the verify verb (or --stage verify) only\n${USAGE}`);
-  // Security round 3 (review: RELIABILITY_FAIL_CLOSED_OUTAGE): --upgrade-build is read by the verify stage only, like --prior-out. The stage holds each to the round's build_sha.
-  let upgradeBuilds: Record<string, string> | undefined;
-  for (const kv of (v["upgrade-build"] as string[] | undefined) ?? []) {
-    if (!reachesVerify) throw new PublishError("USAGE", `--upgrade-build goes with the verify verb (or --stage verify) only\n${USAGE}`);
-    const m = /^([A-Za-z0-9_.-]+)=(.+)$/.exec(kv);
-    if (!m) throw new PublishError("USAGE", `--upgrade-build takes <proxy>=<forge out/ of a checkout at the round's build_sha>, got '${kv}'`);
-    upgradeBuilds ??= {};
-    if (Object.prototype.hasOwnProperty.call(upgradeBuilds, m[1]!)) throw new PublishError("USAGE", `--upgrade-build ${m[1]} is given twice`);
-    upgradeBuilds[m[1]!] = m[2]!;
-  }
   const receiptIdRaw = v["receipt-id"] as string | undefined;
   let receiptId: string | undefined;
   const submitter = v.submitter as string | undefined;
@@ -322,6 +280,9 @@ export function parseCli(argv: string[]): Parsed {
     if (row !== RECEIPT_ROW && row !== APPLY_ROW) throw new PublishError("USAGE", `--receipt-id goes with --row ${RECEIPT_ROW} only (or --row ${APPLY_ROW})\n${USAGE}`);
     receiptId = assertReceiptId(receiptIdRaw);
   }
+  const payload = v.payload as string | undefined;
+  if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
+  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
   let adminArgs: Record<string, string> | undefined;
   const adminRaw = v["admin-arg"] as string[] | undefined;
   if (adminRaw !== undefined && row === UNWIND_GUARD_ROW) {
@@ -333,20 +294,8 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
     parseUnwindGuardArgs(adminArgs);
-  } else if (adminRaw !== undefined && (row === UPGRADE_ROW || row === FREEZE_ROW)) {
-    // issue 1809: the rows' own keys, checked for shape here, before any signer; runGovern checks the values against the core stage table's proxies before the Safe is read
-    const keys: readonly string[] = row === UPGRADE_ROW ? UPGRADE_KEYS : FREEZE_KEYS;
-    adminArgs = {};
-    for (const kv of adminRaw) {
-      const m = /^([a-z-]+)=(.+)$/.exec(kv);
-      if (!m || !keys.includes(m[1]!)) throw new PublishError("USAGE", `--row ${row}: --admin-arg takes key=value with key ${keys.join(", ")}, got '${kv}'`);
-      if (m[1]! in adminArgs) throw new PublishError("USAGE", `--row ${row}: --admin-arg ${m[1]} is given twice`);
-      adminArgs[m[1]!] = m[2]!;
-    }
-    if (adminArgs.proxy === undefined) throw new PublishError("USAGE", `--row ${row} needs --admin-arg proxy=<name>${row === FREEZE_ROW ? "|all" : ""}`);
-    if (row === UPGRADE_ROW && adminArgs.implementation === undefined) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --admin-arg implementation=0x<address>`);
   } else if (adminRaw !== undefined) {
-    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}), --row ${UNWIND_GUARD_ROW}, --row ${UPGRADE_ROW} or --row ${FREEZE_ROW} only\n${USAGE}`);
+    if (row === undefined || !isSelfAdminRow(row)) throw new PublishError("USAGE", `--admin-arg goes with a self-administration row (${SELF_ADMIN_ROWS.join(", ")}) or --row ${UNWIND_GUARD_ROW} only\n${USAGE}`);
     adminArgs = {};
     for (const kv of adminRaw) {
       const m = /^(owner|old-owner|new-owner|threshold|role|account)=(.+)$/.exec(kv);
@@ -354,10 +303,6 @@ export function parseCli(argv: string[]): Parsed {
       adminArgs[m[1]!] = m[2]!;
     }
   } else if (row === UNWIND_GUARD_ROW) parseUnwindGuardArgs(undefined); // USAGE: the row needs its --admin-arg values
-  else if (row === UPGRADE_ROW || row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${row} needs --admin-arg proxy=<name>${row === UPGRADE_ROW ? " --admin-arg implementation=0x<address>" : "|all"}\n${USAGE}`);
-  const payload = v.payload as string | undefined;
-  if (row === APPLY_ROW && payload === undefined) throw new PublishError("USAGE", `--row ${APPLY_ROW} needs --payload FILE\n${USAGE}`);
-  if (payload !== undefined && row !== APPLY_ROW && verb !== "record-receipt") throw new PublishError("USAGE", `--payload goes with --row ${APPLY_ROW} only (or the record-receipt verb)\n${USAGE}`);
   let call: Parsed["call"];
   if (v["call-label"] !== undefined || v["call-target"] !== undefined || v["call-data"] !== undefined) {
     if (!(verb === "govern" || stage === "govern")) throw new PublishError("USAGE", `--call-label, --call-target and --call-data apply to the govern verb only\n${USAGE}`);
@@ -373,18 +318,24 @@ export function parseCli(argv: string[]): Parsed {
   }
   if (stage !== "plan") need("signer", v.signer); // for record-receipt it is the submitter
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
-  // QA plan v1 E7 (issue 1724): --logs-rpc is read by the prove-control adoption only, so a run that cannot reach that step refuses it here.
-  const logsRpc = v["logs-rpc"] as string | undefined;
-  if (logsRpc !== undefined) {
-    const stageNames = stage === undefined || stage === "deploy" || stage === "all" ? [PROOF_STAGE] : stage.split(",").map((s) => s.trim());
-    if (!(verb === "publish" || (verb === undefined && stageNames.includes(PROOF_STAGE)))) throw new PublishError("USAGE", `--logs-rpc goes with a run that reaches ${PROOF_STAGE} only: publish, the default stage set, --stage deploy, all or a list naming ${PROOF_STAGE}\n${USAGE}`);
-    if (!/^https?:\/\//.test(logsRpc)) throw new PublishError("USAGE", "--logs-rpc must be an http(s) URL");
+  let logs: LogScanOpts | undefined;
+  if (v["logs-rpc"] !== undefined || v["logs-window"] !== undefined || v["logs-tries"] !== undefined) {
+    const count = (n: string): number | undefined => {
+      const x = v[n] as string | undefined;
+      if (x === undefined) return undefined;
+      if (!/^[1-9][0-9]*$/.test(x)) throw new PublishError("USAGE", `--${n} must be a positive integer, got '${x}'`);
+      return Number(x);
+    };
+    const logsRpc = v["logs-rpc"] as string | undefined;
+    if (logsRpc !== undefined && !/^https?:\/\//.test(logsRpc)) throw new PublishError("USAGE", "--logs-rpc must be an http(s) URL");
+    const window = count("logs-window");
+    logs = { logsRpc, window: window === undefined ? undefined : BigInt(window), tries: count("logs-tries") };
   }
   return {
     chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",
     coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
-    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, vault: vaultArg, priorOut, upgradeBuilds, adminArgs, logsRpc,
+    maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, agentLabel, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs,
   };
 }
 
@@ -401,9 +352,10 @@ export function selectVerbStages(verb: Verb): string[] {
  * with the same kind, when fewer specs than sheet owners are given. Not checked: the Twin chain (its owners default from the rehearsal keys,
  * owner-signers.ts), a dry run (it skips prove-control, runner.ts), the plan (no signer) and the verbs that have no proof stage. A govern run
  * keeps its own in-run refusal (GOVERN, before any send): it broadcasts nothing before the Safe's signature count is checked.
- * Security round 1: counting was not enough. The same spec twice, two specs that claim the same owner, or a spec that claims an address outside SAFE_OWNERS passed here
- * and failed at prove-control after stages 1-10. Every claim that can be read before stage 1 (owner-signers.ts claimedOwnerOf: a device's @0xOWNER, a keystore's
- * unencrypted address; `claimOf` is the test seam) must be a sheet owner, and no owner may be claimed twice. A claim that cannot be read yet is left to prove-control.
+ * Security round 1 (review-security-031): counting was not enough. The same spec twice, two specs that claim the same owner, or a spec that claims an address outside
+ * SAFE_OWNERS passed here and failed at prove-control after stages 1-10. Every claim that can be read before stage 1 (owner-signers.ts claimedOwnerOf: a device's
+ * @0xOWNER, a keystore's unencrypted address; `claimOf` is the test seam) must be a sheet owner, and no owner may be claimed twice. A claim that cannot be read yet
+ * is left to prove-control.
  */
 export function ownerSignerShortfall(i: { chainId: number; verb?: Verb; stage?: string; dryRun: boolean; specs: string[]; sheet: Pick<Sheet, "safeOwners">; claimOf?: (spec: string) => string | undefined }): PublishError | undefined {
   if (i.chainId !== MAINNET_CHAIN_ID || i.dryRun || i.stage === "plan") return undefined;
@@ -474,12 +426,6 @@ export function defaultCoreDir(cwd: string): string {
   return resolve(import.meta.dir, "..", "..");
 }
 
-/**
- * Security round 3 (review: SECURITY_AVAILABILITY_SELF_PAUSE): the `build=` of an upgrade-proxy or freeze-proxy row, resolved against the working directory. The round
- * records it as `build_dir` and a later verify compares with it, maybe from another directory: a relative path would name another place there.
- */
-export const absoluteBuild = (args: Record<string, string>, cwd: string): Record<string, string> => (args.build ? { ...args, build: resolve(cwd, args.build) } : args);
-
 /** QA plan v1 E1: the HEAD sha of the git checkout that holds `dir` (the build --prior-out names), found by walking up from it. Undefined outside a git checkout. */
 export function checkoutShaOf(dir: string): string | undefined {
   for (let d = resolve(dir); ; d = dirname(d)) {
@@ -549,8 +495,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
-    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1): the
-    // proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
+    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
+    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
     const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
     if (shortfall !== undefined) throw shortfall;
     log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
@@ -567,12 +513,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
     assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo
-    const coreTable = loadStageTable(coreDir);
-    // issue 1705: the govern rows, the evidence steps and the verifier's per-vault expectations come from this tool's own table (src/vault-rules.ts); the
-    // forge scripts come from the checkout. Both must carry the same vault rules, or a deploy would follow one rule set and be checked against another.
-    const rulesProblem = vaultRulesProblem(coreTable, `the core checkout ${coreDir}`);
-    if (rulesProblem) throw new PublishError("USAGE", rulesProblem);
-    useStageTable(coreTable);
+    useStageTable(loadStageTable(coreDir));
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
@@ -580,11 +521,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       return {
         chainId: rpcChainId, rpc: a.rpc, sheet, coreDir, coreSha: a.coreSha, evidenceDir,
         environment: a.environment, signer, caller, frozen, measure, dryCounts: a.dryRun ? {} : undefined, resume: a.resume, dryRun: a.dryRun, run, log,
-        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, proxyReader: deps.proxyReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, logsRpc: a.logsRpc, coreConfigCheck: deps.coreConfigCheck,
+        prompt: deps.prompt ?? (process.stdin.isTTY ? ttyPrompt : undefined), githubActions, actionsProof, baseEnv: env, safeApi: deps.safeApi, chainReader: deps.chainReader, recorderWait: deps.recorderWait, readRetry: deps.readRetry, coreConfigCheck: deps.coreConfigCheck,
         manifestOut, startChain: a.dryRun && a.verb !== REDEPLOY_VERB ? (deps.startChain ?? startAnvil) : undefined, priorArtifactsDir: a.priorOut ? resolve(cwd, a.priorOut) : undefined,
-        // security round 3: --upgrade-build directories, absolute (verify-stage.ts upgradeBuildRefusal holds each to its round's build_sha before the verifier runs)
-        ...(a.upgradeBuilds ? { upgradeBuilds: Object.fromEntries(Object.entries(a.upgradeBuilds).map(([k, d]) => [k, resolve(cwd, d)])) } : {}),
-        // security round 1: a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
+        // security round 1 (review-security-033): a printed resume command names the absolute counts dir and --counts-require-origin-dev (govern.ts resumeCommand)
         countsDir: a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd), countsRequireOriginDev: a.countsRequireOriginDev,
       };
     };
@@ -619,10 +558,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       };
       const mk = deps.ownerSigner ?? ((s: string) => parseOwnerHardwareSpec(s) ? ownerHardwareSigner(s, { prompt: devicePrompt, runner: deps.castRunner }) : signerFromSpec(s));
       const specs = a.ownerSigners.length === 0 && c.chainId === TWIN_CHAIN_ID ? siblingOwnerSpecs(a.signer) : a.ownerSigners;
-      // In order, one device (or one passphrase prompt) at a time: each owner is built and its address read before the next is asked for, so
-      // prompts never interleave and a wrong device stops here, before the Safe is touched (PR 1693; the hunk the qa merge dropped).
       const out: Signer[] = [];
-      for (const s of specs) { const sg = await mk(s); await sg.address(); out.push(sg); }
+      for (const s of specs) { const sg = await mk(s); await sg.address(); out.push(sg); } // in order, one device at a time
       return out;
     };
     // record-receipt (issue 1727): --signer is the SUBMITTER (issue 1750: with --submitter it is the gas payer and the submitter is a Safe). No counts, no stages: it anchors one receipt and records the evidence entry in the run manifest.
@@ -726,7 +663,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     let result: Awaited<ReturnType<typeof runStages>>;
     try {
       result = await runStages(ctx, names, {
-        prove: async (c, row, m) => { await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), ...(deps.prove ?? {}) }); },
+        prove: async (c, row, m) => {
+          const p = deps.prove ?? {};
+          const logs = a.logs || p.logs ? { ...a.logs, ...p.logs } : undefined; // the flags, plus the test seam (sleep)
+          await runProveControl(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), ...p, logs });
+        },
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
@@ -736,10 +677,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           }
         },
         govern: async (c, row, m) => {
-          // security round 1: the release gate of a build checkout an upgrade or a freeze compares with (8453), with this run's seams (build-provenance.ts).
-          // Security round 2: check-sha-green and required-checks.json come from the deployment checkout this run gated (ciDir), never from the build checkout under test.
-          const buildGate: GovernOpts["buildGate"] = (i) => assertReleaseGate({ sha: i.sha, coreDir: i.checkout, ciDir: coreDir, countsDir: "", env, kind: sheet.kind, requireCounts: false, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag });
-          await runGovern(c, row, m, { buildGate, ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === UPGRADE_ROW ? { proxyUpgrade: absoluteBuild(a.adminArgs, cwd) } : a.adminArgs && a.row === FREEZE_ROW ? { proxyFreeze: absoluteBuild(a.adminArgs, cwd) } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
+          await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, agentLabel: a.agentLabel, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
       try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { postflight = "postflight"; throw e; }

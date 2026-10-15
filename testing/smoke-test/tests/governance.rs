@@ -4,9 +4,11 @@
 //!   - RouterGovernance is deployed at a non-zero address.
 //!   - RouterGovernance has bytecode on-chain.
 //!   - RouterGovernance releases from the deployed receipt register, which grants it ADMIN_ROLE
-//!     (issue 1698: one `applyReceipt` call releases a receipt and applies its weights; there is no
-//!     voting path, so there is no voting power to check).
+//!     (one `applyReceipt` call releases a receipt and applies its weights).
 //!   - The deployer holds no admin; the timelock is admin.
+//!   - The deployer cannot apply a consensus receipt: the timelock holds
+//!     `WEIGHT_SETTER_ROLE` (the `applyReceipt` gate) and the deployer does not.
+//!     There is no voting power to check: voting was deleted (issue 1698).
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release -- governance --test-threads=1 --nocapture
@@ -49,10 +51,10 @@ fn governance_has_code() {
 }
 
 /// The weight setter applies receipts from the register the deploy wired (issue 1698, QA plan v1 C1).
-/// `applyReceipt` releases the receipt on `receiptContract()` and then calls `setWeights`, so stage 11
-/// must point `receiptContract()` at the deployed ConsensusRecommendationReceipt and the register must
+/// `applyReceipt` releases the receipt on `receipts()` and then calls `setWeights`, so the deploy must
+/// initialize `receipts()` with the deployed ConsensusRecommendationReceipt and the register must
 /// grant the weight setter ADMIN_ROLE (its `releaseReceipt` gate). Either one missing makes every
-/// `apply-receipt` revert. This replaces the pre-1698 voting-power check: there is no voting path.
+/// `apply-receipt` revert.
 #[test]
 fn governance_releases_from_the_deployed_receipt_register() {
     require_prereqs("governance_releases_from_the_deployed_receipt_register");
@@ -64,13 +66,38 @@ fn governance_releases_from_the_deployed_receipt_register() {
         "the ic-policy manifest names no ConsensusRecommendationReceipt"
     );
     assert_eq!(
-        read_receipt_contract(fx),
+        read_receipts(fx),
         register,
-        "RouterGovernance.receiptContract() must be the deployed receipt register"
+        "RouterGovernance.receipts() must be the deployed receipt register"
     );
     assert!(
-        has_admin_role(fx, register, fx.governance()),
+        has_role(fx, register, ADMIN_ROLE, fx.governance()),
         "the receipt register must grant RouterGovernance ADMIN_ROLE (the releaseReceipt gate)"
+    );
+}
+
+/// The deployer cannot apply a consensus receipt after handover. Only the
+/// timelock holds `WEIGHT_SETTER_ROLE` on RouterGovernance, the gate on
+/// `applyReceipt` (issue 1698), so a receipt reaches the router only through the
+/// Safe scheduling the call on the timelock.
+#[test]
+fn deployer_holds_no_weight_setter_role_timelock_does() {
+    require_prereqs("deployer_holds_no_weight_setter_role_timelock_does");
+    let fx = fixture();
+    let deployer: Address = fx
+        .published()
+        .keys
+        .address("ADMIN_ADDRESS")
+        .expect("deployer address")
+        .parse()
+        .expect("parse deployer address");
+    assert!(
+        !governance_has_role(fx, WEIGHT_SETTER_ROLE, deployer),
+        "deployer must not hold WEIGHT_SETTER_ROLE on RouterGovernance"
+    );
+    assert!(
+        governance_has_role(fx, WEIGHT_SETTER_ROLE, fx.timelock()),
+        "the timelock must hold WEIGHT_SETTER_ROLE on RouterGovernance"
     );
 }
 
@@ -87,11 +114,11 @@ fn deployer_holds_no_admin_role_timelock_does() {
         .parse()
         .expect("parse deployer address");
     assert!(
-        !has_admin_role(fx, fx.governance(), deployer),
+        !governance_has_role(fx, ADMIN_ROLE, deployer),
         "deployer must not hold ADMIN_ROLE on RouterGovernance"
     );
     assert!(
-        has_admin_role(fx, fx.governance(), fx.timelock()),
+        governance_has_role(fx, ADMIN_ROLE, fx.timelock()),
         "the timelock must hold ADMIN_ROLE on RouterGovernance"
     );
 }
@@ -106,37 +133,24 @@ fn get_code(url: &str, addr: Address) -> String {
     )
 }
 
-/// Read `receiptContract()` from the RouterGovernance contract.
-/// receiptContract() selector: keccak256("receiptContract()")[0..4] = 0xd435b3a3
-/// (`cast sig "receiptContract()"`).
-fn read_receipt_contract(fx: &Fixture) -> Address {
-    let result: String = rpc_call(
-        fx.rpc_url(),
-        "eth_call",
-        serde_json::json!([
-            {"to": format!("{:#x}", fx.governance()), "data": "0xd435b3a3"},
-            "latest"
-        ]),
-    );
-    let word = result.trim_start_matches("0x");
-    assert_eq!(
-        word.len(),
-        64,
-        "receiptContract() returned {result:?}, not one word"
-    );
-    format!("0x{}", &word[24..])
-        .parse()
-        .expect("receiptContract() word is an address")
+/// `keccak256("ADMIN_ROLE")`.
+const ADMIN_ROLE: &str = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+
+/// `keccak256("WEIGHT_SETTER_ROLE")`, the gate on `applyReceipt`.
+const WEIGHT_SETTER_ROLE: &str = "a2edfd05c0c1cda238b1c99a8a31252998b19153c63b3f9e5b7048bc4b5f4a3f";
+
+/// Check hasRole(role, account) on the governance contract. `role` is the
+/// 32-byte role id as 64 hex chars without a `0x` prefix.
+fn governance_has_role(fx: &Fixture, role: &str, account: Address) -> bool {
+    has_role(fx, fx.governance(), role, account)
 }
 
-/// Check hasRole(ADMIN_ROLE, account) on `target` (RouterGovernance or the receipt register; both
-/// define ADMIN_ROLE as keccak256("ADMIN_ROLE")).
+/// Check hasRole(role, account) on `target` (RouterGovernance or the receipt register; both
+/// define ADMIN_ROLE as keccak256("ADMIN_ROLE")). `role` is 64 hex chars without a `0x` prefix.
 /// hasRole(bytes32,address) selector: 0x91d14854
-/// ADMIN_ROLE = keccak256("ADMIN_ROLE") = 0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775
-fn has_admin_role(fx: &Fixture, target: Address, account: Address) -> bool {
-    let admin_role = "a49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775";
+fn has_role(fx: &Fixture, target: Address, role: &str, account: Address) -> bool {
     let account_hex = format!("{account:x}");
-    let data = format!("0x91d14854{admin_role}{account_hex:0>64}");
+    let data = format!("0x91d14854{role}{account_hex:0>64}");
     let result: String = rpc_call(
         fx.rpc_url(),
         "eth_call",
@@ -146,6 +160,28 @@ fn has_admin_role(fx: &Fixture, target: Address, account: Address) -> bool {
         ]),
     );
     result.trim_start_matches("0x").ends_with('1')
+}
+
+/// Read `receipts()` (the receipt register) from the RouterGovernance contract.
+/// receipts() selector: keccak256("receipts()")[0..4] = 0xf400b10e (`cast sig "receipts()"`).
+fn read_receipts(fx: &Fixture) -> Address {
+    let result: String = rpc_call(
+        fx.rpc_url(),
+        "eth_call",
+        serde_json::json!([
+            {"to": format!("{:#x}", fx.governance()), "data": "0xf400b10e"},
+            "latest"
+        ]),
+    );
+    let word = result.trim_start_matches("0x");
+    assert_eq!(
+        word.len(),
+        64,
+        "receipts() returned {result:?}, not one word"
+    );
+    format!("0x{}", &word[24..])
+        .parse()
+        .expect("receipts() word is an address")
 }
 
 fn rpc_call<T: for<'de> serde::Deserialize<'de>>(

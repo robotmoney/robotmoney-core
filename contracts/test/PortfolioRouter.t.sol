@@ -12,7 +12,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -235,8 +235,8 @@ contract PortfolioRouterTest is SafeGovernance {
 
     function setUp() public {
         usdc = new MockUSDC();
-        registry = Proxied.vaultRegistry(admin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         vaultA = new MockRouterVault(address(usdc));
         vaultB = new MockRouterVault(address(usdc));
@@ -290,24 +290,19 @@ contract PortfolioRouterTest is SafeGovernance {
     function test_constructor_revertsOnZeroUsdc() public {
         address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation, Proxied.portfolioRouterInit(address(0), address(registry), admin)
-        );
+        CoreProxies.portfolioRouter(address(0), address(registry), admin);
     }
 
     function test_constructor_revertsOnZeroRegistry() public {
         address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        Proxied.proxy(implementation, Proxied.portfolioRouterInit(address(usdc), address(0), admin));
+        CoreProxies.portfolioRouter(address(usdc), address(0), admin);
     }
 
     function test_constructor_revertsOnZeroAdmin() public {
         address implementation = address(new PortfolioRouter());
         vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.portfolioRouterInit(address(usdc), address(registry), address(0))
-        );
+        CoreProxies.portfolioRouter(address(usdc), address(registry), address(0));
     }
 
     function test_constructor_grantsAdminRole() public view {
@@ -1420,8 +1415,9 @@ contract PortfolioRouterTest is SafeGovernance {
     function test_deposit_revertsWithNamedError_whenUsdcBlacklist() public {
         // Deploy fresh USDC + vault + router for this scenario.
         BlacklistableUSDC bUsdc = new BlacklistableUSDC();
-        VaultRegistry bRegistry = Proxied.vaultRegistry(admin);
-        PortfolioRouter bRouter = Proxied.portfolioRouter(address(bUsdc), address(bRegistry), admin);
+        VaultRegistry bRegistry = CoreProxies.vaultRegistry(admin);
+        PortfolioRouter bRouter =
+            CoreProxies.portfolioRouter(address(bUsdc), address(bRegistry), admin);
 
         BlacklistableVault bVault = new BlacklistableVault(address(bUsdc));
         VaultRegistry.VaultMetadata memory bMeta = VaultRegistry.VaultMetadata({

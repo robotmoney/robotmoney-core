@@ -22,8 +22,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
-import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 ///      a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
@@ -115,7 +114,7 @@ contract AgentTokenVaultTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         router = new RecordingSwapRouter();
-        vault = Proxied.agentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,
@@ -136,11 +135,7 @@ contract AgentTokenVaultTest is Test {
             MockPool pool = new MockPool(address(tokens[i]), address(usdc), 10_000);
             vm.prank(admin);
             vault.addAsset(
-                address(tokens[i]),
-                address(pool),
-                10_000,
-                address(0),
-                BasketAssetConfigGuard.Venue.V3
+                address(tokens[i]), address(pool), 10_000, address(0), BasketVault.Venue.V3
             );
         }
     }
@@ -189,7 +184,7 @@ contract AgentTokenVaultTest is Test {
 
         vm.prank(admin);
         vault.addAsset(
-            address(replacement), address(pool), 10_000, address(0), BasketAssetConfigGuard.Venue.V3
+            address(replacement), address(pool), 10_000, address(0), BasketVault.Venue.V3
         );
 
         (address[] memory t,,, bool[] memory active,) = vault.shortlist();
@@ -210,9 +205,7 @@ contract AgentTokenVaultTest is Test {
             )
         );
         vm.prank(stranger);
-        vault.addAsset(
-            address(newToken), address(pool), 10_000, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(newToken), address(pool), 10_000, address(0), BasketVault.Venue.V3);
 
         vm.expectRevert(
             abi.encodeWithSignature(
@@ -288,7 +281,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
 
         // Deploy the vault with a temporary admin (this contract) so we can
         // transfer ADMIN_ROLE to the timelock during setUp.
-        vault = Proxied.agentTokenVault(
+        vault = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             10_000_000 * ONE_USDC,
@@ -304,12 +297,8 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
         tokenB = new TestERC20();
         poolA = new MockPool(address(tokenA), address(usdc), 3000);
         poolB = new MockPool(address(tokenB), address(usdc), 3000);
-        vault.addAsset(
-            address(tokenA), address(poolA), 3000, address(0), BasketAssetConfigGuard.Venue.V3
-        );
-        vault.addAsset(
-            address(tokenB), address(poolB), 3000, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(tokenA), address(poolA), 3000, address(0), BasketVault.Venue.V3);
+        vault.addAsset(address(tokenB), address(poolB), 3000, address(0), BasketVault.Venue.V3);
 
         _installSafeSet();
         safe = _newDefaultSafe();
@@ -336,14 +325,14 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
         returns (bytes32 opId)
     {
         bytes memory callData = abi.encodeCall(
-            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketAssetConfigGuard.Venue.V3)
+            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
         );
         opId = _govSchedule(safe, timelock, address(vault), callData, salt_, ADD_DELAY);
     }
 
     function _executeAddAsset(address token_, address pool_, uint24 fee_, bytes32 salt_) internal {
         bytes memory callData = abi.encodeCall(
-            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketAssetConfigGuard.Venue.V3)
+            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
         );
         _govExecute(safe, timelock, address(vault), callData, salt_);
     }
@@ -385,13 +374,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
             address(vault),
             abi.encodeCall(
                 BasketVault.addAsset,
-                (
-                    address(newToken),
-                    address(newPool),
-                    3000,
-                    address(0),
-                    BasketAssetConfigGuard.Venue.V3
-                )
+                (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
             ),
             salt
         );
@@ -426,13 +409,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
             address(vault),
             abi.encodeCall(
                 BasketVault.addAsset,
-                (
-                    address(newToken),
-                    address(newPool),
-                    3000,
-                    address(0),
-                    BasketAssetConfigGuard.Venue.V3
-                )
+                (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
             ),
             salt
         );
@@ -548,9 +525,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
             )
         );
         vm.prank(stranger);
-        vault.addAsset(
-            address(newToken), address(newPool), 3000, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice A stranger cannot call removeAsset directly because ADMIN_ROLE is
@@ -573,7 +548,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
         MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
-            (address(newToken), address(newPool), 3000, address(0), BasketAssetConfigGuard.Venue.V3)
+            (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         vm.expectRevert();
@@ -592,13 +567,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
 
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
-            (
-                address(newToken),
-                address(lowCardPool),
-                3000,
-                address(0),
-                BasketAssetConfigGuard.Venue.V3
-            )
+            (address(newToken), address(lowCardPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         // Schedule through the timelock.
@@ -636,13 +605,7 @@ contract AgentTokenVaultGovernanceTest is SafeGovernance {
 
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
-            (
-                address(newToken),
-                address(wrongPool),
-                3000,
-                address(0),
-                BasketAssetConfigGuard.Venue.V3
-            )
+            (address(newToken), address(wrongPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         bytes32 salt = keccak256("wrong-pair-salt");

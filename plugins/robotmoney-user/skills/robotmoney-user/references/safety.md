@@ -20,14 +20,17 @@ Before signing any deposit transaction, the client RPC-reads:
 - `eth_chainId` matches the configured `chain_id`
 - `keccak256(eth_getCode(gateway))` matches the configured
   `gateway_runtime_hash`
-- when the gateway is a proxy: the implementation in its ERC-1967 slot, and
-  that implementation's code hash, both read at one block, is listed in the
-  configured `gateway_implementation_hashes`
+- the gateway's ERC-1967 implementation slot names the configured
+  `gateway_implementation`, and that implementation's code hash matches
+  `gateway_implementation_runtime_hash`
 - when the vault the write reaches (or the router and its legs) is a proxy:
   its implementation's code hash is listed in `proxy_implementation_hashes`
 - for a router deposit (`--destination <router>`): `router.previewDeposit(amount)`,
   which marks each leg the router would skip and quotes the shares of the
   rest. Without `--min-shares-per-leg` the floors are those quotes less 0.50%
+
+Every read runs at one pinned block. The same gateway check runs before
+the committee's signed tilt (`committee vote-submit`) and `receipt submit` sign.
 
 Every refusal prints one JSON document on stdout with `"status":"refused"`
 and the name in `error`, and exits 2. Match on `error`, never on `message`.
@@ -44,7 +47,9 @@ and the name in `error`, and exits 2. Match on `error`, never on `message`.
 | `usdc.balanceOf(self) < amount` | `ErrBalanceInsufficient` | Fund the agent's USDC balance. |
 | `eth_chainId != config.chain_id` | `ErrChainIdMismatch` | The RPC endpoint is on the wrong chain. |
 | `keccak256(eth_getCode(gateway)) != gateway_runtime_hash` | `ErrCodeHashMismatch` | The deployed gateway bytecode does not match the pinned hash. |
-| The gateway is a proxy and its implementation's code hash is not in `gateway_implementation_hashes` (or the key is missing, or the implementation has no code) | `ErrImplementationNotApproved` | The timelock installed logic the operator has not approved. The proxy hash alone cannot show it. Do not retry. Tell the operator. The message names the implementation and its code hash. |
+| The implementation slot names another address, the implementation code hash differs, a proxy has no approved implementation configured, or an approved implementation is configured for a gateway with an empty slot | `ErrImplementationNotApproved` | The gateway proxy points at logic the operator did not approve. The proxy hash can still match. |
+| The implementation slot or the implementation code cannot be read | `ErrImplementationUnverified` | The client cannot prove which logic would run. It never signs on an unverified implementation. |
+| The implementation changed after preflight (the signed transaction is discarded unsent), or the transaction executed under another implementation (carries `tx_hash`) | `ErrImplementationChanged` | Review what changed before any retry. A write that executed is not reported as a success. |
 | The vault the write reaches, the router or a router leg is a proxy and its implementation's code hash is not in `proxy_implementation_hashes` (or the key is missing) | `ErrImplementationNotApproved` | Same as above, for that contract: the message names it (`vault 0x…`, `router 0x…`). Do not retry. Tell the operator. |
 | Router deposit: `router.previewDeposit` marks a leg with weight above 0 unavailable (paused, at its TVL cap, an open exclusion, a basket outside its price band), and `--allow-unavailable-legs` was not passed | `ErrLegUnavailable` | The router would skip that leg and deposit its whole share into the other legs, so the split would not be the governed weights. The message names each leg and its bps. Wait and retry, or pass `--allow-unavailable-legs` only with the user's approval. |
 
@@ -80,18 +85,13 @@ anything is signed, so no gas is spent. The message names the contract error.
 Any other simulated revert is not named. The transaction is sent. If it then
 reverts on chain the refusal is `ErrTxReverted` with the `tx_hash`.
 
-A direct (pre-proxy) gateway changes only by redeployment, which changes
-`gateway_runtime_hash`. A proxied gateway (ADR-0014) keeps its proxy hash
-across an upgrade: the Safe and the timelock can install new logic after a
-public delay of 48 hours or more. The client therefore also pins the
-implementation's code hash. The operator lists a reviewed implementation in
-`gateway_implementation_hashes` before its upgrade executes. The client
-refuses to sign on either mismatch — this is not advisory. `rmpc get-gateway`
-prints the live implementation, whether it is approved, and the freeze state.
-
-An agent consent (`rmpc agent-consent`) is signed in the domain of the live
-`implementationVersion()`. An upgrade that bumps it voids every consent signed
-before it: the reveal reverts `InvalidAgentConsent`, and the agent signs again.
+A proxied gateway's own code hash never changes when it is upgraded, so
+`gateway_runtime_hash` alone cannot detect an upgrade. An approved upgrade
+means updating `gateway_implementation` and
+`gateway_implementation_runtime_hash` from the new release manifest. A
+direct (non-proxy) gateway sets neither. A proxied vault, router or router
+leg is pinned the same way through `proxy_implementation_hashes`. The client
+refuses to sign on any mismatch — this is not advisory.
 
 ## Nonce lock refusal (implementation-plan §4.6)
 

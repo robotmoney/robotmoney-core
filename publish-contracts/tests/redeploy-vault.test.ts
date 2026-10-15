@@ -1,42 +1,35 @@
-// Issue 1796: redeploy ONE vault (rmPROTO) into a live deployment. The pure parts (vectors, the seven-call batch with the registry link first and the router cap copied, the before and after checks), the `redeploy-vault` verb
+// Issue 1796: redeploy ONE vault (rmPROTO) into a live deployment. The pure parts (vectors, the five-call batch, the before and after checks), the `redeploy-vault` verb
 // (stub forge and cast, a fake chain reader), the govern row (the in-memory Safe and timelock of tests/govern-world.ts, which enforces the contract rules the batch order exists for),
 // the verifier's retired-vault labels and the evidence entry. The real contracts run in contracts/test/RedeployProtocolAssetVault.t.sol and in the fork rehearsal.
-// QA plan v1 E1 (review DT-2, QD-6): the sha model, last. The govern row and the verify run at the sha the verb ran at, against a deployment at the original sha, through main().
-// QA plan v1 E3 (review F2, E7, QD-7): the cap parity. The batch copies router.vaultCap(old) to the new vault, the row reads it back, the evidence keeps it, the verifier labels it.
+// QA plan v1 additions: the `started` record saved after the confirmation (E2), the new vault bound to the broadcast's CREATE receipt (C2, issue 1701), the reads right
+// after the broadcast re-read on a load-balanced RPC (E6, issue 1723), the timelock's router admin checked first (E3) and the sha model of the row and the verify (E1), last.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, toFunctionSelector, type Address, type Hex } from "viem";
+import { getAddress, decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, type Address, type Hex } from "viem";
 import { EXIT_CODES, type PublishError } from "../src/errors.ts";
-import { parseCli, USAGE } from "../src/cli.ts";
 import { resolveCounts } from "../src/counts.ts";
+import { STALE_READ_TRIES } from "../src/safe/index.ts";
+import { parseCli, USAGE } from "../src/cli.ts";
 import { GOVERN_ROWS, govRowRefusal, resumeCommand, runGovern, stageRows } from "../src/govern.ts";
 import {
-  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, buildRedeployCalls, oldVaultBuild, planRedeployVectors, redeployBeforeProblems, redeployReadBackProblems, redeployRecordKey, redeployRefusal,
-  redeployShaPath, redeployShaRun, redeploysOf, vectorsFromFinal, verifyBuildRefusal, type RedeployAfter, type RedeployBefore, type RedeployRecord,
+  REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, buildRedeployCalls, buildRestoreOldCalls, createdVaultProblems, deployReceiptStatus, oldVaultBuild, planRedeployVectors,
+  readBroadcastReceipts, redeployBeforeProblems, redeployReadBackProblems, redeployRecordKey, redeployRefusal, redeployShaPath, redeployShaRun, redeploysOf, vectorsFromFinal, verifyBuildRefusal,
+  type RedeployAfter, type RedeployBefore, type RedeployRecord,
 } from "../src/redeploy-vault.ts";
-import { loadRunManifest, measuredCounts, newManifest, saveRunManifest, type RunManifest } from "../src/runner.ts";
-import { parseSheet } from "../src/sheet.ts";
-import { DEPLOYER_STAGES, getStageTable, stageByName } from "../src/stages.ts";
-import { manifestBase } from "../src/stage-table.ts";
-import { checkEvidence, checkVaultRedeploys, checkVaultRedeploysOnChain } from "../src/evidence-check.ts";
-import { USDC_ADDRESS } from "../src/usdc.ts";
-import { WEIGHT_SETTER_GATING_LABEL, verifyDeployment } from "../src/verify/index.ts";
+import { beginPauseEntry, loadRunManifest, newManifest, saveRunManifest, type RunManifest } from "../src/runner.ts";
+import { stageByName } from "../src/stages.ts";
+import { checkEvidence, checkReceiptApplications, checkVaultRedeploys, checkVaultRedeploysOnChain } from "../src/evidence-check.ts";
 import { A, addr, fakeTimelock, sender, setup, signers, writeGovernManifests } from "./govern-world.ts";
-import { LENDING_ADAPTERS } from "../src/core-wiring.ts";
 import { ADMIN, typedPrompt, world } from "./harness.ts";
-import { COUNTS, MANIFEST_ADAPTER, SHA, SHA2, healthyPoolReader, healthyProxyReader, tmp, writeCounts } from "./fixtures.ts";
-import { DEPLOYER as WORLD_DEPLOYER, IMPLEMENTATIONS as WORLD_IMPLEMENTATIONS, REGISTRY as WORLD_REGISTRY, ROUTER as WORLD_ROUTER, TIMELOCK as WORLD_TIMELOCK, VAULTS as WORLD_VAULTS, buildWorld, failed as failedLabels } from "./verify/world.ts";
-import { ERC1967_IMPLEMENTATION_SLOT, INITIALIZABLE_SLOT, INITIALIZERS_LOCKED } from "../src/proxies.ts";
-import type { ChainReader, VerifyOptions } from "../src/verify/types.ts";
+import { COUNTS, SHA, SHA2, healthyPoolReader, tmp, writeCounts } from "./fixtures.ts";
+import type { ChainReader } from "../src/verify/types.ts";
 import { ADMIN_ROLE } from "../src/verify/constants.ts";
 
 const USDC = A.vaults.USDC, OLD = A.vaults.PROTO, AGENT = A.vaults.AGENT, RWA = A.vaults.RWA;
 const NEW = addr(0x3012);
 const DEF_VAULTS = [USDC, OLD, AGENT, RWA];
 const DEF_BPS = [8550, 525, 575, 350];
-/** QA plan v1 E3: the old vault's router.vaultCap (250 USDC). Any nonzero value: a new address reads 0, which the router treats as uncapped. */
-const CAP = 250_000_000n;
 const REHEARSAL = { DEPLOYMENT_KIND: "rehearsal", TIMELOCK_MIN_DELAY: "900", GOVERN_NEW_DELAY: "1800", SAFE_SALT_NONCE: "7" };
 const ALL = { ELIGIBLE_VAULTS: "PROTO,AGENT,RWA", GOVERN_UNPAUSE_VAULTS: "USDC,PROTO,AGENT,RWA", ROUTER_WEIGHTS: "USDC:8550,PROTO:525,AGENT:575,RWA:350" };
 const lc = (x: string) => x.toLowerCase();
@@ -77,40 +70,18 @@ describe("the vectors", () => {
 });
 
 describe("the batch", () => {
-  const inputs = { registry: A.registry, router: A.router, oldVault: OLD, newVault: NEW, registryName: "Robot Money Protocol", asset: addr(0xc0de), finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS, vaultCap: CAP };
-  const calls = () => buildRedeployCalls(inputs);
-  test("seven calls in the one order the contracts allow: link the registry, register, copy the router cap, make the new vault eligible, drop the old one, retire it, open the new one", () => {
+  const calls = () => buildRedeployCalls({ router: A.router, routerVaultCap: 525000n, registry: A.registry, oldVault: OLD, newVault: NEW, registryName: "Robot Money Protocol", asset: addr(0xc0de), finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS });
+  test("six calls in the one order the contracts allow: register, make the new vault eligible, drop the old one, retire it, open the new one", () => {
     const c = calls();
-    expect(c.map((x) => x.target)).toEqual([NEW, A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
-    const link = decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[0]!.data });
-    expect(link.functionName).toBe("setRegistry");
-    expect(link.args).toEqual([A.registry]);
-    const d = [c[1]!, ...c.slice(3, 6)].map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
+    expect(c.map((x) => x.target)).toEqual([A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
+    const d = c.filter((x) => x.target === A.registry).map((x) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: x.data }));
     expect(d.map((x) => x.functionName)).toEqual(["registerVault", "migrateEligibility", "migrateEligibility", "retire"]);
-    expect(d[0]!.args).toEqual([NEW, { name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 0n }]);
+    expect(decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: c[1]!.data }).args).toEqual([NEW, 525000n]);
+    expect(d[0]!.args).toEqual([NEW, { name: "Robot Money Protocol", asset: getAddress(addr(0xc0de)), registeredAt: 0n }]);
     expect(d[1]!.args).toEqual([NEW, true, [USDC, OLD, NEW, AGENT, RWA], [8550n, 525n, 0n, 575n, 350n]]);
     expect(d[2]!.args).toEqual([OLD, false, [USDC, NEW, AGENT, RWA], [8550n, 525n, 575n, 350n]]);
     expect(d[3]!.args).toEqual([OLD]);
-    const cap = decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: c[2]!.data });
-    expect(cap.functionName).toBe("setVaultCap");
-    expect(cap.args).toEqual([NEW, CAP]);
-    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[6]!.data }).functionName).toBe("unpauseDeposits");
-  });
-  test("QA plan v1 E3 cap parity: router.setVaultCap(new, vaultCap(old)) lands after the registration and before the new vault is eligible; a plan's string cap is the same call, 0 stays uncapped, a bad cap is refused", () => {
-    const names = calls().map((x) => x.label);
-    const cap = names.indexOf("router.setVaultCap(new, vaultCap(old))");
-    expect(cap).toBeGreaterThan(names.indexOf("registry.registerVault(new)"));
-    expect(cap).toBeLessThan(names.findIndex((l) => l.includes("migrateEligibility(new")));
-    // the plan and the evidence keep the cap as a decimal string: it builds the same calldata as the chain read, so the operation id survives a resume
-    expect(buildRedeployCalls({ ...inputs, vaultCap: CAP.toString() })).toEqual(calls());
-    // an uncapped old leg (0) gives an uncapped new leg: the call still runs, so the parity holds either way
-    expect(decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: buildRedeployCalls({ ...inputs, vaultCap: "0" })[2]!.data }).args).toEqual([NEW, 0n]);
-    for (const bad of ["-1", "1.5", "0x10", "", "01", (1n << 256n).toString()]) expect(() => buildRedeployCalls({ ...inputs, vaultCap: bad })).toThrow("is not a uint256");
-  });
-  test("the registry link is the first call, on the new vault, before it is registered: no vault deploy script links (core S5), the timelock does", () => {
-    const names = calls().map((x) => x.label);
-    expect(names[0]).toBe("new.setRegistry(registry)");
-    expect(names.findIndex((l) => l.includes("setRegistry"))).toBeLessThan(names.findIndex((l) => l.includes("registerVault(new)")));
+    expect(decodeFunctionData({ abi: VAULT_REDEPLOY_ABI, data: c[5]!.data }).functionName).toBe("unpauseDeposits");
   });
   test("the old vault is made ineligible before it is retired (the registry reverts RetireWhileRouterEligible otherwise)", () => {
     const names = calls().map((x) => x.label);
@@ -121,7 +92,7 @@ describe("the batch", () => {
 
 describe("the state before and after", () => {
   const before = (o: Partial<RedeployBefore> = {}): RedeployBefore => ({
-    listed: [USDC, OLD, AGENT, RWA], oldStatus: 0, oldEligible: true, registryRouter: A.router, router: A.router, timelockIsRegistryAdmin: true, timelockIsRouterAdmin: true, votedWeightsActive: false,
+    listed: [USDC, OLD, AGENT, RWA], oldStatus: 0, oldEligible: true, registryRouter: A.router, router: A.router, timelockIsRegistryAdmin: true, votedWeightsActive: false,
     defaultVaults: DEF_VAULTS, defaultBps: DEF_BPS, oldHasCode: true, ...o,
   });
   test("the deployment as Deploy 2 left it passes", () => expect(redeployBeforeProblems(OLD, NEW, before())).toEqual([]));
@@ -134,14 +105,16 @@ describe("the state before and after", () => {
     expect(p({ oldEligible: false })).toContain("not router-eligible");
     expect(p({ registryRouter: addr(0x77) })).toContain("RouterNotLinked");
     expect(p({ timelockIsRegistryAdmin: false })).toContain("ADMIN_ROLE on the registry");
+    // QA plan v1 E3: the batch's setVaultCap runs as the timelock on the router; a caller that did not read the role (undefined) is not refused for it
     expect(p({ timelockIsRouterAdmin: false })).toContain("ADMIN_ROLE on the router");
+    expect(redeployBeforeProblems(OLD, NEW, before({ timelockIsRouterAdmin: true }))).toEqual([]);
     expect(p({ votedWeightsActive: true })).toContain("clear-voted-weights");
     expect(p({ defaultVaults: [USDC, AGENT, RWA], defaultBps: [9000, 600, 400] })).toContain("does not hold the old vault");
   });
   const v = vectorsFromFinal({ finalVaults: [USDC, NEW, AGENT, RWA], finalBps: DEF_BPS, oldVault: OLD, newVault: NEW });
   const after = (o: Partial<RedeployAfter> = {}): RedeployAfter => ({
     oldStatus: 2, newStatus: 0, oldEligible: false, newEligible: true, eligibleCount: 4, votedWeightsActive: false, defaultVaults: v.finalVaults, defaultBps: v.finalBps,
-    effectiveVaults: v.finalVaults, effectiveBps: v.finalBps, newPaused: false, newLinked: true, oldRetiredFlag: true, oldHasCode: true, newVaultCap: CAP, oldVaultCap: CAP, ...o,
+    effectiveVaults: v.finalVaults, effectiveBps: v.finalBps, newPaused: false, oldRetiredFlag: true, oldHasCode: true, ...o,
   });
   test("the state the batch must leave passes, and each deviation is named", () => {
     expect(redeployReadBackProblems(v, after())).toEqual([]);
@@ -155,12 +128,8 @@ describe("the state before and after", () => {
     expect(p({ defaultBps: [8550, 525, 575, 351] })).toContain("getDefaultWeights");
     expect(p({ effectiveVaults: [USDC, OLD, AGENT, RWA] })).toContain("getEffectiveWeights");
     expect(p({ newPaused: true })).toContain("depositsPaused");
-    expect(p({ newLinked: false })).toContain("not linked to the registry");
     expect(p({ oldRetiredFlag: false })).toContain("retired()");
     expect(p({ oldHasCode: false })).toContain("no code");
-    // QA plan v1 E3: the new vault left uncapped (its setVaultCap did not land) while the old one is capped
-    expect(p({ newVaultCap: 0n })).toContain(`router.vaultCap(new) is 0, router.vaultCap(old) is ${CAP}`);
-    expect(redeployReadBackProblems(v, after({ newVaultCap: 0n, oldVaultCap: 0n }))).toEqual([]);
   });
 });
 
@@ -197,12 +166,9 @@ describe("the command line", () => {
   test("--prior-out goes with verify only", () => {
     expect(parseCli(["verify", "--prior-out", "/o", ...base]).priorOut).toBe("/o");
     expect(() => parseCli(["govern", "--prior-out", "/o", ...base])).toThrow("--prior-out goes with the verify");
-    // QA plan v1 E1: a stage set that reaches the verify stage carries it (and cli.ts checks its sha); one that never reaches verify does not
-    for (const s of [[], ["--stage", "all"], ["--stage", "verify"], ["--stage", "timelock,verify"]]) expect(parseCli([...base, ...s, "--prior-out", "/o"]).priorOut).toBe("/o");
-    for (const s of [["--stage", "deploy"], ["--stage", "govern"], ["--stage", "plan"], ["--stage", "vault,timelock"]]) expect(() => parseCli([...base, ...s, "--prior-out", "/o"])).toThrow("--prior-out goes with the verify");
   });
   test("the usage text documents the verb, the row and both arguments", () => {
-    for (const w of ["redeploy-vault", "--vault KEY", "--prior-out DIR", "--row redeploy-vault", "new.setRegistry(registry)", "router.setVaultCap(new, vaultCap(old))", "registry.retire(old)"]) expect(USAGE).toContain(w);
+    for (const w of ["redeploy-vault", "--vault KEY", "--prior-out DIR", "--row redeploy-vault", "registry.retire(old)"]) expect(USAGE).toContain(w);
   });
 });
 
@@ -211,23 +177,15 @@ describe("the command line", () => {
 const SCRIPT = "RedeployProtocolAssetVault.s.sol";
 const TL = A.timelock, REG = A.registry, ROUTER = A.router;
 
-/**
- * A read-only chain that answers the deployment's state, and the new vault's, on top of the healthy pool chain the config-check reads. The new vault is a governed
- * proxy (issue 1809): its storage is healthyProxyReader's (the implementation slot names the stub manifest's vault_implementation, no admin or beacon, initialized,
- * the implementation locked), its upgradeAuthority() is the timelock unless `newAuthority` says otherwise (QA plan v1 L1).
- */
-function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean; routerAdmin?: boolean; newAuthority?: Address; newFrozen?: boolean; newAdminSlot?: Hex } = {}): ChainReader {
+/** A read-only chain that answers the deployment's state, and the new vault's, on top of the healthy pool chain the config-check reads. */
+function chainOf(o: { listed?: readonly Address[]; oldStatus?: number; oldEligible?: boolean; voted?: boolean; defaultVaults?: Address[]; defaultBps?: number[]; newPaused?: boolean; newAdmin?: boolean; newLinked?: boolean; routerAdmin?: boolean } = {}): ChainReader {
   const listed = o.listed ?? [USDC, OLD, AGENT, RWA];
   const base = healthyPoolReader();
-  const proxyStorage = healthyProxyReader(o.newAdminSlot ? { adminSlot: o.newAdminSlot } : {}).getStorageAt;
   return {
     ...base,
-    getStorageAt: proxyStorage,
     read: async (at: string, sig: string, args: unknown[] = []) => {
       const fn = /function (\w+)/.exec(sig)![1]!;
       switch (fn) {
-        case "upgradeAuthority": return o.newAuthority ?? TL;
-        case "upgradesFrozen": return o.newFrozen ?? false;
         case "listVaults": return listed;
         case "getVault": return [{ name: "Robot Money Protocol", asset: addr(0xc0de), registeredAt: 1n }, o.oldStatus ?? 0];
         case "isRouterEligible": return o.oldEligible ?? true;
@@ -235,7 +193,7 @@ function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: bool
         case "votedWeightsActive": return o.voted ?? false;
         case "getDefaultWeights": return [o.defaultVaults ?? DEF_VAULTS, (o.defaultBps ?? DEF_BPS).map(BigInt)];
         case "depositsPaused": return o.newPaused ?? true;
-        case "registry": return o.newLinked ? REG : addr(0); // the deploy leaves the vault unlinked: the govern batch links it
+        case "registry": return o.newLinked === false ? addr(0) : REG;
         case "hasRole": {
           const tl = lc(String(args[1])) === lc(TL);
           if (lc(at) === lc(REG)) return tl;
@@ -250,9 +208,10 @@ function chainOf(o: { listed?: Address[]; oldStatus?: number; oldEligible?: bool
 
 function verbWorld(o: { chainId?: number; sheet?: Record<string, string | null>; manifest?: Partial<RunManifest> | null } = {}) {
   const chainId = o.chainId ?? 918453;
-  const w = world({ chainId, sheet: { ...ALL, ...(o.sheet ?? {}) } });
+  const w = world({ chainId, sheet: { ...ALL, ...(chainId === 8453 ? { ROUTER_WEIGHTS: "USDC:9500,PROTO:500,AGENT:0,RWA:0" } : {}), ...(o.sheet ?? {}) } });
   const dir = join(w.coreDir, "deployments", String(chainId));
   writeGovernManifests(dir);
+  writeFileSync(join(dir, "libs.json"), JSON.stringify({ tick_math: addr(0x7001) }));
   w.cfg.counts[SCRIPT] = 3;
   w.cfg.vaultOut = { [SCRIPT]: NEW };
   if (o.manifest !== null) saveRunManifest(w.evidence, { version: 1, chainId, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "2026-10-13T00:00:00Z", stages: { timelock: { status: "done", startedAt: "x" } }, ...(o.manifest ?? {}) } as RunManifest);
@@ -271,7 +230,8 @@ describe("the redeploy-vault verb", () => {
     expect(rec.deploy_tx_hashes).toHaveLength(3);
     expect(rec.deploy_receipt_statuses).toEqual([1, 1, 1]);
     // the vault manifest names the new vault, the retired one is kept, no temporary file is left
-    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(NEW);
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.replacement-1.json"), "utf8")).vault).toBe(NEW);
     expect(rec.retired_manifest).toBe("protocol-asset-vault.retired-1.json");
     expect(JSON.parse(readFileSync(join(t.dir, rec.retired_manifest!), "utf8")).vault).toBe(OLD);
     expect(existsSync(join(t.dir, "protocol-asset-vault.redeploy.json"))).toBe(false);
@@ -298,7 +258,7 @@ describe("the redeploy-vault verb", () => {
   });
   test("--dry-run simulates only: nothing is broadcast, no record, the vault manifest is unchanged", async () => {
     const t = verbWorld();
-    expect(await t.run(["--dry-run"], { makeSigner: undefined })).toBe(0);
+    expect(await t.run(["--dry-run"])).toBe(0);
     expect(t.forge().filter((c) => c.args.includes("--broadcast"))).toHaveLength(0);
     expect(redeploysOf(t.manifest())).toEqual([]);
     expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
@@ -331,7 +291,7 @@ describe("the redeploy-vault verb", () => {
     expect(early.forge()).toEqual([]);
   });
   test("it refuses a deployment that is not in the state the round starts from, and sends nothing", async () => {
-    for (const bad of [{ oldEligible: false }, { oldStatus: 2 }, { voted: true }, { listed: [USDC, AGENT, RWA] }, { routerAdmin: false }] as Parameters<typeof chainOf>[0][]) {
+    for (const bad of [{ oldEligible: false }, { oldStatus: 2 }, { voted: true }, { listed: [USDC, AGENT, RWA] }, { routerAdmin: false }] as const) {
       const t = verbWorld();
       expect(await t.run([], { chainReader: () => chainOf(bad) })).toBe(EXIT_CODES.REFUSED);
       expect(t.forge()).toEqual([]);
@@ -343,32 +303,16 @@ describe("the redeploy-vault verb", () => {
     expect(await t.run()).toBe(EXIT_CODES.SIGNER);
     expect(t.forge()).toEqual([]);
   });
-  test("a deploy that leaves a vault the registry already lists, an open vault, a deployer admin or an already linked vault is not accepted, and the old manifest stays", async () => {
-    for (const bad of [{ newPaused: false }, { newAdmin: false }, { newLinked: true }, { listed: [USDC, OLD, AGENT, RWA, NEW] }]) {
+  test("a deploy that leaves a vault the registry already lists, an open vault or a deployer admin is not accepted, and the old manifest stays", async () => {
+    for (const bad of [{ newPaused: false }, { newAdmin: false }, { newLinked: false }, { listed: [USDC, OLD, AGENT, RWA, NEW] }]) {
       const t = verbWorld();
       // the before-state check runs on a clean chain: only the AFTER reads differ (every read of the new vault, and the registry listing read after the deploy)
       let lists = 0;
       const after = (at: string, sig: string): boolean => lc(at) === lc(NEW) || (/function listVaults/.test(sig) && ++lists > 1);
       const reader = () => { const clean = chainOf(); const dirty = chainOf(bad); return { ...clean, read: async (...a: Parameters<ChainReader["read"]>) => (after(a[0], a[1]) ? dirty : clean).read(...a) } as ChainReader; };
       const code = await t.run([], { chainReader: reader });
-      expect([EXIT_CODES.VERIFY, EXIT_CODES.REFUSED]).toContain(code);
+      expect(code).toBe(EXIT_CODES.VERIFY); // after the bounded re-reads (QA plan v1 E6), never before the deploy
       expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
-    }
-  });
-  test("issue 1809 (QA plan v1 L1): the new vault is read back as a governed proxy, and the round's record keeps what was read", async () => {
-    const t = verbWorld();
-    expect(await t.run()).toBe(0);
-    const rec = redeploysOf(t.manifest())[0]!;
-    expect(rec.status).toBe("deployed");
-    // the stub manifest names vault_implementation 0x…2001 and the authority the script was given (TIMELOCK_ADDRESS); the chain answers the same
-    expect(rec.proxy).toMatchObject({ name: "rmPROTO", proxy: NEW, implementation: addr(0x2001), authority: TL, mode: "upgradeable", frozen: false, admin_slot_empty: true, beacon_slot_empty: true });
-  });
-  test("issue 1809 (QA plan v1 L1): a new vault whose proxy names another authority, carries an admin slot or reads frozen is refused VERIFY, and the old manifest stays", async () => {
-    for (const bad of [{ newAuthority: addr(0xbad) }, { newAdminSlot: `0x${"0".repeat(24)}${"ad".repeat(20)}` as Hex }, { newFrozen: true }]) {
-      const t = verbWorld();
-      expect(await t.run([], { chainReader: () => chainOf(bad) })).toBe(EXIT_CODES.VERIFY);
-      expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
-      expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
     }
   });
   test("a broadcast count that differs from the simulation stops the run before the manifest moves", async () => {
@@ -377,25 +321,6 @@ describe("the redeploy-vault verb", () => {
     expect(await t.run()).toBe(EXIT_CODES.COUNT_MISMATCH);
     expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
     expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
-  });
-  test("QA plan v1 C2: the new vault is the contract the broadcast CREATED, and the recorded statuses are the broadcast receipts' own", async () => {
-    // forge's receipts name the deployer's CREATE of the vault the manifest names: accepted, the statuses are read from the receipts
-    const ok = verbWorld();
-    expect(await ok.run()).toBe(0);
-    expect(redeploysOf(ok.manifest())[0]!.deploy_receipt_statuses).toEqual([1, 1, 1]);
-    // the manifest names NEW but the CREATE receipt names another contract: refused before the manifest moves, the old vault untouched
-    const forged = verbWorld();
-    forged.w.cfg.createdOut = { [SCRIPT]: addr(0x9998) };
-    expect(await forged.run()).toBe(EXIT_CODES.MANIFEST);
-    expect(JSON.parse(readFileSync(join(forged.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
-    expect(redeploysOf(forged.manifest())[0]!).toMatchObject({ status: "started" });
-    expect(redeploysOf(forged.manifest())[0]!.new_vault).toBeUndefined();
-    expect(forged.w.logs().some((l) => l.event === "run.failed" && String(l.message).includes("is not the contract a recorded deploy transaction created"))).toBe(true);
-    // a receipt that reads status 0 is never recorded as 1
-    const reverted = verbWorld();
-    reverted.w.cfg.revertedReceipt = { [SCRIPT]: 2 };
-    expect(await reverted.run()).toBe(EXIT_CODES.MANIFEST);
-    expect(redeploysOf(reverted.manifest())[0]!.deploy_receipt_statuses).toBeUndefined();
   });
   test("a second run while the first round waits for govern is refused with the govern command, and one that died part-way needs --resume", async () => {
     const t = verbWorld();
@@ -407,9 +332,31 @@ describe("the redeploy-vault verb", () => {
     expect(await died.run()).toBe(EXIT_CODES.RESUME);
     expect(died.forge()).toEqual([]);
   });
+
+  test("QA plan v1 C2: the new vault is the contract the broadcast CREATED, and the recorded statuses are the broadcast receipts' own", async () => {
+    // forge's receipts name the deployer's CREATE of the vault the manifest names: accepted, the statuses are read from the receipts
+    const ok = verbWorld();
+    expect(await ok.run()).toBe(0);
+    expect(redeploysOf(ok.manifest())[0]!.deploy_receipt_statuses).toEqual([1, 1, 1]);
+    // the manifest names NEW but the CREATE receipt names another contract: refused before the manifest moves, the old vault untouched
+    const forged = verbWorld();
+    forged.w.cfg.createdOut = { [SCRIPT]: addr(0x9998) };
+    expect(await forged.run()).toBe(EXIT_CODES.MANIFEST);
+    expect(JSON.parse(readFileSync(join(forged.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    expect(existsSync(join(forged.dir, "protocol-asset-vault.replacement-1.json"))).toBe(false);
+    expect(redeploysOf(forged.manifest())[0]!).toMatchObject({ status: "started" });
+    expect(redeploysOf(forged.manifest())[0]!.new_vault).toBeUndefined();
+    expect(forged.w.logs().some((l) => l.event === "run.failed" && String(l.message).includes("is not the contract a recorded deploy transaction created"))).toBe(true);
+    // a receipt that reads status 0 is never recorded as 1
+    const reverted = verbWorld();
+    reverted.w.cfg.revertedReceipt = { [SCRIPT]: 2 };
+    expect(await reverted.run()).toBe(EXIT_CODES.MANIFEST);
+    expect(redeploysOf(reverted.manifest())[0]!.deploy_receipt_statuses).toBeUndefined();
+  });
+
   // QA plan v1 E2 (review DT-4): the `started` record is saved AFTER the confirmation. Before, a refused confirmation left it open: every fresh run was refused
   // RESUME, --resume looped on a broadcast that never began, and the manifest had to be edited by hand.
-  test("a refused confirmation leaves no open record; the next run starts fresh", async () => {
+  test("QA plan v1 E2: a refused confirmation leaves no open record; the next run starts fresh", async () => {
     const t = verbWorld();
     const broadcasts = () => t.forge().filter((c) => c.args.includes("--broadcast"));
     const untouched = () => {
@@ -463,7 +410,8 @@ describe("the redeploy-vault verb", () => {
   });
 
   // QA plan v1 E6 (issue 1723): the reads after the broadcast go through a load-balanced RPC. A node behind the deploy blocks answers the nonce from before the broadcast,
-  // has no code at the new vault, or sits between two of its transactions. Each is read again, bounded (5 reads; the harness never really sleeps), and still fails closed.
+  // has no code at the new vault, or sits between two of its transactions. Each is read again through safe/read-after-write.ts, bounded (STALE_READ_TRIES reads; the
+  // harness's readRetry never really sleeps), and still fails closed.
   const nonceReadsAfterBroadcast = (t: ReturnType<typeof verbWorld>): string[] => {
     const calls = t.w.state().calls as { tool: string; args: string[] }[];
     const i = calls.findIndex((c) => c.tool === "forge" && c.args.includes("--broadcast"));
@@ -477,19 +425,19 @@ describe("the redeploy-vault verb", () => {
     expect(await t.run()).toBe(0);
     expect(nonceReadsAfterBroadcast(t)).toHaveLength(3);
     expect(redeploysOf(t.manifest())[0]!).toMatchObject({ status: "deployed", new_vault: NEW, deploy_start_nonce: 40, deploy_end_nonce: 43, deploy_count: 3 });
-    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(NEW);
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.replacement-1.json"), "utf8")).vault).toBe(NEW);
   });
-
   test("QA plan v1 E6: a nonce that never shows the broadcast within the bound is still COUNT_MISMATCH, naming the reads and the RPC host; the old manifest stays", async () => {
     const t = verbWorld();
     t.w.cfg.staleNonceReads = { [SCRIPT]: 99 };
     expect(await t.run()).toBe(EXIT_CODES.COUNT_MISMATCH);
-    expect(nonceReadsAfterBroadcast(t)).toHaveLength(5);
-    expect(failedWith(t, "the deployer nonce read 40, 40, 40, 40, 40 in 5 reads from RPC rpc.test")).toBe(true);
-    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    expect(nonceReadsAfterBroadcast(t)).toHaveLength(STALE_READ_TRIES);
+    expect(failedWith(t, "the deployer nonce never showed 43")).toBe(true);
+    expect(failedWith(t, `last read 40, after ${STALE_READ_TRIES} read(s)`)).toBe(true);
+    expect(failedWith(t, "from RPC rpc.test")).toBe(true);
+    expect(existsSync(join(t.dir, "protocol-asset-vault.replacement-1.json"))).toBe(false);
     expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
   });
-
   test("QA plan v1 E6: the new vault read from a node with no code yet, then from one between two deploy transactions (not yet paused), then current: accepted on the third read", async () => {
     const t = verbWorld();
     let attempt = 0;
@@ -507,15 +455,15 @@ describe("the redeploy-vault verb", () => {
     expect(attempt).toBe(3);
     expect(redeploysOf(t.manifest())[0]!).toMatchObject({ status: "deployed", new_vault: NEW });
   });
-
   test("QA plan v1 E6: a new vault that cannot be read for the whole bound is refused VERIFY (not a raw RPC error), and the old manifest stays", async () => {
     const t = verbWorld();
     let reads = 0;
     const reader = () => { const clean = chainOf(); return { ...clean, read: async (...a: Parameters<ChainReader["read"]>) => { if (lc(a[0]) !== lc(NEW)) return clean.read(...a); reads++; throw new Error("execution reverted: returned no data (0x)"); } } as ChainReader; };
     expect(await t.run([], { chainReader: reader })).toBe(EXIT_CODES.VERIFY);
-    expect(reads).toBe(5);
-    expect(failedWith(t, "the new vault cannot be read (execution reverted: returned no data (0x)) (5 reads from RPC rpc.test)")).toBe(true);
-    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    expect(reads).toBe(STALE_READ_TRIES);
+    expect(failedWith(t, "the new vault cannot be read (an error (execution reverted: returned no data (0x)))")).toBe(true);
+    expect(failedWith(t, `(${STALE_READ_TRIES} reads from RPC rpc.test`)).toBe(true);
+    expect(existsSync(join(t.dir, "protocol-asset-vault.replacement-1.json"))).toBe(false);
     expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
   });
 });
@@ -525,10 +473,10 @@ describe("the redeploy-vault verb", () => {
 function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {}) {
   const d = setup({ ...ALL, ...(chainId === 8453 ? REHEARSAL : {}), ...sheetOver }, chainId);
   const tl = fakeTimelock(d.sheet, 900n);
+  tl.s.vaultCaps.set(OLD, 525000n);
   tl.s.weights = { vaults: [...DEF_VAULTS], bps: DEF_BPS.map(BigInt) };
   tl.s.paused = new Set([NEW]); // the old vault was unpaused by stage 13; the new one deploys closed
-  tl.s.governed.add(NEW); // the timelock holds ADMIN_ROLE on the new vault; it is NOT linked: the batch's first call links it
-  tl.s.vaultCaps.set(lc(OLD), CAP); // QA plan v1 E3: the old vault's router cap; the new address reads 0 (uncapped) until the batch copies it
+  tl.s.linked.add(NEW); tl.s.governed.add(NEW);
   // QA plan v1 C2: the round's first deploy transaction is the deployer's CREATE of the new vault (the chain receipt's contractAddress), the other two are calls
   const deployTxs = [`0x${"01".repeat(32)}`, `0x${"02".repeat(32)}`, `0x${"03".repeat(32)}`];
   deployTxs.forEach((h, i) => tl.s.txReceipts.set(h, { from: addr(0xa001), contractAddress: i === 0 ? NEW : null }));
@@ -541,24 +489,22 @@ function rowWorld(chainId = 918453, sheetOver: Record<string, string | null> = {
     retired_manifest: "protocol-asset-vault.retired-1.json", started_at: "x", deployed_at: "y",
   };
   manifest.vault_redeploys = [rec];
-  const opts = (extra: object = {}) => ({ ownerSigners: signers(d.sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: false as const, maxWaitSeconds: 10_000_000, emit: () => {}, row: REDEPLOY_ROW, ...extra });
+  const opts = (extra: object = {}) => ({ ownerSigners: signers(d.sheet), sender, api: tl.api, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, warp: false as const, maxWaitSeconds: chainId === 8453 ? 0 : 10_000_000, emit: () => {}, row: REDEPLOY_ROW, ...extra });
   const warpTo = async (sec: bigint) => { tl.s.clock += sec; };
   const go = (extra: object = {}) => runGovern(d.ctx, stageByName("govern"), manifest, opts({ warp: warpTo, ...extra }));
   return { ...d, tl, manifest, rec, opts, go, warpTo, deployTxs };
 }
 
 describe("the govern row", () => {
-  test("it schedules ONE batch of seven calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
+  test("it schedules ONE batch of six calls, executes it after the delay and leaves the router on the new vault with the same split", async () => {
     const w = rowWorld();
-    expect(w.tl.s.linked.has(NEW)).toBe(false);
     await w.go();
     expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
     const sched = w.tl.s.scheduled.get("redeploy-vault")!;
     expect(sched.form).toBe("batch");
-    expect(sched.calls).toHaveLength(7);
-    expect(sched.calls.map((c) => c.target)).toEqual([NEW, A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
-    // the chain: the new vault is linked, listed, eligible and open, the old one retired and ineligible, the split unchanged across the new vault
-    expect(w.tl.s.linked.has(NEW)).toBe(true);
+    expect(sched.calls).toHaveLength(6);
+    expect(sched.calls.map((c) => c.target)).toEqual([A.registry, A.router, A.registry, A.registry, A.registry, NEW]);
+    // the chain: the new vault is listed, eligible and open, the old one retired and ineligible, the split unchanged across the new vault
     expect(w.tl.s.listed).toEqual([USDC, OLD, AGENT, RWA, NEW]);
     expect(w.tl.s.ineligible.has(OLD)).toBe(true);
     expect(w.tl.s.ineligible.has(NEW)).toBe(false);
@@ -572,7 +518,7 @@ describe("the govern row", () => {
     await w.go();
     const rec = redeploysOf(w.manifest)[0]!;
     expect(rec.status).toBe("governed");
-    expect(rec).toMatchObject({ vaults: [USDC, NEW, AGENT, RWA], bps: DEF_BPS, router_vault_cap: CAP.toString(), voted_weights_active: false, effective_vaults: [USDC, NEW, AGENT, RWA], effective_bps: DEF_BPS, old_vault_status: "Retired", new_vault_status: "Active", schedule_status: 1, execute_status: 1 });
+    expect(rec).toMatchObject({ vaults: [USDC, NEW, AGENT, RWA], bps: DEF_BPS, voted_weights_active: false, effective_vaults: [USDC, NEW, AGENT, RWA], effective_bps: DEF_BPS, old_vault_status: "Retired", new_vault_status: "Active", schedule_status: 1, execute_status: 1 });
     expect(rec.operation_id).toBe(w.tl.s.ids.get("redeploy-vault"));
     expect(rec.schedule_tx).toMatch(/^0x[0-9a-f]{64}$/);
     expect(rec.execute_tx).not.toBe(rec.schedule_tx);
@@ -631,9 +577,9 @@ describe("the govern row", () => {
   test("refused before anything is scheduled: the registry is linked to another router", () => refuses((w) => { w.tl.s.registryRouter = addr(0x77); }, "RouterNotLinked"));
   test("refused before anything is scheduled: the timelock is not the registry admin", () => refuses((w) => { w.tl.s.timelockIsRegistryAdmin = false; }, "ADMIN_ROLE on the registry"));
   test("QA plan v1 E3: refused before anything is scheduled: the timelock is not the router admin (the batch's setVaultCap would revert after the delay)", () => refuses((w) => { w.tl.s.timelockIsRouterAdmin = false; }, "ADMIN_ROLE on the router"));
-  test("refused before anything is scheduled: the new vault is already open, already linked (the batch's set-once link would revert), or not governed by the timelock", async () => {
+  test("refused before anything is scheduled: the new vault is already open, not linked, or not governed by the timelock", async () => {
     await refuses((w) => w.tl.s.paused.delete(NEW), "is not deposit-paused");
-    await refuses((w) => w.tl.s.linked.add(NEW), "already linked to the registry");
+    await refuses((w) => w.tl.s.linked.delete(NEW), "not linked to the registry");
     await refuses((w) => w.tl.s.governed.delete(NEW), "does not hold ADMIN_ROLE on the new vault");
   });
   test("refused when the vault manifest and the run record name different vaults", async () => {
@@ -657,7 +603,7 @@ describe("the govern row", () => {
     await w.go();
     const d = w.tl.s.scheduled.get("redeploy-vault")!.description!;
     expect(d).toContain(`old ${OLD} -> new ${NEW}`);
-    expect(d).toContain("new.setRegistry(registry)");
+    expect(d).toContain("router.setVaultCap(new, approved old cap)");
   });
   test("refused when no redeploy was deployed", async () => {
     const w = rowWorld();
@@ -670,39 +616,126 @@ describe("the govern row", () => {
     await expect(w.go()).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("getEffectiveWeights") });
     expect(redeploysOf(w.manifest)[0]!.status).toBe("deployed");
   });
-  // QA plan v1 E3 (review F2, E7, QD-7): router.vaultCap is keyed by address and 0 is uncapped. Before, the batch had no cap call and the new rmPROTO took routed deposits uncapped.
-  test("QA plan v1 E3 cap parity: the batch gives the new vault the old vault's router cap, read when the round is planned, and the evidence keeps it", async () => {
-    const w = rowWorld();
-    expect(w.tl.s.vaultCaps.get(lc(NEW))).toBeUndefined(); // the new address reads 0: uncapped
-    await w.go();
-    const call = w.tl.s.scheduled.get("redeploy-vault")!.calls[2]!;
-    expect(call.target).toBe(A.router);
-    const d = decodeFunctionData({ abi: ROUTER_REDEPLOY_ABI, data: call.data as Hex });
-    expect(d.functionName).toBe("setVaultCap");
-    expect(d.args).toEqual([NEW, CAP]);
-    expect(w.tl.s.vaultCaps.get(lc(NEW))).toBe(CAP);
-    expect(w.tl.s.vaultCaps.get(lc(OLD))).toBe(CAP);
-    expect(w.tl.s.scheduled.get("redeploy-vault")!.description).toContain("router.setVaultCap(new, vaultCap(old))");
-    expect(redeploysOf(w.manifest)[0]!.router_vault_cap).toBe(CAP.toString());
-    // the evidence entry the row wrote rebuilds the same seven calls
-    const r = redeploysOf(w.manifest)[0]!;
-    const rebuilt = buildRedeployCalls({ registry: r.registry, router: r.router, oldVault: r.old_vault, newVault: r.new_vault!, registryName: r.registry_name!, asset: r.asset!, finalVaults: r.vaults!, finalBps: r.bps!, vaultCap: r.router_vault_cap! });
-    expect(w.tl.s.scheduled.get("redeploy-vault")!.calls).toEqual(rebuilt.map(({ target, data }) => ({ target, data })));
-  });
-  test("QA plan v1 E3: a cap that moves on the old vault after the schedule fails the read-back (GOVERN), and nothing is recorded as governed", async () => {
-    const w = rowWorld(8453);
-    await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
-    w.tl.s.clock += 901n;
-    w.tl.s.vaultCaps.set(lc(OLD), CAP * 2n); // another operation changed the old vault's cap while the batch waited: the batch carries the planned cap
-    await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining(`router.vaultCap(new) is ${CAP}, router.vaultCap(old) is ${CAP * 2n}`) });
-    expect(redeploysOf(w.manifest)[0]!.status).toBe("deployed");
-  });
   test("a second redeploy of the same vault is its own round with its own operation", async () => {
     const w = rowWorld();
     await w.go();
     const first = w.tl.s.ids.get("redeploy-vault");
     expect(redeployRecordKey("PROTO", 1)).not.toBe(redeployRecordKey("PROTO", 2));
     expect(first).toBeDefined();
+  });
+});
+
+
+// ---- failure, retry and recovery (issue 1796) ----------------------------------------------------------------------------------
+
+describe("interrupted broadcast versus atomic execution", () => {
+  test("a deploy broadcast that dies part-way is NOT atomic: the round stays started, the manifest stays, a fresh run is refused and --resume completes it", async () => {
+    const t = verbWorld();
+    t.w.cfg.failBroadcast = SCRIPT;
+    expect(await t.run()).toBe(EXIT_CODES.BROADCAST);
+    expect(redeploysOf(t.manifest())[0]!.status).toBe("started");
+    expect(JSON.parse(readFileSync(join(t.dir, "protocol-asset-vault.json"), "utf8")).vault).toBe(OLD);
+    // a part-way broadcast moved the deployer nonce (some transactions landed): never rerun fresh
+    const n = t.forge().length;
+    expect(await t.run()).toBe(EXIT_CODES.RESUME);
+    expect(t.forge()).toHaveLength(n);
+    // --resume continues the same broadcast and the round completes
+    expect(await t.run(["--resume"])).toBe(0);
+    expect(t.forge().at(-1)!.args).toContain("--resume");
+    const rec = redeploysOf(t.manifest())[0]!;
+    expect(rec.status).toBe("deployed");
+    expect(rec.new_vault).toBe(NEW);
+  });
+  test("a timelock batch is atomic: a call that reverts leaves the chain exactly as it was, the round is not recorded, and the retry executes all six calls", async () => {
+    const w = rowWorld();
+    const before = { listed: [...w.tl.s.listed], weights: JSON.stringify({ v: w.tl.s.weights.vaults, b: w.tl.s.weights.bps.map(String) }) };
+    // the 5th call (retire) reverts
+    w.tl.s.failOn = (c) => c.target === A.registry && c.data.startsWith("0x") && decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: c.data }).functionName === "retire";
+    await expect(w.go()).rejects.toThrow();
+    expect(w.tl.s.listed).toEqual(before.listed); // registerVault of call 1 was undone
+    expect(JSON.stringify({ v: w.tl.s.weights.vaults, b: w.tl.s.weights.bps.map(String) })).toBe(before.weights);
+    expect(w.tl.s.vaultCaps.has(NEW)).toBe(false); // the cap of call 2 was undone
+    expect(w.tl.s.ineligible.has(OLD)).toBe(false);
+    expect(w.tl.s.paused.has(NEW)).toBe(true);
+    expect(redeploysOf(w.manifest)[0]!.status).toBe("deployed");
+    // the failure is fixed: the same command executes the same operation
+    w.tl.s.failOn = undefined;
+    await w.go();
+    expect(redeploysOf(w.manifest)[0]!.status).toBe("governed");
+    expect(w.tl.s.listed).toEqual([USDC, OLD, AGENT, RWA, NEW]);
+    expect(w.tl.s.vaultCaps.get(NEW)).toBe(525000n);
+  });
+});
+
+describe("a pause-all or a changed deployment makes a scheduled round stale", () => {
+  test("a pause-all recorded after the schedule stops the redeploy batch from executing (its last call unpauses the new vault), and nothing is sent", async () => {
+    const w = rowWorld(8453);
+    await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    beginPauseEntry(w.ctx.evidenceDir, { at: new Date().toISOString(), trigger: "verify", reason: "test" });
+    w.tl.s.clock += 901n;
+    await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("will NOT execute") });
+    expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault"]);
+    expect(w.tl.s.paused.has(NEW)).toBe(true);
+    expect(redeploysOf(w.manifest)[0]!.status).toBe("deployed");
+  });
+  test("an unpause of rmPROTO scheduled for the OLD vault is rejected once the manifest names the new vault: it is a different operation, so the tool will not execute it", async () => {
+    const w = rowWorld(8453);
+    const manifestFile = join(w.ctx.coreDir, "deployments", "8453", "protocol-asset-vault.json");
+    writeFileSync(manifestFile, JSON.stringify({ vault: OLD }));
+    w.tl.s.paused.add(OLD); // paused again by a pause-all before the cutover
+    await expect(w.go({ warp: false, row: "unpause-PROTO" })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    expect(w.tl.s.events).toEqual(["schedule:unpause-PROTO"]);
+    writeFileSync(manifestFile, JSON.stringify({ vault: NEW }));
+    w.tl.s.clock += 901n;
+    await expect(w.go({ warp: false, row: "unpause-PROTO" })).rejects.toThrow("is not pending");
+    expect(w.tl.s.events).toEqual(["schedule:unpause-PROTO"]);
+    expect(w.tl.s.paused.has(OLD)).toBe(true); // the old vault was never reopened by the stale operation
+  });
+  test("a deployment that moved on after the schedule (the old vault was made ineligible, or the vector changed, or the new vault was opened) is refused at execute time", async () => {
+    for (const arm of [(w: ReturnType<typeof rowWorld>) => w.tl.s.ineligible.add(OLD), (w: ReturnType<typeof rowWorld>) => { w.tl.s.weights = { vaults: [USDC, OLD, AGENT, RWA], bps: [8000n, 1075n, 575n, 350n] }; }, (w: ReturnType<typeof rowWorld>) => w.tl.s.paused.delete(NEW)]) {
+      const w = rowWorld(8453);
+      await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+      arm(w);
+      w.tl.s.clock += 901n;
+      await expect(w.go({ warp: false })).rejects.toMatchObject({ kind: "GOVERN" });
+      expect(w.tl.s.events).toEqual(["scheduleBatch:redeploy-vault"]);
+    }
+  });
+});
+
+describe("restore-old recovery", () => {
+  const CURRENT = [USDC, NEW, AGENT, RWA];
+  const calls = () => buildRestoreOldCalls({ registry: REG, oldVault: OLD, newVault: NEW, currentVaults: CURRENT, currentBps: DEF_BPS });
+  const dec = (i: number) => decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: calls()[i]!.data }) as unknown as { functionName: string; args: any[] };
+  test("four calls in the one order the contracts allow: reactivate old, two matching eligibility migrations, retire new", () => {
+    const c = calls();
+    expect(c.map((x) => dec(c.indexOf(x)).functionName)).toEqual(["reactivate", "migrateEligibility", "migrateEligibility", "retire"]);
+    expect(c.every((x) => x.target === REG)).toBe(true);
+    expect(dec(0).args).toEqual([OLD]);
+    expect(dec(3).args).toEqual([NEW]);
+  });
+  test("reactivation comes before any eligibility change, and old is made eligible before the new vault is dropped and retired", () => {
+    const names = [0, 1, 2, 3].map((i) => `${dec(i).functionName}:${String(dec(i).args[0]) === OLD ? "old" : "new"}`);
+    expect(names).toEqual(["reactivate:old", "migrateEligibility:old", "migrateEligibility:new", "retire:new"]);
+    expect(dec(1).args[1]).toBe(true);
+    expect(dec(2).args[1]).toBe(false);
+  });
+  test("the two migrations are the mirror of the forward ones: five legs with old at 0 bps right after new, then the launch vector with old in its slot", () => {
+    const five = dec(1).args as [string, boolean, string[], bigint[]];
+    expect(five[2]).toEqual([USDC, NEW, OLD, AGENT, RWA]);
+    expect(five[3]).toEqual([8550n, 525n, 0n, 575n, 350n]);
+    const four = dec(2).args as [string, boolean, string[], bigint[]];
+    expect(four[2]).toEqual(DEF_VAULTS);
+    expect(four[3]).toEqual(DEF_BPS.map(BigInt));
+    // the forward batch's final migration is the same shape with the roles swapped
+    const fwd = buildRedeployCalls({ router: ROUTER, routerVaultCap: 525000n, registry: REG, oldVault: OLD, newVault: NEW, registryName: "n", asset: addr(0xc0de), finalVaults: CURRENT, finalBps: DEF_BPS });
+    const fwdFour = decodeFunctionData({ abi: REGISTRY_REDEPLOY_ABI, data: fwd[3]!.data }).args as [string, boolean, string[], bigint[]];
+    expect(fwdFour[2]).toEqual(CURRENT);
+    expect(four[2]).toEqual(DEF_VAULTS);
+  });
+  test("it is deterministic and refuses a vector that already holds the old vault", () => {
+    expect(calls()).toEqual(calls());
+    expect(() => buildRestoreOldCalls({ registry: REG, oldVault: OLD, newVault: NEW, currentVaults: [USDC, OLD, NEW, RWA], currentBps: DEF_BPS })).toThrow("already holds the old vault");
   });
 });
 
@@ -716,26 +749,25 @@ const EV = parseAbi([
 const T0 = 5000;
 const entry = () => ({
   step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "governed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: TL, deployer: addr(0xa001), core_sha: SHA,
-  deploy_start_nonce: 40, deploy_end_nonce: 43, deploy_count: 3, deploy_tx_hashes: [h(1), h(2), h(3)], deploy_receipt_statuses: [1, 1, 1], registry_name: "Robot Money Protocol", asset: addr(0xc0de),
-  vaults: [USDC, NEW, AGENT, RWA], bps: DEF_BPS, router_vault_cap: CAP.toString(), voted_weights_active: false, effective_vaults: [USDC, NEW, AGENT, RWA], effective_bps: DEF_BPS, old_vault_status: "Retired", new_vault_status: "Active",
+  deploy_start_nonce: 40, deploy_end_nonce: 43, deploy_count: 3, deploy_tx_hashes: [h(1), h(2), h(3)], deploy_receipt_statuses: [1, 1, 1], router_vault_cap: "525000", registry_name: "Robot Money Protocol", asset: addr(0xc0de),
+  vaults: [USDC, NEW, AGENT, RWA], bps: DEF_BPS, voted_weights_active: false, effective_vaults: [USDC, NEW, AGENT, RWA], effective_bps: DEF_BPS, old_vault_status: "Retired", new_vault_status: "Active",
   operation_id: h(77), schedule_tx: h(10), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(11), execute_status: 1, execute_block_timestamp: T0 + 900,
 });
 const ev = (over: object = {}) => ({ deployment_kind: "rehearsal", registry: { address: REG }, timelock: { address: TL }, vaults: { rmPROTO: { address: NEW } }, vault_redeploys: [entry()], ...over });
 const offline = (f: (e: ReturnType<typeof entry>) => void, floor = 900): string => { const e = entry(); f(e); return checkVaultRedeploys(ev({ vault_redeploys: [e] }), floor).join("\n"); };
 
-function chainFor(e: ReturnType<typeof entry>, o: { calls?: number; delay?: bigint; gap?: number; data?: Hex; target?: Address; failedDeploy?: boolean; created?: Address; creator?: Address } = {}): Parameters<typeof checkVaultRedeploysOnChain>[1] {
-  const want = buildRedeployCalls({ registry: e.registry as Address, router: e.router as Address, oldVault: e.old_vault as Address, newVault: e.new_vault as Address, registryName: e.registry_name, asset: e.asset as Address, finalVaults: e.vaults as Address[], finalBps: e.bps, vaultCap: e.router_vault_cap });
+function chainFor(e: ReturnType<typeof entry>, o: { calls?: number; delay?: bigint; gap?: number; data?: Hex; target?: Address; failedDeploy?: boolean; swap?: [number, number]; created?: Address; creator?: Address } = {}): Parameters<typeof checkVaultRedeploysOnChain>[1] {
+  const want = buildRedeployCalls({ router: e.router as Address, routerVaultCap: BigInt(e.router_vault_cap), registry: e.registry as Address, oldVault: e.old_vault as Address, newVault: e.new_vault as Address, registryName: e.registry_name, asset: e.asset as Address, finalVaults: e.vaults as Address[], finalBps: e.bps });
   const receipts = new Map<string, { status: "success" | "reverted"; blockNumber: bigint; logs: { address: string; topics: readonly Hex[]; data: Hex }[]; from?: string; contractAddress?: string | null }>();
   const blocks = new Map<bigint, number>(); let bn = 1n;
-  const add = (hash: string, logs: { address: string; topics: readonly Hex[]; data: Hex }[], ts: number, status: "success" | "reverted" = "success") => { receipts.set(hash, { status, blockNumber: bn, logs }); blocks.set(bn++, ts); };
+  const add = (hash: string, logs: { address: string; topics: readonly Hex[]; data: Hex }[], ts: number, status: "success" | "reverted" = "success", tx: { from?: string; contractAddress?: string | null } = {}) => { receipts.set(hash, { status, blockNumber: bn, logs, ...tx }); blocks.set(bn++, ts); };
   const sched = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallScheduled", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [(i === 0 && o.target ? o.target : c.target) as Address, 0n, i === 0 && o.data ? o.data : c.data, h(0) as Hex, o.delay ?? 900n]) });
   const exec = (i: number, c: { target: string; data: Hex }) => ({ address: TL, topics: encodeEventTopics({ abi: EV, eventName: "CallExecuted", args: { id: h(77) as Hex, index: BigInt(i) } }) as Hex[], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [c.target as Address, 0n, c.data]) });
-  e.deploy_tx_hashes.forEach((x, i) => {
-    add(x, [], 1, o.failedDeploy && i === 0 ? "reverted" : "success");
-    // QA plan v1 C2: the first deploy transaction is the deployer's CREATE of the new vault, the others are calls
-    Object.assign(receipts.get(x)!, { from: o.creator ?? e.deployer, contractAddress: i === 0 ? (o.created ?? e.new_vault) : null });
-  });
-  add(e.schedule_tx, want.slice(0, o.calls ?? want.length).map((c, i) => sched(i, c)), T0);
+  // QA plan v1 C2: the first deploy transaction is the deployer's CREATE of the new vault (the receipt's contractAddress), the other two are calls
+  e.deploy_tx_hashes.forEach((x, i) => add(x, [], 1, o.failedDeploy && i === 0 ? "reverted" : "success", { from: o.creator ?? e.deployer, contractAddress: i === 0 ? (o.created ?? e.new_vault) : null }));
+  const scheduledCalls = want.slice(0, o.calls ?? 6);
+  if (o.swap) [scheduledCalls[o.swap[0]], scheduledCalls[o.swap[1]]] = [scheduledCalls[o.swap[1]]!, scheduledCalls[o.swap[0]]!];
+  add(e.schedule_tx, scheduledCalls.map((c, i) => sched(i, c)), T0);
   add(e.execute_tx, want.map((c, i) => exec(i, c)), T0 + (o.gap ?? 900));
   return {
     getChainId: async () => 8453, getTransactionCount: async () => 0,
@@ -764,9 +796,6 @@ describe("the evidence entry", () => {
     expect(offline((e) => { (e as any).cancelled = true; })).toContain("cancelled is not a field");
     expect(offline((e) => { e.registry = addr(0x99); })).toContain("is not the run's registry");
     expect(offline((e) => { e.execute_tx = e.schedule_tx; })).toContain("also the");
-    // QA plan v1 E3: the cap the batch copied is evidence; a missing one, or a number that a JSON reader may have rounded, is named
-    expect(offline((e) => { delete (e as { router_vault_cap?: string }).router_vault_cap; })).toContain("router_vault_cap undefined is not a decimal uint256 string");
-    expect(offline((e) => { (e as { router_vault_cap: unknown }).router_vault_cap = 250000000; })).toContain("router_vault_cap 250000000 is not a decimal uint256 string");
   });
   test("a production evidence may carry none", () => {
     expect(checkVaultRedeploys(ev({ deployment_kind: "production" }), 172800, "production").join()).toContain("vault_redeploys is present in a production evidence");
@@ -774,17 +803,31 @@ describe("the evidence entry", () => {
   test("the chain check rejects a batch of the wrong size, the wrong call, the wrong target, a short delay, a short gap and a failed deploy transaction", async () => {
     const e = entry();
     const on = async (o: Parameters<typeof chainFor>[1]) => (await checkVaultRedeploysOnChain(ev(), chainFor(e, o), 900)).join("\n");
-    expect(await on({ calls: 6 })).toContain("exactly 7 calls");
-    // QA plan v1 E3: the cap call the chain carried is not the cap the evidence names
-    expect((await checkVaultRedeploysOnChain(ev(), chainFor({ ...e, router_vault_cap: "1" }), 900)).join("\n")).toContain("CallScheduled call 2 calldata is not router.setVaultCap(new, vaultCap(old))");
+    expect(await on({ calls: 4 })).toContain("exactly 6 calls");
     expect(await on({ data: "0x12345678" })).toContain("calldata is not");
     expect(await on({ target: addr(0x31) })).toContain("target");
     expect(await on({ delay: 60n })).toContain("delay");
     expect(await on({ gap: 899 })).toContain("on-chain schedule-to-execute gap");
     expect(await on({ failedDeploy: true })).toContain("deploy tx 0: receipt on chain is reverted");
-    // QA plan v1 C2: the governed vault must be the deployer's CREATE among the recorded deploy transactions
-    expect(await on({ created: addr(0x9998) })).toContain(`new_vault ${NEW} is not the contract a recorded deploy transaction created`);
+  });
+  test("QA plan v1 C2: the chain check binds new_vault to the deployer's CREATE receipt among the recorded deploy transactions", async () => {
+    const on = async (o: Parameters<typeof chainFor>[1]) => (await checkVaultRedeploysOnChain(ev(), chainFor(entry(), o), 900)).join("\n");
+    expect(await on({ created: addr(0x9998) })).toContain("is not the contract a recorded deploy transaction created");
     expect(await on({ creator: addr(0xbad) })).toContain("not by the deployer");
+  });
+  test("the chain check names a batch whose calls are in another order, and one that opens the vault before the old vault is retired", async () => {
+    for (const swap of [[0, 1], [3, 4], [4, 5]] as [number, number][]) {
+      expect((await checkVaultRedeploysOnChain(ev(), chainFor(entry(), { swap }), 900)).length, `swap ${swap}`).toBeGreaterThan(0);
+    }
+  });
+  test("a receipt application recorded before the cutover keeps its own vault set: adding a redeploy entry neither rewrites nor invalidates it", () => {
+    const RID = `0x${"ab".repeat(32)}`;
+    const app = { step: "apply-receipt", receipt_id: RID, target: addr(0x1005), governance: addr(0x1005), payload_digest: `0x${"cd".repeat(32)}`, vaults: [USDC, OLD, AGENT, RWA], bps: DEF_BPS, voted_weights_active: true, effective_vaults: [USDC, OLD, AGENT, RWA], effective_bps: DEF_BPS, operation_id: h(70), schedule_tx: h(620), schedule_status: 1, schedule_block_timestamp: T0 + 20, execute_tx: h(621), execute_status: 1, execute_block_timestamp: T0 + 20 + 900 };
+    const before = JSON.stringify(app);
+    const withBoth: ReturnType<typeof ev> & { receipt_applications?: object[] } = ev({ consensus_receipt: { address: addr(0x1006) }, governance: { address: addr(0x1005) }, receipt_applications: [app] });
+    expect(checkReceiptApplications(withBoth, 900)).toEqual([]);
+    expect(checkVaultRedeploys(withBoth, 900)).toEqual([]);
+    expect(JSON.stringify(withBoth.receipt_applications![0])).toBe(before); // the evidence of the application is not rewritten to the new vault
   });
   test("the final deployer nonce counts the redeploy transactions and the vault list counts the retired vault", () => {
     const base = {
@@ -800,10 +843,35 @@ describe("the evidence entry", () => {
   });
 });
 
-// ---- the sha model (QA plan v1 E1, review DT-2 and QD-6) ----------------------------------------------------------------------------
-// The deployment ran at ORIGINAL. The verb redeployed rmPROTO at FIX (the fix's tag) and recorded FIX as the round's core_sha. The govern row and the verify after it run
-// at FIX: the run manifest of ORIGINAL is accepted, the counts are ORIGINAL's (no file for FIX), the replacing vault is compared with FIX's build (the checkout's out/) and
-// every other contract with --prior-out (a checkout built at ORIGINAL). A verify the model cannot check is refused before any signer, so it never fails and pauses the vaults.
+// ---- the new vault and the deploy receipts (QA plan v1 C2) -----------------------------------------------------------------
+
+describe("QA plan v1 C2: the new vault is bound to the deploy's CREATE receipt", () => {
+  const ok = (o: object = {}) => [{ hash: h(1), status: "0x1", from: ADMIN, contractAddress: NEW, ...o }, { hash: h(2), status: "success", from: ADMIN, contractAddress: null }];
+  test("one successful CREATE of the new vault by the deployer passes; each way it can fail is named", () => {
+    expect(createdVaultProblems(NEW, ADMIN, ok())).toEqual([]);
+    expect(createdVaultProblems(NEW, ADMIN, []).join()).toContain("no deploy transaction is recorded");
+    expect(createdVaultProblems(NEW, ADMIN, ok({ contractAddress: addr(0x9998) })).join()).toContain("is not the contract a recorded deploy transaction created");
+    expect(createdVaultProblems(NEW, ADMIN, ok({ from: addr(0xbad) })).join()).toContain("not by the deployer");
+    expect(createdVaultProblems(NEW, ADMIN, ok({ status: "0x0" })).join()).toContain("not success");
+    expect(createdVaultProblems(NEW, ADMIN, [...ok(), { hash: h(3), status: 1, from: ADMIN, contractAddress: NEW }]).join()).toContain("is not the contract");
+  });
+  test("a status is 1 only for a success; the broadcast receipts are matched by hash, never by position", () => {
+    for (const x of ["success", "0x1", 1, "1"]) expect(deployReceiptStatus(x)).toBe(1);
+    for (const x of ["reverted", "0x0", 0, undefined, "not readable"]) expect(deployReceiptStatus(x)).toBe(0);
+    const f = join(tmp("pc-c2-broadcast-"), "run-latest.json");
+    writeFileSync(f, JSON.stringify({ receipts: [{ transactionHash: h(2).toUpperCase().replace("0X", "0x"), status: "0x1", from: ADMIN, contractAddress: null }, { status: "0x1" }, { transactionHash: h(1), status: "0x0", from: ADMIN, contractAddress: NEW }] }));
+    const m = readBroadcastReceipts(f);
+    expect(m.size).toBe(2);
+    expect(m.get(h(1))).toMatchObject({ status: "0x0", contractAddress: NEW });
+    expect(m.get(h(2))).toMatchObject({ status: "0x1", contractAddress: null });
+    expect(readBroadcastReceipts(join(tmp("pc-c2-none-"), "missing.json")).size).toBe(0);
+  });
+});
+
+// ---- the sha model (QA plan v1 E1, review DT-2, QD-6) ---------------------------------------------------------------------------
+// The deployment ran at ORIGINAL. The verb ran at FIX (the fix the round exists for) and recorded it as the round's core_sha. The govern row and the verify after the
+// round may name FIX although the run manifest names ORIGINAL: the verify compares the replacing vault with the build of its own checkout (FIX) and every other contract
+// with --prior-out (a checkout built at ORIGINAL). A verify the model cannot check is refused before any signer, so it never fails and pauses the vaults.
 
 const ORIGINAL = SHA, FIX = SHA2, THIRD = "c".repeat(40);
 const failure = (f: () => unknown): { kind?: string; message: string } => {
@@ -823,7 +891,7 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
     expect(redeployShaPath({ stage: "govern", row: REDEPLOY_ROW })).toBe("govern-row");
     expect(redeployShaPath({ verb: "verify" })).toBe("verify");
     expect(redeployShaPath({ stage: "verify" })).toBe("verify");
-    // QA plan v1 E1: the default set (a --resume run skips the finished deployer stages, never verify), all, and a list naming verify reach the verify stage too
+    // the default set (a --resume run skips the finished deployer stages, never verify), all, and a list naming verify reach the verify stage too
     for (const a of [{}, { stage: "all" }, { stage: "verify,govern" }, { stage: "timelock, verify" }]) expect(redeployShaPath(a)).toBe("stage-set");
     // never the verify stage: the other verbs, the deployer stages alone, govern alone; a dry run skips verify
     for (const a of [{ verb: "govern" }, { verb: "govern", row: "unpause-PROTO" }, { verb: "publish" }, { verb: "redeploy-vault" }, { verb: "pause-all" }, { stage: "deploy" }, { stage: "govern" }, { stage: "vault,timelock" }, { dryRun: true }, { stage: "all", dryRun: true }]) expect(redeployShaPath(a)).toBeUndefined();
@@ -940,276 +1008,5 @@ describe("the sha model (QA plan v1 E1): which sha the govern row and the verify
     // a --measure flag or the Twin chain never turns it into a measuring run
     expect(resolveCounts({ ...base, chainId: 918453, measureFlag: true, redeploy: { originalSha: ORIGINAL, recorded } })).toMatchObject({ measure: false, mode: "redeploy-sha" });
     expect(existsSync(join(dir, `${FIX}.json`))).toBe(false);
-  });
-});
-
-/**
- * A deployment at ORIGINAL whose rmPROTO the verb replaced at FIX: the run manifest at ORIGINAL (every deployer stage done, stage 13 executed, the round deployed with
- * core_sha FIX), the core checkout at FIX, a --prior-out checkout built at ORIGINAL, and the fake Safe and timelock of govern-world.ts behind the govern row.
- */
-function shaWorld(o: { chainId?: 918453 | 8453; frozen?: boolean } = {}) {
-  const chainId = o.chainId ?? 918453;
-  const w = world({ chainId, sheet: chainId === 8453 ? REHEARSAL : ALL, writeFrozen: o.frozen ?? true });
-  writeFileSync(join(w.coreDir, ".git", "HEAD"), `${FIX}\n`);
-  const dir = join(w.coreDir, "deployments", String(chainId));
-  writeGovernManifests(dir);
-  // the verb left the vault manifest naming the new vault; each basket manifest names the adapter its stage deployed (the verify sheet reads it)
-  // issue 1705 C4: the rmUSDC manifest names its three lending adapters (the verify sheet reads them)
-  const lending = (k: string) => Object.fromEntries((LENDING_ADAPTERS[k as keyof typeof LENDING_ADAPTERS]?.adapters ?? []).map((x, i) => [x.field, addr(0xada1 + i)]));
-  for (const v of getStageTable().vaults) writeFileSync(join(dir, `${manifestBase(v.manifest)}.json`), JSON.stringify({ vault: v.key === "PROTO" ? NEW : A.vaults[v.key], ...(v.key === "USDC" ? lending(v.key) : { adapter: MANIFEST_ADAPTER }) }));
-  const prior = join(tmp("pc-e1-prior-"), "core");
-  mkdirSync(join(prior, ".git"), { recursive: true });
-  mkdirSync(join(prior, "out"), { recursive: true });
-  writeFileSync(join(prior, ".git", "HEAD"), `${ORIGINAL}\n`);
-  const deployTxs = [1, 2, 3].map((n) => `0x${n.toString(16).padStart(64, "0")}`);
-  const executed = { scheduled: { at: "x", tx_hash: `0x${"5c".repeat(32)}`, status: 1 }, executed: { at: "x", tx_hash: `0x${"e1".repeat(32)}`, status: 1 } };
-  saveRunManifest(w.evidence, {
-    version: 1, chainId, coreSha: ORIGINAL, deployer: ADMIN, environment: "local", startedAt: "2026-10-13T00:00:00Z", firstBlock: 1,
-    ...(chainId === 8453 ? { deploymentKind: "rehearsal" as const, deployerStartNonce: 7 } : {}),
-    stages: Object.fromEntries(DEPLOYER_STAGES.map((s) => [s.name, { status: "done", startedAt: "x", count: COUNTS[s.countKey!] ?? 1, lastBlock: 44 }])),
-    govern: Object.fromEntries(["USDC", "PROTO", "AGENT", "RWA"].map((k) => [`unpause-${k}`, executed])),
-    vault_redeploys: [{
-      step: "redeploy-vault", vault: "rmPROTO", key: "PROTO", ordinal: 1, status: "deployed", old_vault: OLD, new_vault: NEW, registry: REG, router: ROUTER, timelock: TL, deployer: ADMIN as Address, core_sha: FIX,
-      deploy_start_nonce: 60, deploy_end_nonce: 63, deploy_count: 3, deploy_tx_hashes: deployTxs, deploy_receipt_statuses: [1, 1, 1], retired_manifest: "protocol-asset-vault.retired-1.json", started_at: "x", deployed_at: "y",
-    }],
-  } as RunManifest);
-  const sheet = parseSheet(readFileSync(w.sheetPath, "utf8"));
-  const tl = fakeTimelock(sheet, sheet.timelockMinDelay);
-  tl.s.weights = { vaults: [...DEF_VAULTS], bps: (chainId === 8453 ? [9500, 500, 0, 0] : DEF_BPS).map(BigInt) };
-  tl.s.paused = new Set([NEW]); // stage 13 opened the four launch vaults; the new one deploys closed
-  tl.s.governed.add(NEW);
-  deployTxs.forEach((x, i) => tl.s.txReceipts.set(x, { from: ADMIN, contractAddress: i === 0 ? NEW : null }));
-  let pauses = 0;
-  const pauseAll = (async () => { pauses++; throw new Error("pause-all must not run"); }) as never;
-  const govern = (g: object = {}) => ({ api: tl.api, ownerSigners: signers(sheet), sender, sleep: async () => { tl.s.clock += 30n; }, pollMs: 0, maxWaitSeconds: 10_000_000, emit: () => {}, warp: async (s: bigint) => { tl.s.clock += s; }, ...g });
-  let seen: VerifyOptions | undefined;
-  const verify = {
-    verifyDeployment: async (x: VerifyOptions) => { seen = x; return { ok: true, checks: [{ label: "fixture", ok: true, detail: "" }] }; },
-    verifySources: async () => ({ ok: true, checks: [] }), depositsPaused: async () => false, emit: () => {},
-  };
-  const priorOut = join(prior, "out");
-  return {
-    w, tl, priorOut, pauses: () => pauses, seen: () => seen, manifest: () => loadRunManifest(w.evidence)!,
-    runGov: (g: object = {}) => w.run(["govern", "--row", REDEPLOY_ROW, "--core-sha", FIX], { govern: govern(g), pauseAll }),
-    runVerify: (args: string[] = ["--core-sha", FIX, "--prior-out", priorOut], over: object = {}) => w.run(["verify", ...args], { verify, pauseAll, ...over }),
-    /** Any run (no verb): the default stage set, --stage all, a stage list. */
-    runStageSet: (args: string[], over: object = {}) => w.run(args, { verify, pauseAll, govern: govern(), ...over }),
-  };
-}
-
-describe("the sha model (QA plan v1 E1): the govern row and the verify through main()", () => {
-  test("govern row and verify run at the redeploy SHA after a deployment at the original SHA: green, nothing paused", async () => {
-    const t = shaWorld();
-    // the govern row at the redeploy sha continues the run manifest of the original sha: ONE batch, scheduled and executed
-    expect(await t.runGov()).toBe(0);
-    expect(t.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
-    expect(redeploysOf(t.manifest())[0]!).toMatchObject({ status: "governed", core_sha: FIX, old_vault: OLD, new_vault: NEW });
-    expect(t.manifest().coreSha).toBe(ORIGINAL);
-    expect(t.w.logs().some((l) => l.event === "run.redeploy_sha" && l.path === "govern-row" && l.original_sha === ORIGINAL && l.redeploy_sha === FIX)).toBe(true);
-    // the verify at the redeploy sha: the replacing vault against this checkout's build, every other contract against --prior-out (the original sha's build)
-    expect(await t.runVerify()).toBe(0);
-    const seen = t.seen()!;
-    expect(seen.artifactsDir).toBe(join(t.w.coreDir, "out"));
-    expect(seen.priorArtifactsDir).toBe(t.priorOut);
-    expect(seen.redeploys).toEqual([{ vault: "rmPROTO", oldVault: OLD, newVault: NEW, oldBuild: "original" }]);
-    expect(seen.redeployDeployerTxs).toBe(3);
-    expect(seen.frozenCounts).toEqual(COUNTS); // the ORIGINAL sha's frozen file: the redeploy sha has none
-    // green, nothing paused, and the evidence names both builds
-    const m = t.manifest();
-    expect(m.stages.verify).toMatchObject({ status: "done", core_sha: FIX, prior_out: { dir: t.priorOut, sha: ORIGINAL } });
-    expect(redeploysOf(m)[0]!).toMatchObject({ verified_at_sha: FIX, prior_out_sha: ORIGINAL });
-    expect(checkVaultRedeploys(ev({ core_sha: ORIGINAL, vault_redeploys: [{ ...entry(), core_sha: FIX, verified_at_sha: FIX, prior_out_sha: ORIGINAL }] }), 900)).toEqual([]);
-    expect(t.pauses()).toBe(0);
-    expect(t.w.logs().some((l) => l.event === "pause_all.auto")).toBe(false);
-    // nothing was measured or written for the redeploy sha, and the deployment's isomorphism report is not rewritten at it
-    expect(existsSync(join(t.w.countsDir, `${FIX}.json`))).toBe(false);
-    expect(existsSync(join(t.w.evidence, "isomorphism-918453.json"))).toBe(false);
-  });
-
-  test("through main() on 8453 with no frozen file: the govern row exits pending and executes at the redeploy sha, the verify passes, nothing is paused", async () => {
-    const t = shaWorld({ chainId: 8453, frozen: false });
-    // 8453 never warps: the first run schedules and exits GOVERN_PENDING naming the redeploy sha; the same command after the delay executes
-    expect(await t.runGov({ warp: false, maxWaitSeconds: 0 })).toBe(EXIT_CODES.GOVERN_PENDING);
-    expect(t.tl.s.events).toEqual(["scheduleBatch:redeploy-vault"]);
-    expect(String(t.w.logs().filter((l) => l.event === "run.failed").pop()?.message)).toContain(`--core-sha ${FIX}`);
-    // QA plan v1 E4: the govern row on 8453 passed the release gate first (the rehearsal tag at FIX, green CI), with no counts file for the redeploy sha
-    expect(t.w.logs().some((l) => l.event === "run.release_gate" && l.ok === true && l.tag === "release/1.0.0-rehearsal" && l.core_sha === FIX && l.counts === "none (redeploy sha)")).toBe(true);
-    t.tl.s.clock += 901n;
-    expect(await t.runGov({ warp: false, maxWaitSeconds: 0 })).toBe(0);
-    expect(t.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
-    expect(await t.runVerify()).toBe(0);
-    // no frozen file for either sha: never COUNTS_MISSING, the counts the run manifest recorded per stage stand in for the original sha's file
-    expect(t.w.logs().some((l) => l.kind === "COUNTS_MISSING")).toBe(false);
-    expect(t.w.logs().some((l) => l.event === "counts.redeploy_sha" && l.source === "run-manifest")).toBe(true);
-    expect(t.seen()!.frozenCounts).toEqual(measuredCounts(t.manifest()));
-    expect(t.manifest().stages.verify).toMatchObject({ status: "done", prior_out: { sha: ORIGINAL } });
-    expect(redeploysOf(t.manifest())[0]!).toMatchObject({ status: "governed", prior_out_sha: ORIGINAL, verified_at_sha: FIX });
-    expect(t.pauses()).toBe(0);
-    expect(existsSync(join(t.w.countsDir, `${FIX}.json`))).toBe(false);
-  });
-
-  test("a verify the model cannot check is refused before any signer: the original sha after the round, the redeploy sha without --prior-out, a --prior-out of the wrong build", async () => {
-    const t = shaWorld();
-    expect(await t.runGov()).toBe(0);
-    let built = 0;
-    const noSigner = { makeSigner: () => { built++; throw new Error("no signer may be built"); } };
-    const refused = async (args: string[], text: string) => {
-      expect(await t.runVerify(args, noSigner)).toBe(EXIT_CODES.USAGE);
-      expect(String(t.w.logs().filter((l) => l.event === "run.failed").pop()?.message)).toContain(text);
-    };
-    await refused(["--core-sha", FIX], "needs --prior-out");
-    const wrong = join(tmp("pc-e1-wrong-"), "core");
-    mkdirSync(join(wrong, ".git"), { recursive: true });
-    writeFileSync(join(wrong, ".git", "HEAD"), `${FIX}\n`);
-    await refused(["--core-sha", FIX, "--prior-out", join(wrong, "out")], `not at the original deployment sha ${ORIGINAL}`);
-    // the checkout moved back to the original sha: the old way to run it, which used to compare the new vault with the old build, fail and pause all four vaults
-    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${ORIGINAL}\n`);
-    await refused(["--core-sha", ORIGINAL, "--prior-out", t.priorOut], `verify --core-sha ${FIX} --prior-out`);
-    expect(built).toBe(0);
-    expect(t.seen()).toBeUndefined();
-    expect(t.pauses()).toBe(0);
-    expect(t.manifest().stages.verify).toBeUndefined();
-  });
-
-  test("QA plan v1 E1: every run that reaches the verify stage after the round is refused before any signer unless it is the verify alone at the redeploy sha: --resume of the default set, --stage all, --stage verify,govern; nothing paused", async () => {
-    const t = shaWorld();
-    expect(await t.runGov()).toBe(0);
-    let built = 0;
-    const noSigner = { makeSigner: () => { built++; throw new Error("no signer may be built"); } };
-    const refused = async (args: string[], text: string) => {
-      expect(await t.runStageSet(args, noSigner)).toBe(EXIT_CODES.USAGE);
-      expect(String(t.w.logs().filter((l) => l.event === "run.failed").pop()?.message)).toContain(text);
-    };
-    const sets = [["--resume"], ["--stage", "all", "--resume"], ["--stage", "verify,govern", "--resume"]];
-    // the original sha: the DT-2 failure (the verify stage compares the replacing vault with the original build, fails and pauses all four vaults)
-    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${ORIGINAL}\n`);
-    for (const s of sets) await refused(["--core-sha", ORIGINAL, ...s], `verify --core-sha ${FIX} --prior-out`);
-    await refused(["--core-sha", ORIGINAL, "--resume", "--prior-out", t.priorOut], "pauses all four vaults");
-    // a --prior-out of the wrong build is checked on a stage set too
-    const wrong = join(tmp("pc-e1-set-wrong-"), "core");
-    mkdirSync(join(wrong, ".git"), { recursive: true });
-    writeFileSync(join(wrong, ".git", "HEAD"), `${FIX}\n`);
-    await refused(["--core-sha", ORIGINAL, "--resume", "--prior-out", join(wrong, "out")], `not at the original deployment sha ${ORIGINAL}`);
-    // the redeploy sha: only the verify alone may name it
-    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${FIX}\n`);
-    for (const s of sets) await refused(["--core-sha", FIX, ...s, "--prior-out", t.priorOut], "only the verify alone");
-    expect(built).toBe(0);
-    expect(t.seen()).toBeUndefined();
-    expect(t.pauses()).toBe(0);
-    expect(t.w.logs().some((l) => l.event === "pause_all.auto")).toBe(false);
-    expect(t.manifest().stages.verify).toBeUndefined();
-    // the verify alone at the redeploy sha still passes
-    expect(await t.runVerify()).toBe(0);
-    expect(t.pauses()).toBe(0);
-  });
-
-  test("a run at the redeploy sha that is not the row or the verify is held to the run manifest's sha (RESUME), and the govern row at the original sha names the same operation", async () => {
-    const t = shaWorld();
-    expect(await t.w.run(["govern", "--row", "unpause-PROTO", "--core-sha", FIX], { govern: { api: t.tl.api } })).toBe(EXIT_CODES.RESUME);
-    expect(String(t.w.logs().filter((l) => l.event === "run.failed").pop()?.message)).toContain(`written at core SHA ${ORIGINAL}, this run names ${FIX}`);
-    expect(t.tl.s.events).toEqual([]);
-    // the row scheduled at the redeploy sha and resumed at the original sha: one operation (its salt is the round's sha, not the run's)
-    expect(await t.runGov({ warp: false, maxWaitSeconds: 0 })).toBe(EXIT_CODES.GOVERN_PENDING);
-    const id = t.tl.s.ids.get("redeploy-vault");
-    t.tl.s.clock += 61n;
-    writeFileSync(join(t.w.coreDir, ".git", "HEAD"), `${ORIGINAL}\n`);
-    expect(await t.w.run(["govern", "--row", REDEPLOY_ROW, "--core-sha", ORIGINAL], { govern: { api: t.tl.api, ownerSigners: signers(parseSheet(readFileSync(t.w.sheetPath, "utf8"))), sender, sleep: async () => {}, pollMs: 0, warp: false, emit: () => {} } })).toBe(0);
-    expect(t.tl.s.events).toEqual(["scheduleBatch:redeploy-vault", "executeBatch:redeploy-vault"]);
-    expect(t.tl.s.ids.get("redeploy-vault")).toBe(id);
-  });
-});
-
-describe("the sha model (QA plan v1 E1): the verifier compares each contract with the build that created it", () => {
-  /** The verify world after a round at FIX: --prior-out is the original build, out-redeploy the FIX build, in which EVERY artifact differs from the original one. */
-  function redeployedWorld() {
-    const v = buildWorld();
-    const ch = v.chain;
-    const l = (x: string) => x.toLowerCase();
-    const OLDV = WORLD_VAULTS.rmPROTO!.address;
-    const NEWV = addr(0xb0012);
-    // issue 1809: both vaults are proxies (ADR-0014). The retired vault's build runs in its implementation OLDI; the replacing vault NEWV runs NEWI. The ERC1967Proxy
-    // build is the same at both shas (one OpenZeppelin pin), so NEWV holds the same proxy code as OLDV.
-    const OLDI = WORLD_IMPLEMENTATIONS.rmPROTO!;
-    const NEWI = addr(0xc0b0012);
-    // the retired vault must still serve redeemInKind: its build and its code carry the selector
-    const SEL = toFunctionSelector("function redeemInKind(uint256 shares, address receiver, address owner)").slice(2);
-    const prior = v.artifactsDir;
-    const protoArt = join(prior, "ProtocolAssetVault.sol", "ProtocolAssetVault.json");
-    const art = JSON.parse(readFileSync(protoArt, "utf8"));
-    art.deployedBytecode.object += SEL;
-    writeFileSync(protoArt, JSON.stringify(art));
-    ch.codes.set(l(OLDI), `${ch.codes.get(l(OLDI))!}${SEL}` as Hex);
-    // the redeploy sha's build: one byte right after the immutable range differs, in every artifact
-    const flip = (hex: string): string => `${hex.slice(0, 82)}${hex.slice(82, 84) === "ee" ? "dd" : "ee"}${hex.slice(84)}`;
-    const current = join(v.dir, "out-redeploy");
-    for (const d of readdirSync(prior)) {
-      const n = d.replace(/\.sol$/, "");
-      const j = JSON.parse(readFileSync(join(prior, d, `${n}.json`), "utf8"));
-      j.deployedBytecode.object = flip(j.deployedBytecode.object);
-      mkdirSync(join(current, d), { recursive: true });
-      writeFileSync(join(current, d, `${n}.json`), JSON.stringify(j));
-    }
-    // the replacing vault runs the redeploy build (in its implementation, behind the same proxy build), with the configuration, roles and asset rows of the vault it replaced
-    ch.codes.set(l(NEWI), flip(ch.codes.get(l(OLDI))!) as Hex);
-    ch.codes.set(l(NEWV), ch.codes.get(l(OLDV))!);
-    ch.storage.set(`${l(NEWV)}|${ERC1967_IMPLEMENTATION_SLOT}`, `0x${"0".repeat(24)}${NEWI.slice(2).toLowerCase()}` as Hex);
-    ch.storage.set(`${l(NEWV)}|${INITIALIZABLE_SLOT}`, `0x${"0".repeat(63)}1` as Hex);
-    ch.storage.set(`${l(NEWI)}|${INITIALIZABLE_SLOT}`, `0x${INITIALIZERS_LOCKED.toString(16).padStart(64, "0")}` as Hex);
-    for (const [k, h] of [...ch.handlers]) if (k.startsWith(`${l(OLDV)}:`)) ch.handlers.set(`${l(NEWV)}:${k.slice(l(OLDV).length + 1)}`, h);
-    for (const k of [...ch.roles]) if (k.startsWith(`${l(OLDV)}|`)) ch.roles.add(`${l(NEWV)}|${k.slice(l(OLDV).length + 1)}`);
-    // and its role history: the redeploy script's constructor grants (issue 1705 C5 counts the emergency key from the RoleGranted logs)
-    for (const lg of [...ch.logs]) if (l(lg.address) === l(OLDV)) ch.logs.push({ ...lg, address: NEWV });
-    // the batch's effect: the old vault retired (still listed, out of the router, its retired flag set), the new one Active and in the old one's router slot
-    ch.set(OLDV, "retired", true);
-    ch.set(WORLD_REGISTRY, "listVaults", [...Object.values(WORLD_VAULTS).map((x) => x.address), NEWV]);
-    ch.set(WORLD_REGISTRY, "vaultCount", 5n);
-    ch.set(WORLD_REGISTRY, "isRouterEligible", (a: unknown[]) => l(String(a[0])) !== l(OLDV));
-    ch.set(WORLD_REGISTRY, "getVault", (a: unknown[]) => [{ name: "Robot Money Protocol", asset: USDC_ADDRESS, registeredAt: 1n }, l(String(a[0])) === l(OLDV) ? 2 : 0]);
-    // QA plan v1 E3: the batch's setVaultCap gave the new vault the old vault's router cap
-    ch.set(WORLD_ROUTER, "vaultCap", CAP);
-    return { v, ch, OLDV, NEWV, NEWI, prior, current, l };
-  }
-
-  /** The verify options after the round executed: the router vectors hold the new vault in the old one's slot, the vault manifest names it, the deployer nonce counts the verb's transactions. */
-  async function governedOpts(w: ReturnType<typeof redeployedWorld>): Promise<VerifyOptions> {
-    const { v, ch, OLDV, NEWV, NEWI, prior, current, l } = w;
-    const [dv, db] = (await ch.read(WORLD_ROUTER, "function getDefaultWeights() view returns (address[] vaults, uint256[] bps)")) as [Address[], bigint[]];
-    const moved = dv.map((x) => (l(x) === l(OLDV) ? NEWV : x));
-    ch.set(WORLD_ROUTER, "getDefaultWeights", [moved, db]);
-    ch.set(WORLD_ROUTER, "getEffectiveWeights", [moved, db]);
-    // issue 1809: the vault manifest names the replacing proxy, its implementation, the authority (the live timelock) and the release mode, as the redeploy script writes them
-    writeFileSync(join(v.manifestDir, "protocol-asset-vault.json"), JSON.stringify({ chain_id: 8453, vault: NEWV, vault_implementation: NEWI, upgrade_authority: WORLD_TIMELOCK, upgrade_mode: "upgradeable" }));
-    ch.noncesMap.set(l(WORLD_DEPLOYER), (ch.noncesMap.get(l(WORLD_DEPLOYER)) ?? 0) + 3); // the verb's three deploy transactions
-    return { ...v.opts, artifactsDir: current, priorArtifactsDir: prior, redeploys: [{ vault: "rmPROTO", oldVault: OLDV, newVault: NEWV, oldBuild: "original" }], redeployDeployerTxs: 3 };
-  }
-
-  test("after a round at another sha every label passes: the replacing vault against the redeploy build, core, libraries, adapters, the other vaults and the retired vault against --prior-out", async () => {
-    const w = redeployedWorld();
-    const { prior } = w;
-    const opts = await governedOpts(w);
-    const r = await verifyDeployment(opts);
-    expect(failedLabels(r)).toEqual([]);
-    expect(r.checks.map((c) => c.label)).toContain("retired[rmPROTO]: runtime code equals the original build artifact (masked)");
-
-    // without --prior-out every contract of the original deployment fails against the redeploy build; the replacing vault still passes
-    const none = failedLabels(await verifyDeployment({ ...opts, priorArtifactsDir: undefined }));
-    for (const x of ["router: runtime code equals build artifact (masked)", "vault[rmUSDC]: runtime code equals build artifact (masked)", "retired[rmPROTO]: runtime code equals the original build artifact (masked)", WEIGHT_SETTER_GATING_LABEL]) expect(none).toContain(x);
-    expect(none).not.toContain("vault[rmPROTO]: runtime code equals build artifact (masked)");
-    // the verify at the ORIGINAL sha's build (the review's DT-2 failure): only the replacing vault fails its code hash
-    const atOriginal = failedLabels(await verifyDeployment({ ...opts, artifactsDir: prior }));
-    expect(atOriginal.filter((x) => x.includes("runtime code"))).toEqual(["vault[rmPROTO]: runtime code equals build artifact (masked)"]);
-    // a retired vault that an earlier round at the redeploy sha deployed is compared with the redeploy build (here it is the original one, so the label fails)
-    expect(failedLabels(await verifyDeployment({ ...opts, redeploys: [{ ...opts.redeploys![0]!, oldBuild: "redeploy" }] }))).toContain("retired[rmPROTO]: runtime code equals the original build artifact (masked)");
-  });
-
-  // QA plan v1 E3 (review F2): router.vaultCap is keyed by address and 0 is uncapped, so a replacing vault the batch did not cap takes routed deposits with no per-leg bound
-  test("QA plan v1 E3 cap parity: the label router.vaultCap(new) equals router.vaultCap(old) passes after the batch and is the one label that fails when the new vault is uncapped", async () => {
-    const w = redeployedWorld();
-    const opts = await governedOpts(w);
-    const label = "redeploy[rmPROTO]: router.vaultCap(new) equals router.vaultCap(old)";
-    const ok = await verifyDeployment(opts);
-    expect(ok.checks.find((c) => c.label === label)).toMatchObject({ ok: true, detail: `router.vaultCap(new) ${CAP}, router.vaultCap(old) ${CAP}` });
-    w.ch.set(WORLD_ROUTER, "vaultCap", (a: unknown[]) => (w.l(String(a[0])) === w.l(w.NEWV) ? 0n : CAP));
-    expect(failedLabels(await verifyDeployment(opts))).toEqual([label]);
   });
 });

@@ -5,9 +5,9 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/PortfolioRouter.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** PortfolioRouter
 
@@ -30,12 +30,12 @@ contract path live across test, demo, and mainnet — environments differ
 only by which vaults the operator has opted in. See
 `docs/development/single-production-codebase.md` for the principle.
 
-Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and
-initialized in the proxy's deployment transaction. Only the timelock named at
-`initialize` can upgrade it, and `freezeUpgrades` ends upgrades forever.
-`redeemFor` has no upgrade- or freeze-dependent branch.
-
 Canonical: docs/architecture.md §4.2
+
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). No router role (ADMIN_ROLE, WEIGHT_SETTER_ROLE and the rotation roles)
+carries upgrade power. `usdc` and `registry` are set once at initialization, no setter.
 
 ## Constants
 
@@ -51,9 +51,9 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 Sole gate on `setWeights`, the active weight setter. After the
 deploy ceremony only the RouterGovernance contract holds it, so
-active weights move only through `RouterGovernance.applyReceipt`,
-one Safe-scheduled call after the timelock delay (issue 1698).
-The timelock keeps `ADMIN_ROLE` and reaches
+active weights move only when the Safe, through the timelock,
+applies a recorded consensus receipt with
+`RouterGovernance.applyReceipt`. The timelock keeps `ADMIN_ROLE` and reaches
 `setDefaultWeights` and `clearVotedWeights` only. The initializer
 seeds the role to `_admin` so the router deploy stage can write
 the initial weights. The governance deploy stage revokes it. The role is its
@@ -132,8 +132,7 @@ uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
 
 ### usdc
 
-USDC token used as the deposit asset across all vaults. Written once by
-`initialize` (a constructor immutable before ADR-0014); no setter exists.
+USDC token used as the deposit asset across all vaults.
 
 ```solidity
 IERC20 public usdc;
@@ -142,7 +141,7 @@ IERC20 public usdc;
 ### registry
 
 VaultRegistry from which vault addresses, lifecycle status, and
-router-eligibility state are read. Written once by `initialize`; no setter exists.
+router-eligibility state are read.
 
 ```solidity
 VaultRegistry public registry;
@@ -199,12 +198,11 @@ mapping(address => uint256) public vaultCap;
 
 ### _weightVaultList
 
-Ordered list of vaults included in the applied (active) weight
-vector. Set by the weight setter when a consensus receipt is
-applied (`RouterGovernance.applyReceipt` → `setWeights`). Empty
-until the first receipt is applied. The storage keeps its
-pre-1698 "voted" name so the read surface (`votedWeightsActive`,
-`clearVotedWeights`) stays ABI-stable for the tools that read it.
+Ordered list of vaults included in the active ("voted") weight
+vector. Set through `setWeights` when the Safe applies a consensus
+receipt (`RouterGovernance.applyReceipt`). Empty until the first
+receipt is applied. The `voted` names are kept for ABI stability:
+there is no voting.
 
 ```solidity
 address[] private _weightVaultList;
@@ -221,10 +219,10 @@ uint256[] private _weightBps;
 
 ### votedWeightsActive
 
-True when the applied weight vector is in effect. False means the
-router falls back to `defaultWeights` (the on-chain fallback).
-Set true by `setWeights`, set false by `clearVotedWeights`.
-See ADR-0002.
+True when the voted weight vector is in effect. False means the
+router falls back to `defaultWeights` (the on-chain
+fallback). Set true by `setWeights`, set false by
+`clearVotedWeights`. See ADR-0002.
 
 ```solidity
 bool public votedWeightsActive;
@@ -233,10 +231,10 @@ bool public votedWeightsActive;
 ### _defaultWeightVaultList
 
 Ordered list of vaults included in the default (fallback) weight
-vector. Used by `previewDeposit`/`deposit` whenever the applied
-vector is not active — i.e. no receipt has been applied yet or
-governance has cleared the applied vector. Admin-settable;
-survives a receipt application unchanged. ADR-0002.
+vector. Used by `previewDeposit`/`deposit` whenever the voted
+vector is not active: no receipt has been applied yet, or the
+timelock cleared the active vector. Admin-settable; survives a
+receipt application unchanged. ADR-0002.
 
 ```solidity
 address[] private _defaultWeightVaultList;
@@ -262,37 +260,19 @@ WeightSetterRotation public pendingWeightSetterRotation;
 
 ## Functions
 
-<a id="constructor"></a>
-
-### constructor
-
-<i>
-
-The implementation is never initialized: only a proxy is.
-
-</i>
-
-**Note:**
-
-- **oz-upgrades-unsafe-allow:** constructor
-
-```solidity
-constructor();
-```
-
 <a id="initialize-address-address-address-address-upgrademode"></a>
 
 ### initialize
 
-Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
 function initialize(
         address _usdc,
         address _registry,
         address _admin,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer;
 ```
 
@@ -303,8 +283,8 @@ function initialize(
 | _usdc | `address` | USDC token address. |
 | _registry | `address` | VaultRegistry contract address. |
 | _admin | `address` | Address that receives `ADMIN_ROLE` at deploy time. |
-| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
-| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="proposeweightsetterrotation-address"></a>
 
@@ -403,9 +383,9 @@ function setWeights(address[] calldata vaults, uint256[] calldata bps)
 ### setDefaultWeights
 
 Set the default (fallback) weight vector. Used by
-`previewDeposit`/`deposit` whenever the applied vector is not
-active — when no receipt has been applied yet, or governance has
-cleared the applied vector. This vector survives a receipt
+`previewDeposit`/`deposit` whenever the active vector is not
+in effect: no receipt has been applied yet, or the timelock
+cleared the active vector. This vector survives a receipt
 application unchanged. ADR-0002.
 
 All vaults must be registered AND router-eligible, the bps must
@@ -490,10 +470,10 @@ function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) i
 
 ### clearVotedWeights
 
-Clear the applied weight vector and revert routing to
-`defaultWeights`. The emergency lever: an applied receipt vector
-that should no longer route is cleared here, through the
-timelock. Restricted to `ADMIN_ROLE`. ADR-0002.
+Clear the active weight vector and revert routing to
+`defaultWeights`. The emergency lever: the Safe, through the
+timelock, falls back to the default vector. Restricted to
+`ADMIN_ROLE`. ADR-0002.
 
 ```solidity
 function clearVotedWeights() external onlyRole(ADMIN_ROLE);
@@ -1051,10 +1031,10 @@ function _executeLeg(address receiver, address vault, uint256 legAmount, uint256
 
 ### getWeights
 
-Return the applied (active) weight vector (vault list and bps).
-This is the raw applied vector and is empty until the first
-consensus receipt is applied; use `getEffectiveWeights` for the
-vector the router actually routes by.
+Return the voted (active) weight vector (vault list and bps).
+This is the raw active vector and is empty until a receipt has
+been applied; use `getEffectiveWeights` for the vector the router
+actually routes by.
 
 ```solidity
 function getWeights() external view returns (address[] memory vaults, uint256[] memory bps);
@@ -1212,10 +1192,9 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 Return true iff `vault` is router-eligible AND its registry
 lifecycle status is `Active` — i.e. it can be written into a
 weight vector and accept a routed deposit right now. This is the
-exact predicate `setWeights`/`setDefaultWeights` enforce; the
-govern tool reads it before scheduling an `applyReceipt` so a
-vector that would render router deposits non-executable is never
-scheduled (GOV-4, no self-DoS). Never reverts: returns false for a
+exact predicate `setWeights`/`setDefaultWeights` enforce, so an
+off-chain tool can check a weight vector before it schedules one
+(GOV-4, no self-DoS). Never reverts: returns false for a
 zero address, an EOA, an asset mismatch, an unregistered vault, or
 any non-Active status.
 
@@ -1234,6 +1213,29 @@ function isRouterEligibleAndActive(address vault) external view returns (bool ok
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | ok | `bool` | True iff the vault is eligible AND Active. |
+
+<a id="_requirenotrepeated-address-uint256"></a>
+
+### _requireNotRepeated
+
+<i>
+
+Revert `DuplicateVault` when `vaults[i]` already appears at an earlier
+index. Quadratic, and the vector holds at most the registry's few
+router-eligible vaults.
+
+</i>
+
+```solidity
+function _requireNotRepeated(address[] calldata vaults, uint256 i) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| i | `uint256` |  |
 
 <a id="_requireactiveandeligible-address"></a>
 
@@ -1261,30 +1263,6 @@ function _requireActiveAndEligible(address vault) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` |  |
-
-<a id="_requirenoduplicatebefore-address-uint256"></a>
-
-### _requireNoDuplicateBefore
-
-<i>
-
-Revert `DuplicateVault` when `vaults[i]` already appears at an
-earlier index. Quadratic over a vector of at most a handful of legs
-(the registry's router-eligible set), checked only at configuration
-time by `setWeights` and `_setDefaultWeights` (HR-L-9 / CS-5).
-
-</i>
-
-```solidity
-function _requireNoDuplicateBefore(address[] calldata vaults, uint256 i) internal pure;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| vaults | `address[]` |  |
-| i | `uint256` |  |
 
 <a id="_requireroutereligible-address"></a>
 
@@ -1398,8 +1376,8 @@ event WeightSetterRotated(address indexed newHolder, uint256 revokedHolders);
 
 ### DefaultWeightsSet
 
-Emitted when the default (fallback) weight vector is updated
-by ADMIN_ROLE.
+Emitted when the default (fallback) weight vector
+is updated by ADMIN_ROLE.
 
 ```solidity
 event DefaultWeightsSet(address[] vaults, uint256[] bps);
@@ -1748,12 +1726,11 @@ error VaultNotRouterEligible(address vault);
 
 ### DuplicateVault
 
-A weight vector names the same vault twice. Without this check a
-duplicate default (`[A, A]`) passes the `length ==
-routerEligibleCount` check while leaving an eligible vault out,
-and a duplicate applied vector double-counts one leg (HR-L-9 /
-CS-5, issue #1698). A digest binds a vector but does not prove
-it is unique, so the receipt path relies on this check too.
+`vault` appears twice in one weight vector (security review
+2026-10-12 finding 8, HR-L-9). A duplicate default could satisfy
+`length == routerEligibleCount` while omitting an eligible vault,
+and a duplicate active entry splits one vault's weight across two
+legs. `setWeights` and `setDefaultWeights` both refuse it.
 
 ```solidity
 error DuplicateVault(address vault);
@@ -1763,7 +1740,7 @@ error DuplicateVault(address vault);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| vault | `address` | The vault address that appears more than once. |
+| vault | `address` |  |
 
 ### OnlyRegistry
 

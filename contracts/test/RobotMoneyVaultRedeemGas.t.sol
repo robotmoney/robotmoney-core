@@ -19,7 +19,7 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {DeployVault} from "../script/DeployVault.s.sol";
 import {VaultTestParams} from "./helpers/VaultTestParams.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract GasUSDC is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
@@ -94,7 +94,7 @@ contract RobotMoneyVaultRedeemGasUnitTest is Test {
 
     function setUp() public {
         usdc = new GasUSDC();
-        vault = Proxied.robotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), 1_000_000_000 * ONE, 100_000_000 * ONE, 0, admin, admin, admin
         );
         uint16[3] memory caps = [uint16(3334), uint16(3333), uint16(3333)];

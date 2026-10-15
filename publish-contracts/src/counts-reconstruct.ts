@@ -44,8 +44,12 @@ const lc = (s: string): string => s.toLowerCase();
 /** The libraries a stage can adopt, by the table: the libs stage its `libraries`, a basket stage its `create2Libraries`. Other stages adopt none. */
 export function adoptableOf(table: StageTable, stage: string): { library: string; artifact: string }[] {
   if (stage === LIBS_STAGE) return table.libraries.map((l) => ({ library: l.name, artifact: l.artifact }));
-  const st = table.stages.find((s) => s.name === stage);
-  return (st?.create2Libraries ?? []).map((n) => { const l = table.create2Libraries!.find((x) => x.name === n)!; return { library: l.name, artifact: l.artifact }; });
+  const at = table.stages.findIndex((s) => s.name === stage);
+  const st = table.stages[at];
+  // Issue 1808: several stages link the same CREATE2 library (GovernedUpgrade is linked by every proxy stage). Only the FIRST stage that lists a
+  // library deploys it on a fresh chain, so only that stage can adopt it; a later stage finds it created or adopted earlier in the run.
+  const earlier = new Set(table.stages.slice(0, Math.max(at, 0)).flatMap((s) => s.create2Libraries ?? []));
+  return (st?.create2Libraries ?? []).filter((n) => !earlier.has(n)).map((n) => { const l = table.create2Libraries!.find((x) => x.name === n)!; return { library: l.name, artifact: l.artifact }; });
 }
 
 const stageKeys = (table: StageTable): string[] => ["safe", ...table.stages.map((s) => s.name)];

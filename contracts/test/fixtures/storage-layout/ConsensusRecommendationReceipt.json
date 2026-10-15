@@ -1,105 +1,96 @@
 {
-  "contract": "ConsensusRecommendationReceipt",
   "enums": {},
-  "libraries": {},
-  "linearization": [
-    "contracts/gateway/ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt",
-    "contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol:IConsensusRecommendationReceipt",
-    "contracts/lib/GovernedUpgrade.sol:GovernedUpgrade",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol:ReentrancyGuardUpgradeable",
-    "contracts/lib/AdminFloorAccessControl.sol:AdminFloorAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/extensions/AccessControlEnumerableUpgradeable.sol:AccessControlEnumerableUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/AccessControlUpgradeable.sol:AccessControlUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/introspection/ERC165Upgradeable.sol:ERC165Upgradeable",
-    "lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol:IERC165",
-    "lib/openzeppelin-contracts/contracts/access/extensions/IAccessControlEnumerable.sol:IAccessControlEnumerable",
-    "lib/openzeppelin-contracts/contracts/access/IAccessControl.sol:IAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ContextUpgradeable.sol:ContextUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol:Initializable"
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],
-  "openzeppelin": {
-    "lib/openzeppelin-contracts": "dbb6104ce834628e473d2173bbc9d47f81a9eec3",
-    "lib/openzeppelin-contracts-upgradeable": "723f8cab09cdae1aca9ec9cc1cfa040c2d4b06c1"
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
   },
   "storage": [
     {
-      "bytes": 20,
-      "contract": "contracts/gateway/ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt",
       "label": "gateway",
       "offset": 0,
-      "slot": 0,
-      "type": "address"
+      "slot": "0",
+      "type": "t_address"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/gateway/ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt",
       "label": "icPolicy",
       "offset": 0,
-      "slot": 1,
-      "type": "address"
+      "slot": "1",
+      "type": "t_address"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/gateway/ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt",
       "label": "_receipts",
       "offset": 0,
-      "slot": 2,
-      "type": "struct IConsensusRecommendationReceipt.Receipt[]"
+      "slot": "2",
+      "type": "t_array(t_struct(Receipt)_storage)dyn_storage"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/gateway/ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt",
       "label": "_indexPlusOne",
       "offset": 0,
-      "slot": 3,
-      "type": "mapping(bytes32 => uint256)"
+      "slot": "3",
+      "type": "t_mapping(t_bytes32,t_uint256)"
     }
   ],
   "structs": {
-    "struct IConsensusRecommendationReceipt.Receipt": [
+    "t_struct(Receipt)_storage": [
       {
         "label": "receiptId",
         "offset": 0,
-        "slot": 0,
-        "type": "bytes32"
+        "slot": "0",
+        "type": "t_bytes32"
       },
       {
         "label": "payloadDigest",
         "offset": 0,
-        "slot": 1,
-        "type": "bytes32"
+        "slot": "1",
+        "type": "t_bytes32"
       },
       {
         "label": "payloadUri",
         "offset": 0,
-        "slot": 2,
-        "type": "string"
+        "slot": "2",
+        "type": "t_string_storage"
       },
       {
         "label": "submitter",
         "offset": 0,
-        "slot": 3,
-        "type": "address"
+        "slot": "3",
+        "type": "t_address"
       },
       {
         "label": "recordedAt",
         "offset": 20,
-        "slot": 3,
-        "type": "uint64"
+        "slot": "3",
+        "type": "t_uint64"
       },
       {
         "label": "releasedAt",
         "offset": 0,
-        "slot": 4,
-        "type": "uint64"
+        "slot": "4",
+        "type": "t_uint64"
       },
       {
         "label": "released",
         "offset": 8,
-        "slot": 4,
-        "type": "bool"
+        "slot": "4",
+        "type": "t_bool"
       }
     ]
   }

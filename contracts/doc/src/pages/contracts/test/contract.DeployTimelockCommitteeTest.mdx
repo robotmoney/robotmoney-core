@@ -5,7 +5,7 @@ description: "Issue #1319: before this change, `DeployTimelock.s.sol` only hande
 
 # DeployTimelockCommitteeTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cb1d9cc5d144b8c5c8b47688dd34b616792f0d5e/contracts/test/DeployTimelockCommittee.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployTimelockCommittee.t.sol)
 
 **Inherits:** [SafeFixture](/contracts/test/helpers/abstract.SafeFixture)
 
@@ -174,6 +174,28 @@ bool internal runAsDeployer;
 function setUp() public;
 ```
 
+<a id="_wiregovernance-address"></a>
+
+### _wireGovernance
+
+<i>
+
+Build RouterGovernance against `receipts_` and mirror DeployRouterGovernance's
+router ADMIN_ROLE and WEIGHT_SETTER_ROLE grants (R7), then hand every router
+role to address(script).
+
+</i>
+
+```solidity
+function _wireGovernance(address receipts_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receipts_ | `address` |  |
+
 <a id="_deployreceiptandrun-address-address"></a>
 
 ### _deployReceiptAndRun
@@ -239,18 +261,6 @@ function test_gateway_stillHasAdminRoleOnICPolicy_afterHandover() public;
 
 ```solidity
 function test_timelock_holdsBothRolesOnReceipt() public;
-```
-
-<a id="test_governance_iswiredtothereceiptregisterbytheceremony"></a>
-
-### test_governance_isWiredToTheReceiptRegisterByTheCeremony
-
-Issue #1698: the ceremony points the weight setter at the receipt
-register and gives it the register's ADMIN_ROLE, so one
-`applyReceipt` call can release a receipt and set the weights.
-
-```solidity
-function test_governance_isWiredToTheReceiptRegisterByTheCeremony() public;
 ```
 
 <a id="test_deployer_nolongerhasrolesonreceipt"></a>

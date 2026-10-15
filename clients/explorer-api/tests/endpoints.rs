@@ -937,7 +937,7 @@ async fn get_router_weights_empty_when_no_snapshots() {
 
 /// QA plan C1 (core issue 1698): RouterGovernance voting was deleted, so the
 /// proposals list and detail routes are gone. Both fall through to the global
-/// 404 handler, the same as any unknown path. Migration 0023 (applied by the
+/// 404 handler, the same as any unknown path. Migration 0024 (applied by the
 /// harness) dropped the tables they read, so a route that came back would
 /// 500 instead.
 #[tokio::test]
@@ -1210,7 +1210,7 @@ async fn account_positions_returns_vault_balances() {
 /// The test writes a newer vault A snapshot shaped like rmAGENT: 1000 USDC of assets over 1000 USDC
 /// of supply (a gross share price of 1), and `previewRedeem(totalSupply())` 950 USDC after a 5%
 /// slippage floor. The agent's 50 shares are worth 47.5 USDC at exit, not 50. A later snapshot
-/// without the reading (a row from before migration 0022) serves `null`, never the gross value.
+/// without the reading (a row from before migration 0023) serves `null`, never the gross value.
 #[tokio::test]
 async fn account_positions_usdc_value_is_preview_redeem_not_convert_to_assets() {
     let s = start_with_seed().await;
@@ -1230,7 +1230,7 @@ async fn account_positions_usdc_value_is_preview_redeem_not_convert_to_assets() 
 }
 
 /// A vault A snapshot at `block` shaped like rmAGENT: 1000 USDC of assets over 1000 USDC of supply,
-/// `previewRedeem(totalSupply())` = `preview` (NULL for a row from before migration 0022).
+/// `previewRedeem(totalSupply())` = `preview` (NULL for a row from before migration 0023).
 async fn vault_a_snapshot(pool: &sqlx::PgPool, block: i64, preview: Option<&str>) {
     sqlx::query(
         "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
@@ -1310,6 +1310,123 @@ async fn account_positions_returns_both_vaults() {
 
     assert!(body["block_number"].is_i64());
     assert!(body["indexed_at"].is_string());
+}
+
+/// Issue 1796: a redeploy retires one generation of a vault and registers another. A holder of BOTH generations keeps two address-specific
+/// positions and two address-specific history rows. Nothing is merged by name, so the retired vault's shares stay visible at the retired
+/// address, and both generations stay in the vault list with their own status.
+#[tokio::test]
+async fn retired_generation_keeps_address_specific_holdings_and_history() {
+    let s = start_with_seed().await;
+    // vault_a is the retired generation (status 2), vault_b stays registered.
+    sqlx::query("UPDATE vaults SET status = 2 WHERE vault_address = $1")
+        .bind(vec![0xaa_u8; 20])
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    // The holder's history carries an exit on the retired vault and a deposit on the new one, each with its own vault address.
+    let holder = vec![0x66_u8; 20];
+    for (block, kind, vault) in [
+        (1100_i64, "withdrawal", 0xaa_u8),
+        (1110_i64, "deposit", 0xbb_u8),
+    ] {
+        sqlx::query(
+            "INSERT INTO account_history_events \
+             (chain_id, block_number, log_index, tx_hash, account, kind, vault, agent, amount, indexed_at) \
+             VALUES ($1, $2, 0, $3, $4, $5, $6, NULL, 1000::NUMERIC, now())",
+        )
+        .bind(8453_i64)
+        .bind(block)
+        .bind(vec![block as u8; 32])
+        .bind(&holder)
+        .bind(kind)
+        .bind(vec![vault; 20])
+        .execute(&s._pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares, indexed_at) \
+         SELECT chain_id, contract, $1, block_number, shares, indexed_at FROM wallet_positions \
+         WHERE owner = decode(repeat('33', 20), 'hex')",
+    )
+    .bind(&holder)
+    .execute(&s._pool)
+    .await
+    .unwrap();
+
+    let positions: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x{}/positions",
+            s.addr,
+            "66".repeat(20)
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut vaults: Vec<&str> = positions["positions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["vault"].as_str().unwrap())
+        .collect();
+    vaults.sort();
+    assert_eq!(
+        vaults,
+        vec![
+            format!("0x{}", "aa".repeat(20)),
+            format!("0x{}", "bb".repeat(20))
+        ],
+        "one position per vault address, the retired one included"
+    );
+
+    let history: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x{}/history",
+            s.addr,
+            "66".repeat(20)
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows: Vec<(String, String)> = history["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap().into(),
+                e["vault"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("withdrawal".to_string(), format!("0x{}", "aa".repeat(20))),
+            ("deposit".to_string(), format!("0x{}", "bb".repeat(20)))
+        ],
+        "each history row keeps the address of the generation it happened on"
+    );
+
+    let list: serde_json::Value = http()
+        .get(format!("http://{}/v1/vaults", s.addr))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        list.to_string().contains(&"aa".repeat(20)),
+        "the retired generation stays in the public vault list"
+    );
 }
 
 /// Suite-08: GET /v1/accounts/:address/positions for unknown address returns

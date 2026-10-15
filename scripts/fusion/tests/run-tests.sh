@@ -4,22 +4,23 @@
 # WHY THESE EXIST
 # ---------------
 # project-fusion.md AC-CORE-09 requires the submitter to be "retryable/idempotent".
-# AC-GOV-01 required "watcher/restart/idempotency tests [that] prove draft-only
-# behavior"; issue 1698 deleted the draft path and the watcher with it, and the
-# acceptance harnesses now prove the apply path instead (the govern stage below).
-# These properties live in shell, and they are exactly the kind of claim that is
-# asserted in a comment and never executed. These tests execute them.
+# That property lives in shell, and it is exactly the kind of claim that is
+# asserted in a comment and never executed. These tests execute it, along with
+# the acceptance harnesses' refusal paths.
+#
+# Issue 1698 deleted the released-receipt draft watcher (watch-released-drafts.sh
+# and its systemd units) and every `rmpc governance draft-proposal` step: a
+# consensus receipt is applied by RouterGovernance.applyReceipt (publish
+# contracts govern row apply-receipt), which releases it and sets the router
+# weights in one call, so there is no proposal and nothing to draft.
 #
 # HOW
 # ---
 # `rmpc` and `cast` are replaced by stub binaries on PATH whose behavior is driven
 # by files in a scratch directory, so an attempt, a chain state and a failure are
-# all observable without a node. The negative controls matter most: the
-# `--no-anchor` test asserts the stub `rmpc` was NEVER invoked with a write
-# subcommand, and the govern-stage test asserts nothing was sent, which are
-# claims no amount of reading the script can settle. The stub `rmpc` has no
-# `governance` subcommand at all, so a harness that still calls the deleted
-# `rmpc governance draft-proposal` gets "unexpected argv" and fails.
+# all observable without a node. The negative control matters most: the
+# --no-anchor test asserts the stub `rmpc` was NEVER invoked with a write
+# subcommand, which is a claim no amount of reading the script can settle.
 #
 # Usage: scripts/fusion/tests/run-tests.sh   (exit 0 = all passed)
 set -uo pipefail
@@ -42,15 +43,16 @@ REPO_ROOT="$(cd "$FUSION_DIR/../.." && pwd)"
 # T16, T25, T29) adds the guards below; merging the T01/T07/T09 watcher guards with them at
 # integration took the union to 156, and merging with r2/wf1-verify-fixes (the decoy check
 # and explorer-API block) raises the total to 170, and the timelock-sourced duplicate-release probe
-# check (issue 1647) makes it 171. Issue 1698 (QA plan v1 leftovers L1) deleted
-# the draft path: the 41 watcher assertions went with watch-released-drafts.sh,
-# the draft-shape assertions became govern-stage apply-path assertions, and the
-# watcher's alert-path assertions moved to the submit worker, which makes it
-# 135. Raise it whenever
+# check (issue 1647) makes it 171. Issue 1698 deleted the draft watcher and every
+# draft-proposal assertion; with the govern-stage weight-setter checks that
+# replace the draft checks, the full count is 117. The QA reconcile onto dev
+# (QA plan v1 leftovers L1) adds six: the cross-repo receipt-weights refusal and
+# apply-path binding (three), and the submit worker's no-rmpc-before-refusal and
+# outage-resolve checks (three), which makes it 123. Raise it whenever
 # assertions are added; lowering it is a deliberate, reviewable act and the
 # workflow re-checks the same number independently (see below), so lowering it
 # here alone buys nothing.
-MIN_EXPECTED_ASSERTIONS=135
+MIN_EXPECTED_ASSERTIONS=123
 
 # The workflow that runs this suite re-asserts the same floor against the
 # machine-readable FUSION_SELFTESTS_EXECUTED line, precisely so a silently
@@ -88,9 +90,10 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (want: $3, got: $2)";
 # STUB_DIR/release_sends      — one line per `cast send` (a release broadcast)
 # STUB_DIR/cast_calls         — every `cast` argv, one line each
 # STUB_DIR/witness_drift      — non-empty: totalAssets moves one unit per read
-# STUB_DIR/receipt_contract   — what the weight setter's receiptContract() returns
-# STUB_DIR/apply_open         — non-empty: applyReceipt passes for ANY sender and
-#                               state (a weight setter with no guards at all)
+# STUB_DIR/weights            — what getWeights and currentWeights report
+# STUB_DIR/setter_weights_drift — non-empty: currentWeights reports a new vector
+#                               on every read after the first (a weight change)
+# STUB_DIR/receipt_contract   — what the weight setter's receipts() returns
 # STUB_DIR/submit_refuses_tampered — non-empty: rmpc receipt submit refuses neg-* files
 # STUB_DIR/api_json           — body curl returns for an explorer-API GET
 # STUB_DIR/alert_posts        — one line per webhook POST body
@@ -117,8 +120,9 @@ new_stubs() {
   : >"$STUB_DIR/alert_post_fail"
   : >"$STUB_DIR/curl_fetch_fail"
   : >"$STUB_DIR/submit_refuses_tampered"
+  : >"$STUB_DIR/setter_weights_drift"
+  : >"$STUB_DIR/setter_weight_reads"
   echo 0x0000000000000000000000000000000000000002 >"$STUB_DIR/receipt_contract"
-  : >"$STUB_DIR/apply_open"
   echo "([0xaa],[10000])" >"$STUB_DIR/weights"
 
   cat >"$STUB_DIR/bin/rmpc" <<'STUB'
@@ -128,8 +132,8 @@ case "$1" in
   receipt)
     for a in "$@"; do [[ "$a" == "verify" ]] && sub=verify; [[ "$a" == "submit" ]] && sub=submit; done
     if [[ "${sub:-}" == "verify" ]]; then
-      # A refusal reported as `ok:false` WITH exit 0 — the shape rmpc's deleted
-      # range-mode draft command used on purpose, and the shape an exit-code-only
+      # A refusal reported as `ok:false` WITH exit 0 — the shape rmpc's own
+      # governance scan mode uses on purpose, and the shape an exit-code-only
       # assertion would read as a pass.
       if [[ -s "$STUB_DIR/verify_ok_false_exit_zero" ]]; then
         echo '{"ok":false,"error":"ErrReceiptSignatureInvalid"}'
@@ -211,23 +215,20 @@ case "$1" in
       exit 1
     fi
     case "$sig" in
-      getEffectiveWeights*) cat "$STUB_DIR/weights"; exit 0 ;;
-      getWeights*)        cat "$STUB_DIR/weights"; exit 0 ;;
-      receiptContract*)   cat "$STUB_DIR/receipt_contract"; exit 0 ;;
-      applyReceipt*)
-        # RouterGovernance.applyReceipt (issue 1698). onlyRole(ADMIN_ROLE) runs
-        # first: only the timelock holds it, so any other --from reverts on
-        # authority. From the timelock, a released receipt reverts one-shot.
-        [[ -s "$STUB_DIR/apply_open" ]] && exit 0
-        if [[ "$*" != *"--from ${FUSION_TIMELOCK_ADDRESS:-<none>}"* ]]; then
-          echo "server returned an error response: execution reverted: AccessControlUnauthorizedAccount()" >&2
-          exit 1
-        fi
-        if [[ -s "$STUB_DIR/released" ]]; then
-          echo "server returned an error response: execution reverted: ReceiptAlreadyReleased()" >&2
-          exit 1
+      currentWeights*)
+        # The weight setter's read of the router. With setter_weights_drift set,
+        # every read after the first reports a moved vector: the shape of a
+        # receipt applied (applyReceipt) inside the window.
+        if [[ -s "$STUB_DIR/setter_weights_drift" && -s "$STUB_DIR/setter_weight_reads" ]]; then
+          echo "read" >>"$STUB_DIR/setter_weight_reads"
+          echo "([0xaa,0xbb],[5000,5000])"
+        else
+          echo "read" >>"$STUB_DIR/setter_weight_reads"
+          cat "$STUB_DIR/weights"
         fi
         exit 0 ;;
+      getWeights*)        cat "$STUB_DIR/weights"; exit 0 ;;
+      "receipts()"*)      cat "$STUB_DIR/receipt_contract"; exit 0 ;;
       totalAssets*)
         # One unit of drift per read when asked for: the accrual shape INV-4 has
         # to distinguish from a signalling-path asset movement, and the shape
@@ -505,9 +506,9 @@ export FUSION_VAULT_ADDRESSES=0x0000000000000000000000000000000000000005
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/r --no-anchor >/dev/null 2>&1
 check "a vault list that is not exactly four refuses to start" "$?" "3"
 
-# A REFUSAL REPORTED AS ok:false WITH EXIT 0 MUST NOT PASS. rmpc's range-mode
-# draft command (deleted by issue 1698) used exactly that shape on purpose, so an
-# exit-code-only assertion would read a refusal as a successful verification. Measured against
+# A REFUSAL REPORTED AS ok:false WITH EXIT 0 MUST NOT PASS. An rmpc subcommand
+# can report a refusal in exactly that shape, so an exit-code-only assertion
+# would read a refusal as a successful verification. Measured against
 # the real rc.1 stand-in during step 3.8, which is how the trap was found.
 new_stubs; acceptance_env
 : >"$STUB_DIR/receipt.json"
@@ -614,7 +615,7 @@ check "the duplicate-release probe reaches ReceiptAlreadyReleased (sent from the
   "$(jq -r '[.assertions[]|select(.assertion|test("duplicate release is rejected"))|.result]|first' "$RESULT" 2>/dev/null)" "PASS"
 
 # ─── T10: one shared INV-4 witness reader, failing LOUDLY ────────────────────
-# `witnesses()` built each reading as `out="proposals=$(cast call … 2>&1 | …)"`:
+# `witnesses()` built each reading as `out="name=$(cast call … 2>&1 | …)"`:
 # stderr folded into the compared value, exit status eaten by the pipe. With a
 # `cast` that failed every read, the blocker INV-4 assertion recorded PASS with
 # the detail "no allocation-state witness moved". Ten failed reads, one green
@@ -645,7 +646,7 @@ export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
 export FUSION_SUBMITTER_ADDRESS=0x00000000000000000000000000000000000000dd
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --no-anchor --out "$RESULT" >/dev/null 2>&1
 check "a readable chain records the INV-4 assertion as PASS" "$(inv4_results)" "PASS"
-for q in getEffectiveWeights getWeights totalAssets totalSupply; do
+for q in currentWeights getWeights totalAssets totalSupply; do
   if grep -q "$q" "$STUB_DIR/cast_calls"; then ok "devnet-acceptance reads $q as an INV-4 witness"
   else bad "devnet-acceptance never read $q"; fi
 done
@@ -688,7 +689,7 @@ new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
 echo 1 >"$STUB_DIR/witness_drift"
 "$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
 check "cross-repo-acceptance reaches the SAME verdict on the same one-unit drift" "$?" "$devnet_drift_rc"
-for q in getEffectiveWeights getWeights totalAssets totalSupply; do
+for q in currentWeights getWeights totalAssets totalSupply; do
   if grep -q "$q" "$STUB_DIR/cast_calls"; then ok "cross-repo-acceptance reads $q as an INV-4 witness"
   else bad "cross-repo-acceptance never read $q (it used to read only totalAssets)"; fi
 done
@@ -739,75 +740,33 @@ check "configuring the variable removes the unconfigured skip" \
   "$(jq -r '.summary.skipped_unconfigured' "$RESULT" 2>/dev/null)" "0"
 unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
 
-# ─── T15 / issue 1698: the govern stage proves the apply path ──────────────
-# The govern stage used to assert on `rmpc governance draft-proposal` output,
-# and the draft-shape tests here were its guards. Issue 1698 deleted that command
-# with RouterGovernance's voting path. The stage now proves, with eth_call only,
-# that the weight setter applies receipts from THIS register, that an account
-# other than the timelock cannot apply, and that a released receipt can never be
-# applied later. Every PASS below has a negative control that must FAIL.
+# ─── T15 / issue 1698: the govern stage and the weights binding ────────────
+# Issue 1698 removed the draft step: RouterGovernance.applyReceipt releases a
+# receipt and sets the router weights in one call, so the govern stage now
+# asserts the converse of applying: the release-only path this harness runs set
+# no weights, read through the weight setter (RouterGovernance.currentWeights).
 echo
-echo "T15 — the govern stage: the apply path (issue 1698)"
+echo "T15 — govern stage (no weight change) and weights assertions"
 
 assertion_result() { jq -r --arg t "$1" '[.assertions[]|select(.assertion|test($t))|.result]|join(",")' "$RESULT" 2>/dev/null; }
 
-govern_env() {
-  export FUSION_UNAUTHORIZED_RELEASER=0x00000000000000000000000000000000000000ee
-  export FUSION_TIMELOCK_ADDRESS=0x00000000000000000000000000000000000000cc
-}
-
-# A released receipt on a weight setter bound to this register.
-new_stubs; acceptance_env; new_curl_stub; receipt_fixture; govern_env
-echo 1 >"$STUB_DIR/released"
-"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "the govern stage passes on a bound, timelock-only apply path" "$?" "0"
-check "the weight setter is bound to THIS register" "$(assertion_result 'only from THIS register')" "PASS"
-check "an account that is not the timelock cannot apply" "$(assertion_result 'reverts on AUTHORITY')" "PASS"
-check "a released receipt can never be applied later" "$(assertion_result 'never move weights later')" "PASS"
-check "the authority probe is sent from the unauthorized account" \
-  "$(grep -c "applyReceipt.*--from $FUSION_UNAUTHORIZED_RELEASER" "$STUB_DIR/cast_calls")" "1"
-check "the one-shot probe is sent from the timelock" \
-  "$(grep -c "applyReceipt.*--from $FUSION_TIMELOCK_ADDRESS" "$STUB_DIR/cast_calls")" "1"
-check "both probes carry the receipt's own weights in canonical bucket order" \
-  "$(grep -c 'applyReceipt.*\[4000,3000,2000,1000\]' "$STUB_DIR/cast_calls")" "2"
-check "the govern stage calls no rmpc governance subcommand (draft-proposal is deleted)" \
-  "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
-check "the govern stage sends nothing" "$(wc -l <"$STUB_DIR/release_sends" | tr -d ' ')" "0"
-
-# NEGATIVE CONTROL: a weight setter that applies receipts from ANOTHER register.
-new_stubs; acceptance_env; new_curl_stub; receipt_fixture; govern_env
-echo 1 >"$STUB_DIR/released"
-echo 0x00000000000000000000000000000000000000ff >"$STUB_DIR/receipt_contract"
-"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "a weight setter bound to ANOTHER register FAILS the binding assertion" "$(assertion_result 'only from THIS register')" "FAIL"
-check "…and fails the run" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
-
-# NEGATIVE CONTROL: a weight setter with no guards at all.
-new_stubs; acceptance_env; new_curl_stub; receipt_fixture; govern_env
-echo 1 >"$STUB_DIR/released"
-echo 1 >"$STUB_DIR/apply_open"
-"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "a weight setter that lets any account apply FAILS the authority assertion" "$(assertion_result 'reverts on AUTHORITY')" "FAIL"
-check "…and one that applies a released receipt FAILS the one-shot assertion" "$(assertion_result 'never move weights later')" "FAIL"
-
-# An unreleased receipt with the release stage NOT selected: the one-shot probe
-# has nothing to probe. That is an honest not_selected skip, and the run is ok.
-new_stubs; acceptance_env; new_curl_stub; receipt_fixture; govern_env
-"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "an unreleased receipt with the release stage unselected skips the one-shot probe as not_selected" \
-  "$(jq -r '[.assertions[]|select(.stage=="govern" and (.assertion|test("can never be applied")))|(.result+":"+.reason)]|join(",")' "$RESULT" 2>/dev/null)" \
-  "SKIP:not_selected"
-check "…and the run stays ok" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "true"
-
-# A SELECTED govern stage with no unauthorized account and no timelock address
-# did not run its probes. That is unconfigured, and the run is NOT ok.
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
-unset FUSION_UNAUTHORIZED_RELEASER FUSION_UNAUTHORIZED_SUBMITTER FUSION_TIMELOCK_ADDRESS
-echo 1 >"$STUB_DIR/released"
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
-check "a SELECTED govern stage with its probe identities unset is not ok" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
-check "…because both probes are counted as unconfigured" \
-  "$(jq -r '.summary.skipped_unconfigured' "$RESULT" 2>/dev/null)" "2"
+check "unchanged weight-setter weights PASS the govern stage" "$(assertion_result 'release-only path sets no router weights')" "PASS"
+check "…and the govern stage never calls rmpc governance" "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
+
+# NEGATIVE CONTROL: weights that moved inside the window must FAIL the stage.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/setter_weights_drift"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "weight-setter weights that moved FAIL the govern stage" "$(assertion_result 'release-only path sets no router weights')" "FAIL"
+check "…and fail the run" "$(jq -r '.ok' "$RESULT" 2>/dev/null)" "false"
+
+# An unreadable weight setter is a FAILURE, never a pass over two absences.
+new_stubs; acceptance_env; new_curl_stub; receipt_fixture
+echo 1 >"$STUB_DIR/rpc_down"
+"$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,govern --out "$RESULT" >/dev/null 2>&1
+check "an unreadable weight setter FAILS the govern stage" "$(assertion_result 'release-only path sets no router weights')" "FAIL"
 
 # The fourth negative case: weights rewritten to 10000/0/0/0.
 new_stubs; acceptance_env; new_curl_stub; receipt_fixture
@@ -828,14 +787,15 @@ new_stubs; acceptance_env; new_curl_stub; receipt_fixture
 export FUSION_UNAUTHORIZED_SUBMITTER=0x00000000000000000000000000000000000000ee
 "$FUSION_DIR/devnet-acceptance.sh" https://example.invalid/receipt --stages verify,negative --out "$RESULT" >/dev/null 2>&1
 check "a stack that accepts tampered weights FAILS the refusal assertion" "$(assertion_result 'rewritten to 10000/0/0/0')" "FAIL"
-unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS FUSION_UNAUTHORIZED_RELEASER FUSION_TIMELOCK_ADDRESS
+unset FUSION_UNAUTHORIZED_SUBMITTER FUSION_SUBMITTER_ADDRESS
 
-# cross-repo-acceptance.sh: the receipt's own weights, and the apply-path binding.
+# cross-repo-acceptance.sh has no draft step either (issue 1698). It checks the
+# receipt's own weights and that the weight setter applies receipts from this
+# register (receipts()).
 new_stubs; cross_repo_env; new_curl_stub; receipt_fixture
 "$FUSION_DIR/cross-repo-acceptance.sh" >/dev/null 2>&1
-check "cross-repo-acceptance passes when the weight setter is bound to this receipt's register" "$?" "0"
-check "…and calls no rmpc governance subcommand (draft-proposal is deleted)" \
-  "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
+check "cross-repo-acceptance passes with the release-only path and unchanged witnesses" "$?" "0"
+check "…and never calls rmpc governance" "$(grep -c '^governance' "$STUB_DIR/rmpc_calls")" "0"
 
 new_stubs; cross_repo_env; new_curl_stub
 printf '{"schema_version":"1.0"}' >"$STUB_DIR/receipt.json"
@@ -896,7 +856,7 @@ unset FUSION_EXPLORER_API FUSION_INDEX_TIMEOUT_SECS
 # ─── T29: cross-repo-acceptance.sh's release stage is idempotent ────────────
 # The script the runbook calls "the AC-E2E-05 seam" sent unconditionally under
 # `set -euo pipefail`, so the SECOND run aborted at that line: the INV-4
-# comparison, the apply-path read and the evidence JSON after it never ran, and
+# comparison and the evidence JSON after it never ran, and
 # a real INV-4 regression between the two runs would be invisible behind it.
 echo
 echo "T29 — cross-repo release idempotency"
@@ -922,10 +882,9 @@ fi
 # ─── T25: the alert path is validated, split by condition, and POSTED ───────
 # submit-receipt-worker.sh had NO alerting code: its "ALERT" was an `echo … >&2`,
 # which under nohup reaches nobody, while runbook §5.5 claimed both harnesses
-# page. The draft watcher (retired by issue 1698) posted only if curl and jq
-# happened to be present, shared one dedup key across two conditions, never
-# resolved, and discarded delivery failures with `|| true`. lib/alert.sh fixed
-# all of it, and the worker now carries the delivery and resolve tests.
+# page. The other (the draft watcher, deleted in issue 1698) posted only if curl
+# and jq happened to be present, shared one dedup key across two conditions,
+# never resolved, and discarded delivery failures with `|| true`.
 echo
 echo "T25 — the Fusion harness alert path"
 
@@ -984,15 +943,13 @@ export FUSION_MAX_ATTEMPTS=1
 timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
 check "a healthy worker pages nobody" "$(wc -l <"$STUB_DIR/alert_posts" | tr -d ' ')" "0"
 
-# A DELIVERY FAILURE IS LOGGED, NOT SWALLOWED BY `|| true`. These alert-path
-# tests drove the draft watcher until issue 1698 retired it; the submit worker
-# is the harness that pages now, through the same lib/alert.sh.
+# A DELIVERY FAILURE IS LOGGED, NOT SWALLOWED BY `|| true`.
 new_stubs; worker_env; new_curl_stub
 export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
 echo 1 >"$STUB_DIR/alert_post_fail"
 echo 1 >"$STUB_DIR/rpc_down"
 export FUSION_MAX_ATTEMPTS=1
-err="$(timeout 4 "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"
+err="$(timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"
 if grep -q "ALERT DELIVERY FAILED" <<<"$err"; then
   ok "a page that could not be delivered is reported, not discarded"
 else
@@ -1003,7 +960,7 @@ new_stubs; worker_env; new_curl_stub
 export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
 echo 1 >"$STUB_DIR/rpc_down"
 export FUSION_MAX_ATTEMPTS=1
-err="$(timeout 4 "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"
+err="$(timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" 2>&1 >/dev/null)"
 if grep -q "ALERT DELIVERY FAILED" <<<"$err"; then
   bad "a successful delivery was reported as failed: $err"
 else
@@ -1013,7 +970,9 @@ fi
 # AN OUTAGE THAT RECOVERS MUST RESOLVE. The open-incident flag lives in the
 # worker's memory, so the outage and the recovery happen in ONE process: the
 # chain answers again after a few cycles, the anchor is already there, and the
-# worker must send the resolve before it exits 0.
+# worker must send the resolve before it exits 0. (These alert-path tests drove
+# the draft watcher until issue 1698 deleted it; the submit worker is the
+# harness that pages now, through the same lib/alert.sh.)
 new_stubs; worker_env; new_curl_stub
 export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
 export FUSION_MAX_ATTEMPTS=1
@@ -1034,7 +993,7 @@ new_stubs; worker_env; new_curl_stub
 export FUSION_ALERT_WEBHOOK="https://alerts.invalid/hook"
 export FUSION_MAX_ATTEMPTS=1
 echo 1 >"$STUB_DIR/rpc_down"
-timeout 4 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
+timeout 8 "$FUSION_DIR/submit-receipt-worker.sh" >/dev/null 2>&1
 check "an outage that never recovers sends no resolve" \
   "$(jq -r 'select(.event_action=="resolve")|.dedup_key' "$STUB_DIR/alert_posts" 2>/dev/null | wc -l | tr -d ' ')" "0"
 unset FUSION_ALERT_WEBHOOK

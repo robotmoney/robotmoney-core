@@ -5,7 +5,7 @@ import { assertChainAllowed, chainGuard, lc, publicClientFor, rpcLabel, sameAddr
 import { FACTORY_ABI, FALLBACK_HANDLER_SLOT, SAFE_141, SAFE_ABI, SAFE_VERSION, ZERO_ADDRESS } from "./constants.ts";
 import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
 import { silentLogger, type Logger } from "./log.ts";
-import { awaitRead, type ReadRetry } from "./read-after-write.ts";
+import { readAfterWrite, settle, type ReadVerdict, type StaleReadRetry } from "./read-after-write.ts";
 import type { Signer } from "./signers.ts";
 
 export interface SafeHandle {
@@ -39,6 +39,8 @@ export function contractNetworksFor(chainId: number) {
 export interface ConnectSafeOpts extends ChainOpts {
   safeAddress: Address;
   logger?: Logger;
+  /** Set right after a broadcast that created the Safe (issue 1723): a read a node behind that block answers (no code, an eth_call with no data) is retried, bounded. Unset: single reads. */
+  staleRead?: StaleReadRetry;
 }
 
 /**
@@ -52,20 +54,25 @@ export async function proxyRuntimeCodeOf(client: Pick<PublicClient, "readContrac
   return r.data;
 }
 
+const showCode = (c: Hex | undefined): string => (c && c !== "0x" ? `code with hash ${keccak256(c)}` : "no code");
+
 /** Connects to a deployed Safe, on the right chain, and reads owners, threshold and version from the chain. Safe 1.4.1 only. */
 export async function connectSafe(opts: ConnectSafeOpts): Promise<SafeHandle> {
   const logger = opts.logger ?? silentLogger;
   const client = publicClientFor(opts);
   await chainGuard(client, opts);
   const address = getAddress(opts.safeAddress);
-  const code = await client.getCode({ address });
+  const read = <T>(what: string, expected: string, r: () => Promise<T>, judge?: (v: T) => ReadVerdict, show?: (v: T) => string) =>
+    settle(opts.staleRead, { what: `${what} of the Safe ${address}`, expected, rpcUrl: opts.rpcUrl, read: r, judge, show, logger });
+  const code = await read("the code", "the Safe's code", () => client.getCode({ address }), (c) => (!c || c === "0x" ? "stale" : "fresh"), showCode);
   if (!code || code === "0x") throw new SafeToolError("NOT_A_SAFE", `no contract at the Safe address ${address} on chain ${opts.chainId}`);
   let version = "";
-  try { version = await client.readContract({ address, abi: SAFE_ABI, functionName: "VERSION" }); } catch { /* reported below */ }
+  try { version = await read("VERSION()", SAFE_VERSION, () => client.readContract({ address, abi: SAFE_ABI, functionName: "VERSION" })); }
+  catch (e) { if (e instanceof SafeToolError) throw e; /* reported below */ }
   if (version !== SAFE_VERSION) throw new SafeToolError("WRONG_SAFE_VERSION", `${address} does not answer as a Safe v${SAFE_VERSION} (VERSION: '${version || "none"}')`, { version });
   const [ownersRaw, thresholdRaw] = await Promise.all([
-    client.readContract({ address, abi: SAFE_ABI, functionName: "getOwners" }),
-    client.readContract({ address, abi: SAFE_ABI, functionName: "getThreshold" }),
+    read("getOwners()", "the roster", () => client.readContract({ address, abi: SAFE_ABI, functionName: "getOwners" })),
+    read("getThreshold()", "the threshold", () => client.readContract({ address, abi: SAFE_ABI, functionName: "getThreshold" })),
   ]);
   const owners = [...ownersRaw] as Address[];
   const threshold = Number(thresholdRaw);
@@ -102,8 +109,8 @@ export interface CreateSafeOpts extends ChainOpts {
   /** Simulate and plan only. */
   dryRun?: boolean;
   logger?: Logger;
-  /** The reads after the creation landed (awaitCreatedSafe, issue 1723): the test seam and tuning. Default 5 reads, 1 s apart. */
-  readRetry?: ReadRetry;
+  /** Bound and test seam for the reads after the creation transaction (issue 1723). Default: STALE_READ_TRIES tries, STALE_READ_DELAY_MS apart. */
+  staleRead?: StaleReadRetry;
 }
 
 export interface CreateSafePlan {
@@ -153,7 +160,7 @@ export function defaultSaltNonce(owners: Address[], threshold: number, deploySha
 /**
  * Creates the production Safe through the canonical SafeProxyFactory (SafeL2 1.4.1 singleton, CompatibilityFallbackHandler).
  * All read-only checks run first. After the one creation transaction the Safe is verified from the chain, not from the plan:
- * owners, threshold, version, nonce 0, singleton slot, fallback slot and the pinned canonical proxy codehash. Those reads are read-after-write safe (awaitCreatedSafe).
+ * owners, threshold, version, nonce 0, singleton slot, fallback slot and the pinned canonical proxy codehash.
  */
 export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult> {
   const logger = opts.logger ?? silentLogger;
@@ -241,54 +248,24 @@ export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult
   const receipt = await client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") throw new SafeToolError("TX_REVERTED", `the creation transaction reverted: ${txHash}`);
 
-  const handle = await awaitCreatedSafe({
-    connect: () => connectSafe({ ...opts, safeAddress: predictedAddress, logger }),
-    want: { owners, threshold: opts.threshold },
-    deployerNonce: opts.expectDeployerNonce === undefined ? undefined : { want: opts.expectDeployerNonce + 1, read: () => client.getTransactionCount({ address: deployer }) },
-    rpcUrl: opts.rpcUrl, txHash, retry: opts.readRetry,
-  });
+  // every read below may meet a node behind the creation block: stale reads are retried, bounded (issue 1723)
+  const staleRead = opts.staleRead ?? {};
+  const handle = await connectSafe({ ...opts, safeAddress: predictedAddress, logger, staleRead });
+  await verifyCreatedSafe(handle, { owners, threshold: opts.threshold }, staleRead);
+  if (opts.expectDeployerNonce !== undefined) {
+    const want = opts.expectDeployerNonce + 1;
+    const after = await readAfterWrite({
+      what: `the deployer ${deployer} nonce after ${txHash}`, expected: String(want), rpcUrl: opts.rpcUrl, logger,
+      read: () => client.getTransactionCount({ address: deployer }), judge: (n) => (n < want ? "stale" : n === want ? "fresh" : "wrong"),
+    }, staleRead);
+    if (after !== want) throw new SafeToolError("VERIFY_FAILED", `deployer nonce is ${after} after the stage, expected ${want}`);
+  }
   const manifest: SafeManifest = {
     safe: predictedAddress, version: SAFE_VERSION, threshold: opts.threshold, owners, factory: SAFE_141.proxyFactory, singleton: SAFE_141.singletonL2,
     fallback_handler: SAFE_141.fallbackHandler, salt_nonce: saltNonce, created_by: deployer, tx_hash: txHash, block: Number(receipt.blockNumber), chain_id: opts.chainId,
   };
   logger.log("info", "safe.create.verified", { safe: predictedAddress, tx_hash: txHash, block: manifest.block });
   return { plan, created: true, txHash, block: manifest.block, handle, manifest };
-}
-
-/**
- * The reads after a landed creation (issue 1723, QA plan v1 E6): connect to the new Safe and verify it against the plan (verifyCreatedSafe: roster, version, nonce 0,
- * singleton, fallback handler, canonical proxy code), then read the deployer nonce the creation must leave. A load-balanced RPC may answer them from a node behind the
- * creation block, which has no code at the Safe (NOT_A_SAFE, or the code check of verifyCreatedSafe) and the deployer's nonce from before. So each is read again, bounded
- * by `retry`, while it does not show the expected state. What still differs after the last read fails with the check's own code (NOT_A_SAFE, VERIFY_FAILED, ...), its
- * message extended with the number of reads and the RPC host. A deployer nonce above the expected one fails at once: another transaction moved the deployer.
- */
-export async function awaitCreatedSafe(c: {
-  connect: () => Promise<SafeHandle>;
-  want: { owners: Address[]; threshold: number };
-  /** The deployer nonce the creation must leave (the nonce before it plus 1) and its read. Unset: not checked. */
-  deployerNonce?: { want: number; read: () => Promise<number> };
-  rpcUrl: string;
-  txHash: Hex;
-  retry?: ReadRetry;
-}): Promise<SafeHandle> {
-  const host = rpcLabel(c.rpcUrl);
-  const created = await awaitRead(async () => { const h = await c.connect(); await verifyCreatedSafe(h, c.want); return h; }, () => true, c.retry);
-  if (!created.ok) {
-    const e = created.error;
-    const why = `${created.reads} read(s) from RPC ${host} after the creation ${c.txHash} landed`;
-    const details = { reads: created.reads, rpc: host, tx_hash: c.txHash };
-    if (e instanceof SafeToolError) throw new SafeToolError(e.code, `${e.message} (${why})`, { ...e.details, ...details });
-    throw new SafeToolError("VERIFY_FAILED", `the new Safe cannot be read: ${revertReasonOf(e)} (${why})`, details);
-  }
-  if (c.deployerNonce) {
-    const { want, read } = c.deployerNonce;
-    const n = await awaitRead(read, (x) => x === want, c.retry, (x) => x > want);
-    if (!n.ok) {
-      if (n.seen.length === 0) throw new SafeToolError("VERIFY_FAILED", `the deployer nonce cannot be read after the stage: ${revertReasonOf(n.error)} (${n.reads} read(s) from RPC ${host})`, { want, rpc: host, tx_hash: c.txHash });
-      throw new SafeToolError("VERIFY_FAILED", `deployer nonce is ${n.last} after the stage, expected ${want}: read ${n.seen.join(", ")} in ${n.reads} read(s) from RPC ${host} after ${c.txHash}`, { got: n.last, want, seen: n.seen, rpc: host, tx_hash: c.txHash });
-    }
-  }
-  return created.last!;
 }
 
 /** The `initializer` argument of createProxyWithNonce(singleton, initializer, saltNonce) inside the SDK's calldata. */
@@ -298,20 +275,29 @@ function initializerOf(calldata: Hex): Hex {
   return (d.args as readonly unknown[])[1] as Hex;
 }
 
-/** Reads the finished Safe from the chain and fails on any difference from the plan. Also usable by a standalone verifier. */
-export async function verifyCreatedSafe(handle: SafeHandle, want: { owners: Address[]; threshold: number }): Promise<void> {
+/**
+ * Reads the finished Safe from the chain and fails on any difference from the plan. Also usable by a standalone verifier.
+ * With `staleRead` (right after the creation, issue 1723) a read a node behind the creation block answers is retried, bounded: a read error
+ * (an eth_call to an address without code yet), an empty storage slot or empty code. A different non-empty value still fails at once.
+ */
+export async function verifyCreatedSafe(handle: SafeHandle, want: { owners: Address[]; threshold: number }, staleRead?: StaleReadRetry): Promise<void> {
   const { client, address } = handle;
   const fail = (m: string): never => { throw new SafeToolError("VERIFY_FAILED", m, { safe: address }); };
-  const owners = (await client.readContract({ address, abi: SAFE_ABI, functionName: "getOwners" })).map(lc).sort().join(",");
+  const read = <T>(what: string, expected: string, r: () => Promise<T>, judge?: (v: T) => ReadVerdict, show?: (v: T) => string) =>
+    settle(staleRead, { what: `${what} of the new Safe ${address}`, expected, rpcUrl: handle.chain.rpcUrl, read: r, judge, show, logger: handle.logger });
+  const word = (a: Address) => `0x${"0".repeat(24)}${lc(a).slice(2)}`;
+  const slotJudge = (want: string) => (v: Hex | undefined): ReadVerdict => (!v || BigInt(v) === 0n ? "stale" : lc(v) === want ? "fresh" : "wrong");
+  const owners = (await read("getOwners()", "the planned roster", () => client.readContract({ address, abi: SAFE_ABI, functionName: "getOwners" }))).map(lc).sort().join(",");
   if (owners !== want.owners.map(lc).sort().join(",")) fail(`the Safe's owners on chain differ from the plan: ${owners}`);
-  if (Number(await client.readContract({ address, abi: SAFE_ABI, functionName: "getThreshold" })) !== want.threshold) fail("the Safe's threshold on chain differs from the plan");
-  if ((await client.readContract({ address, abi: SAFE_ABI, functionName: "VERSION" })) !== SAFE_VERSION) fail("the Safe reports the wrong version");
-  if (Number(await client.readContract({ address, abi: SAFE_ABI, functionName: "nonce" })) !== 0) fail("the new Safe's nonce is not 0");
-  const slot0 = await client.getStorageAt({ address, slot: "0x0" });
-  if (lc(slot0 ?? "") !== `0x${"0".repeat(24)}${lc(SAFE_141.singletonL2).slice(2)}`) fail(`the Safe's singleton (storage slot 0) is not ${SAFE_141.singletonL2}`);
-  const fb = await client.getStorageAt({ address, slot: FALLBACK_HANDLER_SLOT });
-  if (lc(fb ?? "") !== `0x${"0".repeat(24)}${lc(SAFE_141.fallbackHandler).slice(2)}`) fail(`the Safe's fallback handler is not ${SAFE_141.fallbackHandler}`);
-  const code = await client.getCode({ address });
+  if (Number(await read("getThreshold()", String(want.threshold), () => client.readContract({ address, abi: SAFE_ABI, functionName: "getThreshold" }))) !== want.threshold) fail("the Safe's threshold on chain differs from the plan");
+  if ((await read("VERSION()", SAFE_VERSION, () => client.readContract({ address, abi: SAFE_ABI, functionName: "VERSION" }))) !== SAFE_VERSION) fail("the Safe reports the wrong version");
+  if (Number(await read("nonce()", "0", () => client.readContract({ address, abi: SAFE_ABI, functionName: "nonce" }))) !== 0) fail("the new Safe's nonce is not 0");
+  const slot0 = await read("storage slot 0", word(SAFE_141.singletonL2), () => client.getStorageAt({ address, slot: "0x0" }), slotJudge(word(SAFE_141.singletonL2)));
+  if (lc(slot0 ?? "") !== word(SAFE_141.singletonL2)) fail(`the Safe's singleton (storage slot 0) is not ${SAFE_141.singletonL2}`);
+  const fb = await read("the fallback handler slot", word(SAFE_141.fallbackHandler), () => client.getStorageAt({ address, slot: FALLBACK_HANDLER_SLOT }), slotJudge(word(SAFE_141.fallbackHandler)));
+  if (lc(fb ?? "") !== word(SAFE_141.fallbackHandler)) fail(`the Safe's fallback handler is not ${SAFE_141.fallbackHandler}`);
+  const code = await read("the code", `code with hash ${SAFE_141.proxyCodehash}`, () => client.getCode({ address }),
+    (c) => (!c || c === "0x" ? "stale" : keccak256(c) === SAFE_141.proxyCodehash ? "fresh" : "wrong"), showCode);
   if (!code || keccak256(code) !== SAFE_141.proxyCodehash) fail("the Safe's code is not the factory's canonical proxy code");
 }
 

@@ -68,28 +68,7 @@ repage_secs = 3600
 # so watchdog-liveness reports `stale` for a watchdog slower than the chain.
 max_cursor_lag_blocks = 150
 
-# Missed freeze-deadline alert (issue 1809, ADR-0014 §5). A release deployed
-# `upgradeable` with a proving period names a freeze deadline in its release
-# issue. From that second on, every poll reads upgradesFrozen() on each proxy
-# and pages `freeze_deadline_missed:<chain>` while any reads false
-# (docs/operations/contract-release-runbooks.md §4.12). Absent or disabled:
-# nothing is read. Read-only: it never pauses, upgrades or freezes.
-[freeze_deadline]
-enabled = false
-# rpc_url = "https://mainnet.base.org"
-# deadline_unix = 1830297600   # the release issue's deadline, Unix seconds (UTC)
-# repage_secs = 86400          # one page a day while the deadline stays missed
-# proxies = [                  # every proxy of the deployment (ADR-0014 §1: nine)
-#   { name = "rmUSDC", address = "0x…" },
-#   { name = "registry", address = "0x…" },
-# ]
-
-# Executed upgrade and freeze alert (issue 1810, ADR-0014 §3, §5). Every poll
-# reads the indexer's proxy_upgrade_events table and pages once per new
-# `Upgraded` (warning) or `UpgradesFrozen` (info) event, keyed
-# `proxy_upgrade:<chain>:<block>:<log index>`. On-call matches it against the
-# release issue's scheduled round. Absent means enabled with these defaults.
-# Read-only: it never pauses, upgrades or freezes.
-[upgrade_events]
-enabled = true
-startup_lookback_secs = 172800   # a restart re-pages events indexed in the last 48 h
+# Proxy upgrade and freeze pages (issue 1810) need no section: every poll pages
+# each governed `Upgraded` or `UpgradesFrozen` event the indexer stored in
+# `admin_events` (contract_kind = 'proxy', migration 0019) once, through
+# `action.webhook_url`. Alert-only: it never pauses, upgrades or freezes.

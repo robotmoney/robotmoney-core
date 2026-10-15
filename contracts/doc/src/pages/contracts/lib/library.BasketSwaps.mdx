@@ -1,0 +1,354 @@
+---
+title: "BasketSwaps"
+description: "The basket vault's one swap executor and its two emergency unwinds, as an externally linked library. Its code runs by DELEGATECALL as the vault (`address(this)` is the vault, `msg.sender` is the vault's caller), so approvals, balances and events are the vault's. The logic is the code `BasketVault` carried inline before issue 1808, unchanged; it moved so the proxied basket family fits EIP-170. Every swap pays the vault itself: there is no caller-supplied recipient (INV-1)."
+---
+
+# BasketSwaps
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/lib/BasketSwaps.sol)
+
+**Title:** BasketSwaps
+
+The basket vault's one swap executor and its two emergency unwinds, as an externally
+linked library. Its code runs by DELEGATECALL as the vault (`address(this)` is the
+vault, `msg.sender` is the vault's caller), so approvals, balances and events are the
+vault's. The logic is the code `BasketVault` carried inline before issue 1808,
+unchanged; it moved so the proxied basket family fits EIP-170. Every swap pays the
+vault itself: there is no caller-supplied recipient (INV-1).
+
+## Constants
+
+### MAX_BPS
+
+```solidity
+uint256 internal constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
+```
+
+## Functions
+
+<a id="swap-address-address-address-uint24-uint256-uint256-iswaprouter"></a>
+
+### swap
+
+Swap `amountIn` of `tokenIn` to `tokenOut` for the vault, through the asset's
+adapter when set, else the Uniswap V3 `router`. Approval is set before the call
+and cleared after. The deadline is the current block: every swap runs
+synchronously inside the caller's transaction (audit 2026-06-09, L-5).
+
+```solidity
+function swap(
+        address adapter,
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        ISwapRouter router
+    ) public returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| amountIn | `uint256` |  |
+| minAmountOut | `uint256` |  |
+| router | `ISwapRouter` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+<a id="unwindall-basketassetconfigguard-assetinfo-address-iswaprouter"></a>
+
+### unwindAll
+
+`BasketVault.emergencyUnwind` after the deposit halt: swap every active asset's
+balance to USDC. The per-leg floor is max(TWAP-derived, configured minUsdcOut).
+With the oracle unavailable a non-zero configured floor is required. A leg whose
+TWAP floor rounds to zero USDC units is dust and is skipped (QA plan D6, SR-L12):
+one donated wei cannot block the unwind.
+
+```solidity
+function unwindAll(
+        BasketAssetConfigGuard.AssetInfo[] storage assets,
+        address usdc,
+        ISwapRouter router
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `BasketAssetConfigGuard.AssetInfo[]` |  |
+| usdc | `address` |  |
+| router | `ISwapRouter` |  |
+
+<a id="unwindwithoverride-basketassetconfigguard-assetinfo-address-address-iswaprouter"></a>
+
+### unwindWithOverride
+
+`BasketVault.emergencyUnwindWithOverride` after the deposit halt: for each named
+active token whose guard permits overrides, swap its balance to USDC under the
+oracle-independent loss cap `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`,
+emitting `EmergencyUnwindOverrideUsed` before each swap.
+
+```solidity
+function unwindWithOverride(
+        BasketAssetConfigGuard.AssetInfo[] storage assets,
+        address[] calldata tokens,
+        address usdc,
+        ISwapRouter router
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `BasketAssetConfigGuard.AssetInfo[]` |  |
+| tokens | `address[]` |  |
+| usdc | `address` |  |
+| router | `ISwapRouter` |  |
+
+<a id="reabsorb-basketassetconfigguard-assetinfo-uint256-uint256-address-iswaprouter"></a>
+
+### reabsorb
+
+`BasketVault.reabsorbRemovedAsset`: swap a balance that reappeared on a removed
+(inactive) asset back to USDC into NAV under the TWAP-derived, slippage-bounded
+floor, which must not undercut the caller's `minUsdcOut` (AZ-BSK-5). When the
+pool is degraded (the TWAP read reverts) the balance is swept to the fixed
+quarantine address instead of being stranded (LIFE-6). No caller-supplied
+recipient (INV-1). A dust balance, whose floor rounds to zero USDC units, is left in
+place and the call is a no-op (QA plan D6). Panics on an out-of-range `index`.
+
+```solidity
+function reabsorb(
+        BasketAssetConfigGuard.AssetInfo[] storage assets,
+        uint256 index,
+        uint256 minUsdcOut,
+        address usdc,
+        ISwapRouter router
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `BasketAssetConfigGuard.AssetInfo[]` |  |
+| index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+| usdc | `address` |  |
+| router | `ISwapRouter` |  |
+
+<a id="_emergencyfloor-basketassetconfigguard-assetinfo-uint256-uint256"></a>
+
+### _emergencyFloor
+
+<i>
+
+max(TWAP-derived floor, configured minUsdcOut). With the oracle unavailable (the
+self-only `emergencyTwapUsdcValue` reverts) a non-zero configured floor is required.
+`dust` is true when the TWAP floor rounds to zero (QA plan D6): its sale can pay zero,
+which the V4 adapter refuses, so the leg stays put whatever the configured minimum.
+`removeAsset` accepts such a balance.
+
+</i>
+
+```solidity
+function _emergencyFloor(
+        BasketAssetConfigGuard.AssetInfo memory a,
+        uint256 bal,
+        uint256 slippageBps
+    ) private view returns (uint256 floor, bool dust);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `BasketAssetConfigGuard.AssetInfo` |  |
+| bal | `uint256` |  |
+| slippageBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
+| dust | `bool` |  |
+
+<a id="_swaptousdc-basketassetconfigguard-assetinfo-uint256-uint256-address-iswaprouter"></a>
+
+### _swapToUsdc
+
+<i>
+
+Swap `bal` of the asset to USDC under `floor` and emit `Swapped`.
+
+</i>
+
+```solidity
+function _swapToUsdc(
+        BasketAssetConfigGuard.AssetInfo memory a,
+        uint256 bal,
+        uint256 floor,
+        address usdc,
+        ISwapRouter router
+    ) private returns (uint256 received);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `BasketAssetConfigGuard.AssetInfo` |  |
+| bal | `uint256` |  |
+| floor | `uint256` |  |
+| usdc | `address` |  |
+| router | `ISwapRouter` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| received | `uint256` |  |
+
+<a id="_activeassetfortoken-basketassetconfigguard-assetinfo-address"></a>
+
+### _activeAssetForToken
+
+```solidity
+function _activeAssetForToken(BasketAssetConfigGuard.AssetInfo[] storage assets, address token)
+        private
+        view
+        returns (BasketAssetConfigGuard.AssetInfo memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `BasketAssetConfigGuard.AssetInfo[]` |  |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketAssetConfigGuard.AssetInfo` |  |
+
+## Events
+
+### Swapped
+
+<i>
+
+Same signatures as the `BasketVault` events (the vault declares them for its ABI).
+
+</i>
+
+```solidity
+event Swapped(
+        address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| amountOut | `uint256` |  |
+
+### EmergencyUnwindOverrideUsed
+
+```solidity
+event EmergencyUnwindOverrideUsed(
+        address indexed token,
+        uint256 amountIn,
+        uint256 minUsdcOut,
+        uint256 appliedFloor,
+        address indexed caller
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amountIn | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+| appliedFloor | `uint256` |  |
+| caller | `address` |  |
+
+## Errors
+
+### EmergencyFloorUnavailable
+
+<i>
+
+Same selectors as the `BasketVault` errors.
+
+</i>
+
+```solidity
+error EmergencyFloorUnavailable(address token);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+### EmergencyUnwindOverrideDisabled
+
+```solidity
+error EmergencyUnwindOverrideDisabled();
+```
+
+### EmergencyUnwindLossCapExceeded
+
+```solidity
+error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| received | `uint256` |  |
+| appliedFloor | `uint256` |  |
+
+### AssetNotFound
+
+```solidity
+error AssetNotFound();
+```
+
+### AssetInBasket
+
+```solidity
+error AssetInBasket();
+```
+
+### SlippageExceeded
+
+```solidity
+error SlippageExceeded();
+```
+

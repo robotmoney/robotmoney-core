@@ -1,271 +1,219 @@
 {
-  "contract": "ProtocolAssetVault",
   "enums": {
-    "enum BasketAssetConfigGuard.Venue": [
+    "enum BasketVault.Venue": [
       "V3",
       "V4",
       "Aerodrome"
     ]
   },
-  "libraries": {
-    "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard": "0xeefac2fabd6984d999e7d25a048b48b7e4d7cac18d745473c2502551c946c76e",
-    "contracts/lib/BasketSwapOps.sol:BasketSwapOps": "0xf7c6d3a2b3b1ce301c6bc7db8f2a328a0fe65c825f960e8f32bdf5591a6967e2",
-    "contracts/lib/BasketViews.sol:BasketViews": "0xce5efd427ac7558999f2842d44f25d6106aa8acf4fb2fc1826ec7a1a1bf19087",
-    "contracts/lib/TickMath.sol:TickMath": "0xab40a8df583bebd20dfd35533ffa3a877ff0ca72db9457af923f2d0d42f2a43b",
-    "contracts/lib/TwapTickMath.sol:TwapTickMath": "0x541b00954c6cf292eb3da8d529af1e35149271dcaf24ffa011a9932b4e570e25"
-  },
-  "linearization": [
-    "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
-    "contracts/vaults/BasketVault.sol:BasketVault",
-    "contracts/lib/GovernedUpgrade.sol:GovernedUpgrade",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol:ReentrancyGuardUpgradeable",
-    "contracts/lib/AdminFloorAccessControlCounter.sol:AdminFloorAccessControlCounter",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/AccessControlUpgradeable.sol:AccessControlUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/introspection/ERC165Upgradeable.sol:ERC165Upgradeable",
-    "lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol:IERC165",
-    "lib/openzeppelin-contracts/contracts/access/IAccessControl.sol:IAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/token/ERC20/extensions/ERC4626Upgradeable.sol:ERC4626Upgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol:IERC4626",
-    "lib/openzeppelin-contracts-upgradeable/contracts/token/ERC20/ERC20Upgradeable.sol:ERC20Upgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol:IERC20Errors",
-    "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol:IERC20Metadata",
-    "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol:IERC20",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ContextUpgradeable.sol:ContextUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol:Initializable"
+  "libraries": [
+    "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard",
+    "contracts/lib/BasketSwaps.sol:BasketSwaps",
+    "contracts/lib/BasketViews.sol:BasketViews",
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/lib/TickMath.sol:TickMath",
+    "contracts/lib/TwapTickMath.sol:TwapTickMath"
   ],
-  "openzeppelin": {
-    "lib/openzeppelin-contracts": "dbb6104ce834628e473d2173bbc9d47f81a9eec3",
-    "lib/openzeppelin-contracts-upgradeable": "723f8cab09cdae1aca9ec9cc1cfa040c2d4b06c1"
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.ERC20": [
+      "mapping(address account => uint256) _balances;",
+      "mapping(address account => mapping(address spender => uint256)) _allowances;",
+      "uint256 _totalSupply;",
+      "string _name;",
+      "string _symbol;"
+    ],
+    "openzeppelin.storage.ERC4626": [
+      "IERC20 _asset;",
+      "uint8 _underlyingDecimals;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
   },
   "storage": [
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "adminCount",
       "offset": 0,
-      "slot": 0,
-      "type": "uint256"
+      "slot": "0",
+      "type": "t_uint256"
     },
     {
-      "bytes": 1568,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
-      "label": "__gap",
-      "offset": 0,
-      "slot": 1,
-      "type": "uint256[49]"
-    },
-    {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "assets",
       "offset": 0,
-      "slot": 50,
-      "type": "struct BasketAssetConfigGuard.AssetInfo[]"
+      "slot": "1",
+      "type": "t_array(t_struct(AssetInfo)_storage)dyn_storage"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "SWAP_ROUTER",
       "offset": 0,
-      "slot": 51,
-      "type": "contract ISwapRouter"
+      "slot": "2",
+      "type": "t_contract(ISwapRouter)"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "_USDC",
       "offset": 0,
-      "slot": 52,
-      "type": "contract IERC20"
+      "slot": "3",
+      "type": "t_contract(IERC20)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "tvlCap",
       "offset": 0,
-      "slot": 53,
-      "type": "uint256"
+      "slot": "4",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "perDepositCap",
       "offset": 0,
-      "slot": 54,
-      "type": "uint256"
+      "slot": "5",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "exitFeeBps",
       "offset": 0,
-      "slot": 55,
-      "type": "uint256"
+      "slot": "6",
+      "type": "t_uint256"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "feeRecipient",
       "offset": 0,
-      "slot": 56,
-      "type": "address"
+      "slot": "7",
+      "type": "t_address"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "maxSlippageBps",
       "offset": 0,
-      "slot": 57,
-      "type": "uint256"
+      "slot": "8",
+      "type": "t_uint256"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "shutdown",
       "offset": 0,
-      "slot": 58,
-      "type": "bool"
+      "slot": "9",
+      "type": "t_bool"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "depositsPaused",
       "offset": 1,
-      "slot": 58,
-      "type": "bool"
+      "slot": "9",
+      "type": "t_bool"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "retired",
       "offset": 2,
-      "slot": 58,
-      "type": "bool"
+      "slot": "9",
+      "type": "t_bool"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "registry",
       "offset": 3,
-      "slot": 58,
-      "type": "address"
+      "slot": "9",
+      "type": "t_address"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "emergencyUnwindGuard",
       "offset": 0,
-      "slot": 59,
-      "type": "mapping(address => struct BasketSwapOps.EmergencyUnwindGuard)"
+      "slot": "10",
+      "type": "t_mapping(t_address,t_struct(EmergencyUnwindGuard)_storage)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "twapWindow",
       "offset": 0,
-      "slot": 60,
-      "type": "mapping(address => uint32)"
+      "slot": "11",
+      "type": "t_mapping(t_address,t_uint32)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "adapterCodeHashAllowed",
       "offset": 0,
-      "slot": 61,
-      "type": "mapping(bytes32 => bool)"
+      "slot": "12",
+      "type": "t_mapping(t_bytes32,t_bool)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "navDeviationGuardBps",
       "offset": 0,
-      "slot": 62,
-      "type": "uint256"
+      "slot": "13",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "_lastMintedShares",
       "offset": 0,
-      "slot": 63,
-      "type": "uint256"
+      "slot": "14",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
       "label": "_lastWithdrawnAssets",
       "offset": 0,
-      "slot": 64,
-      "type": "uint256"
-    },
-    {
-      "bytes": 1600,
-      "contract": "contracts/vaults/ProtocolAssetVault.sol:ProtocolAssetVault",
-      "label": "__gap",
-      "offset": 0,
-      "slot": 65,
-      "type": "uint256[50]"
+      "slot": "15",
+      "type": "t_uint256"
     }
   ],
   "structs": {
-    "struct BasketAssetConfigGuard.AssetInfo": [
+    "t_struct(AssetInfo)_storage": [
       {
         "label": "token",
         "offset": 0,
-        "slot": 0,
-        "type": "address"
+        "slot": "0",
+        "type": "t_address"
       },
       {
         "label": "pool",
         "offset": 0,
-        "slot": 1,
-        "type": "address"
+        "slot": "1",
+        "type": "t_address"
       },
       {
         "label": "swapFee",
         "offset": 20,
-        "slot": 1,
-        "type": "uint24"
+        "slot": "1",
+        "type": "t_uint24"
       },
       {
         "label": "active",
         "offset": 23,
-        "slot": 1,
-        "type": "bool"
+        "slot": "1",
+        "type": "t_bool"
       },
       {
         "label": "adapter",
         "offset": 0,
-        "slot": 2,
-        "type": "address"
+        "slot": "2",
+        "type": "t_address"
       },
       {
         "label": "venue",
         "offset": 20,
-        "slot": 2,
-        "type": "enum BasketAssetConfigGuard.Venue"
+        "slot": "2",
+        "type": "t_enum(Venue)"
       }
     ],
-    "struct BasketSwapOps.EmergencyUnwindGuard": [
+    "t_struct(EmergencyUnwindGuard)_storage": [
       {
         "label": "minUsdcOut",
         "offset": 0,
-        "slot": 0,
-        "type": "uint256"
+        "slot": "0",
+        "type": "t_uint256"
       },
       {
         "label": "overrideAllowed",
         "offset": 0,
-        "slot": 1,
-        "type": "bool"
+        "slot": "1",
+        "type": "t_bool"
       },
       {
         "label": "maxLossBps",
         "offset": 0,
-        "slot": 2,
-        "type": "uint256"
+        "slot": "2",
+        "type": "t_uint256"
       }
     ]
   }

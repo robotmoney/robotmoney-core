@@ -5,7 +5,7 @@ description: "Asserts every deployable vault's runtime bytecode stays under the 
 
 # VaultCodeSizeGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9d9bb854b1f0b7ca5a572242c715ada0fe27ed77/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:** Test
 
@@ -35,18 +35,6 @@ EIP-170 maximum contract runtime bytecode size, in bytes.
 
 ```solidity
 uint256 internal constant EIP170_LIMIT = 24576;
-```
-
-### UPGRADE_HEADROOM_FLOOR
-
-<i>
-
-ADR-0014 §9: runtime margin every proxied implementation keeps when P1 lands.
-
-</i>
-
-```solidity
-uint256 internal constant UPGRADE_HEADROOM_FLOOR = 1_024;
 ```
 
 ## Functions
@@ -183,6 +171,14 @@ function test_RobotMoneyGateway_underEip170() public;
 function test_PortfolioRouter_underEip170() public;
 ```
 
+<a id="test_routergovernance_undereip170"></a>
+
+### test_RouterGovernance_underEip170
+
+```solidity
+function test_RouterGovernance_underEip170() public;
+```
+
 <a id="test_vaultregistry_undereip170"></a>
 
 ### test_VaultRegistry_underEip170
@@ -207,12 +203,20 @@ function test_InvestmentCommitteePolicy_underEip170() public;
 function test_ConsensusRecommendationReceipt_underEip170() public;
 ```
 
-<a id="test_exclusionledgerandfactory_undereip170"></a>
+<a id="test_exclusionledger_undereip170"></a>
 
-### test_ExclusionLedgerAndFactory_underEip170
+### test_ExclusionLedger_underEip170
 
 ```solidity
-function test_ExclusionLedgerAndFactory_underEip170() public;
+function test_ExclusionLedger_underEip170() public;
+```
+
+<a id="test_proposerfloortimelock_undereip170"></a>
+
+### test_ProposerFloorTimelock_underEip170
+
+```solidity
+function test_ProposerFloorTimelock_underEip170() public;
 ```
 
 <a id="test_linkedlibraries_undereip170"></a>
@@ -223,49 +227,17 @@ function test_ExclusionLedgerAndFactory_underEip170() public;
 function test_linkedLibraries_underEip170() public;
 ```
 
-<a id="test_proxiedimplementations_keepupgradeheadroom"></a>
+<a id="test_proxiedimplementations_keeptheirmeasuredheadroom"></a>
 
-### test_proxiedImplementations_keepUpgradeHeadroom
+### test_proxiedImplementations_keepTheirMeasuredHeadroom
 
-ADR-0014 §9: when P1 lands, every proxied implementation keeps at least 1,024 bytes of
-runtime margin under 24,576, about one D-sized fix. Measured with `forge build --sizes`
-(solc 0.8.24, 100 runs, cancun) after the upgrade base and the size libraries landed:
-RobotMoneyVault 22,978 B (1,598 B margin), AgentTokenVault 23,280 B (1,296),
-ProtocolAssetVault 23,209 B (1,367), RwaBasketVault 23,202 B (1,374),
-RobotMoneyGateway 23,305 B (1,271 after P3's `implementationVersion` added 50 B),
-PortfolioRouter 19,116 B, VaultRegistry 10,123 B,
-InvestmentCommitteePolicy 9,886 B, ConsensusRecommendationReceipt 8,798 B. The P1
-follow-up (write-once `__GovernedUpgrade_init`) added about 42 B to each: the gateway now
-has 1,229 B and AgentTokenVault 1,254 B of margin, the tightest two. A change that
-eats into the floor fails here; move code into a linked library or amend the ADR.
-
-```solidity
-function test_proxiedImplementations_keepUpgradeHeadroom() public;
-```
-
-<a id="test_vaultfamily_keepsitsmeasuredheadroom"></a>
-
-### test_vaultFamily_keepsItsMeasuredHeadroom
-
-The vault family keeps its recorded headroom. Before ADR-0014 the basket kinds had
-268 to 310 bytes. The upgrade base cost each tight contract about 2.6 KB and its
-initializer about 2 KB of runtime; the size libraries (`VaultAdapterOps`,
-`BasketSwapOps`, the single-call `BasketAssetConfigGuard.addAsset`) moved more than
-that out. The floors below are the measured margins (`forge build --sizes`) after the
-P1 follow-up that made `__GovernedUpgrade_init` write-once (about 42 bytes each):
-AgentTokenVault 1,254 bytes, ProtocolAssetVault 1,325, RwaBasketVault 1,332,
-RobotMoneyVault 1,556 (after P1 alone: 1,296, 1,367, 1,374, 1,598). Security round 1
-spent some of it on purpose, still above the 1,024-byte ADR-0014 §9 floor: the
-`emergencyExcludeAdapter` lever, the record-keeping `forceRemoveAdapter` and the
-`nonReentrant` re-add cost RobotMoneyVault 169 bytes (now 1,387), and the ORA-4
-check in `BasketVault.previewDeposit` cost each basket kind 15 (AgentTokenVault
-1,239, ProtocolAssetVault 1,310, RwaBasketVault 1,317). Security round 2 spent 174
-more RobotMoneyVault bytes on the `recoverRemovedAdapter` lever (now 1,213, still
-above the floor). Security round 3 spent 36 more on the venue-health deposit gate
-(`VaultAdapterOps.anyActiveBlocked`, now 1,177). A change that eats them fails here
+The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
+margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
+recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
+RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
 before it fails an EIP-170 deploy.
 
 ```solidity
-function test_vaultFamily_keepsItsMeasuredHeadroom() public;
+function test_proxiedImplementations_keepTheirMeasuredHeadroom() public;
 ```
 

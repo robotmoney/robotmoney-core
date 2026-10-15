@@ -5,7 +5,7 @@ description: "Production deploy script for `ProtocolAssetVault` (rmPROTO). One p
 
 # DeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd9125a091c1aa9363f78f66490481d4d329271b/contracts/script/DeployProtocolAssetVault.s.sol)
 
 **Inherits:** [BasketVaultDeployBase](/contracts/script/abstract.BasketVaultDeployBase)
 
@@ -86,46 +86,35 @@ function runInProcess(Params memory p, string memory json)
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_newimplementation"></a>
+<a id="_newvault-params-address"></a>
 
-### _newImplementation
+### _newVault
 
 <i>
 
-Construct the concrete kind's implementation (ADR-0014: no constructor arguments). The
-base deploys the proxy over it and runs `BasketVault.initialize`.
+Construct the concrete vault. `emergencyResponder` is the deployer for this run.
 
 </i>
 
 ```solidity
-function _newImplementation() internal override returns (BasketVault);
+function _newVault(Params memory p, address emergencyResponder)
+        internal
+        override
+        returns (BasketVault);
 ```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Params` |  |
+| emergencyResponder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `BasketVault` |  |
-
-<a id="_layoutartifact"></a>
-
-### _layoutArtifact
-
-<i>
-
-The kind's build artifact, whose storage-layout snapshot names its layout (ADR-0014 §8).
-
-</i>
-
-```solidity
-function _layoutArtifact() internal pure override returns (string memory);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `string` |  |
 
 <a id="_registryname"></a>
 

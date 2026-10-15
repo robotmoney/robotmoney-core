@@ -43,7 +43,6 @@ fn main() {
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
         Command::Committee { config, .. } => Some(config.as_path()),
         Command::Receipt { config, .. } => Some(config.as_path()),
-        Command::AgentConsent { config, .. } => Some(config.as_path()),
         // No operator config TOML — this is a local-only Ed25519 identity
         // helper with no RPC/chain surface (issue #1111).
         Command::CommitteeIdentity { .. } => None,
@@ -284,17 +283,6 @@ fn main() {
                 pretty,
             }),
         },
-        Command::AgentConsent {
-            config,
-            owner,
-            share_receiver,
-            pretty,
-        } => commands::agent_consent::run(commands::agent_consent::Args {
-            config_path: config,
-            owner,
-            share_receiver,
-            pretty,
-        }),
         Command::CommitteeIdentity {
             path,
             subcommand,

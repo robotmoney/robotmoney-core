@@ -47,19 +47,11 @@ export function assertSignerSpec(spec: string, i: { rpcChainId: number; rpc: str
 }
 
 /**
- * A Safe owner signer spec (--owner-signer). Hardware signing is optional, never required (owner decision 2026-10-14; the hardware-only
- * floor of core 1668 is reverted). On 8453 an owner is an encrypted keystore whose passphrase is typed at the hidden prompt (`keystore:PATH`)
- * or a device bound to its owner (`ledger:PATH@0xOWNER`, `trezor:PATH@0xOWNER`; the grammar is the CLI parser's check). The signer-spec
- * floors still apply: plaintext material, a raw key and a passphrase file are refused (FLOOR). `env:signer` / `env:funder` are refused as
- * owners too (OWNER_SIGNER_REFUSED): that is the credential engine's hand-off of ONE key, the deployer's, with its passphrase in the
- * environment, never a Safe owner's.
+ * A Safe owner signer spec (--owner-signer). Hardware signing (ledger, trezor) is optional on every chain: a software keystore stays a
+ * valid owner signer, also on 8453. The signer-spec floors apply, so plaintext material and (on 8453) passphrase files are refused. (core 1668)
  */
 export function assertOwnerSignerSpec(spec: string, i: { rpcChainId: number; rpc: string; env?: Record<string, string | undefined> }): void {
   assertSignerSpec(spec, i);
-  if (isMainnet(i.rpcChainId) && /^env(:|$)/.test(spec)) {
-    // never echo the spec: the message names the family only
-    throw new PublishError("OWNER_SIGNER_REFUSED", `owner signer 'env' is refused on chain ${MAINNET_CHAIN_ID}: a Safe owner's passphrase is typed at the hidden prompt (keystore:PATH) or the key is on a device (ledger:PATH@0xOWNER, trezor:PATH@0xOWNER), never read from the environment`, { kind: "env" });
-  }
 }
 
 export interface FloorInput {

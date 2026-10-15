@@ -1,6 +1,6 @@
 # QA plan v1 — bake every feature on `qa/test-merge-v1`
 
-Status: draft for owner approval. Date: 2026-10-14. Base: `origin/dev` 4ad3e1d4 plus the 8 open PRs (1690 1693 1785 1787 1797 1799 1805 1818) merged at b64464ad.
+Status: working document for the branch (single source of truth; see "Status" below). Date: 2026-10-14, updated 2026-10-15. Base: `origin/dev` 4ad3e1d4 plus the 8 open PRs (1690 1693 1785 1787 1797 1799 1805 1818) merged at b64464ad.
 
 ## How this plan is used
 
@@ -158,6 +158,54 @@ A fresh adversarial security review of the whole branch once every workstream ab
 3. Twin rehearsal: full publish → verify → govern (incl. one self-admin row and the redeploy row) → verify, with a software keystore owner set and, separately, with the hardware grammar.
 4. Base rehearsal (operator): the single-vault redeploy procedure end to end; record evidence (E3 operator half).
 5. Only then decide whether to land the branch as one merge or split it into PRs.
+
+## Status (2026-10-15)
+
+| Step | Result | Commit |
+|---|---|---|
+| WF1 foundation (A1–A5, B1–B5, C1a) | done, compile-only | 92c8c84e |
+| WF2 lanes (C1b/C1c, B6, C2–C3, D1–D9, E1–E10, X1–X9, U1–U9, T1–T5) + critic fix-ups | done, compile-only | 2b5d9c4a |
+| WF3 (W1–W5, P0–P4, L1–L2) + 52 critic fix-ups | done, compile-only | 9d9bb854 |
+| WF4 security review (S1–S3): 3 rounds, 69 findings (4 high, 26 medium, 37 low, 2 info), 68 fixed, 1 low deferred | done; did not converge at the 3-round cap (round 3: 1 high + 4 medium fixed, not re-reviewed) | 6e2b153d |
+| Merge of `origin/dev` (80b82406) into the branch | **in progress, uncommitted**; 375 conflicted files; abort path `git merge --abort` → 6e2b153d | — |
+| Phase Q (push, CI, run the 130 + existing tests) | not started; needs the owner to push | — |
+
+No test has been run on any of this. Every fix is compile-verified only. The security review artifacts are `docs/code-review/20261015-review-security-claude.{md,json}`.
+
+## Merge of `origin/dev`: reconciliation policy
+
+`dev` merged independent versions of much of this plan while the branch was being built. Owner decision (2026-10-15): **where both built the same feature, `dev`'s design is canonical**; keep QA work `dev` lacks; list anything unportable under "Deferred" below.
+
+| Feature | `dev` (canonical) | QA rows superseded |
+|---|---|---|
+| Governed UUPS upgrades + freeze, stages 1–3 | #1832, #1838, #1839 (`GovernedUUPS.sol`, `UpgradeAuthority.sol`, ADR-0014 `governed-uups-upgrades-and-freeze`) | **P0–P3 and P4's rehearsal**: QA's `GovernedUpgrade.sol`, ADR, `proxies.ts`, `upgrade-rows.ts` and storage-layout gate are dropped. Twin rehearsal (stage 4) is dev's open PR 1841 |
+| Weight setter `applyReceipt`, voting deleted | #1827 | C1a–C1c, L1 (keep only extras dev lacks) |
+| Apply-receipt trust root; four-vault plan | #1829, #1830 | C2, E9 |
+| addAdapter duplicate; agent squatting; committee spoofing | #1822, #1823, #1818 | D1, D2 (consent is dev's commit-based flow), A2 |
+| Hardware signing optional; hardware multi-signers | #1821, #1693 | B1 (keep the pre-stage-1 owner-spec shortfall refusal) |
+| Self-admin rows | #1690 | B3–B5 are additions on top: kept |
+| Single-vault redeploy | #1797, #1799 | A1, A3, E1–E3: dev's final is the base; QA keeps the SHA model, confirm-then-save, CREATE-receipt binding, cap parity |
+| Keeper; sampling measurement; evidence scan; dry-run; read-after-write; prove-control log scan | #1785, #1824, #1828, #1834, #1836, #1837 | D5 test/doc, E5–E8: dev's |
+| rustls bump | #1826 | dev's `Cargo.lock` |
+
+**QA-only work kept and adapted to `dev`:** A4 forge docs (regenerated last), B2 CONFIRM Actions proof, B3 `ProposerFloorTimelock`, B4/B5/B6, C3, D3 pro-rata exclusion recovery (`ExclusionLedger*`), D4 router leg skipping + NAV deviation, D5 sell-anchor mitigation, D6 dust, D7 unwind-guard row, D8 Morpho exposure passthrough + `allExact` removal, D9/U9 redeemFor floors, E4 release gate on every 8453 stage, E10, X1–X9, U1–U8, T1–T5, W1–W5, L2 ABI copies (regenerated), and the WF4 security fixes that are not about QA's own upgrade design.
+
+**Procedure:** lanes resolve conflicts (production contracts, `publish-contracts`, clients, indexer/scripts, docs/CI); then contract tests; then regenerate ABIs, forge docs and storage-layout snapshots (`scripts/ci/check-core-storage-layout.sh --write`); then the compile sweep; then one local merge commit. Lane file lists and the full agent brief are in `~/tmp/robotmoney-core-issues/reconcile/`.
+
+**Deferred (QA work not ported onto `dev`'s design):** the rotation revoke-before-consent guard (`useRotationState.ts:246`, `RotationTab.tsx:90-97`); fusion govern-stage apply-path probes; security finding 050 (`--upgrade-evidence` pin rotation) and 052; findings 004/048 (`--base`/`--release-anchor` history anchoring); QA's end-to-end redeploy `main()` tests (`redeploy-vault.test.ts:1000-1215`); the verifier's proxy-library and implementation compare after a redeploy at another sha (`verify/upgradeability.ts` still compares against the redeploy build); runbook §4.1 external-review and Twin-upgrade-rehearsal gates, cutover gates G1–G6, gateway consent-version steps and the `[freeze_deadline]` alert. Re-review the WF4 findings that concerned QA's own upgrade code (ids 030, 034–037, 041, 043–045, 047) against `dev`'s design.
+
+## Owner actions (only the owner can do these; this session makes no GitHub writes)
+
+- **Decide how to land:** one merge or split PRs; whether to run a round-4 security pass on the round-3 fixes.
+- **Accept or amend ADR-0014** (`dev`'s) and decide queued operations across an upgrade (`docs/development/open-questions.md`).
+- **Issue 1705 EMERGENCY authority:** the security fixes add two hot-key levers (`emergencyExcludeAdapter`, `recoverRemovedAdapter`); confirm or narrow.
+- **GitHub settings:** immutable releases; admin-only ruleset on `refs/tags/release/*`; required status checks on `dev`; whether suite-18's `pull_request` filter should include `contracts/**`.
+- **Issue edits:** #1779 (drop "cadence chosen with the result of core 1793"), #1723 (drop the stale `tx.ts` acceptance item), #1796 (split acceptance into code-done and operator evidence), #1792 (replace closed 1788 with 1820), #1705 (children a–d; (c) is done), close #1675, #1806, #1807, #1815 (stale or superseded). PR 1805: set its body to "Refs #1447", rerun its CI (six failing checks look like infrastructure), then finalize #1447's scope (umbrella for governance isomorphism A–K; QA covers B3 and B6).
+- **Operator runs:** `scripts/stage/measure-catch-up.ts` against `--logs-rpc` (X9); stage dapp on Deploy 2 with the 1 USDC deposit (U8); a Base rehearsal of the single-vault redeploy.
+- **Push for CI (Phase Q):** needed for the unrun regression tests, the proxy-hop gas re-measure, and suite-11b / suite-29 `workflow_dispatch`.
+- **Hand off** `redeem-gas-1482.md` to the devops guide owner.
+- **Cross-repo:** fusion-qa's `core-e2e.ts` `parseRecord` still reads `.ephemeral.voters`, which `dev` dropped.
+- **Standing decisions in force:** hardware signing is always optional; no merge precondition on a mainnet test.
 
 ## Decisions (defaults the plan assumes)
 

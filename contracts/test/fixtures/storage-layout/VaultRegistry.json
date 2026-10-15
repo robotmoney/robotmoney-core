@@ -1,5 +1,4 @@
 {
-  "contract": "VaultRegistry",
   "enums": {
     "enum VaultRegistry.VaultStatus": [
       "Active",
@@ -7,103 +6,88 @@
       "Retired"
     ]
   },
-  "libraries": {},
-  "linearization": [
-    "contracts/VaultRegistry.sol:VaultRegistry",
-    "contracts/lib/GovernedUpgrade.sol:GovernedUpgrade",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
-    "contracts/lib/AdminFloorAccessControl.sol:AdminFloorAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/extensions/AccessControlEnumerableUpgradeable.sol:AccessControlEnumerableUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/AccessControlUpgradeable.sol:AccessControlUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/introspection/ERC165Upgradeable.sol:ERC165Upgradeable",
-    "lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol:IERC165",
-    "lib/openzeppelin-contracts/contracts/access/extensions/IAccessControlEnumerable.sol:IAccessControlEnumerable",
-    "lib/openzeppelin-contracts/contracts/access/IAccessControl.sol:IAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ContextUpgradeable.sol:ContextUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol:Initializable"
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],
-  "openzeppelin": {
-    "lib/openzeppelin-contracts": "dbb6104ce834628e473d2173bbc9d47f81a9eec3",
-    "lib/openzeppelin-contracts-upgradeable": "723f8cab09cdae1aca9ec9cc1cfa040c2d4b06c1"
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
   },
   "storage": [
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "_metadata",
       "offset": 0,
-      "slot": 0,
-      "type": "mapping(address => struct VaultRegistry.VaultMetadata)"
+      "slot": "0",
+      "type": "t_mapping(t_address,t_struct(VaultMetadata)_storage)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "_status",
       "offset": 0,
-      "slot": 1,
-      "type": "mapping(address => enum VaultRegistry.VaultStatus)"
+      "slot": "1",
+      "type": "t_mapping(t_address,t_enum(VaultStatus))"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "_vaults",
       "offset": 0,
-      "slot": 2,
-      "type": "address[]"
+      "slot": "2",
+      "type": "t_array(t_address)dyn_storage"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "_registered",
       "offset": 0,
-      "slot": 3,
-      "type": "mapping(address => bool)"
+      "slot": "3",
+      "type": "t_mapping(t_address,t_bool)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "_routerEligible",
       "offset": 0,
-      "slot": 4,
-      "type": "mapping(address => bool)"
+      "slot": "4",
+      "type": "t_mapping(t_address,t_bool)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "routerEligibleCount",
       "offset": 0,
-      "slot": 5,
-      "type": "uint256"
+      "slot": "5",
+      "type": "t_uint256"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/VaultRegistry.sol:VaultRegistry",
       "label": "router",
       "offset": 0,
-      "slot": 6,
-      "type": "contract IRouterDefaultWeights"
+      "slot": "6",
+      "type": "t_contract(IRouterDefaultWeights)"
     }
   ],
   "structs": {
-    "struct VaultRegistry.VaultMetadata": [
+    "t_struct(VaultMetadata)_storage": [
       {
         "label": "name",
         "offset": 0,
-        "slot": 0,
-        "type": "string"
+        "slot": "0",
+        "type": "t_string_storage"
       },
       {
         "label": "asset",
         "offset": 0,
-        "slot": 1,
-        "type": "address"
+        "slot": "1",
+        "type": "t_address"
       },
       {
         "label": "registeredAt",
         "offset": 0,
-        "slot": 2,
-        "type": "uint256"
+        "slot": "2",
+        "type": "t_uint256"
       }
     ]
   }

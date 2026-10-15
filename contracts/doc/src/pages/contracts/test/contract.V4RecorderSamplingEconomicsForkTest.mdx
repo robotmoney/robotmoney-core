@@ -1,0 +1,418 @@
+---
+title: "V4RecorderSamplingEconomicsForkTest"
+description: "Fork test on the Twin chain (a pinned lazy anvil fork of real Base). It drives the DEPLOYED rmAGENT vault, the DEPLOYED price recorder and the live RM/USDC V4 pool, so the pool depth, the ring size (901), the NAV deviation guard (100 bps), the swap bound (500 bps), the per-deposit cap (15 USDC) and the TVL cap (100 USDC) are the production values. With FORK_RPC_URL unset the test skips with a named reason (ForkSelect). With it set, a missing vault or an unreachable endpoint FAILS the test."
+---
+
+# V4RecorderSamplingEconomicsForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/V4RecorderSamplingEconomicsFork.t.sol)
+
+**Inherits:** Test
+
+Fork test on the Twin chain (a pinned lazy anvil fork of real Base). It drives the DEPLOYED rmAGENT vault, the
+DEPLOYED price recorder and the live RM/USDC V4 pool, so the pool depth, the ring size (901), the NAV deviation
+guard (100 bps), the swap bound (500 bps), the per-deposit cap (15 USDC) and the TVL cap (100 USDC) are the
+production values. With FORK_RPC_URL unset the test skips with a named reason (ForkSelect). With it set, a
+missing vault or an unreachable endpoint FAILS the test.
+
+Every scenario runs twice from one snapshot: a BASELINE where the attacker only deposits and redeems, and an
+ATTACK where the attacker first pushes the pool, samples the recorder, and restores the pool. The attacker
+profit is the difference of the two end USDC balances, so every swap fee and every price impact of the attack is
+inside the number. The fork has no arbitrageurs, so every cost here is a LOWER bound on the real cost.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### KEEPER_INTERVAL
+
+<i>
+
+Keeper cadence from core 1779 (scripts/ops/recorder-keeper.sh INTERVAL_SECS default).
+
+</i>
+
+```solidity
+uint256 internal constant KEEPER_INTERVAL = 240;
+```
+
+### MAX_STEP
+
+<i>
+
+Clamp: one record moves the recorded tick by at most 10 ticks per second for at most 60 s.
+
+</i>
+
+```solidity
+int256 internal constant MAX_STEP = 600;
+```
+
+### HOLDER_TVL
+
+<i>
+
+Existing holders' value: the 100 USDC TVL cap less 20 USDC of headroom: a mark up to 25 percent high still leaves room for one maximal deposit.
+
+</i>
+
+```solidity
+uint256 internal constant HOLDER_TVL = 80e6;
+```
+
+## State Variables
+
+### vaultAddr
+
+<i>
+
+Deploy 2 rmAGENT vault, recorder and V4 adapter. Read in `setUp` from the committed manifests in
+`deployments/8453/deploy-2` (the production-address gate, core 1498, forbids hard-coding them).
+
+</i>
+
+```solidity
+address internal vaultAddr;
+```
+
+### recorderAddr
+
+```solidity
+address internal recorderAddr;
+```
+
+### adapterAddr
+
+```solidity
+address internal adapterAddr;
+```
+
+### vault
+
+```solidity
+BasketVault internal vault;
+```
+
+### rec
+
+```solidity
+UniswapV4PriceRecorder internal rec;
+```
+
+### adapter
+
+```solidity
+UniswapV4SwapAdapter internal adapter;
+```
+
+### rm
+
+```solidity
+address internal rm;
+```
+
+### poolFee
+
+```solidity
+uint24 internal poolFee;
+```
+
+### lastAttackCost
+
+<i>
+
+Set by `_cycle240`: the attack swaps' own wealth change (fees and impact), and the attacker's mint fairness gap.
+
+</i>
+
+```solidity
+int256 internal lastAttackCost;
+```
+
+### lastMintGapBps
+
+```solidity
+int256 internal lastMintGapBps;
+```
+
+### victim
+
+```solidity
+address internal victim = makeAddr("victim");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### keeper
+
+```solidity
+address internal keeper = makeAddr("keeper");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_livetick"></a>
+
+### _liveTick
+
+```solidity
+function _liveTick() internal view returns (int24 t);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="_recordedtick"></a>
+
+### _recordedTick
+
+```solidity
+function _recordedTick() internal view returns (int24 t);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+
+<a id="_swap-address-address-address-uint256"></a>
+
+### _swap
+
+```solidity
+function _swap(address who, address tokenIn, address tokenOut, uint256 amountIn)
+        internal
+        returns (uint256 out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint256` |  |
+
+<a id="_push-address-int256"></a>
+
+### _push
+
+<i>
+
+Push the live tick by `ticks` (positive buys RM with USDC, negative sells RM). Uses the attacker budget.
+
+</i>
+
+```solidity
+function _push(address who, int256 ticks) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| ticks | `int256` |  |
+
+<a id="_restore-address-int24-int256"></a>
+
+### _restore
+
+<i>
+
+Trade back until the live tick is within `tolerance` ticks of `tick0`.
+
+</i>
+
+```solidity
+function _restore(address who, int24 tick0, int256 tolerance) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| tick0 | `int24` |  |
+| tolerance | `int256` |  |
+
+<a id="_wealth-address"></a>
+
+### _wealth
+
+<i>
+
+USDC balance plus RM balance valued at the live pool tick (no liquidation impact: favours the attacker).
+
+</i>
+
+```solidity
+function _wealth(address who) internal view returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_fundattacker"></a>
+
+### _fundAttacker
+
+```solidity
+function _fundAttacker() internal returns (int256 startWealth);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startWealth | `int256` |  |
+
+<a id="_honestwindow"></a>
+
+### _honestWindow
+
+```solidity
+function _honestWindow() internal;
+```
+
+<a id="_deposit-address"></a>
+
+### _deposit
+
+```solidity
+function _deposit(address who) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_keeperrecord"></a>
+
+### _keeperRecord
+
+```solidity
+function _keeperRecord() internal;
+```
+
+<a id="_markerrbps"></a>
+
+### _markErrBps
+
+```solidity
+function _markErrBps() internal view returns (int256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="test_fork_nohonestrecord_markiswrongbyseveralpercentanddepositspause"></a>
+
+### test_fork_noHonestRecord_markIsWrongBySeveralPercentAndDepositsPause
+
+The review item on the real pool: one sampled push, then nobody records for 1,790 s. Measures the NAV mark
+error the sample leaves and shows the vault paths it breaks.
+
+```solidity
+function test_fork_noHonestRecord_markIsWrongBySeveralPercentAndDepositsPause() public;
+```
+
+<a id="_cycle240-int256-bool"></a>
+
+### _cycle240
+
+<i>
+
+One keeper cycle with an optional sample. The attacker deposits the per-deposit cap 20 s after the keeper record
+at +240 s, waits for the mark to heal, redeems every share, and the pnl is its wealth change including every attack
+swap. `push` of 0 is the baseline.
+
+</i>
+
+```solidity
+function _cycle240(int256 push, bool deposit) internal returns (int256 pnl, int256 markErr);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| push | `int256` |  |
+| deposit | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pnl | `int256` |  |
+| markErr | `int256` |  |
+
+<a id="test_fork_keeper240s_bestsampleisnotprofitable"></a>
+
+### test_fork_keeper240s_bestSampleIsNotProfitable
+
+Keeper at 240 s. The attacker samples at the earliest legal moment (pushing in the keeper block, recording 60 s later) with a full
+clamp push in each direction and restores the pool. Both directions lose money against the baseline.
+
+```solidity
+function test_fork_keeper240s_bestSampleIsNotProfitable() public;
+```
+
+<a id="test_fork_keeper240s_markerrorstaysinsidetheguard"></a>
+
+### test_fork_keeper240s_markErrorStaysInsideTheGuard
+
+The mark error at the keeper cadence stays below the 100 bps guard and below the redeem floor margin, in both
+directions, so the sample cannot pause deposits either.
+
+```solidity
+function test_fork_keeper240s_markErrorStaysInsideTheGuard() public;
+```
+

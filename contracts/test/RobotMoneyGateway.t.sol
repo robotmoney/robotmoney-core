@@ -12,8 +12,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "./helpers/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {AgentConsent} from "./helpers/AgentConsent.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's
 ///      balance-delta defense (`FeeOnTransferDetected`). Charges 1% on transfer.
@@ -165,7 +164,7 @@ contract RobotMoneyGatewayTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
@@ -209,13 +208,6 @@ contract RobotMoneyGatewayTest is Test {
     function _authorizeAs(address owner, address who, IGateway.AgentPolicy memory p) internal {
         vm.prank(owner);
         gateway.authorizeAgent(who, p);
-    }
-
-    /// @dev `agent`'s EIP-712 consent for `owner` as revealer and share
-    ///      receiver at its current nonce (issue #1791). Build it before
-    ///      `vm.prank`: it reads the nonce from the gateway.
-    function _agentConsent(address owner) internal view returns (bytes memory) {
-        return AgentConsent.sign(AgentConsent.keyOf("agent"), address(gateway), owner, owner);
     }
 
     function _fundAndApprove(address who, uint256 amt) internal {
@@ -273,54 +265,33 @@ contract RobotMoneyGatewayTest is Test {
         assertTrue(gateway.hasRole(0x00, admin2), "second default-admin retains role");
     }
 
-    /// @dev ADR-0014: the former constructor checks run in `initialize`, inside the proxy's
-    ///      deployment. The implementation is deployed first, so the armed `expectRevert` meets
-    ///      the proxy's CREATE.
     function test_constructor_revertsOnZeroAddresses() public {
-        address implementation = address(new RobotMoneyGateway());
-
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.gatewayInit(
-                IERC20(address(0)), IERC4626(address(vault)), admin, pauser, address(0)
-            )
+        CoreProxies.robotMoneyGateway(
+            IERC20(address(0)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.gatewayInit(
-                IERC20(address(usdc)), IERC4626(address(0)), admin, pauser, address(0)
-            )
+        CoreProxies.robotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(0)), admin, pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.gatewayInit(
-                IERC20(address(usdc)), IERC4626(address(vault)), address(0), pauser, address(0)
-            )
+        CoreProxies.robotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), address(0), pauser, address(0)
         );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.gatewayInit(
-                IERC20(address(usdc)), IERC4626(address(vault)), admin, address(0), address(0)
-            )
+        CoreProxies.robotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, address(0), address(0)
         );
     }
 
     function test_constructor_revertsOnAssetMismatch() public {
         TestERC20 otherUsdc = new TestERC20();
-        address implementation = address(new RobotMoneyGateway());
         vm.expectRevert(RobotMoneyGateway.AssetMismatch.selector);
-        Proxied.proxy(
-            implementation,
-            Proxied.gatewayInit(
-                IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser, address(0)
-            )
+        CoreProxies.robotMoneyGateway(
+            IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
     }
 
@@ -398,11 +369,19 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(rolelessEoa);
         gateway.commitAuthorization(commitHash);
 
-        // Reveal after one block, carrying the agent's consent (issue #1791).
+        // Reveal after one block
         vm.roll(block.number + 2);
-        bytes memory consent = _agentConsent(rolelessEoa);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    rolelessEoa,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(rolelessEoa);
-        gateway.revealAuthorization(agent, salt, p, consent);
+        gateway.revealAuthorization(agent, salt, p);
 
         assertEq(gateway.agentOwner(agent), rolelessEoa);
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -452,9 +431,16 @@ contract RobotMoneyGatewayTest is Test {
         gateway.authorizeAgent(agent, p);
 
         // Victim's reveal succeeds — agent belongs to victim
-        bytes memory consent = _agentConsent(victim);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    victim, keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(victim);
-        gateway.revealAuthorization(agent, salt, p, consent);
+        gateway.revealAuthorization(agent, salt, p);
 
         assertEq(gateway.agentOwner(agent), victim);
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -668,9 +654,17 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(freshDepositor);
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 2);
-        bytes memory consent = _agentConsent(freshDepositor);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    freshDepositor,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(freshDepositor);
-        gateway.revealAuthorization(agent, salt, p, consent);
+        gateway.revealAuthorization(agent, salt, p);
 
         assertEq(gateway.agentOwner(agent), freshDepositor);
     }
@@ -925,7 +919,7 @@ contract RobotMoneyGatewayTest is Test {
         // Fresh deployment using fee-on-transfer token.
         FeeOnTransferUSDC fotUsdc = new FeeOnTransferUSDC();
         MockVault fotVault = new MockVault(address(fotUsdc));
-        RobotMoneyGateway fotGateway = Proxied.robotMoneyGateway(
+        RobotMoneyGateway fotGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser, address(0)
         );
 
@@ -1043,7 +1037,7 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that mints an extra share to the gateway during deposit. Trips
         // the post-call rmUSDC custody invariant (line 243-244).
         ShareLeakVault leaky = new ShareLeakVault(address(usdc));
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
@@ -1063,7 +1057,7 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that under-pulls USDC during deposit; gateway is left with
         // leftover USDC. Trips the post-call USDC custody invariant (line 247-248).
         UnderPullVault underPull = new UnderPullVault(address(usdc));
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
@@ -1088,7 +1082,7 @@ contract RobotMoneyGatewayTest is Test {
         // inside its own deposit() implementation. The nonReentrant modifier
         // must prevent the second entry.
         ReentrantVault reentrantVault = new ReentrantVault(address(usdc));
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(reentrantVault)), admin, pauser, address(0)
         );
         reentrantVault.setGateway(gw);
@@ -1212,7 +1206,7 @@ contract GatewayRollingDepositWindowTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         vm.warp(1_700_000_000);
@@ -1674,7 +1668,7 @@ contract GatewayWithdrawTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         agentRole = gateway.AGENT_ROLE();
@@ -2369,7 +2363,7 @@ contract GatewayWithdrawTest is Test {
     function test_withdraw_revertsOnUnexpectedAssetsReceived() public {
         // Deploy a gateway backed by the misbehaving vault.
         UnexpectedAssetsRedeemVault badVault = new UnexpectedAssetsRedeemVault(address(usdc));
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(badVault)), admin, pauser, address(0)
         );
         bytes32 role = gw.AGENT_ROLE();
@@ -2406,7 +2400,7 @@ contract GatewayWithdrawTest is Test {
 
     function test_withdraw_revertsOnShareCustodyInvariantViolated() public {
         ShareLeakRedeemVault leakyVault = new ShareLeakRedeemVault(address(usdc));
-        RobotMoneyGateway gw = Proxied.robotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(leakyVault)), admin, pauser, address(0)
         );
 
@@ -2463,7 +2457,7 @@ contract GatewayCommitRevealTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = Proxied.robotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         agentRole = gateway.AGENT_ROLE();
@@ -2503,14 +2497,6 @@ contract GatewayCommitRevealTest is Test {
         return keccak256(abi.encode(agentAddr, committer, salt));
     }
 
-    /// @dev `agent`'s EIP-712 consent for `owner` as revealer and share
-    ///      receiver at its current nonce (issue #1791). Build it before
-    ///      `vm.prank`: it reads the nonce from the gateway. Reverts that fire
-    ///      before the consent check (commitment, policy, ownership) pass "".
-    function _agentConsent(address owner) internal view returns (bytes memory) {
-        return AgentConsent.sign(AgentConsent.keyOf("agent"), address(gateway), owner, owner);
-    }
-
     // -------------------------------------------------------------------
     // Happy path
     // -------------------------------------------------------------------
@@ -2531,12 +2517,24 @@ contract GatewayCommitRevealTest is Test {
         // Advance 1 block.
         vm.roll(block.number + 1);
 
-        // Reveal, carrying the agent's consent (issue #1791).
-        bytes memory consent = _agentConsent(depositor);
+        // The agent consents to the depositor for this exact call (core 1791).
+        bytes32 consent = keccak256(
+            abi.encode(
+                depositor, keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+            )
+        );
+        vm.prank(agent);
+        gateway.commitAuthorization(consent);
+
+        // Reveal
         vm.prank(depositor);
         vm.expectEmit(true, true, true, false, address(gateway));
         emit IGateway.CommitRevealed(depositor, commitHash, agent);
-        gateway.revealAuthorization(agent, salt, p, consent);
+        gateway.revealAuthorization(agent, salt, p);
+
+        // The consent is spent by the reveal.
+        (address consentCommitter,) = gateway.commitments(keccak256(abi.encode(consent, agent)));
+        assertEq(consentCommitter, address(0));
 
         // Agent must be authorized correctly.
         assertTrue(gateway.hasRole(agentRole, agent));
@@ -2559,7 +2557,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, salt, p, "");
+        gateway.revealAuthorization(agent, salt, p);
     }
 
     /// @dev AC: reveal with wrong salt reverts CommitmentNotFound (hash mismatch
@@ -2578,7 +2576,7 @@ contract GatewayCommitRevealTest is Test {
         // Reveal with wrong salt: recomputed hash won't match any stored commitment.
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, wrongSalt, p, "");
+        gateway.revealAuthorization(agent, wrongSalt, p);
     }
 
     /// @dev AC: reveal from a different address than the committer reverts.
@@ -2601,7 +2599,7 @@ contract GatewayCommitRevealTest is Test {
         address bob = makeAddr("bob");
         vm.prank(bob);
         vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
-        gateway.revealAuthorization(agent, salt, p, "");
+        gateway.revealAuthorization(agent, salt, p);
     }
 
     /// @dev AC: reveal after COMMIT_EXPIRY_BLOCKS reverts CommitmentExpired.
@@ -2618,7 +2616,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentExpired.selector);
-        gateway.revealAuthorization(agent, salt, p, "");
+        gateway.revealAuthorization(agent, salt, p);
     }
 
     /// @dev AC: reveal in the same block as the commit reverts CommitmentTooRecent.
@@ -2633,7 +2631,7 @@ contract GatewayCommitRevealTest is Test {
         // No block advance — same block.
         vm.prank(depositor);
         vm.expectRevert(RobotMoneyGateway.CommitmentTooRecent.selector);
-        gateway.revealAuthorization(agent, salt, p, "");
+        gateway.revealAuthorization(agent, salt, p);
     }
 
     /// @dev AC: front-runner committing for same agent after legitimate commit
@@ -2691,18 +2689,26 @@ contract GatewayCommitRevealTest is Test {
 
         vm.roll(block.number + 1);
 
-        // Alice reveals first, with the agent's consent — succeeds.
-        bytes memory consentAlice = _agentConsent(alice);
+        // Alice reveals first — succeeds.
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    alice,
+                    keccak256(
+                        abi.encodeCall(gateway.revealAuthorization, (agent, saltAlice, pAlice))
+                    )
+                )
+            )
+        );
         vm.prank(alice);
-        gateway.revealAuthorization(agent, saltAlice, pAlice, consentAlice);
+        gateway.revealAuthorization(agent, saltAlice, pAlice);
         assertEq(gateway.agentOwner(agent), alice);
 
-        // Bob's subsequent reveal for the same agent is blocked, even with
-        // a consent of his own.
-        bytes memory consentBob = _agentConsent(bob);
+        // Bob's subsequent reveal for the same agent is blocked.
         vm.prank(bob);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.revealAuthorization(agent, saltBob, pBob, consentBob);
+        gateway.revealAuthorization(agent, saltBob, pBob);
     }
 
     function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public {
@@ -2717,9 +2723,17 @@ contract GatewayCommitRevealTest is Test {
         gateway.commitAuthorization(commitHash);
         vm.roll(block.number + 1);
 
-        bytes memory consent = _agentConsent(depositor);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    depositor,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (agent, salt, p)))
+                )
+            )
+        );
         vm.prank(depositor);
-        gateway.revealAuthorization(agent, salt, p, consent);
+        gateway.revealAuthorization(agent, salt, p);
         assertEq(gateway.agentOwner(agent), depositor);
     }
 
@@ -2765,7 +2779,7 @@ contract GatewayCommitRevealTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(RobotMoneyGateway.ShareReceiverNotAuthorized.selector);
-        gateway.revealAuthorization(agent, salt, maliciousPolicy, "");
+        gateway.revealAuthorization(agent, salt, maliciousPolicy);
 
         // Agent must NOT have been authorized.
         assertFalse(gateway.hasRole(agentRole, agent));
@@ -2799,9 +2813,19 @@ contract GatewayCommitRevealTest is Test {
 
         vm.roll(block.number + 1);
 
-        bytes memory consent = _agentConsent(depositor);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    depositor,
+                    keccak256(
+                        abi.encodeCall(gateway.revealAuthorization, (agent, salt, selfPolicy))
+                    )
+                )
+            )
+        );
         vm.prank(depositor);
-        gateway.revealAuthorization(agent, salt, selfPolicy, consent);
+        gateway.revealAuthorization(agent, salt, selfPolicy);
 
         // Agent must be authorized with depositor as owner and shareReceiver.
         assertTrue(gateway.hasRole(agentRole, agent));

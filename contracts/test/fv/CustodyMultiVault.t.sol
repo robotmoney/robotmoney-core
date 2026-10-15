@@ -33,12 +33,11 @@ import {NoYieldTestAdapter} from "../helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
 import {
     BasketVaultHarness,
+    newBasketVaultHarness,
     MockPool,
-    MockSwapRouter,
-    deployBasketVaultHarness
+    MockSwapRouter
 } from "../BasketVault.t.sol";
-import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "../helpers/Proxied.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Intentionally violates SUP-1: one holder can redeem twice the assets.
 ///      This test-only double proves the shared predicate is executed, not vacuous.
@@ -89,7 +88,7 @@ contract CustodyMultiVaultTest is Test {
     ///         in the scout pass so the harness is not vacuous.
     function test_SUP1_robotMoneyVault_redeemableLeqTotalAssets() public {
         InvUSDC usdc = new InvUSDC();
-        RobotMoneyVault vault = Proxied.robotMoneyVault(
+        RobotMoneyVault vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), type(uint256).max, type(uint256).max, 0, admin, admin, admin
         );
 
@@ -125,14 +124,12 @@ contract CustodyMultiVaultTest is Test {
         TestERC20 basketToken = new TestERC20();
         MockSwapRouter router = new MockSwapRouter();
         MockPool pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
-        BasketVaultHarness vault = deployBasketVaultHarness(
+        BasketVaultHarness vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, admin
         );
 
         vm.prank(admin);
-        vault.addAsset(
-            address(basketToken), address(pool), 500, address(0), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
         address alice = makeAddr("basketAlice");
         uint256 depositAmount = 1_000e6;
@@ -157,7 +154,7 @@ contract CustodyMultiVaultTest is Test {
         MockSwapRouter router = new MockSwapRouter();
         MockPool pool = new MockPool(address(despxa), address(usdc), uint160(1 << 96));
         UniswapV3SwapAdapter adapter = new UniswapV3SwapAdapter(address(router));
-        RwaBasketVault vault = Proxied.rwaBasketVault(
+        RwaBasketVault vault = CoreProxies.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             type(uint256).max,
@@ -170,9 +167,7 @@ contract CustodyMultiVaultTest is Test {
 
         vm.startPrank(admin);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        vault.addAsset(
-            address(despxa), address(pool), 500, address(adapter), BasketAssetConfigGuard.Venue.V3
-        );
+        vault.addAsset(address(despxa), address(pool), 500, address(adapter), BasketVault.Venue.V3);
         vm.stopPrank();
 
         address alice = makeAddr("rwaAlice");

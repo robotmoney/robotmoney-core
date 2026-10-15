@@ -28,12 +28,7 @@ import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import {
-  fillAgentConsent,
-  freshAccount,
-  freshDepositor,
-  waitForAgentState,
-} from "./helpers/depositor";
+import { consentFromDapp, freshDepositor, waitForAgentState } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 const FAUCET_DRIP_AMOUNT_USDC = 100_000_000n;
@@ -118,21 +113,18 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     // Per issue #269, authorization reverts with `AgentAlreadyOwned` if the
     // agent address already has an owner. The publish run authorized
     // `endpoints.agent_addr` at deploy time. Re-authorizing it here would
-    // revert. Use a fresh agent instead; the wizard's invariant under test is
-    // "the seed handler drips 100 USDC into the connected wallet after a
-    // successful authorize", which does not care which agent address is being
-    // granted AGENT_ROLE. The spec holds the agent's key because the agent
-    // consents to the binding with an EIP-712 signature (issue 1791).
+    // revert. Use a fresh, deterministic-but-unused address instead; the
+    // wizard's invariant under test is "the seed handler drips 100 USDC into
+    // the connected wallet after a successful authorize", which does not care
+    // which agent address is being granted AGENT_ROLE.
     //
     // The gateway requires a caller without ADMIN_ROLE to name itself as
     // shareReceiver (RobotMoneyGateway._validatePolicy), so the depositor
     // receives its own shares.
-    const freshAgent = freshAccount();
-    const FRESH_AGENT_ADDR: Address = freshAgent.address;
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11" as Address;
     await page.getByTestId("wizard-agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("wizard-shareReceiver-input").fill(depositor.address);
     await page.getByTestId("step-2-next").click();
-    await fillAgentConsent(page, endpoints, "wizard", freshAgent, depositor.address);
 
     // Step 3: commit/reveal authorize (two-step flow, AZ-DAPP-1).
     const baseline = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, depositor.address);
@@ -141,6 +133,9 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     const commitSubmit = page.getByTestId("wizard-commit-submit");
     await expect(commitSubmit).toBeEnabled({ timeout: 30_000 });
     await commitSubmit.click();
+
+    // The agent address consents to the depositor before the reveal (core 1791).
+    await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "wizard-consent-hash");
 
     // Step 3b: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("wizard-reveal-submit");

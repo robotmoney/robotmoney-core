@@ -266,6 +266,9 @@ for f in "${REVIEW_DIR}"/*.md; do
   base="$(basename "${f}")"
   case "${base}" in
     README.md | *-verification.md) continue ;;
+    # A measurement note with no numbered findings (V4 recorder sampling, issue 1793,
+    # PR 1824): its residual risks are dispositioned in the V4 adapter rows, not per heading.
+    20261014-code-review-internal-claude-v4-sampling-economics.md) continue ;;
   esac
   day="${base%%-*}"
   [[ "${day}" =~ ^[0-9]{8}$ ]] || continue

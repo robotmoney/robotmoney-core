@@ -24,13 +24,6 @@ import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt
 /// policy, hand the agent to an `ADMIN_ROLE` holder, or revoke it.
 /// `ADMIN_ROLE` grants no authority over an agent it does not own.
 ///
-/// Agent consent (issue #1791). A caller without `ADMIN_ROLE` can bind an
-/// agent address other than itself only with the agent's EIP-712
-/// `AgentConsent` signature over (agent, owner, shareReceiver, nonce) in the
-/// gateway's domain (name `RobotMoneyGateway`, version `1`, chain id, this
-/// gateway). An address bound without that consent (by an `ADMIN_ROLE`
-/// caller) can free itself through `releaseAgent`.
-///
 /// Policy rule (issue #1476). Every call that writes a policy applies the
 /// same validator: the caller-independent shape checks plus one
 /// caller-dependent rule, judged on the caller's role at call time — a
@@ -125,11 +118,9 @@ interface IGateway {
     event AgentOwnershipTransferred(
         address indexed agent, address indexed previousOwner, address indexed newOwner
     );
-    /// @notice Emitted when an agent's policy and role are revoked, by its
-    ///         recorded owner through `revokeAgent` or by the agent itself
-    ///         through `releaseAgent`.
+    /// @notice Emitted when an agent's policy and role are revoked.
     /// @param agent Agent address whose policy was removed.
-    /// @param owner The agent's recorded owner at the time it was removed.
+    /// @param owner Depositor EOA that revoked (must equal the recorded owner).
     event AgentRevoked(address indexed agent, address indexed owner);
     /// @notice Emitted when gateway deposits are paused. Withdrawals stay open.
     /// @param by Address that called `pauseDeposits()`.
@@ -354,7 +345,14 @@ interface IGateway {
     ///         address, the caller identity, and a caller-chosen salt so that
     ///         a mempool observer cannot front-run the reveal with a different
     ///         depositor address.
-    /// @param commitHash `keccak256(abi.encode(agent, msg.sender, salt))`.
+    ///         An agent address also uses this to consent to an owner (core 1791):
+    ///         from its own key it submits
+    ///         `keccak256(abi.encode(owner, keccak256(callData)))`, where `callData` is
+    ///         the full `revealAuthorization(agent, salt, policy)` calldata `owner` will
+    ///         send. That reveal then consumes it, so the consent covers one agent, one
+    ///         policy and one salt. Without the consent the reveal reverts
+    ///         `OwnerConsentMissing`, so nobody can take an address that never agreed.
+    /// @param commitHash `keccak256(abi.encode(agent, msg.sender, salt))`, or the consent hash above.
     function commitAuthorization(bytes32 commitHash) external;
 
     /// @notice Phase-2 of the two-phase commit/reveal agent authorization.
@@ -362,34 +360,17 @@ interface IGateway {
     ///         authorize the agent with the supplied policy. Reverts if no
     ///         prior commitment matches, if the commitment has expired, if
     ///         `msg.sender` is not the original committer, or if the hash
-    ///         does not match.
+    ///         does not match. For an `agent` other than the caller it also
+    ///         reverts `OwnerConsentMissing` unless the agent consented to this
+    ///         caller and this exact call through `commitAuthorization`.
     /// @dev    Must be called at least one block after `commitAuthorization`.
     ///         The policy is checked by the same validator as `setPolicy`:
     ///         a caller without `ADMIN_ROLE` must name itself as
     ///         `shareReceiver` (`ShareReceiverNotAuthorized`).
-    ///
-    ///         Agent consent (issue #1791). A caller without `ADMIN_ROLE`
-    ///         that names an `agent` other than itself must pass the agent's
-    ///         65-byte EIP-712 signature (`r ‖ s ‖ v`) over
-    ///         `AgentConsent(address agent,address owner,address shareReceiver,uint256 nonce)`
-    ///         with `owner = msg.sender`, `shareReceiver = p.shareReceiver`
-    ///         and `nonce = agentConsentNonce(agent)`, in the domain
-    ///         (`RobotMoneyGateway`, `implementationVersion()`, `block.chainid`,
-    ///         this gateway).
-    ///         Anything else reverts `InvalidAgentConsent`. A successful use
-    ///         advances the nonce, so a consent authorizes once. An agent
-    ///         revealing for itself, and an `ADMIN_ROLE` caller, pass empty
-    ///         bytes; the field is not read for them.
-    /// @param agent        The agent address to authorize (must not already be owned).
-    /// @param salt         The caller-chosen salt used when building `commitHash`.
-    /// @param p            Initial policy parameters.
-    /// @param agentConsent The agent's consent signature, or empty (see above).
-    function revealAuthorization(
-        address agent,
-        bytes32 salt,
-        AgentPolicy calldata p,
-        bytes calldata agentConsent
-    ) external;
+    /// @param agent  The agent address to authorize (must not already be owned).
+    /// @param salt   The caller-chosen salt used when building `commitHash`.
+    /// @param p      Initial policy parameters.
+    function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
     /// @notice First-time authorization for `agent`. Admin-only — only callable
     ///         by `ADMIN_ROLE` (so the TimelockController retains agent-onboarding
@@ -400,8 +381,6 @@ interface IGateway {
     ///         `agent` already has a recorded owner; that owner must call
     ///         `setPolicy` to update or `revokeAgent` to release. The caller
     ///         holds `ADMIN_ROLE`, so the validator accepts any `shareReceiver`.
-    ///         No agent consent is taken, so the agent may undo the binding
-    ///         with `releaseAgent` (issue #1791).
     /// @param agent The agent address to authorize (must not already be owned).
     /// @param p     Initial policy parameters.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;
@@ -434,19 +413,9 @@ interface IGateway {
     function transferAgentOwnership(address agent, address newOwner) external;
 
     /// @notice Revoke an agent. Reverts if `msg.sender` is not the recorded
-    ///         owner. Clears policy, role, owner record and consent record.
+    ///         owner. Clears policy, role, and owner record.
     /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
-
-    /// @notice Release path for an address bound without its consent (issue
-    ///         #1791). The caller is the agent: when it has a recorded owner
-    ///         and never consented to that binding (an `ADMIN_ROLE` caller
-    ///         authorized it), this clears its policy, role and owner record
-    ///         exactly as `revokeAgent` does and emits `AgentRevoked` with the
-    ///         owner it had. Reverts `AgentNotReleasable` when the caller has
-    ///         no owner or consented to its binding (by signature or by
-    ///         revealing for itself); such an agent's owner revokes it.
-    function releaseAgent() external;
 
     /// @notice Pause new deposits (`deposit`, `depositTo`). Restricted to
     ///         `DEPOSIT_PAUSER_ROLE`. Withdrawals (`withdraw`, `withdrawFromRouter`)
@@ -533,27 +502,6 @@ interface IGateway {
     /// @return The account that authorized `agent` or received it through
     ///         `transferAgentOwnership`, or zero if none.
     function agentOwner(address agent) external view returns (address);
-
-    /// @notice Nonce the agent's next `AgentConsent` signature must carry
-    ///         (issue #1791). Starts at zero and advances by one each time a
-    ///         consent signature authorizes the agent.
-    /// @param agent The agent address to look up.
-    function agentConsentNonce(address agent) external view returns (uint256);
-
-    /// @notice The gateway implementation version: the EIP-712 domain `version`
-    ///         of every `AgentConsent` (ADR-0014 §10, QA plan Decisions D5). An
-    ///         implementation that changes what a signed consent means returns a
-    ///         new value, so every consent signed under the old one stops
-    ///         verifying after the upgrade; a pure fix keeps it. Clients read it
-    ///         before they sign and never assume a value.
-    function implementationVersion() external pure returns (string memory);
-
-    /// @notice True when the agent's current binding carries its consent: a
-    ///         consent signature, or the agent revealed for itself. False for
-    ///         an unbound address and for a binding an `ADMIN_ROLE` caller made
-    ///         without consent, which the agent can undo with `releaseAgent`.
-    /// @param agent The agent address to look up.
-    function agentConsented(address agent) external view returns (bool);
 
     /// @notice Cumulative vault shares the agent has redeemed in the current
     ///         rolling withdrawal window. Returns zero when the agent has

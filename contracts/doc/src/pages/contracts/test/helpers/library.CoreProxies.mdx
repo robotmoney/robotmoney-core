@@ -1,0 +1,544 @@
+---
+title: "CoreProxies"
+description: "Test helper (issue 1808): every proxied core contract is deployed the way production deploys it, an implementation plus an ERC-1967 proxy initialized in its constructor. Each function takes the arguments the contract's constructor took before issue 1808, so a test that used `new X(args)` calls `CoreProxies.x(args)` and gets the proxy."
+---
+
+# CoreProxies
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/helpers/CoreProxies.sol)
+
+**Title:** CoreProxies
+
+Test helper (issue 1808): every proxied core contract is deployed the way production
+deploys it, an implementation plus an ERC-1967 proxy initialized in its constructor.
+Each function takes the arguments the contract's constructor took before issue 1808,
+so a test that used `new X(args)` calls `CoreProxies.x(args)` and gets the proxy.
+
+The upgrade timelock is `TEST_UPGRADE_TIMELOCK` unless the test sets another with
+`useUpgradeConfig` (the handover tests use the timelock the timelock stage deploys).
+The mode is `Upgradeable` unless set.
+
+Implementations are cached in the calling test contract's storage (one per contract
+type and test), so a `vm.expectRevert` placed before a helper call that follows an
+earlier deploy of the same type binds to the proxy creation (the initializer), the
+way it bound to the constructor before.
+
+## Constants
+
+### TEST_UPGRADE_TIMELOCK
+
+The default upgrade timelock of a test proxy (any test may prank it).
+
+```solidity
+address internal constant TEST_UPGRADE_TIMELOCK =
+        address(uint160(uint256(keccak256("robotmoney.test.upgrade-timelock"))));
+```
+
+### CONFIG_SLOT
+
+```solidity
+bytes32 private constant CONFIG_SLOT = keccak256("robotmoney.test.CoreProxies.config");
+```
+
+## Functions
+
+<a id="useupgradeconfig-address-governeduups-upgrademode"></a>
+
+### useUpgradeConfig
+
+Set the upgrade timelock and mode of every later helper deploy in this test.
+
+```solidity
+function useUpgradeConfig(address timelock, GovernedUUPS.UpgradeMode mode) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="config"></a>
+
+### config
+
+```solidity
+function config() internal view returns (address timelock, GovernedUUPS.UpgradeMode mode);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="configof-address"></a>
+
+### configOf
+
+The `useUpgradeConfig` setting of another test contract (a helper that runs the
+stage scripts reads its caller's setting), with the same defaults as `config`.
+
+```solidity
+function configOf(address testContract)
+        internal
+        view
+        returns (address timelock, GovernedUUPS.UpgradeMode mode);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| testContract | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="implementationof-address"></a>
+
+### implementationOf
+
+The implementation an ERC-1967 proxy points at.
+
+```solidity
+function implementationOf(address proxy) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="robotmoneyvault-ierc20-uint256-uint256-uint256-address-address-address"></a>
+
+### robotMoneyVault
+
+```solidity
+function robotMoneyVault(
+        IERC20 asset_,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        uint256 exitFeeBps,
+        address feeRecipient,
+        address admin,
+        address emergencyResponder
+    ) internal returns (RobotMoneyVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset_ | `IERC20` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RobotMoneyVault` |  |
+
+<a id="protocolassetvault-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+
+### protocolAssetVault
+
+```solidity
+function protocolAssetVault(
+        IERC20 usdc,
+        ISwapRouter swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        uint256 exitFeeBps,
+        address feeRecipient,
+        address admin,
+        address emergencyResponder
+    ) internal returns (ProtocolAssetVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| swapRouter | `ISwapRouter` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `ProtocolAssetVault` |  |
+
+<a id="agenttokenvault-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+
+### agentTokenVault
+
+```solidity
+function agentTokenVault(
+        IERC20 usdc,
+        ISwapRouter swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        uint256 exitFeeBps,
+        address feeRecipient,
+        address admin,
+        address emergencyResponder
+    ) internal returns (AgentTokenVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| swapRouter | `ISwapRouter` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AgentTokenVault` |  |
+
+<a id="rwabasketvault-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+
+### rwaBasketVault
+
+```solidity
+function rwaBasketVault(
+        IERC20 usdc,
+        ISwapRouter swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        uint256 exitFeeBps,
+        address feeRecipient,
+        address admin,
+        address emergencyResponder
+    ) internal returns (RwaBasketVault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| swapRouter | `ISwapRouter` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RwaBasketVault` |  |
+
+<a id="vaultregistry-address"></a>
+
+### vaultRegistry
+
+```solidity
+function vaultRegistry(address admin) internal returns (VaultRegistry);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `VaultRegistry` |  |
+
+<a id="portfoliorouter-address-address-address"></a>
+
+### portfolioRouter
+
+```solidity
+function portfolioRouter(address usdc, address registry, address admin)
+        internal
+        returns (PortfolioRouter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| registry | `address` |  |
+| admin | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `PortfolioRouter` |  |
+
+<a id="routergovernance-address-address-address"></a>
+
+### routerGovernance
+
+```solidity
+function routerGovernance(address router, address receipts, address admin)
+        internal
+        returns (RouterGovernance);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router | `address` |  |
+| receipts | `address` |  |
+| admin | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RouterGovernance` |  |
+
+<a id="robotmoneygateway-ierc20-ierc4626-address-address-address"></a>
+
+### robotMoneyGateway
+
+```solidity
+function robotMoneyGateway(
+        IERC20 usdc,
+        IERC4626 vault,
+        address admin,
+        address pauser,
+        address router
+    ) internal returns (RobotMoneyGateway);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| vault | `IERC4626` |  |
+| admin | `address` |  |
+| pauser | `address` |  |
+| router | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RobotMoneyGateway` |  |
+
+<a id="investmentcommitteepolicy-address-address"></a>
+
+### investmentCommitteePolicy
+
+```solidity
+function investmentCommitteePolicy(address admin, address gateway)
+        internal
+        returns (InvestmentCommitteePolicy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| gateway | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `InvestmentCommitteePolicy` |  |
+
+<a id="consensusrecommendationreceipt-address-address-address"></a>
+
+### consensusRecommendationReceipt
+
+```solidity
+function consensusRecommendationReceipt(address admin, address gateway, address icPolicy)
+        internal
+        returns (ConsensusRecommendationReceipt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| gateway | `address` |  |
+| icPolicy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `ConsensusRecommendationReceipt` |  |
+
+<a id="basketparams-ierc20-iswaprouter-uint256-uint256-uint256-address-address-address"></a>
+
+### basketParams
+
+```solidity
+function basketParams(
+        IERC20 usdc,
+        ISwapRouter swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap,
+        uint256 exitFeeBps,
+        address feeRecipient,
+        address admin,
+        address emergencyResponder
+    ) internal pure returns (BasketVault.InitParams memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| swapRouter | `ISwapRouter` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| admin | `address` |  |
+| emergencyResponder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVault.InitParams` |  |
+
+<a id="proxy-address-bytes"></a>
+
+### proxy
+
+One ERC-1967 proxy over `impl`, initialized in its constructor with `initData`.
+
+```solidity
+function proxy(address impl, bytes memory initData) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+| initData | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_impl-string-bytes"></a>
+
+### _impl
+
+<i>
+
+The cached implementation for `name`, deployed from `creationCode` on first use.
+
+</i>
+
+```solidity
+function _impl(string memory name, bytes memory creationCode) private returns (address impl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+| creationCode | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+
+<a id="_config"></a>
+
+### _config
+
+```solidity
+function _config() private pure returns (Config storage c);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `Config` |  |
+
+<a id="_vm"></a>
+
+### _vm
+
+```solidity
+function _vm() private pure returns (VmLoad);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `VmLoad` |  |
+
+## Structs
+
+### Config
+
+```solidity
+struct Config {
+        address timelock;
+        GovernedUUPS.UpgradeMode mode;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+

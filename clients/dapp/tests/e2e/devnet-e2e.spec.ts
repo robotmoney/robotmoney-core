@@ -22,9 +22,9 @@
 
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { agentOwnerOf, fillAgentConsent, freshAccount, freshDepositor } from "./helpers/depositor";
+import { agentOwnerOf, consentFromDapp, freshDepositor } from "./helpers/depositor";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 // keccak256("AGENT_ROLE") — matches contracts/gateway/AccessRoles.sol.
@@ -134,20 +134,20 @@ test.describe("devnet E2E — full-stack Twin chain", () => {
 
     // Per issue #269, authorization reverts with `AgentAlreadyOwned` if the
     // agent address already has an owner. The publish run authorized
-    // `endpoints.agent_addr` at deploy time. Use a fresh agent instead so the
-    // reveal transaction does not revert. The spec holds its key because the
-    // agent consents to the binding with an EIP-712 signature (issue 1791).
-    const freshAgent = freshAccount();
-    const FRESH_AGENT_ADDR = freshAgent.address;
+    // `endpoints.agent_addr` at deploy time. Use a fresh, deterministic-but-
+    // unused address instead so the reveal transaction does not revert.
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000BB01" as Address;
     await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("shareReceiver-input").fill(depositor.address);
-    await fillAgentConsent(page, endpoints, "authorize", freshAgent, depositor.address);
 
     const authorizePreview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(authorizePreview).toBeVisible({ timeout: 30_000 });
 
     // Step 1 of 2: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
     await page.getByTestId("authorize-submit").click();
+
+    // The agent address consents to the depositor before the reveal (core 1791).
+    await consentFromDapp(page, endpoints, FRESH_AGENT_ADDR, "authorize-consent-hash");
 
     // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber.
     const revealSubmit = page.getByTestId("authorize-reveal-submit");

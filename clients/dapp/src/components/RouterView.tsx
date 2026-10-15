@@ -4,9 +4,9 @@
  * RouterView — reads GET /v1/router/weights and GET /v1/vaults.
  *
  * Shows the Portfolio Router weights and the weight-change history. Works
- * without a connected wallet. There is no proposal to show: issue 1698
- * deleted RouterGovernance voting and the explorer's proposals route; a
- * weight change is one timelocked `applyReceipt` call.
+ * without a connected wallet. There is no governance vote to show: the Safe
+ * applies recorded consensus receipts through the weight setter
+ * (docs/technical/governance-decisions.md).
  *
  * Weights come from the ROUTER ITSELF (issue 1741), read through wagmi (no
  * wallet needed), at the latest block, refetched every WEIGHTS_REFETCH_MS:
@@ -18,9 +18,8 @@
  * The explorer API is NOT the source of the effective weights: its
  * `current_weights` was the last WeightsSet OR DefaultWeightsSet event, so a
  * later default-vector change displayed as the effective vector while the
- * voted vector still overrode it. The explorer supplies the vault names and
- * the weight-change history only. The "voted" vector is the router's applied
- * vector: since issue 1698 only `RouterGovernance.applyReceipt` writes it. When the router cannot
+ * voted vector still overrode it. The explorer supplies the vault names and the
+ * weight-change history only. When the router cannot
  * be read the tab says "unknown" and shows no label.
  *
  * Enhancements (issue #615):
@@ -184,7 +183,7 @@ export function RouterView({ apiUrl, fetchImpl, routerAddress }: RouterViewProps
               testPrefix="router-view-voted-weight"
               tableTestId="router-view-voted-table"
               emptyTestId="router-view-voted-empty"
-              emptyText="No voted vector: no receipt has been applied."
+              emptyText="No voted vector: no consensus receipt has set weights."
               resolveVaultName={resolveVaultName}
             />
           )}

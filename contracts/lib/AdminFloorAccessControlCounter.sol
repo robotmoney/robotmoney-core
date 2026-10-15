@@ -8,7 +8,6 @@
 //            that one is not usable here: AccessControlEnumerable's role
 //            membership set pushes the EIP-170-tight vault family past the
 //            24_576-byte runtime code-size cap.)
-// (Upgradeable parents: docs/adr/ADR-0014-governed-upgrades-and-freeze.md §3.)
 pragma solidity ^0.8.24;
 
 import {
@@ -43,9 +42,8 @@ import {
 ///         member count still includes the account being removed; a count of
 ///         exactly 1 therefore means this is the last admin.
 ///
-///         ADR-0014: the parent is OZ `AccessControlUpgradeable` (role data in an ERC-7201
-///         namespace). `adminCount` is this base's only linear slot; `__gap` reserves the
-///         rest of a 50-slot block so a later field here never shifts a derived vault's state.
+///         Upgradeable base (issue 1808): the role map lives in OpenZeppelin's ERC-7201
+///         namespaced storage. `adminCount` stays a sequential slot of the inheriting vault.
 abstract contract AdminFloorAccessControlCounter is AccessControlUpgradeable {
     /// @notice The role subject to the last-admin floor. Concrete contracts
     ///         declare their own public `ADMIN_ROLE` constant with the same
@@ -54,10 +52,6 @@ abstract contract AdminFloorAccessControlCounter is AccessControlUpgradeable {
 
     /// @notice Number of accounts currently holding the floor-protected role.
     uint256 public adminCount;
-
-    /// @dev Storage gap (ADR-0014 §8): a new field here takes one slot from the gap, so every
-    ///      derived vault's slots stay put. The layout gate allows exactly that and nothing else.
-    uint256[49] private __gap;
 
     /// @notice Revoking the sole `ADMIN_ROLE` holder is forbidden — it would
     ///         leave the contract with zero admins and brick all admin paths.

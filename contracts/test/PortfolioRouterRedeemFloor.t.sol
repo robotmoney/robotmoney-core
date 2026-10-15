@@ -20,7 +20,7 @@ import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {MockV4PoolManager} from "./helpers/MockV4PoolManager.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice rmAGENT as a registered router leg: the real AgentTokenVault, UniswapV4SwapAdapter and UniswapV4PriceRecorder
 ///         over the mock PoolManager (the PortfolioRouterLegAvailability setup), so `previewRedeem`, the TWAP sale floor
@@ -69,7 +69,7 @@ contract PortfolioRouterRedeemFloorTest is Test {
         adapter = new UniswapV4SwapAdapter(address(pm), _key(), address(rec), address(usdc));
         usdc.mint(address(pm), 1e15);
         rm.mint(address(pm), 1e15);
-        agent = Proxied.agentTokenVault(
+        agent = CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(makeAddr("swapRouter02")),
             1_000_000e6,
@@ -79,8 +79,8 @@ contract PortfolioRouterRedeemFloorTest is Test {
             admin,
             admin
         );
-        registry = Proxied.vaultRegistry(admin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         // Ring at the 901-slot floor and one full 1800 s window of history before `addAsset`.
         rec.grow(901);
@@ -91,9 +91,7 @@ contract PortfolioRouterRedeemFloorTest is Test {
 
         vm.startPrank(admin);
         agent.setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        agent.addAsset(
-            address(rm), address(rec), FEE, address(adapter), BasketAssetConfigGuard.Venue.V4
-        );
+        agent.addAsset(address(rm), address(rec), FEE, address(adapter), BasketVault.Venue.V4);
         agent.setMaxSlippageBps(500);
         agent.setNavDeviationGuardBps(SHEET_NAV_DEVIATION_BPS);
         // `redeemFor` needs a registered vault (any status). Router weights and eligibility are deposit-side only.

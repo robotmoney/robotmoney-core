@@ -1,5 +1,5 @@
 // Canonical: docs/architecture.md §5.3 — Human Dapp
-// (See also: docs/adr/ADR-0014-governed-upgrades-and-freeze.md §10 — clients check the implementation behind a proxy)
+// (See also: docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md — clients check the implementation behind a proxy)
 
 /**
  * Build-time vault, router and gateway code-hash pins (QA plan U5, issue 1737 item 1), and
@@ -25,7 +25,9 @@
  *   - `VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH`  JSON map `{ "<vault address>": "<hash>[,<hash>]" }`
  *     (a list of hashes is accepted too);
  *   - `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH` comma-separated hashes for the router;
- *   - `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH` comma-separated hashes for the gateway.
+ *   - the gateway's pin pair (issue 1810, gatewayVerifier.ts): `VITE_GATEWAY_EXPECTED_IMPLEMENTATION`
+ *     (the approved implementation address) and `VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH` (its
+ *     code hash). Both are required; the slot must name that address and its code that hash.
  *
  * `verifyPinnedTarget` applies both: the code at the address must match its code-hash pin,
  * then the ERC-1967 implementation slot and the implementation's code, read at the same block,
@@ -63,8 +65,7 @@
  */
 import { keccak256, type Hex } from "viem";
 import { BASE_MAINNET_CHAIN_ID } from "./writeChainGuard";
-import { parseImplementationPins } from "./gatewayVerifier";
-import { implementationFromSlot } from "./upgradeState";
+import { implementationFromSlot } from "./gatewayVerifier";
 
 /** Build-time key of the per-vault pin map. Never a runtime config key. */
 export const VAULT_CODE_HASH_PIN_KEY = "VITE_VAULT_EXPECTED_CODE_HASH";
@@ -76,8 +77,10 @@ export const GATEWAY_CODE_HASH_PIN_KEY = "VITE_GATEWAY_EXPECTED_CODE_HASH";
 export const VAULT_IMPLEMENTATION_HASH_PIN_KEY = "VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH";
 /** Build-time key of the router implementation pins. Never a runtime config key. */
 export const ROUTER_IMPLEMENTATION_HASH_PIN_KEY = "VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH";
-/** Build-time key of the gateway implementation pins. Never a runtime config key. */
+/** Build-time key of the gateway implementation code hash (issue 1810). Never a runtime config key. */
 export const GATEWAY_IMPLEMENTATION_HASH_PIN_KEY = "VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH";
+/** Build-time key of the approved gateway implementation address (issue 1810). Never a runtime config key. */
+export const GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY = "VITE_GATEWAY_EXPECTED_IMPLEMENTATION";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS = /^0x0{40}$/;
@@ -89,6 +92,17 @@ const HEX = /^0x[0-9a-fA-F]*$/;
 export type CodePins = ReadonlyMap<string, string>;
 /** Lower-cased address -> lower-cased reviewed implementation code hashes. */
 export type ImplementationPins = ReadonlyMap<string, readonly string[]>;
+/** Lower-cased proxy address -> lower-cased implementation address the slot must name. */
+export type ImplementationAddressPins = ReadonlyMap<string, string>;
+
+/** Build-time implementation hash pins: a comma-separated list of 32-byte hex hashes. Malformed entries are dropped. */
+export function parseImplementationPins(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^0x[0-9a-f]{64}$/.test(s) && !/^0x0{64}$/.test(s));
+}
 
 function validHash(v: unknown): v is string {
   return typeof v === "string" && BYTES32.test(v) && !ZERO_HASH.test(v);
@@ -162,9 +176,28 @@ export function parseImplementationPinMap(
   if (validAddress(router)) {
     put(router, parseImplementationPins(env[ROUTER_IMPLEMENTATION_HASH_PIN_KEY]));
   }
+  // The gateway pin is dev's address + hash pair (issue 1810): one without the other is no pin,
+  // exactly as gatewayVerifier.computeGatewayVerification reads it.
   const gateway = env.VITE_GATEWAY_ADDRESS;
-  if (validAddress(gateway)) {
-    put(gateway, parseImplementationPins(env[GATEWAY_IMPLEMENTATION_HASH_PIN_KEY]));
+  const gatewayImplementation = env[GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY]?.trim();
+  if (validAddress(gateway) && validAddress(gatewayImplementation)) {
+    put(gateway, parseImplementationPins(env[GATEWAY_IMPLEMENTATION_HASH_PIN_KEY]).slice(0, 1));
+  }
+  return pins;
+}
+
+/**
+ * The implementation ADDRESS a proxy's slot must name, by proxy address. Only the gateway carries
+ * one (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION`); vaults and the router are pinned by code hash only.
+ */
+export function parseImplementationAddressPins(
+  env: Readonly<Record<string, string | undefined>>,
+): ImplementationAddressPins {
+  const pins = new Map<string, string>();
+  const gateway = env.VITE_GATEWAY_ADDRESS;
+  const implementation = env[GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY]?.trim();
+  if (validAddress(gateway) && validAddress(implementation)) {
+    pins.set(gateway.toLowerCase(), implementation.toLowerCase());
   }
   return pins;
 }
@@ -292,6 +325,7 @@ export function checkImplementationPin(
   slot: unknown,
   implementationCode: unknown,
   pins: ImplementationPins,
+  addressPins: ImplementationAddressPins = new Map(),
 ):
   | { readonly ok: true; readonly implementationHash?: string }
   | { readonly ok: false; readonly cause: CodePinCause; readonly got?: string } {
@@ -300,10 +334,15 @@ export function checkImplementationPin(
   }
   const listed = implementationPinsFor(pins, target);
   const implementation = implementationFromSlot(slot as Hex);
+  if (implementation === undefined) return { ok: false, cause: "implementation-unreadable" };
   if (implementation === null) {
     return listed.length > 0 ? { ok: false, cause: "implementation-unexpected" } : { ok: true };
   }
   if (listed.length === 0) return { ok: false, cause: "implementation-pin-missing" };
+  const expectedAddress = addressPins.get(target.toLowerCase());
+  if (expectedAddress !== undefined && implementation.toLowerCase() !== expectedAddress) {
+    return { ok: false, cause: "implementation-mismatch", got: implementation };
+  }
   if (typeof implementationCode !== "string" || !HEX.test(implementationCode)) {
     return { ok: false, cause: "implementation-unreadable" };
   }
@@ -319,6 +358,7 @@ export function verifyPinnedTarget(
   reads: PinnedTargetReads,
   codePins: CodePins,
   implementationPins: ImplementationPins,
+  implementationAddressPins: ImplementationAddressPins = new Map(),
 ): CodePinResult {
   const code = checkCodePin(target, reads.code, codePins);
   if (!code.ok) return code;
@@ -327,6 +367,7 @@ export function verifyPinnedTarget(
     reads.slot,
     reads.implementationCode,
     implementationPins,
+    implementationAddressPins,
   );
   if (!implementation.ok) return implementation;
   return implementation.implementationHash === undefined
@@ -349,7 +390,7 @@ function describeCause(target: string, cause: CodePinCause, got?: string): strin
     case "implementation-pin-missing":
       return `is an upgradeable proxy and this build pins no reviewed implementation for it, so the logic behind it cannot be verified`;
     case "implementation-mismatch":
-      return `is a proxy whose implementation${got ? ` (code hash ${got})` : " (no code)"} is not a reviewed one this build pins. It may have been upgraded. Do not sign anything against it`;
+      return `is a proxy whose implementation${got ? (got.length === 42 ? ` ${got}` : ` (code hash ${got})`) : " (no code)"} is not a reviewed one this build pins. It may have been upgraded. Do not sign anything against it`;
     case "implementation-unexpected":
       return `is not a proxy, but this build pins an implementation for it`;
     case "router-legs-unreadable":

@@ -4,7 +4,7 @@ title: "SecurityReviewRecheckVaultPoc"
 
 # SecurityReviewRecheckVaultPoc
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92c8c84ea872a76927a29be10ee9d58fbfd83a8c/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/SecurityReviewRecheckVaultPoc.t.sol)
 
 **Inherits:** [RobotMoneyVaultTest](/contracts/test/contract.RobotMoneyVaultTest)
 
@@ -198,6 +198,16 @@ so no pause and no misreported loss.
 
 ```solidity
 function test_f2_noDuplicateToForceRemoveAfterRefusal() public;
+```
+
+<a id="test_f2_reactivatinginactiveadapterstillworks"></a>
+
+### test_f2_reactivatingInactiveAdapterStillWorks
+
+Reactivating a deliberately removed (inactive) adapter still works.
+
+```solidity
+function test_f2_reactivatingInactiveAdapterStillWorks() public;
 ```
 
 <a id="test_o1a_forceremoveallfunded_exiterkeepsfullrecoveryclaim"></a>

@@ -58,16 +58,18 @@ import { decodeFunctionResult, encodeFunctionData, type Hex } from "viem";
 import {
   isRouterDeposit,
   parseCodePins,
+  parseImplementationAddressPins,
   parseImplementationPinMap,
   pinnedWriteTarget,
   verifyPinnedTarget,
   WriteTargetPinError,
   type CodePins,
+  type ImplementationAddressPins,
   type ImplementationPins,
   type PinnedTargetReads,
 } from "./codePins";
 import { routerAbi } from "./abi";
-import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./upgradeState";
+import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./gatewayVerifier";
 
 /** Current guard state: shared by the write hook and the wrong-chain screen. */
 export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean } {
@@ -143,7 +145,7 @@ async function readPinnedTarget(
   } catch {
     return { code, slot: undefined, implementationCode: undefined };
   }
-  let implementation: string | null;
+  let implementation: string | null | undefined;
   try {
     implementation =
       typeof slot === "string" && /^0x[0-9a-fA-F]{0,64}$/.test(slot)
@@ -152,7 +154,10 @@ async function readPinnedTarget(
   } catch {
     return { code, slot: undefined, implementationCode: undefined };
   }
-  if (implementation === null) return { code, slot, implementationCode: null };
+  // undefined: the slot word is not an address; checkImplementationPin refuses it.
+  if (implementation === null || implementation === undefined) {
+    return { code, slot, implementationCode: null };
+  }
   let implementationCode: unknown;
   try {
     implementationCode = await provider.request({
@@ -226,6 +231,7 @@ async function assertTargetPinned(
   variables: unknown,
   pins: CodePins,
   implementationPins: ImplementationPins,
+  implementationAddressPins: ImplementationAddressPins,
   gateway: string | undefined,
   router: string | undefined,
 ) {
@@ -242,7 +248,13 @@ async function assertTargetPinned(
   } catch {
     throw new WriteTargetPinError(target, "code-unreadable");
   }
-  const result = verifyPinnedTarget(target, reads, pins, implementationPins);
+  const result = verifyPinnedTarget(
+    target,
+    reads,
+    pins,
+    implementationPins,
+    implementationAddressPins,
+  );
   if (!result.ok) throw new WriteTargetPinError(target, result.cause, result.got);
   if (isRouterDeposit(variables, router)) {
     await assertRouterLegsPinned(provider, target, block, pins, implementationPins);
@@ -255,11 +267,20 @@ async function assertWriteTarget(
   variables: unknown,
   pins: CodePins,
   implementationPins: ImplementationPins,
+  implementationAddressPins: ImplementationAddressPins,
   gateway: string | undefined,
   router: string | undefined,
 ) {
   await assertTargetHasCode(source, (variables as { address?: unknown }).address);
-  await assertTargetPinned(source, variables, pins, implementationPins, gateway, router);
+  await assertTargetPinned(
+    source,
+    variables,
+    pins,
+    implementationPins,
+    implementationAddressPins,
+    gateway,
+    router,
+  );
 }
 
 export function useGuardedWriteContract() {
@@ -270,6 +291,7 @@ export function useGuardedWriteContract() {
   const robotMoneyVaults = useMemo(() => robotMoneyVaultTargets(env), [env]);
   const codePins = useMemo(() => parseCodePins(env), [env]);
   const implementationPins = useMemo(() => parseImplementationPinMap(env), [env]);
+  const implementationAddressPins = useMemo(() => parseImplementationAddressPins(env), [env]);
   const gateway = env.VITE_GATEWAY_ADDRESS;
   const router = env.VITE_ROUTER_ADDRESS;
   const [refusal, setRefusal] = useState<Error | null>(null);
@@ -313,6 +335,7 @@ export function useGuardedWriteContract() {
       variables,
       codePins,
       implementationPins,
+      implementationAddressPins,
       gateway,
       router,
     )
@@ -337,6 +360,7 @@ export function useGuardedWriteContract() {
           variables,
           codePins,
           implementationPins,
+          implementationAddressPins,
           gateway,
           router,
         );

@@ -1,0 +1,427 @@
+---
+title: "RouterGovernanceApplyReceiptTest"
+description: "A recorded consensus receipt is applied the production way: two of the three Safe owners sign, the real SafeL2 proxy schedules `applyReceipt` on the timelock, the delay passes, and the execute releases the receipt and sets the router weights in one transaction. Nothing pranks the Safe or the timelock. The governance contract is deployed and wired by the real `DeployRouterGovernance` script; the handover mirrors `DeployTimelock`."
+---
+
+# RouterGovernanceApplyReceiptTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/RouterGovernanceApplyReceipt.t.sol)
+
+**Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
+
+**Title:** RouterGovernanceApplyReceiptTest
+
+A recorded consensus receipt is applied the production way: two of the three
+Safe owners sign, the real SafeL2 proxy schedules `applyReceipt` on the
+timelock, the delay passes, and the execute releases the receipt and sets the
+router weights in one transaction. Nothing pranks the Safe or the timelock.
+The governance contract is deployed and wired by the real
+`DeployRouterGovernance` script; the handover mirrors `DeployTimelock`.
+
+Refusals are asserted with their exact reason by executing the ready
+operation straight on the open-executor timelock (the Safe would hide the
+reason as GS013). The receipt register's gateway is this test contract: the
+committee's record path is not under test here.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### WEIGHT_SETTER_ROLE
+
+```solidity
+bytes32 internal constant WEIGHT_SETTER_ROLE = keccak256("WEIGHT_SETTER_ROLE");
+```
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+### RECEIPT_ID
+
+```solidity
+bytes32 internal constant RECEIPT_ID = keccak256("receipt-1");
+```
+
+### DIGEST
+
+```solidity
+bytes32 internal constant DIGEST = keccak256("canonical receipt bytes 1");
+```
+
+## State Variables
+
+### safe
+
+```solidity
+address internal safe;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### usdc
+
+```solidity
+MockUsdc internal usdc;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy internal ic;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### gov
+
+```solidity
+RouterGovernance internal gov;
+```
+
+### vaultA
+
+```solidity
+MockGovVault internal vaultA;
+```
+
+### vaultB
+
+```solidity
+MockGovVault internal vaultB;
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("committee-submitter");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_handover-address"></a>
+
+### _handOver
+
+```solidity
+function _handOver(address target) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+
+<a id="_vector"></a>
+
+### _vector
+
+```solidity
+function _vector() internal view returns (address[] memory vaults, uint256[] memory bps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="_applycall-bytes32-bytes32-address-uint256"></a>
+
+### _applyCall
+
+```solidity
+function _applyCall(bytes32 id, bytes32 digest, address[] memory vaults, uint256[] memory bps)
+        internal
+        pure
+        returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_expectapplyrefused-bytes-bytes32-bytes"></a>
+
+### _expectApplyRefused
+
+<i>
+
+Schedule through the Safe, mine the delay, then execute straight on the
+open-executor timelock expecting exactly `reason`.
+
+</i>
+
+```solidity
+function _expectApplyRefused(bytes memory data, bytes32 salt, bytes memory reason) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+| salt | `bytes32` |  |
+| reason | `bytes` |  |
+
+<a id="_assertnothingapplied"></a>
+
+### _assertNothingApplied
+
+```solidity
+function _assertNothingApplied() internal view;
+```
+
+<a id="test_applyreceipt_viasafeandtimelock"></a>
+
+### test_applyReceipt_viaSafeAndTimelock
+
+```solidity
+function test_applyReceipt_viaSafeAndTimelock() public;
+```
+
+<a id="_assertonereleaseonesetoneapplied"></a>
+
+### _assertOneReleaseOneSetOneApplied
+
+<i>
+
+The recorded execute transaction holds exactly one ReceiptReleased, one
+WeightsSet and one ReceiptApplied, each from its own contract.
+
+</i>
+
+```solidity
+function _assertOneReleaseOneSetOneApplied() internal;
+```
+
+<a id="_assertroutervector-address-uint256"></a>
+
+### _assertRouterVector
+
+<i>
+
+The router's active and effective vectors both equal the applied vector.
+
+</i>
+
+```solidity
+function _assertRouterVector(address[] memory vaults, uint256[] memory bps) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaults | `address[]` |  |
+| bps | `uint256[]` |  |
+
+<a id="test_applyreceipt_revertsondigestmismatch"></a>
+
+### test_applyReceipt_revertsOnDigestMismatch
+
+```solidity
+function test_applyReceipt_revertsOnDigestMismatch() public;
+```
+
+<a id="test_applyreceipt_revertsonunrecordedreceipt"></a>
+
+### test_applyReceipt_revertsOnUnrecordedReceipt
+
+```solidity
+function test_applyReceipt_revertsOnUnrecordedReceipt() public;
+```
+
+<a id="test_applyreceipt_revertsonreleasedreceipt"></a>
+
+### test_applyReceipt_revertsOnReleasedReceipt
+
+```solidity
+function test_applyReceipt_revertsOnReleasedReceipt() public;
+```
+
+<a id="test_applyreceipt_revertsfornonweightsetter-address"></a>
+
+### test_applyReceipt_revertsForNonWeightSetter
+
+Every caller other than the timelock is refused: the Safe itself (with
+two real owner signatures), the deployer, the committee submitter, the
+router and the receipt register, and any fuzzed address.
+
+```solidity
+function test_applyReceipt_revertsForNonWeightSetter(address caller) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
+<a id="_unauthorized-address"></a>
+
+### _unauthorized
+
+```solidity
+function _unauthorized(address who) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="test_weightsetterroleisselfadministered"></a>
+
+### test_weightSetterRoleIsSelfAdministered
+
+ADMIN_ROLE (the timelock) cannot grant the weight-setter role: it is
+self-administered, so the only way to change its holder is the holder.
+
+```solidity
+function test_weightSetterRoleIsSelfAdministered() public view;
+```
+
+<a id="test_duplicatevault_revertsonsettersandreceiptpath"></a>
+
+### test_duplicateVault_revertsOnSettersAndReceiptPath
+
+A vector naming one vault twice is refused on every path that writes a
+vector: the receipt path (setWeights), the governance default-weights
+forwarder and the router's own setDefaultWeights. All through the Safe and
+the timelock. The duplicate default has length 2 == routerEligibleCount,
+the exact shape the finding describes (vault B silently omitted).
+
+```solidity
+function test_duplicateVault_revertsOnSettersAndReceiptPath() public;
+```
+
+<a id="test_novotingsurface"></a>
+
+### test_noVotingSurface
+
+The deployed weight setter, router and receipt register expose no voting
+function. Checked two ways on the deployed runtime code (each contract is an
+ERC-1967 proxy since issue 1808, so the scan reads the implementation it runs): no PUSH4 of any
+voting selector (the dispatcher pushes every external selector), and each
+zero-argument voting getter reverts with empty data (no such function, no
+fallback).
+
+```solidity
+function test_noVotingSurface() public;
+```
+
+<a id="_pushes4-bytes-bytes4"></a>
+
+### _pushes4
+
+<i>
+
+True when `code` contains a PUSH4 whose immediate is `sel`. Walks opcodes so
+bytes inside other PUSH immediates are never read as instructions.
+
+</i>
+
+```solidity
+function _pushes4(bytes memory code, bytes4 sel) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| code | `bytes` |  |
+| sel | `bytes4` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_logs"></a>
+
+### _logs
+
+```solidity
+function _logs() internal returns (VmLogs memory l);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `VmLogs` |  |
+
+## Structs
+
+### VmLogs
+
+```solidity
+struct VmLogs {
+        address[] emitters;
+        bytes32[] topic0;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| emitters | `address[]` |  |
+| topic0 | `bytes32[]` |  |
+

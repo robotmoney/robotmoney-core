@@ -312,12 +312,6 @@ pub fn weight_setter_path_dedup_key(chain_id: i64) -> String {
     format!("weight_setter_path_drift:{chain_id}")
 }
 
-/// Stable incident key for "the release's freeze deadline passed with a proxy
-/// still upgradeable" (issue 1809, ADR-0014 §5).
-pub fn freeze_deadline_dedup_key(chain_id: i64) -> String {
-    format!("freeze_deadline_missed:{chain_id}")
-}
-
 /// Stable incident key for "the explorer indexer the watchdog reads is behind
 /// its budget" (DI-5).
 pub fn indexer_behind_dedup_key(chain_id: i64) -> String {
@@ -367,12 +361,18 @@ pub struct WeightSetterPathDetails {
     pub router_address: String,
     /// The configured sole `WEIGHT_SETTER_ROLE` holder (`RouterGovernance`).
     pub expected_weight_setter: String,
-    /// The configured sole `ADMIN_ROLE` holder on the weight setter.
+    /// The configured sole `WEIGHT_SETTER_ROLE` and `ADMIN_ROLE` holder on the
+    /// weight setter.
     pub expected_timelock: String,
     /// `getRoleMemberCount(WEIGHT_SETTER_ROLE)` on the router.
     pub weight_setter_role_count: u64,
     /// The router's `WEIGHT_SETTER_ROLE` members as read (capped listing).
     pub weight_setter_role_holders: Vec<String>,
+    /// `getRoleMemberCount(WEIGHT_SETTER_ROLE)` on the weight setter: who may
+    /// call `applyReceipt`.
+    pub apply_receipt_role_count: u64,
+    /// The weight setter's `WEIGHT_SETTER_ROLE` members as read (capped listing).
+    pub apply_receipt_role_holders: Vec<String>,
     /// `getRoleMemberCount(ADMIN_ROLE)` on the weight setter.
     pub weight_setter_admin_count: u64,
     /// The weight setter's `ADMIN_ROLE` members as read (capped listing).
@@ -399,16 +399,19 @@ struct WeightSetterAlertInner {
 /// Page because the router's weight-setter path is not the configured one.
 ///
 /// Issue 1698: router weights change only through `RouterGovernance.applyReceipt`
-/// on a Safe-scheduled timelock operation. A second `WEIGHT_SETTER_ROLE` holder
-/// can set weights with no receipt and no delay; an `ADMIN_ROLE` holder on the
-/// weight setter other than the timelock can apply without the delay. The
-/// verifier checks both once at deploy; this catches a grant executed later.
+/// on a Safe-scheduled timelock operation. A second router `WEIGHT_SETTER_ROLE`
+/// holder can set weights with no receipt and no delay; a `WEIGHT_SETTER_ROLE`
+/// holder on the weight setter other than the timelock can apply a receipt
+/// without the delay, and an `ADMIN_ROLE` holder other than the timelock can set
+/// default weights without it. The verifier checks these once at deploy; this
+/// catches a grant executed later.
 pub async fn dispatch_weight_setter_path_alert(
     client: &Client,
     webhook_url: &str,
     breach: &crate::governance::WeightSetterBreach,
 ) -> Result<(), WatchdogError> {
     let role = &breach.weight_setter_role;
+    let appliers = &breach.weight_setter_appliers;
     let admins = &breach.weight_setter_admins;
     post_event(
         client,
@@ -421,7 +424,8 @@ pub async fn dispatch_weight_setter_path_alert(
                 summary: format!(
                     "RobotMoney watchdog: the router weight-setter path changed on chain {}. \
                      WEIGHT_SETTER_ROLE has {} holder(s) [{}], expected only {}; the weight \
-                     setter's ADMIN_ROLE has {} holder(s) [{}], expected only the timelock {}. \
+                     setter's WEIGHT_SETTER_ROLE (applyReceipt) has {} holder(s) [{}] and its \
+                     ADMIN_ROLE has {} holder(s) [{}], each expected only the timelock {}. \
                      A holder outside that path can change router weights without a consensus \
                      receipt or without the timelock delay. Find the grant and revoke it through \
                      the Safe, or update the watchdog config after a deliberate rotation (ADR-0002).",
@@ -429,6 +433,8 @@ pub async fn dispatch_weight_setter_path_alert(
                     role.count,
                     role.members.join(", "),
                     breach.weight_setter_address,
+                    appliers.count,
+                    appliers.members.join(", "),
                     admins.count,
                     admins.members.join(", "),
                     breach.timelock_address,
@@ -443,6 +449,8 @@ pub async fn dispatch_weight_setter_path_alert(
                     expected_timelock: breach.timelock_address.clone(),
                     weight_setter_role_count: role.count,
                     weight_setter_role_holders: role.members.clone(),
+                    apply_receipt_role_count: appliers.count,
+                    apply_receipt_role_holders: appliers.members.clone(),
                     weight_setter_admin_count: admins.count,
                     weight_setter_admins: admins.members.clone(),
                 },
@@ -452,7 +460,7 @@ pub async fn dispatch_weight_setter_path_alert(
     .await
 }
 
-/// Resolve the weight-setter-path page once both role sets match again.
+/// Resolve the weight-setter-path page once all three role sets match again.
 pub async fn dispatch_weight_setter_path_resolve(
     client: &Client,
     webhook_url: &str,
@@ -465,115 +473,6 @@ pub async fn dispatch_weight_setter_path_resolve(
             event_action: "resolve",
             routing_key: "watchdog",
             dedup_key: weight_setter_path_dedup_key(chain_id),
-            payload: None,
-        },
-    )
-    .await
-}
-
-/// Details for the missed freeze-deadline page (issue 1809).
-#[derive(Debug, Serialize)]
-pub struct FreezeDeadlineDetails {
-    /// Always `"freeze_deadline_missed"`.
-    pub alert_kind: &'static str,
-    /// Chain the proxies live on.
-    pub chain_id: i64,
-    /// The configured freeze deadline, Unix seconds.
-    pub deadline_unix: i64,
-    /// When the proxies were read, Unix seconds.
-    pub observed_at_unix: i64,
-    /// Whole days since the deadline.
-    pub days_overdue: i64,
-    /// `name=address` of every proxy that reads `upgradesFrozen() == false`.
-    pub unfrozen_proxies: Vec<String>,
-    /// How many proxies the check reads in total.
-    pub proxy_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct FreezeDeadlineAlertPayload {
-    event_action: &'static str,
-    routing_key: &'static str,
-    dedup_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<FreezeDeadlineAlertInner>,
-}
-
-#[derive(Debug, Serialize)]
-struct FreezeDeadlineAlertInner {
-    summary: String,
-    severity: &'static str,
-    source: &'static str,
-    custom_details: FreezeDeadlineDetails,
-}
-
-/// Page because the release's freeze deadline passed with a proxy still
-/// upgradeable (issue 1809, ADR-0014 §5).
-///
-/// The deadline is an operational commitment, not an on-chain timer, so this
-/// page is the only signal that it was missed. Severity `warning`, not
-/// `critical`: nothing is at risk that was not already at risk the day before,
-/// and withdrawals are untouched either way (ADR-0014 §6). The runbook step is
-/// an incident on the release issue that names the Safe owners and records the
-/// new date or the decision not to freeze.
-pub async fn dispatch_freeze_deadline_alert(
-    client: &Client,
-    webhook_url: &str,
-    breach: &crate::freeze_deadline::FreezeDeadlineBreach,
-) -> Result<(), WatchdogError> {
-    let unfrozen: Vec<String> = breach
-        .unfrozen
-        .iter()
-        .map(|p| format!("{}={}", p.name, p.address))
-        .collect();
-    post_event(
-        client,
-        webhook_url,
-        &FreezeDeadlineAlertPayload {
-            event_action: "trigger",
-            routing_key: "watchdog",
-            dedup_key: freeze_deadline_dedup_key(breach.chain_id),
-            payload: Some(FreezeDeadlineAlertInner {
-                summary: format!(
-                    "RobotMoney watchdog: the freeze deadline (Unix {}) passed {} day(s) ago on                      chain {} and {} of {} proxies still read upgradesFrozen() false: {}. The                      deployment is still upgradeable. Open an incident on the release issue, tag                      every Safe owner, and schedule govern --row freeze-proxy or record the new                      date (contract-release-runbooks.md §4.12).",
-                    breach.deadline_unix,
-                    breach.days_overdue(),
-                    breach.chain_id,
-                    unfrozen.len(),
-                    breach.proxy_count,
-                    unfrozen.join(", "),
-                ),
-                severity: "warning",
-                source: "watchdog",
-                custom_details: FreezeDeadlineDetails {
-                    alert_kind: "freeze_deadline_missed",
-                    chain_id: breach.chain_id,
-                    deadline_unix: breach.deadline_unix,
-                    observed_at_unix: breach.observed_at_unix,
-                    days_overdue: breach.days_overdue(),
-                    unfrozen_proxies: unfrozen,
-                    proxy_count: breach.proxy_count,
-                },
-            }),
-        },
-    )
-    .await
-}
-
-/// Resolve the missed freeze-deadline page once every proxy reads frozen (or
-/// the configured deadline moved past now).
-pub async fn dispatch_freeze_deadline_resolve(
-    client: &Client,
-    webhook_url: &str,
-    chain_id: i64,
-) -> Result<(), WatchdogError> {
-    post_event(
-        client,
-        webhook_url,
-        &FreezeDeadlineAlertPayload {
-            event_action: "resolve",
-            routing_key: "watchdog",
-            dedup_key: freeze_deadline_dedup_key(chain_id),
             payload: None,
         },
     )
@@ -773,7 +672,7 @@ pub async fn dispatch_indexer_behind_resolve(
 /// The single POST seam every consensus-receipt and governance event goes
 /// through. Generic over the payload so there is exactly one place to add a
 /// timeout, a retry or an auth header (T30c).
-async fn post_event<B: Serialize>(
+pub(crate) async fn post_event<B: Serialize>(
     client: &Client,
     webhook_url: &str,
     body: &B,
@@ -889,31 +788,6 @@ mod tests {
             weight_setter_path_dedup_key(918_453),
             weight_setter_path_dedup_key(8_453)
         );
-    }
-
-    #[test]
-    fn freeze_deadline_key_is_its_own_incident_per_chain_and_a_resolve_has_no_payload() {
-        assert_eq!(
-            freeze_deadline_dedup_key(8_453),
-            "freeze_deadline_missed:8453"
-        );
-        assert_ne!(
-            freeze_deadline_dedup_key(8_453),
-            weight_setter_path_dedup_key(8_453)
-        );
-        assert_ne!(
-            freeze_deadline_dedup_key(8_453),
-            freeze_deadline_dedup_key(918_453)
-        );
-        let v = serde_json::to_value(FreezeDeadlineAlertPayload {
-            event_action: "resolve",
-            routing_key: "watchdog",
-            dedup_key: freeze_deadline_dedup_key(8_453),
-            payload: None,
-        })
-        .unwrap();
-        assert_eq!(v["dedup_key"], "freeze_deadline_missed:8453");
-        assert!(v.get("payload").is_none());
     }
 
     #[test]

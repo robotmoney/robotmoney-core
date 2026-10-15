@@ -1,216 +1,158 @@
 {
-  "contract": "RobotMoneyVault",
   "enums": {},
-  "libraries": {
-    "contracts/lib/VaultAdapterOps.sol:VaultAdapterOps": "0x3f2d0bd611cfbcbc22a1e124025cc0e28de053232f1cea7eb37dfc671f6fbfa4"
-  },
-  "linearization": [
-    "contracts/RobotMoneyVault.sol:RobotMoneyVault",
-    "contracts/lib/GovernedUpgrade.sol:GovernedUpgrade",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol:ReentrancyGuardUpgradeable",
-    "contracts/lib/AdminFloorAccessControlCounter.sol:AdminFloorAccessControlCounter",
-    "lib/openzeppelin-contracts-upgradeable/contracts/access/AccessControlUpgradeable.sol:AccessControlUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/introspection/ERC165Upgradeable.sol:ERC165Upgradeable",
-    "lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol:IERC165",
-    "lib/openzeppelin-contracts/contracts/access/IAccessControl.sol:IAccessControl",
-    "lib/openzeppelin-contracts-upgradeable/contracts/token/ERC20/extensions/ERC4626Upgradeable.sol:ERC4626Upgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol:IERC4626",
-    "lib/openzeppelin-contracts-upgradeable/contracts/token/ERC20/ERC20Upgradeable.sol:ERC20Upgradeable",
-    "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol:IERC20Errors",
-    "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol:IERC20Metadata",
-    "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol:IERC20",
-    "lib/openzeppelin-contracts-upgradeable/contracts/utils/ContextUpgradeable.sol:ContextUpgradeable",
-    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol:Initializable"
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/lib/RobotMoneyVaultOps.sol:RobotMoneyVaultOps"
   ],
-  "openzeppelin": {
-    "lib/openzeppelin-contracts": "dbb6104ce834628e473d2173bbc9d47f81a9eec3",
-    "lib/openzeppelin-contracts-upgradeable": "723f8cab09cdae1aca9ec9cc1cfa040c2d4b06c1"
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.ERC20": [
+      "mapping(address account => uint256) _balances;",
+      "mapping(address account => mapping(address spender => uint256)) _allowances;",
+      "uint256 _totalSupply;",
+      "string _name;",
+      "string _symbol;"
+    ],
+    "openzeppelin.storage.ERC4626": [
+      "IERC20 _asset;",
+      "uint8 _underlyingDecimals;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ],
+    "robotmoney.storage.RobotMoneyVaultExclusions": [
+      "ExclusionLedger ledger;",
+      "bool snapshots;",
+      "mapping(uint256 index => uint256 exclusionId) openExclusionOf;"
+    ]
   },
   "storage": [
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "adminCount",
       "offset": 0,
-      "slot": 0,
-      "type": "uint256"
+      "slot": "0",
+      "type": "t_uint256"
     },
     {
-      "bytes": 1568,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
-      "label": "__gap",
+      "label": "adapters",
       "offset": 0,
-      "slot": 1,
-      "type": "uint256[49]"
+      "slot": "1",
+      "type": "t_array(t_struct(AdapterInfo)_storage)dyn_storage"
     },
     {
-      "bytes": 128,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
-      "label": "_book",
+      "label": "adapterAllowed",
       "offset": 0,
-      "slot": 50,
-      "type": "struct VaultAdapterOps.Book"
+      "slot": "2",
+      "type": "t_mapping(t_address,t_bool)"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
+      "label": "adapterCodeHashAllowed",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_bytes32,t_bool)"
+    },
+    {
       "label": "tvlCap",
       "offset": 0,
-      "slot": 54,
-      "type": "uint256"
+      "slot": "4",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "perDepositCap",
       "offset": 0,
-      "slot": 55,
-      "type": "uint256"
+      "slot": "5",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "exitFeeBps",
       "offset": 0,
-      "slot": 56,
-      "type": "uint256"
+      "slot": "6",
+      "type": "t_uint256"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "feeRecipient",
       "offset": 0,
-      "slot": 57,
-      "type": "address"
+      "slot": "7",
+      "type": "t_address"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "quarantineAddress",
       "offset": 0,
-      "slot": 58,
-      "type": "address"
+      "slot": "8",
+      "type": "t_address"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "shutdown",
       "offset": 20,
-      "slot": 58,
-      "type": "bool"
+      "slot": "8",
+      "type": "t_bool"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "retired",
       "offset": 21,
-      "slot": 58,
-      "type": "bool"
+      "slot": "8",
+      "type": "t_bool"
     },
     {
-      "bytes": 20,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "registry",
       "offset": 0,
-      "slot": 59,
-      "type": "address"
+      "slot": "9",
+      "type": "t_address"
     },
     {
-      "bytes": 1,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "depositsPaused",
       "offset": 20,
-      "slot": 59,
-      "type": "bool"
+      "slot": "9",
+      "type": "t_bool"
     },
     {
-      "bytes": 2,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "maxRebalanceBpsPerCall",
       "offset": 21,
-      "slot": 59,
-      "type": "uint16"
+      "slot": "9",
+      "type": "t_uint16"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "minRebalanceInterval",
       "offset": 0,
-      "slot": 60,
-      "type": "uint256"
+      "slot": "10",
+      "type": "t_uint256"
     },
     {
-      "bytes": 32,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
       "label": "lastRebalanceAt",
       "offset": 0,
-      "slot": 61,
-      "type": "uint256"
-    },
-    {
-      "bytes": 20,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
-      "label": "exclusionLedger",
-      "offset": 0,
-      "slot": 62,
-      "type": "contract ExclusionLedger"
-    },
-    {
-      "bytes": 1,
-      "contract": "contracts/RobotMoneyVault.sol:RobotMoneyVault",
-      "label": "_exclusionSnapshots",
-      "offset": 20,
-      "slot": 62,
-      "type": "bool"
+      "slot": "11",
+      "type": "t_uint256"
     }
   ],
   "structs": {
-    "struct VaultAdapterOps.AdapterInfo": [
+    "t_struct(AdapterInfo)_storage": [
       {
         "label": "adapter",
         "offset": 0,
-        "slot": 0,
-        "type": "contract IStrategyAdapter"
+        "slot": "0",
+        "type": "t_contract(IStrategyAdapter)"
       },
       {
         "label": "capBps",
         "offset": 20,
-        "slot": 0,
-        "type": "uint16"
+        "slot": "0",
+        "type": "t_uint16"
       },
       {
         "label": "active",
         "offset": 22,
-        "slot": 0,
-        "type": "bool"
-      }
-    ],
-    "struct VaultAdapterOps.Book": [
-      {
-        "label": "adapters",
-        "offset": 0,
-        "slot": 0,
-        "type": "struct VaultAdapterOps.AdapterInfo[]"
-      },
-      {
-        "label": "allowed",
-        "offset": 0,
-        "slot": 1,
-        "type": "mapping(address => bool)"
-      },
-      {
-        "label": "codeHashAllowed",
-        "offset": 0,
-        "slot": 2,
-        "type": "mapping(bytes32 => bool)"
-      },
-      {
-        "label": "openExclusionOf",
-        "offset": 0,
-        "slot": 3,
-        "type": "mapping(uint256 => uint256)"
+        "slot": "0",
+        "type": "t_bool"
       }
     ]
   }

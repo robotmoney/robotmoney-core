@@ -48,9 +48,9 @@ product:
 - **Account layer** — watched address or connected wallet; shows portfolio
   positions, transaction history, and agent policies.
 - **Action layer** — wallet required; vault-selector deposit and multi-vault
-  withdrawal. There is no governance proposal surface: router weights change
-  only when the Safe applies a consensus receipt through the timelock, in one
-  `RouterGovernance.applyReceipt` call (issue 1698).
+  withdrawal. There is no governance proposal surface. `RouterGovernance` has
+  no voting (issue 1698). Router weights change only when the Safe applies a
+  consensus receipt through the timelock.
 
 Before any implementation issue begins, five questions must be resolved:
 
@@ -102,11 +102,8 @@ portfolio router ABI are missing and must be added.
   `docs/technical/vault-registry-decisions.md` §3.4.
 - `portfolioRouterAbi` — `deposit(...)`, `previewDeposit(uint256)`,
   `activeVaults()` per `docs/technical/portfolio-router-decisions.md` §3.1–3.2.
-- `routerGovernanceAbi` — the read surface only (`currentWeights()`). Issue
-  1698 deleted the contract's proposal, vote and execute functions with the
-  voter set. The weight setter's `applyReceipt` call replaced them, and only
-  the Safe schedules it through the timelock, so the dapp builds no governance
-  write.
+- No `routerGovernanceAbi`. `RouterGovernance` has no proposal or vote
+  function (issue 1698), so the dapp needs none of its calls.
 
 No existing ABI in `abi.ts` needs to be changed. The edit is purely additive.
 Risk of merge conflict with other in-flight issues: moderate (other issues may
@@ -201,10 +198,9 @@ the batched vault list fetch. Per-vault metadata uses
   the scoped key rather than re-fetching everything.
 
 **Router and governance state.** A `RouterContext` holds active vault weights
-and the router address. It is provided separately from `VaultRegistryContext`
-because its update cadence is different (a weight change is a timelocked
-`applyReceipt`, rare; vault registration is rarer still). There is no
-governance proposal to hold: issue 1698 deleted the voting path (item 7). The
+and the router address. It is provided
+separately from `VaultRegistryContext` because its update cadence is different
+(weight changes are rare; vault registration is rarer still). The
 `RouterContext` uses query key `['router', routerAddress, chainId]`.
 
 **Rationale.** wagmi's `useReadContract` instances do not deduplicate by
@@ -281,7 +277,7 @@ history pane; live chain state still goes through RPC."
 | File | Change | Risk of merge conflict |
 |---|---|---|
 | `main.tsx` | Remove `VITE_VAULT_ADDRESS`; provide `VaultRegistryContext` and `RouterContext` | High — central entry point |
-| `lib/abi.ts` | Add `vaultRegistryAbi`, `portfolioRouterAbi`, `routerGovernanceAbi` | Moderate — other issues append here |
+| `lib/abi.ts` | Add `vaultRegistryAbi`, `portfolioRouterAbi` | Moderate — other issues append here |
 | `components/StatusHeader.tsx` | Replace single vault stat card with registry summary | Low — display-only change |
 | `components/AgentsPanel.tsx` | Widen `vaultAddress` to `vaultAddresses` for registration check | Low — one prop change |
 | `lib/useVaultRegistration.ts` | Accept `vaultAddresses: readonly Address[]`; use multi-call | Low — isolated hook file |
@@ -297,7 +293,7 @@ history pane; live chain state still goes through RPC."
 | `components/ProtocolLayer.tsx` | Root container for protocol layer (no wallet) | Protocol |
 | `components/VaultRegistryView.tsx` | List of all vaults with TVL, risk, status | Protocol |
 | `components/VaultDetailView.tsx` | Single-vault adapter breakdown, charts | Protocol |
-| `components/PortfolioRouterView.tsx` | Active and default weights, weight history | Protocol |
+| `components/PortfolioRouterView.tsx` | Active weights, history | Protocol |
 | `components/ProtocolStats.tsx` | Aggregate TVL, depositor count, activity feed | Protocol |
 | `components/AccountLayer.tsx` | Root container for account layer | Account |
 | `components/PortfolioPositionView.tsx` | Receipt balances across all vaults | Account |
@@ -321,7 +317,6 @@ This scout (317)
         └─> Account layer: portfolio position view (#319) — reads registry context + balanceOf
               └─> Action layer: vault-selector deposit (#320) — needs VaultRecord from context
                     └─> Action layer: withdrawal (#321) — needs position from #319
-              └─> (Action layer: governance vote (#322) — dropped, issue 1698 deleted the voting path; item 7)
 ```
 
 **Issues that are parallel-safe (no shared hot-file edits):**
@@ -402,12 +397,8 @@ This scout (317)
    The `resolveExplorerApiUrl` / `fetchAgentDeposits` pattern in `explorerApi.ts`
    is the established model — extend it with typed functions per new endpoint.
 
-7. **Governance proposal surface (removed, issue 1698).** The first plan had a
-   `GovernanceVoteTab` over `RouterGovernance`'s `castVote` / `getProposal`
-   surface (#341, #342). Issue 1698 deleted that surface from the contract,
-   and QA plan v1 C1 deletes the dapp's `GovernancePanel`. Router weights change
-   only through the Safe's `applyReceipt` call; the dapp reads the current
-   weights.
+7. **No governance proposal surface.** The dapp has no governance vote tab.
+   `RouterGovernance.sol` has no proposal or vote function (issue 1698).
 
 ---
 
@@ -422,5 +413,5 @@ All items below are in `Plan tracking issue #109` §"Phase: Multi-vault dapp".
 | Account layer: portfolio position, transaction history, agent policies (#319) | Yes | Context additions |
 | Action layer: vault-selector deposit (#320) | Yes | Context additions + `DepositWithdrawTab` widening |
 | Action layer: multi-vault withdrawal (#321) | Yes | Context additions + position view (#319) |
-| Action layer: governance vote (#322) | No: dropped, issue 1698 deleted the voting path (item 7) | — |
+| Action layer: governance vote (#322) | No: removed, `RouterGovernance` has no voting (issue 1698) | n/a |
 | Dapp Playwright E2E: multi-vault flows | Yes | All action layer issues merged |

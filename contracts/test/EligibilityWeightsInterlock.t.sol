@@ -16,7 +16,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -68,8 +68,8 @@ contract EligibilityWeightsInterlockTest is Test {
 
     function setUp() public {
         usdc = new MockUsdc();
-        registry = Proxied.vaultRegistry(registryAdmin);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), routerAdmin);
+        registry = CoreProxies.vaultRegistry(registryAdmin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
 
         vaultA = new InterlockMockVault(address(usdc));
         vaultB = new InterlockMockVault(address(usdc));
@@ -229,7 +229,7 @@ contract EligibilityWeightsInterlockTest is Test {
     ///         reverts RouterNotLinked (use plain setRouterEligible instead).
     function test_migrateEligibility_requiresLinkedRouter() public {
         // Fresh registry with no router linked.
-        VaultRegistry solo = Proxied.vaultRegistry(registryAdmin);
+        VaultRegistry solo = CoreProxies.vaultRegistry(registryAdmin);
         vm.startPrank(registryAdmin);
         solo.registerVault(address(vaultA), _meta("Vault A"));
         vm.expectRevert(VaultRegistry.RouterNotLinked.selector);

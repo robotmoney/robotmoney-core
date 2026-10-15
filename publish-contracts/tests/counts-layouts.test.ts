@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
 import { sumCounts } from "../src/counts.ts";
 import type { CountsJsonLike } from "../src/counts-reconstruct.ts";
-import { verifyReconstructionOnChain } from "../src/counts-reconstruct.ts";
+import { adoptableOf, verifyReconstructionOnChain } from "../src/counts-reconstruct.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
 import { buildCreate2Libraries, predictedLibraryAddress } from "../src/libs-adopt.ts";
 import { gitAnchorCommitted, gitFrozenDirCommitted } from "../src/release-gate.ts";
@@ -25,23 +25,25 @@ import { world, type World } from "./harness.ts";
 
 const PREV = "9a768bb9cc66d4485470a99a068ba7477604501a";
 const REF_PATH = join(REPO, "deployments", "frozen-counts", `${PREV}.json`);
-// Issue 1809 added the authority stage after that release: the reference carries it at 0, so its stage set is the table's, and every copy of the anchor is that file.
-const REF = { ...(JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>), authority: 0 } as Record<string, number>;
-const writeRef = (to: string): void => writeFileSync(to, JSON.stringify({ ...JSON.parse(readFileSync(REF_PATH, "utf8")), counts: REF }, null, 2));
+const REF = JSON.parse(readFileSync(REF_PATH, "utf8")).counts as Record<string, number>;
 const OUT = join(import.meta.dir, "fixtures", "build-out");
 const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const TICK_RUNTIME = `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` as Hex;
-const THREE = [...buildCreate2Libraries(table.create2Libraries!, OUT).values()];
+const C2 = buildCreate2Libraries(table.create2Libraries!, OUT);
+const THREE = [...C2.values()];
+// Issue 1808: each create2 library is adopted by the first stage that lists it (vault, gateway, proto).
+const ADOPTING = ["vault", "gateway", "proto"].map((stage) => ({ stage, libs: adoptableOf(table, stage).map((l) => C2.get(l.artifact)!) }));
 const getCode = async (a: Address): Promise<string> => ({ [TICK.toLowerCase()]: TICK_RUNTIME, ...Object.fromEntries(THREE.map((b) => [b.address.toLowerCase(), b.runtime])) } as Record<string, string>)[a.toLowerCase()] ?? "0x";
 const adoptedRun = (sha: string): CountsJsonLike => {
-  const counts = { ...REF, libs: 0, proto: REF.proto! - 3 };
+  const counts: Record<string, number> = { ...REF, libs: 0 };
+  for (const a of ADOPTING) counts[a.stage] = REF[a.stage]! - a.libs.length;
   return {
     deploySha: sha, chainId: 918453, counts, deployerNonce: sumCounts(counts) + 1, pinBlock: 52_500_000, rehearsal: { conclusion: "success" },
     adopted: {
       libs: { deployerTxs: 0, factory: "0x4e59b44847b379578588920cA78FbF26c0B4956C", libraries: [{ name: "tick_math", artifact: "TickMath", address: TICK, codeHash: keccak256(TICK_RUNTIME) }] },
-      proto: { deployerTxs: REF.proto! - 3, libraries: THREE.map((b) => ({ name: b.name, artifact: b.artifact, address: b.address, codeHash: b.runtimeHash })) },
+      ...Object.fromEntries(ADOPTING.map((a) => [a.stage, { deployerTxs: REF[a.stage]! - a.libs.length, libraries: a.libs.map((b) => ({ name: b.name, artifact: b.artifact, address: b.address, codeHash: b.runtimeHash })) }])),
     } as never,
   };
 };
@@ -60,7 +62,7 @@ function coreAtX(): Layout {
   rmSync(join(core, ".git"), { recursive: true, force: true });
   git(core, "init", "-q"); git(core, "config", "commit.gpgsign", "false");
   mkdirSync(join(core, FROZEN), { recursive: true });
-  writeRef(join(core, FROZEN, `${PREV}.json`));
+  copyFileSync(REF_PATH, join(core, FROZEN, `${PREV}.json`));
   git(core, "add", "-A"); git(core, "commit", "-q", "-m", "release sha X");
   return { w, x: git(core, "rev-parse", "HEAD"), core };
 }
@@ -87,7 +89,7 @@ async function runIt(l: Layout, countsDir: string, stage: "plan" | "libs" = "pla
   const real = console.log; console.log = () => {};
   try {
     const code = await l.w.run(["--stage", stage, "--environment", "base-mainnet", "--core-sha", l.x, "--counts-dir", countsDir, ...more], {
-      // the harness passes the committed-dir proof by default (its counts dir is no checkout): undefined puts the CLI's real gitFrozenDirCommitted back
+      // the harness passes the committed-dir proof by default (its counts dir is no checkout): undefined puts the CLI's real gitFrozenDirCommitted back (QA plan v1 E4)
       run: realGit as never, frozenDirCommitted: undefined, makeSigner: () => { signerMade = true; throw new Error("no signer"); },
       verifyReconstructed: async (f: any) => { await verifyReconstructionOnChain(f.measured.reconstructed, { table, out: { linkOut: OUT, c2Out: OUT } as never, getCode }); },
     });
@@ -202,7 +204,7 @@ describe("L2 refusals: the counts checkout must be the same repository, a descen
     const other = join(tmp("pc-other-"), "o");
     mkdirSync(join(other, FROZEN), { recursive: true });
     git(other, "init", "-q"); git(other, "config", "commit.gpgsign", "false");
-    writeRef(join(other, FROZEN, `${PREV}.json`));
+    copyFileSync(REF_PATH, join(other, FROZEN, `${PREV}.json`));
     await freeze(l.x, join(other, FROZEN));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "forged");
     await fails(l, join(other, FROZEN), "is not a descendant of");
@@ -210,7 +212,7 @@ describe("L2 refusals: the counts checkout must be the same repository, a descen
   test("a counts dir that is no git work tree at all is refused", async () => {
     const l = coreAtX();
     const dir = join(tmp("pc-plain-"), "frozen");
-    writeRef((mkdirSync(dir, { recursive: true }), join(dir, `${PREV}.json`)));
+    copyFileSync(REF_PATH, (mkdirSync(dir, { recursive: true }), join(dir, `${PREV}.json`)));
     await freeze(l.x, dir);
     await fails(l, dir, "not inside a git work tree");
   });
@@ -281,7 +283,7 @@ describe("the git children are hermetic (issue 1740 review)", () => {
     const other = join(tmp("pc-rep-"), "o");
     mkdirSync(join(other, FROZEN), { recursive: true });
     git(other, "init", "-q"); git(other, "config", "commit.gpgsign", "false");
-    writeRef(join(other, FROZEN, `${PREV}.json`));
+    copyFileSync(REF_PATH, join(other, FROZEN, `${PREV}.json`));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "unrelated root");
     await freeze(l.x, join(other, FROZEN));
     git(other, "add", "-A"); git(other, "commit", "-q", "-m", "forged data");
@@ -338,7 +340,7 @@ describe("the default counts dir cannot satisfy the layout and the error says wh
     const l = coreAtX();
     const cwdCounts = join(l.w.dir, FROZEN); // the default: deployments/frozen-counts under the working directory
     mkdirSync(cwdCounts, { recursive: true });
-    writeRef(join(cwdCounts, `${PREV}.json`));
+    copyFileSync(REF_PATH, join(cwdCounts, `${PREV}.json`));
     await freeze(l.x, cwdCounts);
     const env = { PATH: `${STUB_DIR}:${process.env.PATH}`, HOME: process.env.HOME, STUB_STATE: l.w.statePath, STUB_CONFIG: l.w.cfgPath, GITHUB_TOKEN: "t" };
     const args = ["--chain", "8453", "--rpc", "http://rpc.test:8545", "--sheet", l.w.sheetPath, "--signer", "keystore:/dev/shm/stub/DEPLOYER", "--environment", "base-mainnet", "--core-sha", l.x, "--core-dir", l.core, "--evidence", l.w.evidence, "--stage", "plan"];

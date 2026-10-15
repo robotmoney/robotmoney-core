@@ -7,7 +7,8 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
+import {RMUSDC_VAULT_NAME} from "./DeployVault.s.sol";
 
 /// @title DeployVaultRegistry
 /// @notice Foundry deploy script for the VaultRegistry contract.
@@ -21,16 +22,15 @@ import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 ///         Required env vars:
 ///           ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 ///           VAULT_ADDRESS    — RobotMoneyVault to register
-///
-///           VAULT_NAME       — registered vault name, from the frozen sheet (no default)
+///         The registered name is RMUSDC_VAULT_NAME (DeployVault.s.sol), a script constant like each basket
+///         script's VAULT_NAME (issue 1705 C9: one registry-name source for all four vaults).
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
-///         (mandatory and equal to 8453 on Base mainnet), UPGRADE_AUTHORITY (the deployment's
-///         timelock, deployed first) and UPGRADE_MODE (`upgradeable` or `frozen-at-deploy`).
-///
-///         The registry is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
-///         `initialize` in its constructor.
-contract DeployVaultRegistry is GovernedProxyDeploy {
+///         (mandatory and equal to 8453 on Base mainnet).
+///         SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+///         of the registry proxy (`UpgradeAuthority`, issue 1808). The manifest `registry` is the
+///         ERC-1967 proxy; `registry_implementation` is its implementation.
+contract DeployVaultRegistry is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "registry.json";
 
@@ -38,14 +38,13 @@ contract DeployVaultRegistry is GovernedProxyDeploy {
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
-        /// The proxy.
         VaultRegistry registry;
         address admin;
         address vault;
         address asset;
         bool registered;
-        /// The implementation behind `registry` (ADR-0014).
-        address implementation;
+        address registryImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys registry,
@@ -60,15 +59,16 @@ contract DeployVaultRegistry is GovernedProxyDeploy {
         address admin = _envAddressRequired("ADMIN_ADDRESS");
         address vault = _envAddressRequired("VAULT_ADDRESS");
         address asset = BASE_USDC;
-        string memory vaultName = _envStringRequired("VAULT_NAME");
+        string memory vaultName = RMUSDC_VAULT_NAME;
         // The registry stores these two addresses without reading them; a wrong-chain
         // or mistyped address would register a vault with no code behind it.
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(asset.code.length > 0, "USDC_ADDRESS has no code on this chain");
-        _useEnvUpgradeConfig("");
+
+        UpgradeConfig memory u = _readUpgradeConfig("");
 
         vm.startBroadcast();
-        (d.registry, d.implementation) = _deployRegistry(admin);
+        _deployRegistry(d, admin, u);
         d.admin = admin;
         d.vault = vault;
         d.asset = asset;
@@ -95,9 +95,8 @@ contract DeployVaultRegistry is GovernedProxyDeploy {
         require(admin_ != address(0), "ADMIN_ADDRESS=0");
         require(vault_ != address(0), "VAULT_ADDRESS=0");
         require(asset_ != address(0), "USDC_ADDRESS=0");
-        _useInProcessUpgradeConfig();
 
-        (d.registry, d.implementation) = _deployRegistry(admin_);
+        _deployRegistry(d, admin_, _inProcessUpgradeConfig());
         d.admin = admin_;
         d.vault = vault_;
         d.asset = asset_;
@@ -115,18 +114,14 @@ contract DeployVaultRegistry is GovernedProxyDeploy {
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    /// @dev The registry implementation and its initialized proxy (ADR-0014).
-    function _deployRegistry(address admin_)
-        internal
-        returns (VaultRegistry registry, address implementation)
-    {
-        implementation = address(new VaultRegistry());
-        registry = VaultRegistry(
+    /// @dev Deploy the registry implementation and its ERC-1967 proxy, initialized atomically.
+    function _deployRegistry(Deployed memory d, address admin_, UpgradeConfig memory u) internal {
+        d.upgrade = u;
+        d.registryImplementation = address(new VaultRegistry());
+        d.registry = VaultRegistry(
             _deployProxy(
-                implementation,
-                abi.encodeCall(
-                    VaultRegistry.initialize, (admin_, _upgrade.authority, _upgrade.mode)
-                )
+                d.registryImplementation,
+                abi.encodeCall(VaultRegistry.initialize, (admin_, u.timelock, u.mode))
             )
         );
     }
@@ -168,10 +163,9 @@ contract DeployVaultRegistry is GovernedProxyDeploy {
         string memory obj = "registry_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "registry", address(d.registry));
-        vm.serializeAddress(obj, "registry_implementation", d.implementation);
-        vm.serializeBytes32(obj, "registry_layout_id", _layoutId("VaultRegistry"));
-        vm.serializeAddress(obj, "upgrade_authority", _upgrade.authority);
-        vm.serializeString(obj, "upgrade_mode", upgradeModeName(_upgrade.mode));
+        vm.serializeAddress(obj, "registry_implementation", d.registryImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "vault", d.vault);
         vm.serializeAddress(obj, "asset", d.asset);

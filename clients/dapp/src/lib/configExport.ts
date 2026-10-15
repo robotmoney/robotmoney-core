@@ -14,6 +14,10 @@
  *   chain_id, rpc_url, gateway_address, usdc_address, vault_address,
  *   gateway_runtime_hash
  *
+ * Optional top-level fields (issue 1810), emitted only for a proxied gateway:
+ *   gateway_implementation, gateway_implementation_runtime_hash
+ *   rmpc refuses every write on a proxied gateway without them.
+ *
  * Required [signer] sub-table fields (encrypted_keystore path):
  *   allow_software_fallback = true
  *   keystore_path
@@ -27,14 +31,11 @@
  * receives the agent's shares unnoticed. The panel always passes them once a
  * wallet is connected.
  *
- * Implementation pin (QA plan P3, issue 1810): when the gateway is an ERC-1967
- * proxy, rmpc refuses every write and every agent consent unless the live
- * implementation's code hash is in `gateway_implementation_hashes`. The panel
- * passes that hash only after the dapp verified it against the build's
- * reviewed pin (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH`), so the export
- * never pins whatever is live at export time. A later upgrade is refused until
- * the operator approves the new code. A direct gateway gets no such line
- * (rmpc refuses a pin for one).
+ * Gateway implementation pin (issue 1810): the panel passes the
+ * implementation and its code hash only after the dapp verified them against
+ * the build's pin (`VITE_GATEWAY_EXPECTED_IMPLEMENTATION` + `_HASH`), so the
+ * export never pins whatever is live at export time. A direct gateway gets no
+ * such lines.
  *
  * The vaults and the router are proxies too, and rmpc checks every one a write
  * reaches against `proxy_implementation_hashes` (a deposit the vault, a
@@ -98,10 +99,11 @@ interface RmpcExportInputs {
   /** keccak256(eth_getCode(gateway_address)) — must be non-zero */
   gateway_runtime_hash: string;
   /**
-   * keccak256 of the code of each approved gateway implementation (QA plan P3).
-   * Only for a proxied gateway; omitted or empty for a direct one.
+   * The verified ERC-1967 implementation behind a proxied gateway and its
+   * code hash (issue 1810). Omit both for a direct gateway.
    */
-  gateway_implementation_hashes?: readonly string[];
+  gateway_implementation?: string;
+  gateway_implementation_runtime_hash?: string;
   /**
    * The vault is an ERC-1967 proxy: rmpc needs `proxy_implementation_hashes`. Without reviewed
    * hashes below, the export writes the key commented out with where to copy them from.
@@ -135,14 +137,10 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
     `usdc_address         = ${tomlStr(inputs.usdc_address)}`,
     `vault_address        = ${tomlStr(inputs.vault_address)}`,
     `gateway_runtime_hash = ${tomlStr(inputs.gateway_runtime_hash)}`,
-    ...(inputs.gateway_implementation_hashes !== undefined &&
-    inputs.gateway_implementation_hashes.length > 0
+    ...(inputs.gateway_implementation && inputs.gateway_implementation_runtime_hash
       ? [
-          `# The reviewed gateway implementation this dapp build pins, verified live at export.`,
-          `# rmpc refuses to sign against any other: approve a reviewed upgrade by adding its hash.`,
-          `gateway_implementation_hashes = [${inputs.gateway_implementation_hashes
-            .map(tomlStr)
-            .join(", ")}]`,
+          `gateway_implementation = ${tomlStr(inputs.gateway_implementation)}`,
+          `gateway_implementation_runtime_hash = ${tomlStr(inputs.gateway_implementation_runtime_hash)}`,
         ]
       : []),
     ...(inputs.proxy_implementation_hashes !== undefined &&

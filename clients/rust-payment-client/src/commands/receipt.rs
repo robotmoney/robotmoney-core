@@ -30,11 +30,12 @@
 //! `cfg.gateway_address`; the caller must hold `AGENT_ROLE` on the gateway and
 //! `COMMITTEE_AGENT_ROLE` on the IC policy (docs/architecture.md §4.9.2).
 //!
-//! Before it signs, `submit` runs checks 1, 2 and 2b of the write preflight
-//! (issue 1810, `crate::upgrade::verify_gateway_before_signing`): the RPC
-//! serves `chain_id`, the gateway's code hashes to `gateway_runtime_hash`, and
-//! a proxied gateway runs an implementation pinned in
-//! `gateway_implementation_hashes`. A mismatch exits 2, a failed read 3.
+//! Before it signs, `submit` verifies the gateway proxy code and its live
+//! implementation at one pinned block (issue 1810,
+//! `policy::implementation::verify_gateway_code_now`): the gateway's code
+//! hashes to `gateway_runtime_hash`, and a proxied gateway runs the approved
+//! `gateway_implementation` with code hash
+//! `gateway_implementation_runtime_hash`. A mismatch or a failed read exits 2.
 //!
 //! Exit codes:
 //! - 0 — success.
@@ -57,6 +58,7 @@ use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::implementation::{check_executed_under, verify_gateway_code_now};
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::AgentSigner;
@@ -347,31 +349,23 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
         }
     };
 
-    // Checks 1, 2 and 2b before anything is signed (issue 1810): the RPC
-    // serves `chain_id`, the gateway's code is `gateway_runtime_hash`, and a
-    // proxied gateway runs an implementation pinned in
-    // `gateway_implementation_hashes`. A failed read refuses too.
-    if let Err(err) = rt.block_on(crate::upgrade::verify_gateway_before_signing(
-        &rpc,
-        &cfg,
-        gateway_addr,
-    )) {
-        log::error!("rmpc receipt submit: gateway check refused: {err}");
-        emit_failure(
-            &ReceiptFailure {
-                ok: false,
-                error: err.name().to_string(),
-                message: Some(format!("{err}")),
-            },
-            args.pretty,
-        );
-        return match err {
-            RmpcError::ErrChainIdMismatch
-            | RmpcError::ErrCodeHashMismatch
-            | RmpcError::ErrImplementationNotApproved { .. } => EXIT_REFUSAL,
-            _ => EXIT_STARTUP_FAIL,
-        };
-    }
+    // The gateway proxy and its live implementation must be the approved
+    // ones before anything is signed (issue 1810).
+    let gateway_implementation = match rt.block_on(verify_gateway_code_now(&rpc, &cfg)) {
+        Ok(i) => i,
+        Err(e) => {
+            log::error!("rmpc receipt submit: {e}");
+            emit_failure(
+                &ReceiptFailure {
+                    ok: false,
+                    error: e.name().to_string(),
+                    message: Some(format!("{e}")),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
 
     let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "submit") {
         Ok(f) => f,
@@ -500,6 +494,27 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
             return EXIT_REFUSAL;
         }
     };
+
+    // The anchor is a success only if it executed under the implementation
+    // it was signed against (issue 1810). The message names the tx_hash.
+    if let Err(e) = rt.block_on(check_executed_under(
+        &rpc,
+        gateway_addr,
+        gateway_implementation,
+        receipt.block_number,
+        &format!("{tx_hash:#x}"),
+    )) {
+        log::error!("rmpc receipt submit: {e}");
+        emit_failure(
+            &ReceiptFailure {
+                ok: false,
+                error: e.name().to_string(),
+                message: Some(format!("{e}")),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     let block_number = receipt.block_number.unwrap_or(0);
 

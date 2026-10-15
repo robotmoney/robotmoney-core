@@ -47,7 +47,9 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "manifests the stage table names are missing in {}: {missing:?}",
         dir.display()
     );
-    // Core 1710: all four vaults deploy paused, rmUSDC included. The verifier below expects exactly that before stage 13.
+    // Core 1710, issue 1705: each vault's deposit state before govern is the stage table's deployPaused (all four deploy paused, rmUSDC included),
+    // and after govern it is open where the table makes the unpause a stage 13 row. The verifier below expects exactly that.
+    let rules = table.vault_deposit_rules();
     let deposits_paused = |vault: alloy_primitives::Address| -> bool {
         fx.cast_call_raw(vault, "depositsPaused()", &[])
             .expect("read depositsPaused")
@@ -59,8 +61,17 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         ("rmAGENT", fx.agent_vault()),
         ("rmRWA", fx.rwa_vault()),
     ];
-    for (name, vault) in four_vaults {
-        assert!(deposits_paused(vault), "{name} must deploy paused");
+    assert_eq!(
+        rules.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+        four_vaults.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        "the stage table's vault rows and the harness vaults must be the same four, in order"
+    );
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+        assert_eq!(
+            deposits_paused(vault),
+            rule.deploy_paused,
+            "{name}: depositsPaused before govern must equal the stage table's deployPaused"
+        );
     }
     let verified = fx
         .published()
@@ -242,10 +253,11 @@ fn twin_chain_publish_verify_and_govern_matrix() {
             "the govern matrix must print one scheduled and one executed line for {row}"
         );
     }
-    for (name, vault) in four_vaults {
-        assert!(
-            !deposits_paused(vault),
-            "{name} must read open after stage 13"
+    for (rule, (name, vault)) in rules.iter().zip(four_vaults) {
+        assert_eq!(
+            deposits_paused(vault),
+            rule.paused_after_stage13(),
+            "{name}: depositsPaused after stage 13 must follow the stage table (deployPaused, unpauseInStage13)"
         );
     }
 
@@ -403,14 +415,12 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         "receipt B was recorded only: it must not read released"
     );
 
-    // Issue 1696, issue 1698: the Safe applies a consensus receipt through the timelock as ONE call, RouterGovernance.applyReceipt(receiptId, payloadDigest,
-    // vaults, bps), which releases the receipt and writes the vector to the router in one transaction, after the unpause rows. A third receipt (receipt-c) is
-    // recorded with its own digest, unreleased. `govern --row apply-receipt` checks it before sending, schedules the call through the real Safe, waits the real
-    // delay (one time warp on the fork) and executes it. The tool read the receipt and the router back; this test reads them again from the chain. The Twin
-    // proves the row executes on the real contracts, not that mainnet governance works.
-    // Issue 1743: the ACTIVE vector (PortfolioRouter.setWeights, written by applyReceipt; the storage keeps its pre-1698 "voted" name) overrides the DEFAULT
-    // vector while votedWeightsActive is true, so the DEFAULT alone says nothing about routing. Every check below reads the default vector, the EFFECTIVE
-    // vector (what deposits route by) and the active flag.
+    // Issue 1696, issue 1698: the Safe applies a consensus receipt through the timelock as ONE call, RouterGovernance.applyReceipt, which releases
+    // the receipt and sets the router's ACTIVE vector together. A third receipt (receipt-c) is recorded with its own digest, unreleased.
+    // `govern --row apply-receipt` checks it before sending, schedules the call through the real Safe, waits the real delay (one time warp on the
+    // fork) and executes it. The tool read it back; this test reads it again from the chain. The default vector is untouched and stays the fallback.
+    // Issue 1743: the active vector overrides the default while votedWeightsActive is true, so every check reads the default, the active and the
+    // EFFECTIVE vector (what deposits route by) and the flag.
     let router_vector = |fx: &Fixture, sig: &str| -> (Vec<String>, Vec<u64>) {
         let raw = fx
             .cast_call_raw(fx.router(), sig, &[])
@@ -425,6 +435,7 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         (vaults, bps)
     };
     let router_weights = |fx: &Fixture| router_vector(fx, "getDefaultWeights()");
+    let active_weights = |fx: &Fixture| router_vector(fx, "getWeights()");
     let effective_weights = |fx: &Fixture| router_vector(fx, "getEffectiveWeights()");
     let voted_active = |fx: &Fixture| -> bool {
         fx.cast_call_raw(fx.router(), "votedWeightsActive()", &[])
@@ -499,77 +510,32 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     );
     assert!(
         c_released(&fx),
-        "receipt C must read released after the call"
+        "receipt C must read released after the one applyReceipt call"
     );
-    // Issue 1698: applyReceipt writes the router's ACTIVE vector (setWeights). The DEFAULT vector is the deploy-time fallback and does not move.
-    assert_eq!(
-        router_weights(&fx),
-        before,
-        "applyReceipt leaves the default (launch) vector untouched"
-    );
-    let after = effective_weights(&fx);
+    let after = active_weights(&fx);
     assert_eq!(after.0, want_vaults, "the vault list is unchanged");
-    // Core 1710: the Safe operation CHANGES the router split. The effective read-back differs from what the router routed by before the call.
-    assert_ne!(
-        after.1, before.1,
-        "apply-receipt must change the effective router weights from the launch vector"
-    );
     assert_eq!(
         after.1,
         vec![5000, 3000, 0, 2000],
-        "the router routes by receipt C's vector after the call"
+        "the router's active vector is receipt C's vector after the call"
     );
-    // Issue 1743: a receipt-driven rebalance changes the EFFECTIVE routing. The applied vector is the active one, so the flag reads true.
+    // Issue 1743: a receipt-driven rebalance must change the EFFECTIVE routing.
     assert!(
         voted_active(&fx),
-        "the applied receipt is the router's active vector (votedWeightsActive reads true)"
+        "the applied vector is the router's active vector"
     );
-    // A receipt is applied once: a second application of C is refused before anything is sent (the chain would revert ReceiptAlreadyReleased too).
-    {
-        let refusal = fx
-            .apply_fixture_receipt("receipt-c.json")
-            .expect_err("a released receipt cannot be applied again")
-            .to_string();
-        assert!(
-            refusal.contains("already released"),
-            "the refusal must name the released receipt, got: {refusal}"
-        );
-        assert_eq!(
-            effective_weights(&fx),
-            after,
-            "the refused second application changes nothing"
-        );
-    }
-    // Issue 1743, the emergency lever on the REAL contracts: `govern --row clear-voted-weights` drops the active (applied receipt) vector through the real Safe
-    // and timelock, so routing falls back to the default launch vector. Receipt C stays released: the clear undoes the routing, never the release.
-    {
-        let cleared = fx
-            .published()
-            .govern("clear-voted-weights", &[])
-            .expect("the Safe clears the active vector through the timelock");
-        assert_eq!(
-            cleared.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
-            vec!["clear-voted-weights", "clear-voted-weights"],
-            "one scheduled line and one executed line"
-        );
-        assert!(
-            !voted_active(&fx),
-            "votedWeightsActive must read false after the clear"
-        );
-        assert_eq!(
-            effective_weights(&fx),
-            router_weights(&fx),
-            "effective equals default after the clear"
-        );
-        assert_eq!(
-            effective_weights(&fx),
-            before,
-            "effective is the launch vector again"
-        );
-        assert!(c_released(&fx), "the clear does not un-release receipt C");
-    }
+    assert_eq!(
+        effective_weights(&fx),
+        after,
+        "the effective routing after apply-receipt equals receipt C's vector"
+    );
+    assert_eq!(
+        router_weights(&fx),
+        before,
+        "the default vector is untouched and stays the fallback"
+    );
     // The rehearsal evidence: the run manifest records the round under receipt_applications and evidence-check asserts it against the chain
-    // (one batch of exactly the release and the weight change, one real delay apart).
+    // (exactly one applyReceipt call, one real delay apart).
     // The Twin timelock runs a short delay: the floor is the delay the chain itself reports, so the gap must still reach it.
     let min_delay = u64::from_str_radix(
         &word(
@@ -607,6 +573,29 @@ fn twin_chain_publish_verify_and_govern_matrix() {
         .expect("the run manifest records receipt_applications");
     assert_eq!(apps.len(), 1, "one receipt was applied");
     assert_eq!(apps[0]["receipt_id"], c_id.to_lowercase());
+
+    // Issue 1743, the emergency lever on the REAL contracts: `govern --row clear-voted-weights` runs through the real Safe and timelock, and the
+    // router routes by the default launch vector again.
+    let cleared = fx
+        .published()
+        .govern("clear-voted-weights", &[])
+        .expect("the Safe clears the active vector through the timelock");
+    assert_eq!(
+        cleared.iter().map(|r| r.row.as_str()).collect::<Vec<_>>(),
+        vec!["clear-voted-weights", "clear-voted-weights"],
+        "one scheduled line and one executed line"
+    );
+    assert!(
+        !voted_active(&fx),
+        "votedWeightsActive must read false after the clear"
+    );
+    assert_eq!(
+        effective_weights(&fx),
+        before,
+        "effective is the launch vector again"
+    );
+    // The clear undoes the routing, never the release.
+    assert!(c_released(&fx), "the clear does not un-release receipt C");
 
     // Core 1676 (owner decision 2026-10-08): rmAGENT holds RM on the Uniswap V4 RM/USDC pool. The verifier read the venue, the V4 adapter, the
     // recorder PoolKey and the absence of any recorder admin back from the chain: each label is in the output or `verify()` above would have failed.

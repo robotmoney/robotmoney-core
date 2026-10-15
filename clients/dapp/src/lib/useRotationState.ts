@@ -22,9 +22,9 @@
  * browser wallet always takes the depositor path. Step 1 (`revokeAgent`) is
  * the same for both: the gateway only lets the agent's recorded owner call it.
  *
- * On the depositor path the new agent must consent (issue 1791): its EIP-712
- * AgentConsent signature is collected before step 1, because a rotation that
- * revokes the old agent and then cannot reveal the new one leaves no agent.
+ * On the depositor path the new agent must consent (core 1791): before the
+ * reveal it commits `consentHash` (`computeConsentHash`) from its own key, or
+ * the reveal reverts `OwnerConsentMissing`. Step 3 shows that hash.
  *
  * Each step has its own write hook and receipt (QA plan U5). A step advances
  * when the wallet accepts it; a step whose receipt says reverted stops the
@@ -42,12 +42,11 @@ import {
 import { useGuardedWriteContract } from "./useGuardedWriteContract";
 import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { ADMIN_ROLE_HASH, gatewayAbi } from "./abi";
-import { useAgentConsent } from "./useAgentConsent";
-import { NO_AGENT_CONSENT } from "./agentConsent";
 import { buildPreview, type AdminAction, type PreviewContext } from "./preview";
 import { composeRotationPreview } from "./rotation";
 import {
   commitAuthorizationCall,
+  computeConsentHash,
   generateSalt,
   revealAuthorizationCall,
   type CommitInputs,
@@ -153,27 +152,13 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
         } satisfies AdminAction)
       : null;
 
-  // Depositor path: the new agent's consent (issue 1791). The admin path's
-  // authorizeAgent takes none.
-  const agentConsent = useAgentConsent({
-    gateway: gatewayAddress,
-    agent: authorizePath === "depositor" ? newAgentRaw : "",
-    revealer: address,
-    shareReceiver,
-  });
-
   // Depositor path: step 2 signs the commit and step 3 the reveal, so those are
   // what it previews (QA plan U4, DR-4). A new-agent edit resets the steps and
   // the salt, so the agent and salt cannot drift between commit and reveal.
   const commitInputs: CommitInputs | null =
     authorizeAction && address ? { agent: authorizeAction.agent, committer: address, salt } : null;
   const revealInputs: RevealInputs | null = authorizeAction
-    ? {
-        agent: authorizeAction.agent,
-        salt,
-        policy: authorizeAction.policy,
-        agentConsent: agentConsent.consent ?? NO_AGENT_CONSENT,
-      }
+    ? { agent: authorizeAction.agent, salt, policy: authorizeAction.policy }
     : null;
 
   const revokePreview = revokeAction ? buildPreview(revokeAction, ctx) : null;
@@ -237,11 +222,7 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
   const authorizeReady =
     authorizePath === "admin"
       ? Boolean(authorizeSim)
-      : newAgentFree &&
-        receiverIsSelf &&
-        agentConsent.consent !== null &&
-        commitPreview?.ok === true &&
-        revealPreview?.ok === true;
+      : newAgentFree && receiverIsSelf && commitPreview?.ok === true && revealPreview?.ok === true;
   // Step 2 needs its own preview; step 1 needs BOTH so the operator sees the
   // whole rotation before signing anything.
   const authorizeOk = combinedOk && authorizeReady;
@@ -339,7 +320,14 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     );
   };
 
+  // Core 1791: the hash the new agent commits from its own key before the reveal.
+  const consentHash =
+    authorizePath === "depositor" && address && authorizeAction
+      ? computeConsentHash(address, authorizeAction.agent, salt, authorizeAction.policy)
+      : null;
+
   return {
+    consentHash,
     oldAgent: oldAgentRaw,
     setOldAgent,
     newAgent: newAgentRaw,
@@ -357,7 +345,6 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     done,
     authorizeOpen,
     authorizePath,
-    agentConsent,
     revokePreview,
     authorizePreview,
     revealPreview,

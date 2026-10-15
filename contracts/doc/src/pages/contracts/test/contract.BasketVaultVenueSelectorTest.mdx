@@ -5,7 +5,7 @@ description: "Verifies that addAsset stores the Venue enum on AssetInfo and disp
 
 # BasketVaultVenueSelectorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/test/BasketVault.t.sol)
 
 **Inherits:** Test
 
@@ -216,7 +216,7 @@ event AssetAdded(
         address pool,
         uint24 swapFee,
         address adapter,
-        BasketAssetConfigGuard.Venue venue
+        BasketVault.Venue venue
     );
 ```
 
@@ -229,5 +229,5 @@ event AssetAdded(
 | pool | `address` |  |
 | swapFee | `uint24` |  |
 | adapter | `address` |  |
-| venue | `BasketAssetConfigGuard.Venue` |  |
+| venue | `BasketVault.Venue` |  |
 

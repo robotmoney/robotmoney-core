@@ -24,7 +24,6 @@ import {
   mainnetComposeTexts,
   readMainnetManifests,
   redactRpc,
-  upgradedImplementationHashes,
 } from "../mainnet-dapp.ts";
 import { manifestOf, vaultManifests } from "../stage-manifests.ts";
 
@@ -120,6 +119,26 @@ describe("the env builder from the manifests", () => {
     expect(env.INDEXER_SAFE).toBe(SAFE);
     expect(env.INDEXER_TIMELOCK).toBe(TIMELOCK);
     expect(env.VITE_TIMELOCK_ADDRESS).toBe(TIMELOCK);
+    // A direct (legacy) gateway's manifest has no implementation: the pins are empty.
+    expect(env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION).toBe("");
+    expect(env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH).toBe("");
+  });
+
+  test("passes a proxied gateway's implementation pin through, and refuses a half or zero pin (issue 1810)", () => {
+    const IMPL = A(0x10a);
+    const IMPL_HASH = `0x${"cd".repeat(32)}`;
+    const proxied = fixture("proxied", (d) => {
+      Object.assign(d[manifestOf("gateway")]!, { gateway_implementation: IMPL, gateway_implementation_runtime_hash: IMPL_HASH });
+    });
+    const penv = buildMainnetDappEnv(input(proxied));
+    expect(penv.VITE_GATEWAY_EXPECTED_IMPLEMENTATION).toBe(IMPL);
+    expect(penv.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH).toBe(IMPL_HASH);
+    const half = fixture("impl-half", (d) => void (d[manifestOf("gateway")]!.gateway_implementation = IMPL));
+    expect(refusal(() => buildMainnetDappEnv(input(half)))).toBe("manifest-field");
+    const zero = fixture("impl-zero", (d) => {
+      Object.assign(d[manifestOf("gateway")]!, { gateway_implementation: IMPL, gateway_implementation_runtime_hash: `0x${"0".repeat(64)}` });
+    });
+    expect(refusal(() => buildMainnetDappEnv(input(zero)))).toBe("manifest-field");
   });
 
   // Issue 1737 item 1 (QA plan U5): the builder hands the dapp a code-hash pin for every vault and the router,
@@ -268,6 +287,39 @@ describe("refusals on the manifests and the options", () => {
         handover(d).vault_2!.implementation_code_hash = VAULT_IMPL_HASH;
       })))),
     ).toBe("manifest-mismatch");
+    // A basket vault deploy names its implementation `implementation` (BasketVaultDeployBase), DeployVault `vault_implementation`.
+    const basket = buildMainnetDappEnv(input(fixture("impl-basket", (d) => {
+      proxied(d);
+      d[vaultManifests().rmAGENT!]!.implementation = IMPL;
+      handover(d).vault_2!.implementation_code_hash = VAULT_IMPL_HASH;
+    })));
+    expect(JSON.parse(basket.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmPROTO]: VAULT_IMPL_HASH, [VAULTS.rmAGENT]: VAULT_IMPL_HASH });
+  });
+
+  // Issue 1796 with QA plan U5: a vault the migration overlay (current-vaults.json) moved to a later generation is pinned by
+  // the overlay's verified runtime hash, never by the deploy-time hash of the retired vault, and carries no implementation pin
+  // (the overlay records none), so the dapp refuses deposits into it while its exits stay open.
+  test("a vault the migration overlay moved is pinned by the overlay's runtime hash and has no implementation pin", () => {
+    const NEW_PROTO = A(0x4001);
+    const NEW_PROTO_HASH = `0x${"f2".repeat(32)}`;
+    const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
+    const generation = {
+      vault: "rmPROTO", old_address: VAULTS.rmPROTO, current_address: NEW_PROTO, old_runtime_hash: VAULT_HASHES.rmPROTO,
+      current_runtime_hash: NEW_PROTO_HASH, operation_id: `0x${"21".repeat(32)}`, execution_tx: `0x${"22".repeat(32)}`,
+    };
+    const moved = (gen: Json) => (d: Record<string, Json>) => {
+      d[vaultManifests().rmPROTO!]!.vault_implementation = A(0x2001);
+      (tl(d).vault_handover as Record<string, Json>).vault_1!.implementation_code_hash = `0x${"e2".repeat(32)}`;
+      d["current-vaults.json"] = { schema: "robotmoney-vault-generations-v1", chain_id: 8453, verified_block: "1", generations: [gen] };
+    };
+    const env = buildMainnetDappEnv(input(fixture("overlay-moved", moved(generation))));
+    expect(JSON.parse(env.VITE_VAULT_ADDRESSES!).rmPROTO).toBe(NEW_PROTO);
+    const pins = JSON.parse(env.VITE_VAULT_EXPECTED_CODE_HASH!) as Record<string, string>;
+    expect(pins[NEW_PROTO]).toBe(NEW_PROTO_HASH);
+    expect(pins[VAULTS.rmPROTO]).toBeUndefined();
+    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({});
+    // mutation: an overlay generation without a usable runtime hash refuses the build
+    expect(refusal(() => buildMainnetDappEnv(input(fixture("overlay-zero", moved({ ...generation, current_runtime_hash: `0x${"0".repeat(64)}` })))))).toBe("manifest-field");
   });
 
   test("manifests that disagree: router, vault order, rmUSDC, timelock addresses", () => {
@@ -492,79 +544,6 @@ function harness(over: { env?: Record<string, string | undefined>; configJson?: 
 const MANI = fixture("cli");
 const UP = ["dapp", "up", "--chain", "8453", "--rpc", RPC, "--manifests", MANI, "--start-block", "52401633"];
 const filesOf = (argv: string[]) => argv.filter((_, i) => argv[i - 1] === "-f").map((f) => f.replace(CORE_ROOT + "/", ""));
-
-// Security round 2 (review: SECURITY_OPERATIONAL_PIN_ROTATION_GAP): after upgrade-proxy executes, the timelock manifest still names the deploy-time implementation hash
-// (DeployTimelock writes it once). The govern evidence's executed proxy_upgrades rounds pin the installed implementation's hash, so the runbook's rotation
-// step has a supported path that never edits the release record. Security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): the latest executed round's hash
-// replaces the deploy-time one; a superseded implementation is never pinned.
-describe("security round 2: an executed upgrade's implementation is pinned in place of the deploy-time one", () => {
-  const IMPL = A(0x2001);
-  const USDC_IMPL_HASH = `0x${"e0".repeat(32)}`;
-  const ROUTER_IMPL_HASH = `0x${"e1".repeat(32)}`;
-  const NEW_VAULT_HASH = `0x${"f0".repeat(32)}`;
-  const NEW_ROUTER_HASH = `0x${"f1".repeat(32)}`;
-  const tl = (d: Record<string, Json>) => d[manifestOf("timelock")]!;
-  /** rmUSDC (vault_0) and the router are proxies, their deploy-time implementation hashes in the timelock manifest. */
-  const dir = fixture("upgrade-pins", (d) => {
-    d[manifestOf("router")]!.router_implementation = IMPL;
-    d[vaultManifests().rmUSDC!]!.vault_implementation = IMPL;
-    (tl(d).code_hashes as Json).router_implementation = ROUTER_IMPL_HASH;
-    (tl(d).vault_handover as Record<string, Json>).vault_0!.implementation_code_hash = USDC_IMPL_HASH;
-  });
-  const row = (proxy: string, address: string, hash: string, over: Json = {}) => ({
-    step: "upgrade-proxy", proxy, proxy_address: address, implementation: A(0x3001), implementation_code_hash: hash,
-    schedule_tx: `0x${"12".repeat(32)}`, schedule_status: 1, execute_tx: `0x${"13".repeat(32)}`, execute_status: 1, ...over,
-  });
-  const evidence = (name: string, doc: Json): string => {
-    const p = join(WORK, `${name}.json`);
-    writeFileSync(p, JSON.stringify(doc));
-    return p;
-  };
-
-  test("security round 3: an evidence file with one executed rmUSDC round v1->v2 pins v2 only for vault_0 (the deploy-time v1 retires); the router's row replaces the router pin", () => {
-    const ev = evidence("ev-good", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH), row("router", ROUTER.toUpperCase().replace("0X", "0x"), NEW_ROUTER_HASH)] });
-    const env = buildMainnetDappEnv(input(dir, { upgradeEvidence: ev }));
-    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: NEW_VAULT_HASH });
-    expect(env.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe(NEW_ROUTER_HASH);
-    expect(JSON.parse(env.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)[VAULTS.rmUSDC]).not.toContain(USDC_IMPL_HASH);
-    // mutation: without the evidence only the deploy-time hashes are pinned, and every write to the upgraded contracts would refuse
-    const before = buildMainnetDappEnv(input(dir));
-    expect(JSON.parse(before.VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: USDC_IMPL_HASH });
-    expect(before.VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH).toBe(ROUTER_IMPL_HASH);
-    // a row for a proxy the dapp pins nothing for (the registry) changes nothing
-    expect(upgradedImplementationHashes(evidence("ev-registry", { chain_id: 8453, proxy_upgrades: [row("registry", REGISTRY, NEW_VAULT_HASH)] })).get(REGISTRY.toLowerCase())).toEqual([NEW_VAULT_HASH]);
-  });
-
-  test("security round 3 (review: SECURITY_STALE_PIN_ACCEPTS_ROLLBACK): only the latest executed round is pinned, by execute time, so a rollback is pinned only once a round records it", () => {
-    const V3 = `0x${"f3".repeat(32)}`;
-    // v1 -> v2 -> v3: v3 only, never v1 or v2
-    const chainOf = evidence("ev-v3", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 }), row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: 200 })] });
-    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: chainOf })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: V3 });
-    // a rollback the Safe meant (v2 -> v1) is a round of its own: v1 is pinned again because that round executed last, and v2 retires
-    const rollback = evidence("ev-rollback", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 }), row("rmUSDC", VAULTS.rmUSDC, USDC_IMPL_HASH, { execute_block_timestamp: 200 })] });
-    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: rollback })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: USDC_IMPL_HASH });
-    // recorded out of execution order (the timelock's executor is open): the execute time decides, not the file order
-    const swapped = evidence("ev-swapped", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: 200 }), row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_block_timestamp: 100 })] });
-    expect(upgradedImplementationHashes(swapped).get(VAULTS.rmUSDC.toLowerCase())).toEqual([NEW_VAULT_HASH, V3]);
-    expect(JSON.parse(buildMainnetDappEnv(input(dir, { upgradeEvidence: swapped })).VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH!)).toEqual({ [VAULTS.rmUSDC]: V3 });
-    // a malformed execute time is refused, never guessed
-    const bad = evidence("ev-bad-time", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, V3, { execute_block_timestamp: "soon" })] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: bad })))).toBe("upgrade-evidence");
-  });
-
-  test("a scheduled-only row, a failed execute, a row of another chain's evidence, or an upgrade of a contract the manifests say is direct is refused", () => {
-    const scheduled = evidence("ev-scheduled", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_tx: undefined, execute_status: undefined })] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: scheduled })))).toBe("upgrade-not-executed");
-    const reverted = evidence("ev-reverted", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH, { execute_status: 0 })] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: reverted })))).toBe("upgrade-not-executed");
-    const twin = evidence("ev-twin", { chain_id: 918453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, NEW_VAULT_HASH)] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: twin })))).toBe("wrong-chain");
-    const direct = evidence("ev-direct", { chain_id: 8453, proxy_upgrades: [row("rmPROTO", VAULTS.rmPROTO, NEW_VAULT_HASH)] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: direct })))).toBe("manifest-mismatch");
-    const zero = evidence("ev-zero", { chain_id: 8453, proxy_upgrades: [row("rmUSDC", VAULTS.rmUSDC, `0x${"0".repeat(64)}`)] });
-    expect(refusal(() => buildMainnetDappEnv(input(dir, { upgradeEvidence: zero })))).toBe("manifest-field");
-  });
-});
 
 describe("the overlay must be in the compose file list", () => {
   test("the real list passes; a list without the overlay, with an extra file or reordered is refused", () => {

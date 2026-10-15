@@ -13,8 +13,7 @@ const DOCS = {
 const PHRASES: [string, RegExp][] = [
   ["the row and its arguments", /--row apply-receipt --receipt-id 0x<bytes32> --payload FILE/],
   ["one timelock call (issue 1698)", /ONE timelock call/],
-  ["the applyReceipt call and its arguments", /applyReceipt\(receiptId, payloadDigest, vaults, bps\)/],
-  ["release and weights in one transaction", /one transaction/],
+  ["the weight setter's applyReceipt", /applyReceipt\(receiptId, payloadDigest, vaults, bps\)/],
   ["the digest refusal", /keccak256/],
   ["the sum refusal", /10000 bps/],
   ["the vault set refusal", /router-eligible vaults/],
@@ -49,32 +48,37 @@ describe("docs mention the apply-receipt row (issue 1696, issue 1698)", () => {
   }
 });
 
-// Issue 1743, issue 1698: the clear row (the emergency lever) is documented in both docs.
-describe("docs mention the clear-voted-weights row (issue 1743)", () => {
+// Issue 1743: the clear row is documented in both docs, and that an active vector does not block apply-receipt (issue 1698).
+describe("docs mention the clear-voted-weights row and that applyReceipt overwrites an active vector (issue 1743, issue 1698)", () => {
   const P: [string, RegExp][] = [
     ["the row", /--row clear-voted-weights/],
     ["the single call", /RouterGovernance\.clearVotedWeights\(\)/],
     ["the role", /ADMIN_ROLE/],
-    ["what it clears: the active (applied receipt) vector", /applied receipt/i],
+    ["an active vector does not block the row", /An active vector already in effect does not block the row: `applyReceipt` overwrites it\./],
     ["the effective weights read-back", /getEffectiveWeights\(\)/],
     ["the evidence list", /voted_weights_clears/],
-    ["the verifier labels", /router: votedWeightsActive is false after deploy, true after an applied receipt/],
+    ["the verifier labels", /router: votedWeightsActive is false after deploy/],
     ["no contract change", /No contract change/i],
     ["the live-router 0 bps leg warning (issue 1746)", /NEVER run clear-voted-weights on the LIVE 8453 router/],
   ];
   for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
 });
 
-// QA plan v1 C2 (issue 1701): the README says the verifier and evidence-check bind the applied vector to the chain's ReceiptApplied event, and names the
-// apply-receipt / pause-all ordering gap. (The runbook sentence belongs to the docs sweep.)
-describe("the README documents the chain-bound applied vector and the pause ordering gap (issue 1701)", () => {
-  const R = DOCS["publish-contracts/README.md"];
-  test("the verifier reads the last ReceiptApplied event, never the editable run manifest", () => {
-    expect(R).toMatch(/last `ReceiptApplied` event of the weight setter/);
-    expect(R).toMatch(/never from the editable run manifest/);
-    expect(R).toMatch(/binds each `receipt_applications` entry to the `ReceiptApplied` event/);
+// Issue 1701: the two causes of exit 25 and the apply-receipt versus pause-all ordering gap are documented in both docs.
+describe("docs name both causes of exit 25 and the apply-receipt ordering gap (issue 1701)", () => {
+  const P: [string, RegExp][] = [
+    ["the ordering gap", /An apply-receipt operation scheduled before a pause-all can still execute after it/],
+    ["the pause check that ignores it", /`refuseIfPausedSince`.{0,60}ignores every row that is not an unpause/],
+    ["exit 25: a vault not confirmed paused", /details\.unpaused/],
+    ["exit 25: a pause not recorded", /details\.manifest_recorded: false/],
+  ];
+  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
+  test("the README exit-code text lists both causes of 25", () => {
+    const readme = DOCS["publish-contracts/README.md"];
+    expect(readme).toContain("Exit 25 (`PAUSE`) has two causes");
+    expect(readme).not.toContain("A vault not confirmed paused exits 25.");
+    expect(readme.match(/pause not confirmed or not recorded 25/g)?.length).toBe(2);
   });
-  test("an apply-receipt scheduled before a pause-all can still execute after it", () => expect(R).toMatch(/apply-receipt operation scheduled before a pause-all still executes after it/));
 });
 
 // QA plan v1 D7 (review E5, issue 1705 Q2): the emergency unwind guard row is documented in both docs, with the post-govern verify that needs it.
@@ -133,20 +137,4 @@ describe("docs name the release gate on every broadcasting 8453 run (QA plan v1 
       expect(text).not.toMatch(/COUNTS_UNTRACKED/);
     });
   }
-});
-
-// QA plan v1 E7 (issue 1724): the prove-control adoption's log scan. Both docs name --logs-rpc, the stop at the found event, the range-limit shrink, the backoff and the
-// two named refusals, so an operator whose --rpc refuses eth_getLogs finds the flag in the runbook step and in the README.
-describe("docs name the prove-control log scan, --logs-rpc and its refusals (QA plan v1 E7)", () => {
-  const P: [string, RegExp][] = [
-    ["--logs-rpc", /--logs-rpc URL/],
-    ["the stop at the found event", /stops at the first window that holds/],
-    ["the range-limit shrink", /halves the window/],
-    ["the backoff", /doubling wait/],
-    ["the named RPC refusal", /RPC_REFUSED/],
-    ["the named scan bound", /LOG_SCAN_LIMIT/],
-    ["a refused read is never an empty answer", /never an empty answer/],
-  ];
-  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
-  test("the README options table has a --logs-rpc row", () => expect(DOCS["publish-contracts/README.md"]).toMatch(/^\| `--logs-rpc` \|/m));
 });

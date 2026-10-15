@@ -68,10 +68,10 @@ import { TestnetBanner } from "./components/TestnetBanner";
 import { MainnetBanner } from "./components/MainnetBanner";
 import { WrongChainGate } from "./components/WrongChainGate";
 import { VerificationBanner } from "./components/VerificationBanner";
+import { GatewayUpgradeStatus } from "./components/GatewayUpgradeStatus";
 import { VaultList } from "./components/VaultList";
 import { VaultDetail } from "./components/VaultDetail";
 import { RouterView } from "./components/RouterView";
-import { ProtocolUpgradesPanel } from "./components/ProtocolUpgradesPanel";
 import { ProtocolStats } from "./components/ProtocolStats";
 import { AboutModal } from "./components/AboutModal";
 import { DebugPage } from "./components/DebugPage";
@@ -109,14 +109,17 @@ export interface DappConfig {
   readonly vault: Address;
   readonly registry?: Address;
   readonly router?: Address;
-  readonly governance?: Address;
   readonly timelock?: Address;
   /** Core 1544: the 2-of-3 Safe that proposes to the timelock. Absent: admin proposals are blocked. */
   readonly safe?: Address;
   readonly rmToken?: Address;
   readonly expectedCodeHash?: string;
-  /** Issue 1810: reviewed gateway implementation code hashes (build-time, comma-separated). */
-  readonly expectedImplementationHashes?: string;
+  /**
+   * Issue 1810: the approved ERC-1967 implementation behind the gateway proxy
+   * and its code hash. Build-time-only pins, like `expectedCodeHash`.
+   */
+  readonly expectedImplementation?: string;
+  readonly expectedImplementationHash?: string;
   readonly envClass: "fork" | "devnet" | "testnet" | "mainnet";
   readonly explorerApiUrl: string;
   readonly vaultAddressBySymbol: ReturnType<typeof parseVaultAddressMap>;
@@ -134,7 +137,6 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     vault: (env.VITE_VAULT_ADDRESS ?? ZERO_ADDRESS) as Address,
     registry: env.VITE_REGISTRY_ADDRESS ? (env.VITE_REGISTRY_ADDRESS as Address) : undefined,
     router: env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : undefined,
-    governance: env.VITE_GOVERNANCE_ADDRESS ? (env.VITE_GOVERNANCE_ADDRESS as Address) : undefined,
     // Issue #647: TimelockController address for the Timelock admin tab (architecture §4.5).
     timelock: configuredAddress(env.VITE_TIMELOCK_ADDRESS),
     safe: configuredAddress(env.VITE_SAFE_ADDRESS),
@@ -142,7 +144,8 @@ export function deriveDappConfig(env: RuntimeConfig): DappConfig {
     // ROBOTMONEY token on Base; nothing deploys RM, core 1489).
     rmToken: env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined,
     expectedCodeHash: env.VITE_GATEWAY_EXPECTED_CODE_HASH,
-    expectedImplementationHashes: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH,
+    expectedImplementation: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION,
+    expectedImplementationHash: env.VITE_GATEWAY_EXPECTED_IMPLEMENTATION_HASH,
     envClass: (env.VITE_ENV_CLASS as DappConfig["envClass"]) ?? "fork",
     explorerApiUrl: resolveExplorerApiUrl(env),
     // Issue #1247 task 4.14: the per-deployment vault-symbol map that
@@ -158,7 +161,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
     cfg.gateway,
     cfg.expectedCodeHash,
-    cfg.expectedImplementationHashes,
+    { address: cfg.expectedImplementation, hash: cfg.expectedImplementationHash },
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState("my-account");
@@ -219,6 +222,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
       <WrongChainGate>
         <StatusHeader />
         <VerificationBanner state={verificationState} refresh={verificationRefresh} />
+        <GatewayUpgradeStatus state={verificationState} />
         <main className="dapp-shell">
           <div className="landing-overview">
             <ProtocolStats />
@@ -272,12 +276,6 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
                         router. The Consensus Receipts tab shows each receipt.
                       </p>
                     </section>
-                    {/* Issue 1810: implementation and freeze state of the non-vault proxies. */}
-                    <ProtocolUpgradesPanel
-                      gatewayAddress={cfg.gateway}
-                      routerAddress={cfg.router}
-                      registryAddress={cfg.registry}
-                    />
                   </div>
                 ),
               },

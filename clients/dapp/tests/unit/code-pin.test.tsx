@@ -32,6 +32,7 @@ import {
   checkCodePin,
   checkImplementationPin,
   GATEWAY_CODE_HASH_PIN_KEY,
+  GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY,
   GATEWAY_IMPLEMENTATION_HASH_PIN_KEY,
   isRouterDeposit,
   parseCodePins,
@@ -505,6 +506,7 @@ describe("implementation pins behind an ERC-1967 proxy (ADR-0014)", () => {
         VITE_ROUTER_ADDRESS: router,
         [ROUTER_IMPLEMENTATION_HASH_PIN_KEY]: `${REVIEWED_IMPL_PIN}, ${other}`,
         VITE_GATEWAY_ADDRESS: gateway,
+        [GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY]: fresh(),
         [GATEWAY_IMPLEMENTATION_HASH_PIN_KEY]: REVIEWED_IMPL_PIN,
       });
       expect(pins.get(v1)).toEqual([REVIEWED_IMPL_PIN]);
@@ -515,6 +517,13 @@ describe("implementation pins behind an ERC-1967 proxy (ADR-0014)", () => {
       expect(parseImplementationPinMap({ [VAULT_IMPLEMENTATION_HASH_PIN_KEY]: "nope" }).size).toBe(
         0,
       );
+      // Issue 1810: the gateway pin is an address + hash pair; a hash alone is no pin.
+      expect(
+        parseImplementationPinMap({
+          VITE_GATEWAY_ADDRESS: gateway,
+          [GATEWAY_IMPLEMENTATION_HASH_PIN_KEY]: REVIEWED_IMPL_PIN,
+        }).size,
+      ).toBe(0);
     });
 
     it("is build-time only: /config.json can never supply an implementation pin", () => {
@@ -522,6 +531,7 @@ describe("implementation pins behind an ERC-1967 proxy (ADR-0014)", () => {
         VAULT_IMPLEMENTATION_HASH_PIN_KEY,
         ROUTER_IMPLEMENTATION_HASH_PIN_KEY,
         GATEWAY_IMPLEMENTATION_HASH_PIN_KEY,
+        GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY,
         GATEWAY_CODE_HASH_PIN_KEY,
       ]) {
         expect(RUNTIME_CONFIG_KEYS as readonly string[]).not.toContain(key);
@@ -726,6 +736,7 @@ describe("implementation pins behind an ERC-1967 proxy (ADR-0014)", () => {
       {
         VITE_GATEWAY_ADDRESS: gateway,
         [GATEWAY_CODE_HASH_PIN_KEY]: PROXY_PIN,
+        [GATEWAY_IMPLEMENTATION_ADDRESS_PIN_KEY]: reviewed,
         [GATEWAY_IMPLEMENTATION_HASH_PIN_KEY]: REVIEWED_IMPL_PIN,
       },
       (a) =>

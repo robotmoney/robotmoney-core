@@ -5,9 +5,9 @@ description: "Foundry deploy script for the VaultRegistry contract. Deploys Vaul
 
 # DeployVaultRegistry
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/DeployVaultRegistry.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/DeployVaultRegistry.s.sol)
 
-**Inherits:** [GovernedProxyDeploy](/contracts/script/abstract.GovernedProxyDeploy)
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
 
 **Title:** DeployVaultRegistry
 
@@ -22,15 +22,14 @@ DEPLOYMENT_OUT so rmpc and the dapp discover it without manual editing.
 Required env vars:
 ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 VAULT_ADDRESS    — RobotMoneyVault to register
-
-VAULT_NAME       — registered vault name, from the frozen sheet (no default)
+The registered name is RMUSDC_VAULT_NAME (DeployVault.s.sol), a script constant like each basket
+script's VAULT_NAME (issue 1705 C9: one registry-name source for all four vaults).
 USDC is the canonical Base USDC constant on every chain.
 Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
-(mandatory and equal to 8453 on Base mainnet), UPGRADE_AUTHORITY (the deployment's
-timelock, deployed first) and UPGRADE_MODE (`upgradeable` or `frozen-at-deploy`).
-
-The registry is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
-`initialize` in its constructor.
+(mandatory and equal to 8453 on Base mainnet).
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+of the registry proxy (`UpgradeAuthority`, issue 1808). The manifest `registry` is the
+ERC-1967 proxy; `registry_implementation` is its implementation.
 
 ## Constants
 
@@ -100,34 +99,27 @@ function runInProcessWith(
 | ---- | ---- | ----------- |
 | d | `Deployed` | Struct containing the deployed registry and key parameters. |
 
-<a id="_deployregistry-address"></a>
+<a id="_deployregistry-deployed-address-upgradeconfig"></a>
 
 ### _deployRegistry
 
 <i>
 
-The registry implementation and its initialized proxy (ADR-0014).
+Deploy the registry implementation and its ERC-1967 proxy, initialized atomically.
 
 </i>
 
 ```solidity
-function _deployRegistry(address admin_)
-        internal
-        returns (VaultRegistry registry, address implementation);
+function _deployRegistry(Deployed memory d, address admin_, UpgradeConfig memory u) internal;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| d | `Deployed` |  |
 | admin_ | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| registry | `VaultRegistry` |  |
-| implementation | `address` |  |
+| u | `UpgradeConfig` |  |
 
 <a id="_registerifabsent-vaultregistry-address-address-string"></a>
 
@@ -201,14 +193,13 @@ Result struct returned to in-process callers (e.g. forge tests).
 
 ```solidity
 struct Deployed {
-        /// The proxy.
         VaultRegistry registry;
         address admin;
         address vault;
         address asset;
         bool registered;
-        /// The implementation behind `registry` (ADR-0014).
-        address implementation;
+        address registryImplementation;
+        UpgradeConfig upgrade;
     }
 ```
 
@@ -221,5 +212,6 @@ struct Deployed {
 | vault | `address` |  |
 | asset | `address` |  |
 | registered | `bool` |  |
-| implementation | `address` |  |
+| registryImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
 

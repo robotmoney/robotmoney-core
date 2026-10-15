@@ -502,7 +502,7 @@ async fn reorged_placeholder_member_goes_with_its_vote() {
 
 /// DI-8: a member whose only recorded registration is orphaned but whose older
 /// vote survives keeps a row, because `committee_votes` references it. This is
-/// the member whose earlier registration predates the migration-0020 backfill
+/// the member whose earlier registration predates the migration-0021 backfill
 /// (which kept only the newest one). It becomes the inactive placeholder DI-4
 /// would have written for that vote, and the rollback violates no foreign key.
 #[tokio::test]
@@ -744,8 +744,8 @@ async fn rollback_set_equals_live_block_scoped_schema() {
             "{required} (migration 0014) must be rolled back by a reorg"
         );
     }
-    // QA plan X7: the committee membership history (0020) and the exclusion
-    // records (0021).
+    // QA plan X7: the committee membership history (0021) and the exclusion
+    // records (0022).
     for required in [
         "committee_agent_events",
         "exclusion_records",
@@ -759,10 +759,10 @@ async fn rollback_set_equals_live_block_scoped_schema() {
             "{required} (QA plan X7) must be rolled back by a reorg"
         );
     }
-    // QA plan P3: the proxy upgrade and freeze history (0024).
+    // Core 1810: the proxies' upgrade and freeze events are `admin_events` rows (0019).
     assert!(
-        rollback.iter().any(|t| t == "proxy_upgrade_events"),
-        "proxy_upgrade_events (QA plan P3) must be rolled back by a reorg"
+        rollback.iter().any(|t| t == "admin_events"),
+        "admin_events (proxy upgrade and freeze history, core 1810) must be rolled back by a reorg"
     );
     // Security round 1: each vault's ExclusionLedger as read from the chain (0025). A read above
     // the root is dropped, and the next tick reads the vault again.
@@ -783,7 +783,7 @@ async fn rollback_set_equals_live_block_scoped_schema() {
         "agent_deposits",
         "agent_policies",
         // governance_votes and governance_proposals were here until migration
-        // 0023 dropped them (issue 1698): RouterGovernance has no voting.
+        // 0024 dropped them (issue 1698): RouterGovernance has no voting.
         "router_weight_snapshots",
         "router_deposit_legs",
         "adapter_allocations",
@@ -942,7 +942,7 @@ async fn reorg_rollback_exclusions_are_documented_and_live() {
 /// block-scoped child that references a block-scoped parent must be deleted
 /// first: deleting the parent first raises a foreign-key violation. The live
 /// schema held one such pair (`governance_votes` → `governance_proposals`)
-/// until migration 0023 dropped it (issue 1698), so the test creates its own
+/// until migration 0024 dropped it (issue 1698), so the test creates its own
 /// pair. The parent's name sorts first, so a set derived in name order would
 /// delete it first: this asserts the FK-aware ordering, not just membership.
 #[tokio::test]

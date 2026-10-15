@@ -58,8 +58,7 @@ import {
   BASKET_VAULT_SHORTLIST_ABI,
   VAULT_EXCLUSION_ABI,
   EXCLUSION_LEDGER_ABI,
-  GOVERNED_UPGRADE_ABI,
-  GATEWAY_COMMITTEE_ABI,
+  GOVERNED_UUPS_ABI,
 } from "../../src/lib/abi";
 import {
   gatewayAbiGenerated,
@@ -149,27 +148,16 @@ const PAIRS: readonly AbiPair[] = [
     handMaintained: EXCLUSION_LEDGER_ABI,
     canonical: exclusionLedgerAbiGenerated,
   },
-  // QA plan P3: the upgrade views the vault page reads (ADR-0014 GovernedUpgrade).
+  // Issue 1810: the GovernedUUPS views, on two proxied contracts.
   {
-    label: "GOVERNED_UPGRADE_ABI vs RobotMoneyVault",
-    handMaintained: GOVERNED_UPGRADE_ABI,
+    label: "GOVERNED_UUPS_ABI vs RobotMoneyGateway",
+    handMaintained: GOVERNED_UUPS_ABI,
+    canonical: gatewayAbiGenerated,
+  },
+  {
+    label: "GOVERNED_UUPS_ABI vs RobotMoneyVault",
+    handMaintained: GOVERNED_UUPS_ABI,
     canonical: robotMoneyVaultAbiGenerated,
-  },
-  {
-    label: "GOVERNED_UPGRADE_ABI vs AgentTokenVault",
-    handMaintained: GOVERNED_UPGRADE_ABI,
-    canonical: agentTokenVaultAbiGenerated,
-  },
-  {
-    label: "GOVERNED_UPGRADE_ABI vs RobotMoneyGateway",
-    handMaintained: GOVERNED_UPGRADE_ABI,
-    canonical: gatewayAbiGenerated,
-  },
-  // Issue 1810: the committee pointers the protocol upgrade panel reads on the gateway.
-  {
-    label: "GATEWAY_COMMITTEE_ABI vs RobotMoneyGateway",
-    handMaintained: GATEWAY_COMMITTEE_ABI,
-    canonical: gatewayAbiGenerated,
   },
 ];
 

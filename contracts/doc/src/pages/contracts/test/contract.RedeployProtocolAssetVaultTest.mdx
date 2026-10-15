@@ -1,34 +1,25 @@
 ---
 title: "RedeployProtocolAssetVaultTest"
-description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796). The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults, the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts. QA plan v1 E3: the batch also copies the old vault's router cap to the new vault, and the script pauses the new vault before its first asset is added."
+description: "Single-vault redeploy of rmPROTO into a live deployment (issue 1796). The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults, the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script. The govern row's batch is replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts."
 ---
 
 # RedeployProtocolAssetVaultTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/83e1899a1c3ea08d208a2cdfc32e1b22389b35a9/contracts/test/RedeployProtocolAssetVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0f9285f2d57ebe0159c827a0783ba1c3b0f1976f/contracts/test/RedeployProtocolAssetVault.t.sol)
 
-**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture)
+**Inherits:** [BasketDeployFixture](/contracts/test/helpers/abstract.BasketDeployFixture), [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
 Single-vault redeploy of rmPROTO into a live deployment (issue 1796).
 The deployment state is the Deploy 2 shape: registry and router governed by a timelock, four router-eligible vaults,
-the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script, unlinked: the registry link is the
-timelock's first call in the govern batch (core S5: no vault deploy script links the registry). The govern row's batch is
+the default split 8550 / 525 / 575 / 350. The new vault comes from the redeploy script. The govern row's batch is
 replayed call by call from the timelock, so the order of retire against migrateEligibility is checked on the real contracts.
-QA plan v1 E3: the batch also copies the old vault's router cap to the new vault, and the script pauses the new vault
-before its first asset is added.
 
 ## Constants
 
-### OLD_ROUTER_CAP
-
-<i>
-
-The old vault's per-leg router cap. Any nonzero value: a new address reads 0, which the router treats as uncapped.
-
-</i>
+### DELAY
 
 ```solidity
-uint256 internal constant OLD_ROUTER_CAP = 250 * 1e6;
+uint256 internal constant DELAY = 1800;
 ```
 
 ## State Variables
@@ -54,7 +45,19 @@ PortfolioRouter internal router;
 ### timelock
 
 ```solidity
-address internal timelock = makeAddr("timelock");
+address internal timelock;
+```
+
+### governor
+
+```solidity
+TimelockController internal governor;
+```
+
+### committee
+
+```solidity
+address internal committee;
 ```
 
 ### emergency
@@ -179,6 +182,14 @@ function _redeploy() internal returns (BasketVault v);
 function test_redeploy_handsTheVaultOverAndLeavesItClosedAndUnregistered() public;
 ```
 
+<a id="test_redeploy_pauseprecedesfirstactiveasset"></a>
+
+### test_redeploy_pausePrecedesFirstActiveAsset
+
+```solidity
+function test_redeploy_pausePrecedesFirstActiveAsset() public;
+```
+
 <a id="test_redeploy_configuredlikethelaunchvault"></a>
 
 ### test_redeploy_configuredLikeTheLaunchVault
@@ -201,37 +212,6 @@ function test_redeploy_refusesAnEoaTimelock() public;
 
 ```solidity
 function test_redeploy_refusesAnEmergencyKeyThatIsTheDeployer() public;
-```
-
-<a id="test_redeploy_deployercannotlinktheregistryafterhandover"></a>
-
-### test_redeploy_deployerCannotLinkTheRegistryAfterHandover
-
-<i>
-
-The link is ADMIN_ROLE-gated and the deploy dropped the deployer's ADMIN_ROLE: only the timelock can link, in the batch.
-
-</i>
-
-```solidity
-function test_redeploy_deployerCannotLinkTheRegistryAfterHandover() public;
-```
-
-<a id="test_redeploy_depositrevertsbetweencreationandfirstaddasset"></a>
-
-### test_redeploy_depositRevertsBetweenCreationAndFirstAddAsset
-
-<i>
-
-QA plan v1 E3 (review F2): the redeploy pauses the vault right after creating it, before the first `addAsset`. Once an asset is
-active `maxDeposit` opens, so the earlier add-then-pause order left a window in which a direct deposit into a vault of a live
-deployment minted shares before the ORA-4 guard was set. The vault's own log order shows the pause came first and was never
-undone, and `deposit` reverts `DepositsArePaused` (its first check) for as long as the pause holds.
-
-</i>
-
-```solidity
-function test_redeploy_depositRevertsBetweenCreationAndFirstAddAsset() public;
 ```
 
 <a id="_fivelegs-address"></a>
@@ -284,16 +264,70 @@ function _newLegs(address newVault) internal view returns (address[] memory v);
 | ---- | ---- | ----------- |
 | v | `address[]` |  |
 
+<a id="_batch-basketvault"></a>
+
+### _batch
+
+```solidity
+function _batch(BasketVault v)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| data | `bytes[]` |  |
+
+<a id="_schedule-basketvault-bytes32"></a>
+
+### _schedule
+
+```solidity
+function _schedule(BasketVault v, bytes32 salt) internal returns (bytes32 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| salt | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+
+<a id="_execute-basketvault-bytes32"></a>
+
+### _execute
+
+```solidity
+function _execute(BasketVault v, bytes32 salt) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+| salt | `bytes32` |  |
+
 <a id="_runbatch-basketvault"></a>
 
 ### _runBatch
-
-<i>
-
-The seven calls of the govern row, in its order: the link first, so the vault is bound before it is registered, then the cap,
-so the vault is capped before it becomes eligible.
-
-</i>
 
 ```solidity
 function _runBatch(BasketVault v) internal;
@@ -313,102 +347,20 @@ function _runBatch(BasketVault v) internal;
 function test_batch_replacesTheVaultAndKeepsTheSplit() public;
 ```
 
-<a id="test_batch_givesthenewvaulttheoldvaultsroutercap"></a>
+<a id="test_batch_quorumdelaycancellationreplay"></a>
 
-### test_batch_givesTheNewVaultTheOldVaultsRouterCap
-
-<i>
-
-QA plan v1 E3 (review F2): `vaultCap` is keyed by address and 0 is uncapped, so the new address starts with no per-leg cap.
-The batch's third call copies the old vault's cap before the new vault becomes eligible: router.vaultCap(new) == vaultCap(old).
-
-</i>
+### test_batch_quorumDelayCancellationReplay
 
 ```solidity
-function test_batch_givesTheNewVaultTheOldVaultsRouterCap() public;
+function test_batch_quorumDelayCancellationReplay() public;
 ```
 
-<a id="test_batch_capcallneedsthetimelockasrouteradmin"></a>
+<a id="test_batch_revertateverycallrestoresallstate"></a>
 
-### test_batch_capCallNeedsTheTimelockAsRouterAdmin
-
-<i>
-
-The cap call runs as the timelock on the router: without the router's ADMIN_ROLE the whole batch reverts, which is why the
-govern row refuses to schedule unless the timelock holds it.
-
-</i>
+### test_batch_revertAtEveryCallRestoresAllState
 
 ```solidity
-function test_batch_capCallNeedsTheTimelockAsRouterAdmin() public;
-```
-
-<a id="test_batch_retirebeforemigraterevertsincontract"></a>
-
-### test_batch_retireBeforeMigrateRevertsInContract
-
-```solidity
-function test_batch_retireBeforeMigrateRevertsInContract() public;
-```
-
-<a id="test_batch_linkstheregistryfirstsotheregistrydrivesthenewvault"></a>
-
-### test_batch_linksTheRegistryFirstSoTheRegistryDrivesTheNewVault
-
-<i>
-
-The link lands first in the batch, as the timelock (ADMIN_ROLE on the new vault). After the batch the registry is the one
-address that drives the vault's deposit-halt leg, so a later status change through the registry reaches the vault.
-
-</i>
-
-```solidity
-function test_batch_linksTheRegistryFirstSoTheRegistryDrivesTheNewVault() public;
-```
-
-<a id="test_batch_withoutthelinktheregistrycannotdrivethenewvault"></a>
-
-### test_batch_withoutTheLinkTheRegistryCannotDriveTheNewVault
-
-<i>
-
-Without the link the registry's status setter reverts in the vault's `OnlyRegistry` guard: a batch that forgot the link
-would leave a vault the registry cannot retire, which is why the link is in the batch and not optional.
-
-</i>
-
-```solidity
-function test_batch_withoutTheLinkTheRegistryCannotDriveTheNewVault() public;
-```
-
-<a id="test_batch_registrylinkissetonce"></a>
-
-### test_batch_registryLinkIsSetOnce
-
-<i>
-
-The link is set-once: a second redeploy round, or a re-run batch, cannot re-point it.
-
-</i>
-
-```solidity
-function test_batch_registryLinkIsSetOnce() public;
-```
-
-<a id="test_batch_athreelegintermediateisalsovalidbutthefivelegorderneverexposesit"></a>
-
-### test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt
-
-```solidity
-function test_batch_aThreeLegIntermediateIsAlsoValidButTheFiveLegOrderNeverExposesIt() public;
-```
-
-<a id="test_batch_newvaultcannotbeweightedbeforeitisregistered"></a>
-
-### test_batch_newVaultCannotBeWeightedBeforeItIsRegistered
-
-```solidity
-function test_batch_newVaultCannotBeWeightedBeforeItIsRegistered() public;
+function test_batch_revertAtEveryCallRestoresAllState() public;
 ```
 
 <a id="test_oldvaultstillredeemsafterretire"></a>
@@ -417,5 +369,174 @@ function test_batch_newVaultCannotBeWeightedBeforeItIsRegistered() public;
 
 ```solidity
 function test_oldVaultStillRedeemsAfterRetire() public;
+```
+
+<a id="test_bootstrap_interruptedbeforehandoverstaysclosedunregisteredandunbound"></a>
+
+### test_bootstrap_interruptedBeforeHandoverStaysClosedUnregisteredAndUnbound
+
+```solidity
+function test_bootstrap_interruptedBeforeHandoverStaysClosedUnregisteredAndUnbound() public;
+```
+
+<a id="_bindto-address"></a>
+
+### _bindTo
+
+```solidity
+function _bindTo(address reg) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `address` |  |
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_nocode"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_noCode
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_noCode() public;
+```
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_notaregistry"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_notARegistry
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_notARegistry() public;
+```
+
+<a id="test_bootstrap_incorrectbindingfailsclosed_registrythetimelockdoesnotgovern"></a>
+
+### test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern
+
+```solidity
+function test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern() public;
+```
+
+<a id="bindexternal-address"></a>
+
+### bindExternal
+
+```solidity
+function bindExternal(address reg) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reg | `address` |  |
+
+<a id="test_bootstrap_registryisboundexactlyonce"></a>
+
+### test_bootstrap_registryIsBoundExactlyOnce
+
+```solidity
+function test_bootstrap_registryIsBoundExactlyOnce() public;
+```
+
+<a id="test_bootstrap_deployerkeepsnoroleanywhere"></a>
+
+### test_bootstrap_deployerKeepsNoRoleAnywhere
+
+```solidity
+function test_bootstrap_deployerKeepsNoRoleAnywhere() public;
+```
+
+<a id="test_bootstrap_atimelockwithoutadmincannotgrantitselfadmin"></a>
+
+### test_bootstrap_aTimelockWithoutAdminCannotGrantItselfAdmin
+
+```solidity
+function test_bootstrap_aTimelockWithoutAdminCannotGrantItselfAdmin() public;
+```
+
+<a id="_funddeposit-uint256"></a>
+
+### _fundDeposit
+
+```solidity
+function _fundDeposit(uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="test_localpause_ofalivelegrevertsthewholerouterdeposit"></a>
+
+### test_localPause_ofALiveLegRevertsTheWholeRouterDeposit
+
+```solidity
+function test_localPause_ofALiveLegRevertsTheWholeRouterDeposit() public;
+```
+
+<a id="test_stale_unpauseoftheretiredoldvaultisharmlesstorouting"></a>
+
+### test_stale_unpauseOfTheRetiredOldVaultIsHarmlessToRouting
+
+```solidity
+function test_stale_unpauseOfTheRetiredOldVaultIsHarmlessToRouting() public;
+```
+
+<a id="_restorebatch-basketvault"></a>
+
+### _restoreBatch
+
+```solidity
+function _restoreBatch(BasketVault v)
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| data | `bytes[]` |  |
+
+<a id="_runrestore-basketvault"></a>
+
+### _runRestore
+
+```solidity
+function _runRestore(BasketVault v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `BasketVault` |  |
+
+<a id="test_restoreold_putstheoldvaultbackandretiresthenewonekeepingitsexits"></a>
+
+### test_restoreOld_putsTheOldVaultBackAndRetiresTheNewOneKeepingItsExits
+
+```solidity
+function test_restoreOld_putsTheOldVaultBackAndRetiresTheNewOneKeepingItsExits() public;
+```
+
+<a id="test_restoreold_reactivationmustcomebeforeeligibility"></a>
+
+### test_restoreOld_reactivationMustComeBeforeEligibility
+
+```solidity
+function test_restoreOld_reactivationMustComeBeforeEligibility() public;
 ```
 

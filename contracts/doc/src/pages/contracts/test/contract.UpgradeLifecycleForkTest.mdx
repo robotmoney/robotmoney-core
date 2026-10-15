@@ -1,0 +1,510 @@
+---
+title: "UpgradeLifecycleForkTest"
+description: "Issue 1808, on the Twin chain (a pinned lazy fork of real Base). The production stage scripts deploy the whole core stack as proxies (rmUSDC on the real Aave V3, Compound V3 and Moonwell venues, rmPROTO / rmAGENT / rmRWA on the real Uniswap pools), the stack is populated (shares, allowances, adapter positions, basket holdings, a gateway policy, an IC agent, a receipt, router weights and caps), the timelock stage hands it to a real canonical SafeL2 2-of-3 and the CREATE2 timelock, and then every proxy is upgraded v1 -> v2 through Safe -> timelock. Every value is read back and the synchronous redemptions still pay. A second test freezes through the same path and proves a queued upgrade fails."
+---
+
+# UpgradeLifecycleForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/UpgradeLifecycleFork.t.sol)
+
+**Inherits:** Test
+
+Issue 1808, on the Twin chain (a pinned lazy fork of real Base). The production stage
+scripts deploy the whole core stack as proxies (rmUSDC on the real Aave V3, Compound V3
+and Moonwell venues, rmPROTO / rmAGENT / rmRWA on the real Uniswap pools), the stack is
+populated (shares, allowances, adapter positions, basket holdings, a gateway policy, an IC
+agent, a receipt, router weights and caps), the timelock stage hands it to a real
+canonical SafeL2 2-of-3 and the CREATE2 timelock, and then every proxy is upgraded v1 ->
+v2 through Safe -> timelock. Every value is read back and the synchronous redemptions
+still pay. A second test freezes through the same path and proves a queued upgrade fails.
+
+CI runs it in forge-fork-vault-regressions through scripts/devnet/forge-fork-tests.ts,
+which fails a run in which nothing executed. With FORK_RPC_URL unset it skips by name.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### SWAP_ROUTER_02
+
+```solidity
+address internal constant SWAP_ROUTER_02 = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### SAFE_PROXY_FACTORY
+
+```solidity
+address internal constant SAFE_PROXY_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
+```
+
+### SAFE_SINGLETON_L2
+
+```solidity
+address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+```
+
+### SAFE_FALLBACK_HANDLER
+
+```solidity
+address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+### DELAY
+
+```solidity
+uint256 internal constant DELAY = 2 days;
+```
+
+## State Variables
+
+### selected
+
+```solidity
+bool internal selected;
+```
+
+### timelockScript
+
+```solidity
+DeployTimelock internal timelockScript;
+```
+
+### deployer
+
+```solidity
+address internal deployer;
+```
+
+### safe
+
+```solidity
+ISafe internal safe;
+```
+
+### ownerPks
+
+```solidity
+uint256[3] internal ownerPks;
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### pauser
+
+```solidity
+address internal pauser = makeAddr("fork-pauser");
+```
+
+### agent
+
+```solidity
+address internal agent = makeAddr("fork-agent");
+```
+
+### shareReceiver
+
+```solidity
+address internal shareReceiver = makeAddr("fork-share-receiver");
+```
+
+### holder
+
+```solidity
+address internal holder = makeAddr("fork-holder");
+```
+
+### spender
+
+```solidity
+address internal spender = makeAddr("fork-spender");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("fork-submitter");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("fork-emergency");
+```
+
+### vault
+
+```solidity
+RobotMoneyVault internal vault;
+```
+
+### registry
+
+```solidity
+VaultRegistry internal registry;
+```
+
+### router
+
+```solidity
+PortfolioRouter internal router;
+```
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway;
+```
+
+### ic
+
+```solidity
+InvestmentCommitteePolicy internal ic;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### governance
+
+```solidity
+RouterGovernance internal governance;
+```
+
+### proto
+
+```solidity
+BasketVault internal proto;
+```
+
+### agentVault
+
+```solidity
+BasketVault internal agentVault;
+```
+
+### rwa
+
+```solidity
+BasketVault internal rwa;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_deploystack-address"></a>
+
+### _deployStack
+
+```solidity
+function _deployStack(address upgradeTimelock) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| upgradeTimelock | `address` |  |
+
+<a id="_basketparams"></a>
+
+### _basketParams
+
+```solidity
+function _basketParams() internal returns (BasketVaultDeployBase.Params memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `BasketVaultDeployBase.Params` |  |
+
+<a id="_agentcfg"></a>
+
+### _agentCfg
+
+<i>
+
+rmAGENT's launch asset (RM on Uniswap V4) needs the recorder's history; the upgrade
+path is the same base contract for any asset list, so this run gives the agent script
+the real V3 wETH pool (as FourVaultInitialState.t.sol does).
+
+</i>
+
+```solidity
+function _agentCfg() internal pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_vaults"></a>
+
+### _vaults
+
+```solidity
+function _vaults() internal view returns (address[] memory v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `address[]` |  |
+
+<a id="_proxies"></a>
+
+### _proxies
+
+```solidity
+function _proxies() internal view returns (address[10] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[10]` |  |
+
+<a id="_v2-uint256"></a>
+
+### _v2
+
+```solidity
+function _v2(uint256 i) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_populate"></a>
+
+### _populate
+
+```solidity
+function _populate() internal;
+```
+
+<a id="_snapshot"></a>
+
+### _snapshot
+
+```solidity
+function _snapshot() internal view returns (Snapshot memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snapshot` |  |
+
+<a id="_assertsame-snapshot-snapshot"></a>
+
+### _assertSame
+
+```solidity
+function _assertSame(Snapshot memory a, Snapshot memory b) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Snapshot` |  |
+| b | `Snapshot` |  |
+
+<a id="_assertroles"></a>
+
+### _assertRoles
+
+```solidity
+function _assertRoles() internal view;
+```
+
+<a id="test_fork_upgradeeveryproxy_throughsafeandtimelock_keepsstate"></a>
+
+### test_fork_upgradeEveryProxy_throughSafeAndTimelock_keepsState
+
+Every proxy goes v1 -> v2 in one Safe-scheduled timelock batch; all state survives
+and both synchronous redemptions pay.
+
+```solidity
+function test_fork_upgradeEveryProxy_throughSafeAndTimelock_keepsState() public;
+```
+
+<a id="test_fork_freezethroughsafeandtimelock_blocksaqueuedupgrade"></a>
+
+### test_fork_freezeThroughSafeAndTimelock_blocksAQueuedUpgrade
+
+The delayed freeze through Safe -> timelock on the deployed stack: a queued upgrade
+fails after it, nobody can clear it, and withdrawals keep working.
+
+```solidity
+function test_fork_freezeThroughSafeAndTimelock_blocksAQueuedUpgrade() public;
+```
+
+<a id="_createsafe"></a>
+
+### _createSafe
+
+```solidity
+function _createSafe() internal returns (ISafe created);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| created | `ISafe` |  |
+
+<a id="_owners"></a>
+
+### _owners
+
+```solidity
+function _owners() internal view returns (address[] memory owners);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owners | `address[]` |  |
+
+<a id="_sortedownerpks"></a>
+
+### _sortedOwnerPks
+
+```solidity
+function _sortedOwnerPks() internal view returns (uint256[3] memory pks);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pks | `uint256[3]` |  |
+
+<a id="_sign-uint256-bytes32"></a>
+
+### _sign
+
+```solidity
+function _sign(uint256 pk, bytes32 txHash) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pk | `uint256` |  |
+| txHash | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_safeexec-address-bytes"></a>
+
+### _safeExec
+
+<i>
+
+execTransaction with the two lowest-address owners' signatures; the inner call must succeed.
+
+</i>
+
+```solidity
+function _safeExec(address to, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| data | `bytes` |  |
+
+## Structs
+
+### Snapshot
+
+```solidity
+struct Snapshot {
+        uint256 vaultShares;
+        uint256 vaultSupply;
+        uint256 vaultAssets;
+        uint256 allowance;
+        uint256[] adapterBalances;
+        uint256 protoShares;
+        uint256 protoAssets;
+        uint256[] protoHoldings;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        uint256 protoMaxSlippage;
+        uint256 protoNavGuard;
+        uint256 routerCap;
+        address[] defaultVaults;
+        uint256[] defaultBps;
+        bytes32 policyHash;
+        uint256 receiptCount;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vaultShares | `uint256` |  |
+| vaultSupply | `uint256` |  |
+| vaultAssets | `uint256` |  |
+| allowance | `uint256` |  |
+| adapterBalances | `uint256[]` |  |
+| protoShares | `uint256` |  |
+| protoAssets | `uint256` |  |
+| protoHoldings | `uint256[]` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| protoMaxSlippage | `uint256` |  |
+| protoNavGuard | `uint256` |  |
+| routerCap | `uint256` |  |
+| defaultVaults | `address[]` |  |
+| defaultBps | `uint256[]` |  |
+| policyHash | `bytes32` |  |
+| receiptCount | `uint256` |  |
+

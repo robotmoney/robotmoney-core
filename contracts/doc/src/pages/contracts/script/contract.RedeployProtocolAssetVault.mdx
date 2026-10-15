@@ -5,7 +5,7 @@ description: "Single-vault redeploy of rmPROTO into a live deployment (issue 179
 
 # RedeployProtocolAssetVault
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/script/RedeployProtocolAssetVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/script/RedeployProtocolAssetVault.s.sol)
 
 **Inherits:** [DeployProtocolAssetVault](/contracts/script/contract.DeployProtocolAssetVault)
 
@@ -18,9 +18,8 @@ ADMIN_ADDRESS, SWAP_ROUTER, REGISTRY_ADDRESS, TVL_CAP, PER_DEPOSIT_CAP, EXIT_FEE
 NAV_DEVIATION_BPS, MIN_POOL_LIQUIDITY, DEPLOYMENT_OUT, EXPECTED_CHAIN_ID  as in `DeployProtocolAssetVault`
 TIMELOCK_ADDRESS   the deployment's TimelockController. It must be a contract. It receives ADMIN_ROLE on the new vault.
 EMERGENCY_ADDRESS  the deployment's independent emergency key. It receives EMERGENCY_ROLE on the new vault.
-UPGRADE_MODE       `upgradeable` or `frozen-at-deploy` (ADR-0014 §5). The new vault's upgrade authority is
-TIMELOCK_ADDRESS itself (ADR-0014 §4), so no separate UPGRADE_AUTHORITY is read.
-REGISTRY_ADDRESS is read and checked for code only: the vault is left unlinked for the govern batch.
+UPGRADE_MODE       `upgradeable` or `frozen` (issue 1808). The new vault proxy's upgrade authority is TIMELOCK_ADDRESS,
+the deployment's live timelock.
 
 ## Constants
 
@@ -116,22 +115,26 @@ function _redeploy(Params memory p, Cfg memory cfg, address timelock, address em
 | ---- | ---- | ----------- |
 | d | `Deployed` |  |
 
-<a id="_handover-address-address-address-address"></a>
+<a id="_handover-address-address-address-address-address"></a>
 
 ### _handOver
 
 <i>
 
-Mirrors the role block of `DeployTimelock._deployAndWire` without the registry link: move EMERGENCY_ROLE to the emergency
-key, then grant ADMIN_ROLE to the timelock and revoke it from the deployer. The registry link is the timelock's first call in
-the govern batch, so the vault must leave here unlinked. Every step is read back, so a half-finished handover reverts the
-whole deploy.
+Mirrors the per-vault block of `DeployTimelock._deployAndWire`: link the registry while the deployer still holds ADMIN_ROLE,
+move EMERGENCY_ROLE to the emergency key, then grant ADMIN_ROLE to the timelock and revoke it from the deployer. Every step is
+read back, so a half-finished handover reverts the whole deploy.
 
 </i>
 
 ```solidity
-function _handOver(address vault, address deployer, address timelock, address emergency)
-        internal;
+function _handOver(
+        address vault,
+        address registry,
+        address deployer,
+        address timelock,
+        address emergency
+    ) internal;
 ```
 
 **Parameters**
@@ -139,6 +142,7 @@ function _handOver(address vault, address deployer, address timelock, address em
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` |  |
+| registry | `address` |  |
 | deployer | `address` |  |
 | timelock | `address` |  |
 | emergency | `address` |  |

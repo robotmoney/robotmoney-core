@@ -10,7 +10,7 @@
 //!
 //! AC-4 (governance_proposals / governance_votes from ProposalCreated and
 //! VoteCast) is gone: RouterGovernance voting was deleted (issue 1698) and
-//! migration 0023 dropped both tables. `account_history.rs` checks the old
+//! migration 0024 dropped both tables. `account_history.rs` checks the old
 //! events are ignored.
 //!
 //! DI-1: a vault registered in a tick has its own Deposit logs from the
@@ -438,7 +438,7 @@ async fn weights_set_event_populates_router_weight_snapshots() {
 /// and apply what comes back before closing the run.
 ///
 /// The ledger is the one the new vault's `exclusionLedger()` names (security round 1): the
-/// address `ExclusionLedgerFactory` created, read from the vault in the same tick, never an
+/// address the vault's initializer created, read from the vault in the same tick, never an
 /// address derived from the vault.
 #[tokio::test]
 async fn vault_registered_and_deposited_in_one_tick_indexes_the_deposit() {

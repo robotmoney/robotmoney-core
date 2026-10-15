@@ -24,8 +24,8 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20, MockSwapRouter, MockPool} from "./BasketVault.t.sol";
 import {StubSwapRouter} from "./DeployProtocolAssetVault.t.sol";
 import {MockAdapter, TestUSDC} from "./RobotMoneyVault.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Deliberately unprotected mock "vault": bare `AccessControl` with a
 ///      self-administered `ADMIN_ROLE`, mirroring the shape every real family
@@ -83,7 +83,7 @@ contract VaultFamilyInvariantsTest is Test {
 
     function _deployRobotMoneyVault() internal returns (RobotMoneyVault) {
         TestUSDC usdc = new TestUSDC();
-        return Proxied.robotMoneyVault(
+        return CoreProxies.robotMoneyVault(
             IERC20(address(usdc)),
             type(uint256).max,
             type(uint256).max,
@@ -97,7 +97,7 @@ contract VaultFamilyInvariantsTest is Test {
     function _deployRwaVault() internal returns (RwaBasketVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
-        return Proxied.rwaBasketVault(
+        return CoreProxies.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             type(uint256).max,
@@ -112,7 +112,7 @@ contract VaultFamilyInvariantsTest is Test {
     function _deployAgentTokenVault() internal returns (AgentTokenVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
-        return Proxied.agentTokenVault(
+        return CoreProxies.agentTokenVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             type(uint256).max,
@@ -127,7 +127,7 @@ contract VaultFamilyInvariantsTest is Test {
     function _deployProtocolAssetVault() internal returns (ProtocolAssetVault) {
         TestERC20 usdc = new TestERC20();
         StubSwapRouter router = new StubSwapRouter();
-        return Proxied.protocolAssetVault(
+        return CoreProxies.protocolAssetVault(
             IERC20(address(usdc)),
             ISwapRouter(address(router)),
             type(uint256).max,
@@ -185,7 +185,7 @@ contract VaultFamilyInvariantsTest is Test {
         returns (RmFixture memory f)
     {
         TestUSDC usdc = new TestUSDC();
-        f.vault = Proxied.robotMoneyVault(
+        f.vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)),
             type(uint256).max,
             type(uint256).max,
@@ -224,7 +224,7 @@ contract VaultFamilyInvariantsTest is Test {
         f.usdc = new TestERC20();
         f.router = new MockSwapRouter();
         MockPool pool = new MockPool(address(basketToken), address(f.usdc), uint160(1 << 96));
-        f.vault = Proxied.agentTokenVault(
+        f.vault = CoreProxies.agentTokenVault(
             IERC20(address(f.usdc)),
             ISwapRouter(address(f.router)),
             type(uint256).max,
@@ -235,14 +235,7 @@ contract VaultFamilyInvariantsTest is Test {
             emergencyResponder
         );
         vm.startPrank(admin);
-        f.vault
-            .addAsset(
-                address(basketToken),
-                address(pool),
-                500,
-                address(0),
-                BasketAssetConfigGuard.Venue.V3
-            );
+        f.vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
         f.vault.setRegistry(registry);
         vm.stopPrank();
 

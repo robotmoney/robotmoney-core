@@ -20,7 +20,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {GasUSDC, GasBurningAdapter} from "./RobotMoneyVaultRedeemGas.t.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Burns `cost` in `withdraw`, records the gas it was entered with.
 contract ProbeAdapter is IStrategyAdapter {
@@ -97,7 +97,7 @@ contract RobotMoneyVaultRedeemGasMechanismTest is Test {
 
     function setUp() public {
         usdc = new GasUSDC();
-        vault = Proxied.robotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             IERC20(address(usdc)), 1_000_000_000 * ONE, 100_000_000 * ONE, 0, admin, admin, admin
         );
         probe = new ProbeAdapter(address(usdc), address(vault));

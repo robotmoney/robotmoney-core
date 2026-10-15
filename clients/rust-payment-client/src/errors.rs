@@ -31,26 +31,33 @@ pub enum RmpcError {
     #[error("ErrChainIdMismatch: RPC eth_chainId does not match configured chain_id")]
     ErrChainIdMismatch,
 
-    /// A proxy the write reaches runs an implementation the operator did not
-    /// approve. For the gateway (`proxy` = `"gateway"`): its runtime code hash
-    /// is not in `gateway_implementation_hashes`, the key is missing, or the
-    /// implementation has no code; a config that pins implementation hashes
-    /// for a gateway that is not a proxy is refused the same way. For a vault
-    /// or the router the write reaches through the gateway (`proxy` names it,
-    /// e.g. `"vault 0x…"`): the same rules against `proxy_implementation_hashes`.
-    /// A proxy's own code hash is unchanged across an upgrade, so the address
-    /// and runtime-hash pins alone cannot catch this. Nothing is signed
-    /// (ADR-0014 §10, QA plan P3).
-    #[error(
-        "ErrImplementationNotApproved: {proxy} implementation {implementation} \
-         (code hash {code_hash}) is not approved: {reason}"
-    )]
-    ErrImplementationNotApproved {
-        proxy: String,
-        implementation: String,
-        code_hash: String,
-        reason: String,
-    },
+    /// The gateway proxy points at an implementation the operator did not
+    /// approve: the ERC-1967 implementation slot names another address, the
+    /// implementation's code hash differs from
+    /// `gateway_implementation_runtime_hash`, or the proxy/direct shape of
+    /// the gateway differs from the config. The proxy's own code hash can
+    /// still match. Issue 1810.
+    ///
+    /// Also raised for a vault or the router a write reaches through the
+    /// gateway (a deposit's vault, a withdraw's router and vault, every leg of
+    /// a router deposit) when it is a proxy whose implementation code hash is
+    /// not in `proxy_implementation_hashes`; the detail names that proxy.
+    #[error("ErrImplementationNotApproved: {0}")]
+    ErrImplementationNotApproved(String),
+
+    /// An implementation could not be read (the implementation slot or the
+    /// implementation code read failed) for the gateway or for a vault or
+    /// router proxy the write reaches; the detail names the read. A write
+    /// never proceeds on an unverified implementation. Issue 1810.
+    #[error("ErrImplementationUnverified: implementation read failed: {0}")]
+    ErrImplementationUnverified(String),
+
+    /// The gateway implementation changed after this write was checked: before
+    /// broadcast (the signed transaction is discarded, never sent) or by the
+    /// block the transaction executed in (the result is not reported as a
+    /// success). Issue 1810.
+    #[error("ErrImplementationChanged: {0}")]
+    ErrImplementationChanged(String),
 
     /// Deposits are paused: the gateway or its vault reports
     /// `depositsPaused() == true`. Deposit-only refusal: a deposit pause
@@ -256,7 +263,9 @@ impl RmpcError {
             RmpcError::ErrConcurrentInvocation => "ErrConcurrentInvocation",
             RmpcError::ErrCodeHashMismatch => "ErrCodeHashMismatch",
             RmpcError::ErrChainIdMismatch => "ErrChainIdMismatch",
-            RmpcError::ErrImplementationNotApproved { .. } => "ErrImplementationNotApproved",
+            RmpcError::ErrImplementationNotApproved(_) => "ErrImplementationNotApproved",
+            RmpcError::ErrImplementationUnverified(_) => "ErrImplementationUnverified",
+            RmpcError::ErrImplementationChanged(_) => "ErrImplementationChanged",
             RmpcError::ErrDepositsPaused => "ErrDepositsPaused",
             RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
             RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
@@ -308,12 +317,9 @@ mod tests {
             RmpcError::ErrConcurrentInvocation,
             RmpcError::ErrCodeHashMismatch,
             RmpcError::ErrChainIdMismatch,
-            RmpcError::ErrImplementationNotApproved {
-                proxy: "gateway".into(),
-                implementation: "0x01".into(),
-                code_hash: "0x02".into(),
-                reason: "not in gateway_implementation_hashes".into(),
-            },
+            RmpcError::ErrImplementationNotApproved("unapproved".into()),
+            RmpcError::ErrImplementationUnverified("read failed".into()),
+            RmpcError::ErrImplementationChanged("changed".into()),
             RmpcError::ErrDepositsPaused,
             RmpcError::ErrAllowanceInsufficient,
             RmpcError::ErrBalanceInsufficient,

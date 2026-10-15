@@ -17,8 +17,8 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
-import {Proxied} from "./helpers/Proxied.sol";
 
 /// @dev Plain 8-decimal ERC20 etched at each B20 address. Anvil and forge cannot run the Base B20
 ///      precompile (the account code is the single byte 0xef, an invalid opcode off Base), so the
@@ -66,7 +66,7 @@ contract RwaVaultB20ForkTest is Test {
         v3Cfg = vm.readFile("config/rwa-assets.json");
 
         // The launch vault: deSPXA only, deployed by the production script.
-        VaultRegistry registry = Proxied.vaultRegistry(admin);
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         BasketVaultDeployBase.Deployed memory d = new DeployRwaBasketVault()
             .runInProcess(
                 BasketVaultDeployBase.Params({
@@ -143,7 +143,7 @@ contract RwaVaultB20ForkTest is Test {
                     _pool(i),
                     uint24(b20Cfg.readUint(string.concat(_key(i), ".poolFee"))),
                     address(adapter),
-                    BasketAssetConfigGuard.Venue.Aerodrome
+                    BasketVault.Venue.Aerodrome
                 )
             );
         }
@@ -167,9 +167,7 @@ contract RwaVaultB20ForkTest is Test {
         // A direct call by the deployer cannot bypass the timelock.
         vm.prank(admin);
         vm.expectRevert();
-        vault.addAsset(
-            _token(0), _pool(0), 10, address(adapter), BasketAssetConfigGuard.Venue.Aerodrome
-        );
+        vault.addAsset(_token(0), _pool(0), 10, address(adapter), BasketVault.Venue.Aerodrome);
 
         assertEq(vault.assetCount(), 1, "deSPXA only before the timelock batch");
         _addAllFourThroughTimelock();

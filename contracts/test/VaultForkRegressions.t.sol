@@ -14,7 +14,7 @@ import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev The parts of the real Aave V3 Pool and its addresses provider that pause a reserve the way
 ///      `PoolConfigurator.setReservePause` does: rewrite its configuration bitmap.
@@ -127,7 +127,7 @@ contract VaultForkRegressions is Test {
     /// @dev Deploy a fresh RobotMoneyVault with a single adapter.
     ///      Approves the vault from alice and attacker.
     function _deployVaultWithAdapter(address adapter_) internal returns (RobotMoneyVault vault_) {
-        vault_ = Proxied.robotMoneyVault(
+        vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC),
             TVL_CAP,
             PER_DEPOSIT_CAP,
@@ -217,7 +217,7 @@ contract VaultForkRegressions is Test {
     function test_fork_aave_donationAttack_victimSharesFair() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
@@ -245,7 +245,7 @@ contract VaultForkRegressions is Test {
     function test_fork_morpho_donationAttack_victimSharesFair() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
@@ -272,7 +272,7 @@ contract VaultForkRegressions is Test {
     function test_fork_compound_donationAttack_victimSharesFair() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         CompoundV3Adapter compoundAdapter =
@@ -302,7 +302,7 @@ contract VaultForkRegressions is Test {
     function test_fork_directTransfer_countedInTotalAssets() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
@@ -341,7 +341,7 @@ contract VaultForkRegressions is Test {
 
         uint256 tightCap = 20_000 * ONE_USDC;
 
-        RobotMoneyVault tightVault = Proxied.robotMoneyVault(
+        RobotMoneyVault tightVault = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC),
             tightCap,
             tightCap, // perDepositCap = tvlCap so deposit can fill the whole cap
@@ -404,7 +404,7 @@ contract VaultForkRegressions is Test {
     function test_fork_unroutedDeposit_emitsEventAndStaysIdle() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
@@ -468,7 +468,7 @@ contract VaultForkRegressions is Test {
     function test_fork_morphoAdapter_withdrawReturnsActualDelivered() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
@@ -524,7 +524,7 @@ contract VaultForkRegressions is Test {
     function test_fork_venueHealth_pausedAaveReserveClosesDeposits() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
@@ -565,7 +565,7 @@ contract VaultForkRegressions is Test {
     function test_fork_vaultInvariants_decimalsOffsetAndShareMinting() public {
         _setUp();
 
-        RobotMoneyVault vault_ = Proxied.robotMoneyVault(
+        RobotMoneyVault vault_ = CoreProxies.robotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =

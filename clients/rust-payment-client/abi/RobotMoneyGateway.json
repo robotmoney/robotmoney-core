@@ -1,25 +1,7 @@
 [
   {
-    "type": "constructor",
-    "inputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
     "type": "function",
     "name": "ADMIN_ROLE",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "AGENT_CONSENT_TYPEHASH",
     "inputs": [],
     "outputs": [
       {
@@ -110,19 +92,6 @@
   },
   {
     "type": "function",
-    "name": "UPGRADE_INTERFACE_VERSION",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "WINDOW_SECONDS",
     "inputs": [],
     "outputs": [
@@ -130,44 +99,6 @@
         "name": "",
         "type": "uint64",
         "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "agentConsentNonce",
-    "inputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "agentConsented",
-    "inputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -788,19 +719,6 @@
   },
   {
     "type": "function",
-    "name": "implementationVersion",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "pure"
-  },
-  {
-    "type": "function",
     "name": "initialize",
     "inputs": [
       {
@@ -829,14 +747,14 @@
         "internalType": "address"
       },
       {
-        "name": "upgradeAuthority",
+        "name": "upgradeTimelock_",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "mode",
+        "name": "upgradeMode_",
         "type": "uint8",
-        "internalType": "enum GovernedUpgrade.UpgradeMode"
+        "internalType": "enum GovernedUUPS.UpgradeMode"
       }
     ],
     "outputs": [],
@@ -861,13 +779,6 @@
       }
     ],
     "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "releaseAgent",
-    "inputs": [],
-    "outputs": [],
-    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -957,11 +868,6 @@
             "internalType": "address[]"
           }
         ]
-      },
-      {
-        "name": "agentConsent",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -1166,7 +1072,7 @@
   },
   {
     "type": "function",
-    "name": "upgradeAuthority",
+    "name": "upgradeTimelock",
     "inputs": [],
     "outputs": [
       {
@@ -1193,7 +1099,7 @@
       }
     ],
     "outputs": [],
-    "stateMutability": "payable"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1974,11 +1880,6 @@
   },
   {
     "type": "error",
-    "name": "AgentNotReleasable",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "AgentPolicyExpired",
     "inputs": []
   },
@@ -2049,22 +1950,6 @@
   },
   {
     "type": "error",
-    "name": "ERC1967InvalidImplementation",
-    "inputs": [
-      {
-        "name": "implementation",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "ERC1967NonPayable",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "FailedInnerCall",
     "inputs": []
   },
@@ -2072,22 +1957,6 @@
     "type": "error",
     "name": "FeeOnTransferDetected",
     "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "FreezeTargetMismatch",
-    "inputs": [
-      {
-        "name": "live",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "liveCodeHash",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ]
   },
   {
     "type": "error",
@@ -2109,11 +1978,6 @@
         "internalType": "uint256"
       }
     ]
-  },
-  {
-    "type": "error",
-    "name": "InvalidAgentConsent",
-    "inputs": []
   },
   {
     "type": "error",
@@ -2168,6 +2032,11 @@
   {
     "type": "error",
     "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "OwnerConsentMissing",
     "inputs": []
   },
   {
@@ -2228,50 +2097,7 @@
   },
   {
     "type": "error",
-    "name": "UUPSUnsupportedProxiableUUID",
-    "inputs": [
-      {
-        "name": "slot",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "UnexpectedAssetsReceived",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "UpgradeAuthorityNotContract",
-    "inputs": [
-      {
-        "name": "authority",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "UpgradeModeUnset",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "UpgradeNotAuthorized",
-    "inputs": [
-      {
-        "name": "caller",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "UpgradesAreFrozen",
     "inputs": []
   },
   {

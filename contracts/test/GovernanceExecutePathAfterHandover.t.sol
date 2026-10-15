@@ -3,11 +3,11 @@
 // Canonical: docs/technical/security-model.md §4 — Access control & admin
 // Canonical: docs/technical/governance-isomorphism.md — the Safe is a real
 //            2-of-3 SafeProxy on the canonical SafeL2 singleton (R5, R6, R9)
-// Canonical: docs/technical/governance-decisions.md §3.2 — a receipt is applied, not voted on
-// Implements: fusion round-2 task R7 — the weight setter's applyReceipt() path must
+// Implements: fusion round-2 task R7 — the RouterGovernance weight path must
 //             actually reach PortfolioRouter.setWeights on a FRESH deployment,
 //             while the deployer EOA must not be able to call setWeights at all.
-// Implements: issue #1698 — one applyReceipt call through the real Safe and timelock
+// Implements: issue #1698 — that path is applyReceipt, driven by the Safe through
+//             the timelock; there is no voting.
 // Implements: issue #1447 (QA plan v1 B6) — the recovery procedures of core 1788 (a quarantined,
 //             excluded adapter) and core 1789 (a duplicate adapter) through the real Safe and
 //             timelock, not through an impersonated admin
@@ -25,30 +25,32 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title GovernanceExecutePathAfterHandover
 /// @notice R7's two halves, proved on one topology built the way the deploy
 ///         scripts build it — not on a hand-wired fixture.
 ///
 ///         Before this task, `DeployRouterGovernance` deployed the governance
-///         contract and stopped. Nothing ever granted it the router roles, so
-///         the weight setter could be told to act and could not. The only
-///         thing that COULD move weights was the deployer EOA, which is exactly
-///         the inversion §4.3 describes as the gap.
+///         contract and stopped. Nothing ever granted it the router's weight
+///         role, so an approved weight change still reverted inside
+///         `router.setWeights` — the approving body could approve and could not
+///         act. Since issue 1698 the approved change is a Safe-scheduled
+///         `applyReceipt` through the timelock. The only thing that
+///         COULD move weights was the deployer EOA, which is exactly the
+///         inversion §4.3 describes as the gap.
 ///
 ///         `DeployTimelock` then revokes the deployer's router `ADMIN_ROLE`,
-///         points the weight setter at the receipt register and grants it the
-///         register's `ADMIN_ROLE` (issue #1698), so after a complete ceremony
-///         the honest end state is: the weight setter can apply a receipt in
-///         one call, the deployer cannot, and the timelock administers both.
+///         so after a complete ceremony the honest end state is: governance
+///         can act, the deployer cannot, and the timelock administers both.
 ///
 /// @dev    Fork test. The Safe that drives the timelock is the one stage now
 ///         runs (issue #1447): a SafeProxy created through the canonical
@@ -80,7 +82,7 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     RobotMoneyVault internal vault;
     RobotMoneyGateway internal gateway;
     InvestmentCommitteePolicy internal icPolicy;
-    ConsensusRecommendationReceipt internal register;
+    ConsensusRecommendationReceipt internal receipts;
     TimelockController internal timelock;
 
     MockGovVault internal vaultA;
@@ -104,15 +106,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
     address internal emergency = makeAddr("emergency");
     address internal pauser = makeAddr("pauser");
 
-    // Recommending body: committee agents, deliberately disjoint (INV-4). The
-    // submitter records the receipt the Safe later applies.
-    address internal submitter = makeAddr("committee-submitter");
+    // Recommending body: committee agents, deliberately disjoint (INV-4).
+    address internal agentAthena = makeAddr("committee-athena");
     address internal agentWoon = makeAddr("committee-woon");
 
     uint256 internal constant MIN_DELAY = 2 days;
-    string internal constant PAYLOAD_URI = "https://robotmoney.net/api/swarm/receipts/session-1";
-    bytes32 internal constant RECEIPT_ID = keccak256("receipt-after-handover");
-    bytes32 internal constant DIGEST = keccak256("payload-after-handover");
+
+    bytes32 internal constant RECEIPT_ID = keccak256("handover-receipt-1");
+    bytes32 internal constant DIGEST = keccak256("handover canonical receipt bytes");
 
     function setUp() public {
         string memory rpc = vm.envOr("FORK_RPC_URL", string(""));
@@ -123,9 +124,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         deployer = address(timelockScript);
 
         safe = _createSafe();
+        // Issue 1808: every proxy (the governance stage's too) names the timelock the handover
+        // deploys for this Safe.
+        address upgradeTimelock = timelockScript.predictTimelock(address(safe), MIN_DELAY);
+        CoreProxies.useUpgradeConfig(upgradeTimelock, GovernedUUPS.UpgradeMode.Upgradeable);
+        govScript.setUpgradeConfig(upgradeTimelock, GovernedUUPS.UpgradeMode.Upgradeable);
         usdc = new MockUsdc();
 
-        vault = Proxied.robotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -134,9 +140,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             deployer, // admin
             deployer // emergencyResponder
         );
-        gateway = Proxied.robotMoneyGateway(usdc, vault, deployer, pauser, address(0));
-        registry = Proxied.vaultRegistry(deployer);
-        router = Proxied.portfolioRouter(address(usdc), address(registry), deployer);
+        gateway = CoreProxies.robotMoneyGateway(usdc, vault, deployer, pauser, address(0));
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
 
         // Two weightable vaults, registered and router-eligible.
         vaultA = new MockGovVault(address(usdc));
@@ -154,33 +160,24 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        // The committee body and its receipt register, wired through the gateway
-        // the way the ic-policy stage wires them. Separately administered; no
-        // weight authority.
-        icPolicy = Proxied.investmentCommitteePolicy(deployer, address(gateway));
-        register =
-            Proxied.consensusRecommendationReceipt(deployer, address(gateway), address(icPolicy));
+        // The committee body. Separately administered; no weight authority.
+        // The receipt register's gateway is this test contract, so the test can
+        // record a receipt directly (the committee's record path is not under test).
+        icPolicy = CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
+        receipts =
+            CoreProxies.consensusRecommendationReceipt(deployer, address(this), address(icPolicy));
         vm.startPrank(deployer);
-        icPolicy.grantRole(icPolicy.ADMIN_ROLE(), address(gateway));
-        gateway.setICPolicy(address(icPolicy));
-        gateway.setConsensusReceipt(address(register));
-        gateway.authorizeAgent(submitter, _submitterPolicy());
-        gateway.committeeRegister(submitter, "swarm-submitter-v1");
-        gateway.committeeRegister(agentWoon, "woon-v1");
+        icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentAthena);
+        icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentWoon);
         vm.stopPrank();
 
-        // The committee records its receipt. Nothing happens to the router.
-        vm.prank(submitter);
-        gateway.consensusRecordReceipt(RECEIPT_ID, DIGEST, PAYLOAD_URI);
-
-        // The deployment under test: the governance stage.
+        // The deployment under test: the governance script.
         DeployRouterGovernance.Deployed memory d =
-            govScript.runInProcessWith(deployer, address(router));
+            govScript.runInProcessWith(deployer, address(router), address(receipts));
         gov = d.governance;
 
         // The handover ceremony: every ADMIN_ROLE moves to the timelock and is
-        // revoked from the deployer EOA; the weight setter is pointed at the
-        // register and may release from it.
+        // revoked from the deployer EOA.
         // Call the script FROM the script's own address. `DeployTimelock`
         // revokes roles from `msg.sender` while its own external calls
         // originate from the script address; only when those two coincide does
@@ -200,21 +197,24 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             MIN_DELAY,
             DeployTimelock.Committee({
                 icPolicy: address(icPolicy),
-                consensusReceipt: address(register),
+                consensusReceipt: address(receipts),
                 receiptAdmin: deployer
             }),
             DeployTimelock.SafeSpec({owners: _ownersOfSafe(), threshold: 2})
         );
         timelock = t.timelock;
+
+        // The committee records a receipt (this contract is the register's gateway).
+        receipts.recordReceipt(agentAthena, RECEIPT_ID, DIGEST, "https://example.invalid/r1");
     }
 
-    // ─── Half 1: the weight setter can act ───────────────────────────────────
+    // ─── Half 1: the approving body can act ──────────────────────────────────
 
-    /// @notice The deploy script leaves governance able to reach the router.
+    /// @notice The deploy script leaves governance able to call setWeights.
     function test_governanceHoldsRouterAdminRole() public view {
         assertTrue(
             IAccessControl(address(router)).hasRole(ADMIN_ROLE, address(gov)),
-            "RouterGovernance cannot reach the router: setDefaultWeights is dead on arrival"
+            "RouterGovernance cannot reach the router fallbacks: setDefaultWeights is dead on arrival"
         );
     }
 
@@ -231,51 +231,16 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         assertFalse(r.hasRole(WEIGHT_SETTER_ROLE, emergency), "emergency holds the setter");
     }
 
-    /// @notice Issue #1698: the ceremony wired the weight setter to the register
-    ///         and gave it the release role; the timelock administers the register.
-    function test_ceremonyWiresTheWeightSetterToTheReceiptRegister() public view {
-        assertEq(address(gov.receiptContract()), address(register), "register not wired");
-        assertTrue(register.hasRole(ADMIN_ROLE, address(gov)), "weight setter cannot release");
-        assertTrue(register.hasRole(ADMIN_ROLE, address(timelock)), "timelock cannot release");
-        assertFalse(register.hasRole(ADMIN_ROLE, deployer), "deployer can still release");
-        assertFalse(
-            register.hasRole(register.DEFAULT_ADMIN_ROLE(), address(gov)),
-            "weight setter must not administer the register"
-        );
-    }
-
-    /// @notice THE R7 regression and the #1698 acceptance: the Safe schedules ONE
-    ///         applyReceipt on the timelock (which holds governance ADMIN_ROLE),
-    ///         the delay elapses, the Safe executes, and in that transaction
-    ///         the receipt is released and the weights land on the router.
+    /// @notice THE R7 regression: the Safe schedules `applyReceipt` on the
+    ///         timelock (which holds the governance WEIGHT_SETTER_ROLE), the delay
+    ///         elapses, and the execute releases the receipt and lands the
+    ///         weights on the router.
     function test_applyReceiptReachesSetWeightsOnAFreshDeployment() public {
         (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
-        assertFalse(register.isReleased(RECEIPT_ID), "recorded, not released");
-        assertFalse(router.votedWeightsActive(), "recorded, not routed");
-
-        _applyViaTimelock(RECEIPT_ID, DIGEST, vaults, bps, keccak256("apply-1"));
-
-        assertTrue(register.isReleased(RECEIPT_ID), "receipt not released");
-        assertTrue(router.votedWeightsActive(), "applied vector not routing");
-        (address[] memory appliedVaults, uint256[] memory appliedBps) = router.getWeights();
-        assertEq(appliedVaults.length, 2, "no applied weight vector on the router");
-        assertEq(appliedVaults[0], address(vaultA));
-        assertEq(appliedVaults[1], address(vaultB));
-        assertEq(appliedBps[0], 6_000, "vault A weight not applied");
-        assertEq(appliedBps[1], 4_000, "vault B weight not applied");
-    }
-
-    /// @notice One operation per receipt: a second round for the same id fails at
-    ///         execution (GS013 from the Safe) and changes nothing.
-    function test_applyReceipt_secondRoundForTheSameReceiptIsRefused() public {
-        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
-        _applyViaTimelock(RECEIPT_ID, DIGEST, vaults, bps, keccak256("apply-1"));
-
-        bps[0] = 1_000;
-        bps[1] = 9_000;
         bytes memory data =
             abi.encodeCall(RouterGovernance.applyReceipt, (RECEIPT_ID, DIGEST, vaults, bps));
-        bytes32 salt = keccak256("apply-2");
+        bytes32 salt = keccak256("apply-receipt");
+
         _safeExec(
             address(timelock),
             abi.encodeCall(
@@ -283,13 +248,30 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             )
         );
         vm.warp(block.timestamp + MIN_DELAY + 1);
-        _safeExecExpectRevert(
+        _safeExec(
             address(timelock),
-            abi.encodeCall(TimelockController.execute, (address(gov), 0, data, bytes32(0), salt)),
-            bytes("GS013")
+            abi.encodeCall(TimelockController.execute, (address(gov), 0, data, bytes32(0), salt))
         );
-        (, uint256[] memory appliedBps) = router.getWeights();
-        assertEq(appliedBps[0], 6_000, "the first round's weights must stand");
+
+        assertTrue(receipts.isReleased(RECEIPT_ID), "receipt not released");
+        (address[] memory appliedVaults, uint256[] memory appliedBps) = router.getWeights();
+        assertEq(appliedVaults.length, 2, "no active weight vector on the router");
+        assertEq(appliedVaults[0], address(vaultA));
+        assertEq(appliedVaults[1], address(vaultB));
+        assertEq(appliedBps[0], 6_000, "vault A weight not applied");
+        assertEq(appliedBps[1], 4_000, "vault B weight not applied");
+    }
+
+    /// @notice After the handover the timelock alone holds the governance
+    ///         WEIGHT_SETTER_ROLE, and RouterGovernance can release receipts.
+    function test_timelockAloneAppliesReceipts() public view {
+        assertEq(gov.getRoleMemberCount(WEIGHT_SETTER_ROLE), 1, "one applyReceipt caller");
+        assertEq(gov.getRoleMember(WEIGHT_SETTER_ROLE, 0), address(timelock));
+        assertTrue(
+            IAccessControl(address(receipts)).hasRole(ADMIN_ROLE, address(gov)),
+            "governance cannot release the receipt it applies"
+        );
+        assertEq(address(gov.receipts()), address(receipts));
     }
 
     // ─── Half 2: the deployer EOA cannot ─────────────────────────────────────
@@ -308,19 +290,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             IAccessControl(address(router)).hasRole(ADMIN_ROLE, deployer),
             "deployer EOA still holds router ADMIN_ROLE"
         );
-    }
-
-    /// @notice The deployer EOA cannot apply a receipt either: governance
-    ///         ADMIN_ROLE left with the handover.
-    function test_deployerEoaCannotApplyReceiptDirectly() public {
-        (address[] memory vaults, uint256[] memory bps) = _sixtyForty();
-        vm.prank(deployer);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, deployer, ADMIN_ROLE
-            )
-        );
-        gov.applyReceipt(RECEIPT_ID, DIGEST, vaults, bps);
     }
 
     // ─── The timelock cannot bypass RouterGovernance ─────────────────────────
@@ -385,29 +354,18 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
 
     // ─── INV-4: the two bodies are disjoint ──────────────────────────────────
 
-    /// @notice The committee agents that recorded the receipt hold no weight
-    ///         authority, and the weight setter, the timelock and the Safe hold
-    ///         no COMMITTEE_AGENT_ROLE.
-    function test_committeeIsDisjointFromTheWeightSetter() public view {
-        bytes32 agentRole = icPolicy.COMMITTEE_AGENT_ROLE();
-        assertTrue(icPolicy.hasRole(agentRole, submitter), "submitter is a committee agent");
-        assertTrue(icPolicy.hasRole(agentRole, agentWoon), "woon is a committee agent");
-        address[2] memory agents = [submitter, agentWoon];
+    /// @notice No committee agent holds any weight authority: not the
+    ///         governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
+    function test_committeeHoldsNoWeightAuthority() public view {
+        address[2] memory agents = [agentAthena, agentWoon];
         for (uint256 i = 0; i < agents.length; i++) {
-            assertFalse(gov.hasRole(ADMIN_ROLE, agents[i]), "committee agent reaches applyReceipt");
+            assertFalse(gov.hasRole(WEIGHT_SETTER_ROLE, agents[i]), "agent can apply receipts");
+            assertFalse(gov.hasRole(ADMIN_ROLE, agents[i]), "agent administers governance");
             assertFalse(
-                router.hasRole(WEIGHT_SETTER_ROLE, agents[i]), "committee agent sets weights"
-            );
-            assertFalse(
-                router.hasRole(ADMIN_ROLE, agents[i]), "committee agent administers the router"
-            );
-            assertFalse(
-                timelock.hasRole(timelock.PROPOSER_ROLE(), agents[i]), "committee agent proposes"
+                IAccessControl(address(router)).hasRole(WEIGHT_SETTER_ROLE, agents[i]),
+                "agent can set router weights"
             );
         }
-        assertFalse(icPolicy.hasRole(agentRole, address(gov)), "weight setter is a committee agent");
-        assertFalse(icPolicy.hasRole(agentRole, address(timelock)), "timelock is a committee agent");
-        assertFalse(icPolicy.hasRole(agentRole, address(safe)), "safe is a committee agent");
     }
 
     // ─── The Safe ────────────────────────────────────────────────────────────
@@ -684,8 +642,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         timelock.execute(address(vault), 0, dup, bytes32(0), salt);
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
-
     /// @dev Two funded adapters onboarded through the Safe and the timelock in ONE batch (allow
     ///      both instances and their code hashes, add both at a 100 % cap), then a holder whose
     ///      deposit the vault routes across them.
@@ -754,6 +710,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         );
     }
 
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
     function _sixtyForty() internal view returns (address[] memory vaults, uint256[] memory bps) {
         vaults = new address[](2);
         vaults[0] = address(vaultA);
@@ -761,53 +719,6 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         bps = new uint256[](2);
         bps[0] = 6_000;
         bps[1] = 4_000;
-    }
-
-    /// @dev The committee submitter's gateway policy: enough to hold AGENT_ROLE
-    ///      and record a receipt; it moves no value.
-    function _submitterPolicy() internal view returns (IGateway.AgentPolicy memory) {
-        address[] memory noList = new address[](0);
-        return IGateway.AgentPolicy({
-            active: true,
-            validUntil: uint64(block.timestamp + 30 days),
-            maxPerPayment: 1e6,
-            maxPerWindow: 10e6,
-            shareReceiver: submitter,
-            allowedDestinations: noList,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
-            allowedSourceVaults: noList
-        });
-    }
-
-    /// @dev `applyReceipt` is ADMIN_ROLE-gated and ADMIN_ROLE now lives on the
-    ///      timelock, so the apply is scheduled by the Safe and executed after
-    ///      the min delay — the real post-handover route, one call.
-    function _applyViaTimelock(
-        bytes32 receiptId,
-        bytes32 digest,
-        address[] memory vaults,
-        uint256[] memory bps,
-        bytes32 salt
-    ) internal {
-        bytes memory data = abi.encodeCall(
-            RouterGovernance.applyReceipt, (receiptId, digest, vaults, bps)
-        );
-
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(
-                TimelockController.schedule, (address(gov), 0, data, bytes32(0), salt, MIN_DELAY)
-            )
-        );
-
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-
-        _safeExec(
-            address(timelock),
-            abi.encodeCall(TimelockController.execute, (address(gov), 0, data, bytes32(0), salt))
-        );
     }
 
     /// @dev A 2-of-3 SafeProxy on SafeL2 through the canonical factory — the

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/code-review/20260618-code-review-internal-claude.md (L-10)
-// (See also: docs/architecture.md §2.3 — Governance Boundary;
-//            docs/adr/ADR-0014-governed-upgrades-and-freeze.md §3 — upgradeable parents)
+// (See also: docs/architecture.md §2.3 — Governance Boundary)
 pragma solidity ^0.8.24;
 
 import {
@@ -33,12 +32,8 @@ import {
 ///         member count still includes the account being removed; a count of
 ///         exactly 1 therefore means this is the last admin.
 ///
-///         ADR-0014: the parent is OZ `AccessControlEnumerableUpgradeable`, whose role
-///         sets live in an ERC-7201 namespace, so this base adds no linear storage and
-///         needs no gap. The proxied PortfolioRouter, VaultRegistry,
-///         InvestmentCommitteePolicy and ConsensusRecommendationReceipt use it behind
-///         their initializers. RouterGovernance stays a direct deployment (ADR-0014 §2)
-///         and grants its roles in its constructor; the parent needs no initializer for that.
+///         Upgradeable base (issue 1808): the role sets live in OpenZeppelin's ERC-7201
+///         namespaced storage, so every inheriting core contract runs behind its own proxy.
 abstract contract AdminFloorAccessControl is AccessControlEnumerableUpgradeable {
     /// @notice The role subject to the last-admin floor. Concrete contracts
     ///         declare their own public `ADMIN_ROLE` constant with the same

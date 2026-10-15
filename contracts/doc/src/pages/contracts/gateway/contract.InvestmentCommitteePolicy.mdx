@@ -5,9 +5,9 @@ description: "Registry of admin-allowlisted committee agents and their signed al
 
 # InvestmentCommitteePolicy
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2b5d9c4acd4cb83f9e0296cb55ac7ac1f5bacbf6/contracts/gateway/InvestmentCommitteePolicy.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/gateway/InvestmentCommitteePolicy.sol)
 
-**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUpgrade](/contracts/lib/abstract.GovernedUpgrade)
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
 **Title:** InvestmentCommitteePolicy
 
@@ -31,9 +31,9 @@ prompt_hash, inputs_digest, timestamp, schema_version.
 
 Emits: `AgentRegistered`, `AgentRevoked`, `VoteSubmitted`.
 
-Upgradeability (ADR-0014): deployed behind its own ERC1967Proxy and initialized
-in the proxy's deployment transaction. Only the timelock named at `initialize`
-can upgrade it, and `freezeUpgrades` ends upgrades forever.
+Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+(`GovernedUUPS`). `gateway` is set once at initialization and has no setter.
 
 ## Constants
 
@@ -58,7 +58,6 @@ bytes32 public constant COMMITTEE_AGENT_ROLE = keccak256("COMMITTEE_AGENT_ROLE")
 ### gateway
 
 The RobotMoneyGateway address. All committee writes must originate here.
-Written once by `initialize` (a constructor immutable before ADR-0014); no setter.
 
 ```solidity
 address public gateway;
@@ -82,36 +81,18 @@ Vote[] private _votes;
 
 ## Functions
 
-<a id="constructor"></a>
-
-### constructor
-
-<i>
-
-The implementation is never initialized: only a proxy is.
-
-</i>
-
-**Note:**
-
-- **oz-upgrades-unsafe-allow:** constructor
-
-```solidity
-constructor();
-```
-
 <a id="initialize-address-address-address-upgrademode"></a>
 
 ### initialize
 
-Initialize the proxy. Runs once, inside the proxy's deployment transaction.
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
 
 ```solidity
 function initialize(
         address admin_,
         address gateway_,
-        address upgradeAuthority,
-        UpgradeMode mode
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
     ) external initializer;
 ```
 
@@ -121,8 +102,8 @@ function initialize(
 | ---- | ---- | ----------- |
 | admin_ | `address` | Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE. |
 | gateway_ | `address` | Address of the deployed RobotMoneyGateway. |
-| upgradeAuthority | `address` | The deployment's timelock: the only address that may upgrade or freeze. |
-| mode | `UpgradeMode` | `Upgradeable` or `FrozenAtDeploy`; `Unset` reverts. |
+| upgradeTimelock_ | `address` | The Safe-controlled timelock: the only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
 <a id="_revokerole-bytes32-address"></a>
 

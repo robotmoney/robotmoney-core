@@ -11,13 +11,9 @@
 //! ## Test structure
 //!
 //! For each basket vault:
-//!  1. Deploy the vault on the fork with the test account as admin: the
-//!     kind's implementation (its CREATE2 libraries linked) behind an
-//!     `ERC1967Proxy` whose constructor runs `BasketVault.initialize`
-//!     (ADR-0014 §3, `rmpc_fork_e2e::proxied::deploy_basket_vault`). The
-//!     former eight-argument constructor is gone.
-//!  2. Add one confirmed Base asset (cbBTC for ProtocolAssetVault, JUNO
-//!     for AgentTokenVault) so the basket is non-empty.
+//!  1. Deploy the vault contract on the fork with the test account as admin.
+//!  2. Add one Base asset with a deep Uniswap V3 USDC pool (cbBTC for
+//!     ProtocolAssetVault, wETH for AgentTokenVault) so the basket is non-empty.
 //!  3. Approve USDC → deposit → assert shares > 0.
 //!  4. Redeem → assert net USDC delta within exitFeeBps + maxSlippageBps +
 //!     10 bps slack + 1 wei rounding.
@@ -45,6 +41,49 @@ use rmpc_fork_e2e::{
 
 // 50 USDC (6 decimals).
 const DEPOSIT_USDC: u64 = 50_000_000;
+
+// ── ABI-encode constructor arguments ─────────────────────────────────────────
+
+/// ABI-encode the eight constructor arguments shared by both basket vault
+/// subclasses. Each `address` is left-padded to 32 bytes; each `uint256`
+/// is 32 bytes big-endian.
+///
+/// Constructor signature (BasketVault subclasses):
+///   `(address usdc_, address swapRouter_, uint256 tvlCap_,
+///     uint256 perDepositCap_, uint256 exitFeeBps_, address feeRecipient_,
+///     address admin_, address emergencyResponder_)`
+#[allow(clippy::too_many_arguments)]
+fn encode_basket_constructor(
+    usdc: Address,
+    swap_router: Address,
+    tvl_cap: U256,
+    per_deposit_cap: U256,
+    exit_fee_bps: U256,
+    fee_recipient: Address,
+    admin: Address,
+    emergency_responder: Address,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8 * 32);
+
+    fn push_addr(buf: &mut Vec<u8>, a: Address) {
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.extend_from_slice(a.as_slice());
+    }
+    fn push_u256(buf: &mut Vec<u8>, v: U256) {
+        buf.extend_from_slice(&v.to_be_bytes::<32>());
+    }
+
+    push_addr(&mut buf, usdc);
+    push_addr(&mut buf, swap_router);
+    push_u256(&mut buf, tvl_cap);
+    push_u256(&mut buf, per_deposit_cap);
+    push_u256(&mut buf, exit_fee_bps);
+    push_addr(&mut buf, fee_recipient);
+    push_addr(&mut buf, admin);
+    push_addr(&mut buf, emergency_responder);
+
+    buf
+}
 
 // ── Generic basket vault round-trip helper ─────────────────────────────────────
 
@@ -98,16 +137,14 @@ fn basket_round_trip(
         "[{label}] USDC funding failed: {usdc_before} < {deposit}"
     );
 
-    // ── Deploy the vault behind its proxy (ADR-0014) ───────────────────
+    // ── Build initcode: bytecode + ABI-encoded constructor args ────────
     // Caps: 10M USDC TVL, 1M USDC per-deposit, 0 exit fee (simplifies
     // tolerance arithmetic). Admin = test account so it can call addAsset.
-    // A missing `out/` artifact is a failure, never a silent skip.
     let tvl_cap = U256::from(10_000_000u64) * U256::from(1_000_000u64); // 10M USDC
     let per_deposit_cap = U256::from(1_000_000u64) * U256::from(1_000_000u64); // 1M USDC
     let exit_fee_bps = U256::ZERO;
-    let vault_addr = rmpc_fork_e2e::proxied::deploy_basket_vault(
-        &admin,
-        contract_name,
+
+    let ctor_args = encode_basket_constructor(
         addresses::USDC,
         addresses::UNISWAP_V3_SWAP_ROUTER,
         tvl_cap,
@@ -116,8 +153,18 @@ fn basket_round_trip(
         admin.address, // fee recipient
         admin.address, // admin — receives ADMIN_ROLE, can call addAsset
         admin.address, // emergency responder
+    );
+
+    // Core 1808: the basket vault is a governed proxy. Its `initialize(InitParams, timelock, mode)` takes
+    // the old constructor words first (InitParams is an all-static struct, so it encodes inline).
+    let vault_addr = rmpc_fork_e2e::governed::deploy_governed(
+        &admin,
+        &format!("{contract_name}.sol"),
+        contract_name,
+        &ctor_args,
+        8_000_000,
     )
-    .expect("deploy basket vault behind its proxy (run `forge build` first)");
+    .expect("deploy basket vault");
     eprintln!("[basket_vault_round_trip/{label}] vault deployed at {vault_addr:#x}");
 
     // ── Verify: vault.asset() == USDC ──────────────────────────────────
@@ -262,17 +309,18 @@ fn basket_vault_round_trip() {
         "ProtocolAssetVault/cbBTC",
     );
 
-    // ── AgentTokenVault: single asset = JUNO/USDC (1% fee) ────────────
-    // JUNO is the simplest confirmed AgentTokenVault shortlist asset with a
-    // direct USDC pool on Base (no multi-hop). WOON (UniV4) and GIZA
-    // (Aerodrome) require additional adapter contracts not deployed in the
-    // fork harness; ZYFAI routes WETH→ZYFAI (two-hop, not one-hop V3).
+    // ── AgentTokenVault: single asset = wETH/USDC (0.05% fee) ─────────
+    // The old JUNO/USDC leg was removed from the launch shortlist (no usable pool: its
+    // TWAP cardinality is far below the guard's floor). The launch asset, RM, trades
+    // on a Uniswap V4 pool that needs the V4 adapter and recorder, which this harness
+    // does not deploy. The wETH/USDC V3 pool exercises the same BasketVault
+    // deposit/redeem path with real Base liquidity and TWAP history.
     basket_round_trip(
         &fx,
         "AgentTokenVault",
-        addresses::JUNO,
-        addresses::BASKET_AGENT_POOL_JUNO,
-        addresses::BASKET_AGENT_POOL_JUNO_FEE,
-        "AgentTokenVault/JUNO",
+        addresses::WETH9,
+        addresses::POOL_WETH_USDC,
+        500,
+        "AgentTokenVault/wETH",
     );
 }

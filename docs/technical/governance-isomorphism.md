@@ -61,8 +61,10 @@ signatures are required, and the Safe contract is what enforces it.**
 
 ### 1.2 After the handover: the unpause-only matrix
 
-Stage 13, after the timelock handover, is one unpause per vault (issue 1520): the
-unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), all of which deploy paused (core 1710; the rule is `scripts/deploy/stage-table.json` `vaults[]`, issue 1705). Unpause needs `ADMIN_ROLE`,
+Stage 13 is the unpause of each of the four vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA,
+issue 1520), all of which deploy paused (core 1710; `scripts/deploy/stage-table.json`
+`vaults[].deployPaused` and `unpauseInStage13`, issue 1705). Router weights change only
+through the on-demand apply-receipt row, never in stage 13. Unpause needs `ADMIN_ROLE`,
 which the timelock holds, so each unpause is a Safe transaction that schedules one
 timelock operation and a second Safe transaction that executes it after the delay
 ([security-model.md](./security-model.md), the pause-key abuse and pause-trigger rows).
@@ -77,9 +79,9 @@ sheet: the vault setters (per-deposit cap, TVL cap, exit fee, fee recipient),
 router eligibility and the router default weights. A sheet that routes any of
 them through govern is refused. The one on-demand govern row after launch is
 `apply-receipt` (core 1696): the Safe releases a consensus receipt and applies its
-weights in one timelock call, `RouterGovernance.applyReceipt` (issue 1698). The
-sheet's legacy voting names (`VOTER_*`, `QUORUM_THRESHOLD`, `VOTING_PERIOD`,
-`EXECUTION_DELAY`) are accepted and ignored: the contract has no voting path.
+weights as one timelock call, `RouterGovernance.applyReceipt`. `RouterGovernance`
+has no voting configuration (issue 1698). The sheet parser refuses the old
+voter, quorum and period names.
 
 The Safe tool's other operations (`updateDelay`, a no-op `scheduleBatch`, a cancel)
 are demonstrations. They run on the Twin fork (`update-delay`, `batch`, `cancel`) and

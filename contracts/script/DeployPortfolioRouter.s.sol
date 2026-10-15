@@ -8,7 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployPortfolioRouter
 /// @notice Foundry deploy script for the PortfolioRouter contract.
@@ -27,16 +27,13 @@ import {GovernedProxyDeploy} from "./GovernedProxyDeploy.sol";
 ///           REGISTRY_ADDRESS   — deployed VaultRegistry address
 ///           VAULT_ADDRESS      — RobotMoneyVault (sole active vault, 10 000 bps)
 ///
-///           UPGRADE_AUTHORITY  — the deployment's timelock, deployed first (ADR-0014 §4)
-///           UPGRADE_MODE       — `upgradeable` or `frozen-at-deploy` (ADR-0014 §5)
-///
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
-///
-///         The router is a proxy (ADR-0014): the implementation and an ERC1967Proxy that runs
-///         `initialize` in its constructor.
-contract DeployPortfolioRouter is GovernedProxyDeploy {
+///         SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+///         of the router proxy (`UpgradeAuthority`, issue 1808). The manifest `router` is the
+///         ERC-1967 proxy; `router_implementation` is its implementation.
+contract DeployPortfolioRouter is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "router.json";
 
@@ -47,14 +44,13 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
-        /// The proxy.
         PortfolioRouter router;
         VaultRegistry registry;
         address admin;
         address vault;
         address usdc;
-        /// The implementation behind `router` (ADR-0014).
-        address implementation;
+        address routerImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys the router,
@@ -73,10 +69,11 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
         require(registry.code.length > 0, "REGISTRY_ADDRESS has no code on this chain");
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(usdc.code.length > 0, "USDC_ADDRESS has no code on this chain");
-        _useEnvUpgradeConfig("");
+
+        UpgradeConfig memory u = _readUpgradeConfig("");
 
         vm.startBroadcast();
-        d = _deploy(admin, registry, vault, usdc);
+        d = _deploy(admin, registry, vault, usdc, u);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -97,10 +94,10 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
         require(registry_ != address(0), "REGISTRY_ADDRESS=0");
         require(vault_ != address(0), "VAULT_ADDRESS=0");
         require(usdc_ != address(0), "USDC_ADDRESS=0");
-        _useInProcessUpgradeConfig();
 
+        UpgradeConfig memory u = _inProcessUpgradeConfig();
         vm.startPrank(admin_);
-        d = _deploy(admin_, registry_, vault_, usdc_);
+        d = _deploy(admin_, registry_, vault_, usdc_, u);
         vm.stopPrank();
 
         _logResult(d);
@@ -110,22 +107,25 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
 
     /// @dev Deploy router and set initial weights. Caller must ensure ADMIN_ROLE and WEIGHT_SETTER_ROLE
     ///      is active on the call context (broadcast or prank).
-    function _deploy(address admin_, address registry_, address vault_, address usdc_)
-        internal
-        returns (Deployed memory d)
-    {
+    function _deploy(
+        address admin_,
+        address registry_,
+        address vault_,
+        address usdc_,
+        UpgradeConfig memory u
+    ) internal returns (Deployed memory d) {
         d.registry = VaultRegistry(registry_);
         d.admin = admin_;
         d.vault = vault_;
         d.usdc = usdc_;
 
-        d.implementation = address(new PortfolioRouter());
+        d.upgrade = u;
+        d.routerImplementation = address(new PortfolioRouter());
         d.router = PortfolioRouter(
             _deployProxy(
-                d.implementation,
+                d.routerImplementation,
                 abi.encodeCall(
-                    PortfolioRouter.initialize,
-                    (usdc_, registry_, admin_, _upgrade.authority, _upgrade.mode)
+                    PortfolioRouter.initialize, (usdc_, registry_, admin_, u.timelock, u.mode)
                 )
             )
         );
@@ -162,7 +162,6 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
     function _logResult(Deployed memory d) internal view {
         console2.log("PortfolioRouter deployed and configured");
         console2.log("  router    :", address(d.router));
-        console2.log("  router_implementation:", d.implementation);
         console2.log("  registry  :", address(d.registry));
         console2.log("  admin     :", d.admin);
         console2.log("  vault     :", d.vault);
@@ -175,10 +174,9 @@ contract DeployPortfolioRouter is GovernedProxyDeploy {
         string memory obj = "router_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "router", address(d.router));
-        vm.serializeAddress(obj, "router_implementation", d.implementation);
-        vm.serializeBytes32(obj, "router_layout_id", _layoutId("PortfolioRouter"));
-        vm.serializeAddress(obj, "upgrade_authority", _upgrade.authority);
-        vm.serializeString(obj, "upgrade_mode", upgradeModeName(_upgrade.mode));
+        vm.serializeAddress(obj, "router_implementation", d.routerImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "registry", address(d.registry));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "vault", d.vault);

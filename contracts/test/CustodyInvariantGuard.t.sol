@@ -23,7 +23,7 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](21);
+        paths = new string[](20);
         paths[0] = "contracts/PortfolioRouter.sol";
         paths[1] = "contracts/RobotMoneyVault.sol";
         paths[2] = "contracts/VaultRegistry.sol";
@@ -39,14 +39,14 @@ contract CustodyInvariantGuardTest is Test {
         paths[12] = "contracts/adapters/AerodromeSwapAdapter.sol";
         paths[13] = "contracts/adapters/UniswapV3SwapAdapter.sol";
         paths[14] = "contracts/interfaces/IStrategyAdapter.sol";
-        // ADR-0014: the upgrade base, the ledger factory and the linked libraries that move
-        // vault or gateway assets as the vault or the gateway (DELEGATECALL).
-        paths[15] = "contracts/lib/GovernedUpgrade.sol";
-        paths[16] = "contracts/ExclusionLedgerFactory.sol";
-        paths[17] = "contracts/lib/VaultAdapterOps.sol";
-        paths[18] = "contracts/lib/BasketSwapOps.sol";
-        paths[19] = "contracts/lib/GatewayWithdrawOps.sol";
-        paths[20] = "contracts/lib/GatewayWindows.sol";
+        // ADR-0014: the upgrade base, the exclusion ledger that holds recovered USDC, and the
+        // linked libraries that move vault or gateway assets as the vault or the gateway.
+        paths[15] = "contracts/lib/GovernedUUPS.sol";
+        paths[16] = "contracts/ExclusionLedger.sol";
+        paths[17] = "contracts/lib/RobotMoneyVaultOps.sol";
+        paths[18] = "contracts/lib/BasketSwaps.sol";
+        paths[19] = "contracts/lib/GatewayWindows.sol";
+        paths[20] = "contracts/ProposerFloorTimelock.sol";
     }
 
     /// @dev True if `haystack` contains `needle` (naive substring scan).

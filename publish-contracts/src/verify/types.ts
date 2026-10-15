@@ -2,7 +2,7 @@
 // Spec: the one-deployment-scheme plan, "Stage 12 verifier" (devops issue 53); issues devops 57 (S8) and 61.
 
 import type { StageTable } from "../stage-table.ts";
-import type { ProxyRecord } from "../proxies.ts";
+import type { UpgradeabilityRecord } from "./upgradeability.ts";
 
 export type Address = `0x${string}`;
 export type Hex = `0x${string}`;
@@ -18,11 +18,8 @@ export interface Check {
 export interface VerifyReport {
   ok: boolean;
   checks: Check[];
-  /**
-   * Issue 1809 (ADR-0014): every proxy of the stage table as the chain read it (proxy, implementation, code hashes, ERC-1967 admin and beacon slots, authority, mode,
-   * frozen). The verify stage record keeps it as evidence. Absent when the table lists no proxies or the run stopped before they were read.
-   */
-  proxies?: ProxyRecord[];
+  /** Issue 1809: what the upgradeability labels read (proxies, implementations, code hashes, layout ids, authority, delay, initialization, freeze state) and the immutability claim. */
+  upgradeability?: UpgradeabilityRecord;
   /** QA plan v1 C3 (CS-6): what gates the router's weight setter, as the chain reads it. Absent when the run stopped before the router was read. */
   weightSetter?: WeightSetterGating;
 }
@@ -45,11 +42,16 @@ export interface WeightSetterGating {
 
 export interface WeightSetterHolder {
   address: Address;
-  /** The holder's runtime code equals the RouterGovernance build (masked): its only weight writes, `applyReceipt`, `setDefaultWeights` and `clearVotedWeights`, are `onlyRole(ADMIN_ROLE)`. */
+  /**
+   * The holder's logic code (the implementation behind its ERC-1967 proxy, issue 1808) equals the RouterGovernance build (masked): its weight writes are
+   * `applyReceipt` (`onlyRole(WEIGHT_SETTER_ROLE)`, issue 1698), `setDefaultWeights` and `clearVotedWeights` (`onlyRole(ADMIN_ROLE)`).
+   */
   routerGovernanceCode: boolean;
-  /** The holder's `ADMIN_ROLE` members: its gate. Null when the holder does not answer `getRoleMemberCount`/`getRoleMember` (it is no AccessControlEnumerable contract). */
+  /** The holder's `ADMIN_ROLE` members. Null when the holder does not answer `getRoleMemberCount`/`getRoleMember` (it is no AccessControlEnumerable contract). */
   admins: Address[] | null;
-  /** The holder runs the RouterGovernance build and the timelock is its only `ADMIN_ROLE` member, so nothing but a timelock operation moves weights through it. */
+  /** The holder's own `WEIGHT_SETTER_ROLE` members (the `applyReceipt` gate, issue 1698). Null when unreadable. */
+  setters: Address[] | null;
+  /** The holder runs the RouterGovernance build and the timelock is its only `ADMIN_ROLE` and its only `WEIGHT_SETTER_ROLE` member, so nothing but a timelock operation moves weights through it. */
   timelockGated: boolean;
 }
 
@@ -96,15 +98,12 @@ export interface VaultSheet {
   seedShareReceiver?: Address;
   /** Router eligibility the deployer left in place: rmUSDC from the router stage, a basket when the sheet lists it in ELIGIBLE_VAULTS. */
   routerEligible: boolean;
-  /**
-   * Issue 1705 C4, kind usdc: the lending adapters the vault stage registered, in registration order: the address from the vault manifest and the cap
-   * from the deploy script. The vault's adapter registry, caps and both allowlists (address and code hash) must equal this set. A missing value fails the label.
-   */
-  adapters?: { address: Address; capBps: number }[];
-  /** Issue 1705 C4, kind basket and agent: the swap bound the deploy leaves (config root maxSlippageBps, else the vault default). A missing value fails the label. */
-  maxSlippageBps?: bigint;
   /** Build artifact contract name when it is not implied by the kind. */
   contract?: string;
+  /** Baskets (issue 1705 C4): the maxSlippageBps the config sets, else the vault's constructor default. Required for kind basket and agent. */
+  maxSlippageBps?: bigint;
+  /** rmUSDC (issue 1705 C4): the strategy adapters the vault stage registered, in order, with the bps cap the deploy script gives each. Required for kind usdc. */
+  adapters?: { adapter: Address; capBps: number }[];
 }
 
 export interface VerifySheet {
@@ -118,15 +117,14 @@ export interface VerifySheet {
   timelockDelay: number;
   /** Issue 1727: the deployment kind of the run (the sheet's DEPLOYMENT_KIND). Absent means production, the strictest reading: the 172800 s floor on 8453. */
   deploymentKind?: "production" | "rehearsal";
+  /** Issue 1809: the sheet's UPGRADE_MODE. Absent fails "upgrades: the sheet declares the release mode" and every freeze-state label. */
+  upgradeMode?: "upgradeable" | "frozen";
+  /** Issue 1809: the sheet's UPGRADE_FREEZE_DEADLINE (ISO 8601 UTC), the proving-period deadline of an upgradeable release. */
+  freezeDeadline?: string;
   /** Keyed by vault key (rmUSDC, rmPROTO, rmAGENT, rmRWA). */
   vaults: Record<string, VaultSheet>;
   /** The router default weights the deployer left in place, in router order (rmUSDC, then the eligible baskets): vault key and bps. */
   defaultWeights: { vault: string; bps: number }[];
-  /**
-   * Issue 1809 (ADR-0014 §5): the release mode the sheet states (UPGRADE_MODE). Every proxy's manifest must name it and upgradesFrozen() must read true exactly when
-   * it is frozen-at-deploy or a freeze row froze the proxy. Absent: the sheet states none, and every proxy's mode label fails (an undeclared mode is refused).
-   */
-  upgradeMode?: "upgradeable" | "frozen-at-deploy";
 }
 
 export interface VerifyOptions {
@@ -146,6 +144,10 @@ export interface VerifyOptions {
   frozenCounts: Record<string, number>;
   /** Directory with forge `out/` artifacts for the code-hash comparison. */
   artifactsDir: string;
+  /** Issue 1809: the core checkout at the DEPLOY_SHA, for the storage-layout snapshots the layout identifiers hash. Absent: the layout labels fail. */
+  coreDir?: string;
+  /** Issue 1809, test seam: the time (seconds) the freeze deadline is compared with. Absent: the head block's timestamp. */
+  now?: bigint;
   /**
    * The deployer nonce the runner recorded at the end of the last deployer stage. Set only when the govern stage has run: govern pays
    * gas for the Safe execTransaction calls from the deployer keystore, so the live nonce then exceeds the frozen sum by design.
@@ -162,12 +164,9 @@ export interface VerifyOptions {
    */
   controlProof?: { txHash: Hex; nonce: number };
   /**
-   * The last consensus receipt the run manifest records as applied through `govern --row apply-receipt` (issue 1696, issue 1698): the receipt id and the vector. It is an
-   * editable file, so it never sets what the router is checked against (QA plan v1 C2, issue 1701). The verifier reads the weight setter's `ReceiptApplied` events and
-   * the router's `VotedWeightsCleared` events since `fromBlock` instead: the last application, unless a clear came after it, is the active vector. No active vector:
-   * `votedWeightsActive()` must read false and the EFFECTIVE weights must equal the sheet's launch vector. An active one: the receipt must read released,
-   * `votedWeightsActive()` must read true and the EFFECTIVE weights must equal the event's vector. This record must name the receipt and the vector of the chain's last
-   * `ReceiptApplied` event (absent exactly when there is none), or the applied-receipt label fails. The DEFAULT vector equals the sheet in every case.
+   * The last consensus receipt the Safe applied through `govern --row apply-receipt` (issue 1696), from the run manifest: the receipt id and the vector the
+   * router took. Absent: no receipt was applied and the router default weights must equal the sheet. Present: the receipt must read released and the router
+   * default weights must equal this vector (the sheet vector was superseded by the application).
    */
   appliedReceipt?: { receiptId: Hex; vaults: Address[]; bps: number[] };
   /**
@@ -178,7 +177,7 @@ export interface VerifyOptions {
    * `oldBuild` (QA plan v1 E1): the build the retired vault runs. "original" (the default): the first round's old vault, a contract of the original deployment, compared with
    * `priorArtifactsDir`. "redeploy": a later round's old vault, deployed by an earlier round at the redeploy sha, compared with `artifactsDir`.
    */
-  redeploys?: { vault: string; oldVault: Address; newVault: Address; oldBuild?: "original" | "redeploy" }[];
+  redeploys?: { vault: string; oldVault: Address; newVault: Address; replacementManifest?: string; routerVaultCap?: string; oldBuild?: "original" | "redeploy" }[];
   /**
    * Issue 1796, QA plan v1 E1: forge out/ of a checkout at the ORIGINAL deployment sha (--prior-out). With redeploys, `artifactsDir` is the build of the redeploy sha and only the
    * replacing vaults run it: every contract the original deployment created (core, libraries, adapters, the vaults not replaced, a first round's retired vault) runs the code of
@@ -187,16 +186,6 @@ export interface VerifyOptions {
   priorArtifactsDir?: string;
   /** Issue 1796: the deployer transactions the redeploys sent (the sum of their deploy counts). They are outside every frozen stage count and move the deployer nonce. */
   redeployDeployerTxs?: number;
-  /**
-   * Issue 1809: per proxy (the stage table's proxy name), the implementation the last EXECUTED `govern --row upgrade-proxy` round installed, from the run manifest's
-   * `proxy_upgrades`, and the forge out/ that round compared it with (`build_dir`). The proxy's implementation slot must then name it and its code is compared with that
-   * build (absent or missing on disk: `artifactsDir`). A record only picks WHICH implementation and build: the slot and the code are read from the chain.
-   * Security round 1: `buildSha` is the commit the round proved its build was made from (`build_sha`). When it is recorded, the directory compared with must sit in a
-   * git checkout at that commit, or the code label fails: an edited `build_dir` cannot point the verifier at another build. (evidence-check refuses an 8453 round without it.)
-   */
-  upgrades?: { proxy: string; implementation: Address; buildDir?: string; buildSha?: string }[];
-  /** Issue 1809: the proxies an executed `govern --row freeze-proxy` round froze (the run manifest's `proxy_freezes`): upgradesFrozen() must read true on each. */
-  freezes?: string[];
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */
   usdcCodeHash?: string;
   /** Delay in ms between 429 retries (tests set 0). */
@@ -216,8 +205,6 @@ export interface LogEntry {
   topics: Hex[];
   data: Hex;
   blockNumber: bigint;
-  /** The log's position in its block. Orders two logs of one block (an application and a clear, QA plan v1 C2). Absent: block order only. */
-  logIndex?: number;
 }
 
 /** The only surface the verifier uses to touch a chain. It is read-only. */

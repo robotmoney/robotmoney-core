@@ -2,12 +2,6 @@
 pragma solidity ^0.8.24;
 
 // Adversarial re-check of finding 3 of docs/code-review/20261012-security-review.md (committee vote attribution).
-// At baseline Q5 and Q4 proved the spoof landed. Issue #1790 (PR 1818) added the
-// gateway identity guard (`p.agent == msg.sender`, else `CommitteeAgentNotCaller`),
-// so those two tests now pin the refusal; Q3 and Q2 were never spoofable.
-// The Q2 squat of a third-party agent address (finding 7) landed at baseline. Issue
-// #1791 requires the agent's EIP-712 consent for that reveal, so it now pins
-// `InvalidAgentConsent`.
 // Run: forge test --match-path 'contracts/test/SecurityReviewRecheckCommitteePoc.t.sol' -vv
 
 import {ICGatewayIntegration} from "./ICGatewayIntegration.t.sol";
@@ -19,7 +13,7 @@ import {
 } from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {Proxied} from "./helpers/Proxied.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
     address attacker = address(0xB2);
@@ -40,25 +34,35 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         });
     }
 
-    /// Permissionless commit/reveal: `owner` authorizes `agent` with a policy
-    /// naming `owner` as shareReceiver, as `_validatePolicy` demands of
-    /// non-admin callers. It carries no agent consent, so since issue #1791 it
-    /// lands only when `owner == agent` (the reveal is the agent's own consent).
+    /// Permissionless commit/reveal: `owner` authorizes `agent` (may be any
+    /// address that is not already owned) with a policy naming `owner` as
+    /// shareReceiver, as `_validatePolicy` demands of non-admin callers.
     function _selfReveal(address owner, address agent, bytes32 salt) internal {
-        _commitAndRoll(owner, agent, salt);
-        vm.prank(owner);
-        gateway.revealAuthorization(agent, salt, _selfPolicy(owner), "");
-    }
-
-    function _commitAndRoll(address owner, address agent, bytes32 salt) internal {
         bytes32 commitment = keccak256(abi.encode(agent, owner, salt));
         vm.prank(owner);
         gateway.commitAuthorization(commitment);
         vm.roll(block.number + 1);
+        vm.prank(agent);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    owner,
+                    keccak256(
+                        abi.encodeCall(
+                            gateway.revealAuthorization, (agent, salt, _selfPolicy(owner))
+                        )
+                    )
+                )
+            )
+        );
+        vm.prank(owner);
+        gateway.revealAuthorization(agent, salt, _selfPolicy(owner));
     }
 
-    // ── Q5: spoof cannot supersede the real member's latest vote (#1790) ────
+    // ── Q5: spoof cannot supersede the real member's latest vote ───────────
 
+    /// Remediated by core 1790 (PR 1818): the gateway reverts `CommitteeAgentNotCaller`
+    /// when `p.agent != msg.sender`, so the member's `latestVoteByAgent` stays theirs.
     function test_spoofedVoteCannotSupersedeMembersLatestVote() public {
         // Real member votes Overweight 6000 bps.
         IInvestmentCommitteePolicy.VoteParams memory real = _defaultVoteParams();
@@ -67,8 +71,7 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         assertEq(ic.latestVoteByAgent(committeeAgent), realId);
 
         // Attacker self-registers and tries to back-run with an opposite vote
-        // under the member's address. The gateway refuses it before the IC
-        // contract is reached.
+        // under the member's address.
         _selfReveal(attacker, attacker, keccak256("f3-spoof"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.stance = IInvestmentCommitteePolicy.Stance.Underweight;
@@ -79,8 +82,8 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
         gateway.committeeVoteSubmit(spoof);
 
-        // "Latest wins" readers (architecture.md L581, latestVoteByAgent) still
-        // see the member's own vote as the live position, unchanged.
+        // "Latest wins" readers (architecture.md, latestVoteByAgent) still see
+        // the member's own vote as the live position.
         assertEq(ic.latestVoteByAgent(committeeAgent), realId);
         InvestmentCommitteePolicy.Vote memory v = ic.getVote(realId);
         assertEq(v.agent, committeeAgent);
@@ -89,23 +92,23 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         assertEq(ic.voteCount(), 1, "only the member's own vote is recorded");
     }
 
-    // ── Q4: flood under a member's name is refused on every attempt (#1790) ─
+    // ── Q4: flood under a member's name is refused on-chain ─────────────────
 
-    function test_spoofedVoteFloodRevertsUnderMemberName() public {
+    /// Remediated by core 1790 (PR 1818): every spoofed submission reverts, so no
+    /// row naming the member is appended. The aggregate side (latest signal per
+    /// member and vault) is covered end to end by
+    /// `vote_flood_from_one_member_counts_once_end_to_end` in explorer-indexer.
+    function test_spoofedVoteFloodUnderMemberNameReverts() public {
         _selfReveal(attacker, attacker, keccak256("f3-flood"));
         IInvestmentCommitteePolicy.VoteParams memory spoof = _defaultVoteParams();
         spoof.targetWeightBps = 0;
-        // Varying the memo hash per attempt does not matter: the identity guard
-        // fires on `p.agent != msg.sender` before any vote field is read.
         for (uint256 i = 0; i < 25; i++) {
             spoof.voteJsonHash = keccak256(abi.encode("attacker-memo", i));
             vm.prank(attacker);
             vm.expectRevert(RobotMoneyGateway.CommitteeAgentNotCaller.selector);
             gateway.committeeVoteSubmit(spoof);
         }
-        // No on-chain row names the member, so there is nothing for the
-        // indexer's aggregate to pick up.
-        assertEq(ic.voteCount(), 0, "flood must leave the vote log empty");
+        assertEq(ic.voteCount(), 0, "no spoofed row may be recorded");
     }
 
     // ── Q4b: the self-registered agent has no vote path under its own name ──
@@ -132,7 +135,7 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
 
     function test_selfRegisteredAgentCannotAnchorReceipt() public {
         ConsensusRecommendationReceipt receipt =
-            Proxied.consensusRecommendationReceipt(admin, address(gateway), address(ic));
+            CoreProxies.consensusRecommendationReceipt(admin, address(gateway), address(ic));
         vm.prank(admin);
         gateway.setConsensusReceipt(address(receipt));
 
@@ -147,33 +150,61 @@ contract SecurityReviewRecheckCommitteePoc is ICGatewayIntegration {
         assertEq(receipt.getReceipt(0).submitter, committeeAgent);
     }
 
-    // ── Q2: permissionless reveal can no longer squat a THIRD-PARTY agent ──
+    // ── Q2: permissionless reveal squats a THIRD-PARTY agent address ───────
 
-    /// @dev Finding 7. At baseline the attacker became the policy owner of a
-    ///      published third-party address, with itself as share receiver, and
-    ///      admin onboarding of that address then reverted `AgentAlreadyOwned`
-    ///      (also after the admin stripped its role). Issue #1791 requires the
-    ///      agent's EIP-712 consent for a non-admin reveal of another address,
-    ///      so the same reveal reverts `InvalidAgentConsent`, nothing is bound,
-    ///      and the admin onboards the address.
-    function test_permissionlessRevealCannotSquatThirdPartyAgentAddress() public {
+    function test_permissionlessRevealSquatsThirdPartyAgentAddress() public {
         // A future committee member's published EOA, not yet gateway-authorized.
         address victim = address(0xD1);
         bytes32 salt = keccak256("f3-squat");
-        _commitAndRoll(attacker, victim, salt);
+
+        // Core 1791: the victim never consented to the attacker, so the reveal reverts.
+        bytes32 commitment = keccak256(abi.encode(victim, attacker, salt));
         vm.prank(attacker);
-        vm.expectRevert(RobotMoneyGateway.InvalidAgentConsent.selector);
-        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker), "");
+        gateway.commitAuthorization(commitment);
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
+        assertEq(gateway.agentOwner(victim), address(0));
+        assertFalse(gateway.hasRole(gateway.AGENT_ROLE(), victim));
 
-        bytes32 agentRole = gateway.AGENT_ROLE();
-        assertEq(gateway.agentOwner(victim), address(0), "attacker owns the victim's entry");
-        assertFalse(gateway.hasRole(agentRole, victim), "victim got AGENT_ROLE from the squat");
-
-        // Admin onboarding is no longer blocked.
+        // The victim stays free to onboard through the admin path.
         vm.prank(admin);
         gateway.authorizeAgent(victim, _selfPolicy(victim));
         assertEq(gateway.agentOwner(victim), admin, "admin onboarding blocked");
-        assertTrue(gateway.hasRole(agentRole, victim), "victim not onboarded");
+        assertTrue(gateway.hasRole(gateway.AGENT_ROLE(), victim), "victim not onboarded");
+    }
+
+    /// A consent names one owner and one exact reveal: another owner cannot use it.
+    function test_consentToOneOwnerDoesNotLetAnotherOwnerReveal() public {
+        address victim = address(0xD1);
+        address friend = address(0xF1);
+        bytes32 salt = keccak256("f3-friend");
+        IGateway.AgentPolicy memory p = _selfPolicy(friend);
+
+        vm.prank(victim);
+        gateway.commitAuthorization(
+            keccak256(
+                abi.encode(
+                    friend,
+                    keccak256(abi.encodeCall(gateway.revealAuthorization, (victim, salt, p)))
+                )
+            )
+        );
+        vm.prank(attacker);
+        gateway.commitAuthorization(keccak256(abi.encode(victim, attacker, salt)));
+        vm.prank(friend);
+        gateway.commitAuthorization(keccak256(abi.encode(victim, friend, salt)));
+        vm.roll(block.number + 1);
+
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.OwnerConsentMissing.selector);
+        gateway.revealAuthorization(victim, salt, _selfPolicy(attacker));
+
+        // The named owner with the consented policy succeeds, and the consent is spent.
+        vm.prank(friend);
+        gateway.revealAuthorization(victim, salt, p);
+        assertEq(gateway.agentOwner(victim), friend);
     }
 
     // ── Q2: self-registered agent's fund paths pull only from itself ────────

@@ -5,11 +5,12 @@ import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbi, toBytes, t
 import { checkEvidence, checkEvidenceOnChain, checkReceiptPathOnChain, GOVERN_STEPS, REHEARSAL_ROWS, type ChainReader } from "../src/evidence-check.ts";
 import { buildRegisterCalls } from "../src/committee-register.ts";
 import { finalDeployerNonce } from "../src/counts.ts";
+import { withUpgradeability } from "./upgradeability-fixture.ts";
 
 const h = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const a = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 const T0 = 1000;
-const prod = (): any => ({
+const prod = (): any => withUpgradeability({
   chain_id: 8453, core_sha: "ab".repeat(20), plan_approved_at: "2026-10-05T10:00:00Z",
   owner_exceptions: [{ text: "x", recorded_at: "2026-10-04T10:00:00Z" }],
   stages: [{ stage: "safe", frozen_count: 2, receipt_count: 2, tx_hashes: [h(1), h(2)], receipts_status: [1, 1] }],
@@ -19,12 +20,13 @@ const prod = (): any => ({
   deployer: a(20), deployer_nonce_final: 3, registry: { address: a(21) },
   govern: GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 172800, schedule_status: 1, execute_status: 1 })),
   sources: { blockscout_all_verified: true, sourcify_all_exact: true },
-});
+} as any);
 const RID = h(0xabc), DIGEST = h(0xd16), SUB = a(0x5ab1);
 const reh = (): any => {
   const e: any = prod();
   e.deployment_kind = "rehearsal";
   e.timelock.min_delay = 900;
+  e.upgradeability.timelock.min_delay = "900"; // issue 1809: the record read the same timelock
   e.deployer_start_nonce = 118;
   e.deployer_nonce_final = 118 + 3;
   e.govern = GOVERN_STEPS.map((step, i) => ({ step, operation_id: h(900 + i), schedule_tx: h(100 + i * 3), schedule_block_timestamp: T0 + i, execute_tx: h(101 + i * 3), execute_block_timestamp: T0 + i + 900, schedule_status: 1, execute_status: 1 }));
@@ -44,8 +46,7 @@ const path = (e: any) => {
   e.committee_registrations = [{ step: "register-committee", submitter: SUB, agent_label: "s", gateway: a(30), ic_policy: a(31), timelock: a(9), valid_until: "9999999", operation_id: h(810), schedule_tx: h(210), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(211), execute_status: 1, submitter_safe: { ...SAFE_FACTS }, execute_block_timestamp: T0 + 900 }];
   e.recorded_receipts = [{ receipt_id: RID, payload_digest: DIGEST, payload_uri: "https://twin.invalid/r.json", submitter: SUB, tx_hash: h(220), status: 1, submitter_safe: { address: SUB, ...SAFE_FACTS, safe_tx_hash: h(0x5a), nonce: 3, signers: [a(2), a(3)], sent_by: a(20) } }];
   e.consensus_receipt = { address: a(32) }; e.governance = { address: a(33) };
-  // issue 1698: ONE applyReceipt call on the governance contract; `receipt` is the register it released on, and the entry carries no voted flag (its vector is the active one)
-  e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, governance: a(33), receipt: a(32), vaults: [a(5), a(6)], bps: [9000, 1000], effective_vaults: [a(5), a(6)], effective_bps: [9000, 1000], payload_digest: DIGEST, operation_id: h(812), schedule_tx: h(212), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(213), execute_status: 1, execute_block_timestamp: T0 + 910 }];
+  e.receipt_applications = [{ step: "apply-receipt", receipt_id: RID, target: a(33), governance: a(33), vaults: [a(5), a(6)], bps: [9000, 1000], voted_weights_active: true, effective_vaults: [a(5), a(6)], effective_bps: [9000, 1000], payload_digest: DIGEST, operation_id: h(812), schedule_tx: h(212), schedule_status: 1, schedule_block_timestamp: T0 + 10, execute_tx: h(213), execute_status: 1, execute_block_timestamp: T0 + 910 }];
   return e;
 };
 const R = { kind: "rehearsal" as const };
@@ -73,6 +74,7 @@ describe("evidence kind", () => {
     r.timelock.min_delay = 172800;
     expect(problems(r, R)).toContain("cannot be told from production");
     r.timelock.min_delay = 172799;
+    r.upgradeability.timelock.min_delay = "172799";
     expect(checkEvidence(r, undefined, undefined, R)).toEqual([]);
   });
   test("govern gaps follow the kind: 900 s passes as a rehearsal, fails as production", () => {
