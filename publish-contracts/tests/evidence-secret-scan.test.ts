@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { scanEvidenceFolder } from "../src/evidence-check.ts";
 import { scanRehearsal } from "../src/ci/scan-rehearsal-secrets.ts";
 import { configHashes, writeReport, type IsoReport } from "../src/isomorphism.ts";
+import { fileHashOf } from "../src/counts.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "evidence-scan-"));
 
@@ -33,6 +34,31 @@ describe("secret scan over the evidence folder", () => {
     writeFileSync(join(d, "isomorphism-8453.json"), JSON.stringify({ configHashes: { "config/dex-pools.json": "6b".repeat(32) } }, null, 2) + "\n");
     expect(scanEvidenceFolder(d).join()).toContain("64-hex");
   });
+  // issue 1689: a hash word on the line no longer exempts a 64-hex hit; only sha256:<hex> under configHashes and a whole 0x bytes32 JSON value pass
+  test("key-like hex on a line that names tx, hash, salt, digest, sha or block is flagged", () => {
+    const k = "5e".repeat(32);
+    const lines = [`tx ${k}`, `"hash": "${k}"`, `tx_hash=0x${k} extra`, `salt ${k}`, `"payload_digest": "${k}",`, `sha ${k}`, `block 12 key 0x${k} done`, `"fileHash": "${k}"`];
+    for (const line of lines) {
+      const d = scratch();
+      writeFileSync(join(d, "notes.txt"), line + "\n");
+      expect(scanEvidenceFolder(d).join()).toContain("64-hex");
+    }
+  });
+  test("a sha256:<hex> value under configHashes passes, the same value outside configHashes or without the prefix is flagged", () => {
+    const h = "6b".repeat(32);
+    const ok = scratch();
+    writeFileSync(join(ok, "iso.json"), JSON.stringify({ chainId: 1, configHashes: { "config/a.json": `sha256:${h}`, "config/b.json": `sha256:${h}` }, after: 1 }, null, 2) + "\n");
+    expect(scanEvidenceFolder(ok)).toEqual([]);
+    const outside = scratch();
+    writeFileSync(join(outside, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}` }, other: { "config/a.json": `sha256:${h}` } }, null, 2) + "\n");
+    expect(scanEvidenceFolder(outside)).toEqual([`${join(outside, "iso.json")}:6: 64-hex value (private key shape)`]);
+    const bare = scratch();
+    writeFileSync(join(bare, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}`, key: h } }, null, 2) + "\n");
+    expect(scanEvidenceFolder(bare)).toEqual([`${join(bare, "iso.json")}:4: 64-hex value (private key shape)`]);
+    const oneLine = scratch();
+    writeFileSync(join(oneLine, "iso.json"), JSON.stringify({ configHashes: { "config/a.json": `sha256:${h}` } }) + "\n");
+    expect(scanEvidenceFolder(oneLine).join()).toContain("64-hex");
+  });
   test("a keystore, an assignment and a mnemonic are found", () => {
     const d = scratch(); mkdirSync(join(d, "sub"));
     writeFileSync(join(d, "sub", "ks.json"), '{"crypto": {"ciphertext": "00"}}\n');
@@ -43,7 +69,17 @@ describe("secret scan over the evidence folder", () => {
   });
   test("every committed evidence folder is clean", () => {
     const root = resolve(import.meta.dir, "..", "..");
-    for (const dir of [join(root, "evidence"), join(root, "deployments")]) if (existsSync(dir)) expect(scanEvidenceFolder(dir)).toEqual([]);
+    const counts = join(root, "deployments", "frozen-counts");
+    // The one bare 64-hex a committed file may hold is a frozen counts file's measured.crossChecked.fileHash (counts.ts), and only when it is
+    // provably public: the sha256 of the committed anchor file it names. Any other hit, or a fileHash that is not that digest, fails.
+    const provenFileHash = (hit: string): boolean => {
+      const [f, n] = hit.split(":");
+      if (!f!.startsWith(counts + "/")) return false;
+      const cc = JSON.parse(readFileSync(f!, "utf8"))?.measured?.crossChecked;
+      const line = readFileSync(f!, "utf8").split("\n")[Number(n) - 1]!;
+      return typeof cc?.fileHash === "string" && line.trim() === `"fileHash": "${cc.fileHash}"` && fileHashOf(readFileSync(join(counts, `${cc.sha}.json`))) === cc.fileHash;
+    };
+    for (const dir of [join(root, "evidence"), join(root, "deployments")]) if (existsSync(dir)) expect(scanEvidenceFolder(dir).filter((h) => !provenFileHash(h))).toEqual([]);
     expect(readdirSync(root).length).toBeGreaterThan(0);
   });
 });

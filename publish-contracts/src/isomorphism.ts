@@ -57,8 +57,7 @@ export const sha256File = (p: string): string => createHash("sha256").update(rea
 
 /**
  * Each value is `sha256:<64 hex>`. The prefix is load-bearing: the evidence secret scan reads a bare 64-hex value as a
- * private key and skips only lines that name a hash word (`sha` here). The scan rule itself is unchanged. The prefix does not
- * widen what the scan lets through: any line that says `sha` was already exempt.
+ * private key, and exempts it only as a `sha256:` value directly under the `configHashes` key of a pretty-printed report (issue 1689).
  */
 export function configHashes(coreDir: string): Record<string, string> {
   const dir = join(coreDir, "config");
