@@ -1552,7 +1552,8 @@ impl Db {
         Ok(row.0)
     }
 
-    /// Insert a Timelock or Safe event into `admin_events` (migration 0017). Idempotent on the log position.
+    /// Insert a Timelock, Safe or proxy-upgrade event into `admin_events` (migrations 0017, 0019). Idempotent on
+    /// the log position.
     pub async fn insert_admin_event(
         &self,
         chain_id: i64,

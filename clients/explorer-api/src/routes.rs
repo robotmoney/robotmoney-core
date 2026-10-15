@@ -63,9 +63,9 @@ use crate::model::{
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
     DepositsResponse, EventKind, Freshness, Health, RegimeFeedResponse, RegimeSnapshot,
     RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
-    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
-    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
-    WeightHistoryEntry,
+    UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
+    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
+    VaultsResponse, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -283,24 +283,53 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     }))
 }
 
+/// (address, kind, newest `Upgraded` detail, first `UpgradesFrozen` block).
+type ContractRow = (Vec<u8>, String, Option<String>, Option<i64>);
+
 async fn list_contracts(
     State(state): State<AppState>,
     Path(chain_id): Path<i64>,
 ) -> ApiResult<Json<ContractsResponse>> {
     // The canonical schema has no `label` column on `contracts`; surface
     // it as null so the wire format stays stable for existing clients.
-    let rows: Vec<(Vec<u8>, String)> =
-        sqlx::query_as("SELECT address, kind FROM contracts WHERE chain_id = $1 ORDER BY address")
-            .bind(chain_id)
-            .fetch_all(&state.pool)
-            .await?;
+    //
+    // Issue 1810: each contract's implementation and freeze state come from
+    // its newest indexed `Upgraded` and `UpgradesFrozen` events
+    // (`admin_events`, contract_kind 'proxy').
+    let rows: Vec<ContractRow> = sqlx::query_as(
+        "SELECT c.address, c.kind, \
+             (SELECT e.detail FROM admin_events e \
+               WHERE e.chain_id = c.chain_id AND e.contract = c.address \
+                 AND e.contract_kind = 'proxy' AND e.event_name = 'Upgraded' \
+               ORDER BY e.block_number DESC, e.log_index DESC LIMIT 1) AS upgraded, \
+             (SELECT e.block_number FROM admin_events e \
+               WHERE e.chain_id = c.chain_id AND e.contract = c.address \
+                 AND e.contract_kind = 'proxy' AND e.event_name = 'UpgradesFrozen' \
+               ORDER BY e.block_number ASC, e.log_index ASC LIMIT 1) AS frozen_at_block \
+         FROM contracts c WHERE c.chain_id = $1 ORDER BY c.address",
+    )
+    .bind(chain_id)
+    .fetch_all(&state.pool)
+    .await?;
     let contracts = rows
         .into_iter()
-        .map(|(address, kind)| Contract {
-            chain_id,
-            address: addr_to_hex(&address),
-            kind,
-            label: None,
+        .map(|(address, kind, upgraded, frozen_at_block)| {
+            let implementation = upgraded.as_deref().and_then(|d| {
+                serde_json::from_str::<serde_json::Value>(d)
+                    .ok()?
+                    .get("implementation")?
+                    .as_str()
+                    .map(str::to_string)
+            });
+            Contract {
+                chain_id,
+                address: addr_to_hex(&address),
+                kind,
+                label: None,
+                upgrade_state: UpgradeState::of(upgraded.is_some(), frozen_at_block).as_str(),
+                implementation,
+                frozen_at_block,
+            }
         })
         .collect();
     let freshness = current_freshness(&state, chain_id).await?;

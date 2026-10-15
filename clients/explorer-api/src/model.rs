@@ -28,16 +28,17 @@ pub struct Health {
     pub reorg_count: i32,
 }
 
-/// One Timelock or Safe event (`admin_events`).
+/// One Timelock, Safe or proxy-upgrade event (`admin_events`).
 #[derive(Debug, Serialize)]
 pub struct AdminEventEntry {
     pub chain_id: i64,
     pub block_number: i64,
     pub log_index: i32,
     pub tx_hash: String,
-    /// The Timelock or Safe that emitted it.
+    /// The Timelock, Safe or proxied core contract that emitted it.
     pub contract: String,
-    /// `timelock` or `safe`.
+    /// `timelock`, `safe`, or `proxy` (a core contract's `Upgraded` /
+    /// `UpgradesFrozen`, issue 1810).
     pub contract_kind: String,
     pub event_name: String,
     /// Timelock operation id, or Safe transaction hash.
@@ -61,6 +62,47 @@ pub struct Contract {
     pub address: String,
     pub kind: String,
     pub label: Option<String>,
+    /// The implementation behind this ERC-1967 proxy, from its newest indexed
+    /// `Upgraded` event; null when none was indexed (issue 1810).
+    pub implementation: Option<String>,
+    /// [`UpgradeState`] as a string: `frozen`, `upgradeable` or `unknown`.
+    pub upgrade_state: &'static str,
+    /// Block of the indexed `UpgradesFrozen` event; null unless frozen.
+    pub frozen_at_block: Option<i64>,
+}
+
+/// Whether a contract can still be upgraded, as far as the indexed events
+/// show (issue 1810). Disclosure only: signing clients read the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeState {
+    /// An `UpgradesFrozen` event was indexed. Permanent: there is no unfreeze.
+    Frozen,
+    /// An `Upgraded` event was indexed and no freeze. The upgrade timelock can
+    /// still replace the implementation.
+    Upgradeable,
+    /// No upgrade event was indexed: a direct (non-proxy) deployment, a
+    /// non-core contract, or a proxy deployed before the indexer's first block.
+    Unknown,
+}
+
+impl UpgradeState {
+    /// Derive the state from the indexed events: a freeze wins, any upgrade
+    /// event without a freeze is upgradeable, nothing indexed is unknown.
+    pub fn of(has_upgraded: bool, frozen_at_block: Option<i64>) -> Self {
+        match (frozen_at_block, has_upgraded) {
+            (Some(_), _) => UpgradeState::Frozen,
+            (None, true) => UpgradeState::Upgradeable,
+            (None, false) => UpgradeState::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UpgradeState::Frozen => "frozen",
+            UpgradeState::Upgradeable => "upgradeable",
+            UpgradeState::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

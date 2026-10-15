@@ -34,9 +34,9 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IConsensusRecommendationReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
-    IPortfolioRouterEvents, ITimelockEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents,
-    Topics,
+    IConsensusRecommendationReceiptEvents, IGatewayEvents, IGovernedUpgradeEvents,
+    IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents, ITimelockEvents, IVaultEvents,
+    IVaultReads, IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -70,9 +70,10 @@ pub struct IndexerConfig {
     pub registry: Option<Address>,
     /// Optional RouterGovernance (the router's weight setter) address. When
     /// set, the indexer registers it in `contracts` (kind `router_governance`)
-    /// and counts it toward the deploy-block floor. It is not watched for logs:
-    /// its voting events were deleted with its voting (issue #1698), and the
-    /// weights it sets are indexed from the router's own `WeightsSet`.
+    /// and counts it toward the deploy-block floor. Its voting events were
+    /// deleted with its voting (issue #1698), and the weights it sets are
+    /// indexed from the router's own `WeightsSet`. It is watched for its proxy
+    /// `Upgraded` / `UpgradesFrozen` events only (issue 1810).
     pub router_governance: Option<Address>,
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
@@ -147,7 +148,10 @@ impl IndexerConfig {
                 addrs.push(cr);
             }
         }
-        for a in [self.timelock, self.safe].into_iter().flatten() {
+        for a in [self.router_governance, self.timelock, self.safe]
+            .into_iter()
+            .flatten()
+        {
             if !addrs.contains(&a) {
                 addrs.push(a);
             }
@@ -1308,8 +1312,12 @@ async fn run_inner(
     })
 }
 
-/// Decode a Timelock or Safe log into an `admin_events` row. `None` when the log is not one of these events
-/// or was not emitted by the configured Timelock or Safe.
+/// Decode a Timelock, Safe or proxy-upgrade log into an `admin_events` row. `None` when the log is not one
+/// of these events, or a Timelock or Safe event not emitted by the configured Timelock or Safe.
+///
+/// Proxy events (issue 1810): `Upgraded` and `UpgradesFrozen` from any other watched contract (every proxied
+/// core contract emits them from its own address) become `contract_kind = 'proxy'` rows. The Timelock and
+/// the Safe are not Robot Money proxies, so the same topics from them are not recorded.
 pub fn admin_event_of(
     cfg: &IndexerConfig,
     topics: &Topics,
@@ -1419,10 +1427,33 @@ pub fn admin_event_of(
             detail,
         }));
     }
+    if topic0 == topics.proxy_upgraded {
+        let d = IGovernedUpgradeEvents::Upgraded::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Upgraded: {e}")))?;
+        return Ok(Some(AdminEvent {
+            contract_kind: "proxy",
+            event_name: "Upgraded",
+            op_id: None,
+            detail: serde_json::json!({ "implementation": format!("{:#x}", d.implementation) }),
+        }));
+    }
+    if topic0 == topics.proxy_upgrades_frozen {
+        let d = IGovernedUpgradeEvents::UpgradesFrozen::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("UpgradesFrozen: {e}")))?;
+        return Ok(Some(AdminEvent {
+            contract_kind: "proxy",
+            event_name: "UpgradesFrozen",
+            op_id: None,
+            detail: serde_json::json!({
+                "implementation": format!("{:#x}", d.implementation),
+                "code_hash": format!("{:#x}", d.codeHash),
+            }),
+        }));
+    }
     Ok(None)
 }
 
-/// One Timelock or Safe event, ready for `Db::insert_admin_event`.
+/// One Timelock, Safe or proxy-upgrade event, ready for `Db::insert_admin_event`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdminEvent {
     pub contract_kind: &'static str,
@@ -3255,14 +3286,15 @@ mod tests {
         );
     }
 
-    /// RouterGovernance emits no event the indexer decodes (issue #1698), so it
-    /// is registered as a contract but its logs are not fetched.
+    /// RouterGovernance's voting events are gone (issue #1698), but as a proxied
+    /// core contract it emits `Upgraded` / `UpgradesFrozen` (issue 1810), so it
+    /// is registered AND watched.
     #[test]
-    fn router_governance_is_registered_but_not_watched() {
+    fn router_governance_is_registered_and_watched_for_proxy_events() {
         let gov = Address::from([0x66u8; 20]);
         let mut cfg = admin_cfg();
         cfg.router_governance = Some(gov);
-        assert!(!cfg.watched_addresses().contains(&gov));
+        assert!(cfg.watched_addresses().contains(&gov));
         assert!(cfg
             .configured_contracts()
             .contains(&(gov, "router_governance")));
@@ -3409,6 +3441,55 @@ mod tests {
             ld.data.to_vec(),
         );
         assert_eq!(admin_event_of(&cfg, &topics, &other).unwrap(), None);
+    }
+
+    /// Issue 1810: a proxied core contract's `Upgraded` and `UpgradesFrozen`
+    /// become `proxy` rows naming the implementation (and the frozen code
+    /// hash). The same topics from the Timelock or the Safe are not recorded.
+    #[test]
+    fn proxy_upgrade_and_freeze_events_decode_as_proxy_rows() {
+        use alloy_primitives::{FixedBytes, B256};
+        use alloy_sol_types::SolEvent as _;
+        let cfg = admin_cfg();
+        let topics = Topics::new();
+        let gateway = cfg.gateway;
+        let implementation = Address::from([0x1c; 20]);
+
+        let up = IGovernedUpgradeEvents::Upgraded { implementation }.encode_log_data();
+        let log = raw_log(gateway, up.topics().to_vec(), up.data.to_vec());
+        let got = admin_event_of(&cfg, &topics, &log)
+            .unwrap()
+            .expect("decoded");
+        assert_eq!((got.contract_kind, got.event_name), ("proxy", "Upgraded"));
+        assert_eq!(got.op_id, None);
+        assert_eq!(got.detail["implementation"], format!("{implementation:#x}"));
+
+        let frozen = IGovernedUpgradeEvents::UpgradesFrozen {
+            proxy: gateway,
+            implementation,
+            codeHash: FixedBytes([0x77; 32]),
+        }
+        .encode_log_data();
+        let log = raw_log(gateway, frozen.topics().to_vec(), frozen.data.to_vec());
+        let got = admin_event_of(&cfg, &topics, &log)
+            .unwrap()
+            .expect("decoded");
+        assert_eq!(
+            (got.contract_kind, got.event_name),
+            ("proxy", "UpgradesFrozen")
+        );
+        assert_eq!(got.detail["implementation"], format!("{implementation:#x}"));
+        assert_eq!(
+            got.detail["code_hash"],
+            format!("{:#x}", B256::from([0x77; 32]))
+        );
+
+        for not_a_proxy in [cfg.timelock.unwrap(), cfg.safe.unwrap()] {
+            let log = raw_log(not_a_proxy, up.topics().to_vec(), up.data.to_vec());
+            assert_eq!(admin_event_of(&cfg, &topics, &log).unwrap(), None);
+        }
+        assert!(topics.all_topic0().contains(&topics.proxy_upgraded));
+        assert!(topics.all_topic0().contains(&topics.proxy_upgrades_frozen));
     }
 
     #[test]

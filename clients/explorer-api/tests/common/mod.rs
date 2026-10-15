@@ -104,6 +104,10 @@ pub const ADMIN_EVENTS_MIGRATION: &str = include_str!(
 /// and `/v1/vaults/:address` read both caps.
 pub const VAULT_CAPS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql");
+/// Migration 0019 (issue 1810): `admin_events.contract_kind` admits `proxy`, the core contracts' `Upgraded` and
+/// `UpgradesFrozen` events, from which `/v1/chains/:chain_id/contracts` derives implementation and freeze state.
+pub const PROXY_UPGRADE_EVENTS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql");
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
@@ -213,6 +217,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply vault snapshot caps migration (0018)");
+    sqlx::raw_sql(PROXY_UPGRADE_EVENTS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply proxy upgrade events migration (0019)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
