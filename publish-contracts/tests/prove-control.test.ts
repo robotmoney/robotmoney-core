@@ -386,6 +386,73 @@ describe("prove-control adopts a proof that landed before the run died", () => {
   });
 });
 
+// ---- a stale load-balanced RPC right after the proof landed (issue 1723) -----------------------------------------------------------------
+// The Safe handle answers the nonce as a node behind the proof's block would: 0 for the first `k` reads, then the chain's nonce.
+// The clock is injected: `sleep` only counts.
+describe("prove-control on a stale RPC: a stale nonce 0 after the proof landed never re-runs the proof", () => {
+  const staleApi = (w: ReturnType<typeof world>, k: number, api = fakeProveApi(w)) => {
+    const served = { stale: 0 };
+    return { served, api: { ...api, connectSafe: async (o: Parameters<typeof api.connectSafe>[0]) => {
+      const h = await api.connectSafe(o);
+      return { ...h, nonce: async () => (served.stale < k ? (served.stale++, 0) : h.nonce()) };
+    } } };
+  };
+  const sleeps = () => { const c = { n: 0, sleep: async () => { c.n++; } }; return c; };
+
+  test("on entry (--resume): the proof landed, the RPC answers nonce 0 three times, then 1: adopted, nothing proposed, signed or sent", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    const { api, served } = staleApi(w, 3);
+    const c = sleeps();
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api, ownerSigners: PROVE_SIGNERS, staleRead: { sleep: c.sleep } } })).toBe(0);
+    expect(served.stale).toBe(3);
+    expect(c.n).toBe(2); // the entry read, then two stale re-reads, then 1
+    expect(sends(w)).toEqual([]);
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true, txHash: LANDED_TX, nonce: 0 });
+    expect(w.logs().filter((l) => l.event === "safe.stale_read")).toHaveLength(2);
+  });
+
+  test("after the proof: the run dies right after its proof landed, --resume meets a stale nonce 0: the nonce converges to 1, the proof is adopted and sent once", async () => {
+    const w = world({ writeSafeManifest: true });
+    const api = fakeProveApi(w);
+    const crashing = { ...api, executeTx: async (...a: Parameters<typeof api.executeTx>) => {
+      await api.executeTx(...a);
+      await landed(w);
+      throw new Error("the process died before the run manifest was written");
+    } };
+    expect(await w.run(["--stage", PROOF_STAGE], { prove: { api: crashing, ownerSigners: PROVE_SIGNERS } })).not.toBe(0);
+    expect(executed(w)).toHaveLength(1);
+    const { api: stale, served } = staleApi(w, 4);
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api: stale, ownerSigners: PROVE_SIGNERS, staleRead: { sleep: sleeps().sleep } } })).toBe(0);
+    expect(served.stale).toBe(4);
+    expect(executed(w)).toHaveLength(1); // not taken a second time
+    expect(manifest(w).stages[PROOF_STAGE]).toMatchObject({ status: "done", adopted: true });
+  });
+
+  test("a nonce that never leaves 0 while an execution exists fails with STALE_READ_TIMEOUT naming the expected value, the last value and the RPC host: nothing is sent", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w);
+    const { api } = staleApi(w, Infinity);
+    const c = sleeps();
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api, ownerSigners: PROVE_SIGNERS, staleRead: { tries: 4, sleep: c.sleep } } })).not.toBe(0);
+    expect(lastError(w).message).toContain("expected 1 or more, last read 0, after 4 read(s)");
+    expect(lastError(w).message).toContain("rpc.test");
+    expect(c.n).toBe(3);
+    expect(sends(w)).toEqual([]);
+    expect(existsSync(manifestPath(w)) ? manifest(w).stages[PROOF_STAGE] : undefined).toBeUndefined();
+  });
+
+  test("a consistent nonce 2 on --resume is not retried: the adoption refuses it as before", async () => {
+    const w = world({ writeSafeManifest: true });
+    await landed(w, { nonce: 2 });
+    const c = sleeps();
+    expect(await w.run(["--stage", PROOF_STAGE, "--resume"], { prove: { api: fakeProveApi(w), ownerSigners: PROVE_SIGNERS, staleRead: { sleep: c.sleep } } })).toBe(EXIT_CODES.CONTROL_NOT_PROVEN);
+    expect(lastError(w).message).toContain("the Safe nonce is 2");
+    expect(c.n).toBe(0);
+    expect(sends(w)).toEqual([]);
+  });
+});
+
 describe("hardware owner signers in prove-control (a simulated cast, no device)", () => {
   const KEYS = [toHex(0xb1, { size: 32 }), toHex(0xb2, { size: 32 }), toHex(0xb3, { size: 32 })] as const;
   const accts = KEYS.map((k) => privateKeyToAccount(k));

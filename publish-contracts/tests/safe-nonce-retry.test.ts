@@ -1,7 +1,8 @@
 // Issue 1750 / 1723: the post-execute reads that a stale load-balanced RPC answers late are retried a BOUNDED number of times and still fail closed.
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, keccak256, toBytes, type Address, type Hex } from "viem";
-import { NONCE_RETRY_TRIES, awaitSafeNonce } from "../src/safe/tx.ts";
+import { awaitSafeNonce } from "../src/safe/tx.ts";
+import { STALE_READ_TRIES } from "../src/safe/read-after-write.ts";
 import { awaitExecutionSuccess } from "../src/record-receipt.ts";
 
 const TX = `0x${"11".repeat(32)}` as Hex;
@@ -24,12 +25,13 @@ describe("awaitSafeNonce: a stale RPC read is retried, bounded, and fails closed
     expect(await awaitSafeNonce(handle, 5, TX, { sleep: async () => { slept++; } })).toBe(5);
     expect([calls.n, slept]).toEqual([1, 0]);
   });
-  test("always stale fails after the default 5 tries, names the RPC origin (not its path or key) and the transaction", async () => {
+  test("always stale fails with STALE_READ_TIMEOUT after the default 10 tries, names the expected and last nonce, the RPC origin (not its path or key) and the transaction", async () => {
     const { handle, calls } = handleWith([4]);
     const e = await awaitSafeNonce(handle, 5, TX, noSleep).catch((x) => x);
-    expect(e).toMatchObject({ code: "NONCE_DID_NOT_MOVE" });
-    expect(calls.n).toBe(NONCE_RETRY_TRIES);
-    expect(NONCE_RETRY_TRIES).toBe(5);
+    expect(e).toMatchObject({ code: "STALE_READ_TIMEOUT", details: { expected: "5", last: "4", rpc_host: "secret-key.rpc.example.org" } });
+    expect(calls.n).toBe(STALE_READ_TRIES);
+    expect(STALE_READ_TRIES).toBe(10);
+    expect(e.message).toContain("expected 5, last read 4");
     expect(e.message).toContain("secret-key.rpc.example.org");
     expect(e.message).not.toContain("abc123");
     expect(e.message).toContain(TX);

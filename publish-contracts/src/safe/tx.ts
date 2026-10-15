@@ -9,6 +9,7 @@ import { delayFloor, isMainnet } from "../floors.ts";
 import { lc, rpcLabel, sameAddress } from "./chain.ts";
 import { SAFE_ABI, SAFE_VERSION, TIMELOCK_ABI, ZERO_ADDRESS } from "./constants.ts";
 import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
+import { readAfterWrite, type StaleReadRetry } from "./read-after-write.ts";
 import type { SafeHandle } from "./safe.ts";
 import { recoverSafeSigner, splitSignature, verifySafeSignature, type SignMode } from "./sig.ts";
 import type { Signer } from "./signers.ts";
@@ -316,7 +317,7 @@ export interface ExecuteOpts {
   localChecks?: boolean;
   /** Simulate only: run every check and the execTransaction call, send nothing. */
   dryRun?: boolean;
-  /** Test seam and tuning for the post-execute nonce read (default 5 tries, 1 s apart). */
+  /** Test seam and tuning for the post-execute nonce read (default STALE_READ_TRIES tries, STALE_READ_DELAY_MS apart). */
   nonceRetry?: NonceRetry;
   /** Send every signature in the bundle, not only the threshold. The Safe checks the first `threshold` of them: the rest are readable from the chain by a verifier (the control proof). */
   allSignatures?: boolean;
@@ -333,28 +334,20 @@ export interface ExecuteResult {
 }
 
 /** How the post-execute nonce read retries on a stale load-balanced RPC (issue 1723). Bounded: it always ends. */
-export interface NonceRetry { tries?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> }
-export const NONCE_RETRY_TRIES = 5;
-export const NONCE_RETRY_DELAY_MS = 1000;
+export type NonceRetry = StaleReadRetry;
 
 /**
  * Reads the Safe nonce after a landed execution until it is `want`. A load-balanced RPC may answer from a node that has not seen the block yet (stale), although the
- * transaction landed (receipt status success). The read is retried `tries` times with `delayMs` between them. It still fails closed with NONCE_DID_NOT_MOVE, naming the RPC
- * origin, the transaction and the nonces it saw, when every try is stale. A nonce above `want` fails at once: another transaction moved the Safe.
+ * transaction landed (receipt status success): a nonce below `want` is re-read through readAfterWrite and fails closed with STALE_READ_TIMEOUT (expected value, last
+ * value seen, RPC host) when it never moves. A nonce above `want` fails at once with NONCE_DID_NOT_MOVE: another transaction moved the Safe.
  */
 export async function awaitSafeNonce(handle: SafeHandle, want: number, txHash: Hex, retry: NonceRetry = {}): Promise<number> {
-  const tries = retry.tries ?? NONCE_RETRY_TRIES;
-  const delay = retry.delayMs ?? NONCE_RETRY_DELAY_MS;
-  const sleep = retry.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const seen: number[] = [];
-  for (let i = 1; i <= tries; i++) {
-    const n = await handle.nonce();
-    seen.push(n);
-    if (n === want) return n;
-    if (n > want) break;
-    if (i < tries) await sleep(delay);
-  }
-  throw new SafeToolError("NONCE_DID_NOT_MOVE", `the Safe nonce did not reach ${want} after ${txHash}: read ${seen.join(", ")} in ${seen.length} try(ies) from RPC ${rpcLabel(handle.chain.rpcUrl)} (a stale load-balanced RPC, or another transaction moved the Safe). The transaction landed: read the chain before any retry.`, { tx_hash: txHash, seen, rpc: rpcLabel(handle.chain.rpcUrl) });
+  const n = await readAfterWrite({
+    what: `the Safe ${handle.address} nonce after ${txHash}`, expected: String(want), rpcUrl: handle.chain.rpcUrl, logger: handle.logger,
+    read: () => handle.nonce(), judge: (v) => (v < want ? "stale" : v === want ? "fresh" : "wrong"),
+  }, retry);
+  if (n !== want) throw new SafeToolError("NONCE_DID_NOT_MOVE", `the Safe nonce is ${n} after ${txHash}, expected ${want}: another transaction moved the Safe (RPC ${rpcLabel(handle.chain.rpcUrl)}). The transaction landed: read the chain before any retry.`, { tx_hash: txHash, nonce: n, want, rpc: rpcLabel(handle.chain.rpcUrl) });
+  return n;
 }
 
 export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender: Signer, opts: ExecuteOpts = {}): Promise<ExecuteResult> {
