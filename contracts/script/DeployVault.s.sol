@@ -12,7 +12,7 @@ import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @dev The name rmUSDC is registered under in the VaultRegistry. A script constant like each
 ///      basket script's VAULT_NAME: one registry-name source for all four vaults (issue 1705 C9).
@@ -43,7 +43,12 @@ string constant RMUSDC_VAULT_NAME = "Robot Money USDC";
 ///      USDC is the canonical Base USDC constant on every chain (no USDC_ADDRESS).
 ///        EXIT_FEE_BPS     — exit fee in basis points (0 is a valid value)
 ///        SEED_DEPOSIT_USDC      — seed in 6-decimal USDC units (non-zero)
-contract DeployVault is ExpectedChainGuard {
+///        SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and release
+///                                mode of the vault proxy (`UpgradeAuthority`, issue 1808)
+///
+///      The vault is an ERC-1967 proxy initialized in its constructor (issue 1808). The manifest
+///      `vault` is the proxy; `vault_implementation` is the implementation it points at.
+contract DeployVault is UpgradeAuthority {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "vault.json";
     /// @notice Name rmUSDC is registered under in the VaultRegistry. A script constant like each
@@ -123,6 +128,8 @@ contract DeployVault is ExpectedChainGuard {
         CompoundV3Adapter compoundAdapter;
         MorphoAdapter moonwellAdapter;
         address admin;
+        address vaultImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Deploys, registers adapters, seeds, writes JSON.
@@ -130,8 +137,9 @@ contract DeployVault is ExpectedChainGuard {
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
         address seedReceiver = _seedShareReceiver("", p.admin);
+        UpgradeConfig memory u = _readUpgradeConfig("");
         vm.startBroadcast();
-        d = _deploy(p);
+        d = _deploy(p, u);
         // The broadcaster IS d.admin: msg.sender holds ADMIN_ROLE. vm.prank is prohibited here.
         _approveAndRegisterAdapters(d);
         uint256 seed = _seedAmount("");
@@ -146,7 +154,7 @@ contract DeployVault is ExpectedChainGuard {
     /// @notice In-process variant for forge tests, no seed deposit. Env-driven.
     /// @return d The deployed contracts and admin.
     function runInProcess() external returns (Deployed memory d) {
-        d = _deploy(_readEnvParamsFrom(""));
+        d = _deploy(_readEnvParamsFrom(""), _inProcessUpgradeConfig());
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
@@ -163,7 +171,7 @@ contract DeployVault is ExpectedChainGuard {
         returns (Deployed memory d)
     {
         _requireSeedReceiver(seedReceiver_, p.admin);
-        d = _deploy(p);
+        d = _deploy(p, _inProcessUpgradeConfig());
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         uint256 shares = _seedStep(d, seedReceiver_, seed_);
@@ -175,7 +183,7 @@ contract DeployVault is ExpectedChainGuard {
     /// @param p Deployment parameters (admin, caps, fee, USDC).
     /// @return d The deployed contracts and admin.
     function runInProcessWithParams(Params memory p) external returns (Deployed memory d) {
-        d = _deploy(p);
+        d = _deploy(p, _inProcessUpgradeConfig());
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
@@ -260,7 +268,7 @@ contract DeployVault is ExpectedChainGuard {
         vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
     }
 
-    function _deploy(Params memory p) internal returns (Deployed memory d) {
+    function _deploy(Params memory p, UpgradeConfig memory u) internal returns (Deployed memory d) {
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
         require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
         require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
@@ -270,14 +278,26 @@ contract DeployVault is ExpectedChainGuard {
         require(p.tvlCap > 0 && p.perDepositCap > 0, "TVL_CAP / PER_DEPOSIT_CAP = 0");
         d.admin = p.admin;
         d.usdc = p.usdcAddress;
-        d.vault = new RobotMoneyVault(
-            IERC20(d.usdc),
-            p.tvlCap,
-            p.perDepositCap,
-            p.exitFeeBps,
-            p.feeRecipient,
-            p.admin, // vaultAdmin — receives ADMIN_ROLE
-            p.admin // emergencyResponder — handed to the emergency key by the timelock stage
+        d.upgrade = u;
+        d.vaultImplementation = address(new RobotMoneyVault());
+        d.vault = RobotMoneyVault(
+            _deployProxy(
+                d.vaultImplementation,
+                abi.encodeCall(
+                    RobotMoneyVault.initialize,
+                    (
+                        IERC20(d.usdc),
+                        p.tvlCap,
+                        p.perDepositCap,
+                        p.exitFeeBps,
+                        p.feeRecipient,
+                        p.admin, // vaultAdmin — receives ADMIN_ROLE
+                        p.admin, // emergencyResponder — handed to the emergency key by the timelock stage
+                        u.timelock,
+                        u.mode
+                    )
+                )
+            )
         );
         // Registration happens in the callers: the call context differs between broadcast
         // and in-process modes.
@@ -287,7 +307,10 @@ contract DeployVault is ExpectedChainGuard {
 
         console2.log("RobotMoneyVault + Aave V3, Compound V3, Moonwell Flagship adapters deployed");
         console2.log("  usdc               :", d.usdc);
-        console2.log("  vault              :", address(d.vault));
+        console2.log("  vault (proxy)      :", address(d.vault));
+        console2.log("  vault_implementation:", d.vaultImplementation);
+        console2.log("  upgrade_timelock   :", u.timelock);
+        console2.log("  upgrade_mode       :", upgradeModeName(u.mode));
         console2.log("  aave_adapter       :", address(d.aaveAdapter));
         console2.log("  compound_adapter   :", address(d.compoundAdapter));
         console2.log("  moonwell_adapter   :", address(d.moonwellAdapter));
@@ -303,6 +326,7 @@ contract DeployVault is ExpectedChainGuard {
     ///         Seed fields: seed_share_receiver, seed_shares (minted to the receiver) and
     ///         deployer_share_balance_after (read from the vault at write time, must be 0).
     ///         The verifier asserts the deployer balance is 0 and the receiver holds the seed.
+    ///         Upgrade fields (issue 1808): vault_implementation, upgrade_timelock, upgrade_mode.
     function _writeDeploymentJsonTo(
         Deployed memory d,
         address seedReceiver,
@@ -313,6 +337,9 @@ contract DeployVault is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "usdc", d.usdc);
         vm.serializeAddress(obj, "vault", address(d.vault));
+        vm.serializeAddress(obj, "vault_implementation", d.vaultImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "aave_adapter", address(d.aaveAdapter));
         vm.serializeAddress(obj, "compound_adapter", address(d.compoundAdapter));
         vm.serializeAddress(obj, "moonwell_flagship_adapter", address(d.moonwellAdapter));

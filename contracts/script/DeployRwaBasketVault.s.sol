@@ -14,11 +14,9 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {BasketVaultDeployBase} from "./BasketVaultDeployBase.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
-import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
 /// @title DeployRwaBasketVault
 /// @notice Production deploy script for `RwaBasketVault` (rmRWA). One path on every chain.
@@ -56,6 +54,7 @@ contract DeployRwaBasketVault is BasketVaultDeployBase {
         returns (Deployed memory d)
     {
         Cfg memory cfg = _parseCfg(json, "assets");
+        _vaultUpgrade = _inProcessUpgradeConfig();
         vm.startPrank(p.admin);
         d = _deployAll(p, cfg);
         vm.stopPrank();
@@ -66,15 +65,19 @@ contract DeployRwaBasketVault is BasketVaultDeployBase {
         override
         returns (BasketVault)
     {
-        return new RwaBasketVault(
-            IERC20(p.usdc),
-            ISwapRouter(p.swapRouter),
-            p.tvlCap,
-            p.perDepositCap,
-            p.exitFeeBps,
-            p.feeRecipient,
-            p.admin,
-            emergencyResponder
+        address impl = address(new RwaBasketVault());
+        return BasketVault(
+            _deployProxy(
+                impl,
+                abi.encodeCall(
+                    RwaBasketVault.initialize,
+                    (
+                        _basketInitParams(p, emergencyResponder),
+                        _vaultUpgrade.timelock,
+                        _vaultUpgrade.mode
+                    )
+                )
+            )
         );
     }
 

@@ -9,7 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployGateway
 /// @notice Stage 5 of the core deploy (libs, vault, registry, router, gateway).
@@ -31,7 +31,13 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///        ROUTER_ADDRESS        — the PortfolioRouter from the router stage, non-zero
 ///        DEPLOYMENT_OUT        — output JSON path
 ///      USDC is the canonical Base USDC constant on every chain.
-contract DeployGateway is ExpectedChainGuard {
+///
+///      SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode of
+///      the gateway proxy (`UpgradeAuthority`, issue 1808). The manifest `gateway` is the
+///      ERC-1967 proxy and `gateway_runtime_hash` is the code at that address (the proxy).
+///      `gateway_implementation` and `gateway_implementation_runtime_hash` name the logic the
+///      proxy runs: a signing client must check both (upgradeability stage 3).
+contract DeployGateway is UpgradeAuthority {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "gateway.json";
 
@@ -53,14 +59,18 @@ contract DeployGateway is ExpectedChainGuard {
         address pauser;
         address shareReceiver;
         bytes32 gatewayRuntimeHash;
+        address gatewayImplementation;
+        bytes32 gatewayImplementationRuntimeHash;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint.
     /// @return d The deployed gateway and its wiring.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
+        UpgradeConfig memory u = _readUpgradeConfig("");
         vm.startBroadcast();
-        d = _deployGateway(p);
+        d = _deployGateway(p, u);
         vm.stopBroadcast();
         _writeDeploymentJson(d);
     }
@@ -69,7 +79,7 @@ contract DeployGateway is ExpectedChainGuard {
     /// @return d The deployed gateway and its wiring.
     function runInProcess() external returns (Deployed memory d) {
         Params memory p = _readEnvParamsFrom("");
-        d = _deployGateway(p);
+        d = _deployGateway(p, _inProcessUpgradeConfig());
     }
 
     /// @notice Direct-parameter variant for forge tests. Skips env resolution.
@@ -95,7 +105,7 @@ contract DeployGateway is ExpectedChainGuard {
         p.vault = vault_;
         p.router = router_;
         p.usdcAddress = usdc_;
-        d = _deployGateway(p);
+        d = _deployGateway(p, _inProcessUpgradeConfig());
     }
 
     /// @dev `prefix` is "" in production. Tests pass their own prefix because env vars are
@@ -110,7 +120,10 @@ contract DeployGateway is ExpectedChainGuard {
         p.usdcAddress = BASE_USDC;
     }
 
-    function _deployGateway(Params memory p) internal returns (Deployed memory d) {
+    function _deployGateway(Params memory p, UpgradeConfig memory u)
+        internal
+        returns (Deployed memory d)
+    {
         d.admin = p.admin;
         d.pauser = p.pauser;
         d.shareReceiver = p.shareReceiver;
@@ -132,16 +145,34 @@ contract DeployGateway is ExpectedChainGuard {
         d.vault = p.vault;
         d.router = p.router;
 
-        d.gateway =
-            new RobotMoneyGateway(IERC20(d.usdc), IERC4626(d.vault), d.admin, d.pauser, d.router);
+        d.upgrade = u;
+        d.gatewayImplementation = address(new RobotMoneyGateway());
+        d.gateway = RobotMoneyGateway(
+            _deployProxy(
+                d.gatewayImplementation,
+                abi.encodeCall(
+                    RobotMoneyGateway.initialize,
+                    (
+                        IERC20(d.usdc),
+                        IERC4626(d.vault),
+                        d.admin,
+                        d.pauser,
+                        d.router,
+                        u.timelock,
+                        u.mode
+                    )
+                )
+            )
+        );
 
         // The core 1493 defect, closed: the immutable router must be the one the router
         // stage deployed, and never zero.
         require(d.gateway.router() != address(0), "gateway.router is zero");
         require(d.gateway.router() == d.router, "gateway.router != ROUTER_ADDRESS");
 
-        // Pin the gateway runtime hash.
+        // Pin the code at the gateway address (the proxy) and the logic it runs.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
+        d.gatewayImplementationRuntimeHash = d.gatewayImplementation.codehash;
 
         console2.log("RobotMoneyGateway deployed with the router");
         console2.log("  gateway          :", address(d.gateway));
@@ -164,6 +195,12 @@ contract DeployGateway is ExpectedChainGuard {
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "pauser", d.pauser);
         vm.serializeAddress(obj, "share_receiver", d.shareReceiver);
+        vm.serializeAddress(obj, "gateway_implementation", d.gatewayImplementation);
+        vm.serializeBytes32(
+            obj, "gateway_implementation_runtime_hash", d.gatewayImplementationRuntimeHash
+        );
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         string memory json = vm.serializeBytes32(obj, "gateway_runtime_hash", d.gatewayRuntimeHash);
 
         vm.writeJson(json, outPath);

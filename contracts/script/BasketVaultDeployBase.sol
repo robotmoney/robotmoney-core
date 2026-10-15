@@ -7,11 +7,13 @@
 // `UniswapV3SwapAdapter`. There is no chain-id branch and no devnet-only input.
 pragma solidity ^0.8.24;
 
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
@@ -27,7 +29,7 @@ import {IUniswapV4PriceRecorder} from "../interfaces/IUniswapV4PriceRecorder.sol
 ///      deployer needs ADMIN_ROLE for `addAsset` and `setAdapterCodeHashAllowed`, and
 ///      EMERGENCY_ROLE for `pauseDeposits()`. The timelock stage hands both roles over and revokes the
 ///      deployer (core 1487). This script never grants a role to anyone else.
-abstract contract BasketVaultDeployBase is ExpectedChainGuard {
+abstract contract BasketVaultDeployBase is UpgradeAuthority {
     using stdJson for string;
 
     /// @notice Sheet inputs for one deploy.
@@ -90,7 +92,14 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         address[] tokens;
         bool registered;
         bool paused;
+        address implementation;
+        UpgradeConfig upgrade;
     }
+
+    /// @dev The upgrade authority and release mode `_newVault` initializes the vault proxy with
+    ///      (issue 1808). Each entry point sets it before deploying: `run()` from the env
+    ///      (`UpgradeAuthority._readUpgradeConfig`), an in-process run from the test seam.
+    UpgradeConfig internal _vaultUpgrade;
 
     // ─── Per-vault hooks ──────────────────────────────────────────────────────
 
@@ -144,6 +153,7 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
         Params memory p = _readParamsFrom(prefix);
         uint256[] memory eligibilityBps = _readEligibilityBps(prefix);
         Cfg memory cfg = _parseCfg(vm.readFile(configFile), arrayKey);
+        _vaultUpgrade = _readUpgradeConfig(prefix);
 
         vm.startBroadcast();
         d = _deployAll(p, cfg);
@@ -334,6 +344,9 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
 
         BasketVault vault = _newVault(p, p.admin);
         d.vault = address(vault);
+        d.implementation = _implementationOf(d.vault);
+        d.upgrade = _vaultUpgrade;
+        require(vault.upgradeTimelock() == _vaultUpgrade.timelock, "vault upgrade timelock differs");
         d.registry = p.registry;
         d.tokens = new address[](cfg.assets.length);
 
@@ -367,6 +380,24 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
     ///      linked into this script: a correctly linked vault points at the same instance with
     ///      the same runtime codehash. Also probes `totalAssets()`: it must not revert and must
     ///      stay far below a sane ceiling (1000 times the TVL cap).
+    /// @dev The per-instance initializer arguments (what the constructor took before issue 1808).
+    function _basketInitParams(Params memory p, address emergencyResponder)
+        internal
+        pure
+        returns (BasketVault.InitParams memory)
+    {
+        return BasketVault.InitParams({
+            usdc: IERC20(p.usdc),
+            swapRouter: ISwapRouter(p.swapRouter),
+            tvlCap: p.tvlCap,
+            perDepositCap: p.perDepositCap,
+            exitFeeBps: p.exitFeeBps,
+            feeRecipient: p.feeRecipient,
+            admin: p.admin,
+            emergencyResponder: emergencyResponder
+        });
+    }
+
     function _assertTickMathLinkIntegrity(address vault, uint256 tvlCap) internal view {
         address canonicalLib = address(TickMath);
         require(canonicalLib != address(0), "TickMath: zero linked library");
@@ -531,6 +562,12 @@ abstract contract BasketVaultDeployBase is ExpectedChainGuard {
             vm.toString(block.chainid),
             ',"vault":"',
             vm.toString(d.vault),
+            '","implementation":"',
+            vm.toString(d.implementation),
+            '","upgrade_timelock":"',
+            vm.toString(d.upgrade.timelock),
+            '","upgrade_mode":"',
+            upgradeModeName(d.upgrade.mode),
             '","registry":"',
             vm.toString(d.registry),
             '","adapter":"',

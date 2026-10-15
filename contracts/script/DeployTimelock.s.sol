@@ -14,7 +14,8 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @dev Safe 1.4.1 read surface used by the full deploy-time Safe checks.
 interface ISafeFull {
@@ -136,7 +137,13 @@ interface IGatewayAgentOwnership {
 /// @dev After deploying, the broadcaster (current ADMIN_ROLE holder) is no
 ///      longer the admin on any contract. Verify with:
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
-contract DeployTimelock is ExpectedChainGuard {
+///
+///         Upgrade authority (issue 1808): every core contract is an ERC-1967 proxy whose only
+///         upgrade and freeze authority, `upgradeTimelock()`, was fixed at its initialization to
+///         the CREATE2 address of THIS timelock (`UpgradeAuthority.predictTimelock`). This stage
+///         deploys the timelock there through the canonical CREATE2 factory, checks its roles
+///         and delay, and asserts every handed-over contract names it, before any role moves.
+contract DeployTimelock is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "timelock.json";
 
@@ -544,12 +551,10 @@ contract DeployTimelock is ExpectedChainGuard {
         //    to any caller once the delay has elapsed (security-model §4; core 1521).
         //    admin = address(0) means the timelock is self-administered
         //    (the safe can change delay/roles only through the timelock).
-        address[] memory proposers = new address[](1);
-        proposers[0] = d.safe;
-        address[] memory executors = new address[](1);
-        executors[0] = address(0);
-
-        timelock = new TimelockController(d.minDelay, proposers, executors, address(0));
+        //    It is deployed through the canonical CREATE2 factory at the address every core
+        //    proxy already names as its upgrade authority (issue 1808, UpgradeAuthority).
+        timelock = _deployTimelockAtPrediction(d.safe, d.minDelay);
+        _requireUpgradeAuthority(d, address(timelock));
 
         // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is
         // permissionless (anyone may `commitAuthorization`/`revealAuthorization`),
@@ -892,6 +897,56 @@ contract DeployTimelock is ExpectedChainGuard {
                 "R7: RouterGovernance lacks receipt ADMIN_ROLE - applyReceipt cannot release"
             );
         }
+    }
+
+    /// @dev Deploy the core timelock at `predictTimelock(safe, minDelay)` through the CREATE2
+    ///      factory. CREATE2 binds the init code, so code already at that address can only be
+    ///      this same timelock (anyone may have deployed it first): it is reused, and its roles
+    ///      and delay are checked either way.
+    function _deployTimelockAtPrediction(address safe, uint256 minDelay)
+        internal
+        returns (TimelockController timelock)
+    {
+        address predicted = predictTimelock(safe, minDelay);
+        if (predicted.code.length == 0) {
+            (bool ok,) =
+                CREATE2_FACTORY.call(abi.encodePacked(TIMELOCK_SALT, timelockInitCode(safe, minDelay)));
+            require(ok && predicted.code.length != 0, "timelock CREATE2 deployment failed");
+        }
+        timelock = TimelockController(payable(predicted));
+        require(timelock.getMinDelay() == minDelay, "timelock minDelay differs from TIMELOCK_MIN_DELAY");
+        require(
+            timelock.hasRole(timelock.PROPOSER_ROLE(), safe)
+                && timelock.hasRole(timelock.CANCELLER_ROLE(), safe)
+                && timelock.hasRole(timelock.EXECUTOR_ROLE(), address(0)),
+            "timelock roles are not proposer/canceller = Safe, executor = anyone"
+        );
+        require(
+            !timelock.hasRole(timelock.DEFAULT_ADMIN_ROLE(), msg.sender),
+            "deployer holds the timelock admin role"
+        );
+    }
+
+    /// @dev Issue 1808: every handed-over core proxy names this timelock as its only upgrade and
+    ///      freeze authority. A proxy that names any other address (the deployer, a placeholder,
+    ///      another deployment's timelock) stops the handover before any role moves.
+    function _requireUpgradeAuthority(Deployed memory d, address timelock) internal view {
+        for (uint256 i = 0; i < d.vaults.length; i++) {
+            _requireNamesTimelock(d.vaults[i], timelock);
+        }
+        _requireNamesTimelock(d.gateway, timelock);
+        _requireNamesTimelock(d.registry, timelock);
+        _requireNamesTimelock(d.router, timelock);
+        _requireNamesTimelock(d.governance, timelock);
+        if (d.icPolicy != address(0)) _requireNamesTimelock(d.icPolicy, timelock);
+        if (d.consensusReceipt != address(0)) _requireNamesTimelock(d.consensusReceipt, timelock);
+    }
+
+    function _requireNamesTimelock(address proxy, address timelock) internal view {
+        require(
+            GovernedUUPS(proxy).upgradeTimelock() == timelock,
+            string.concat(vm.toString(proxy), ": upgradeTimelock is not the deployed timelock")
+        );
     }
 
     /// @dev Hand every listed agent from the deployer (msg.sender) to `timelock`.

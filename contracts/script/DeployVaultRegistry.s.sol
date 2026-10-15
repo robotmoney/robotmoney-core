@@ -7,7 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
-import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 import {RMUSDC_VAULT_NAME} from "./DeployVault.s.sol";
 
 /// @title DeployVaultRegistry
@@ -27,7 +27,10 @@ import {RMUSDC_VAULT_NAME} from "./DeployVault.s.sol";
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
-contract DeployVaultRegistry is ExpectedChainGuard {
+///         SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE: the upgrade authority and release mode
+///         of the registry proxy (`UpgradeAuthority`, issue 1808). The manifest `registry` is the
+///         ERC-1967 proxy; `registry_implementation` is its implementation.
+contract DeployVaultRegistry is UpgradeAuthority {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "registry.json";
 
@@ -40,6 +43,8 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         address vault;
         address asset;
         bool registered;
+        address registryImplementation;
+        UpgradeConfig upgrade;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys registry,
@@ -60,8 +65,10 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");
         require(asset.code.length > 0, "USDC_ADDRESS has no code on this chain");
 
+        UpgradeConfig memory u = _readUpgradeConfig("");
+
         vm.startBroadcast();
-        d.registry = new VaultRegistry(admin);
+        _deployRegistry(d, admin, u);
         d.admin = admin;
         d.vault = vault;
         d.asset = asset;
@@ -89,7 +96,7 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         require(vault_ != address(0), "VAULT_ADDRESS=0");
         require(asset_ != address(0), "USDC_ADDRESS=0");
 
-        d.registry = new VaultRegistry(admin_);
+        _deployRegistry(d, admin_, _inProcessUpgradeConfig());
         d.admin = admin_;
         d.vault = vault_;
         d.asset = asset_;
@@ -106,6 +113,18 @@ contract DeployVaultRegistry is ExpectedChainGuard {
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────
+
+    /// @dev Deploy the registry implementation and its ERC-1967 proxy, initialized atomically.
+    function _deployRegistry(Deployed memory d, address admin_, UpgradeConfig memory u) internal {
+        d.upgrade = u;
+        d.registryImplementation = address(new VaultRegistry());
+        d.registry = VaultRegistry(
+            _deployProxy(
+                d.registryImplementation,
+                abi.encodeCall(VaultRegistry.initialize, (admin_, u.timelock, u.mode))
+            )
+        );
+    }
 
     /// @dev Register `vault` if it is not already in the registry.
     ///      Returns true if registration happened, false if already present.
@@ -144,6 +163,9 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         string memory obj = "registry_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "registry", address(d.registry));
+        vm.serializeAddress(obj, "registry_implementation", d.registryImplementation);
+        vm.serializeAddress(obj, "upgrade_timelock", d.upgrade.timelock);
+        vm.serializeString(obj, "upgrade_mode", upgradeModeName(d.upgrade.mode));
         vm.serializeAddress(obj, "admin", d.admin);
         vm.serializeAddress(obj, "vault", d.vault);
         vm.serializeAddress(obj, "asset", d.asset);
