@@ -383,12 +383,14 @@ Common edge cases:
   management fee and swap-fee share are deferred to a future phase.
 - Vaults must disclose risk labels, fees, caps, availability, and
   retirement or pause state.
-- Future proxy-backed contracts must disclose their current implementation
+- Proxy-backed contracts must disclose their current implementation
   and whether upgrades remain possible. A final mainnet release must offer a
   freeze-at-deploy choice or an explicitly governed, time-bounded proving
   period followed by irreversible freeze; see
   `docs/technical/contract-upgradeability-plan.md`. Current direct
-  deployments have no in-place upgrade path.
+  deployments have no in-place upgrade path. The contracts expose both
+  facts on chain (`upgradesFrozen()` and the ERC-1967 implementation slot,
+  issue 1808); surfacing them to users is upgradeability stage 3.
 - Accessibility expectations apply to human-facing flows, including
   readable previews, keyboard-accessible controls, and clear status and
   error messaging.

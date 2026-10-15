@@ -12,9 +12,11 @@
 into every environment. Environments differ only by (a) deployment
 configuration and (b) seeded application data — never by code.**
 
-The planned core-contract upgrade path follows this rule: the same UUPS
-implementation and proxy deployment scheme serves every environment. Upgrade
-availability is initialized state, then may be permanently frozen by the
+The core-contract upgrade path follows this rule (implemented in the source,
+issue 1808, ADR-0014): the same UUPS implementation and proxy deployment scheme
+serves every environment. Upgrade availability is initialized state (the
+`upgradeMode` initializer argument and the stage scripts' `UPGRADE_MODE`, both
+required with no default), then may be permanently frozen by the
 Safe-controlled timelock. A final mainnet release must explicitly select
 freeze-at-deploy or an approved proving period followed by freeze. An
 environment-specific implementation is not an allowed way to achieve either
