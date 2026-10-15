@@ -409,7 +409,7 @@
   ],
   "upgradeAuthority": {
     "stage": "timelock",
-    "contract": "TimelockController",
+    "contract": "ProposerFloorTimelock",
     "address": "create2",
     "factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
     "salt": "robotmoney.core.timelock.v1",
@@ -424,7 +424,7 @@
     ],
     "transactionsPerProxy": 2,
     "layoutPins": "contracts/test/fixtures/storage-layout/pins.json",
-    "note": "Upgradeability stage 2 (issue 1809). Every stage with proxies deploys, per proxy, one implementation (its constructor disables initializers) and one ERC1967Proxy whose constructor runs initialize atomically: two deployer transactions per proxy. The release mode changes no count: it is only an initialize argument. Every proxy names the timelock as its only upgrade and freeze authority from its first block. The timelock stage runs LAST and deploys the TimelockController at the CREATE2 address the factory gives for the salt and the init code built from SAFE_ADDRESS and TIMELOCK_MIN_DELAY, so no interim deployer upgrade path exists. A resumed stage replays its own transactions with forge --resume at the same nonces, so its proxy and implementation addresses do not move. The publish-contracts verifier reads each proxy's ERC-1967 slots, upgradeTimelock(), upgradesFrozen() and initialized version, and records them with the layout identifier in upgradeability.json."
+    "note": "Upgradeability stage 2 (issue 1809). Every stage with proxies deploys, per proxy, one implementation (its constructor disables initializers) and one ERC1967Proxy whose constructor runs initialize atomically: two deployer transactions per proxy. The release mode changes no count: it is only an initialize argument. Every proxy names the timelock as its only upgrade and freeze authority from its first block. The timelock stage runs LAST and deploys the ProposerFloorTimelock at the CREATE2 address the factory gives for the salt and the init code built from SAFE_ADDRESS and TIMELOCK_MIN_DELAY, so no interim deployer upgrade path exists. A resumed stage replays its own transactions with forge --resume at the same nonces, so its proxy and implementation addresses do not move. The publish-contracts verifier reads each proxy's ERC-1967 slots, upgradeTimelock(), upgradesFrozen() and initialized version, and records them with the layout identifier in upgradeability.json."
   },
   "govern": {
     "stage": 13,
@@ -618,7 +618,7 @@
     "router": "PortfolioRouter",
     "registry": "VaultRegistry",
     "governance": "RouterGovernance",
-    "timelock": "TimelockController",
+    "timelock": "ProposerFloorTimelock",
     "icPolicy": "InvestmentCommitteePolicy",
     "receipt": "ConsensusRecommendationReceipt",
     "recorder": "UniswapV4PriceRecorder",

@@ -138,7 +138,6 @@ describe("stage-table.json", () => {
       );
     const src = all("contracts").join("\n");
     for (const [k, name] of Object.entries(table.artifacts)) {
-      if (name === "TimelockController") continue; // OpenZeppelin, deployed by DeployTimelock
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "icPolicy", "receipt", "recorder", "registry", "router", "timelock", "v4Adapter"]);
