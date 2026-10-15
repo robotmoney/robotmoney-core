@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/security-model.md (pause-key abuse and pause-trigger rows: unpause is the one operation after the handover)
 //            docs/operations/contract-release-runbooks.md section 4.3 (the deployer configures before the timelock handover)
-// Implements: issue 1520 (stage 13 is the basket unpauses only; voting power, router eligibility and default weights are deploy-time)
+// Implements: issue 1520 (stage 13 is the basket unpauses only; router eligibility and default weights are deploy-time)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
-import {DeployRouterGovernance} from "../script/DeployRouterGovernance.s.sol";
 import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol";
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
@@ -14,76 +13,6 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
-
-contract GovernanceVotersHarness is DeployRouterGovernance {
-    function readVoters(string memory key) external view returns (address[] memory) {
-        return _envVotersRequired(key);
-    }
-}
-
-/// @notice The deployer sets voting power in the governance stage, before the timelock handover.
-contract DeployTimeVotingPowerTest is Test {
-    GovernanceVotersHarness internal script;
-    PortfolioRouter internal router;
-    address internal admin = makeAddr("dt-gov-admin");
-    address internal voterA = makeAddr("dt-voter-a");
-    address internal voterB = makeAddr("dt-voter-b");
-
-    function setUp() public {
-        script = new GovernanceVotersHarness();
-        TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
-    }
-
-    function test_votingPowerIsSetForEveryVoterAtDeployTime() public {
-        address[] memory voters = new address[](2);
-        voters[0] = voterA;
-        voters[1] = voterB;
-        DeployRouterGovernance.Deployed memory d =
-            script.runInProcessWithVoters(admin, address(router), 3600, 3600, 2, voters, 1000);
-        assertEq(d.governance.votingPower(voterA), 1000);
-        assertEq(d.governance.votingPower(voterB), 1000);
-        assertEq(d.governance.totalVotingPower(), 2000);
-        assertEq(d.governance.quorumThreshold(), 2);
-    }
-
-    function test_totalVotingPowerBelowQuorumReverts() public {
-        address[] memory voters = new address[](1);
-        voters[0] = voterA;
-        vm.expectRevert(bytes("total voting power is below the quorum"));
-        script.runInProcessWithVoters(admin, address(router), 3600, 3600, 2000, voters, 1000);
-    }
-
-    function test_zeroVoterPowerReverts() public {
-        address[] memory voters = new address[](1);
-        voters[0] = voterA;
-        vm.expectRevert(bytes("VOTER_POWER must be above 0"));
-        script.runInProcessWithVoters(admin, address(router), 3600, 3600, 2, voters, 0);
-    }
-
-    function test_voterListIsRequiredAndStrict() public {
-        vm.expectRevert(bytes("DT_VOTERS_UNSET must be set"));
-        script.readVoters("DT_VOTERS_UNSET");
-
-        vm.setEnv("DT_VOTERS_BAD", "not-an-address");
-        vm.expectRevert(bytes("DT_VOTERS_BAD is malformed: expected a comma list of addresses"));
-        script.readVoters("DT_VOTERS_BAD");
-
-        vm.setEnv("DT_VOTERS_ZERO", vm.toString(address(0)));
-        vm.expectRevert(bytes("DT_VOTERS_ZERO holds the zero address"));
-        script.readVoters("DT_VOTERS_ZERO");
-
-        vm.setEnv("DT_VOTERS_DUP", string.concat(vm.toString(voterA), ",", vm.toString(voterA)));
-        vm.expectRevert(bytes("DT_VOTERS_DUP lists an address twice"));
-        script.readVoters("DT_VOTERS_DUP");
-
-        vm.setEnv("DT_VOTERS_OK", string.concat(vm.toString(voterA), ",", vm.toString(voterB)));
-        address[] memory v = script.readVoters("DT_VOTERS_OK");
-        assertEq(v.length, 2);
-        assertEq(v[1], voterB);
-    }
-}
 
 contract EligibilityHarness is DeployProtocolAssetVault {
     function makeEligible(VaultRegistry registry, address vault, uint256[] memory bps) external {

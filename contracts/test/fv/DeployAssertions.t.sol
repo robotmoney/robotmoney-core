@@ -236,6 +236,14 @@ contract DeployAssertionsTest is SafeFixture {
         assertFalse(
             _aclGovernance.hasRole(ADMIN_ROLE, deployer), "deployer retains governance ADMIN_ROLE"
         );
+        assertFalse(
+            _aclGovernance.hasRole(keccak256("WEIGHT_SETTER_ROLE"), deployer),
+            "deployer retains governance WEIGHT_SETTER_ROLE (applyReceipt)"
+        );
+        assertTrue(
+            _aclGovernance.hasRole(keccak256("WEIGHT_SETTER_ROLE"), timelock),
+            "timelock missing governance WEIGHT_SETTER_ROLE (applyReceipt)"
+        );
 
         // The independent hot key holds the vault EMERGENCY_ROLE; the Timelock
         // holds the Gateway root.
@@ -345,7 +353,12 @@ contract DeployAssertionsTest is SafeFixture {
             new RobotMoneyGateway(usdc, _aclVault, _aclDeployer, makeAddr("fv-pauser"), address(0));
         _aclRegistry = new VaultRegistry(_aclDeployer);
         _aclRouter = new PortfolioRouter(address(usdc), address(_aclRegistry), _aclDeployer);
-        _aclGovernance = new RouterGovernance(address(_aclRouter), _aclDeployer, 7 days, 1 days, 2);
+        _aclGovernance =
+            new RouterGovernance(address(_aclRouter), makeAddr("receipts"), _aclDeployer);
+        // The governance WEIGHT_SETTER_ROLE (applyReceipt) is self-administered: the
+        // script's grant to the timelock runs as address(script), so it must hold it.
+        vm.prank(_aclDeployer);
+        _aclGovernance.grantRole(keccak256("WEIGHT_SETTER_ROLE"), address(script));
         // R7: DeployRouterGovernance grants this at deploy time and
         // DeployTimelock asserts it before handing over. Without it the
         // handover refuses — correctly, because the approving body would be

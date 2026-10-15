@@ -232,7 +232,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE`; a weight change is one timelock operation (`apply-receipt`). `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them · deploy-assertion.
 
 > **`GOV-4` — A weight vector that would render router deposits non-executable can never be applied (no self-DoS).**
-> ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_proposalCannotSelfDosRouter`.
+> ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_receiptCannotSelfDosRouter`.
 
 > **`GOV-5` — The timelock/Safe is never the *sole* unrecoverable point of liveness that the admin-floor masks.**
 > 🟡 TRUSTED · admin-floor protects the timelock's membership, not the off-chain Safe quorum — see Layer-2 note in the audit doc · documented assumption (not directly FV-able; track operationally).

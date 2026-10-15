@@ -151,13 +151,7 @@ contract DeployTimelockTest is SafeGovernance {
         );
         registry = new VaultRegistry(address(script));
         router = new PortfolioRouter(address(usdc), address(registry), address(script));
-        governance = new RouterGovernance(
-            address(router),
-            address(script),
-            7 days, // votingPeriod
-            1 days, // executionDelay
-            2 // quorumThreshold — RouterGovernance.MIN_QUORUM_THRESHOLD (D16)
-        );
+        governance = new RouterGovernance(address(router), makeAddr("receipts"), address(script));
         // R7: DeployTimelock now refuses a handover that would leave the
         // approving body unable to act, so the fixture must reflect what
         // DeployRouterGovernance does at deploy time — grant governance
@@ -1074,7 +1068,7 @@ contract DeployTimelockChainFloorTest is SafeGovernance {
         gateway = new RobotMoneyGateway(usdc, vault, deployer, makeAddr("floor-pauser"), address(0));
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1207,7 +1201,7 @@ contract DeployTimelockManifestTest is SafeGovernance {
         VaultRegistry registry = new VaultRegistry(deployer);
         PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
         RouterGovernance governance =
-            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+            new RouterGovernance(address(router), makeAddr("receipts"), deployer);
 
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
@@ -1301,9 +1295,10 @@ contract DeployTimelockManifestTest is SafeGovernance {
         assertFalse(vm.contains(src, setter), "a test sets the shared DEPLOYMENT_OUT variable");
     }
 
-    function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view {
-        assertEq(manifest.readUint(".min_quorum_threshold"), 2);
-        assertGt(manifest.readUint(".quorum_threshold"), 1);
+    /// @notice There is no voting (issue 1698), so the manifest records no quorum.
+    function test_manifestRecordsNoQuorum() public view {
+        assertFalse(vm.keyExistsJson(manifest, ".quorum_threshold"), "quorum in manifest");
+        assertFalse(vm.keyExistsJson(manifest, ".min_quorum_threshold"), "quorum floor in manifest");
     }
 
     /// @notice A run with no listed agent records a listed count of zero, so
@@ -1380,7 +1375,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
 
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1508,7 +1503,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         VaultRegistry registry2 = new VaultRegistry(deployer2);
         PortfolioRouter router2 = new PortfolioRouter(address(usdc2), address(registry2), deployer2);
         RouterGovernance governance2 =
-            new RouterGovernance(address(router2), deployer2, 7 days, 1 days, 2);
+            new RouterGovernance(address(router2), makeAddr("receipts"), deployer2);
         vm.prank(deployer2);
         router2.grantRole(ADMIN_ROLE, address(governance2));
         vm.prank(deployer2);
@@ -1668,7 +1663,7 @@ contract DeployTimelockAgentHandoverTest is SafeGovernance {
         PortfolioRouter router_ =
             new PortfolioRouter(address(dep_.usdc), address(registry_), deployer_);
         RouterGovernance governance_ =
-            new RouterGovernance(address(router_), deployer_, 7 days, 1 days, 2);
+            new RouterGovernance(address(router_), makeAddr("receipts"), deployer_);
         vm.prank(deployer_);
         router_.grantRole(ADMIN_ROLE, address(governance_));
         vm.prank(deployer_);
@@ -1886,8 +1881,16 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
 
         VaultRegistry registry = new VaultRegistry(deployer);
         PortfolioRouter router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        // The committee contracts are required inputs on every chain. The deployer
+        // holds their admin roles until the handover. The receipt register exists
+        // before governance, which releases receipts through it (issue 1698).
+        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(deployer, address(gateway));
+        ConsensusRecommendationReceipt receipt =
+            new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
         RouterGovernance governance =
-            new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+            new RouterGovernance(address(router), address(receipt), deployer);
+        vm.prank(deployer);
+        receipt.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);
@@ -1915,11 +1918,6 @@ abstract contract DeployTimelockRunEntrypointBase is SafeGovernance {
         _set("TIMELOCK_MIN_DELAY", "172800");
         OUT_PATH = uniqueTmpPath(vm, string.concat("1476-run-entrypoint", _prefix()));
         _set("DEPLOYMENT_OUT", OUT_PATH);
-        // The committee contracts are required inputs on every chain. The deployer
-        // holds their admin roles until the handover.
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(deployer, address(gateway));
-        ConsensusRecommendationReceipt receipt =
-            new ConsensusRecommendationReceipt(deployer, address(gateway), address(ic));
         _set("IC_POLICY_ADDRESS", vm.toString(address(ic)));
         _set("CONSENSUS_RECEIPT_ADDRESS", vm.toString(address(receipt)));
         _set("RECEIPT_ADMIN_ADDRESS", vm.toString(deployer));
@@ -2276,7 +2274,7 @@ contract DeployTimelockFourVaultsTest is SafeGovernance {
         gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, makeAddr("four-pauser"), address(0));
         registry = new VaultRegistry(deployer);
         router = new PortfolioRouter(address(usdc), address(registry), deployer);
-        governance = new RouterGovernance(address(router), deployer, 7 days, 1 days, 2);
+        governance = new RouterGovernance(address(router), makeAddr("receipts"), deployer);
         vm.prank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         vm.prank(deployer);

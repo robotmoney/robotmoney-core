@@ -44,14 +44,6 @@ interface IGatewayAgentOwnership {
 }
 
 /// @title DeployTimelock
-/// @dev Minimal read surface on RouterGovernance, so the manifest can record
-///      the quorum the topology actually landed on without importing the whole
-///      contract into this script.
-interface IRouterGovernanceQuorum {
-    function quorumThreshold() external view returns (uint256);
-    function MIN_QUORUM_THRESHOLD() external view returns (uint256);
-}
-
 /// @notice Deploy an OZ TimelockController and complete the privileged-role
 ///         handover on all five Robot Money contracts (RobotMoneyVault,
 ///         RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
@@ -706,23 +698,22 @@ contract DeployTimelock is ExpectedChainGuard {
         // conditions must BOTH hold when it finishes, and neither is implied
         // by the other:
         //
-        //   (a) RouterGovernance holds the role, or the approving body can
-        //       approve and cannot act — every proposal that reaches quorum
-        //       reverts inside `execute()`;
+        //   (a) RouterGovernance holds the role, or every applyReceipt the
+        //       Safe schedules reverts inside `setWeights`;
         //   (b) the deployer EOA does NOT hold it, or a single key can move
-        //       weights directly and the whole propose/vote/delay path is
-        //       decorative.
+        //       weights directly and the Safe -> timelock -> applyReceipt path
+        //       is decorative.
         //
         // Before the grant is asserted, because a governance contract that
         // cannot act is a broken deployment, not a safer one.
         require(
             IAccessControl(d.router).hasRole(ADMIN_ROLE, d.governance),
-            "R7: RouterGovernance lacks router ADMIN_ROLE - execute() cannot reach setWeights"
+            "R7: RouterGovernance lacks router ADMIN_ROLE - setDefaultWeights cannot forward"
         );
 
         require(
             IAccessControl(d.router).hasRole(WEIGHT_SETTER_ROLE, d.governance),
-            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - execute() cannot reach setWeights"
+            "R7: RouterGovernance lacks router WEIGHT_SETTER_ROLE - applyReceipt cannot reach setWeights"
         );
         // Defence in depth: DeployRouterGovernance already drops the deployer's
         // WEIGHT_SETTER_ROLE. Drop it here too, while the deployer still holds
@@ -801,6 +792,17 @@ contract DeployTimelock is ExpectedChainGuard {
             !IAccessControl(d.governance).hasRole(ADMIN_ROLE, msg.sender),
             "Deployer still has ADMIN_ROLE on governance"
         );
+        // The governance contract's own WEIGHT_SETTER_ROLE gates applyReceipt
+        // (issue 1698). It is self-administered, so the deployer, as its only
+        // holder, hands it to the timelock and drops its copy: afterwards a
+        // receipt is applied only by a Safe-scheduled timelock operation.
+        IAccessControl(d.governance).grantRole(WEIGHT_SETTER_ROLE, address(timelock));
+        IAccessControl(d.governance).revokeRole(WEIGHT_SETTER_ROLE, msg.sender);
+        require(
+            IAccessControl(d.governance).hasRole(WEIGHT_SETTER_ROLE, address(timelock))
+                && !IAccessControl(d.governance).hasRole(WEIGHT_SETTER_ROLE, msg.sender),
+            "R7: governance WEIGHT_SETTER_ROLE (applyReceipt) is not the timelock alone"
+        );
 
         // InvestmentCommitteePolicy (optional — issue #1319, one-ceremony rule
         // #1247 AC10 / INV-3).
@@ -877,6 +879,17 @@ contract DeployTimelock is ExpectedChainGuard {
             require(
                 !IAccessControl(d.consensusReceipt).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
                 "Deployer still has DEFAULT_ADMIN_ROLE on consensus receipt: RECEIPT_ADMIN_ADDRESS names the wrong account"
+            );
+            // applyReceipt releases the receipt it applies (issue 1698): the
+            // governance contract must point at this register and hold its
+            // ADMIN_ROLE (granted by DeployRouterGovernance) after the handover.
+            require(
+                address(RouterGovernance(d.governance).receipts()) == d.consensusReceipt,
+                "R7: RouterGovernance.receipts() is not CONSENSUS_RECEIPT_ADDRESS"
+            );
+            require(
+                IAccessControl(d.consensusReceipt).hasRole(ADMIN_ROLE, d.governance),
+                "R7: RouterGovernance lacks receipt ADMIN_ROLE - applyReceipt cannot release"
             );
         }
     }
@@ -959,14 +972,6 @@ contract DeployTimelock is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeString(obj, "deployment_kind", d.rehearsal ? "rehearsal" : "production");
-        vm.serializeUint(
-            obj, "quorum_threshold", IRouterGovernanceQuorum(d.governance).quorumThreshold()
-        );
-        vm.serializeUint(
-            obj,
-            "min_quorum_threshold",
-            IRouterGovernanceQuorum(d.governance).MIN_QUORUM_THRESHOLD()
-        );
         // Kept flat as well as inside `addresses`: existing readers (the
         // smoke-test fixture, the explorer env writer) index this file by these
         // top-level keys, and a manifest that breaks them is a manifest nobody

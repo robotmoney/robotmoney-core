@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/technical/governance-decisions.md §3.6 — setWeights call path
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
-// Implements: Plan tracking issue #109 "Router-weight governance" phase
-// Implements: issue #364
+// Implements: issue #364, issue #1698 (the weight setter applies a consensus receipt; voting deleted)
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
-import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -15,225 +14,119 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployRouterGovernance
-/// @notice Foundry deploy script for the RouterGovernance contract.
-///         Deploys RouterGovernance with the deployer as ADMIN_ROLE and
-///         writes a deployment JSON readable by the smoke-test fixture.
+/// @notice Foundry deploy script for RouterGovernance, the router's weight setter.
+///         Deploys it with the deployer as `ADMIN_ROLE` and `WEIGHT_SETTER_ROLE`
+///         holder (the timelock stage hands both to the TimelockController) and
+///         wires the three grants `applyReceipt` and the fallbacks need:
 ///
-///         The smoke-test devnet startup sequence runs this script after
-///         DeployPortfolioRouter so that the dapp's Governance tab reads
-///         live on-chain data in CI.
+///         - router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
+///           forward;
+///         - router `WEIGHT_SETTER_ROLE`, the only gate on `setWeights`, after
+///           which the deployer's own copy is dropped;
+///         - `ADMIN_ROLE` on the ConsensusRecommendationReceipt, so
+///           `applyReceipt` can release the receipt it applies.
 ///
-///         It also grants the freshly deployed RouterGovernance `ADMIN_ROLE`
-///         on the PortfolioRouter. Without that grant the approving body can
-///         approve and cannot act: a proposal reaches quorum, clears its
-///         execution delay, and then `execute()` reverts inside
-///         `router.setWeights`, leaving the deployer EOA as the only address
-///         that can move allocation weights — the exact inversion
-///         project-fusion.md §4.3 names as the governance-topology gap. The
-///         caller must therefore hold `ADMIN_ROLE` on the router, which the
-///         deployer does until `DeployTimelock` hands it to the timelock.
+///         Every grant is read back: a silent failure produces a deployment that
+///         looks complete and fails only when the first receipt is applied.
+///         The stage runs after `ic-policy` because the receipt register must
+///         exist, and before `timelock`, while the deployer still holds the
+///         router and receipt admin roles.
 ///
-///         Required env vars:
-///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
-///           ROUTER_ADDRESS     — deployed PortfolioRouter address
-///
-///         Also required (unset or malformed reverts, there is no default):
-///           VOTING_PERIOD      — voting period in seconds
-///           EXECUTION_DELAY    — delay from voting end to execution in seconds
-///                                (at least the contract's MIN_EXECUTION_DELAY)
-///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum (greater than 1)
-///           VOTER_ADDRESSES    — comma list of the voters; each gets VOTER_POWER (issue 1520: set by the deployer, before the timelock handover)
-///           VOTER_POWER        — voting power of each voter, above 0
-///           EXPECTED_CHAIN_ID  — mandatory and equal to 8453 on Base mainnet
-///           DEPLOYMENT_OUT     — path for the output JSON (required, no default)
-///
-///         The router ADMIN_ROLE grant always runs: no flag skips it.
+///         Required env vars (unset or malformed reverts, there is no default):
+///           ADMIN_ADDRESS             — receives ADMIN_ROLE and WEIGHT_SETTER_ROLE
+///           ROUTER_ADDRESS            — deployed PortfolioRouter
+///           CONSENSUS_RECEIPT_ADDRESS — deployed ConsensusRecommendationReceipt
+///           EXPECTED_CHAIN_ID         — mandatory and equal to 8453 on Base mainnet
+///           DEPLOYMENT_OUT            — path for the output JSON
 contract DeployRouterGovernance is ExpectedChainGuard {
     /// @dev Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "governance.json";
 
-    using stdJson for string;
+    bytes32 internal constant RECEIPT_ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
         RouterGovernance governance;
         PortfolioRouter router;
+        address receipts;
         address admin;
-        uint64 votingPeriod;
-        uint64 executionDelay;
-        uint256 quorumThreshold;
     }
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys
-    ///         RouterGovernance, and writes a deployment JSON.
-    /// @return d Struct containing the deployed governance and key parameters.
+    ///         RouterGovernance, wires it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
         _requireExpectedChain("");
-        // The quorum floor is checked FIRST, before any other env read. Two
-        // reasons, both deliberate: a refusal costs nothing, and a test of the
-        // refusal then needs to set only QUORUM_THRESHOLD — which nothing else
-        // reads — instead of also setting ADMIN_ADDRESS/ROUTER_ADDRESS.
-        // `vm.setEnv` mutates process-global state shared by concurrently
-        // scheduled test files, and this repo has already been burned by
-        // exactly that race on ADMIN_ADDRESS (see AgentTokenVault.t.sol's
-        // note and Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds).
-        uint256 quorumThreshold = _envUintRequired("QUORUM_THRESHOLD");
-        require(quorumThreshold > 1, "QUORUM_THRESHOLD must be greater than 1");
-
         address admin = _envAddressRequired("ADMIN_ADDRESS");
         address router = _envAddressRequired("ROUTER_ADDRESS");
+        address receipts = _envAddressRequired("CONSENSUS_RECEIPT_ADDRESS");
         require(router.code.length > 0, "ROUTER_ADDRESS has no code on this chain");
-
-        uint64 votingPeriod = _envUint64Required("VOTING_PERIOD");
-        uint64 executionDelay = _envUint64Required("EXECUTION_DELAY");
-        address[] memory voters = _envVotersRequired("VOTER_ADDRESSES");
-        uint256 voterPower = _envUintRequired("VOTER_POWER");
-        require(voterPower > 0, "VOTER_POWER must be above 0");
+        require(receipts.code.length > 0, "CONSENSUS_RECEIPT_ADDRESS has no code on this chain");
 
         // `msg.sender` is the broadcasting account under `forge script`, and it
-        // is that account whose router ADMIN_ROLE the grant below depends on.
+        // is that account whose router and receipt admin roles the grants use.
         vm.startBroadcast();
-        d = _deploy(msg.sender, admin, router, votingPeriod, executionDelay, quorumThreshold);
-        _setVotingPower(d, voters, voterPower);
+        d = _deploy(msg.sender, admin, router, receipts);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
     }
 
     /// @notice In-process variant for forge tests. No broadcast, no JSON written.
-    /// @param admin_           Address to receive ADMIN_ROLE.
-    /// @param router_          Deployed PortfolioRouter address.
-    /// @param votingPeriod_    Voting period in seconds.
-    /// @param executionDelay_  Delay from voting end to execution in seconds.
-    /// @param quorumThreshold_ Minimum FOR voting power for quorum.
-    /// @return d Struct containing the deployed governance and key parameters.
-    function runInProcessWith(
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_
-    ) external returns (Deployed memory d) {
+    /// @param admin_    Address to receive ADMIN_ROLE and WEIGHT_SETTER_ROLE; must
+    ///                  hold router ADMIN_ROLE, router WEIGHT_SETTER_ROLE and the
+    ///                  receipt register's DEFAULT_ADMIN_ROLE.
+    /// @param router_   Deployed PortfolioRouter address.
+    /// @param receipts_ Deployed ConsensusRecommendationReceipt address.
+    function runInProcessWith(address admin_, address router_, address receipts_)
+        external
+        returns (Deployed memory d)
+    {
         require(admin_ != address(0), "ADMIN_ADDRESS=0");
         require(router_ != address(0), "ROUTER_ADDRESS=0");
-        // Same floor as run(). The in-process path is the one fork tests and
-        // fixtures use, so leaving it unguarded would let a hollow single-voter
-        // quorum back in through the door the broadcast path closes.
-        require(quorumThreshold_ > 1, "QUORUM_THRESHOLD must be greater than 1");
-
+        require(receipts_ != address(0), "CONSENSUS_RECEIPT_ADDRESS=0");
         // Under `vm.startPrank` the script's outgoing calls carry `admin_` as
-        // their sender, NOT this function's `msg.sender` (which is the test
-        // contract). The grant's precondition is therefore about `admin_`.
+        // their sender, NOT this function's `msg.sender` (the test contract).
         vm.startPrank(admin_);
-        d = _deploy(admin_, admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);
-        vm.stopPrank();
-
-        _logResult(d);
-    }
-
-    /// @notice In-process variant that also sets the voting power of every voter, as `run()` does. No broadcast, no JSON written.
-    /// @param voters_ Voters, each given `power_`.
-    /// @param power_  Voting power of each voter.
-    function runInProcessWithVoters(
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_,
-        address[] calldata voters_,
-        uint256 power_
-    ) external returns (Deployed memory d) {
-        require(admin_ != address(0), "ADMIN_ADDRESS=0");
-        require(router_ != address(0), "ROUTER_ADDRESS=0");
-        require(quorumThreshold_ > 1, "QUORUM_THRESHOLD must be greater than 1");
-        require(power_ > 0, "VOTER_POWER must be above 0");
-        vm.startPrank(admin_);
-        d = _deploy(admin_, admin_, router_, votingPeriod_, executionDelay_, quorumThreshold_);
-        _setVotingPower(d, voters_, power_);
+        d = _deploy(admin_, admin_, router_, receipts_);
         vm.stopPrank();
         _logResult(d);
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _deploy(
-        address granter_,
-        address admin_,
-        address router_,
-        uint64 votingPeriod_,
-        uint64 executionDelay_,
-        uint256 quorumThreshold_
-    ) internal returns (Deployed memory d) {
+    function _deploy(address granter_, address admin_, address router_, address receipts_)
+        internal
+        returns (Deployed memory d)
+    {
         d.admin = admin_;
         d.router = PortfolioRouter(router_);
-        d.votingPeriod = votingPeriod_;
-        d.executionDelay = executionDelay_;
-        d.quorumThreshold = quorumThreshold_;
-
-        d.governance =
-            new RouterGovernance(router_, admin_, votingPeriod_, executionDelay_, quorumThreshold_);
+        d.receipts = receipts_;
+        d.governance = new RouterGovernance(router_, receipts_, admin_);
 
         _grantRouterAdmin(d, granter_);
         _grantWeightSetter(d, granter_);
+        _grantReceiptRelease(d);
     }
 
-    /// @dev Voting power is deploy-time configuration: the deployer holds ADMIN_ROLE on the governance contract it just deployed, so it sets
-    ///      the power of every voter here, before DeployTimelock hands ADMIN_ROLE away. Each value is read back.
-    function _setVotingPower(Deployed memory d, address[] memory voters, uint256 power) internal {
-        for (uint256 i = 0; i < voters.length; i++) {
-            d.governance.setVotingPower(voters[i], power);
-            require(d.governance.votingPower(voters[i]) == power, "voting power not set");
-        }
-        require(
-            d.governance.totalVotingPower() >= d.quorumThreshold,
-            "total voting power is below the quorum"
-        );
-    }
-
-    /// @dev A required comma list of non-zero addresses, no repeat.
-    function _envVotersRequired(string memory key) internal view returns (address[] memory voters) {
-        require(vm.envExists(key), string.concat(key, " must be set"));
-        try vm.envAddress(key, ",") returns (address[] memory v) {
-            voters = v;
-        } catch {
-            revert(string.concat(key, " is malformed: expected a comma list of addresses"));
-        }
-        require(voters.length > 0, string.concat(key, " is empty"));
-        for (uint256 i = 0; i < voters.length; i++) {
-            require(voters[i] != address(0), string.concat(key, " holds the zero address"));
-            for (uint256 j = 0; j < i; j++) {
-                require(voters[i] != voters[j], string.concat(key, " lists an address twice"));
-            }
-        }
-    }
-
-    /// @dev Give the governance contract the router `ADMIN_ROLE` its
-    ///      `execute()` needs, then read the role back. The read-back is the
-    ///      point: a silent failure here produces a deployment that looks
-    ///      complete, passes every liveness check, and only fails days later
-    ///      when the first real proposal tries to land its weights.
-    /// @param granter_ The account whose ADMIN_ROLE on the router authorises
-    ///                  the grant — the broadcaster under `run()`, the pranked
-    ///                  admin in-process.
+    /// @dev Router `ADMIN_ROLE`, so `setDefaultWeights` and `clearVotedWeights`
+    ///      forward. Read back.
     function _grantRouterAdmin(Deployed memory d, address granter_) internal {
         bytes32 routerAdminRole = d.router.ADMIN_ROLE();
         address governance = address(d.governance);
-
         require(
             IAccessControl(address(d.router)).hasRole(routerAdminRole, granter_),
             "caller lacks router ADMIN_ROLE: cannot wire governance (run this script before DeployTimelock hands the router ADMIN_ROLE away)"
         );
-
         IAccessControl(address(d.router)).grantRole(routerAdminRole, governance);
         require(
             IAccessControl(address(d.router)).hasRole(routerAdminRole, governance),
-            "RouterGovernance missing router ADMIN_ROLE: execute() would revert in setWeights"
+            "RouterGovernance missing router ADMIN_ROLE: setDefaultWeights would revert"
         );
     }
 
-    /// @dev Give the governance contract `WEIGHT_SETTER_ROLE`, the sole gate on
-    ///      `setWeights`, then drop the granter's own copy so no key but
-    ///      governance can set active weights. Both effects are read back.
+    /// @dev Router `WEIGHT_SETTER_ROLE`, the sole gate on `setWeights`, then drop
+    ///      the granter's own copy so no key but RouterGovernance can set active
+    ///      weights. Both effects are read back.
     function _grantWeightSetter(Deployed memory d, address granter_) internal {
         IAccessControl router = IAccessControl(address(d.router));
         bytes32 role = d.router.WEIGHT_SETTER_ROLE();
@@ -242,20 +135,28 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         router.grantRole(role, governance);
         require(
             router.hasRole(role, governance),
-            "RouterGovernance missing router WEIGHT_SETTER_ROLE: execute() would revert in setWeights"
+            "RouterGovernance missing router WEIGHT_SETTER_ROLE: applyReceipt would revert in setWeights"
         );
         if (router.hasRole(role, granter_)) router.revokeRole(role, granter_);
         require(!router.hasRole(role, granter_), "deployer still holds router WEIGHT_SETTER_ROLE");
     }
 
+    /// @dev Receipt `ADMIN_ROLE`, so `applyReceipt` can release the receipt it
+    ///      applies in the same call. Read back.
+    function _grantReceiptRelease(Deployed memory d) internal {
+        IAccessControl(d.receipts).grantRole(RECEIPT_ADMIN_ROLE, address(d.governance));
+        require(
+            IAccessControl(d.receipts).hasRole(RECEIPT_ADMIN_ROLE, address(d.governance)),
+            "RouterGovernance missing receipt ADMIN_ROLE: applyReceipt would revert in releaseReceipt"
+        );
+    }
+
     function _logResult(Deployed memory d) internal pure {
         console2.log("RouterGovernance deployed and configured");
-        console2.log("  governance    :", address(d.governance));
-        console2.log("  router        :", address(d.router));
-        console2.log("  admin         :", d.admin);
-        console2.log("  votingPeriod  :", d.votingPeriod);
-        console2.log("  executionDelay:", d.executionDelay);
-        console2.log("  quorumThreshold:", d.quorumThreshold);
+        console2.log("  governance:", address(d.governance));
+        console2.log("  router    :", address(d.router));
+        console2.log("  receipts  :", d.receipts);
+        console2.log("  admin     :", d.admin);
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
@@ -265,11 +166,8 @@ contract DeployRouterGovernance is ExpectedChainGuard {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "governance", address(d.governance));
         vm.serializeAddress(obj, "router", address(d.router));
-        vm.serializeAddress(obj, "admin", d.admin);
-        vm.serializeUint(obj, "voting_period", d.votingPeriod);
-        vm.serializeUint(obj, "execution_delay", d.executionDelay);
-        vm.serializeUint(obj, "total_voting_power", d.governance.totalVotingPower());
-        string memory json = vm.serializeUint(obj, "quorum_threshold", d.quorumThreshold);
+        vm.serializeAddress(obj, "consensus_receipt", d.receipts);
+        string memory json = vm.serializeAddress(obj, "admin", d.admin);
 
         vm.writeJson(json, outPath);
         console2.log("Wrote governance deployment JSON to", outPath);
