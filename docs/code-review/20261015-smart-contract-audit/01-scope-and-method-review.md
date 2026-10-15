@@ -19,3 +19,5 @@ The current source materially differs from the October 15 security report's revi
 ## Evidence standard and remaining scope work
 
 Chapter reports distinguish source inspection from reproduced behavior and live deployment evidence. Historical findings are rechecked against current code; a prior `fixed` label does not close a finding here. The next scope pass must enumerate every public/external entrypoint and actual deployed address, compare the QA deployment manifests to current source, map each `docs/architecture.md` §8 and `docs/technical/smart-contract-invariants.md` invariant to behavioral evidence, and test cross-contract attack sequences before a release verdict. Third-party protocol internals and live chain state have not been audited in this pass.
+
+The seven review chapters are not complete against their outlines. No complete external-entrypoint inventory, role-to-deployment matrix, invariant traceability matrix, systematic static-analysis results, or complete historical-finding disposition table is included. Treat findings as initial source candidates and every unrecorded outline item as open; chapter presence alone is not evidence of coverage.
