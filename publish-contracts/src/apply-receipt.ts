@@ -74,13 +74,13 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
   const entries: { vault: Address; bps: number; bucket: string }[] = [];
   for (const w of weights) {
     const bucket = String(w?.bucket);
-    const key = BUCKET_VAULT[bucket];
-    if (key === undefined) return usage(`--payload weights: bucket '${bucket}' is not one of ${Object.keys(BUCKET_VAULT).join(", ")}`);
+    // Object.hasOwn (issue 1701): a bucket named constructor or __proto__ must be a USAGE error, not an inherited Object.prototype member.
+    if (!Object.hasOwn(BUCKET_VAULT, bucket)) return usage(`--payload weights: bucket '${bucket}' is not one of ${Object.keys(BUCKET_VAULT).join(", ")}`);
     if (seen.has(bucket)) return usage(`--payload weights: bucket '${bucket}' is listed twice`);
     seen.add(bucket);
     const bps = w?.weight_bps;
     if (!Number.isInteger(bps) || bps < 0 || bps > BPS_TOTAL) return usage(`--payload weights: ${bucket} weight_bps ${String(bps)} is not an integer from 0 to ${BPS_TOTAL}`);
-    entries.push({ vault: vaultOf[key], bps, bucket });
+    entries.push({ vault: vaultOf[BUCKET_VAULT[bucket]!], bps, bucket });
   }
   const sum = entries.reduce((a, e) => a + e.bps, 0);
   if (sum !== BPS_TOTAL) return usage(`--payload weights sum to ${sum} bps, want ${BPS_TOTAL}`, { sum });
