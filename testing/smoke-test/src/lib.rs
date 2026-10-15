@@ -745,6 +745,16 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         &self.gateway_runtime_hash
     }
+    /// The approved ERC-1967 implementation behind the gateway proxy, from
+    /// the gateway manifest (issue 1810).
+    pub fn gateway_implementation_hex(&self) -> &str {
+        &self.topology.gateway_implementation
+    }
+    /// `keccak256` of the gateway implementation's runtime code, from the
+    /// gateway manifest (issue 1810).
+    pub fn gateway_implementation_runtime_hash(&self) -> &str {
+        &self.topology.gateway_implementation_runtime_hash
+    }
     /// Raw string form of the gateway address (for TOML/config templating).
     pub fn gateway_hex(&self) -> &str {
         &self.topology.gateway

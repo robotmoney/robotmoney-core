@@ -144,6 +144,9 @@ impl Fixture {
     pub fn gateway_runtime_hash(&self) -> &str {
         self.devnet.gateway_runtime_hash()
     }
+    pub fn gateway_implementation_hex(&self) -> &str {
+        self.devnet.gateway_implementation_hex()
+    }
     pub fn tempdir(&self) -> &Path {
         self.devnet.tempdir()
     }
@@ -338,6 +341,8 @@ gateway_address       = "{gateway}"
 usdc_address          = "{usdc}"
 vault_address         = "{vault}"
 gateway_runtime_hash  = "{hash}"
+gateway_implementation = "{implementation}"
+gateway_implementation_runtime_hash = "{implementation_hash}"
 max_fee_per_gas_cap   = 100000000000
 gateway_from_block    = {from_block}
 
@@ -352,6 +357,8 @@ keystore_path           = "{keystore}"
         usdc = devnet.usdc_hex(),
         vault = devnet.vault_hex(),
         hash = devnet.gateway_runtime_hash(),
+        implementation = devnet.gateway_implementation_hex(),
+        implementation_hash = devnet.gateway_implementation_runtime_hash(),
         keystore = keystore_path.display(),
     );
     std::fs::write(&config_path, toml)?;

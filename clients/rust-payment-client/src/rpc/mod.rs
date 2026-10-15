@@ -185,6 +185,22 @@ impl RpcClient {
             .await
     }
 
+    /// `eth_getStorageAt` — one 32-byte storage word at `address` and `slot`.
+    /// `tag` defaults to `"latest"`. Used to read the ERC-1967 implementation
+    /// slot behind a proxy (issue 1810).
+    pub async fn get_storage_at(
+        &self,
+        address: Address,
+        slot: B256,
+        tag: Option<&str>,
+    ) -> Result<B256> {
+        self.call(
+            "eth_getStorageAt",
+            json!([address, slot, tag.unwrap_or("latest")]),
+        )
+        .await
+    }
+
     /// `eth_getBalance` — wei balance.
     pub async fn get_balance(&self, address: Address, tag: Option<&str>) -> Result<U256> {
         self.call("eth_getBalance", json!([address, tag.unwrap_or("latest")]))
@@ -418,6 +434,29 @@ impl FailoverRpcClient {
                 Err(e) => {
                     log::warn!(
                         "rmpc rpc: get_code failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getStorageAt`.
+    pub async fn get_storage_at(
+        &self,
+        address: alloy_primitives::Address,
+        slot: alloy_primitives::B256,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<alloy_primitives::B256> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_storage_at(address, slot, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!(
+                        "rmpc rpc: get_storage_at failed on {}, trying next; error: {e}",
                         client.url()
                     );
                     last_err = Some(e);

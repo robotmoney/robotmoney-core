@@ -51,6 +51,7 @@ use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::implementation::{check_executed_under, verify_gateway_code_now};
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
@@ -347,6 +348,24 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
         }
     };
 
+    // The gateway proxy and its live implementation must be the approved
+    // ones before anything is signed (issue 1810).
+    let gateway_implementation = match rt.block_on(verify_gateway_code_now(&rpc, &cfg)) {
+        Ok(i) => i,
+        Err(e) => {
+            log::error!("rmpc receipt submit: {e}");
+            emit_failure(
+                &ReceiptFailure {
+                    ok: false,
+                    error: e.name().to_string(),
+                    message: Some(format!("{e}")),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+
     let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "submit") {
         Ok(f) => f,
         Err(code) => return code,
@@ -474,6 +493,27 @@ pub fn run_submit(args: SubmitArgs) -> i32 {
             return EXIT_REFUSAL;
         }
     };
+
+    // The anchor is a success only if it executed under the implementation
+    // it was signed against (issue 1810). The message names the tx_hash.
+    if let Err(e) = rt.block_on(check_executed_under(
+        &rpc,
+        gateway_addr,
+        gateway_implementation,
+        receipt.block_number,
+        &format!("{tx_hash:#x}"),
+    )) {
+        log::error!("rmpc receipt submit: {e}");
+        emit_failure(
+            &ReceiptFailure {
+                ok: false,
+                error: e.name().to_string(),
+                message: Some(format!("{e}")),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     let block_number = receipt.block_number.unwrap_or(0);
 

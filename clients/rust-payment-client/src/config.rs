@@ -120,7 +120,24 @@ pub struct Config {
     #[serde(default)]
     pub ic_policy_address: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
+    /// For a proxied gateway this is the hash of the ERC-1967 proxy code,
+    /// which does not change when the implementation behind it does.
     pub gateway_runtime_hash: String,
+    /// The approved ERC-1967 implementation behind the gateway proxy
+    /// (0x-prefixed hex): the gateway manifest's `gateway_implementation`.
+    ///
+    /// Every write refuses unless the live implementation slot names exactly
+    /// this address and its code hashes to
+    /// [`Config::gateway_implementation_runtime_hash`] (issue 1810). Set both
+    /// or neither. Leave both out only for a direct (non-proxy) gateway: a
+    /// gateway whose implementation slot is set refuses every write when they
+    /// are absent.
+    #[serde(default)]
+    pub gateway_implementation: Option<String>,
+    /// `keccak256(eth_getCode(gateway_implementation))` (0x-prefixed hex): the
+    /// gateway manifest's `gateway_implementation_runtime_hash`.
+    #[serde(default)]
+    pub gateway_implementation_runtime_hash: Option<String>,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.
     ///
     /// `u64` (max ≈ 1.8 × 10^19 wei = 18 ETH/gas) is far above any plausible

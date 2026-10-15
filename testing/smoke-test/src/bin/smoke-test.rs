@@ -267,6 +267,14 @@ fn run() -> i32 {
     println!("vault_addr={:#x}", fixture.vault());
     println!("agent_addr={:#x}", fixture.agent());
     println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
+    println!(
+        "gateway_implementation={}",
+        fixture.gateway_implementation_hex()
+    );
+    println!(
+        "gateway_implementation_runtime_hash={}",
+        fixture.gateway_implementation_runtime_hash()
+    );
 
     if cli.deploy_only {
         return finish_deploy_only(fixture, deploy_args);
@@ -533,6 +541,16 @@ fn print_endpoint_summary(
         out,
         "gateway_runtime_hash={}",
         fixture.gateway_runtime_hash()
+    );
+    let _ = writeln!(
+        out,
+        "gateway_implementation={}",
+        fixture.gateway_implementation_hex()
+    );
+    let _ = writeln!(
+        out,
+        "gateway_implementation_runtime_hash={}",
+        fixture.gateway_implementation_runtime_hash()
     );
     // Issue #320: surface registry and router addresses so dapp e2e
     // tests can drive the vault-selector and router deposit flow.

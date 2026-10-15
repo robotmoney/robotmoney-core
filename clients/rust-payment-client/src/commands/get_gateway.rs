@@ -15,6 +15,11 @@
 //! - `depositsPaused()` → deposit-pause flag. It stops new deposits only;
 //!   withdrawals stay open while it is set (core 1494).
 //! - `eth_chainId` → the §9 `chain_id` envelope field.
+//! - The ERC-1967 implementation slot (issue 1810). For a proxied gateway:
+//!   the implementation address and its code hash, `upgradesFrozen()` and
+//!   `upgradeTimelock()`, beside the approved implementation from the TOML.
+//!   A direct gateway reports `implementation: null` and skips the upgrade
+//!   reads it does not have.
 //!
 //! Output is the §9 envelope from `crate::read_output`. Per-field failures
 //! are surfaced via `PartialBuilder`: a single sub-read that reverts marks
@@ -39,6 +44,7 @@ use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::output::emit;
+use crate::policy::implementation::read_implementation;
 use crate::read_output::{Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 
@@ -67,6 +73,21 @@ pub struct GatewayData {
     /// `gateway.depositsPaused()` boolean. True stops new deposits only;
     /// withdrawals stay open (core 1494).
     pub deposits_paused: bool,
+    /// The live ERC-1967 implementation behind the gateway proxy; `null` for
+    /// a direct (non-proxy) gateway.
+    pub implementation: Option<String>,
+    /// `keccak256(eth_getCode(implementation))`; `null` for a direct gateway.
+    pub implementation_code_hash: Option<String>,
+    /// `gateway_implementation` from the operator TOML (the approved one).
+    pub configured_implementation: Option<String>,
+    /// `gateway_implementation_runtime_hash` from the operator TOML.
+    pub configured_implementation_code_hash: Option<String>,
+    /// `gateway.upgradesFrozen()`: true once upgrades are permanently
+    /// disabled. `null` for a direct gateway, which has no upgrade path.
+    pub upgrades_frozen: Option<bool>,
+    /// `gateway.upgradeTimelock()`: the only account that can upgrade or
+    /// freeze the proxy. `null` for a direct gateway.
+    pub upgrade_timelock: Option<String>,
 }
 
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
@@ -139,6 +160,8 @@ async fn read_gateway(
     let data = GatewayData {
         address: format!("{gateway_addr:#x}"),
         configured_code_hash: cfg.gateway_runtime_hash.clone(),
+        configured_implementation: cfg.gateway_implementation.clone(),
+        configured_implementation_code_hash: cfg.gateway_implementation_runtime_hash.clone(),
         ..Default::default()
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
@@ -189,7 +212,73 @@ async fn read_gateway(
         Err(e) => b.record_err("deposits_paused", e),
     }
 
+    // implementation, upgradesFrozen(), upgradeTimelock() (issue 1810)
+    match read_implementation(rpc, gateway_addr, &block_tag).await {
+        Ok(None) => {}
+        Ok(Some(implementation)) => {
+            b.data_mut().implementation = Some(format!("{implementation:#x}"));
+            match rpc.get_code(implementation, Some(&block_tag)).await {
+                Ok(code) if code.is_empty() => b.record_err(
+                    "implementation_code_hash",
+                    "eth_getCode returned 0x (no code at the implementation)",
+                ),
+                Ok(code) => {
+                    b.data_mut().implementation_code_hash =
+                        Some(format!("0x{}", hex::encode(keccak256(code.as_ref()))));
+                }
+                Err(e) => b.record_err(
+                    "implementation_code_hash",
+                    format!("eth_getCode failed: {e}"),
+                ),
+            }
+            match call_view(
+                rpc,
+                gateway_addr,
+                &block_tag,
+                RobotMoneyGateway::upgradesFrozenCall {},
+            )
+            .await
+            {
+                Ok(r) => b.data_mut().upgrades_frozen = Some(r._0),
+                Err(e) => b.record_err("upgrades_frozen", e),
+            }
+            match call_view(
+                rpc,
+                gateway_addr,
+                &block_tag,
+                RobotMoneyGateway::upgradeTimelockCall {},
+            )
+            .await
+            {
+                Ok(r) => b.data_mut().upgrade_timelock = Some(format!("{:#x}", r._0)),
+                Err(e) => b.record_err("upgrade_timelock", e),
+            }
+        }
+        Err(e) => b.record_err("implementation", format!("{e}")),
+    }
+
     Ok(b.finish())
+}
+
+/// One `()` view call at `block_tag`, decoded through the typed bindings.
+async fn call_view<C: SolCall>(
+    rpc: &FailoverRpcClient,
+    to: Address,
+    block_tag: &str,
+    call: C,
+) -> std::result::Result<C::Return, String> {
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to,
+                from: None,
+                data: call.abi_encode().into(),
+            },
+            Some(block_tag),
+        )
+        .await
+        .map_err(|e| format!("eth_call failed: {e}"))?;
+    C::abi_decode_returns(&out, true).map_err(|e| format!("abi decode: {e}"))
 }
 
 /// Decode a `()` → `address` view via the typed bindings. Returns a

@@ -686,6 +686,11 @@ pub fn check_govern_rows(rows: &[GovernRow]) -> Result<(), HarnessError> {
 #[derive(Debug, Clone)]
 pub struct Topology {
     pub gateway: String,
+    /// The ERC-1967 implementation behind the gateway proxy, and its runtime
+    /// code hash, from the gateway manifest: the approved pair an rmpc config
+    /// pins (issue 1810).
+    pub gateway_implementation: String,
+    pub gateway_implementation_runtime_hash: String,
     pub usdc: String,
     pub vault: String,
     pub aave_adapter: String,
@@ -765,6 +770,12 @@ pub fn load_topology_with(dir: &Path, table: &StageTable) -> Result<Topology, Ha
     };
     Ok(Topology {
         gateway: field(&gw_j, &gw_f, "gateway")?,
+        gateway_implementation: field(&gw_j, &gw_f, "gateway_implementation")?,
+        gateway_implementation_runtime_hash: field(
+            &gw_j,
+            &gw_f,
+            "gateway_implementation_runtime_hash",
+        )?,
         usdc,
         vault: field(&vault_j, &vault_f, "vault")?,
         aave_adapter: opt_field(&vault_j, "aave_adapter"),
@@ -968,7 +979,16 @@ mod tests {
                 std::fs::write(dir.join(n(t.manifest_of(stage).unwrap())), body).unwrap();
             };
             w("vault", format!("{{\"vault\":\"{}\"}}", a('1')));
-            w("gateway", format!("{{\"gateway\":\"{}\"}}", a('2')));
+            w(
+                "gateway",
+                format!(
+                    "{{\"gateway\":\"{}\",\"gateway_implementation\":\"{}\",\
+                     \"gateway_implementation_runtime_hash\":\"0x{}\"}}",
+                    a('2'),
+                    a('b'),
+                    "cd".repeat(32)
+                ),
+            );
             w("registry", format!("{{\"registry\":\"{}\"}}", a('3')));
             w("router", format!("{{\"router\":\"{}\"}}", a('4')));
             w("governance", format!("{{\"governance\":\"{}\"}}", a('5')));
@@ -996,6 +1016,11 @@ mod tests {
         let d = write(&table, false);
         let topo = load_topology_with(&d, &table).unwrap();
         assert_eq!(topo.gateway, a('2'));
+        assert_eq!(topo.gateway_implementation, a('b'));
+        assert_eq!(
+            topo.gateway_implementation_runtime_hash,
+            format!("0x{}", "cd".repeat(32))
+        );
         assert_eq!(topo.safe, a('9'));
         assert_eq!(topo.vaults.len(), 4);
         assert_eq!(topo.vaults["rmUSDC"], a('1'));

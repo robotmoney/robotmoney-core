@@ -21,9 +21,9 @@
 mod common;
 
 use crate::common::{
-    enc_bool, enc_u256, install_happy_path_mocks, install_withdraw_preflight_mocks, jrpc_result,
-    jrpc_result_raw, match_eth_call_selector, selector_hex_of, Fixture, ASSET_RECIPIENT, GATEWAY,
-    SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
+    enc_bool, enc_u256, install_gateway_implementation, install_happy_path_mocks,
+    install_withdraw_preflight_mocks, jrpc_result, jrpc_result_raw, match_eth_call_selector,
+    selector_hex_of, Fixture, ASSET_RECIPIENT, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE, VAULT,
 };
 use alloy_primitives::{b256, hex as ahex, Bytes, LogData, B256, U256};
 use alloy_sol_types::SolEvent;
@@ -728,4 +728,58 @@ fn refusal_field_set_is_identical_across_the_three_write_commands() {
         "deposit and withdraw-router must emit the same refusal field set",
     );
     assert_eq!(deposit, ["error", "message", "order_id", "status"]);
+}
+
+/// Issue 1810: a redemption through the gateway proxy verifies the live
+/// implementation too. The proxy code (and its pinned hash) is unchanged and
+/// the approved implementation is configured, but the slot names another one.
+/// A withdrawal is refused like a deposit, before anything is signed.
+#[tokio::test]
+async fn withdraw_refuses_an_unapproved_gateway_implementation() {
+    use alloy_primitives::{address, Address};
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+    const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0xbb];
+
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, None).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let state_dir = unique_state_dir();
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out.status.code(), Some(2));
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["error"], "ErrImplementationNotApproved");
+    assert!(v["tx_hash"].is_null(), "nothing was sent: {v}");
+}
+
+/// The approved implementation lets the same redemption through.
+#[tokio::test]
+async fn withdraw_succeeds_under_the_approved_gateway_implementation() {
+    use alloy_primitives::{address, Address};
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    install_withdraw_happy_path(&mut server, chain_id).await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, None).await;
+
+    let fix = Fixture::build_proxied(&server.url(), chain_id, IMPL_A, IMPL_A_CODE);
+    let state_dir = unique_state_dir();
+    let out = withdraw_args(fix.config_path.to_str().unwrap(), &state_dir)
+        .args(["--receipt-timeout-secs", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["status"], "success");
 }

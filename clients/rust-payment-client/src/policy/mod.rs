@@ -18,7 +18,11 @@
 //!
 //! 1. `eth_chainId` matches `config.chain_id`
 //! 2. `keccak256(eth_getCode(gateway))` matches `config.gateway_runtime_hash`
-//!    (eth_getCode returning empty bytecode is itself a refusal)
+//!    (eth_getCode returning empty bytecode is itself a refusal), and the
+//!    gateway's live ERC-1967 implementation is the approved
+//!    `config.gateway_implementation` with code hash
+//!    `config.gateway_implementation_runtime_hash` (issue 1810, see
+//!    [`implementation`])
 //! 3. `gateway.depositsPaused() == false`
 //! 4. `gateway.usdc()` matches `config.usdc_address`
 //! 5. `gateway.vault()` matches `config.vault_address`, and
@@ -39,13 +43,18 @@
 //! refuse deposits only: the withdraw preflight reads the gateway's
 //! `depositsPaused()` as information and never reads it on the vault.
 //!
+//! Every read runs at ONE block, pinned with `eth_blockNumber` before the
+//! first check (issue 1810), so the checks describe one consistent chain
+//! state. [`PreflightReport::block_number`] carries that block; the vault
+//! share check ([`Preflight::run_withdraw_vault`]) reads at it too.
+//!
 //! Each rule maps onto a specific [`RmpcError`] variant. Operator tooling
 //! matches on those names; renaming them is a breaking change.
 
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::{keccak256, Address, U256};
+use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 
 use crate::config::Config;
@@ -53,6 +62,9 @@ use crate::errors::{Result, RmpcError};
 use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::rpc::{CallRequest, FailoverRpcClient};
 use serde::Serialize;
+
+pub mod implementation;
+pub use implementation::verify_gateway_code;
 
 /// Window length in seconds. Mirrors `RobotMoneyGateway.WINDOW_SECONDS`
 /// (constant on-chain, baked into the contract). Re-reading it on every
@@ -76,7 +88,12 @@ pub struct PreflightInputs {
 #[derive(Debug, Clone)]
 pub struct PreflightReport {
     pub chain_id: u64,
+    /// The block every preflight read ran at.
+    pub block_number: u64,
     pub gateway_runtime_hash_ok: bool,
+    /// The verified implementation behind the gateway proxy; `None` for a
+    /// direct gateway. The write path binds the signed transaction to it.
+    pub gateway_implementation: Option<Address>,
     /// `gateway.depositsPaused()`. Refuses a deposit; information only on
     /// a withdrawal.
     pub deposits_paused: bool,
@@ -152,34 +169,30 @@ impl<'a> Preflight<'a> {
 
         let gateway_addr = parse_addr(&self.config.gateway_address, "gateway_address")?;
 
-        // 2. code hash pin
-        let code = self.rpc.get_code(gateway_addr, None).await?;
-        if code.is_empty() {
-            return Err(RmpcError::ErrCodeHashMismatch);
-        }
-        let observed_hash = keccak256(code.as_ref());
-        let expected_hash = parse_b256_hex(&self.config.gateway_runtime_hash)?;
-        if observed_hash.as_slice() != expected_hash.as_slice() {
-            return Err(RmpcError::ErrCodeHashMismatch);
-        }
+        // Pin one block for every read below (issue 1810).
+        let block_number = self.rpc.block_number().await?;
+        let tag = block_tag(block_number);
+
+        // 2. proxy code hash pin + live implementation check
+        let gateway_implementation = verify_gateway_code(self.rpc, self.config, &tag).await?;
 
         // 3. depositsPaused() — information only. A deposit pause never
         //    blocks a withdrawal (core 1494), so neither the flag nor a
         //    failed read of it refuses here.
         let deposits_paused = self
-            .call_view_deposits_paused(gateway_addr)
+            .call_view_deposits_paused(gateway_addr, &tag)
             .await
             .unwrap_or(false);
 
         // 4-5. usdc()/vault() addresses pinned in config
-        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr).await?;
+        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr, &tag).await?;
         let usdc_addr_cfg = parse_addr(&self.config.usdc_address, "usdc_address")?;
         if usdc_addr_on_chain != usdc_addr_cfg {
             return Err(RmpcError::ErrConfig(format!(
                 "gateway.usdc() = {usdc_addr_on_chain:?} does not match configured usdc_address = {usdc_addr_cfg:?}"
             )));
         }
-        let vault_addr_on_chain = self.call_view_vault(gateway_addr).await?;
+        let vault_addr_on_chain = self.call_view_vault(gateway_addr, &tag).await?;
         let vault_addr_cfg = parse_addr(&self.config.vault_address, "vault_address")?;
         if vault_addr_on_chain != vault_addr_cfg {
             return Err(RmpcError::ErrConfig(format!(
@@ -189,7 +202,7 @@ impl<'a> Preflight<'a> {
 
         // 6. agents(self) — active + validUntil
         let agent = self
-            .call_view_agents(gateway_addr, inputs.signer_address)
+            .call_view_agents(gateway_addr, inputs.signer_address, &tag)
             .await?;
         if !agent.active {
             return Err(RmpcError::ErrAgentNotAuthorized);
@@ -213,7 +226,7 @@ impl<'a> Preflight<'a> {
         //     (zero when the agent's anchor has aged past WINDOW_SECONDS)
         //     instead of the per-calendar-window mapping.
         let window_gross = self
-            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address)
+            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address, &tag)
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxWithdrawPerWindow {
@@ -225,7 +238,9 @@ impl<'a> Preflight<'a> {
 
         Ok(PreflightReport {
             chain_id,
+            block_number,
             gateway_runtime_hash_ok: true,
+            gateway_implementation,
             deposits_paused,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
@@ -250,31 +265,27 @@ impl<'a> Preflight<'a> {
 
         let gateway_addr = parse_addr(&self.config.gateway_address, "gateway_address")?;
 
-        // 2. code hash pin
-        let code = self.rpc.get_code(gateway_addr, None).await?;
-        if code.is_empty() {
-            return Err(RmpcError::ErrCodeHashMismatch);
-        }
-        let observed_hash = keccak256(code.as_ref());
-        let expected_hash = parse_b256_hex(&self.config.gateway_runtime_hash)?;
-        if observed_hash.as_slice() != expected_hash.as_slice() {
-            return Err(RmpcError::ErrCodeHashMismatch);
-        }
+        // Pin one block for every read below (issue 1810).
+        let block_number = self.rpc.block_number().await?;
+        let tag = block_tag(block_number);
+
+        // 2. proxy code hash pin + live implementation check
+        let gateway_implementation = verify_gateway_code(self.rpc, self.config, &tag).await?;
 
         // 3. depositsPaused() on the gateway — a deposit refusal.
-        if self.call_view_deposits_paused(gateway_addr).await? {
+        if self.call_view_deposits_paused(gateway_addr, &tag).await? {
             return Err(RmpcError::ErrDepositsPaused);
         }
 
         // 4-5. usdc()/vault() addresses pinned in config
-        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr).await?;
+        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr, &tag).await?;
         let usdc_addr_cfg = parse_addr(&self.config.usdc_address, "usdc_address")?;
         if usdc_addr_on_chain != usdc_addr_cfg {
             return Err(RmpcError::ErrConfig(format!(
                 "gateway.usdc() = {usdc_addr_on_chain:?} does not match configured usdc_address = {usdc_addr_cfg:?}"
             )));
         }
-        let vault_addr_on_chain = self.call_view_vault(gateway_addr).await?;
+        let vault_addr_on_chain = self.call_view_vault(gateway_addr, &tag).await?;
         let vault_addr_cfg = parse_addr(&self.config.vault_address, "vault_address")?;
         if vault_addr_on_chain != vault_addr_cfg {
             return Err(RmpcError::ErrConfig(format!(
@@ -283,13 +294,13 @@ impl<'a> Preflight<'a> {
         }
         // 5b. depositsPaused() on the vault the gateway deposits into. The
         //     vault's deposit() reverts DepositsArePaused while it is set.
-        if self.call_view_deposits_paused(vault_addr_cfg).await? {
+        if self.call_view_deposits_paused(vault_addr_cfg, &tag).await? {
             return Err(RmpcError::ErrDepositsPaused);
         }
 
         // 6. agents(self) — active + validUntil
         let agent = self
-            .call_view_agents(gateway_addr, inputs.signer_address)
+            .call_view_agents(gateway_addr, inputs.signer_address, &tag)
             .await?;
         if !agent.active {
             return Err(RmpcError::ErrAgentNotAuthorized);
@@ -313,7 +324,7 @@ impl<'a> Preflight<'a> {
         //    preflight now reads the rolling gross via effectiveDepositWindowGross
         //    instead of the deprecated per-calendar-window agentWindowGross.
         let window_gross = self
-            .call_view_agent_deposit_window_gross(gateway_addr, inputs.signer_address)
+            .call_view_agent_deposit_window_gross(gateway_addr, inputs.signer_address, &tag)
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxPerWindow {
@@ -326,7 +337,7 @@ impl<'a> Preflight<'a> {
         let (allowance, balance) = if check_usdc {
             // 9. allowance(self, gateway) >= amount
             let allowance = self
-                .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr)
+                .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr, &tag)
                 .await?;
             if allowance < inputs.amount {
                 return Err(RmpcError::ErrAllowanceInsufficient);
@@ -334,7 +345,7 @@ impl<'a> Preflight<'a> {
 
             // 10. balanceOf(self) >= amount
             let balance = self
-                .call_view_balance_of(usdc_addr_cfg, inputs.signer_address)
+                .call_view_balance_of(usdc_addr_cfg, inputs.signer_address, &tag)
                 .await?;
             if balance < inputs.amount {
                 return Err(RmpcError::ErrBalanceInsufficient);
@@ -346,7 +357,9 @@ impl<'a> Preflight<'a> {
 
         Ok(PreflightReport {
             chain_id,
+            block_number,
             gateway_runtime_hash_ok: true,
+            gateway_implementation,
             deposits_paused: false,
             agent_active: agent.active,
             agent_valid_until: agent.validUntil,
@@ -376,17 +389,27 @@ impl<'a> Preflight<'a> {
     /// `commands::withdraw` with its own private copies of the
     /// `eth_call` decoders, which made `commands::withdraw_router` import
     /// a policy rule from a sibling command module.
+    ///
+    /// `block_number` is the gateway preflight's pinned block
+    /// ([`PreflightReport::block_number`]), so the share reads describe the
+    /// same chain state as the gateway checks.
     pub async fn run_withdraw_vault(
         &self,
         vault: Address,
         gateway: Address,
         agent: Address,
         shares: U256,
+        block_number: u64,
     ) -> Result<()> {
-        if self.call_view_allowance(vault, agent, gateway).await? < shares {
+        let tag = block_tag(block_number);
+        if self
+            .call_view_allowance(vault, agent, gateway, &tag)
+            .await?
+            < shares
+        {
             return Err(RmpcError::ErrShareAllowanceInsufficient);
         }
-        if self.call_view_balance_of(vault, agent).await? < shares {
+        if self.call_view_balance_of(vault, agent, &tag).await? < shares {
             return Err(RmpcError::ErrShareBalanceInsufficient);
         }
         Ok(())
@@ -396,7 +419,7 @@ impl<'a> Preflight<'a> {
 
     /// `depositsPaused()` on the gateway or a vault. Both expose the same
     /// `depositsPaused() returns (bool)` view, so one selector serves both.
-    async fn call_view_deposits_paused(&self, target: Address) -> Result<bool> {
+    async fn call_view_deposits_paused(&self, target: Address, tag: &str) -> Result<bool> {
         let data = RobotMoneyGateway::depositsPausedCall {}.abi_encode();
         let out = self
             .rpc
@@ -406,7 +429,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded = RobotMoneyGateway::depositsPausedCall::abi_decode_returns(&out, true)
@@ -414,7 +437,7 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    async fn call_view_usdc(&self, gateway: Address) -> Result<Address> {
+    async fn call_view_usdc(&self, gateway: Address, tag: &str) -> Result<Address> {
         let data = RobotMoneyGateway::usdcCall {}.abi_encode();
         let out = self
             .rpc
@@ -424,7 +447,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded = RobotMoneyGateway::usdcCall::abi_decode_returns(&out, true)
@@ -432,7 +455,7 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    async fn call_view_vault(&self, gateway: Address) -> Result<Address> {
+    async fn call_view_vault(&self, gateway: Address, tag: &str) -> Result<Address> {
         let data = RobotMoneyGateway::vaultCall {}.abi_encode();
         let out = self
             .rpc
@@ -442,7 +465,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded = RobotMoneyGateway::vaultCall::abi_decode_returns(&out, true)
@@ -454,6 +477,7 @@ impl<'a> Preflight<'a> {
         &self,
         gateway: Address,
         agent: Address,
+        tag: &str,
     ) -> Result<RobotMoneyGateway::agentsReturn> {
         let data = RobotMoneyGateway::agentsCall { _0: agent }.abi_encode();
         let out = self
@@ -464,7 +488,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         RobotMoneyGateway::agentsCall::abi_decode_returns(&out, true)
@@ -508,6 +532,7 @@ impl<'a> Preflight<'a> {
         &self,
         gateway: Address,
         agent: Address,
+        tag: &str,
     ) -> Result<U256> {
         let data = RobotMoneyGateway::effectiveDepositWindowGrossCall { agent }.abi_encode();
         let out = self
@@ -518,7 +543,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded =
@@ -539,6 +564,7 @@ impl<'a> Preflight<'a> {
         &self,
         gateway: Address,
         agent: Address,
+        tag: &str,
     ) -> Result<U256> {
         let data = RobotMoneyGateway::effectiveWithdrawWindowGrossCall { agent }.abi_encode();
         let out = self
@@ -549,7 +575,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded =
@@ -565,6 +591,7 @@ impl<'a> Preflight<'a> {
         token: Address,
         owner: Address,
         spender: Address,
+        tag: &str,
     ) -> Result<U256> {
         let data = Erc20::allowanceCall { owner, spender }.abi_encode();
         let out = self
@@ -575,7 +602,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded = Erc20::allowanceCall::abi_decode_returns(&out, true)
@@ -583,7 +610,7 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    async fn call_view_balance_of(&self, token: Address, who: Address) -> Result<U256> {
+    async fn call_view_balance_of(&self, token: Address, who: Address, tag: &str) -> Result<U256> {
         let data = Erc20::balanceOfCall { account: who }.abi_encode();
         let out = self
             .rpc
@@ -593,7 +620,7 @@ impl<'a> Preflight<'a> {
                     from: None,
                     data: data.into(),
                 },
-                None,
+                Some(tag),
             )
             .await?;
         let decoded = Erc20::balanceOfCall::abi_decode_returns(&out, true)
@@ -609,6 +636,12 @@ impl<'a> Preflight<'a> {
 pub struct ChecksOutput {
     pub chain_id_match: bool,
     pub gateway_code_hash_match: bool,
+    /// The gateway's live ERC-1967 implementation is the approved one (or
+    /// the gateway is a direct deployment and none is configured).
+    pub gateway_implementation_match: bool,
+    /// The verified implementation behind the gateway proxy; `null` for a
+    /// direct gateway or when it was not verified.
+    pub gateway_implementation: Option<String>,
     /// `depositsPaused()` was observed true. A refusal on a deposit;
     /// information only on a withdrawal, which proceeds regardless.
     pub deposits_paused: bool,
@@ -626,6 +659,8 @@ impl ChecksOutput {
         Self {
             chain_id_match: true,
             gateway_code_hash_match: r.gateway_runtime_hash_ok,
+            gateway_implementation_match: r.gateway_runtime_hash_ok,
+            gateway_implementation: r.gateway_implementation.map(|a| format!("{a:#x}")),
             deposits_paused: r.deposits_paused,
             agent_active: r.agent_active,
             agent_valid_until: r.agent_valid_until,
@@ -647,14 +682,22 @@ impl ChecksOutput {
             RmpcError::ErrCodeHashMismatch => {
                 c.chain_id_match = true;
             }
+            RmpcError::ErrImplementationNotApproved(_)
+            | RmpcError::ErrImplementationUnverified(_)
+            | RmpcError::ErrImplementationChanged(_) => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+            }
             RmpcError::ErrDepositsPaused => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
+                c.gateway_implementation_match = true;
                 c.deposits_paused = true;
             }
             _ => {
                 c.chain_id_match = true;
                 c.gateway_code_hash_match = true;
+                c.gateway_implementation_match = true;
             }
         }
         c
@@ -664,6 +707,8 @@ impl ChecksOutput {
         Self {
             chain_id_match: false,
             gateway_code_hash_match: false,
+            gateway_implementation_match: false,
+            gateway_implementation: None,
             deposits_paused: false,
             agent_active: false,
             agent_valid_until: 0,
@@ -682,19 +727,9 @@ fn parse_addr(s: &str, field: &str) -> Result<Address> {
     Address::from_str(s).map_err(|e| RmpcError::ErrConfig(format!("{field}: {e}")))
 }
 
-fn parse_b256_hex(s: &str) -> Result<[u8; 32]> {
-    let stripped = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| RmpcError::ErrConfig(format!("gateway_runtime_hash: {e}")))?;
-    if bytes.len() != 32 {
-        return Err(RmpcError::ErrConfig(format!(
-            "gateway_runtime_hash: expected 32 bytes, got {}",
-            bytes.len()
-        )));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+/// `eth_*` block tag for a pinned block number.
+fn block_tag(block_number: u64) -> String {
+    format!("0x{block_number:x}")
 }
 
 fn now_unix() -> u64 {

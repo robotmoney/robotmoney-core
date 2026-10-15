@@ -44,6 +44,7 @@ use crate::gateway::{GatewayVoteParams, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
+use crate::policy::implementation::{check_executed_under, verify_gateway_code_now};
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
@@ -260,6 +261,25 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
+    // The gateway proxy and its live implementation must be the approved
+    // ones before anything is signed (issue 1810).
+    let gateway_implementation = match rt.block_on(verify_gateway_code_now(&rpc, &cfg)) {
+        Ok(i) => i,
+        Err(e) => {
+            log::error!("rmpc committee vote-submit: {e}");
+            emit_failure(
+                &CommitteeFailure {
+                    ok: false,
+                    error: e.name().to_string(),
+                    message: Some(format!("{e}")),
+                    tx_hash: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+
     let fees = match fetch_fees(
         &rt,
         &rpc,
@@ -392,6 +412,28 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
             return EXIT_REFUSAL;
         }
     };
+
+    // The vote is a success only if it executed under the implementation it
+    // was signed against (issue 1810).
+    if let Err(e) = rt.block_on(check_executed_under(
+        &rpc,
+        gateway_addr,
+        gateway_implementation,
+        receipt.block_number,
+        &format!("{tx_hash:#x}"),
+    )) {
+        log::error!("rmpc committee vote-submit: {e}");
+        emit_failure(
+            &CommitteeFailure {
+                ok: false,
+                error: e.name().to_string(),
+                message: Some(format!("{e}")),
+                tx_hash: Some(format!("{tx_hash:#x}")),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     let block_number = receipt.block_number.unwrap_or(0);
     log::info!("rmpc committee vote-submit: ok tx_hash={tx_hash:#x} block={block_number}");

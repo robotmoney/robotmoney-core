@@ -45,6 +45,8 @@ fn config(max_fee_cap: u64) -> Config {
         timelock_from_block: None,
         gateway_from_block: None,
         ic_policy_address: None,
+        gateway_implementation: None,
+        gateway_implementation_runtime_hash: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: std::path::PathBuf::from("/tmp/unused.enc"),

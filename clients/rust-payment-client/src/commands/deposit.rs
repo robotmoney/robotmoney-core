@@ -254,6 +254,7 @@ pub fn run(args: Args) -> i32 {
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
             checks: &|| ChecksOutput::from_report(&report),
+            gateway_implementation: report.gateway_implementation,
         },
     ) {
         Ok(c) => c,

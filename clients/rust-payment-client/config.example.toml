@@ -47,6 +47,14 @@ vault_address = "0xYOUR_VAULT_ADDRESS"
 # Obtain with: cast keccak $(cast code $GATEWAY_ADDRESS)
 gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
 
+# The approved ERC-1967 implementation behind a proxied gateway, from the
+# gateway manifest (`gateway_implementation`, `gateway_implementation_runtime_hash`).
+# The proxy's own code hash above never changes on an upgrade, so every write
+# also checks the live implementation slot and refuses an unapproved one.
+# Set both or neither. Leave both out only for a direct (non-proxy) gateway.
+# gateway_implementation = "0xYOUR_GATEWAY_IMPLEMENTATION"
+# gateway_implementation_runtime_hash = "0xYOUR_GATEWAY_IMPLEMENTATION_RUNTIME_HASH"
+
 # ── Optional contract addresses ───────────────────────────────────────────────
 
 # VaultRegistry — required for `rmpc get-vaults` / `rmpc get-vault`.

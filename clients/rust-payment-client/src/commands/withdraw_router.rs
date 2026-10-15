@@ -287,7 +287,13 @@ pub fn run(args: Args) -> i32 {
     for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
         let leg_result = session.rt.block_on(async {
             Preflight::new(&session.rpc, &cfg)
-                .run_withdraw_vault(*vault, gateway_addr, agent_address, *leg_shares)
+                .run_withdraw_vault(
+                    *vault,
+                    gateway_addr,
+                    agent_address,
+                    *leg_shares,
+                    report.block_number,
+                )
                 .await
         });
         if let Err(err) = leg_result {
@@ -339,6 +345,7 @@ pub fn run(args: Args) -> i32 {
             receipt_timeout_secs: args.receipt_timeout_secs,
             replay_deadline: deadline,
             checks: &|| ChecksOutput::from_report(&report),
+            gateway_implementation: report.gateway_implementation,
         },
     ) {
         Ok(c) => c,
