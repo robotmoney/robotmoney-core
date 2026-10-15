@@ -173,7 +173,8 @@ describe("the three repaired jobs stay enforced", () => {
   test("dapp-lint-build has no skip condition and no continue-on-error", () => {
     const b = jobBlock(wf("suite-09-dapp-quality.yml"), "lint-build");
     expect(b).toContain("name: dapp-lint-build");
-    expect(b).not.toMatch(/^\s+if:/m);
+    // Job level only (4 spaces): the failure-only Playwright artifact upload step (QA plan v1 U5) legitimately has `if: failure()`.
+    expect(b).not.toMatch(/^ {4}if:/m);
     expect(b).not.toMatch(/continue-on-error/);
   });
   test("bun-audit has no skip condition and no continue-on-error", () => {
