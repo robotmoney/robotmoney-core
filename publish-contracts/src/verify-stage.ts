@@ -2,14 +2,14 @@
 // asset config from the core config file (never from the chain it is checking) and fails the run on any failed check.
 import { writeFileSync } from "node:fs";
 import { keccak256 } from "viem";
-import { checkVaultRedeploys, checkVaultRedeploysOnChain } from "./evidence-check.ts";
+import { checkReceiptApplications, checkReceiptApplicationsOnChain, checkVaultRedeploys, checkVaultRedeploysOnChain, type ChainReader as EvidenceChainReader } from "./evidence-check.ts";
 import { buildMigrationOverlay } from "./migration-overlay.ts";
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi } from "viem";
 import { PublishError } from "./errors.ts";
 import { effectiveCounts } from "./counts.ts";
-import { resumeCommand } from "./govern.ts";
-import { MAINNET_CHAIN_ID } from "./floors.ts";
+import { loadReceiptAddr, resumeCommand } from "./govern.ts";
+import { MAINNET_CHAIN_ID, delayFloor } from "./floors.ts";
 import { kindLabel } from "./chains.ts";
 import { adoptedTxs, governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
@@ -143,6 +143,8 @@ export interface VerifyDeps {
   emit?: (line: string) => void;
   /** 8453 only: depositsPaused() of one vault, read from the chain independently of the verifier (the mode cross-check). Default: viem over the run's RPC. */
   depositsPaused?: (rpc: string, vault: `0x${string}`) => Promise<boolean>;
+  /** 8453 only (issue 1701): the transaction reader that backs each `receipt_applications` entry with its timelock batch. Default: viem over the run's RPC. */
+  receiptChain?: EvidenceChainReader;
 }
 const PAUSED_ABI = parseAbi(["function depositsPaused() view returns (bool)"]);
 const readDepositsPaused = async (rpc: string, vault: `0x${string}`): Promise<boolean> =>
@@ -201,6 +203,20 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
       let got: boolean | string;
       try { got = await read(ctx.rpc, vault); } catch (e) { got = (e as Error).message; }
       if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, `unpause-${v.key}`)}` : ""}` });
+    }
+    // Issue 1701: the router weight check above trusts the applied vector of the run manifest, which an operator can edit. On 8453 every receipt_applications
+    // entry must be backed by its timelock batch on chain (the evidence-check --receipt-applications --rpc check), so a forged entry cannot hide router weight drift.
+    const apps = (manifest.receipt_applications ?? []) as unknown[];
+    if (apps.length > 0) {
+      const ev = {
+        consensus_receipt: { address: loadReceiptAddr(ctx) }, governance: { address: readManifestField(ctx, manifestRef("governance", "governance")) },
+        timelock: { address: readManifestField(ctx, manifestRef("timelock", "timelock")) }, receipt_applications: apps,
+      };
+      const floor = delayFloor(ctx.chainId, ctx.sheet.kind);
+      const chain = deps.receiptChain ?? (createPublicClient({ transport: http(ctx.rpc) }) as unknown as EvidenceChainReader);
+      let problems: string[];
+      try { problems = [...checkReceiptApplications(ev, floor), ...await checkReceiptApplicationsOnChain(ev, chain, floor)]; } catch (e) { problems = [(e as Error).message]; }
+      if (problems.length) report.checks.push({ label: "govern post-govern: receipt_applications are backed by their timelock batches on chain", ok: false, detail: `the run manifest's applied receipt vector is not backed by the chain, so the router weight check cannot trust it: ${problems.join("; ")}` });
     }
     report.ok = report.checks.every((c) => c.ok);
     const s = await deps.verifySources({ chainId: ctx.chainId, contracts: contractsFromManifests(manifestDir(ctx), getStageTable()) });

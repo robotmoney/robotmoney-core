@@ -6,7 +6,9 @@ import { PublishError } from "../src/errors.ts";
 import { publishLogger } from "../src/log.ts";
 import { newManifest, type RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
-import { stageByName } from "../src/stages.ts";
+import { manifestRef, stageByName } from "../src/stages.ts";
+import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters } from "viem";
+import { applyCalldata } from "../src/evidence-check.ts";
 import { buildVerifySheet, handoverBlock, loadExpectedAssets, mainnetGovernMode, runVerifyStage } from "../src/verify-stage.ts";
 import { ADMIN, world } from "./harness.ts";
 import { COUNTS, SHA, sheetText, tmp } from "./fixtures.ts";
@@ -348,5 +350,73 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     expect(code).toBe(13);
     expect(v.n).toBe(1);
     expect(p.calls).toEqual(["verify"]);
+  });
+});
+
+describe("issue 1701: on 8453 the applied receipt vector of the run manifest must be backed by its timelock batch on chain", () => {
+  const TL = "0x0000000000000000000000000000000000000071", GOV = "0x0000000000000000000000000000000000000072", RCPT = "0x0000000000000000000000000000000000000073";
+  const RID = ("0x" + "0a".repeat(32)) as `0x${string}`;
+  const VAULTS = [vaultAddr("USDC"), vaultAddr("PROTO"), vaultAddr("RWA")];
+  const ONCHAIN_BPS = [5000, 3000, 2000];
+  const TLEV = parseAbi([
+    "event CallScheduled(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data, bytes32 predecessor, uint256 delay)",
+    "event CallExecuted(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data)",
+  ]);
+  const OP = ("0x" + "77".repeat(32)) as `0x${string}`;
+  const tlLog = (name: "CallScheduled" | "CallExecuted", index: bigint, target: string, data: `0x${string}`) => ({
+    address: TL, topics: encodeEventTopics({ abi: TLEV, eventName: name, args: { id: OP, index } } as never) as `0x${string}`[],
+    data: name === "CallScheduled" ? encodeAbiParameters(parseAbiParameters("address, uint256, bytes, bytes32, uint256"), [target as `0x${string}`, 0n, data, ("0x" + "00".repeat(32)) as `0x${string}`, 172800n])
+      : encodeAbiParameters(parseAbiParameters("address, uint256, bytes"), [target as `0x${string}`, 0n, data]),
+  });
+  /** The chain: one real apply batch that set ONCHAIN_BPS, scheduled at t=1000 and executed one 172800 s delay later. */
+  const chain = () => {
+    const [rel, w] = applyCalldata(RID, VAULTS, ONCHAIN_BPS);
+    const calls = [{ target: RCPT, data: rel }, { target: GOV, data: w }];
+    const rc: Record<string, { status: "success"; blockNumber: bigint; logs: any[] }> = {
+      ["0x" + "51".repeat(32)]: { status: "success", blockNumber: 1n, logs: calls.map((c, i) => tlLog("CallScheduled", BigInt(i), c.target, c.data)) },
+      ["0x" + "52".repeat(32)]: { status: "success", blockNumber: 2n, logs: calls.map((c, i) => tlLog("CallExecuted", BigInt(i), c.target, c.data)) },
+    };
+    return {
+      getChainId: async () => 8453, getTransactionCount: async () => 0, readContract: async () => undefined,
+      getTransactionReceipt: async ({ hash }: { hash: string }) => { const r = rc[hash]; if (!r) throw new Error("not found"); return r; },
+      getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({ timestamp: blockNumber === 1n ? 1000n : 1000n + 172800n }),
+    };
+  };
+  const entry = (bps: number[]) => ({
+    step: "apply-receipt", receipt_id: RID, target: RCPT, governance: GOV, vaults: VAULTS, bps, voted_weights_active: false, effective_vaults: VAULTS, effective_bps: bps,
+    operation_id: OP, schedule_tx: "0x" + "51".repeat(32), schedule_status: 1, schedule_block_timestamp: 1000, execute_tx: "0x" + "52".repeat(32), execute_status: 1, execute_block_timestamp: 1000 + 172800,
+  });
+  async function run(apps: unknown[]) {
+    const { ctx } = setup({}, { chain: 8453 });
+    const dir = join(ctx.coreDir, "deployments", "8453");
+    for (const [ref, v] of [[manifestRef("timelock", "timelock"), TL], [manifestRef("governance", "governance"), GOV], [manifestRef("ic-policy", "consensus_receipt"), RCPT]] as const) {
+      const [file, field] = ref.split(":") as [string, string];
+      writeFileSync(join(dir, `${file}.json`), JSON.stringify({ chain_id: 8453, [field]: v }));
+    }
+    const mctx = { ...ctx, evidenceDir: join(ctx.coreDir, "ev") } as RunContext;
+    const manifest = { ...newManifest(mctx, "0xa"), firstBlock: 5, receipt_applications: apps };
+    let seen: any;
+    // The verifier stub plays the router check: it passes whenever the router weights equal the applied vector the manifest hands it (a drifted router plus a forged entry agree).
+    const deps = {
+      verifyDeployment: async (o: any) => { seen = o; return { ok: true, checks: [{ label: "router: default weights equal sheet", ok: true, detail: "" }] }; },
+      verifySources: async () => ({ ok: true, checks: [] }), emit: () => {}, depositsPaused: async () => true, receiptChain: chain(),
+      recorderSpawn: (() => ({ status: 0, stdout: "", stderr: "" })) as never,
+    };
+    let err: any;
+    try { await runVerifyStage(mctx, stageByName("verify"), manifest as never, deps as never); } catch (e) { err = e; }
+    return { err, seen };
+  }
+
+  test("an entry backed by its batch passes; a forged entry naming the drifted router vector fails the verify even though the router check passed", async () => {
+    const ok = await run([entry(ONCHAIN_BPS)]);
+    expect(ok.err).toBeUndefined();
+    const drifted = [6000, 2000, 2000];
+    const forged = await run([entry(drifted)]);
+    expect(forged.seen.appliedReceipt.bps).toEqual(drifted);
+    expect(forged.err).toMatchObject({ kind: "VERIFY" });
+    expect(forged.err.details.failed).toContain("govern post-govern: receipt_applications are backed by their timelock batches on chain");
+    // an entry whose transactions are not on chain at all is refused too
+    const unbacked = await run([{ ...entry(drifted), schedule_tx: "0x" + "99".repeat(32), execute_tx: "0x" + "98".repeat(32) }]);
+    expect(unbacked.err).toMatchObject({ kind: "VERIFY" });
   });
 });
