@@ -1055,7 +1055,8 @@ async fn stats_total_tvl_leaves_out_retired_vaults() {
         [(&beta, 600_i64, "7000000"), (&retired, 610_i64, "5000000")]
     {
         sqlx::query(
-            "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', 900)",
+            "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', 900) \
+             ON CONFLICT (chain_id, address) DO NOTHING",
         )
         .bind(8453_i64)
         .bind(&vault[..])
