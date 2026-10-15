@@ -170,15 +170,17 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Gateway storage-layout gate (issue 1476)
-        # RobotMoneyGateway state may only be appended. The gate diffs the
-        # AST-id-free (label, slot, offset, type) of every state variable and
-        # storage-struct member from `forge inspect` against the committed
-        # snapshot (taken from dev before issue 1476). The self-test runs first
-        # and proves the gate fails on a mutated snapshot.
+      - name: Core storage-layout gate (issues 1476, 1808)
+        # Every proxied core contract (the four vaults, registry, router, gateway, IC policy,
+        # receipt register, RouterGovernance) keeps its storage across upgrades only if the
+        # layout never moves. The gate diffs, per contract, the AST-id-free (label, slot,
+        # offset, type) of every state variable and storage-struct member from `forge inspect`,
+        # the linked libraries and the ERC-7201 namespaces against the committed snapshots,
+        # plus the pinned OpenZeppelin submodule commits. The self-test runs first and proves
+        # the gate fails on mutated snapshots.
         run: |
-          scripts/ci/check-gateway-storage-layout.sh --selftest
-          scripts/ci/check-gateway-storage-layout.sh
+          scripts/ci/check-core-storage-layout.sh --selftest
+          scripts/ci/check-core-storage-layout.sh
 
       - name: Gateway agent-policy gas report (issue 1476)
         # Measurement, not a budget: prints the RobotMoneyGateway rows for

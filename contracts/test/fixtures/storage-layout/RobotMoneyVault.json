@@ -1,0 +1,153 @@
+{
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/lib/RobotMoneyVaultOps.sol:RobotMoneyVaultOps"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.ERC20": [
+      "mapping(address account => uint256) _balances;",
+      "mapping(address account => mapping(address spender => uint256)) _allowances;",
+      "uint256 _totalSupply;",
+      "string _name;",
+      "string _symbol;"
+    ],
+    "openzeppelin.storage.ERC4626": [
+      "IERC20 _asset;",
+      "uint8 _underlyingDecimals;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
+  },
+  "storage": [
+    {
+      "label": "adminCount",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_uint256"
+    },
+    {
+      "label": "adapters",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_array(t_struct(AdapterInfo)_storage)dyn_storage"
+    },
+    {
+      "label": "adapterAllowed",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_mapping(t_address,t_bool)"
+    },
+    {
+      "label": "adapterCodeHashAllowed",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_bytes32,t_bool)"
+    },
+    {
+      "label": "tvlCap",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_uint256"
+    },
+    {
+      "label": "perDepositCap",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_uint256"
+    },
+    {
+      "label": "exitFeeBps",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_uint256"
+    },
+    {
+      "label": "feeRecipient",
+      "offset": 0,
+      "slot": "7",
+      "type": "t_address"
+    },
+    {
+      "label": "quarantineAddress",
+      "offset": 0,
+      "slot": "8",
+      "type": "t_address"
+    },
+    {
+      "label": "shutdown",
+      "offset": 20,
+      "slot": "8",
+      "type": "t_bool"
+    },
+    {
+      "label": "retired",
+      "offset": 21,
+      "slot": "8",
+      "type": "t_bool"
+    },
+    {
+      "label": "registry",
+      "offset": 0,
+      "slot": "9",
+      "type": "t_address"
+    },
+    {
+      "label": "depositsPaused",
+      "offset": 20,
+      "slot": "9",
+      "type": "t_bool"
+    },
+    {
+      "label": "maxRebalanceBpsPerCall",
+      "offset": 21,
+      "slot": "9",
+      "type": "t_uint16"
+    },
+    {
+      "label": "minRebalanceInterval",
+      "offset": 0,
+      "slot": "10",
+      "type": "t_uint256"
+    },
+    {
+      "label": "lastRebalanceAt",
+      "offset": 0,
+      "slot": "11",
+      "type": "t_uint256"
+    }
+  ],
+  "structs": {
+    "t_struct(AdapterInfo)_storage": [
+      {
+        "label": "adapter",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_contract(IStrategyAdapter)"
+      },
+      {
+        "label": "capBps",
+        "offset": 20,
+        "slot": "0",
+        "type": "t_uint16"
+      },
+      {
+        "label": "active",
+        "offset": 22,
+        "slot": "0",
+        "type": "t_bool"
+      }
+    ]
+  }
+}

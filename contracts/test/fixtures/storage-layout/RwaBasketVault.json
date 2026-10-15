@@ -1,0 +1,213 @@
+{
+  "libraries": [
+    "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard",
+    "contracts/lib/BasketSwaps.sol:BasketSwaps",
+    "contracts/lib/BasketViews.sol:BasketViews",
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/lib/TickMath.sol:TickMath",
+    "contracts/lib/TwapTickMath.sol:TwapTickMath"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.ERC20": [
+      "mapping(address account => uint256) _balances;",
+      "mapping(address account => mapping(address spender => uint256)) _allowances;",
+      "uint256 _totalSupply;",
+      "string _name;",
+      "string _symbol;"
+    ],
+    "openzeppelin.storage.ERC4626": [
+      "IERC20 _asset;",
+      "uint8 _underlyingDecimals;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ]
+  },
+  "storage": [
+    {
+      "label": "adminCount",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_uint256"
+    },
+    {
+      "label": "assets",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_array(t_struct(AssetInfo)_storage)dyn_storage"
+    },
+    {
+      "label": "SWAP_ROUTER",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_contract(ISwapRouter)"
+    },
+    {
+      "label": "_USDC",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_contract(IERC20)"
+    },
+    {
+      "label": "tvlCap",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_uint256"
+    },
+    {
+      "label": "perDepositCap",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_uint256"
+    },
+    {
+      "label": "exitFeeBps",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_uint256"
+    },
+    {
+      "label": "feeRecipient",
+      "offset": 0,
+      "slot": "7",
+      "type": "t_address"
+    },
+    {
+      "label": "maxSlippageBps",
+      "offset": 0,
+      "slot": "8",
+      "type": "t_uint256"
+    },
+    {
+      "label": "shutdown",
+      "offset": 0,
+      "slot": "9",
+      "type": "t_bool"
+    },
+    {
+      "label": "depositsPaused",
+      "offset": 1,
+      "slot": "9",
+      "type": "t_bool"
+    },
+    {
+      "label": "retired",
+      "offset": 2,
+      "slot": "9",
+      "type": "t_bool"
+    },
+    {
+      "label": "registry",
+      "offset": 3,
+      "slot": "9",
+      "type": "t_address"
+    },
+    {
+      "label": "emergencyUnwindGuard",
+      "offset": 0,
+      "slot": "10",
+      "type": "t_mapping(t_address,t_struct(EmergencyUnwindGuard)_storage)"
+    },
+    {
+      "label": "twapWindow",
+      "offset": 0,
+      "slot": "11",
+      "type": "t_mapping(t_address,t_uint32)"
+    },
+    {
+      "label": "adapterCodeHashAllowed",
+      "offset": 0,
+      "slot": "12",
+      "type": "t_mapping(t_bytes32,t_bool)"
+    },
+    {
+      "label": "navDeviationGuardBps",
+      "offset": 0,
+      "slot": "13",
+      "type": "t_uint256"
+    },
+    {
+      "label": "_lastMintedShares",
+      "offset": 0,
+      "slot": "14",
+      "type": "t_uint256"
+    },
+    {
+      "label": "_lastWithdrawnAssets",
+      "offset": 0,
+      "slot": "15",
+      "type": "t_uint256"
+    }
+  ],
+  "structs": {
+    "t_struct(AssetInfo)_storage": [
+      {
+        "label": "token",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_address"
+      },
+      {
+        "label": "pool",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_address"
+      },
+      {
+        "label": "swapFee",
+        "offset": 20,
+        "slot": "1",
+        "type": "t_uint24"
+      },
+      {
+        "label": "active",
+        "offset": 23,
+        "slot": "1",
+        "type": "t_bool"
+      },
+      {
+        "label": "adapter",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_address"
+      },
+      {
+        "label": "venue",
+        "offset": 20,
+        "slot": "2",
+        "type": "t_enum(Venue)"
+      }
+    ],
+    "t_struct(EmergencyUnwindGuard)_storage": [
+      {
+        "label": "minUsdcOut",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_uint256"
+      },
+      {
+        "label": "overrideAllowed",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_bool"
+      },
+      {
+        "label": "maxLossBps",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_uint256"
+      }
+    ]
+  }
+}

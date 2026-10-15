@@ -116,6 +116,17 @@ exists. Test-only contracts live under `contracts/test/` and are not shipped to 
 | `lib/BasketViews.sol` | HR-0618 (via BasketVault NAV/preview path) | Audited | View helper exercised through BasketVault preview findings |
 | `lib/BpsMath.sol` | VA-0609, HR-0618 (via exit-fee rounding findings) | Audited | Basis-point math exercised through exit-fee rounding findings |
 | `lib/ForeignTokenQuarantine.sol` | HR-0618 (via reabsorb/quarantine path) | Audited | Quarantine/reabsorb path reviewed under MC-0619 F-17 / HR-0618 |
+| `lib/GovernedUUPS.sol` | none | Not separately audited | Issue 1808: `GovernedUUPS` (the UUPS entry points every proxied core contract inherits) and the linked `GovernedUpgrade` library (timelock-only `upgradeToAndCall`, target-bound one-way `freezeUpgrades`, ERC-7201 storage). New upgrade authority surface: needs an external audit before any proxied deployment holds user funds on 8453 (docs/technical/contract-upgradeability-plan.md) |
+| `lib/GatewayWindows.sol` | VA-0609, HR-0618 (via the gateway rolling-window path, GW-4 / NC-7) | Audited logic, moved | Issue 1808: the gateway's rolling-window ring buffer moved unchanged into this linked library so the proxied gateway fits EIP-170. The move (DELEGATECALL, storage-pointer arguments) is not yet re-reviewed |
+| `lib/RobotMoneyVaultOps.sol` | VA-0609, HR-0618 (via the rmUSDC emergency and drift paths) | Audited logic, moved | Issue 1808: rmUSDC's emergency drains, the `adminRebalance` pull, `getAdapterInfo` and `getAdapterDrift` moved unchanged into this linked library so the proxied vault fits EIP-170. Not yet re-reviewed |
+| `lib/BasketSwaps.sol` | HR-0618, MC-0619 (via the BasketVault swap and emergency-unwind paths) | Audited logic, moved | Issue 1808: the basket swap executor, `emergencyUnwind`, `emergencyUnwindWithOverride` and `reabsorbRemovedAsset` moved unchanged into this linked library so the proxied basket family fits EIP-170. Not yet re-reviewed |
+
+> Post-audit change (issue 1808): every proxied core contract above (`RobotMoneyVault`, the three
+> basket vaults, `VaultRegistry`, `PortfolioRouter`, `RobotMoneyGateway`, `InvestmentCommitteePolicy`,
+> `ConsensusRecommendationReceipt`, `RouterGovernance`) now initializes through `initialize` behind its
+> own ERC-1967 proxy, on OpenZeppelin's upgradeable bases (v5.0.2), with constructor immutables moved to
+> storage. None of the reports above covers the proxy form; it needs an external audit before a proxied
+> deployment holds user funds on 8453. The live Base 8453 contracts are direct deployments and unchanged.
 
 > The Chronicle-priced RWA vault, its Chronicle adapter, the deSPXA position adapter and the
 > original Uniswap V4 adapters are deleted (core 1492, plan decisions 8 and 9). Findings that named them stay
