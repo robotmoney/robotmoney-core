@@ -201,9 +201,11 @@ the reviewed implementation and code hash. Test, demo, rehearsal, and contained
 mainnet test instances stay upgradeable. A final mainnet proxy must either
 freeze upgrades in its deployment transaction or be frozen by a delayed
 governance action after an explicit production proving period. Existing direct
-addresses cannot acquire this behavior in place. The release-sheet mode, the
-signing-client checks and the Twin rehearsal are upgradeability stages 2 to 4
-(planned). The detailed scope, cutover, and safety gates are in
+addresses cannot acquire this behavior in place. The signing clients verify
+the live implementation behind the gateway proxy before every write, and the
+indexer, explorer, dapp and watchdog disclose implementation changes and freeze
+state (upgradeability stage 3, issue 1810). The release-sheet mode and the Twin
+rehearsal are upgradeability stages 2 and 4 (planned). The detailed scope, cutover, and safety gates are in
 `docs/technical/contract-upgradeability-plan.md` and
 `docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md`.
 
@@ -1183,6 +1185,14 @@ because `BasketVault.addAsset` refuses a pool below those floors (core 1554).
 The explorer stack exists for public history, dashboards, and display. It
 does not authorize actions and does not replace live `rmpc` preflight.
 
+**Proxy upgrade and freeze disclosure (issue 1810).** The indexer stores every
+proxied core contract's `Upgraded` and `UpgradesFrozen` events in
+`admin_events` (`contract_kind = 'proxy'`), and the contracts endpoint reports
+each contract's implementation and upgrade state (`frozen`, `upgradeable`, or
+`unknown` when no upgrade event was indexed). This is disclosure only: `rmpc`
+and the dapp read the implementation slot from the chain and never trust the
+index to authorize a write.
+
 The explorer API exposes both scopes defined in §5.0. It is the primary
 data source for the dapp protocol layer and account history, and for
 integrators who need activity feeds without running their own indexer.
@@ -1314,7 +1324,9 @@ operations.
 
 On a threshold breach the watchdog follows `action.mode`: `alert`, `pause`,
 or `pause_and_alert`. The alert path dispatches PagerDuty-compatible
-structured JSON through `src/alert.rs` to `action.webhook_url`. The pause
+structured JSON through `src/alert.rs` to `action.webhook_url`. Separately, the watchdog pages each governed upgrade or freeze
+of a proxied core contract once, from the indexed proxy events (issue 1810,
+`src/upgrade_monitor.rs`); that alert never pauses. The pause
 path constructs and submits a `gateway.pauseDeposits()` EIP-155 transaction through
 `src/pause.rs`, using `action.gateway_rpc_url`,
 `action.gateway_address`, and the funded `DEPOSIT_PAUSER_ROLE` key from either
