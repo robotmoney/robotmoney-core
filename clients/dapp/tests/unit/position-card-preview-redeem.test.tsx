@@ -8,7 +8,7 @@
 // The explorer rows below are in the API's own shape (`vault`, no name), which PortfolioPosition used to
 // read as `vault_address` and crash on (the #1038 shape bug).
 import { describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { encodeAbiParameters, toFunctionSelector } from "viem";
 import { PortfolioPosition } from "../../src/components/PortfolioPosition";
 import { NAV_DISCLOSURE_TEXT, NavDisclosure, VaultPositionCard } from "../../src/components/shared";
@@ -71,7 +71,7 @@ describe("PortfolioPosition prices a position at previewRedeem", () => {
       fake,
     );
     await out.findByTestId("vault-position-card");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(out.getByTestId("vault-position-card-usdc").textContent).toBe("47.50 USDC"),
     );
     expect(out.getByTestId("portfolio-position-row-usdc").textContent).toBe("47.50 USDC");
@@ -100,7 +100,7 @@ describe("PortfolioPosition prices a position at previewRedeem", () => {
       fake,
     );
     await out.findByTestId("vault-position-card");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(out.getByTestId("vault-position-card-usdc").textContent).toBe("47.40 USDC"),
     );
     expect(out.getByTestId("vault-position-card-nav-disclosure").textContent).toBe(
