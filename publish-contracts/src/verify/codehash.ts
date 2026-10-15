@@ -23,15 +23,18 @@ export function loadArtifact(outDir: string, name: string): Artifact {
   for (const list of Object.values<any>(d.immutableReferences ?? {})) refs.push(...list);
   for (const file of Object.values<any>(d.linkReferences ?? {})) for (const list of Object.values<any>(file)) refs.push(...list);
   const object = String(d.object);
-  refs.push(...implicitRefs(object, refs.length > 0 && Object.keys(d.linkReferences ?? {}).length > 0));
+  // Issue 1808: the stages compile with different `--libraries` settings (libs and recorder without, every proxy stage and the timelock with
+  // tick_math), and the setting changes the metadata hash of everything compiled, linked or not. The verifier's out/ holds one of the two, so
+  // the CBOR trailer is masked for every artifact; the executable bytes are still compared exactly.
+  refs.push(...implicitRefs(object, true));
   return { object, refs };
 }
 
 /**
  * Two byte ranges the compiler fills in that no reference list names.
  *  - A library's own address: its runtime code starts with PUSH20 <address(this)> (0x73 and 20 zero bytes in the artifact, the deployed address on chain).
- *  - The CBOR metadata trailer of a contract that links libraries: `forge script --libraries` compiles with the libraries in the settings, which
- *    changes the metadata hash (the last bytes) and nothing executable. Contracts that link nothing keep their trailer in the comparison.
+ *  - The CBOR metadata trailer (when `linksLibraries`): `forge script --libraries` compiles with the libraries in the settings, which
+ *    changes the metadata hash (the last bytes) and nothing executable. `loadArtifact` masks it for every artifact (issue 1808).
  */
 export function implicitRefs(object: string, linksLibraries: boolean): Ref[] {
   const hex = object.replace(/^0x/, "");
