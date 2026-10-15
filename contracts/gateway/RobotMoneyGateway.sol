@@ -6,9 +6,12 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import {AccessRoles} from "./AccessRoles.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {GatewayWindows} from "../lib/GatewayWindows.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
 import {IPortfolioRouter} from "./interfaces/IPortfolioRouter.sol";
 import {IInvestmentCommitteePolicy} from "./interfaces/IInvestmentCommitteePolicy.sol";
@@ -22,7 +25,12 @@ import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommenda
 /// @dev Implements `Plan tracking issue #109` §2.2. Custom errors only;
 ///      OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 ///      hash deliberately excludes `deadline`.
-contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
+///
+///      Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the
+///      constructor, the implementation is locked, and only `upgradeTimelock()` can upgrade
+///      or freeze it (`GovernedUUPS`). No gateway role carries upgrade power. `usdcToken`,
+///      `vaultContract` and `routerContract` are set once at initialization, no setter.
+contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway, GovernedUUPS {
     using SafeERC20 for IERC20;
 
     // -------------------------------------------------------------------
@@ -189,18 +197,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     uint8 internal constant OP_WITHDRAW_ROUTER = 4;
 
     // -------------------------------------------------------------------
-    // Immutables
+    // Pinned at initialization (no setter)
     // -------------------------------------------------------------------
 
     /// @notice Pinned USDC token.
-    IERC20 public immutable usdcToken;
+    IERC20 public usdcToken;
 
     /// @notice Pinned ERC-4626 vault.
-    IERC4626 public immutable vaultContract;
+    IERC4626 public vaultContract;
 
     /// @notice Portfolio Router for multi-vault agent deposits. May be `address(0)`
     ///         if the gateway was deployed without router support.
-    IPortfolioRouter public immutable routerContract;
+    IPortfolioRouter public routerContract;
 
     // -------------------------------------------------------------------
     // Storage
@@ -275,38 +283,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Per-agent rolling withdrawal window state. See `WithdrawWindow`.
     mapping(address => WithdrawWindow) public agentWithdrawWindow;
 
-    struct WindowEntry {
-        uint64 timestamp;
-        uint256 amount;
-    }
-
-    /// @notice Bounded ring buffer backing one agent's rolling-window accounting
-    ///         (NC-7 / GW-4). The previous design `.push`ed a fresh `WindowEntry`
-    ///         for every operation and only advanced a `head` cursor on prune, so
-    ///         the underlying dynamic array grew without bound for the life of the
-    ///         agent — eventually making every windowed op (and the linear prune
-    ///         scan) cost so much gas that the agent gas-bricks itself out of the
-    ///         gateway permanently.
-    ///
-    ///         The ring buffer fixes this in two ways:
-    ///           1. SAME-SECOND COALESCING — operations sharing a `block.timestamp`
-    ///              merge into the single newest entry instead of appending. The
-    ///              count of distinct live entries can therefore never exceed the
-    ///              number of distinct seconds in the rolling window, which is
-    ///              hard-capped at `MAX_WINDOW_ENTRIES`.
-    ///           2. SLOT REUSE — pruned (expired) slots are reclaimed by wrapping
-    ///              `head`/`count` around the fixed-capacity `slots` array, so the
-    ///              array's storage footprint plateaus at the high-water mark of
-    ///              concurrently-live entries and never grows monotonically.
-    ///
-    ///         Exact rolling-window semantics (strict `(t-WINDOW_SECONDS, t]`
-    ///         expiry) are preserved per-entry; only the storage shape changed.
-    struct RollingWindow {
-        WindowEntry[] slots; // ring storage; length == live capacity (≤ MAX_WINDOW_ENTRIES)
-        uint256 head; // index of the oldest live entry
-        uint256 count; // number of live entries
-        uint256 total; // cumulative amount across the live entries
-    }
+    // Bounded ring buffer backing one agent's rolling-window accounting (NC-7 / GW-4):
+    // same-second coalescing bounds the live entry count, and pruned slots are reused so
+    // storage plateaus at the high-water mark. Exact `(t-WINDOW_SECONDS, t]` expiry per entry.
+    // The ring buffer type and its logic live in the linked library `GatewayWindows`
+    // (issue 1808), which runs on this proxy's storage by DELEGATECALL.
 
     /// @notice Hard cap on the number of distinct live ring-buffer entries per
     ///         agent per side. Because same-second operations coalesce, the live
@@ -323,8 +304,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         the ring buffer can never silently overflow its bound.
     error WindowBufferFull();
 
-    mapping(address => RollingWindow) private _depositWindow;
-    mapping(address => RollingWindow) private _withdrawWindow;
+    mapping(address => GatewayWindows.RollingWindow) private _depositWindow;
+    mapping(address => GatewayWindows.RollingWindow) private _withdrawWindow;
 
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
@@ -390,16 +371,30 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     // -------------------------------------------------------------------
-    // Constructor
+    // Initializer
     // -------------------------------------------------------------------
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param usdc_    USDC (or 6-decimal stand-in) token address.
     /// @param vault_   ERC-4626 vault whose `asset()` MUST equal `usdc_`.
     /// @param admin_   Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
     /// @param pauser_  Holder of `DEPOSIT_PAUSER_ROLE`. Must be distinct from agents.
     /// @param router_  Portfolio Router address, or `address(0)` to deploy without
     ///                 router support (single-vault mode).
-    constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        IERC20 usdc_,
+        IERC4626 vault_,
+        address admin_,
+        address pauser_,
+        address router_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControl_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (address(usdc_) == address(0)) revert ZeroAddress();
         if (address(vault_) == address(0)) revert ZeroAddress();
         if (admin_ == address(0)) revert ZeroAddress();
@@ -451,12 +446,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @inheritdoc IGateway
     function effectiveWithdrawWindowGross(address agent) external view returns (uint256) {
-        return _effectiveWindowTotal(_withdrawWindow[agent]);
+        return GatewayWindows.effectiveTotal(_withdrawWindow[agent]);
     }
 
     /// @inheritdoc IGateway
     function effectiveDepositWindowGross(address agent) external view returns (uint256) {
-        return _effectiveWindowTotal(_depositWindow[agent]);
+        return GatewayWindows.effectiveTotal(_depositWindow[agent]);
     }
 
     /// @dev Apply a `shares` redemption against the agent's rolling-window
@@ -465,13 +460,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      writes the updated `WithdrawWindow` to storage. Extracted from
     ///      `withdraw` to keep the entrypoint within EVM stack-depth limits.
     function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal {
-        RollingWindow storage w = _withdrawWindow[agent];
-        _pruneWindow(w);
-        uint256 projected = w.total + shares;
-        if (projected > cap) revert WithdrawWindowCapExceeded();
-        _appendWindowEntry(w, shares);
-        agentWithdrawWindow[agent] =
-            WithdrawWindow({windowStart: _oldestTimestamp(w), gross: w.total});
+        (bool withinCap, uint64 oldest, uint256 total) =
+            GatewayWindows.accrue(_withdrawWindow[agent], shares, cap);
+        if (!withinCap) revert WithdrawWindowCapExceeded();
+        agentWithdrawWindow[agent] = WithdrawWindow({windowStart: oldest, gross: total});
     }
 
     /// @dev Apply an `amount` deposit against the agent's rolling-window deposit
@@ -480,141 +472,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      `DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
     ///      the deposit side is equally hardened against calendar-boundary bursts.
     function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal {
-        RollingWindow storage w = _depositWindow[agent];
-        _pruneWindow(w);
-        uint256 projected = w.total + amount;
-        if (projected > cap) revert WindowCapExceeded();
-        _appendWindowEntry(w, amount);
-        agentDepositWindow[agent] =
-            DepositWindow({windowStart: _oldestTimestamp(w), gross: w.total});
-    }
-
-    /// @dev Drop every live entry whose timestamp has aged past the rolling
-    ///      window `(t-WINDOW_SECONDS, t]`, reclaiming its ring slot and
-    ///      decrementing `total`. Strictly bounded: it scans at most `count`
-    ///      entries, which can never exceed `MAX_WINDOW_ENTRIES` (NC-7).
-    function _pruneWindow(RollingWindow storage w) internal {
-        uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
-        uint256 head = w.head;
-        uint256 count = w.count;
-        uint256 total = w.total;
-        uint256 cap = w.slots.length;
-        while (count > 0 && w.slots[head].timestamp <= cutoff) {
-            total -= w.slots[head].amount;
-            head = head + 1 == cap ? 0 : head + 1;
-            count--;
-        }
-        w.head = count == 0 ? 0 : head;
-        w.count = count;
-        w.total = total;
-    }
-
-    /// @dev Record `amount` at the current `block.timestamp` in the ring buffer.
-    ///      Operations within the same second COALESCE into the newest live entry
-    ///      (no new slot), which is what bounds the live entry count. Otherwise a
-    ///      freed slot is reused (ring wrap) or, only while the buffer has not yet
-    ///      reached its high-water mark, a new slot is `push`ed — capped at
-    ///      `MAX_WINDOW_ENTRIES`. `total` always tracks the live sum.
-    function _appendWindowEntry(RollingWindow storage w, uint256 amount) internal {
-        uint256 count = w.count;
-        uint256 cap = w.slots.length;
-        // Same-second coalescing: fold into the newest live entry if present.
-        if (count > 0) {
-            uint256 newest = w.head + count - 1;
-            if (newest >= cap) newest -= cap;
-            if (w.slots[newest].timestamp == uint64(block.timestamp)) {
-                w.slots[newest].amount += amount;
-                w.total += amount;
-                return;
-            }
-        }
-        // Distinct second: claim the next ring slot after the newest live entry.
-        if (count == cap) {
-            // Buffer is completely full — every slot is live, so there is no freed
-            // slot to reuse. Grow capacity by one (hard-capped at
-            // MAX_WINDOW_ENTRIES), re-linearizing the live region to start at
-            // index 0 first so the wrapped layout cannot corrupt ordering. The
-            // re-pack is O(count) and only ever runs when the high-water mark
-            // actually increases, which is rare in practice.
-            //
-            // The `count >= MAX_WINDOW_ENTRIES` revert cannot be reached through
-            // the public deposit/withdraw API. Live entries each occupy a
-            // distinct second (same-second deposits coalesce), and the window is
-            // exactly WINDOW_SECONDS == MAX_WINDOW_ENTRIES seconds wide. Filling
-            // every distinct second reaches count == MAX_WINDOW_ENTRIES, but
-            // adding one more distinct second advances past the oldest entry's
-            // expiry, so `_pruneWindow` evicts it before the append ever observes
-            // a full buffer. The guard is a defensive overflow bound, never
-            // triggerable externally. See
-            // test_rollingWindow_liveCountBoundedAcrossDistinctSeconds.
-            // coverage:unreachable
-            if (count >= MAX_WINDOW_ENTRIES) revert WindowBufferFull();
-            _relinearize(w);
-            w.slots.push(WindowEntry({timestamp: uint64(block.timestamp), amount: amount}));
-            w.head = 0;
-            w.count = count + 1;
-            w.total += amount;
-            return;
-        }
-        uint256 tail = w.head + count;
-        if (tail >= cap) tail -= cap;
-        w.slots[tail] = WindowEntry({timestamp: uint64(block.timestamp), amount: amount});
-        w.count = count + 1;
-        w.total += amount;
-    }
-
-    /// @dev Rotate the full ring buffer so the oldest live entry sits at index 0.
-    ///      Precondition: the buffer is completely full (`count == slots.length`),
-    ///      so every slot is live and a simple rotation by `head` re-linearizes
-    ///      the live region. Used only on the rare grow path. Implemented as a
-    ///      sequence of in-place reversals (reverse[0,head), reverse[head,len),
-    ///      reverse[0,len)) so it needs no scratch array.
-    function _relinearize(RollingWindow storage w) internal {
-        uint256 head = w.head;
-        if (head == 0) return;
-        uint256 len = w.slots.length;
-        _reverseRange(w, 0, head);
-        _reverseRange(w, head, len);
-        _reverseRange(w, 0, len);
-        w.head = 0;
-    }
-
-    /// @dev Reverse `slots[lo:hi)` in place.
-    function _reverseRange(RollingWindow storage w, uint256 lo, uint256 hi) internal {
-        while (lo + 1 < hi) {
-            hi--;
-            WindowEntry memory tmp = w.slots[lo];
-            w.slots[lo] = w.slots[hi];
-            w.slots[hi] = tmp;
-            lo++;
-        }
-    }
-
-    /// @dev Timestamp of the oldest live entry, or 0 when the window is empty.
-    function _oldestTimestamp(RollingWindow storage w) internal view returns (uint64) {
-        // The empty-window early return is dead through the public API.
-        // `_oldestTimestamp` is only called in
-        // `_accrueRollingWithdraw`/`_accrueRollingDeposit`, immediately after
-        // `_appendWindowEntry` has added an entry, so `w.count` is always >= 1
-        // at the call site. The guard is defensive for internal reuse only.
-        // coverage:unreachable
-        if (w.count == 0) return 0;
-        return w.slots[w.head].timestamp;
-    }
-
-    /// @dev View-only effective live total after notionally pruning expired
-    ///      entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
-    function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256 total) {
-        uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
-        uint256 head = w.head;
-        uint256 count = w.count;
-        total = w.total;
-        uint256 cap = w.slots.length;
-        while (count > 0 && w.slots[head].timestamp <= cutoff) {
-            total -= w.slots[head].amount;
-            head = head + 1 == cap ? 0 : head + 1;
-            count--;
-        }
+        (bool withinCap, uint64 oldest, uint256 total) =
+            GatewayWindows.accrue(_depositWindow[agent], amount, cap);
+        if (!withinCap) revert WindowCapExceeded();
+        agentDepositWindow[agent] = DepositWindow({windowStart: oldest, gross: total});
     }
 
     function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32) {

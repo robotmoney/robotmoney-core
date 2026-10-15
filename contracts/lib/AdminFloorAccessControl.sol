@@ -4,8 +4,8 @@
 pragma solidity ^0.8.24;
 
 import {
-    AccessControlEnumerable
-} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
 /// @title AdminFloorAccessControl
 /// @notice `AccessControlEnumerable` with a "last-admin floor": the final
@@ -31,7 +31,10 @@ import {
 ///         mutated, so when an `ADMIN_ROLE` revoke is in flight the current
 ///         member count still includes the account being removed; a count of
 ///         exactly 1 therefore means this is the last admin.
-abstract contract AdminFloorAccessControl is AccessControlEnumerable {
+///
+///         Upgradeable base (issue 1808): the role sets live in OpenZeppelin's ERC-7201
+///         namespaced storage, so every inheriting core contract runs behind its own proxy.
+abstract contract AdminFloorAccessControl is AccessControlEnumerableUpgradeable {
     /// @notice The role subject to the last-admin floor. Concrete contracts
     ///         declare their own public `ADMIN_ROLE` constant with the same
     ///         value; this internal mirror is what the floor checks against.
@@ -41,7 +44,7 @@ abstract contract AdminFloorAccessControl is AccessControlEnumerable {
     ///         leave the contract with zero admins and brick all admin paths.
     error LastAdminFloor();
 
-    /// @inheritdoc AccessControlEnumerable
+    /// @inheritdoc AccessControlEnumerableUpgradeable
     /// @dev Reverts when the revoke would remove the final `ADMIN_ROLE` holder.
     ///      Covers both `revokeRole` and `renounceRole`, which both route here.
     function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {

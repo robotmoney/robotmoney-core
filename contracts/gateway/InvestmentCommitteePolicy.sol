@@ -5,7 +5,9 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title InvestmentCommitteePolicy
 /// @notice Registry of admin-allowlisted committee agents and their signed
@@ -27,7 +29,15 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///   prompt_hash, inputs_digest, timestamp, schema_version.
 ///
 /// Emits: `AgentRegistered`, `AgentRevoked`, `VoteSubmitted`.
-contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `gateway` is set once at initialization and has no setter.
+contract InvestmentCommitteePolicy is
+    AdminFloorAccessControl,
+    ReentrancyGuardUpgradeable,
+    GovernedUUPS
+{
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants/revokes COMMITTEE_AGENT_ROLE; revokeAgent; addGateway.
@@ -122,7 +132,7 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
     // ─── State ───────────────────────────────────────────────────────────────
 
     /// @notice The RobotMoneyGateway address. All committee writes must originate here.
-    address public immutable gateway;
+    address public gateway;
 
     /// @notice Human-readable label for each registered agent.
     mapping(address => string) public agentId;
@@ -130,11 +140,22 @@ contract InvestmentCommitteePolicy is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Ordered list of all submitted votes (append-only).
     Vote[] private _votes;
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param admin_    Address granted DEFAULT_ADMIN_ROLE and ADMIN_ROLE.
     /// @param gateway_  Address of the deployed RobotMoneyGateway.
-    constructor(address admin_, address gateway_) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(
+        address admin_,
+        address gateway_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer {
+        __AccessControlEnumerable_init();
+        __ReentrancyGuard_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (admin_ == address(0) || gateway_ == address(0)) revert ZeroAddress();
         gateway = gateway_;
 

@@ -6,6 +6,7 @@
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
+import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 
 /// @dev Minimal view the registry needs from `PortfolioRouter` to keep the
 ///      default weight vector's length consistent with router eligibility.
@@ -59,7 +60,11 @@ interface IExactnessVault {
 /// `setVaultStatus`. This role is self-administered (its own role-admin)
 /// so the deployer is the sole initial admin, matching the gateway's
 /// access-control pattern.
-contract VaultRegistry is AdminFloorAccessControl {
+///
+/// Runs behind its own ERC-1967 proxy (issue 1808): `initialize` replaces the constructor,
+/// the implementation is locked, and only `upgradeTimelock()` can upgrade or freeze it
+/// (`GovernedUUPS`). `ADMIN_ROLE` carries no upgrade power.
+contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants/revokes other roles, registers vaults, changes vault status.
@@ -216,10 +221,18 @@ contract VaultRegistry is AdminFloorAccessControl {
     /// @param vault The still-router-eligible vault the caller tried to retire.
     error RetireWhileRouterEligible(address vault);
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Initializer ─────────────────────────────────────────────────────────
 
+    /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it).
     /// @param admin Address that receives `ADMIN_ROLE` at deploy time.
-    constructor(address admin) {
+    /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
+    /// @param upgradeMode_ The release mode. `Undeclared` reverts.
+    function initialize(address admin, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __AccessControlEnumerable_init();
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
         if (admin == address(0)) revert ZeroAddress();
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, admin);
