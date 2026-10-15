@@ -48,7 +48,7 @@ library InvariantRegistry {
     /// @dev The full catalogue. Order mirrors the spec's section order. NEVER
     ///      reorder-and-renumber; append-only like the spec's IDs.
     function entries() internal pure returns (Entry[] memory e) {
-        e = new Entry[](59);
+        e = new Entry[](65);
         uint256 i;
 
         // ── 1. Custody & solvency (INV-1/2/3, CUST) ──────────────────────────
@@ -121,6 +121,14 @@ library InvariantRegistry {
         e[i++] = Entry("GOV-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("GOV-4", Status.HOLDS, "symbolic", 0); // F-05 / RTR-4 fixed (#968)
         e[i++] = Entry("GOV-5", Status.HOLDS, "static-guard", 0); // 🟡 trusted / operational
+        // Issue 1808: governed UUPS upgrades and the one-way freeze (GovernedUpgrade.t.sol,
+        // UpgradeAuthorityStages.t.sol, UpgradeLifecycleFork.t.sol, the CI layout gate).
+        e[i++] = Entry("GOV-6", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-7", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-8", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-9", Status.HOLDS, "static-guard", 0);
+        e[i++] = Entry("GOV-10", Status.HOLDS, "deploy-assertion", 0);
+        e[i++] = Entry("GOV-11", Status.HOLDS, "static-guard", 0);
 
         // ── 9. Adapters (ADP) ────────────────────────────────────────────────
         e[i++] = Entry("ADP-1", Status.HOLDS, "static-guard", 0);

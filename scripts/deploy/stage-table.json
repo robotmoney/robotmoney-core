@@ -323,7 +323,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/timelock.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null
     }
   ],
