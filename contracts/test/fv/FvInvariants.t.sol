@@ -45,6 +45,7 @@ import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
 import {InvestmentCommitteePolicy} from "../../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../../gateway/ConsensusRecommendationReceipt.sol";
+import {CoreProxies} from "../helpers/CoreProxies.sol";
 
 /// @dev Minimal USDC for the router-deposit FV harness.
 contract FvUSDC is ERC20 {
@@ -578,13 +579,13 @@ contract FvInvariantsTest is Test {
         // Stand up the weight setter and the receipt register it applies, and
         // hand it the router's weight role so applyReceipt -> setWeights is the
         // only weight-setting path.
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(address(this), address(this));
+        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(address(this), address(this));
         address submitter = makeAddr("submitter");
         ic.registerAgent(submitter, "submitter");
         ConsensusRecommendationReceipt receipts =
-            new ConsensusRecommendationReceipt(address(this), address(this), address(ic));
+            CoreProxies.consensusRecommendationReceipt(address(this), address(this), address(ic));
         RouterGovernance gov =
-            new RouterGovernance(address(router), address(receipts), address(this));
+            CoreProxies.routerGovernance(address(router), address(receipts), address(this));
         router.grantRole(router.ADMIN_ROLE(), address(gov));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(gov));
         receipts.grantRole(receipts.ADMIN_ROLE(), address(gov));
@@ -639,8 +640,8 @@ contract FvInvariantsTest is Test {
         )
     {
         usdc = new FvUSDC();
-        registry = new VaultRegistry(address(this));
-        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        registry = CoreProxies.vaultRegistry(address(this));
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), address(this));
         vault = _addEligibleVault(registry, router, usdc);
     }
 

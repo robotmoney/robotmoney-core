@@ -27,6 +27,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockUsdc, MockGovVault} from "./RouterGovernance.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
 import {ForkSelect} from "./helpers/ForkSelect.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title GovernanceExecutePathAfterHandover
 /// @notice R7's two halves, proved on one topology built the way the deploy
@@ -117,9 +119,14 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         deployer = address(timelockScript);
 
         safe = _createSafe();
+        // Issue 1808: every proxy (the governance stage's too) names the timelock the handover
+        // deploys for this Safe.
+        address upgradeTimelock = timelockScript.predictTimelock(address(safe), MIN_DELAY);
+        CoreProxies.useUpgradeConfig(upgradeTimelock, GovernedUUPS.UpgradeMode.Upgradeable);
+        govScript.setUpgradeConfig(upgradeTimelock, GovernedUUPS.UpgradeMode.Upgradeable);
         usdc = new MockUsdc();
 
-        vault = new RobotMoneyVault(
+        vault = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -128,9 +135,9 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
             deployer, // admin
             deployer // emergencyResponder
         );
-        gateway = new RobotMoneyGateway(usdc, vault, deployer, pauser, address(0));
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        gateway = CoreProxies.robotMoneyGateway(usdc, vault, deployer, pauser, address(0));
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
 
         // Two weightable vaults, registered and router-eligible.
         vaultA = new MockGovVault(address(usdc));
@@ -151,8 +158,8 @@ contract GovernanceExecutePathAfterHandoverTest is Test {
         // The committee body. Separately administered; no weight authority.
         // The receipt register's gateway is this test contract, so the test can
         // record a receipt directly (the committee's record path is not under test).
-        icPolicy = new InvestmentCommitteePolicy(deployer, address(gateway));
-        receipts = new ConsensusRecommendationReceipt(deployer, address(this), address(icPolicy));
+        icPolicy = CoreProxies.investmentCommitteePolicy(deployer, address(gateway));
+        receipts = CoreProxies.consensusRecommendationReceipt(deployer, address(this), address(icPolicy));
         vm.startPrank(deployer);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentAthena);
         icPolicy.grantRole(icPolicy.COMMITTEE_AGENT_ROLE(), agentWoon);

@@ -15,6 +15,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {BasketDeployFixture} from "./helpers/BasketDeployFixture.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Registry and router only read `asset()` from a vault that is just a weight leg.
 contract RedeployLegVault is ERC20 {
@@ -39,6 +40,7 @@ contract RedeployLegVault is ERC20 {
 contract InterruptedRedeploy is RedeployProtocolAssetVault {
     function deployOnly(Params memory p, string memory json) external returns (address vault) {
         Cfg memory cfg = _parseCfg(json, "assets");
+        _vaultUpgrade = _inProcessUpgradeConfig();
         vm.startPrank(p.admin);
         vault = _deployConfigured(p, cfg).vault;
         vm.stopPrank();
@@ -76,7 +78,7 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture, SafeGovernance {
         timelock = address(governor);
         script = new RedeployProtocolAssetVault();
         launch = new DeployProtocolAssetVault();
-        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
 
         json = _etchConfigPools("config/protocol-assets.json", "assets");
         BasketVaultDeployBase.Params memory p = _params();
@@ -436,7 +438,7 @@ contract RedeployProtocolAssetVaultTest is BasketDeployFixture, SafeGovernance {
     }
 
     function test_bootstrap_incorrectBindingFailsClosed_registryTheTimelockDoesNotGovern() public {
-        VaultRegistry other = new VaultRegistry(deployer);
+        VaultRegistry other = CoreProxies.vaultRegistry(deployer);
         vm.expectRevert(bytes("timelock lacks ADMIN_ROLE on REGISTRY_ADDRESS"));
         this.bindExternal(address(other));
     }

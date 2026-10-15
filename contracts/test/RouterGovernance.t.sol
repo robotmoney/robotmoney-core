@@ -14,6 +14,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
 import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ contract RouterGovernanceTest is Test {
 
     function setUp() public {
         usdc = new MockUsdc();
-        registry = new VaultRegistry(registryAdmin);
+        registry = CoreProxies.vaultRegistry(registryAdmin);
         vaultA = new MockGovVault(address(usdc));
         vaultB = new MockGovVault(address(usdc));
         vm.startPrank(registryAdmin);
@@ -111,10 +112,10 @@ contract RouterGovernanceTest is Test {
         registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
-        router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
-        InvestmentCommitteePolicy ic = new InvestmentCommitteePolicy(govAdmin, address(this));
-        receipts = new ConsensusRecommendationReceipt(govAdmin, address(this), address(ic));
-        gov = new RouterGovernance(address(router), address(receipts), govAdmin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), routerAdmin);
+        InvestmentCommitteePolicy ic = CoreProxies.investmentCommitteePolicy(govAdmin, address(this));
+        receipts = CoreProxies.consensusRecommendationReceipt(govAdmin, address(this), address(ic));
+        gov = CoreProxies.routerGovernance(address(router), address(receipts), govAdmin);
 
         vm.startPrank(routerAdmin);
         router.grantRole(router.ADMIN_ROLE(), address(gov));
@@ -139,11 +140,11 @@ contract RouterGovernanceTest is Test {
 
     function test_constructor_revertsOnZeroAddress() public {
         vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(address(0), address(receipts), govAdmin);
+        CoreProxies.routerGovernance(address(0), address(receipts), govAdmin);
         vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(address(router), address(0), govAdmin);
+        CoreProxies.routerGovernance(address(router), address(0), govAdmin);
         vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(address(router), address(receipts), address(0));
+        CoreProxies.routerGovernance(address(router), address(receipts), address(0));
     }
 
     function test_constructor_storesWiringAndSeedsBothRolesToAdmin() public view {

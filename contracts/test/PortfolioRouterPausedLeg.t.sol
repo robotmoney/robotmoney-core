@@ -10,6 +10,7 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {TestUSDC, MockAdapter} from "./RobotMoneyVault.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice The router's availability check reads the REGISTRY status and eligibility only. A vault
 ///         whose own `depositsPaused()` reads true is still Active and eligible, so:
@@ -32,10 +33,10 @@ contract PortfolioRouterPausedLegTest is Test {
 
     function setUp() public {
         usdc = new TestUSDC();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
         for (uint256 i = 0; i < 4; i++) {
-            v[i] = new RobotMoneyVault(
+            v[i] = CoreProxies.robotMoneyVault(
                 IERC20(address(usdc)),
                 1_000_000 * ONE_USDC,
                 100_000 * ONE_USDC,

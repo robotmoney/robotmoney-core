@@ -19,6 +19,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {RoleHolders} from "./helpers/RoleHolders.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ShortlistMockPool, ShortlistStubSwapRouter} from "./ProtocolAssetVaultShortlist.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title GovernedVaultSafeTimelockTest
 /// @notice The vault admin setters (retire, setFeeRecipient, addAsset, removeAsset,
@@ -55,7 +56,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
         vm.recordLogs();
         usdc = new TestERC20();
         swapRouter = new ShortlistStubSwapRouter();
-        proto = new ProtocolAssetVault(
+        proto = CoreProxies.protocolAssetVault(
             IERC20(address(usdc)),
             ISwapRouter(address(swapRouter)),
             10_000_000 * ONE_USDC,
@@ -65,7 +66,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        rwa = new RwaBasketVault(
+        rwa = CoreProxies.rwaBasketVault(
             IERC20(address(usdc)),
             ISwapRouter(address(swapRouter)),
             10_000_000 * ONE_USDC,
@@ -75,7 +76,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        core = new RobotMoneyVault(
+        core = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -84,7 +85,7 @@ contract GovernedVaultSafeTimelockTest is SafeGovernance {
             address(this),
             address(this)
         );
-        registry = new VaultRegistry(address(this));
+        registry = CoreProxies.vaultRegistry(address(this));
 
         // Seed one asset so removeAsset has a real target, then register + link the vault.
         protoToken = new TestERC20();

@@ -26,6 +26,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {MockPool, MockSwapRouter} from "./BasketVault.t.sol";
 import {ISafe, ISafeProxyFactory, _ISafeSetup} from "./SafeIntegration.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @title WithdrawalsNeverFrozenTest
 /// @notice Withdrawals are never frozen, by anyone. Every shipped vault (rmUSDC, the
@@ -87,6 +89,8 @@ contract WithdrawalsNeverFrozenTest is Test {
         DeployTimelock script = new DeployTimelock();
         address deployer = address(script);
         safe = _createSafe();
+        // Issue 1808: every proxy names the timelock the handover deploys for this Safe.
+        CoreProxies.useUpgradeConfig(script.predictTimelock(address(safe), MIN_DELAY), GovernedUUPS.UpgradeMode.Upgradeable);
         assertEq(safe.getThreshold(), 2, "safe threshold must be 2");
         assertEq(safe.getOwners().length, 3, "safe must have 3 owners");
 
@@ -95,15 +99,15 @@ contract WithdrawalsNeverFrozenTest is Test {
         swapRouter = new MockSwapRouter();
         pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
 
-        registry = new VaultRegistry(deployer);
-        router = new PortfolioRouter(address(usdc), address(registry), deployer);
+        registry = CoreProxies.vaultRegistry(deployer);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), deployer);
         RouterGovernance governance =
-            new RouterGovernance(address(router), makeAddr("receipts"), deployer);
+            CoreProxies.routerGovernance(address(router), makeAddr("receipts"), deployer);
 
         vm.startPrank(deployer);
         router.grantRole(ADMIN_ROLE, address(governance));
         router.grantRole(router.WEIGHT_SETTER_ROLE(), address(governance));
-        rmUsdc = new RobotMoneyVault(
+        rmUsdc = CoreProxies.robotMoneyVault(
             usdc,
             type(uint256).max,
             type(uint256).max,
@@ -116,7 +120,7 @@ contract WithdrawalsNeverFrozenTest is Test {
         rmUsdc.setAdapterAllowed(address(noYield), true);
         rmUsdc.setAdapterCodeHashAllowed(address(noYield).codehash, true);
         rmUsdc.addAdapter(address(noYield), 10_000);
-        gateway = new RobotMoneyGateway(usdc, rmUsdc, deployer, pauser, address(router));
+        gateway = CoreProxies.robotMoneyGateway(usdc, rmUsdc, deployer, pauser, address(router));
         _buildOtherVaults(deployer);
         vm.stopPrank();
 
@@ -383,12 +387,12 @@ contract WithdrawalsNeverFrozenTest is Test {
         ISwapRouter sr = ISwapRouter(address(swapRouter));
         address fees = makeAddr("basketFees");
         rmProto =
-            new ProtocolAssetVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
-        rmAgent = new AgentTokenVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
+            CoreProxies.protocolAssetVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
+        rmAgent = CoreProxies.agentTokenVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
         rmProto.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
         rmAgent.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
-        rmRwa = new RwaBasketVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
+        rmRwa = CoreProxies.rwaBasketVault(usdc, sr, 1_000_000e6, 100_000e6, 0, fees, deployer, deployer);
         rmRwa.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
     }
 

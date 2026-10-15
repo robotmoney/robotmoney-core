@@ -13,6 +13,7 @@ import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @title GovernanceSeparationInvariant
 /// @notice Verifies the decision that the committee and the weight setter are
@@ -57,7 +58,7 @@ contract GovernanceSeparationInvariant is Test {
     function setUp() public {
         // Committee body. The gateway address is only required non-zero by the
         // constructor; this invariant asserts role membership.
-        ic = new InvestmentCommitteePolicy(admin, makeAddr("gateway"));
+        ic = CoreProxies.investmentCommitteePolicy(admin, makeAddr("gateway"));
         bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
         vm.startPrank(admin);
         ic.grantRole(committeeRole, committeeAthena);
@@ -68,9 +69,9 @@ contract GovernanceSeparationInvariant is Test {
         // Applying body: RouterGovernance holds the router's weight role, and
         // the timelock holds governance ADMIN_ROLE and WEIGHT_SETTER_ROLE.
         TestERC20 usdc = new TestERC20();
-        VaultRegistry registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
-        gov = new RouterGovernance(address(router), makeAddr("receipts"), admin);
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
+        gov = CoreProxies.routerGovernance(address(router), makeAddr("receipts"), admin);
         vm.startPrank(admin);
         router.grantRole(ADMIN_ROLE, address(gov));
         router.grantRole(WEIGHT_SETTER_ROLE, address(gov));

@@ -13,6 +13,7 @@ import {BasketVaultDeployBase} from "../script/BasketVaultDeployBase.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @notice Fork regression for rmRWA. The real `DeployRwaBasketVault` script runs against the real
 ///         deSPXA fee 500 pool, real SwapRouter02 and real USDC on the Twin chain pin. A deposit
@@ -43,7 +44,7 @@ contract RwaBasketVaultFork is Test {
         if (!ForkSelect.selectOrSkip(rpc)) return;
 
         cfg = vm.readFile("config/rwa-assets.json");
-        VaultRegistry registry = new VaultRegistry(admin);
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         BasketVaultDeployBase.Params memory p = BasketVaultDeployBase.Params({
             admin: admin,
             swapRouter: cfg.readAddress(".swapRouter02"),

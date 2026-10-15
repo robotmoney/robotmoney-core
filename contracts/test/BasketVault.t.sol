@@ -30,6 +30,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 import {SafeGovernance} from "./helpers/SafeGovernance.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
 ///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -168,22 +170,22 @@ contract MockSwapRouter is ISwapRouter {
     }
 }
 
+/// @dev A `BasketVaultHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
+///      the harness constructor took.
+function newBasketVaultHarness(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_) returns (BasketVaultHarness) {
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    BasketVault.InitParams memory p = BasketVault.InitParams({usdc: usdc_, swapRouter: swapRouter_, tvlCap: 1_000_000e6, perDepositCap: 100_000e6, exitFeeBps: 0, feeRecipient: admin_, admin: admin_, emergencyResponder: emergencyResponder_});
+    return BasketVaultHarness(CoreProxies.proxy(address(new BasketVaultHarness()), abi.encodeCall(BasketVaultHarness.initialize, (p, t, m))));
+}
+
 contract BasketVaultHarness is BasketVault {
-    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_)
-        BasketVault(
-            "Basket Harness",
-            "bTEST",
-            usdc_,
-            swapRouter_,
-            1_000_000e6,
-            100_000e6,
-            0,
-            100,
-            admin_,
-            admin_,
-            emergencyResponder_
-        )
-    {}
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("Basket Harness", "bTEST", 100, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+    }
 
     function maxAssets() public pure override returns (uint256) {
         return 4;
@@ -250,7 +252,7 @@ contract BasketVaultTest is Test {
         basketToken = new TestERC20();
         router = new MockSwapRouter();
         pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
-        vault = new BasketVaultHarness(
+        vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
@@ -1310,20 +1312,35 @@ contract BasketVaultTest is Test {
         );
     }
 
-    /// @notice Constructor reverts when admin_ is address(0).
+    /// @notice The initializer (the constructor before issue 1808) reverts when admin_ is
+    ///         address(0): the proxy is never created.
     function test_constructor_revertsWhenAdminIsZero() public {
-        vm.expectRevert(BasketVault.ZeroAddress.selector);
-        new BasketVaultHarness(
-            IERC20(address(usdc)), ISwapRouter(address(router)), address(0), emergencyResponder
-        );
+        _expectHarnessInitReverts(address(0), emergencyResponder);
     }
 
-    /// @notice Constructor reverts when emergencyResponder_ is address(0).
+    /// @notice The initializer reverts when emergencyResponder_ is address(0).
     function test_constructor_revertsWhenEmergencyResponderIsZero() public {
-        vm.expectRevert(BasketVault.ZeroAddress.selector);
-        new BasketVaultHarness(
-            IERC20(address(usdc)), ISwapRouter(address(router)), admin, address(0)
+        _expectHarnessInitReverts(admin, address(0));
+    }
+
+    function _expectHarnessInitReverts(address admin_, address emergency_) internal {
+        address impl = address(new BasketVaultHarness());
+        BasketVault.InitParams memory p = BasketVault.InitParams({
+            usdc: IERC20(address(usdc)),
+            swapRouter: ISwapRouter(address(router)),
+            tvlCap: 1_000_000e6,
+            perDepositCap: 100_000e6,
+            exitFeeBps: 0,
+            feeRecipient: admin_,
+            admin: admin_,
+            emergencyResponder: emergency_
+        });
+        bytes memory init = abi.encodeCall(
+            BasketVaultHarness.initialize,
+            (p, CoreProxies.TEST_UPGRADE_TIMELOCK, GovernedUUPS.UpgradeMode.Upgradeable)
         );
+        vm.expectRevert(BasketVault.ZeroAddress.selector);
+        CoreProxies.proxy(impl, init);
     }
 
     /// @notice ADMIN_ROLE holder can call setMaxSlippageBps; EMERGENCY_ROLE-only holder cannot.
@@ -1626,7 +1643,7 @@ contract BasketVaultTest is Test {
     ///         the window floor (901) and succeeds at or above it.
     function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
         // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
-        BasketVaultHarness freshVault = new BasketVaultHarness(
+        BasketVaultHarness freshVault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
@@ -2868,7 +2885,7 @@ contract BasketVaultTest is Test {
     function test_redeemInKind_reentrancyBlockedAndSharesBurnedFirst() public {
         ReentrantHookToken hook = new ReentrantHookToken();
         MockPool hp = new MockPool(address(hook), address(usdc), uint160(1 << 96));
-        BasketVaultHarness v = new BasketVaultHarness(
+        BasketVaultHarness v = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
         vm.prank(admin);
@@ -2965,7 +2982,7 @@ contract BasketVaultRebalanceTest is Test {
         poolA = new MockPool(address(tokenA), address(usdc), uint160(1 << 96));
         poolB = new MockPool(address(tokenB), address(usdc), uint160(1 << 96));
 
-        vault = new BasketVaultHarness(
+        vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
         );
 
@@ -3267,7 +3284,7 @@ contract BasketVaultAerodromeTest is Test {
         aeroPool = new MockAerodromePool(t0, t1);
 
         v3Router = new MockSwapRouter();
-        vault = new BasketVaultHarness(
+        vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3591,7 +3608,7 @@ contract BasketVaultVenueSelectorTest is Test {
         v3Router = new MockSwapRouter();
         aeroRouter = new MockAerodromeRouter();
 
-        vault = new BasketVaultHarness(
+        vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3834,7 +3851,7 @@ contract BasketVaultVenueSelectorTest is Test {
     /// @dev Builds a fresh vault wired with V3 + V4 + Aerodrome assets.
     ///      Extracted to avoid stack-too-deep in the deposit test.
     function _buildMixedVenueVault() internal returns (BasketVaultHarness freshVault) {
-        freshVault = new BasketVaultHarness(
+        freshVault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
 
@@ -3950,7 +3967,7 @@ contract BasketVaultTimelockTest is SafeGovernance {
     function setUp() public {
         usdc = new TestERC20();
         swapRouter = new MockSwapRouter();
-        vault = new BasketVaultHarness(
+        vault = newBasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
         );
         _installSafeSet();

@@ -22,6 +22,8 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 // ─── Minimal mock infrastructure ─────────────────────────────────────────────
 
@@ -102,23 +104,23 @@ contract MockSwapRouterForGuards is ISwapRouter {
     }
 }
 
+/// @dev A `BasketVaultHarnessForGuards` behind an initialized ERC-1967 proxy (issue 1808), taking the arguments
+///      the harness constructor took.
+function newBasketVaultHarnessForGuards(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergency_) returns (BasketVaultHarnessForGuards) {
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    BasketVault.InitParams memory p = BasketVault.InitParams({usdc: usdc_, swapRouter: swapRouter_, tvlCap: type(uint256).max, perDepositCap: type(uint256).max, exitFeeBps: 0, feeRecipient: admin_, admin: admin_, emergencyResponder: emergency_});
+    return BasketVaultHarnessForGuards(CoreProxies.proxy(address(new BasketVaultHarnessForGuards()), abi.encodeCall(BasketVaultHarnessForGuards.initialize, (p, t, m))));
+}
+
 /// @dev Concrete BasketVault harness (BasketVault is abstract).
 contract BasketVaultHarnessForGuards is BasketVault {
-    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergency_)
-        BasketVault(
-            "GuardHarness",
-            "gTEST",
-            usdc_,
-            swapRouter_,
-            type(uint256).max,
-            type(uint256).max,
-            0, // exitFeeBps
-            100, // initialSlippageBps (1%)
-            admin_, // feeRecipient
-            admin_,
-            emergency_
-        )
-    {}
+    function initialize(InitParams calldata p, address upgradeTimelock_, UpgradeMode upgradeMode_)
+        external
+        initializer
+    {
+        __BasketVault_init("GuardHarness", "gTEST", 100, p);
+        __GovernedUUPS_init(upgradeTimelock_, upgradeMode_);
+    }
 
     function maxAssets() public pure override returns (uint256) {
         return 4;
@@ -152,7 +154,7 @@ contract ConfusedDeputyGuardsTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)),
             IERC4626(address(vault)),
             admin,
@@ -411,7 +413,7 @@ contract BasketVaultSwapGuardsTest is Test {
         basketToken = new TestERC20();
         swapRouter = new MockSwapRouterForGuards();
         pool = new MockPoolForGuards(address(basketToken), address(usdc));
-        vault = new BasketVaultHarnessForGuards(
+        vault = newBasketVaultHarnessForGuards(
             IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergency
         );
 
@@ -593,8 +595,8 @@ contract PortfolioRouterRuntimeEligibilityTest is Test {
 
     function setUp() public {
         usdc = new TestERC20();
-        registry = new VaultRegistry(admin);
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        registry = CoreProxies.vaultRegistry(admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
 
         vaultA = new MockVault(address(usdc));
 

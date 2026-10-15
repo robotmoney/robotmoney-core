@@ -17,6 +17,7 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev ERC-4626-shaped stub whose `redeem` burns `redeemCost` gas (a stand-in for the adapter
 ///      fan-out) and records `gasleft()` at entry. 1:1 shares to assets.
@@ -110,14 +111,14 @@ contract RedeemGasGuardsTest is Test {
         vault.setRedeemCost(STUB_COST);
         usdc.mint(address(vault), 1_000_000 * ONE);
 
-        registry = new VaultRegistry(admin);
+        registry = CoreProxies.vaultRegistry(admin);
         vm.prank(admin);
         registry.registerVault(
             address(vault),
             VaultRegistry.VaultMetadata({name: "Stub", asset: address(usdc), registeredAt: 0})
         );
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
-        gateway = new RobotMoneyGateway(
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(router)
         );
 
@@ -428,7 +429,10 @@ contract RedeemGasGuardsTest is Test {
         uint256 floor = GATEWAY_ROUTER_BASE + GATEWAY_ROUTER_PER_LEG;
         uint256 est = _estimate(2);
         assertGe(est, floor, "estimate below the gateway floor");
-        assertLe(est, floor + 50_000, "estimate far above the floor");
+        // The gateway is an ERC-1967 proxy (issue 1808): its DELEGATECALL keeps back 1/64 of
+        // the gas it forwards, so the floor checked inside the implementation needs floor / 63
+        // more at the proxy entry. The rest of the slack is the call prelude, as before.
+        assertLe(est, floor + floor / 63 + 50_000, "estimate far above the floor");
         (bool ok,) = _gatewayRouterCall(est, bytes32(uint256(1)));
         assertTrue(ok, "router withdraw failed at the exact estimate");
         assertEq(usdc.balanceOf(assetRecipient), 10 * ONE, "short payout at the estimate");

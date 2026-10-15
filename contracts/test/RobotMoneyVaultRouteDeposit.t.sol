@@ -15,6 +15,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
+import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
 
@@ -117,16 +119,30 @@ contract ReadCountingAdapter is IStrategyAdapter {
 
 // ─── Vault harness ───────────────────────────────────────────────────────────
 
+/// @dev A `RouteHarness` behind an initialized ERC-1967 proxy (issue 1808), taking the
+///      arguments the harness constructor took.
+function newRouteHarness(
+    IERC20 asset_,
+    uint256 tvlCap_,
+    uint256 perDepositCap_,
+    address feeRecipient_,
+    address admin_
+) returns (RouteHarness) {
+    (address t, GovernedUUPS.UpgradeMode m) = CoreProxies.config();
+    return RouteHarness(
+        CoreProxies.proxy(
+            address(new RouteHarness()),
+            abi.encodeCall(
+                RobotMoneyVault.initialize,
+                (asset_, tvlCap_, perDepositCap_, 0, feeRecipient_, admin_, admin_, t, m)
+            )
+        )
+    );
+}
+
 /// @dev Exposes the allocator on its own so a test can count the adapter reads
 ///      `_routeDeposit` makes, without the surrounding `deposit()` NAV reads.
 contract RouteHarness is RobotMoneyVault {
-    constructor(
-        IERC20 asset_,
-        uint256 tvlCap_,
-        uint256 perDepositCap_,
-        address feeRecipient_,
-        address admin_
-    ) RobotMoneyVault(asset_, tvlCap_, perDepositCap_, 0, feeRecipient_, admin_, admin_) {}
 
     /// @dev Call with `amount` USDC ALREADY transferred into the vault — exactly
     ///      the state `_deposit` hands `_routeDeposit`.
@@ -188,7 +204,7 @@ contract RobotMoneyVaultRouteDepositTest is Test {
     function setUp() public {
         usdc = new RouteUSDC();
         vault =
-            new RouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
+            newRouteHarness(IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, feeRecipient, admin);
 
         for (uint256 i = 0; i < 3; i++) {
             adapters[i] = new ReadCountingAdapter(address(usdc), address(vault));

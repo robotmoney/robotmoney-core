@@ -13,6 +13,7 @@ import {DeployProtocolAssetVault} from "../script/DeployProtocolAssetVault.s.sol
 import {DeployAgentTokenVault} from "../script/DeployAgentTokenVault.s.sol";
 import {DeployRwaBasketVault} from "../script/DeployRwaBasketVault.s.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 interface IDepositsPaused {
     function depositsPaused() external view returns (bool);
@@ -106,7 +107,7 @@ contract FourVaultInitialStateForkTest is Test {
     function test_fork_eachVaultDeploysWithTheTablesDepositState() public {
         if (!selected) return;
         string memory table = vm.readFile(TABLE);
-        VaultRegistry registry = new VaultRegistry(admin);
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         uint256 n;
         while (vm.keyExistsJson(table, string.concat(".vaults[", vm.toString(n), "]"))) n++;
         assertEq(n, 4, "the table lists the four vaults");

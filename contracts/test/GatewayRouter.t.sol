@@ -21,6 +21,7 @@ import {CoreStages} from "./helpers/CoreStages.sol";
 import {VenueEtcher} from "./helpers/VenueMocks.sol";
 import {DeployGateway} from "../script/DeployGateway.s.sol";
 import {FeeOnTransferUSDC, ShareLeakVault, UnderPullVault} from "./RobotMoneyGateway.t.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -186,7 +187,7 @@ contract GatewayRouterTest is Test {
         vault = new MockVault(address(usdc));
 
         // Registry + two vaults for the router
-        registry = new VaultRegistry(admin);
+        registry = CoreProxies.vaultRegistry(admin);
         vaultA = new RouterMockVault(address(usdc), "Vault A Shares", "vA");
         vaultB = new RouterMockVault(address(usdc), "Vault B Shares", "vB");
 
@@ -202,7 +203,7 @@ contract GatewayRouterTest is Test {
         vm.stopPrank();
 
         // Deploy router (60%/40% split)
-        router = new PortfolioRouter(address(usdc), address(registry), admin);
+        router = CoreProxies.portfolioRouter(address(usdc), address(registry), admin);
         address[] memory vaults = new address[](2);
         vaults[0] = address(vaultA);
         vaults[1] = address(vaultB);
@@ -219,7 +220,7 @@ contract GatewayRouterTest is Test {
         vm.stopPrank();
 
         // Deploy gateway with router support
-        gateway = new RobotMoneyGateway(
+        gateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(router)
         );
     }
@@ -298,7 +299,7 @@ contract GatewayRouterTest is Test {
 
     /// @dev A gateway deployed without a router address returns zero.
     function test_gatewayRouter_constructor_noRouter_returnsZero() public {
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         assertEq(gw.router(), address(0));
@@ -545,7 +546,7 @@ contract GatewayRouterTest is Test {
     ///      call depositTo with any destination that is not the pinned vault reverts.
     function test_depositTo_revertsWhenRouterNotConfigured() public {
         // Deploy a gateway without a router.
-        RobotMoneyGateway noRouterGateway = new RobotMoneyGateway(
+        RobotMoneyGateway noRouterGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
 
@@ -930,7 +931,7 @@ contract GatewayRouterTest is Test {
     function test_depositTo_routerPath_revertsOnUsdcCustodyInvariant() public {
         // Deploy gateway with an underpull router.
         UnderPullRouter underPullRouter = new UnderPullRouter(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(underPullRouter)
         );
         address[] memory routerDests = new address[](1);
@@ -973,7 +974,7 @@ contract GatewayRouterTest is Test {
         // Build a fresh stack: fee-on-transfer usdc, matching vault, gateway with router.
         FeeOnTransferUSDC fotUsdc = new FeeOnTransferUSDC();
         MockVault fotVault = new MockVault(address(fotUsdc));
-        VaultRegistry fotRegistry = new VaultRegistry(admin);
+        VaultRegistry fotRegistry = CoreProxies.vaultRegistry(admin);
         RouterMockVault fotVaultA = new RouterMockVault(address(fotUsdc), "FOT Vault A", "fA");
         vm.prank(admin);
         fotRegistry.registerVault(
@@ -981,7 +982,7 @@ contract GatewayRouterTest is Test {
             VaultRegistry.VaultMetadata({name: "FOT A", asset: address(fotUsdc), registeredAt: 0})
         );
         PortfolioRouter fotRouter =
-            new PortfolioRouter(address(fotUsdc), address(fotRegistry), admin);
+            CoreProxies.portfolioRouter(address(fotUsdc), address(fotRegistry), admin);
         address[] memory fvaults = new address[](1);
         fvaults[0] = address(fotVaultA);
         uint256[] memory fbps = new uint256[](1);
@@ -993,7 +994,7 @@ contract GatewayRouterTest is Test {
         fotRouter.setWeights(fvaults, fbps);
         vm.stopPrank();
 
-        RobotMoneyGateway fotGateway = new RobotMoneyGateway(
+        RobotMoneyGateway fotGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser, address(fotRouter)
         );
 
@@ -1058,7 +1059,7 @@ contract GatewayRouterTest is Test {
     function test_depositTo_vaultPath_revertsOnPostCallShareCustody() public {
         // Use a share-leaking vault.
         ShareLeakVault leaky = new ShareLeakVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser, address(0)
         );
         address[] memory empty = new address[](0);
@@ -1098,7 +1099,7 @@ contract GatewayRouterTest is Test {
     ///      under-pulls USDC leaves the gateway holding leftover stablecoin.
     function test_depositTo_vaultPath_revertsOnPostCallUsdcCustody() public {
         UnderPullVault underPull = new UnderPullVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
+        RobotMoneyGateway gw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser, address(0)
         );
         address[] memory empty = new address[](0);
@@ -1191,7 +1192,8 @@ contract GatewayRouterTest is Test {
     ///      snapshot is enforced end-to-end.
     ///
     ///      Storage layout (forge inspect RobotMoneyGateway storageLayout):
-    ///        slot 3  → agents mapping (slot 2 is commitments, added by #507)
+    ///        slot 4  → agents mapping (issue 1808: slots 0-2 hold the pinned usdc,
+    ///                  vault and router of the proxy; slot 3 is commitments)
     ///      AgentPolicy struct offsets from the mapping element base:
     ///        +0 → active (bool) + validUntil (uint64, packed)
     ///        +1 → maxPerPayment (uint256)
@@ -1205,11 +1207,11 @@ contract GatewayRouterTest is Test {
         _authorize(agent, p);
 
         // 2. Compute the storage slot for agents[agent].maxPerWindow.
-        //    agents mapping is at slot 3 (slot 2 = commitments from #507); AgentPolicy fields at the struct base:
+        //    agents mapping is at slot 4 (slot 3 = commitments, issue 1808); AgentPolicy fields at the struct base:
         //      +0 → active (bool) + validUntil (uint64, packed into 1 slot)
         //      +1 → maxPerPayment (uint256)
         //      +2 → maxPerWindow  (uint256)
-        bytes32 agentsPolicyBase = keccak256(abi.encode(agent, uint256(3)));
+        bytes32 agentsPolicyBase = keccak256(abi.encode(agent, uint256(4)));
         bytes32 maxPerWindowSlot = bytes32(uint256(agentsPolicyBase) + 2);
 
         // 3. Also overwrite maxPerPayment (offset +1) so per-payment cap is not
@@ -1964,7 +1966,7 @@ contract GatewayRouterTest is Test {
 
     /// @dev router: reverts when router not configured.
     function test_withdrawFromRouter_revertsWhenRouterNotConfigured() public {
-        RobotMoneyGateway noRouterGateway = new RobotMoneyGateway(
+        RobotMoneyGateway noRouterGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
         );
         address[] memory empty = new address[](0);
@@ -2292,7 +2294,7 @@ contract GatewayRouterTest is Test {
     {
         leakyVault = new LeakyRedeemRouterVault(address(usdc));
 
-        VaultRegistry leakyRegistry = new VaultRegistry(admin);
+        VaultRegistry leakyRegistry = CoreProxies.vaultRegistry(admin);
         vm.startPrank(admin);
         leakyRegistry.registerVault(
             address(leakyVault),
@@ -2300,7 +2302,7 @@ contract GatewayRouterTest is Test {
         );
         vm.stopPrank();
 
-        leakyRouter = new PortfolioRouter(address(usdc), address(leakyRegistry), admin);
+        leakyRouter = CoreProxies.portfolioRouter(address(usdc), address(leakyRegistry), admin);
 
         address[] memory lv = new address[](1);
         lv[0] = address(leakyVault);
@@ -2312,7 +2314,7 @@ contract GatewayRouterTest is Test {
         leakyRouter.setWeights(lv, lbps);
         vm.stopPrank();
 
-        leakyGateway = new RobotMoneyGateway(
+        leakyGateway = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(leakyRouter)
         );
     }
@@ -2462,7 +2464,7 @@ contract GatewayRouterTest is Test {
     ///      complete without reverting.
     function test_withdrawFromRouter_emptyAllowedSourceVaults_acceptsPinnedVault() public {
         // Deploy a gateway whose pinned vault is vaultA (which is router-registered).
-        RobotMoneyGateway pinnedGw = new RobotMoneyGateway(
+        RobotMoneyGateway pinnedGw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vaultA)), admin, pauser, address(router)
         );
 
@@ -2537,7 +2539,7 @@ contract GatewayRouterTest is Test {
     ///      call where only the pinned-vault leg carries non-zero shares.
     function test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg() public {
         // Gateway whose pinned vault is vaultA (router-registered).
-        RobotMoneyGateway pinnedGw = new RobotMoneyGateway(
+        RobotMoneyGateway pinnedGw = CoreProxies.robotMoneyGateway(
             IERC20(address(usdc)), IERC4626(address(vaultA)), admin, pauser, address(router)
         );
 

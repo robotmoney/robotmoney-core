@@ -17,6 +17,7 @@ import {RwaBasketVault} from "../vaults/RwaBasketVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
+import {CoreProxies} from "./helpers/CoreProxies.sol";
 
 /// @dev Plain 8-decimal ERC20 etched at each B20 address. Anvil and forge cannot run the Base B20
 ///      precompile (the account code is the single byte 0xef, an invalid opcode off Base), so the
@@ -64,7 +65,7 @@ contract RwaVaultB20ForkTest is Test {
         v3Cfg = vm.readFile("config/rwa-assets.json");
 
         // The launch vault: deSPXA only, deployed by the production script.
-        VaultRegistry registry = new VaultRegistry(admin);
+        VaultRegistry registry = CoreProxies.vaultRegistry(admin);
         BasketVaultDeployBase.Deployed memory d = new DeployRwaBasketVault()
             .runInProcess(
                 BasketVaultDeployBase.Params({
