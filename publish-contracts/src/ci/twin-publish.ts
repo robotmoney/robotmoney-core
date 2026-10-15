@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 // The step script of the twin-publish action (core 1488, 1523), in TypeScript because no shell file may orchestrate the deploy driver.
-// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, PIN_BLOCK_IN (optional), REHEARSAL_IN, GITHUB_WORKSPACE, GITHUB_ENV.
+// Environment in: RPC_URL, SHARE_RECEIVER_IN, VERIFY_IN, GOVERN_IN, PREDEPLOY_LIBS_IN, PIN_BLOCK_IN (optional), REHEARSAL_IN, SHEET_OVERLAY_IN (optional), GITHUB_WORKSPACE, GITHUB_ENV.
+// SHEET_OVERLAY_IN (issue 1811) is a committed sheet overlay, relative to the core checkout (deployments/twin-918453/upgrade-rehearsal.env): its NAME=value lines replace the same
+// names of the committed Twin sheet, after the keystore lines and before the rehearsal-kind lines. The upgrade rehearsal uses it to deploy UPGRADE_MODE=upgradeable.
 // REHEARSAL_IN=true (issue 1727) runs the Twin chain in the REHEARSAL kind the Base mainnet rehearsal uses: the sheet gets DEPLOYMENT_KIND=rehearsal, TIMELOCK_MIN_DELAY=900, a new
 // SAFE_SALT_NONCE, and the deployer is NOT fresh (one self-transfer before publish moves its nonce, so the relative nonce accounting runs). After govern and the second verify it
 // runs the receipt path with a REAL recorded receipt, not a fixture. The SUBMITTER is a SECOND Safe (issue 1750, owner decision 2026-10-10: the submitter is a multisig, never a key): this script
@@ -64,6 +66,7 @@ const fragment = join(rh, "fragment.env");
 run([bun, rehearsal, "keys", "--dir", join(rh, "keys"), "--password-file", pass, "--chain-id", String(TWIN_CHAIN_ID)], { cwd: pc, stdoutTo: fragment });
 // Later lines win in merge-sheet.
 if (env("SHARE_RECEIVER_IN")) appendFileSync(fragment, `SHARE_RECEIVER_ADDRESS=${env("SHARE_RECEIVER_IN")}\n`);
+if (env("SHEET_OVERLAY_IN")) appendFileSync(fragment, readFileSync(join(core, env("SHEET_OVERLAY_IN")), "utf8").replace(/\n?$/, "\n"));
 // The rehearsal kind (issue 1727): explicit lines, later lines win. The committed Twin sheet stays production-kind (60 s); this job is the rehearsal.
 const rehearsalMode = env("REHEARSAL_IN") === "true";
 const safeSalt = Math.floor(Date.now() / 1000);

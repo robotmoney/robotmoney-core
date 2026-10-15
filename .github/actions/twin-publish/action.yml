@@ -36,6 +36,10 @@ inputs:
     description: "'true' first deploys the four CREATE2 libraries (TickMath, BasketAssetConfigGuard, TwapTickMath, BasketViews) on the Twin fork, so the run finds them all already deployed (issue 1721)."
     required: false
     default: "false"
+  sheet-overlay:
+    description: "Optional (issue 1811): a committed sheet overlay relative to the core checkout, merged over the committed Twin sheet (deployments/twin-918453/upgrade-rehearsal.env deploys UPGRADE_MODE=upgradeable). Empty: none."
+    required: false
+    default: ""
   pin-block:
     description: "Optional: the Base block the Twin fork is pinned at. Recorded in counts.json (pinBlock) and, when the baseline is rebuilt from an adopted run, in measured.reconstructed.fromRun (issue 1733)."
     required: false
@@ -53,4 +57,5 @@ runs:
         REHEARSAL_IN: ${{ inputs.rehearsal }}
         PREDEPLOY_LIBS_IN: ${{ inputs.predeploy-libs }}
         PIN_BLOCK_IN: ${{ inputs.pin-block }}
+        SHEET_OVERLAY_IN: ${{ inputs.sheet-overlay }}
       run: bun "${{ github.action_path }}/../../../publish-contracts/src/ci/twin-publish.ts"
