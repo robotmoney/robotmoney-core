@@ -1,5 +1,5 @@
 // Fast unit tests: no chain, no keys beyond a small-cost test keystore made in the test. Each runs in milliseconds.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createCipheriv, scryptSync } from "node:crypto";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { encodeFunctionData, keccak256, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
-  PRODUCTION_ROSTER, SAFE_141, SafeRevertError, SafeToolError, TIMELOCK_ABI, ZERO_BYTES32, addSignature, defaultSaltNonce, describeCalldata, importSignatureBundle,
+  PRODUCTION_ROSTER, SAFE_141, STALE_READ_DELAY_MS, STALE_READ_TRIES, connectSafe, createSafe, executeTx, proposeTx, signTx, SafeRevertError, SafeToolError, TIMELOCK_ABI, ZERO_BYTES32, addSignature, defaultSaltNonce, describeCalldata, importSignatureBundle,
   isLoopbackRpc, jsonLogger, ownerHardwareSigner, keystoreSigner, ledgerSigner, localSafeTxHash, loopbackKeySigner, modeOf, packSignatures, readPassphraseFile, recoverSafeSigner,
   redact, toSafeSignature, validateRoster, verifySafeSignature, type SafeTxBundle,
 } from "./index.ts";
@@ -16,6 +16,7 @@ import { parseFlags, callsFromFlags } from "./cli.ts";
 import { assertNoPlaintextKeys } from "./guard.ts";
 import { revertReasonOf } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../chains.ts";
+import { FAKE_CHAIN_ID, staleRpc, type StaleRpc, type StaleRpcOpts } from "../../tests/stale-rpc.ts";
 
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as `0x${string}`;
 const code = (f: () => unknown): string | undefined => { try { f(); } catch (e) { return e instanceof SafeToolError ? e.code : "OTHER"; } return undefined; };
@@ -233,5 +234,94 @@ describe("hardware owner signers: one device per owner, each checked against its
     for (const bad of ["ledger", "ledger:m/44'/60'/0'/0/0", "ledger:@0x1", `ledger:44/60@${A(1)}`, `ledger:m/44'/60'/0'/0/0@0x12`, `keystore:x@${A(1)}`]) {
       expect(() => ownerHardwareSigner(bad, { prompt: async () => {} })).toThrow(SafeToolError);
     }
+  });
+});
+
+// ---- read-after-write on a load-balanced RPC (issue 1723) ---------------------------------------------------------------------------------
+// A fake RPC (tests/stale-rpc.ts) answers the first K post-broadcast reads of each kind as a node behind the block would, then the true state.
+// The clock is injected: `sleep` advances a virtual clock and never waits.
+describe("post-broadcast reads on a stale load-balanced RPC (issue 1723)", () => {
+  const ownerKeys = [1, 2, 3].map((i) => `0x${String(i).repeat(64)}` as Hex);
+  const owners = ownerKeys.map((k) => privateKeyToAccount(k).address);
+  const DEPLOYER = A(0xd0);
+  const SAFE = A(0x5afe);
+  const clock = () => {
+    const c = { now: 0, sleeps: 0, sleep: async (ms: number) => { c.now += ms; c.sleeps++; } };
+    return c;
+  };
+  const create = (rpc: StaleRpc, c: ReturnType<typeof clock>, tries?: number) => createSafe({
+    rpcUrl: rpc.url, chainId: FAKE_CHAIN_ID, allowChainIds: [FAKE_CHAIN_ID], owners, threshold: 2, deployer: rpc.deployerSigner(), expectDeployerNonce: 0,
+    staleRead: { sleep: c.sleep, ...(tries ? { tries } : {}) },
+  });
+  const rpcs: StaleRpc[] = [];
+  const fake = (o: Omit<StaleRpcOpts, "owners" | "threshold" | "deployer">) => { const r = staleRpc({ owners, threshold: 2, deployer: DEPLOYER, ...o }); rpcs.push(r); return r; };
+  afterAll(() => rpcs.forEach((r) => r.stop()));
+
+  test("createSafe: no code, no eth_call data, empty storage and the old deployer nonce for the first 3 reads each, then the true state: created and verified", async () => {
+    const rpc = fake({ stale: { code: 3, safeCall: 3, storage: 3, deployerNonce: 3 } });
+    const c = clock();
+    const res = await create(rpc, c);
+    expect(res.created).toBe(true);
+    expect(res.manifest!.safe).toBe(rpc.safe()!);
+    expect(rpc.served).toMatchObject({ code: 3, safeCall: 3, storage: 3, deployerNonce: 3 });
+    expect(c.sleeps).toBeGreaterThanOrEqual(3);
+    expect(c.now).toBe(c.sleeps * STALE_READ_DELAY_MS);
+  });
+
+  test("createSafe: a node that never shows the new Safe's code fails with STALE_READ_TIMEOUT naming the expected value, the last value seen and the RPC host", async () => {
+    const rpc = fake({ stale: { code: Infinity } });
+    const c = clock();
+    const e = await create(rpc, c).catch((x) => x);
+    expect(e).toMatchObject({ code: "STALE_READ_TIMEOUT", details: { expected: "the Safe's code", last: "no code", tries: STALE_READ_TRIES, rpc_host: "127.0.0.1" } });
+    expect(e.message).toContain("expected the Safe's code, last read no code");
+    expect(e.message).toContain("127.0.0.1");
+    expect(c.sleeps).toBe(STALE_READ_TRIES - 1);
+  });
+
+  test("createSafe: a deployer nonce that never moves fails with STALE_READ_TIMEOUT (expected 1, last 0), within a smaller bound", async () => {
+    const rpc = fake({ stale: { deployerNonce: Infinity } });
+    const e = await create(rpc, clock(), 4).catch((x) => x);
+    expect(e).toMatchObject({ code: "STALE_READ_TIMEOUT", details: { expected: "1", last: "0", tries: 4 } });
+    expect(e.message).toContain("expected 1, last read 0");
+  });
+
+  test("createSafe: a fresh but wrong state still fails at once, never retried into a success", async () => {
+    const wrongCode = fake({ wrong: { code: "0x6001600155" } });
+    const c1 = clock();
+    await expect(create(wrongCode, c1)).rejects.toMatchObject({ code: "VERIFY_FAILED" });
+    expect(c1.sleeps).toBe(0);
+    const jumped = fake({ wrong: { deployerNonceDelta: 1 } });
+    const c2 = clock();
+    await expect(create(jumped, c2)).rejects.toMatchObject({ code: "VERIFY_FAILED", message: expect.stringContaining("deployer nonce is 2") });
+    expect(c2.sleeps).toBe(0);
+  });
+
+  const execute = async (rpc: StaleRpc, c: ReturnType<typeof clock>) => {
+    const handle = await connectSafe({ rpcUrl: rpc.url, chainId: FAKE_CHAIN_ID, allowChainIds: [FAKE_CHAIN_ID], safeAddress: SAFE });
+    let bundle = await proposeTx(handle, { to: SAFE, data: "0x", action: "self-call" });
+    for (const k of ownerKeys.slice(0, 2)) bundle = await signTx(handle, bundle, loopbackKeySigner(k, handle.chain));
+    return executeTx(handle, bundle, rpc.deployerSigner(), { nonceRetry: { sleep: c.sleep } });
+  };
+
+  test("executeTx: the Safe nonce read after the receipt is stale for 3 reads, then resolves to nonceBefore + 1 without NONCE_DID_NOT_MOVE", async () => {
+    const rpc = fake({ safe: SAFE, stale: { safeNonce: 3 } });
+    const c = clock();
+    const res = await execute(rpc, c);
+    expect([res.nonceBefore, res.nonceAfter]).toEqual([0, 1]);
+    expect(rpc.served.safeNonce).toBe(3);
+    expect(c.sleeps).toBe(3);
+  });
+
+  test("executeTx: a Safe nonce that never moves fails with STALE_READ_TIMEOUT (expected 1, last 0, the RPC host)", async () => {
+    const rpc = fake({ safe: SAFE, stale: { safeNonce: Infinity } });
+    const e = await execute(rpc, clock()).catch((x) => x);
+    expect(e).toMatchObject({ code: "STALE_READ_TIMEOUT", details: { expected: "1", last: "0", rpc_host: "127.0.0.1" } });
+  });
+
+  test("executeTx: a Safe nonce that moved by two (another transaction) fails at once with NONCE_DID_NOT_MOVE", async () => {
+    const rpc = fake({ safe: SAFE, wrong: { safeNonceDelta: 1 } });
+    const c = clock();
+    await expect(execute(rpc, c)).rejects.toMatchObject({ code: "NONCE_DID_NOT_MOVE" });
+    expect(c.sleeps).toBe(0);
   });
 });

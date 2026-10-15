@@ -11,7 +11,7 @@ import { PublishError } from "./errors.ts";
 import { confirmStage, manifestDir, readManifestField, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
 import { manifestRef, type StageRow } from "./stages.ts";
 import {
-  checkSignaturesOnChain, connectSafe, executeTx, localSafeTxHash, proposeTx, signTx, verifySafeSignature, type SafeHandle, type SafeTxBundle, type Signer,
+  checkSignaturesOnChain, connectSafe, executeTx, localSafeTxHash, proposeTx, readAfterWrite, signTx, verifySafeSignature, type SafeHandle, type SafeTxBundle, type Signer, type StaleReadRetry,
 } from "./safe/index.ts";
 
 /** One Safe execution event read from the chain. `safeTxHash` is the Safe transaction hash the Safe itself emitted (indexed in Safe 1.4.1). */
@@ -75,6 +75,8 @@ export interface ProveOpts {
   /** Pays the gas of the execTransaction: the deployer, the only funded key (core 1712). Every owner still signs. The deployer's own signer, never an owner. */
   sender: Signer;
   api?: ProveApi;
+  /** Bound and test seam for the --resume nonce re-read when the chain holds an execution but the RPC answers nonce 0 (issue 1723). */
+  staleRead?: StaleReadRetry;
 }
 
 const lc = (a: string): string => a.toLowerCase();
@@ -98,7 +100,18 @@ export async function runProveControl(ctx: RunContext, row: StageRow, manifest: 
   if (handle.owners.map(lc).sort().join() !== ctx.sheet.safeOwners.map(lc).sort().join()) {
     throw controlNotProven("the Safe's owners on chain differ from the sheet", { safe });
   }
-  const nonce = await handle.nonce();
+  let nonce = await handle.nonce();
+  if (nonce === 0 && ctx.resume) {
+    // Issue 1723: right after a proof landed, a load-balanced RPC node behind its block still answers nonce 0. On --resume the Safe's own
+    // execution events decide: when one exists the 0 is stale, so the nonce is re-read (bounded) instead of taking the proof a second time.
+    const from = safeStageBlockOrNull(ctx, manifest);
+    if (from !== null && (await api.chain.executions(handle, from)).length > 0) {
+      nonce = await readAfterWrite({
+        what: `the Safe ${safe} nonce (an execution of the Safe exists from block ${from})`, expected: "1 or more", rpcUrl: ctx.rpc, logger: ctx.log,
+        read: () => handle.nonce(), judge: (n) => (n === 0 ? "stale" : "fresh"),
+      }, o.staleRead);
+    }
+  }
   if (nonce !== 0) {
     if (!ctx.resume) {
       throw controlNotProven(`the Safe nonce is ${nonce}, not 0: the Safe moved outside this run, and a proof is taken on a new Safe only. If this run died after its own proof landed, rerun the same command with --resume to adopt it from the chain`, { nonce });
@@ -139,12 +152,17 @@ export async function runProveControl(ctx: RunContext, row: StageRow, manifest: 
 
 /** The block to scan from: the Safe's creation block, which no Safe execution can precede. Absent: refused (never a guess of block 0). */
 function safeStageBlock(ctx: RunContext, manifest: RunManifest): number {
+  const b = safeStageBlockOrNull(ctx, manifest);
+  if (b === null) throw controlNotProven("the run records no safe stage block, so the chain cannot be scanned for a landed proof");
+  return b;
+}
+function safeStageBlockOrNull(ctx: RunContext, manifest: RunManifest): number | null {
   const fromRecord = manifest.stages.safe?.firstBlock;
   let fromFile: unknown;
   const p = join(manifestDir(ctx), "safe.json");
-  if (existsSync(p)) { try { fromFile = JSON.parse(readFileSync(p, "utf8")).block; } catch { /* reported below */ } }
+  if (existsSync(p)) { try { fromFile = JSON.parse(readFileSync(p, "utf8")).block; } catch { /* reported by the caller */ } }
   for (const b of [fromRecord, fromFile, manifest.firstBlock]) if (typeof b === "number" && Number.isInteger(b) && b >= 0) return b;
-  throw controlNotProven("the run records no safe stage block, so the chain cannot be scanned for a landed proof");
+  return null;
 }
 
 /**
