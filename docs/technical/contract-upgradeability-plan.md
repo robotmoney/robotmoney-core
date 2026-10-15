@@ -134,7 +134,8 @@ Implemented by issue 1810. Every Robot Money write a client signs goes to the
 gateway proxy, so the gateway is the proxy the signing clients verify.
 
 **Verification before signing.** `rmpc` (`deposit`, `withdraw`,
-`withdraw-router`, `committee vote-submit`, `receipt submit`) and the dapp's
+`withdraw-router`, the committee's signed tilt `committee vote-submit`, and
+`receipt submit`) and the dapp's
 admin writes pin a block, then check at that block:
 
 1. `keccak256(eth_getCode(gateway))` equals the proxy pin

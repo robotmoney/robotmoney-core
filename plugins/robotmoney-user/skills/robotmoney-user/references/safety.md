@@ -23,7 +23,7 @@ Before signing any deposit transaction, the client RPC-reads:
   `gateway_implementation_runtime_hash`
 
 Every read runs at one pinned block. The same gateway check runs before
-`committee vote-submit` and `receipt submit` sign.
+the committee's signed tilt (`committee vote-submit`) and `receipt submit` sign.
 
 | Condition | Error code | Meaning |
 |---|---|---|
