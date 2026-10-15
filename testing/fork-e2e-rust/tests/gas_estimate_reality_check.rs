@@ -19,7 +19,7 @@
 //! Core 1808 (ADR-0014, governed UUPS upgrades): rmUSDC runs behind a governed
 //! `ERC1967Proxy` and calls its linked `RobotMoneyVaultOps` library by
 //! DELEGATECALL. The test first proves the vault it measures is that proxy (a
-//! non-zero ERC-1967 implementation slot), so the 920,000 ceiling is enforced
+//! non-zero ERC-1967 implementation slot), so the 1,060,000 ceiling is enforced
 //! on the proxied path, the proxy hop and the library calls included, and never
 //! on a direct vault. Suite 05 lists the deposit
 //! line in `required_markers` (QA plan T3), so a run where the deposit
@@ -38,10 +38,12 @@ const MAX_GAS_APPROVE: u64 = 80_000;
 /// may rebalance. Issue 1656 made this test actually run in CI (it had silently skipped) and
 /// measured 833,900 gas on the current vault, above the old 700k; 1656 then raised the ceiling to
 /// 1,000,000, which a regression of up to about 20% would still pass. Issue 1683 (owner decision
-/// D6 in the QA plan): 920,000 is the measured cost plus about 10%. A deliberate deposit-path
-/// change that costs more raises this number in the same change, citing the new
-/// `deposit gasUsed=` line from CI.
-const MAX_GAS_DEPOSIT: u64 = 920_000;
+/// D6 in the QA plan): 920,000 was the measured cost plus about 10%. The first CI run of the QA
+/// branch merged with dev (the deposit-path changes of QA plan D3 to D9 on dev's proxied vault)
+/// measured `deposit gasUsed=964197`, 4.8% over it. 1,060,000 is that cost plus about 10%. A
+/// deliberate deposit-path change that costs more raises this number in the same change, citing the
+/// new `deposit gasUsed=` line from CI.
+const MAX_GAS_DEPOSIT: u64 = 1_060_000;
 
 /// Conservative ceiling for the vault redeem gas.
 const MAX_GAS_REDEEM: u64 = 1_100_000;

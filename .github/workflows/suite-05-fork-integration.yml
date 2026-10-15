@@ -160,8 +160,8 @@ jobs:
           # and anvil. Under mode shared that variable is empty, so they silently skipped (and counted
           # as passed) in twin-light. mode fork sets it, so they now run, and the macro panics under CI
           # if the fork is ever absent.
-          # Issue 1683 (QA plan T3): the deposit gas ceiling is 920,000 (measured 833,900 plus about
-          # 10%). The test prints the marker below only after the deposit assertion passed; the
+          # Issue 1683 (QA plan T3): the deposit gas ceiling was 920,000 (measured 833,900 plus about
+          # 10%) and is 1,060,000 since the QA merge measured 964,197 (see the test). The test prints the marker below only after the deposit assertion passed; the
           # wrapper matches it as a line prefix, so the line's gasUsed and budget values may vary.
           - group: anvil-devnet-adapters
             cargo_tests: >-
