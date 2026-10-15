@@ -117,6 +117,8 @@ contract ExclusionLedger {
     /// @notice USDC this ledger owes across all records (recovered minus claimed).
     uint256 public heldUsdc;
 
+    // `_checkpoint` appends through a local storage pointer, which slither cannot follow.
+    // slither-disable-next-line uninitialized-state
     mapping(address holder => Checkpoint[]) private _checkpoints;
 
     /// @notice A record opened: `adapter` left NAV and its future recovery belongs to the

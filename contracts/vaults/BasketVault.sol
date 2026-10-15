@@ -150,6 +150,9 @@ abstract contract BasketVault is
         uint256 maxLossBps;
     }
 
+    // Written only through `BasketAssetConfigGuard`'s storage pointer (`_guardAssets()`), which slither
+    // cannot follow.
+    // slither-disable-next-line uninitialized-state
     AssetInfo[] public assets;
 
     // ─── Pinned at initialization (no setter) ──────────────────────────

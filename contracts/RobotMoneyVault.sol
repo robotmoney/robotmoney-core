@@ -96,6 +96,9 @@ contract RobotMoneyVault is
         bool active;
     }
     /// @notice Ordered registry of all strategy adapters (active and inactive).
+    // Written only through the `RobotMoneyVaultOps` library's storage pointer (`_book()`), which
+    // slither cannot follow.
+    // slither-disable-next-line uninitialized-state
     AdapterInfo[] public adapters;
     /// @notice Exact adapter instances approved by vault governance to receive this vault's USDC.
     mapping(address adapter => bool allowed) public adapterAllowed;
