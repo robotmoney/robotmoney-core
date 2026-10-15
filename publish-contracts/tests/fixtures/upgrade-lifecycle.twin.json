@@ -1,0 +1,625 @@
+{
+  "kind": "twin-upgrade-lifecycle",
+  "chain_id": 918453,
+  "core_sha": "c641526542bcf97e79ab8390ed0c4429251f353b",
+  "safe": "0xF7118A1Fe5C98b6f88A44e529632205f222F6D97",
+  "timelock": {
+    "address": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+    "min_delay": "3600"
+  },
+  "deploy": {
+    "upgradeability": {
+      "chain_id": 918453,
+      "core_sha": "c641526542bcf97e79ab8390ed0c4429251f353b",
+      "mode": "upgradeable",
+      "freeze_deadline": "2030-01-01T00:00:00Z",
+      "timelock": {
+        "address": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+        "min_delay": "3600"
+      },
+      "transactions_per_proxy": 2,
+      "proxies": {
+        "vault[rmUSDC]": {
+          "stage": "vault",
+          "contract": "RobotMoneyVault",
+          "proxy": "0x4239b8057D7CAff78F7AA1398A289846d06f7877",
+          "implementation": "0x7868d6d0f2850f506aa622207813c711e383e4d9",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xbf49552cbeef1ecd351ab47c868c3dee800134aabf69db392353290cd42eb4cb",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyVault.json",
+          "layout_id": "0xb8d92221489e54680ce44767959c0d2413bc378f4329bac736b972cbff102983",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "registry": {
+          "stage": "registry",
+          "contract": "VaultRegistry",
+          "proxy": "0x11547BC593Ed8E3DCA6A8D13C8749c9c09aeAaEC",
+          "implementation": "0xc2b7c481fd6a6197bea9119b665a92210fc91539",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xa88409e061aee8025ae1d106554375b873f578871dacd2d6af9f48bdaa02c240",
+          "layout": "contracts/test/fixtures/storage-layout/VaultRegistry.json",
+          "layout_id": "0x480bf6085da373282dc109c624832454d64eb1bd12fefb0b074b555952a81d4b",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "router": {
+          "stage": "router",
+          "contract": "PortfolioRouter",
+          "proxy": "0xbcf0478120f73C3C3719A44B1FcD3B8417ebf5D5",
+          "implementation": "0x8b9cb42787990046065139a57344fd7f0f3ba087",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x1ed4dd41d536ad2ffdbf1e893addbc217aaacd3279e3a3dd04f4666faeb92034",
+          "layout": "contracts/test/fixtures/storage-layout/PortfolioRouter.json",
+          "layout_id": "0x8f3103ef95db7b7e69ba42bae8fda6a1450215f3f86996bc7caacc9e74f73f44",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "gateway": {
+          "stage": "gateway",
+          "contract": "RobotMoneyGateway",
+          "proxy": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+          "implementation": "0x57238fbc291314cde6f98d8699323e52aa066ab1",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x1075393f00cbb48bc2e56f9bf02bea7badff809d01f163588ab2a26ceeeae10f",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json",
+          "layout_id": "0x230933a839b5acd11f56f4d20794fdcba588e48339f61f4dbfc09683abeb64fc",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "icpolicy": {
+          "stage": "ic-policy",
+          "contract": "InvestmentCommitteePolicy",
+          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
+          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
+          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
+          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "receipt": {
+          "stage": "ic-policy",
+          "contract": "ConsensusRecommendationReceipt",
+          "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
+          "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x3f5db4c589fe82b7a8fd3abd15c57f65113e064456d39962553e1406d9dbc4f1",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json",
+          "layout_id": "0xe44b6a9cb96179ed07ebe15ac0090d2f3d0eb8d3ab8f54b21154fcea4dabd751",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "governance": {
+          "stage": "governance",
+          "contract": "RouterGovernance",
+          "proxy": "0x938f04d9cbFA26dbdaFAf66AE0A2184B0A0C0F46",
+          "implementation": "0x8a05f563423e7bd88b426d76eeb18a0583080f38",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x138ae4ae343a267e202750156362106bb6ff7ecde46d7e5a2f304ea94049a0f0",
+          "layout": "contracts/test/fixtures/storage-layout/RouterGovernance.json",
+          "layout_id": "0xac0c624fa65b3befd558df133c5e02cb111dd6b8dfffd15a32d5e32b3d0781d7",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmPROTO]": {
+          "stage": "proto",
+          "contract": "ProtocolAssetVault",
+          "proxy": "0x1FBE7f889C2BbAFB12655FE60Baf1AA2DbA4F6BD",
+          "implementation": "0x2422c2e4231a403f568018763e4c751aec1d2354",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x136b80be1cf063d9452dafc6a3f264d1f5913fcbfa34d0c39ca23454c453b932",
+          "layout": "contracts/test/fixtures/storage-layout/ProtocolAssetVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmAGENT]": {
+          "stage": "agent",
+          "contract": "AgentTokenVault",
+          "proxy": "0xb968b3C1481ff313e96E5aa0329811E07a4A3566",
+          "implementation": "0xf9faf131d15e677b5ab26b12b64208aa14e4ab1e",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xcf8680675c8ec2441156ab44107bc0c2e66a9500c2ad1d2d28943526e94b914c",
+          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmRWA]": {
+          "stage": "rwa",
+          "contract": "RwaBasketVault",
+          "proxy": "0x869C0CcE9b738d70B4AB519DEE13316be9903a89",
+          "implementation": "0xa49da61ceef07f9a0d07182065ed88d7c6118aee",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x312065c22b94f7dc26c9addf2ac858c676da4c27d759c6b4fea203ac91ce5f7b",
+          "layout": "contracts/test/fixtures/storage-layout/RwaBasketVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        }
+      },
+      "core_immutable": false,
+      "immutability_refused_because": [
+        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, icpolicy, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
+      ],
+      "remaining_governed_parameters": [
+        "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
+        "rmUSDC strategy adapters, their caps and the adapter and code-hash allowlists: ADMIN_ROLE, the Safe through the timelock",
+        "basket asset config, swap adapters, maxSlippageBps and navDeviationGuardBps: ADMIN_ROLE, the Safe through the timelock",
+        "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock) and clearVotedWeights",
+        "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
+        "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
+        "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
+        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
+        "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
+      ],
+      "upstream_dependencies": [
+        "USDC: Circle's FiatTokenProxy (upgradeable and pausable by Circle, blacklist included)",
+        "Aave v3 Pool and aTokens, Compound v3 Comet and Moonwell markets behind the rmUSDC strategy adapters (each upgradeable by its own governance)",
+        "basket assets and their tokens (config/protocol-assets.json, config/rwa-assets.json, config/agent-token-shortlist.json): each token keeps its issuer's admin",
+        "Uniswap V3 SwapRouter02 and pools, Uniswap V4 PoolManager and the RM/USDC pool used by the swap adapters and the price recorder",
+        "the strategy and swap adapters and UniswapV4PriceRecorder: direct deployments replaced only through the governed adapter allowlists",
+        "Safe 1.4.1: the SafeL2 singleton and the fallback handler behind the Safe that proposes on the timelock"
+      ]
+    }
+  },
+  "upgrade": {
+    "proxy": "gateway",
+    "proxy_address": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+    "from_implementation": "0x57238fbc291314cde6f98d8699323e52aa066ab1",
+    "to_implementation": "0x20b009d5f65ea8d393a89a02468bd8160461f189",
+    "to_code_hash": "0xa0c5075726daef32167ac7b884da0600efc6ea8bae03bf434a51b6025ad5e4cf",
+    "deploy_tx": "0x5fbe2e178013888f59562d10222ae352c5711b96293059cb7dfcd97d6a118fdd",
+    "operation_id": "0x0d66e88a28ed03e46dea98929ea875368950b61c1dd0c10122db03ebae642aa7",
+    "salt": "0xa6b972bfb6ea5145cd75e4cc2923aa7527f1c13e43891c6d813cfa62fe87fe5e",
+    "schedule_tx": "0x3144cf7c5118557c494062c1155973dcbd64f0a75f1383abeeee3b04d1e80a52",
+    "execute_tx": "0x0c7b67c9193014821118130e423afd98e6d231d97563d822974e63217c029c67",
+    "upgradeability": {
+      "chain_id": 918453,
+      "core_sha": "c641526542bcf97e79ab8390ed0c4429251f353b",
+      "mode": "upgradeable",
+      "freeze_deadline": "2030-01-01T00:00:00Z",
+      "timelock": {
+        "address": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+        "min_delay": "3600"
+      },
+      "transactions_per_proxy": 2,
+      "proxies": {
+        "vault[rmUSDC]": {
+          "stage": "vault",
+          "contract": "RobotMoneyVault",
+          "proxy": "0x4239b8057D7CAff78F7AA1398A289846d06f7877",
+          "implementation": "0x7868d6d0f2850f506aa622207813c711e383e4d9",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xbf49552cbeef1ecd351ab47c868c3dee800134aabf69db392353290cd42eb4cb",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyVault.json",
+          "layout_id": "0xb8d92221489e54680ce44767959c0d2413bc378f4329bac736b972cbff102983",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "registry": {
+          "stage": "registry",
+          "contract": "VaultRegistry",
+          "proxy": "0x11547BC593Ed8E3DCA6A8D13C8749c9c09aeAaEC",
+          "implementation": "0xc2b7c481fd6a6197bea9119b665a92210fc91539",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xa88409e061aee8025ae1d106554375b873f578871dacd2d6af9f48bdaa02c240",
+          "layout": "contracts/test/fixtures/storage-layout/VaultRegistry.json",
+          "layout_id": "0x480bf6085da373282dc109c624832454d64eb1bd12fefb0b074b555952a81d4b",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "router": {
+          "stage": "router",
+          "contract": "PortfolioRouter",
+          "proxy": "0xbcf0478120f73C3C3719A44B1FcD3B8417ebf5D5",
+          "implementation": "0x8b9cb42787990046065139a57344fd7f0f3ba087",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x1ed4dd41d536ad2ffdbf1e893addbc217aaacd3279e3a3dd04f4666faeb92034",
+          "layout": "contracts/test/fixtures/storage-layout/PortfolioRouter.json",
+          "layout_id": "0x8f3103ef95db7b7e69ba42bae8fda6a1450215f3f86996bc7caacc9e74f73f44",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "gateway": {
+          "stage": "gateway",
+          "contract": "RobotMoneyGateway",
+          "proxy": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+          "implementation": "0x20b009d5f65ea8d393a89a02468bd8160461f189",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xa0c5075726daef32167ac7b884da0600efc6ea8bae03bf434a51b6025ad5e4cf",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json",
+          "layout_id": "0x230933a839b5acd11f56f4d20794fdcba588e48339f61f4dbfc09683abeb64fc",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "icpolicy": {
+          "stage": "ic-policy",
+          "contract": "InvestmentCommitteePolicy",
+          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
+          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
+          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
+          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "receipt": {
+          "stage": "ic-policy",
+          "contract": "ConsensusRecommendationReceipt",
+          "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
+          "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x3f5db4c589fe82b7a8fd3abd15c57f65113e064456d39962553e1406d9dbc4f1",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json",
+          "layout_id": "0xe44b6a9cb96179ed07ebe15ac0090d2f3d0eb8d3ab8f54b21154fcea4dabd751",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "governance": {
+          "stage": "governance",
+          "contract": "RouterGovernance",
+          "proxy": "0x938f04d9cbFA26dbdaFAf66AE0A2184B0A0C0F46",
+          "implementation": "0x8a05f563423e7bd88b426d76eeb18a0583080f38",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x138ae4ae343a267e202750156362106bb6ff7ecde46d7e5a2f304ea94049a0f0",
+          "layout": "contracts/test/fixtures/storage-layout/RouterGovernance.json",
+          "layout_id": "0xac0c624fa65b3befd558df133c5e02cb111dd6b8dfffd15a32d5e32b3d0781d7",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmPROTO]": {
+          "stage": "proto",
+          "contract": "ProtocolAssetVault",
+          "proxy": "0x1FBE7f889C2BbAFB12655FE60Baf1AA2DbA4F6BD",
+          "implementation": "0x2422c2e4231a403f568018763e4c751aec1d2354",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x136b80be1cf063d9452dafc6a3f264d1f5913fcbfa34d0c39ca23454c453b932",
+          "layout": "contracts/test/fixtures/storage-layout/ProtocolAssetVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmAGENT]": {
+          "stage": "agent",
+          "contract": "AgentTokenVault",
+          "proxy": "0xb968b3C1481ff313e96E5aa0329811E07a4A3566",
+          "implementation": "0xf9faf131d15e677b5ab26b12b64208aa14e4ab1e",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xcf8680675c8ec2441156ab44107bc0c2e66a9500c2ad1d2d28943526e94b914c",
+          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmRWA]": {
+          "stage": "rwa",
+          "contract": "RwaBasketVault",
+          "proxy": "0x869C0CcE9b738d70B4AB519DEE13316be9903a89",
+          "implementation": "0xa49da61ceef07f9a0d07182065ed88d7c6118aee",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x312065c22b94f7dc26c9addf2ac858c676da4c27d759c6b4fea203ac91ce5f7b",
+          "layout": "contracts/test/fixtures/storage-layout/RwaBasketVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": false,
+          "initialized_version": "1",
+          "manifest_upgrade_mode": "upgradeable"
+        }
+      },
+      "core_immutable": false,
+      "immutability_refused_because": [
+        "not frozen on chain (upgradeable release, proving period open): vault[rmUSDC], registry, router, gateway, icpolicy, receipt, governance, vault[rmPROTO], vault[rmAGENT], vault[rmRWA]"
+      ],
+      "remaining_governed_parameters": [
+        "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
+        "rmUSDC strategy adapters, their caps and the adapter and code-hash allowlists: ADMIN_ROLE, the Safe through the timelock",
+        "basket asset config, swap adapters, maxSlippageBps and navDeviationGuardBps: ADMIN_ROLE, the Safe through the timelock",
+        "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock) and clearVotedWeights",
+        "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
+        "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
+        "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
+        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
+        "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
+      ],
+      "upstream_dependencies": [
+        "USDC: Circle's FiatTokenProxy (upgradeable and pausable by Circle, blacklist included)",
+        "Aave v3 Pool and aTokens, Compound v3 Comet and Moonwell markets behind the rmUSDC strategy adapters (each upgradeable by its own governance)",
+        "basket assets and their tokens (config/protocol-assets.json, config/rwa-assets.json, config/agent-token-shortlist.json): each token keeps its issuer's admin",
+        "Uniswap V3 SwapRouter02 and pools, Uniswap V4 PoolManager and the RM/USDC pool used by the swap adapters and the price recorder",
+        "the strategy and swap adapters and UniswapV4PriceRecorder: direct deployments replaced only through the governed adapter allowlists",
+        "Safe 1.4.1: the SafeL2 singleton and the fallback handler behind the Safe that proposes on the timelock"
+      ]
+    }
+  },
+  "rejected_upgrade": {
+    "proxy": "gateway",
+    "proxy_address": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+    "target_implementation": "0x57238fbc291314cde6f98d8699323e52aa066ab1",
+    "operation_id": "0xd9501a9ef289186d04ce41dfdc419f8cb52374b28e7d214a09c8509d745ed2a6",
+    "salt": "0xde18ace2d2a307924d9bbf4d581dd636c1180d3c6da140aa01f7381efc6e49c1",
+    "schedule_tx": "0x5937d75f4908653251638ccb497085d5bd05d5d5297d3ffb2bdbc0e686666916",
+    "safe_tool_refusal": "the Safe rejected the call with GS013: the inner call failed and gas price is 0",
+    "revert_selector": "0xb60e7ed8",
+    "revert_error": "UpgradesAreFrozen"
+  },
+  "freeze": {
+    "operation_id": "0x2dc422471db1d5c275fe810f992abd2ed9a2a20c97fe17815b1f336e1df515f5",
+    "salt": "0x39fa6d788390c40f2871d77263e4c3c28bb2a8e1e98d448b21107bf33e0117b8",
+    "schedule_tx": "0xf321d21c5874ce2a2872e606ba4c9c5e1d00aee596c813d30f14278eeb0b8e6f",
+    "execute_tx": "0xbf2c5ac3235193271cda8412582ac2daba73760027740bc99c2efb94ae05bf89",
+    "targets": {
+      "vault[rmUSDC]": {
+        "proxy": "0x4239b8057D7CAff78F7AA1398A289846d06f7877",
+        "implementation": "0x7868d6d0f2850f506aa622207813c711e383e4d9",
+        "implementation_code_hash": "0xbf49552cbeef1ecd351ab47c868c3dee800134aabf69db392353290cd42eb4cb"
+      },
+      "registry": {
+        "proxy": "0x11547BC593Ed8E3DCA6A8D13C8749c9c09aeAaEC",
+        "implementation": "0xc2b7c481fd6a6197bea9119b665a92210fc91539",
+        "implementation_code_hash": "0xa88409e061aee8025ae1d106554375b873f578871dacd2d6af9f48bdaa02c240"
+      },
+      "router": {
+        "proxy": "0xbcf0478120f73C3C3719A44B1FcD3B8417ebf5D5",
+        "implementation": "0x8b9cb42787990046065139a57344fd7f0f3ba087",
+        "implementation_code_hash": "0x1ed4dd41d536ad2ffdbf1e893addbc217aaacd3279e3a3dd04f4666faeb92034"
+      },
+      "gateway": {
+        "proxy": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+        "implementation": "0x20b009d5f65ea8d393a89a02468bd8160461f189",
+        "implementation_code_hash": "0xa0c5075726daef32167ac7b884da0600efc6ea8bae03bf434a51b6025ad5e4cf"
+      },
+      "icpolicy": {
+        "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
+        "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
+        "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce"
+      },
+      "receipt": {
+        "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
+        "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
+        "implementation_code_hash": "0x3f5db4c589fe82b7a8fd3abd15c57f65113e064456d39962553e1406d9dbc4f1"
+      },
+      "governance": {
+        "proxy": "0x938f04d9cbFA26dbdaFAf66AE0A2184B0A0C0F46",
+        "implementation": "0x8a05f563423e7bd88b426d76eeb18a0583080f38",
+        "implementation_code_hash": "0x138ae4ae343a267e202750156362106bb6ff7ecde46d7e5a2f304ea94049a0f0"
+      },
+      "vault[rmPROTO]": {
+        "proxy": "0x1FBE7f889C2BbAFB12655FE60Baf1AA2DbA4F6BD",
+        "implementation": "0x2422c2e4231a403f568018763e4c751aec1d2354",
+        "implementation_code_hash": "0x136b80be1cf063d9452dafc6a3f264d1f5913fcbfa34d0c39ca23454c453b932"
+      },
+      "vault[rmAGENT]": {
+        "proxy": "0xb968b3C1481ff313e96E5aa0329811E07a4A3566",
+        "implementation": "0xf9faf131d15e677b5ab26b12b64208aa14e4ab1e",
+        "implementation_code_hash": "0xcf8680675c8ec2441156ab44107bc0c2e66a9500c2ad1d2d28943526e94b914c"
+      },
+      "vault[rmRWA]": {
+        "proxy": "0x869C0CcE9b738d70B4AB519DEE13316be9903a89",
+        "implementation": "0xa49da61ceef07f9a0d07182065ed88d7c6118aee",
+        "implementation_code_hash": "0x312065c22b94f7dc26c9addf2ac858c676da4c27d759c6b4fea203ac91ce5f7b"
+      }
+    }
+  },
+  "final": {
+    "upgradeability": {
+      "chain_id": 918453,
+      "core_sha": "c641526542bcf97e79ab8390ed0c4429251f353b",
+      "mode": "upgradeable",
+      "freeze_deadline": "2030-01-01T00:00:00Z",
+      "timelock": {
+        "address": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+        "min_delay": "3600"
+      },
+      "transactions_per_proxy": 2,
+      "proxies": {
+        "vault[rmUSDC]": {
+          "stage": "vault",
+          "contract": "RobotMoneyVault",
+          "proxy": "0x4239b8057D7CAff78F7AA1398A289846d06f7877",
+          "implementation": "0x7868d6d0f2850f506aa622207813c711e383e4d9",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xbf49552cbeef1ecd351ab47c868c3dee800134aabf69db392353290cd42eb4cb",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyVault.json",
+          "layout_id": "0xb8d92221489e54680ce44767959c0d2413bc378f4329bac736b972cbff102983",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "registry": {
+          "stage": "registry",
+          "contract": "VaultRegistry",
+          "proxy": "0x11547BC593Ed8E3DCA6A8D13C8749c9c09aeAaEC",
+          "implementation": "0xc2b7c481fd6a6197bea9119b665a92210fc91539",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xa88409e061aee8025ae1d106554375b873f578871dacd2d6af9f48bdaa02c240",
+          "layout": "contracts/test/fixtures/storage-layout/VaultRegistry.json",
+          "layout_id": "0x480bf6085da373282dc109c624832454d64eb1bd12fefb0b074b555952a81d4b",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "router": {
+          "stage": "router",
+          "contract": "PortfolioRouter",
+          "proxy": "0xbcf0478120f73C3C3719A44B1FcD3B8417ebf5D5",
+          "implementation": "0x8b9cb42787990046065139a57344fd7f0f3ba087",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x1ed4dd41d536ad2ffdbf1e893addbc217aaacd3279e3a3dd04f4666faeb92034",
+          "layout": "contracts/test/fixtures/storage-layout/PortfolioRouter.json",
+          "layout_id": "0x8f3103ef95db7b7e69ba42bae8fda6a1450215f3f86996bc7caacc9e74f73f44",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "gateway": {
+          "stage": "gateway",
+          "contract": "RobotMoneyGateway",
+          "proxy": "0x0a41235DC87688EC14279889FD90Ab28856591F2",
+          "implementation": "0x20b009d5f65ea8d393a89a02468bd8160461f189",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xa0c5075726daef32167ac7b884da0600efc6ea8bae03bf434a51b6025ad5e4cf",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyGateway.json",
+          "layout_id": "0x230933a839b5acd11f56f4d20794fdcba588e48339f61f4dbfc09683abeb64fc",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "icpolicy": {
+          "stage": "ic-policy",
+          "contract": "InvestmentCommitteePolicy",
+          "proxy": "0x1A6AD08ECF6a1b8E0d421b97B54C9F6777b2A63b",
+          "implementation": "0x63534138552609388923cfcd93e596e4ea66c75c",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x9a5c83c1bec1015e249b92c40f2d366d5d3e3291b73db91ab1724bbdebdb58ce",
+          "layout": "contracts/test/fixtures/storage-layout/InvestmentCommitteePolicy.json",
+          "layout_id": "0x3a441f765dd8379dbc25492781c2122d12c540fc0cddb02f21b1112b16fe93ef",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "receipt": {
+          "stage": "ic-policy",
+          "contract": "ConsensusRecommendationReceipt",
+          "proxy": "0xB5BA019528d8339B14773697d8237f3B0572D2AE",
+          "implementation": "0xddda88be0ea293b11e84afe32b0bef2ddb6b17da",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x3f5db4c589fe82b7a8fd3abd15c57f65113e064456d39962553e1406d9dbc4f1",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json",
+          "layout_id": "0xe44b6a9cb96179ed07ebe15ac0090d2f3d0eb8d3ab8f54b21154fcea4dabd751",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "governance": {
+          "stage": "governance",
+          "contract": "RouterGovernance",
+          "proxy": "0x938f04d9cbFA26dbdaFAf66AE0A2184B0A0C0F46",
+          "implementation": "0x8a05f563423e7bd88b426d76eeb18a0583080f38",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x138ae4ae343a267e202750156362106bb6ff7ecde46d7e5a2f304ea94049a0f0",
+          "layout": "contracts/test/fixtures/storage-layout/RouterGovernance.json",
+          "layout_id": "0xac0c624fa65b3befd558df133c5e02cb111dd6b8dfffd15a32d5e32b3d0781d7",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmPROTO]": {
+          "stage": "proto",
+          "contract": "ProtocolAssetVault",
+          "proxy": "0x1FBE7f889C2BbAFB12655FE60Baf1AA2DbA4F6BD",
+          "implementation": "0x2422c2e4231a403f568018763e4c751aec1d2354",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x136b80be1cf063d9452dafc6a3f264d1f5913fcbfa34d0c39ca23454c453b932",
+          "layout": "contracts/test/fixtures/storage-layout/ProtocolAssetVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmAGENT]": {
+          "stage": "agent",
+          "contract": "AgentTokenVault",
+          "proxy": "0xb968b3C1481ff313e96E5aa0329811E07a4A3566",
+          "implementation": "0xf9faf131d15e677b5ab26b12b64208aa14e4ab1e",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0xcf8680675c8ec2441156ab44107bc0c2e66a9500c2ad1d2d28943526e94b914c",
+          "layout": "contracts/test/fixtures/storage-layout/AgentTokenVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        },
+        "vault[rmRWA]": {
+          "stage": "rwa",
+          "contract": "RwaBasketVault",
+          "proxy": "0x869C0CcE9b738d70B4AB519DEE13316be9903a89",
+          "implementation": "0xa49da61ceef07f9a0d07182065ed88d7c6118aee",
+          "proxy_code_hash": "0xa8a678c6158f0493f08d78f2225b42629e50903846c93abbe444cae217e47a47",
+          "implementation_code_hash": "0x312065c22b94f7dc26c9addf2ac858c676da4c27d759c6b4fea203ac91ce5f7b",
+          "layout": "contracts/test/fixtures/storage-layout/RwaBasketVault.json",
+          "layout_id": "0x76c3ef11ba05f649bc856d7fea1def55259b9c19a79de50342ca86511645d077",
+          "upgrade_timelock": "0xB35280882D8B25E53F378Bf6C73E84186D1c2b96",
+          "upgrades_frozen": true,
+          "initialized_version": "18446744073709551615",
+          "manifest_upgrade_mode": "upgradeable"
+        }
+      },
+      "core_immutable": true,
+      "immutability_refused_because": [],
+      "remaining_governed_parameters": [
+        "vault caps (tvlCap, perDepositCap), exitFeeBps and feeRecipient on every vault: ADMIN_ROLE, the Safe through the timelock",
+        "rmUSDC strategy adapters, their caps and the adapter and code-hash allowlists: ADMIN_ROLE, the Safe through the timelock",
+        "basket asset config, swap adapters, maxSlippageBps and navDeviationGuardBps: ADMIN_ROLE, the Safe through the timelock",
+        "router weights: RouterGovernance.applyReceipt (a consensus receipt the Safe applies through the timelock) and clearVotedWeights",
+        "router eligibility, vault registration and retirement on the VaultRegistry: ADMIN_ROLE, the Safe through the timelock",
+        "the router weight setter (WEIGHT_SETTER_ROLE): rotated by the Safe and executed by the timelock",
+        "deposit pauses: the pauser key (gateway DEPOSIT_PAUSER_ROLE) and the emergency key (vault EMERGENCY_ROLE levers) with no timelock, unpauses through the timelock",
+        "investment committee membership and receipts: the IC policy and the consensus receipt register (ADMIN_ROLE, COMMITTEE_AGENT_ROLE)",
+        "the timelock delay and its proposers: TimelockController self-administration by the Safe (updateDelay, grantRole)",
+        "depositor agent authorizations on the gateway: each depositor's own commitAuthorization and revealAuthorization"
+      ],
+      "upstream_dependencies": [
+        "USDC: Circle's FiatTokenProxy (upgradeable and pausable by Circle, blacklist included)",
+        "Aave v3 Pool and aTokens, Compound v3 Comet and Moonwell markets behind the rmUSDC strategy adapters (each upgradeable by its own governance)",
+        "basket assets and their tokens (config/protocol-assets.json, config/rwa-assets.json, config/agent-token-shortlist.json): each token keeps its issuer's admin",
+        "Uniswap V3 SwapRouter02 and pools, Uniswap V4 PoolManager and the RM/USDC pool used by the swap adapters and the price recorder",
+        "the strategy and swap adapters and UniswapV4PriceRecorder: direct deployments replaced only through the governed adapter allowlists",
+        "Safe 1.4.1: the SafeL2 singleton and the fallback handler behind the Safe that proposes on the timelock"
+      ]
+    },
+    "verifier_exit_code": 0
+  }
+}

@@ -56,3 +56,33 @@ describe("runbook 4.12 and the stage table agree (issue 1809)", () => {
     for (const s of ["**Freeze ownership.**", "**Missed-deadline alerts.**", "**The deadline is not an on-chain freeze.**", "Nothing on chain freezes a proxy", "freezeUpgrades(expectedImplementation, expectedCodeHash)", "**Voluntary cutover", "not executed by this issue", "ADR-0009-vault-retirement-no-assisted-migration.md", "`redeemInKind`"]) expect(SECTION, s).toContain(s);
   });
 });
+
+// Issue 1811 docs drift check: the release checklist names the external security review a final mainnet release requires, and the runbook names the Twin lifecycle
+// rehearsal the code runs (the CI job, the sheet overlay, the harness and the evidence flag all exist under those names).
+describe("the release checklist and the Twin lifecycle rehearsal (issue 1811)", () => {
+  const gate = (() => {
+    const start = RUNBOOK.indexOf("### 4.1. Code-readiness gate");
+    const end = RUNBOOK.indexOf("### 4.2.", start);
+    if (start < 0 || end < 0) throw new Error("the runbook has no section 4.1 Code-readiness gate before 4.2");
+    return RUNBOOK.slice(start, end);
+  })();
+  const tracking = RUNBOOK.slice(RUNBOOK.indexOf("## 6. Per-release GitHub tracking issue"), RUNBOOK.indexOf("## 7. "));
+  test("the code-readiness gate requires an external security review before a final mainnet release, never waived, covering the proxy form", () => {
+    for (const s of ["**External security review before a final mainnet release.**", "completed external security review of the exact contracts", "`GovernedUUPS`", "`freezeUpgrades`", "`docs/audits.md`", "never waived for a final release"]) expect(gate, s).toContain(s);
+  });
+  test("the tracking issue checklist carries the external review item and the lifecycle job", () => {
+    expect(tracking).toContain("External security review completed for the release SHA");
+    expect(tracking).toContain("`core-stages-twin-upgrade-lifecycle`");
+  });
+  test("the runbook names the rehearsal the code runs", () => {
+    const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
+    expect(wf).toContain("name: core-stages-twin-upgrade-lifecycle");
+    expect(wf).toContain("sheet-overlay: deployments/twin-918453/upgrade-rehearsal.env");
+    expect(wf).toContain("bun publish-contracts/src/ci/twin-upgrade-lifecycle.ts");
+    expect(readFileSync(join(REPO, "deployments", "twin-918453", "upgrade-rehearsal.env"), "utf8")).toMatch(/^UPGRADE_MODE=upgradeable$/m);
+    expect(readFileSync(join(REPO, "publish-contracts", "src", "evidence-check.ts"), "utf8")).toContain('"upgrade-lifecycle": { type: "string" }');
+    const required = JSON.parse(readFileSync(join(REPO, "scripts", "ci", "required-checks.json"), "utf8")).required.map((r: { name: string }) => r.name);
+    expect(required).toContain("core-stages-twin-upgrade-lifecycle");
+    for (const s of ["`core-stages-twin-upgrade-lifecycle`", "`deployments/twin-918453/upgrade-rehearsal.env`", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`", "--upgrade-lifecycle FILE --rpc URL", "`UpgradesAreFrozen`", "**Rollback is not assumed safe.**", "**After a governed upgrade.**"]) expect(SECTION, s).toContain(s);
+  });
+});
