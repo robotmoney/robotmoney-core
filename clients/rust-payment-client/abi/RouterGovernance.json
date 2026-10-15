@@ -8,24 +8,14 @@
         "internalType": "address"
       },
       {
-        "name": "_admin",
+        "name": "_receipts",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "_votingPeriod",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "_executionDelay",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "_quorumThreshold",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "_admin",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -45,19 +35,6 @@
   },
   {
     "type": "function",
-    "name": "BPS_DENOMINATOR",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "DEFAULT_ADMIN_ROLE",
     "inputs": [],
     "outputs": [
@@ -71,70 +48,30 @@
   },
   {
     "type": "function",
-    "name": "MAX_HISTORY_BLOCKS",
+    "name": "WEIGHT_SETTER_ROLE",
     "inputs": [],
     "outputs": [
       {
         "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "stateMutability": "view"
   },
   {
     "type": "function",
-    "name": "MIN_EXECUTION_DELAY",
-    "inputs": [],
-    "outputs": [
+    "name": "applyReceipt",
+    "inputs": [
       {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MIN_QUORUM_THRESHOLD",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MIN_VOTING_PERIOD",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "activeProposal",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "id",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "receiptId",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        "name": "proposer",
-        "type": "address",
-        "internalType": "address"
+        "name": "payloadDigest",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
         "name": "vaults",
@@ -145,76 +82,6 @@
         "name": "bps",
         "type": "uint256[]",
         "internalType": "uint256[]"
-      },
-      {
-        "name": "votingDeadline",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "executableAfter",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "votesFor",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "snapshotQuorum",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "executed",
-        "type": "bool",
-        "internalType": "bool"
-      },
-      {
-        "name": "cancelled",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "cadenceParams",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "_votingPeriod",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "_executionDelay",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "_quorumThreshold",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "_totalVotingPower",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "cancel",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -226,19 +93,6 @@
     "inputs": [],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "currentProposalId",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -254,56 +108,6 @@
         "name": "bps",
         "type": "uint256[]",
         "internalType": "uint256[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "execute",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "executionDelay",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getPastVotes",
-    "inputs": [
-      {
-        "name": "voter",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "blockNumber",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -414,99 +218,13 @@
   },
   {
     "type": "function",
-    "name": "hasVoted",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "voter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "proposalState",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint8",
-        "internalType": "enum RouterGovernance.ProposalState"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "proposalVoteSnapshot",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "propose",
-    "inputs": [
-      {
-        "name": "vaults",
-        "type": "address[]",
-        "internalType": "address[]"
-      },
-      {
-        "name": "bps",
-        "type": "uint256[]",
-        "internalType": "uint256[]"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "quorumThreshold",
+    "name": "receipts",
     "inputs": [],
     "outputs": [
       {
         "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
+        "type": "address",
+        "internalType": "contract IConsensusRecommendationReceipt"
       }
     ],
     "stateMutability": "view"
@@ -580,63 +298,6 @@
   },
   {
     "type": "function",
-    "name": "setExecutionDelay",
-    "inputs": [
-      {
-        "name": "delay",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setQuorumThreshold",
-    "inputs": [
-      {
-        "name": "threshold",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setVotingPeriod",
-    "inputs": [
-      {
-        "name": "period",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setVotingPower",
-    "inputs": [
-      {
-        "name": "voter",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "power",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "supportsInterface",
     "inputs": [
       {
@@ -655,116 +316,20 @@
     "stateMutability": "view"
   },
   {
-    "type": "function",
-    "name": "totalVotingPower",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "vote",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "votingPeriod",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "votingPower",
-    "inputs": [
-      {
-        "name": "voter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
     "type": "event",
-    "name": "ExecutionDelaySet",
+    "name": "ReceiptApplied",
     "inputs": [
       {
-        "name": "oldDelay",
-        "type": "uint64",
+        "name": "receiptId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "payloadDigest",
+        "type": "bytes32",
         "indexed": false,
-        "internalType": "uint64"
-      },
-      {
-        "name": "newDelay",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ProposalCancelled",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "cancelledBy",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ProposalCreated",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "proposer",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
+        "internalType": "bytes32"
       },
       {
         "name": "vaults",
@@ -777,50 +342,6 @@
         "type": "uint256[]",
         "indexed": false,
         "internalType": "uint256[]"
-      },
-      {
-        "name": "votingDeadline",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ProposalExecuted",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "executor",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "QuorumThresholdSet",
-    "inputs": [
-      {
-        "name": "oldThreshold",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "newThreshold",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -901,106 +422,6 @@
     "anonymous": false
   },
   {
-    "type": "event",
-    "name": "VoteCast",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "voter",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "power",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "totalFor",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "VotingPeriodSet",
-    "inputs": [
-      {
-        "name": "oldPeriod",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      },
-      {
-        "name": "newPeriod",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "VotingPowerSet",
-    "inputs": [
-      {
-        "name": "voter",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "oldPower",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "newPower",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "WeightsApplied",
-    "inputs": [
-      {
-        "name": "proposalId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "vaults",
-        "type": "address[]",
-        "indexed": false,
-        "internalType": "address[]"
-      },
-      {
-        "name": "bps",
-        "type": "uint256[]",
-        "indexed": false,
-        "internalType": "uint256[]"
-      }
-    ],
-    "anonymous": false
-  },
-  {
     "type": "error",
     "name": "AccessControlBadConfirmation",
     "inputs": []
@@ -1023,118 +444,55 @@
   },
   {
     "type": "error",
-    "name": "ActiveProposalExists",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "AlreadyExecuted",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "AlreadyVoted",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "CheckpointTooOld",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ExecutionDelayBelowMinimum",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ExecutionDelayNotElapsed",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidWeightSum",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "LastAdminFloor",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "LengthMismatch",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NoActiveProposal",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NoVotingPower",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ProposalAlreadyCancelled",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ProposalAlreadyExecuted",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ProposalDefeated",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ProposalIsCancelled",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ProposalNotActive",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "QuorumBelowMinimum",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "QuorumNotReached",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ReentrancyGuardReentrantCall",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "VaultNotEligible",
+    "name": "PayloadDigestMismatch",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
+        "name": "receiptId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "stored",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "given",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ]
   },
   {
     "type": "error",
-    "name": "VotingPeriodBelowMinimum",
-    "inputs": []
+    "name": "ReceiptAlreadyReleased",
+    "inputs": [
+      {
+        "name": "receiptId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
   },
   {
     "type": "error",
-    "name": "VotingStillOpen",
+    "name": "ReceiptNotRecorded",
+    "inputs": [
+      {
+        "name": "receiptId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
   {
