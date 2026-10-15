@@ -50,7 +50,7 @@ rmpc build-info      Print the git commit this binary was compiled from (JSON)
 rmpc get-vault       Read vault state directly from chain
 rmpc get-vaults      List all vaults registered in the VaultRegistry
 rmpc get-router      Read PortfolioRouter state: vault addresses, weight bps, and router cap
-rmpc get-governance  Read RouterGovernance state: constructor params and weights
+rmpc get-governance  Read RouterGovernance state: router weights, bound contracts and role holders
 rmpc get-timelock    Read TimelockController state
 rmpc get-gateway     Read gateway state directly from chain
 rmpc get-agent       Read an agent's authorization + window usage
@@ -74,12 +74,10 @@ receipt, and that submission is the rebalance: one timelock operation releases
 the receipt and applies its weights (publish-contracts govern row
 `apply-receipt`, core 1696). There is no voting by token holders or anyone else:
 no voter set, no voting power, no quorum, no voting period, no execution delay,
-no propose, vote or execute. `rmpc get-governance` only reads the
-`RouterGovernance` state, and `rmpc governance draft-proposal` prints an unsigned
-review draft only. Today's test bytecode still carries the old voting functions.
-They are unused: the test deploys it with voter addresses nobody holds keys for.
-A later contract change (issue 1698) will delete them and add a weight-setter
-`applyReceipt` call.
+no propose, vote or execute. `RouterGovernance.applyReceipt`, gated by its
+`WEIGHT_SETTER_ROLE` (held by the timelock), is the one call that moves the
+weights (issue 1698). `rmpc get-governance` only reads the `RouterGovernance`
+state.
 
 ## Example trace: read governance state
 
@@ -87,9 +85,10 @@ A later contract change (issue 1698) will delete them and add a weight-setter
 rmpc get-governance --config rmpc.toml --pretty
 ```
 
-The `get-governance` output includes `active_proposal` (always `null`, because
-nobody holds a voter key), the `cadence_params` block (constructor arguments of
-today's bytecode, not a governance model) and the router weight vector.
+The `get-governance` output carries the router and receipt-register addresses
+the contract is bound to, the router's active (`current_weights`) and fallback
+(`default_weights`) vectors, and the holders of `ADMIN_ROLE` and
+`WEIGHT_SETTER_ROLE`. There are no proposals to report.
 
 
 ## Investment Committee commands

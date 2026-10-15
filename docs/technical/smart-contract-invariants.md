@@ -181,7 +181,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ HOLDS (fixed #967, NC-5) · `sharesPerLeg[i]` binds to `vaults[i]` (the caller-named address, committed to the gateway intent hash), never to `_effectiveWeightsMemory()` — a between-sign reweight can never redirect a leg to an unnamed vault · symbolic (reorder weights between sign and execute) — `FvInvariants.t.sol::test_RTR3_expectedFail_legsAreIdentityBound`.
 
 > **`RTR-4` — A weight vector is never executable unless every weighted vault is simultaneously router-eligible AND `Active` (deposit-able) and the bps sum equals `MAX_BPS`.**
-> ✅ HOLDS · `setWeights`/`setDefaultWeights`/`propose` now require `VaultStatus==Active` per weighted vault — a non-depositable vector can never be written (F-05 fixed, #968) · symbolic — `FvInvariants.t.sol::test_RTR4_weightsRequireActiveStatus`.
+> ✅ HOLDS · `setWeights`/`setDefaultWeights` require `VaultStatus==Active` per weighted vault — a non-depositable vector can never be written (F-05 fixed, #968) · symbolic — `FvInvariants.t.sol::test_RTR4_weightsRequireActiveStatus`.
 
 > **`RTR-5` — `previewDeposit` and the executed deposit never disagree on which legs are available (no preview/execute divergence).**
 > ✅ HOLDS · `_executeLegs` skip-and-renormalises exactly the legs `previewDeposit` reports `unavailable` (or both report the whole basket unavailable) — preview-available ⇒ execute-deposits, preview-unavailable ⇒ execute-skips. A single `setVaultStatus(_, DepositsPaused)` no longer bricks *every* router deposit (F-13 / NC-4 fixed, #968) · fuzz (assert preview-available ⇒ execute-succeeds, or both fail) — `FvInvariants.t.sol::test_RTR5_previewMatchesExecute`.
@@ -226,10 +226,10 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `DeployTimelock.t.sol` · deploy-assertion.
 
 > **`GOV-2` — A governance action never executes before the minimum execution delay has elapsed.**
-> 🟢 HOLDS · `RouterGovernance` min-delay (prior M-9 fix) · symbolic.
+> 🟢 HOLDS · every governance action is a `TimelockController` operation, so the timelock's `getMinDelay()` applies. `RouterGovernance` has no proposal or execution delay of its own (issue 1698) · deploy-assertion.
 
 > **`GOV-3` — Router weights change only through the timelock.**
-> 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE`; a weight change is one timelock operation (`apply-receipt`). `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them · deploy-assertion.
+> 🟢 HOLDS · `WEIGHT_SETTER_ROLE` is held by `RouterGovernance` alone and the timelock holds its `ADMIN_ROLE` and its own `WEIGHT_SETTER_ROLE`; a weight change is one timelock call, `RouterGovernance.applyReceipt` (`apply-receipt`). `RouterGovernance` has no propose, vote or execute function (issue 1698) · deploy-assertion.
 
 > **`GOV-4` — A weight vector that would render router deposits non-executable can never be applied (no self-DoS).**
 > ✅ HOLDS · the router rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), and `apply-receipt` refuses a vector whose vault set differs from the registry's eligible list before anything is sent (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_receiptCannotSelfDosRouter`.

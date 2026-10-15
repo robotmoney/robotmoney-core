@@ -535,7 +535,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 9. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — deploys contracts, asserts a healthy RPC on a real Base head, the four-vault manifests and the handover
 10. `cargo test -p smoke-test --release --test fund_usdc -- --test-threads=1 --nocapture` — the Twin environment steps: fund USDC (a grant of the exact amount on the real FiatToken slot, spendable through the real token's `transfer`), fund gas (exact balance), the chain is the anvil Twin fork (id 918453), and warp moves block time 48h without real waiting.
 11. `cargo test -p smoke-test --release --test twin_fork_env -- --test-threads=1 --nocapture` — the same three environment steps straight through `TwinFork` on the real Base USDC, with no publish run: fund USDC sets the real balance slot, fund gas, warp, and the fork is the anvil Twin fork on a real Base head.
-12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds no `ADMIN_ROLE` on `RouterGovernance` and no voting power, and the timelock holds `ADMIN_ROLE` (core 1488). There is no voting by anyone: `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+12. `cargo test -p smoke-test --release --test governance -- --test-threads=1 --nocapture` — after the publish-contracts run, the deployer holds neither `ADMIN_ROLE` nor `WEIGHT_SETTER_ROLE` on `RouterGovernance`, and the timelock holds both (core 1488, issue 1698). `WEIGHT_SETTER_ROLE` gates `applyReceipt`. There is no voting by anyone: `RouterGovernance` has no voting function (issue 1698).
     Each is wrapped in `cargo_test_require_executed.sh` so a run that silently collects zero tests fails red rather than green (issue #1311 AC). All write `smoke-test-<binary>.log`.
     The `demo_seeding`, `full_stack_demo_tvl`, `faucet_eth` and `faucet_rm` binaries were deleted in core 1488 with demo depositor seeding and the dapp faucet funding. Every devnet row now starts or reuses the Twin chain, funds fresh rehearsal keystores and calls publish contracts (`bun publish-contracts/src/cli.ts`, installed by `.github/actions/publish-contracts-setup`; the stage sheet is the committed `deployments/twin-918453/stage-sheet.env`, `STAGE_SHEET` overrides it).
 13. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then remove any dapp containers by label as the safety-net teardown. The Twin fork needs none: it dies with the runner.
@@ -990,7 +990,7 @@ actual cost and resolved all five:
 | Target | Outcome | Reason |
 |--------|---------|--------|
 | `fund_usdc` | wired — suite 14 devnet matrix row | real-signed-transfer + Geth-not-Anvil assertions (issue #255 step 7); no other executed target asserts the devnet backend rejects Anvil cheat RPCs |
-| `governance` | wired — suite 14 devnet matrix row | RouterGovernance deploy + `setVotingPower`/admin-role wiring on the **actual `forge script Deploy` output** (issue #364); distinct from `rmpc-fork-e2e::governance` (suite 5), which exercises a hand-deployed governance stack's `propose`/`vote`/`execute` functions of today's bytecode on an anvil fork and never touches the devnet's real deploy script — neither `fixture_meta` nor any other executed target reads `fx.governance()` |
+| `governance` | wired — suite 14 devnet matrix row | RouterGovernance deploy + admin-role and weight-setter-role wiring on the **actual `forge script Deploy` output** (issue #364, issue 1698); distinct from `rmpc-fork-e2e::governance` (suite 5), which exercises a hand-deployed governance stack's `applyReceipt` call on an anvil fork and never touches the devnet's real deploy script — neither `fixture_meta` nor any other executed target reads `fx.governance()` |
 | `vault_deposit_redeem` | **deleted** | both of its assertions are already made by a suite that genuinely runs today: `vault_on_chain_state` (exitFeeBps==0, activeAdapterCount>=1) duplicates `smoke-test::fixture_meta::vault_has_zero_exit_fee_and_one_active_adapter`, already a suite-14 matrix row; `vault_deposit_redeem_round_trip` (deposit 1 USDC, redeem, assert USDC returned within tolerance) duplicates `rmpc-fork-e2e::vault_deposit_redeem_smoke` (suite-05 `anvil-goldens` group — confirmed executing for real against the checked-in fork fixture, `chain_id=8453 fork_block=48896605`, no skip). `rmpc-fork-e2e::devnet_adapter_round_trip` (suite-05 `geth-light` group) does **not** count as coverage despite naming the same scenario: it unconditionally self-skips in CI (`[fork-e2e] skipping: RMPC_FORK_RPC_URL not set`, `finished in 0.00s`) because that variable is never set anywhere in suite-05 — see issue #1239, which tracks provisioning it. The deleted test's docstring framing ("wired to the three real Aave/Compound/Morpho adapters") is therefore not independently re-proven by name anywhere; only the two narrower assertions it actually made (exit fee / adapter-count-`>=1`, and a generic deposit/redeem tolerance check) are covered by what runs |
 
 **Overlap analysis against `smoke-test::demo_seeding`** (required by issue
@@ -1000,7 +1000,7 @@ and `rmpc-fork-e2e::governance` analyses above): `demo_seeding`'s assertions
 `VaultRegistry.listVaults()` returning four Active vaults,
 `PortfolioRouter.getWeights()` matching the 8500/500/500/500 split, and all
 four vaults reporting non-zero `totalAssets` after `seed_demo_depositors`. It
-calls none of `fund_eth_from_harness`, `fund_rm_token`, or `setVotingPower`,
+calls none of `fund_eth_from_harness` or `fund_rm_token`,
 and reads no `exitFeeBps` / `activeAdapterCount`. It does call
 `self.fund_usdc(...)` indirectly, via `seed_demo_depositors` funding each
 simulated depositor before their deposit -- but only as unasserted setup
@@ -1013,7 +1013,7 @@ backend check). No overlap with any of the five targets:
   plumbing but asserts none of its distinguishing behavior (see above); the
   two targets are not redundant.
 - `governance` — `demo_seeding` reads router weights as static config; it
-  never touches `RouterGovernance` or `setVotingPower`.
+  never touches `RouterGovernance`.
 - `vault_deposit_redeem` — `demo_seeding` asserts `totalAssets` rose after
   seeding, not a redeem-returns-principal-within-tolerance round trip, and
   never reads `exitFeeBps` / `activeAdapterCount`.
@@ -1051,11 +1051,10 @@ so a regression should fail the PR that introduces it, not surface a day
 later on `dev` or in a nightly run.
 
 Wiring `governance` into CI for the first time immediately paid for itself:
-it surfaced a real bug (`read_voting_power`'s hardcoded `votingPower(address)`
-selector, `0x13c8a7f5`, matched no function on `RouterGovernance` — the
-correct selector is `0xc07473f6`), which had never been caught because the
-target had never executed anywhere. Fixed in the same PR; confirmed 4/4
-passing both locally and in CI.
+it surfaced a real bug (a hardcoded function selector in the voting-power
+read matched no function on `RouterGovernance`), which had never been caught
+because the target had never executed anywhere. Fixed in the same PR. The
+voting-power read is gone with voting (issue 1698).
 
 `vault_deposit_redeem` needed no cost measurement because it is deleted, not
 wired — its allowlist entry is removed along with the file.

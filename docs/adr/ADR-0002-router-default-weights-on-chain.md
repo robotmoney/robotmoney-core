@@ -37,10 +37,11 @@ The Router routes by `defaultWeights` whenever no active vector is set
 overrides it and leaves `defaultWeights` untouched.
 
 Updates to `defaultWeights` flow through the same Safe → Timelock →
-`ADMIN_ROLE` path used elsewhere in the protocol. On today's bytecode the
-`apply-receipt` batch writes the receipt's vector through
-`RouterGovernance.setDefaultWeights`; `RouterGovernance.propose`, `vote`
-and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+`ADMIN_ROLE` path used elsewhere in the protocol. The `apply-receipt` govern
+row does not write `defaultWeights`. It schedules one
+`RouterGovernance.applyReceipt` call, which writes the receipt's vector as the
+ACTIVE vector through `setWeights`. `defaultWeights` stays the fallback.
+`RouterGovernance` has no voting function (issue 1698).
 
 ## Amendment — 2026-10-05: Launch default weights and who sets active weights
 
@@ -92,6 +93,11 @@ holds its counterpart as an immutable) is only needed to replace the gateway or
 the router themselves. The registry is re-linked with `setRouter`, which is
 repeatable. After a rotation the old `RouterGovernance` still holds router
 `ADMIN_ROLE` unless the same timelock batch revokes it (see the bounds below).
+The same holds for the `ConsensusRecommendationReceipt` register's
+`ADMIN_ROLE`, which `applyReceipt` needs to release a receipt: the timelock
+grants it to the new instance and revokes the old one's. The new instance's own
+`WEIGHT_SETTER_ROLE` (the `applyReceipt` gate) must be held by the timelock
+alone. The verifier asserts both (issue 1698).
 
 ## Amendment — 2026-10-07: Bounded rotation of `WEIGHT_SETTER_ROLE`
 

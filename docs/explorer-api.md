@@ -26,8 +26,6 @@ issues #654, #661, #675, and #695.
 | GET | `/v1/vaults` | `list_vaults` | Implemented |
 | GET | `/v1/vaults/:address` | `get_vault` | Partial — see issue #675 |
 | GET | `/v1/router/weights` | `get_router_weights` | Implemented |
-| GET | `/v1/governance/proposals` | `list_proposals` | Implemented |
-| GET | `/v1/governance/proposals/:id` | `get_proposal` | Implemented |
 | GET | `/v1/governance/admin-events` | `list_admin_events` | Implemented (issue 1731) |
 | GET | `/v1/stats` | `get_stats` | Implemented |
 | GET | `/v1/router/state` | `get_router_state` | Implemented |
@@ -40,7 +38,7 @@ issues #654, #661, #675, and #695.
 - Depositors (issue 1766). `unique_depositors` on `/v1/stats` is the number of distinct addresses that currently hold shares in any of the vaults, so an address holding several vaults counts once and an address that redeemed everything does not count. The seed receiver counts while it holds the seed shares, and the deployer does not once it has redeemed. The balance is the latest `wallet_positions` row per vault and holder, which the indexer rolls forward on every vault `Deposit` (direct, router and gateway deposits all emit one) and back on every `Withdraw`. An address in `agent_deposits` or `router_deposit_legs` with no position row at all is also counted. This is an assumption, not an owner decision, and it is one SQL constant (`UNIQUE_DEPOSITORS_SQL` in `clients/explorer-api/src/routes.rs`). Plain share `Transfer` events are not indexed, so a holder who only received shares by transfer is not counted, and a sender who transferred all shares away is still counted.
 - Vault caps (issue 1741). `GET /v1/vaults` and `GET /v1/vaults/:address` serve, per vault, `tvl_cap` (the vault's `tvlCap()`), `per_deposit_cap` (`perDepositCap()`), `headroom` (`max(tvl_cap - total_assets, 0)`) and `snapshot_block`, all from the vault's latest `vault_snapshots` row and all in asset base units (USDC, 6 decimals) as decimal strings. `RobotMoneyVault` and every `BasketVault` declare both caps as `uint256 public`. A cap the indexer could not read is `null`, never `"0"`, and a `null` cap or `total_assets` makes `headroom` `null`: a client must show `null` as unknown. A real `"0"` means the chain reported 0 (a wound-down vault). `2^256-1` is the contract's "no cap" value. The registry `deposit_cap` field (always 0, the contract no longer has it) is gone from the API; the `vaults.deposit_cap` DB column remains but is unused. Migration 0018 resets old `vault_snapshots.tvl_cap = 0` rows to NULL (a failed read could not be told from a real zero); the next tick rewrites the latest snapshot, so afterwards a real zero cap (deposits blocked) is stored as `"0"`. `headroom` is `tvl_cap - total_assets` of the snapshot only: it ignores `perDepositCap`, `depositsPaused`, shutdown and retirement, which the on-chain `maxDeposit` folds in. The dapp labels it "TVL headroom (snapshot)" and shows a number only when the vault's resolved deposit state is open ("n/a (deposits closed)" when paused or retired, "unknown" otherwise). The caps are as of `snapshot_block`, which trails the index block by up to the snapshot heartbeat (a snapshot with an unknown cap is retaken on the next tick).
 - `GET /v1/vaults/:address` freshness (issue 1741): `block_number` is the index block (the same value as `/health` `last_indexed_block`), `chain_head_block` is the head the indexer last saw, and `vault.snapshot_block` is the block of the latest vault snapshot. `block_number` used to be the snapshot block, which made a healthy indexer look thousands of blocks behind. A client measures the lag as `chain_head_block - block_number` and labels `snapshot_block` separately.
-- `GET /v1/router/weights` `current_weights` is the weight vector of the last `WeightsSet` **or** `DefaultWeightsSet` event, not the vector the router routes by. A passed vote (`WeightsSet`, `votedWeightsActive() == true`) overrides the default vector. The effective weights are read from the router itself (`getEffectiveWeights()`, `votedWeightsActive()`, `getWeights()`, `getDefaultWeights()`); the dapp's Router Governance tab does so, pinned to the deployment chain and only when the write-chain guard allows the read (otherwise "unknown"), and labels them `Effective: voted` or `Effective: default`.
+- `GET /v1/router/weights` `current_weights` is the weight vector of the last `WeightsSet` **or** `DefaultWeightsSet` event, not the vector the router routes by. An applied receipt (`RouterGovernance.applyReceipt` writes `WeightsSet`, `votedWeightsActive() == true`) overrides the default vector. The effective weights are read from the router itself (`getEffectiveWeights()`, `votedWeightsActive()`, `getWeights()`, `getDefaultWeights()`); the dapp's router view does so, pinned to the deployment chain and only when the write-chain guard allows the read (otherwise "unknown"), and labels them `Effective: voted` or `Effective: default`.
 - `chain_head_block` (on `/health`, `/v1/vaults` and `/v1/stats`) is the head the indexer last saw. `chain_head_block - block_number` is the lag (about 5 when healthy, because the indexer waits 5 confirmations). It is `null` until a tick has read a head.
 - `GET /v1/vaults` rows carry `deposits_paused`: the vault's `depositsPaused()` at its latest snapshot, `null` when it has none (read that as unknown, never as open). `status` is the registry lifecycle status and does not follow `pauseDeposits()`.
 - `GET /v1/governance/admin-events` lists, newest first (at most 500), the events of the Timelock (`CallScheduled`, `CallExecuted`, `Cancelled`, `MinDelayChange`) and of the Safe (`ExecutionSuccess`, `ExecutionFailure`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`) when the indexer is given `INDEXER_TIMELOCK` and `INDEXER_SAFE`. Each entry has `block_number`, `log_index`, `tx_hash`, `contract`, `contract_kind` (`timelock` or `safe`), `event_name`, `op_id` (timelock operation id or Safe transaction hash) and `detail` (the decoded arguments). Both contracts are listed by `/v1/chains/:chain_id/contracts` with kinds `timelock` and `safe`.
@@ -228,15 +226,6 @@ adds `owner` and `window_usage_to_date` columns to `agent_policies`.
       "tx_hash": "0x...",
       "agent": "0x...",
       "revoked": false,
-      "indexed_at": "2026-06-07T00:00:00Z"
-    },
-    {
-      "kind": "governance_vote",
-      "block_number": 12346000,
-      "log_index": 5,
-      "tx_hash": "0x...",
-      "proposal_id": 42,
-      "power": "1000",
       "indexed_at": "2026-06-07T00:00:00Z"
     }
   ]

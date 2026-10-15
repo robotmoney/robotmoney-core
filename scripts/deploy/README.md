@@ -7,7 +7,7 @@
 ## Schema (version 1)
 
 - `stages[]`, in deploy order:
-  - `name`: `libs|recorder|vault|registry|router|gateway|governance|ic-policy|proto|agent|rwa|timelock`.
+  - `name`: `libs|recorder|vault|registry|router|gateway|ic-policy|governance|proto|agent|rwa|timelock`.
   - `kind`: always `forge`.
   - `script`: `contracts/script/<File>.s.sol:<Contract>`.
   - `requiredEnv`: names the script reads with no default. This includes `DEPLOYMENT_OUT`. Some are fed by earlier manifests (for example `REGISTRY_ADDRESS`).
@@ -23,7 +23,7 @@ Run order is the table order. The per-stage wiring (which manifest key feeds whi
 
 ## Stage 13 (govern)
 
-`stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each of the four vaults, rmUSDC included, because all four deploy paused (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. Router weights change on demand through the govern row `apply-receipt` (core 1696): the Safe, through the timelock, releases the Investment Committee's consensus receipt and applies its weights in one batch. There is no voting by anyone. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
+`stage-table.json` carries a `govern` block that describes stage 13: after the timelock handover the only mainnet operation is the unpause of each of the four vaults, rmUSDC included, because all four deploy paused (`mainnetRows`), one timelock operation per unpause, all scheduled in one sitting, one 48 hour wait. Vault setters, router eligibility and router default weights are deploy-time configuration set in stages 4 to 10 (router through rwa) and asserted by the verify stage. Router weights change on demand through the govern row `apply-receipt` (core 1696): the Safe, through the timelock, releases the Investment Committee's consensus receipt and applies its weights in one `RouterGovernance.applyReceipt` call. There is no voting by anyone. `update-delay`, `batch` and `cancel` (`twinOnlyRows`) run on the Twin fork only. `stage-table.test.ts` asserts the description.
 
 ## Required env (no defaults)
 
@@ -31,7 +31,7 @@ Every name in `requiredEnv` is read with no fallback. An unset or malformed valu
 
 - `DEPLOYMENT_OUT` for every stage. The publish-contracts CLI sets it. Anyone who runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
 - `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `EXIT_FEE_BPS`.
-- `governance`: `QUORUM_THRESHOLD` (greater than 1), `VOTING_PERIOD` and `EXECUTION_DELAY` (seconds, at least the contract minimum), `VOTER_ADDRESSES` and `VOTER_POWER`. These are constructor arguments of today's `RouterGovernance` bytecode, not a governance model: there is no voting by anyone, the mainnet test deploys RouterGovernance with voter addresses nobody holds keys for, and `RouterGovernance.propose`, `vote` and `execute` exist in the deployed test bytecode, are unused (the voter addresses are held by nobody), and will be deleted before the final deployment (issue 1698), when a weight-setter `applyReceipt` call will replace them.
+- `governance`: `ADMIN_ADDRESS`, `ROUTER_ADDRESS` and `CONSENSUS_RECEIPT_ADDRESS`. The stage runs after `ic-policy`, which deploys the receipt register. It grants `RouterGovernance` router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` (the deployer's copy dropped) and the receipt register's `ADMIN_ROLE`, so `applyReceipt` can release a receipt and set the weights in one call. There is no voting by anyone and no voting parameter (issue 1698). The sheet parser refuses the old voter, quorum, voting period and execution delay names. The `timelock` stage hands `RouterGovernance`'s own `WEIGHT_SETTER_ROLE` to the timelock and drops the deployer's copy.
 - `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).
 - `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT`, `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`) and `ROUTER_DEFAULT_BPS`: `none` leaves the basket router-ineligible, otherwise a comma list of bps for the router default vector after this basket flips eligible (rmUSDC, the eligible baskets so far, this vault). The stage makes the basket eligible and sets that vector in one atomic `registry.migrateEligibility`, before the timelock handover.
 - `recorder` (core 1676) reads only `DEPLOYMENT_OUT`: it deploys the permissionless Uniswap V4 price recorder for the UniswapV4 entry of `config/agent-token-shortlist.json`, grows its ring to 901 slots and records the first snapshot. `agent` reads `RECORDER_ADDRESS` (the recorder stage manifest's `recorder`); the other basket stages ignore it. The runner waits for a full 1800 s window of recorder history before the `agent` stage.
