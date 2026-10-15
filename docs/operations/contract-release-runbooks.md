@@ -587,6 +587,77 @@ Also check the class the deployed bundle reports. **The bundle check is the real
 
 **Restore-old recovery (needs separate approval, never automatic: the old vault keeps the known redeem defect).** `buildRestoreOldCalls` builds one inverse batch of four calls: `reactivate(old)` first, then two matching eligibility migrations (old joins at 0 bps beside new, then new leaves and old takes its slot at the unchanged weight), then `retire(new)`. Retirement stops deposits only: holders of the new vault keep `redeem` and `redeemInKind`. The order is proven on the real contracts by `test_restoreOld_*`.
 
+### 4.12. Governed proxies: release mode, freeze ownership, deadline and the voluntary cutover (issue 1809)
+
+Upgradeability stage 2. The contracts (issue 1808) and the clients (issue 1810) are in place; this section is how a release deploys, verifies, records and later freezes the governed proxies. Canonical design: `docs/technical/contract-upgradeability-plan.md` and `docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md` (Proposed). A CI test (`publish-contracts/tests/upgrade-runbook-drift.test.ts`) checks that the stage table, the labels and the sheet names below agree with the code.
+
+**Release mode.** One required sheet line, `UPGRADE_MODE`, with no default: `frozen` freezes upgrades inside every proxy's atomic initializer, `upgradeable` leaves every proxy upgradeable through the Safe and the timelock. The sheet declares one mode for every proxy of the release; the manifests, the verifier and the evidence record it per proxy. `UPGRADE_FREEZE_DEADLINE` (ISO 8601 UTC, for example `2027-01-31T00:00:00Z`) is the proving-period deadline of an upgradeable release. It is required for an upgradeable PRODUCTION release on 8453 and refused with `frozen`. A run never changes its mode: the run manifest records `upgradeMode`, and `--resume` under another mode is refused (`RESUME`, exit 16) before any forge call.
+
+| Release | `UPGRADE_MODE` | `UPGRADE_FREEZE_DEADLINE` | Core immutability claim |
+| --- | --- | --- | --- |
+| Final mainnet, fixed at launch | `frozen` | none | made by verify only when the full core set verifies frozen on chain |
+| Final mainnet, production proving period | `upgradeable` | required | none until governance has frozen every proxy and verify passes |
+| Twin, rehearsal, contained mainnet test | either | optional | as above |
+
+The committed Twin sheet, the 8453 rehearsal example and the production fixture sheet declare `frozen`.
+
+**Stage order and transactions.** The proxy stages run in this order, each before the `timelock` stage, which deploys the upgrade authority LAST:
+
+| Stage | Proxy (manifest field) | Implementation (manifest field) | Implementation contract |
+| --- | --- | --- | --- |
+| `vault` | `vault` | `vault_implementation` | `RobotMoneyVault` |
+| `registry` | `registry` | `registry_implementation` | `VaultRegistry` |
+| `router` | `router` | `router_implementation` | `PortfolioRouter` |
+| `gateway` | `gateway` | `gateway_implementation` | `RobotMoneyGateway` |
+| `ic-policy` | `policy` | `policy_implementation` | `InvestmentCommitteePolicy` |
+| `ic-policy` | `consensus_receipt` | `consensus_receipt_implementation` | `ConsensusRecommendationReceipt` |
+| `governance` | `governance` | `governance_implementation` | `RouterGovernance` |
+| `proto` | `vault` | `implementation` | `ProtocolAssetVault` |
+| `agent` | `vault` | `implementation` | `AgentTokenVault` |
+| `rwa` | `vault` | `implementation` | `RwaBasketVault` |
+
+Each proxy is 2 deployer transactions: the implementation, then the `ERC1967Proxy` whose constructor runs `initialize` atomically. The mode changes no count, so a frozen count measured on the Twin chain in one mode holds for the other. The deterministic address assumption is the timelock: every proxy names, from its first block, the CREATE2 address of the exact Safe-proposer `TimelockController`, from the factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`, the salt `robotmoney.core.timelock.v1` and `SAFE_ADDRESS` and `TIMELOCK_MIN_DELAY`. Nothing else can hold code there, so no interim deployer upgrade path exists. The stage table (`scripts/deploy/stage-table.json`, `proxies` on each stage and `upgradeAuthority`) carries the same facts.
+
+**Resume after a partial failure.** A proxy stage that dies part-way stays `started` in the run manifest. Rerun with `--resume` and the same arguments: forge replays the stage's own transactions at the same nonces, so its proxy and implementation addresses do not move. After every proxy stage the runner checks the stage manifest: each proxy and implementation address, `upgrade_timelock`, and `upgrade_mode` equal to the sheet's mode. Anything else stops the run (`MANIFEST`, exit 12) with the stage left `started`. Stop and read the chain before anything else runs.
+
+**What verify proves and records.** Per proxied core contract (the full set above), the verifier reads the chain and pushes these labels:
+
+- `is the build's proxy with no admin and no beacon`
+- `implementation slot equals the manifest`
+- `implementation links the build's libraries`
+- `upgradeTimelock() is the deployed timelock`
+- `initialized once and not initializing`
+- `upgradesFrozen() agrees with the release mode`
+- `manifest upgrade_mode equals the release sheet`
+- `storage layout identifier recorded`
+
+The implementation code itself is the existing `runtime code equals build artifact (masked)` label. Three release labels follow: `upgrades: the sheet declares the release mode`, `upgrades: the freeze deadline is not missed` and `upgrades: core immutability is claimed only when the full core set verifies frozen on chain`. The gateway manifest's `gateway_implementation_runtime_hash` (the signing clients' pin) must equal the live implementation code hash. On 8453 source verification covers the proxy and the implementation of every proxied contract (`source[<name> implementation]`).
+
+Verify writes `deployments/<chain>/upgradeability.json` on every run, pass or fail. For each proxy it records the proxy and implementation addresses, both runtime code hashes, the layout file, and `layout_id`, which is the keccak256 of the committed layout snapshot followed by `pins.json`. It also records `upgrade_timelock`, `upgrades_frozen`, `initialized_version` and `manifest_upgrade_mode`. For the release it records the timelock and its delay and `core_immutable`. It lists the parameters a freeze leaves governed and the upstream dependencies it does not control. `core_immutable` is true only for a frozen release whose full core set verified frozen with every check of the run passing; otherwise `immutability_refused_because` says why. Copy the file into the evidence as `upgradeability`. `evidence-check` refuses a missing or partial record, a claim it cannot back, and dropped list entries. With `--rpc` or `--chain-fixture` it reads every proxy fact back from the chain.
+
+**Freeze ownership.** The freeze of an upgradeable release belongs to the governing Safe's owners (`SAFE_OWNERS`, at the sheet's `SAFE_THRESHOLD`): only they can propose on the timelock, which is the only freeze authority. The per-release runbook (section 5) names the release owner, the Safe signers who will sign the freeze, and a backup signer for each. The release owner schedules the freeze, and the signers sign it.
+
+**The freeze round, per proxy.** First review the pending timelock operations and cancel every pending upgrade through the Safe: a queued upgrade must not run after the review. Then schedule `freezeUpgrades(expectedImplementation, expectedCodeHash)` on each proxy through the Safe and the timelock. Take both values from the latest `upgradeability.json` (`implementation`, `implementation_code_hash`). The call reverts if an upgrade landed in between, so a queued freeze can never lock in a version nobody reviewed. After the delay, execute it, then run `verify` with the release's own sheet (still `upgradeable`: the manifests recorded that mode). Once every proxy of the full core set reads `upgradesFrozen()` true and every check passes, verify makes the immutability claim and records `core_immutable` true. The watchdog pages each executed freeze once (issue 1810).
+
+**The deadline is not an on-chain freeze.** Nothing on chain freezes a proxy when `UPGRADE_FREEZE_DEADLINE` passes. The deadline is the Safe signers' commitment. Schedule the freeze no later than the deadline minus the timelock delay minus one day of margin: on 8453 production that is at least 72 hours before the deadline.
+
+**Missed-deadline alerts.** The signal is the verify stage. From 7 days before the deadline, the release owner runs `verify` on 8453 at least once a day and posts the result in the release tracking issue (section 6).
+
+| When | Condition | Who is alerted |
+| --- | --- | --- |
+| deadline minus (timelock delay + 7 days) | any proxy still reads `upgradesFrozen()` false and no freeze is scheduled | the release owner and the named Safe signers: schedule the freeze now |
+| deadline minus (timelock delay + 1 day) | still no freeze scheduled | the release owner escalates to every Safe owner: this is the last safe moment |
+| deadline passed | `upgrades: the freeze deadline is not missed` fails (`VERIFY`, exit 13), with a detail that starts with `MISSED` and names every unfrozen proxy | the release owner pages every Safe owner and records the miss in the tracking issue |
+
+After a miss the deployment stays reported as upgradeable everywhere until every proxy verifies frozen: `core_immutable` stays false, the explorer reports `upgrade_state` `upgradeable`, and the dapp shows the gateway as upgradeable. Never describe the release as immutable before that.
+
+**Voluntary cutover from the current direct Base deployments (planned, not executed by this issue).** The contracts already live on Base 8453 are direct deployments. They cannot be upgraded in place, and pointing a new proxy at an implementation moves no share or permission. A governed-proxy release is therefore a NEW deployment at new addresses, and holders move by their own choice (`docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md`, no assisted migration):
+
+1. Deploy the proxied release with this tool (sections 4.3 and 4.12) at new addresses, and run verify and the evidence check. The current direct addresses stay recorded as they are and are labelled legacy (direct deployment, not upgradeable). They are never presented as upgraded.
+2. Keep every legacy vault redeemable: `redeem` and `withdraw` for USDC, and `redeemInKind` for the baskets. Do not pause a legacy vault's withdrawals, and do not move a legacy holder's shares.
+3. Point new deposits at the new release only after its cutover gates pass: verify green, evidence accepted, and the signing clients' implementation pins updated from the new gateway manifest (`gateway_implementation`, `gateway_implementation_runtime_hash`). The registry, router and gateway references of the new deployment are its own. Nothing in the legacy deployment is rewired.
+4. Retire legacy vaults only through their own governance (registry retirement, deposits halted, withdrawals kept), as in 4.11. Holders exit and deposit into the new release themselves. The dapp and the explorer show legacy positions at their own addresses (4.11, address-specific holdings).
+
 ## 5. Per-release runbook format
 
 Each release has an operator runbook committed under `docs/runbooks/`. The

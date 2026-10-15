@@ -99,8 +99,8 @@ There is no beacon: one upgrade never changes more than one proxy.
   `FrozenAtDeploy` sets the flag inside the atomic initialization (with the event); `Upgradeable` leaves the
   timelock path open for a test, demo, rehearsal, contained mainnet test or a final-mainnet proving period, closed
   later by a delayed freeze. The stage scripts read `UPGRADE_MODE` (`upgradeable` or `frozen`), required, no default.
-  Until the release sheet carries the mode (stage 2), `publish-contracts` passes `frozen`, so no deployment comes up
-  upgradeable by default.
+  `publish-contracts` passes the release sheet's `UPGRADE_MODE`, which has no default either (stage 2, issue 1809), so no
+  deployment comes up upgradeable by omission.
 
 ### 5. Layout safety
 
@@ -134,7 +134,7 @@ proves it fails on a moved, retyped, added or reordered entry, a changed library
 | Deploy scripts deploy initialized proxies; CREATE2 timelock; handover refuses a foreign authority | Implemented (issue 1808) |
 | Layout gate in CI; lifecycle tests (unit, Safe + timelock, Twin fork) | Implemented (issue 1808) |
 | Publish verifier checks the implementation behind each proxy | Implemented (issue 1808) |
-| Release sheet declares every proxy's mode, implementation, layout id, deadline; publish refuses an undeclared mode; manifests and frozen counts | Planned (stage 2) |
+| Release sheet declares every proxy's mode, implementation, layout id, deadline; publish refuses an undeclared mode; manifests and frozen counts | Done (stage 2, issue 1809): the sheet's `UPGRADE_MODE` (one mode for every proxy) and `UPGRADE_FREEZE_DEADLINE`; the build fixes each implementation's code; verify records each proxy's implementation, code hashes, layout id, authority, initialization and freeze state in `upgradeability.json` and the evidence; the stage table states 2 transactions per proxy and the counts do not depend on the mode |
 | Signing clients, ABI consumers, dapp and indexer track implementation and freeze state | Planned (stage 3) |
 | Twin rehearsal of upgrade and freeze; cutover from the direct deployments | Planned (stage 4) |
 
