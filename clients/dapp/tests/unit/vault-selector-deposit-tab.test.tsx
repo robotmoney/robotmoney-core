@@ -138,7 +138,8 @@ vi.mock("wagmi", () => ({
   // issue 1731: the deposits-paused reads use useReadContracts; no live chain in this test.
   useReadContracts: (opts: { contracts: unknown[]; query?: { enabled?: boolean } }) => {
     readsSeen.push(opts);
-    return mockState.vaultDepositsPaused === undefined
+    // A disabled query has no data, as in wagmi: a read the guard did not allow gives no answer.
+    return mockState.vaultDepositsPaused === undefined || opts.query?.enabled === false
       ? { data: undefined }
       : {
           data: opts.contracts.map(() => ({
