@@ -5,7 +5,7 @@ description: "R7's two halves, proved on one topology built the way the deploy s
 
 # GovernanceExecutePathAfterHandoverTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/GovernanceExecutePathAfterHandover.t.sol)
 
 **Inherits:** Test
 
@@ -15,10 +15,11 @@ R7's two halves, proved on one topology built the way the deploy
 scripts build it — not on a hand-wired fixture.
 
 Before this task, `DeployRouterGovernance` deployed the governance
-contract and stopped. Nothing ever granted it `ADMIN_ROLE` on the
-`PortfolioRouter`, so a proposal that passed quorum and cleared its
-execution delay still reverted inside `router.setWeights` — the
-approving body could approve and could not act. The only thing that
+contract and stopped. Nothing ever granted it the router's weight
+role, so an approved weight change still reverted inside
+`router.setWeights` — the approving body could approve and could not
+act. Since issue 1698 the approved change is a Safe-scheduled
+`applyReceipt` through the timelock. The only thing that
 COULD move weights was the deployer EOA, which is exactly the
 inversion §4.3 describes as the gap.
 
@@ -89,28 +90,22 @@ bytes32 internal constant FALLBACK_HANDLER_STORAGE_SLOT =
         0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
 ```
 
-### VOTING_PERIOD
-
-```solidity
-uint64 internal constant VOTING_PERIOD = 1 days;
-```
-
-### EXECUTION_DELAY
-
-```solidity
-uint64 internal constant EXECUTION_DELAY = 1 days;
-```
-
-### QUORUM
-
-```solidity
-uint256 internal constant QUORUM = 2;
-```
-
 ### MIN_DELAY
 
 ```solidity
 uint256 internal constant MIN_DELAY = 2 days;
+```
+
+### RECEIPT_ID
+
+```solidity
+bytes32 internal constant RECEIPT_ID = keccak256("handover-receipt-1");
+```
+
+### DIGEST
+
+```solidity
+bytes32 internal constant DIGEST = keccak256("handover canonical receipt bytes");
 ```
 
 ## State Variables
@@ -183,6 +178,12 @@ RobotMoneyGateway internal gateway;
 InvestmentCommitteePolicy internal icPolicy;
 ```
 
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
 ### timelock
 
 ```solidity
@@ -233,18 +234,6 @@ address internal emergency = makeAddr("emergency");
 address internal pauser = makeAddr("pauser");
 ```
 
-### voter1
-
-```solidity
-address internal voter1 = makeAddr("gov-voter-1");
-```
-
-### voter2
-
-```solidity
-address internal voter2 = makeAddr("gov-voter-2");
-```
-
 ### agentAthena
 
 ```solidity
@@ -289,16 +278,28 @@ emergency key do not.
 function test_onlyGovernanceHoldsWeightSetterRole() public view;
 ```
 
-<a id="test_executereachessetweightsonafreshdeployment"></a>
+<a id="test_applyreceiptreachessetweightsonafreshdeployment"></a>
 
-### test_executeReachesSetWeightsOnAFreshDeployment
+### test_applyReceiptReachesSetWeightsOnAFreshDeployment
 
-THE R7 regression: propose (routed through the timelock, which
-now holds governance ADMIN_ROLE) → both voters vote → delay
-elapses → execute() lands the weights on the router.
+THE R7 regression: the Safe schedules `applyReceipt` on the
+timelock (which holds the governance WEIGHT_SETTER_ROLE), the delay
+elapses, and the execute releases the receipt and lands the
+weights on the router.
 
 ```solidity
-function test_executeReachesSetWeightsOnAFreshDeployment() public;
+function test_applyReceiptReachesSetWeightsOnAFreshDeployment() public;
+```
+
+<a id="test_timelockaloneappliesreceipts"></a>
+
+### test_timelockAloneAppliesReceipts
+
+After the handover the timelock alone holds the governance
+WEIGHT_SETTER_ROLE, and RouterGovernance can release receipts.
+
+```solidity
+function test_timelockAloneAppliesReceipts() public view;
 ```
 
 <a id="test_deployereoacannotcallsetweightsdirectly"></a>
@@ -338,32 +339,21 @@ function test_timelockSetWeightsThroughRealSafeScheduleExecute_reverts() public;
 ### test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds
 
 The same Safe -> Timelock path still reaches setDefaultWeights,
-the below-quorum fallback the timelock keeps through ADMIN_ROLE.
+the fallback the timelock keeps through ADMIN_ROLE.
 
 ```solidity
 function test_timelockSetDefaultWeightsThroughRealSafeScheduleExecute_succeeds() public;
 ```
 
-<a id="test_votersetisdisjointfromthecommittee"></a>
+<a id="test_committeeholdsnoweightauthority"></a>
 
-### test_voterSetIsDisjointFromTheCommittee
+### test_committeeHoldsNoWeightAuthority
 
-The voters that carried the executed proposal hold no
-COMMITTEE_AGENT_ROLE, and the committee agents hold no power.
-
-```solidity
-function test_voterSetIsDisjointFromTheCommittee() public view;
-```
-
-<a id="test_quorumistwooftotalvotingpowertwo"></a>
-
-### test_quorumIsTwoOfTotalVotingPowerTwo
-
-The quorum that carried it is the D16 floor, and it is not
-satisfiable by one voter.
+No committee agent holds any weight authority: not the
+governance WEIGHT_SETTER_ROLE or ADMIN_ROLE, not the router's.
 
 ```solidity
-function test_quorumIsTwoOfTotalVotingPowerTwo() public view;
+function test_committeeHoldsNoWeightAuthority() public view;
 ```
 
 <a id="test_safeisthetimelockdriverandistwoofthree"></a>
@@ -402,37 +392,6 @@ function _sixtyForty() internal view returns (address[] memory vaults, uint256[]
 | ---- | ---- | ----------- |
 | vaults | `address[]` |  |
 | bps | `uint256[]` |  |
-
-<a id="_proposeviatimelock-address-uint256"></a>
-
-### _proposeViaTimelock
-
-<i>
-
-`propose` is ADMIN_ROLE-gated and ADMIN_ROLE now lives on the
-timelock, so a proposal is scheduled by the Safe and executed after
-the min delay — the real post-handover route.
-
-</i>
-
-```solidity
-function _proposeViaTimelock(address[] memory vaults, uint256[] memory bps)
-        internal
-        returns (uint256 proposalId);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| vaults | `address[]` |  |
-| bps | `uint256[]` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| proposalId | `uint256` |  |
 
 <a id="_createsafe"></a>
 

@@ -5,7 +5,7 @@ description: "Fork-based integration tests proving that a 2-of-3 Safe proxy depl
 
 # SafeIntegrationTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f6eb411b56ad36fcaf8bf714e311cacc116b7aaf/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:** Test
 
@@ -689,14 +689,14 @@ AC1b: Full Safe+timelock path on PortfolioRouter (setRouterCap).
 function test_happyPath_portfolioRouter_setRouterCap() public withSnap;
 ```
 
-<a id="test_happypath_routergovernance_setquorumthreshold"></a>
+<a id="test_happypath_routergovernance_clearvotedweights"></a>
 
-### test_happyPath_routerGovernance_setQuorumThreshold
+### test_happyPath_routerGovernance_clearVotedWeights
 
-AC1c: Full Safe+timelock path on RouterGovernance (setQuorumThreshold).
+AC1c: Full Safe+timelock path on RouterGovernance (clearVotedWeights).
 
 ```solidity
-function test_happyPath_routerGovernance_setQuorumThreshold() public withSnap;
+function test_happyPath_routerGovernance_clearVotedWeights() public withSnap;
 ```
 
 <a id="test_happypath_vault_setexitfeebps"></a>

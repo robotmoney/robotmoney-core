@@ -5,7 +5,7 @@ description: "The manifest must answer, from one file: which chain, which addres
 
 # DeployTimelockManifestTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/7bae4c9b0cf6849694f16d3874216689595dbf25/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -111,12 +111,14 @@ shared variable lets one test write to another test's path.
 function test_manifestTests_passAnExplicitPath_neverSetDeploymentOut() public view;
 ```
 
-<a id="test_manifestrecordsthequorumflooritwasdeployedunder"></a>
+<a id="test_manifestrecordsnoquorum"></a>
 
-### test_manifestRecordsTheQuorumFloorItWasDeployedUnder
+### test_manifestRecordsNoQuorum
+
+There is no voting (issue 1698), so the manifest records no quorum.
 
 ```solidity
-function test_manifestRecordsTheQuorumFloorItWasDeployedUnder() public view;
+function test_manifestRecordsNoQuorum() public view;
 ```
 
 <a id="test_manifestrecordszerolistedagents_whennonelisted"></a>

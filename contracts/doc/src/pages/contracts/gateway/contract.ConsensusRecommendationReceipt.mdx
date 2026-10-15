@@ -5,7 +5,7 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/381e87005f49e132cc7df5b7b0fc90224415b97c/contracts/gateway/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/92a6966c4e2c4008e204c9d68b50ae898338c9ca/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/interface.IConsensusRecommendationReceipt)
 
@@ -53,7 +53,9 @@ Emits: `ReceiptRecorded`, `ReceiptReleased`.
 
 ### ADMIN_ROLE
 
-Releases receipts. Held by the `TimelockController` (INV-3).
+Releases receipts. Held by the `TimelockController` (INV-3) and
+by RouterGovernance, whose `applyReceipt` releases a receipt in
+the same call that sets its weights (issue 1698).
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
