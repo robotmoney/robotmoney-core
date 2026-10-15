@@ -66,9 +66,6 @@ export function makeRehearsalKeys(o: MakeKeysOptions): RehearsalKeys {
  * Sheet fragment: addresses and numbers only. Names follow the frozen sheet role vocabulary; the operator pastes it
  * into the rehearsal sheet. Safe owner order is the order of the keystores.
  */
-/** The registered name of the rmUSDC vault in the registry (a label, not a secret). */
-export const REHEARSAL_VAULT_NAME = "Robot Money USDC";
-
 export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
   const a = k.addresses;
   const get = (n: string) => { const v = a[n]; if (!v) throw new Error(`no key named ${n}`); return v; };
@@ -81,7 +78,6 @@ export function sheetFragment(k: RehearsalKeys, chainId?: number): string {
     `EMERGENCY_ADDRESS=${get("EMERGENCY")}`,
     `SAFE_OWNERS=${owners.join(",")}`,
     `SAFE_THRESHOLD=${SAFE_THRESHOLD}`,
-    `VAULT_NAME=${REHEARSAL_VAULT_NAME}`,
   ];
   return lines.join("\n") + "\n";
 }

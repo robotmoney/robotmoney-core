@@ -1,0 +1,22 @@
+---
+title: "DeployVault.s Constants"
+---
+
+# DeployVault.s Constants
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/851b6f6154c5148deb9edad9c16aa038d73ecd19/contracts/script/DeployVault.s.sol)
+
+## RMUSDC_VAULT_NAME
+
+<i>
+
+The name rmUSDC is registered under in the VaultRegistry. A script constant like each
+basket script's VAULT_NAME: one registry-name source for all four vaults (issue 1705 C9).
+File level so the registry stage (DeployVaultRegistry.s.sol) imports this one value.
+
+</i>
+
+```solidity
+string constant RMUSDC_VAULT_NAME = "Robot Money USDC";
+```
+

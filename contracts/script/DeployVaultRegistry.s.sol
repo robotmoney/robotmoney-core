@@ -8,6 +8,7 @@ import {console2} from "forge-std/console2.sol";
 
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
+import {RMUSDC_VAULT_NAME} from "./DeployVault.s.sol";
 
 /// @title DeployVaultRegistry
 /// @notice Foundry deploy script for the VaultRegistry contract.
@@ -21,8 +22,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         Required env vars:
 ///           ADMIN_ADDRESS    — receives ADMIN_ROLE on the registry
 ///           VAULT_ADDRESS    — RobotMoneyVault to register
-///
-///           VAULT_NAME       — registered vault name, from the frozen sheet (no default)
+///         The registered name is RMUSDC_VAULT_NAME (DeployVault.s.sol), a script constant like each basket
+///         script's VAULT_NAME (issue 1705 C9: one registry-name source for all four vaults).
 ///         USDC is the canonical Base USDC constant on every chain.
 ///         Also required: DEPLOYMENT_OUT (output JSON path), EXPECTED_CHAIN_ID
 ///         (mandatory and equal to 8453 on Base mainnet).
@@ -53,7 +54,7 @@ contract DeployVaultRegistry is ExpectedChainGuard {
         address admin = _envAddressRequired("ADMIN_ADDRESS");
         address vault = _envAddressRequired("VAULT_ADDRESS");
         address asset = BASE_USDC;
-        string memory vaultName = _envStringRequired("VAULT_NAME");
+        string memory vaultName = RMUSDC_VAULT_NAME;
         // The registry stores these two addresses without reading them; a wrong-chain
         // or mistyped address would register a vault with no code behind it.
         require(vault.code.length > 0, "VAULT_ADDRESS has no code on this chain");

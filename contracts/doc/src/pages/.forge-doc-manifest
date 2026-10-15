@@ -50,6 +50,7 @@ contracts/lib/library.TwapTickMath.mdx
 contracts/library.FeatureFlags.mdx
 contracts/script/abstract.BasketVaultDeployBase.mdx
 contracts/script/abstract.ExpectedChainGuard.mdx
+contracts/script/constants.DeployVault.s.mdx
 contracts/script/contract.DeployAgentTokenVault.mdx
 contracts/script/contract.DeployGateway.mdx
 contracts/script/contract.DeployInvestmentCommitteePolicy.mdx

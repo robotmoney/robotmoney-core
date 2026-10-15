@@ -954,7 +954,7 @@ async fn shipped_vault_names_get_their_intended_risk_label() {
         (0xA1, "Robot Money Protocol", "VOLATILE"),
         // DeployAgentTokenVault.s.sol VAULT_NAME
         (0xA2, "Robot Money Agent Tokens", "SPECULATIVE"),
-        // stage-sheet VAULT_NAME env
+        // DeployVault.s.sol VAULT_NAME
         (0xA3, "Robot Money USDC", "STABLE_YIELD"),
     ];
 

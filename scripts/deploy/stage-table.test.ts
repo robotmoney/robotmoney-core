@@ -186,8 +186,8 @@ describe("stage-table.json", () => {
           expect([f, decisions[f]?.decision]).toEqual([f, expect.stringMatching(/^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/)]);
         } else expect([f, decisions[f]]).toEqual([f, undefined]);
       }
-      // The recorded differences today: the seed, the eligibility source, the emergency levers and the registry name source.
-      expect(Object.keys(decisions).sort()).toEqual(["eligibilitySource", "emergencyLevers", "registryNameSource", "seed"]);
+      // The recorded differences today: the seed, the eligibility source and the emergency levers. The registry name has one source (C9).
+      expect(Object.keys(decisions).sort()).toEqual(["eligibilitySource", "emergencyLevers", "seed"]);
     });
     test("the loader refuses a difference with no decision, a stale decision and a missing field", () => {
       const copy = () => JSON.parse(JSON.stringify(raw));
@@ -229,11 +229,18 @@ describe("stage-table.json", () => {
         expect([v.key, [...levers].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
       }
     });
-    test("registry name: the sheet name is the registry stage's required env, a script constant is the vault script's VAULT_NAME", () => {
-      for (const v of rules) {
-        if (v.registryNameSource.startsWith("sheet:")) expect(table.stages.find((s) => s.name === "registry")!.requiredEnv).toContain(v.registryNameSource.slice("sheet:".length));
-        else expect(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)).toMatch(/string public constant VAULT_NAME = "[^"]+";/);
-      }
+    test("registry name: one source for all four vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
+      expect(new Set(rules.map((v) => v.registryNameSource))).toEqual(new Set(["script-constant"]));
+      // each vault script holds its name as a constant: VAULT_NAME = "<name>", or for rmUSDC VAULT_NAME = RMUSDC_VAULT_NAME, a file-level constant of the same script
+      const nameOf = (src: string) => /string public constant VAULT_NAME = "([^"]+)";/.exec(src)?.[1] ?? (/string public constant VAULT_NAME = RMUSDC_VAULT_NAME;/.test(src) ? /string constant RMUSDC_VAULT_NAME = "([^"]+)";/.exec(src)?.[1] : undefined);
+      const names = rules.map((v) => nameOf(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)));
+      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money Agent Tokens", "Robot Money RWA"]);
+      for (const s of table.stages) expect([s.name, s.requiredEnv.includes("VAULT_NAME")]).toEqual([s.name, false]);
+      // the registry stage registers rmUSDC under DeployVault's constant, not an env read
+      const reg = read("contracts/script/DeployVaultRegistry.s.sol");
+      expect(reg).toMatch(/import \{RMUSDC_VAULT_NAME\} from "\.\/DeployVault\.s\.sol";/);
+      expect(reg).toContain("vaultName = RMUSDC_VAULT_NAME");
+      expect(reg).not.toContain('"VAULT_NAME"');
     });
   });
 

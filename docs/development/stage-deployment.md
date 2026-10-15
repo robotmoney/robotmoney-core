@@ -103,7 +103,6 @@ SEED_DEPOSIT_USDC=1000000
 EXIT_FEE_BPS=<basis points, 0 allowed>
 TVL_CAP=<6-decimal USDC units>
 PER_DEPOSIT_CAP=<6-decimal USDC units>
-VAULT_NAME=<registered name of the rmUSDC vault in the registry>
 ```
 
 Every line above is required. No script has a default for it (`scripts/deploy/README.md`).

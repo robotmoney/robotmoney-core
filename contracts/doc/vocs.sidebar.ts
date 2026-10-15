@@ -177,6 +177,13 @@ export const sidebar = [
             { text: "AdapterBytecodeGuard", link: "/contracts/script/library.AdapterBytecodeGuard" },
           ],
         },
+        {
+          text: "Constants",
+          collapsed: true,
+          items: [
+            { text: "DeployVault.s", link: "/contracts/script/constants.DeployVault.s" },
+          ],
+        },
       ],
     },
     {

@@ -48,8 +48,6 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   USDC_ADDRESS: { kind: "address" },
   FEE_RECIPIENT_ADDRESS: { kind: "address-or-safe" },
   SEED_DEPOSIT_USDC: { kind: "uint" },
-  /** The name the rmUSDC vault is registered under in the registry (core registry stage env VAULT_NAME; from the frozen sheet, no default). */
-  VAULT_NAME: { kind: "string" },
   /** The Uniswap V3 SwapRouter02 the basket vaults trade through (core env SWAP_ROUTER). */
   SWAP_ROUTER: { kind: "address" },
   TIMELOCK_MIN_DELAY: { kind: "uint" },
@@ -79,6 +77,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
+  [/^VAULT_NAME$/, "the registry name of every vault is a constant of its own vault stage script (rmUSDC included), never a sheet value (issue 1705: one registry-name source for all four vaults). Delete the line"],
   [/^(VAULT_TVL_CAP|VAULT_PER_DEPOSIT_CAP|VAULT_EXIT_FEE_BPS)$/, "there is no unprefixed vault cap name: each vault has its own, and the name carries the vault key (USDC, PROTO, AGENT or RWA), for example VAULT_PROTO_TVL_CAP"],
   [/^VAULT_(?:USDC_)?(?:NAV_DEVIATION_BPS|MIN_POOL_LIQUIDITY)$/, "the NAV deviation guard and the pool liquidity floor belong to the baskets only: name the basket (PROTO, AGENT or RWA), for example VAULT_AGENT_NAV_DEVIATION_BPS. rmUSDC has no navDeviationGuardBps and no pool"],
 ];

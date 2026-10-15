@@ -298,3 +298,8 @@ describe("rule b twin sheet", () => {
     expect([...s.govern.unpauseVaults]).toEqual(["USDC", "PROTO", "AGENT", "RWA"]);
   });
 });
+
+// Issue 1705 C9: every vault's registry name is a script constant, so the sheet carries no VAULT_NAME.
+test("VAULT_NAME is refused with the reason: one registry-name source for all four vaults", () => {
+  expect(() => parseSheet(sheetText({}, ['VAULT_NAME="Robot Money USDC"']))).toThrow(/VAULT_NAME is refused: .*one registry-name source/);
+});
