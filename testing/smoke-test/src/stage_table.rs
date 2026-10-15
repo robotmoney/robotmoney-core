@@ -16,9 +16,31 @@ struct Stage {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct VaultRow {
     key: String,
     manifest: String,
+    /// Issue 1705: the vault stage leaves deposits paused (absent in an older table: false).
+    #[serde(default)]
+    deploy_paused: bool,
+    /// Issue 1705: the vault's unpause row is a stage 13 row.
+    #[serde(default)]
+    unpause_in_stage13: bool,
+}
+
+/// The deposit rule of one vault from the table (issue 1705): its `rm<KEY>` name, whether it deploys paused, and whether stage 13 unpauses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultDepositRule {
+    pub name: String,
+    pub deploy_paused: bool,
+    pub unpause_in_stage13: bool,
+}
+
+impl VaultDepositRule {
+    /// The paused state after stage 13 ran every unpause row the sheet lists: open when the row is a stage 13 row, else its deploy state.
+    pub fn paused_after_stage13(&self) -> bool {
+        self.deploy_paused && !self.unpause_in_stage13
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +114,18 @@ impl StageTable {
             .collect()
     }
 
+    /// The deposit rule of every vault, in table order (issue 1705).
+    pub fn vault_deposit_rules(&self) -> Vec<VaultDepositRule> {
+        self.vaults
+            .iter()
+            .map(|v| VaultDepositRule {
+                name: format!("rm{}", v.key),
+                deploy_paused: v.deploy_paused,
+                unpause_in_stage13: v.unpause_in_stage13,
+            })
+            .collect()
+    }
+
     /// How many of the table's manifests exist in `dir`.
     pub fn count_present(&self, dir: &Path) -> usize {
         self.all_manifests()
@@ -121,6 +155,19 @@ mod tests {
         assert!(all.contains(&"vault.json".to_string()));
         assert_eq!(t.expected_manifest_count(), all.len());
         assert_eq!(t.vault_manifests().len(), 4);
+    }
+
+    #[test]
+    fn real_table_carries_the_four_vault_deposit_rules() {
+        let t = StageTable::load_default().unwrap();
+        let rules = t.vault_deposit_rules();
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
+        // issue 1705 Q1 (a): all four deploy paused and stage 13 opens all four
+        assert!(rules
+            .iter()
+            .all(|r| r.deploy_paused && r.unpause_in_stage13));
+        assert!(rules.iter().all(|r| !r.paused_after_stage13()));
     }
 
     #[test]
