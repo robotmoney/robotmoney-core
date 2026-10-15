@@ -267,44 +267,36 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         keys.join("DEPLOYER").display(),
         pw.display()
     );
-    let status = Command::new("bun")
-        .current_dir(&root)
-        .arg(root.join(PUBLISH_CLI_REL))
-        .args([
-            "--stage",
-            "vault",
-            "--chain",
-            &TWIN_CHAIN_ID.to_string(),
-            "--rpc",
-            &fx.rpc_url,
-        ])
-        .arg("--sheet")
-        .arg(&sheet)
-        .args([
-            "--signer",
-            &signer,
-            "--environment",
-            "stage",
-            "--core-sha",
-            &git_head(&root)?,
-        ])
-        .arg("--counts-dir")
-        .arg(&counts)
-        .arg("--evidence")
-        .arg(dir.path().join("evidence"))
-        .env("PUBLISH_MANIFEST_DIR", &mdir)
-        // The CLI refuses an unattended run without YES=1, and refuses YES=1 on 8453. This is the Twin chain only.
-        .env("YES", "1")
-        .env_remove("CONFIRM")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| HarnessError::Rpc(format!("spawn publish-contracts: {e}")))?;
-    if !status.status.success() {
-        return Err(HarnessError::Rpc(format!(
-            "vault stage failed: {}",
-            String::from_utf8_lossy(&status.stderr)
-        )));
-    }
+    // Core 1808: the vault is a governed proxy. Its implementation links TickMath from the libs stage manifest, so the
+    // libs stage runs first. The proxy initializer is bound to the timelock predicted from SAFE_ADDRESS. A vault-only run
+    // makes no Safe and deploys the proxy frozen (publish contracts always sets UPGRADE_MODE=frozen), so that timelock never
+    // acts. The deployer stands in as the nominal Safe through a safe.json the stage reads like any earlier manifest.
+    run_publish_stage(
+        &root,
+        fx,
+        "libs",
+        &sheet,
+        &signer,
+        dir.path(),
+        &mdir,
+        &counts,
+    )?;
+    let nominal_safe = serde_json::json!({
+        "safe": format!("{deployer:#x}"),
+        "chain_id": TWIN_CHAIN_ID,
+        "nominal": "vault-only fork fixture: no Safe is made, the proxy is frozen at deploy",
+    });
+    std::fs::write(mdir.join("safe.json"), nominal_safe.to_string())?;
+    run_publish_stage(
+        &root,
+        fx,
+        "vault",
+        &sheet,
+        &signer,
+        dir.path(),
+        &mdir,
+        &counts,
+    )?;
     let out = mdir.join("vault.json");
     let text = std::fs::read_to_string(&out)?;
     // Keep the manifest path for the record; the tempdir (keystores included) drops with this call.
@@ -328,6 +320,60 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
         )));
     }
     Ok(vault)
+}
+
+/// One `bun publish-contracts/src/cli.ts --stage <stage>` run on the Twin chain with the fixture's sheet and keystore.
+#[allow(clippy::too_many_arguments)]
+fn run_publish_stage(
+    root: &std::path::Path,
+    fx: &ForkFixture,
+    stage: &str,
+    sheet: &std::path::Path,
+    signer: &str,
+    dir: &std::path::Path,
+    mdir: &std::path::Path,
+    counts: &std::path::Path,
+) -> Result<(), HarnessError> {
+    let status = Command::new("bun")
+        .current_dir(root)
+        .arg(root.join(PUBLISH_CLI_REL))
+        .args([
+            "--stage",
+            stage,
+            "--chain",
+            &TWIN_CHAIN_ID.to_string(),
+            "--rpc",
+            &fx.rpc_url,
+        ])
+        .arg("--sheet")
+        .arg(sheet)
+        .args([
+            "--signer",
+            signer,
+            "--environment",
+            "stage",
+            "--core-sha",
+            &git_head(root)?,
+        ])
+        .arg("--counts-dir")
+        .arg(counts)
+        // One evidence directory per stage: each run is its own single-stage publish, not a resume of the last one.
+        .arg("--evidence")
+        .arg(dir.join(format!("evidence-{stage}")))
+        .env("PUBLISH_MANIFEST_DIR", mdir)
+        // The CLI refuses an unattended run without YES=1, and refuses YES=1 on 8453. This is the Twin chain only.
+        .env("YES", "1")
+        .env_remove("CONFIRM")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| HarnessError::Rpc(format!("spawn publish-contracts: {e}")))?;
+    if !status.status.success() {
+        return Err(HarnessError::Rpc(format!(
+            "{stage} stage failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
