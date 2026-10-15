@@ -52,7 +52,9 @@
       ],
       "manifest": "deployments/<chain>/vault.json",
       "manifestNotes": "Seed fields: seed_share_receiver (SEED_SHARE_RECEIVER), seed_shares (minted to the receiver) and deployer_share_balance_after (must be 0). Verify asserts the deployer holds zero shares and the receiver holds the seed shares.",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": "USDC",
       "create2Libraries": [
         "GovernedUpgrade",
@@ -75,7 +77,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/registry.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
@@ -98,7 +102,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/router.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
@@ -123,7 +129,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/gateway.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade",
@@ -147,7 +155,9 @@
         "EXPECTED_CHAIN_ID"
       ],
       "manifest": "deployments/<chain>/ic-policy.json",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"
@@ -171,7 +181,9 @@
       ],
       "manifest": "deployments/<chain>/governance.json",
       "manifestNotes": "RouterGovernance is the router's weight setter (issue 1698). It runs after ic-policy because its applyReceipt releases receipts on the ConsensusRecommendationReceipt register in the same call that sets the weights: the stage grants it router ADMIN_ROLE, router WEIGHT_SETTER_ROLE (the deployer's copy dropped) and the receipt register's ADMIN_ROLE. It has no voting and no constructor parameters beyond the three addresses.",
-      "libraries": [],
+      "libraries": [
+        "tick_math"
+      ],
       "vault": null,
       "create2Libraries": [
         "GovernedUpgrade"

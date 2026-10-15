@@ -76,6 +76,14 @@ describe("ERC-1967 proxies (issue 1808)", () => {
   test("with no proxy artifact the code at the address is compared directly", async () => {
     expect((await compareDeployedCode(world("0x"), proxy, implArt, undefined)).ok).toBe(false);
   });
+  test("a proxy compiled with other settings (another CBOR metadata trailer) is still the proxy", async () => {
+    const withCbor = { object: "0x60806040" + "cc".repeat(8) + "aabbcc" + "0003", refs: [] };
+    const deployedOtherMeta = "0x60806040" + "cc".repeat(8) + "ddeeff" + "0003";
+    const w = world("0x" + "11".repeat(4) + "ab".repeat(4) + "22".repeat(4), deployedOtherMeta);
+    expect((await compareDeployedCode(w, proxy, implArt, withCbor)).ok).toBe(true);
+    const tampered = world("0x" + "11".repeat(4) + "ab".repeat(4) + "22".repeat(4), "0x60806041" + "cc".repeat(8) + "ddeeff" + "0003");
+    expect((await compareDeployedCode(tampered, proxy, implArt, withCbor)).implementation).toBeUndefined();
+  });
   test("logicCode reads the implementation's code behind a proxy", async () => {
     const w = world("0xfeed");
     expect(await logicCode(w, proxy, proxyArt)).toBe("0xfeed");

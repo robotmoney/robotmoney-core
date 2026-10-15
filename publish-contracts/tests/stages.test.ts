@@ -75,7 +75,9 @@ describe("stage list built from core's stage table", () => {
   });
   test("the libs stage links nothing and every library a stage links comes from the libs manifest key", () => {
     expect(STAGES.find((s) => s.name === LIBS_STAGE)!.libraries).toEqual([]);
-    expect(forge.filter((s) => s.libraries.length).map((s) => s.vault)).toEqual(["PROTO", "AGENT", "RWA"]);
+    // Issue 1808: every stage that deploys a proxied core contract compiles with --libraries tick_math (one setting, one CREATE2 address per library);
+    // the libs, recorder and timelock stages deploy no proxy and link nothing.
+    expect(forge.filter((s) => s.libraries.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "gateway", "ic-policy", "governance", "proto", "agent", "rwa"]);
     for (const s of forge) for (const l of s.libraries) expect(l.manifestKey).toBeTruthy();
   });
   test("no script path, env name list or artifact name is typed in the stage modules", () => {

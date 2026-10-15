@@ -68,6 +68,15 @@ export const ERC1967_IMPLEMENTATION_SLOT: Hex = "0x360894a13ba1a3210667c828492db
 /** The OpenZeppelin proxy every core contract runs behind since issue 1808. */
 export const ERC1967_PROXY_ARTIFACT = "ERC1967Proxy";
 
+/**
+ * True when `code` is the build's ERC1967Proxy runtime. The CBOR metadata trailer is masked: the deploy stages compile with `--libraries`
+ * (which changes every contract's metadata hash, the proxy's too) and the verifier's build may not, while the proxy's executable bytes are fixed.
+ */
+export function isProxyCode(code: Hex, proxyArt: Artifact | undefined): boolean {
+  if (proxyArt === undefined) return false;
+  return compareCode(code, { object: proxyArt.object, refs: [...proxyArt.refs, ...implicitRefs(proxyArt.object, true)] }).ok;
+}
+
 /** `loadArtifact`, or undefined when the build has no artifact of that name. */
 export function tryLoadArtifact(outDir: string, name: string): Artifact | undefined {
   try { return loadArtifact(outDir, name); } catch { return undefined; }
@@ -86,7 +95,7 @@ export async function compareDeployedCode(
   proxyArt: Artifact | undefined,
 ): Promise<CodeHashResult & { implementation?: Hex }> {
   const code = await chain.getCode(address);
-  if (proxyArt === undefined || !compareCode(code, proxyArt).ok) return compareCode(code, art);
+  if (!isProxyCode(code, proxyArt)) return compareCode(code, art);
   const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
   const implementation = (`0x${word.slice(24)}`).toLowerCase() as Hex;
   const r = compareCode(await chain.getCode(implementation), art);
@@ -100,7 +109,7 @@ export async function logicCode(
   proxyArt: Artifact | undefined,
 ): Promise<Hex> {
   const code = await chain.getCode(address);
-  if (proxyArt === undefined || !compareCode(code, proxyArt).ok) return code;
+  if (!isProxyCode(code, proxyArt)) return code;
   const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
   return chain.getCode(`0x${word.slice(24)}` as Hex);
 }
