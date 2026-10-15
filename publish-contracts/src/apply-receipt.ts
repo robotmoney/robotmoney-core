@@ -17,6 +17,8 @@ export const BUCKET_VAULT: Readonly<Record<string, VaultKey>> = {
 };
 
 export const GOVERNANCE_APPLY_ABI = parseAbi(["function applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)"]);
+/** Issue 1831: the recordedAt of the last receipt RouterGovernance applied. applyReceipt reverts ReceiptNotNewerThanApplied unless the receipt was recorded strictly later. */
+export const GOVERNANCE_LAST_APPLIED_ABI = parseAbi(["function lastAppliedRecordedAt() view returns (uint64)"]);
 /** The router reads govern needs: the ACTIVE vector applyReceipt sets, the DEFAULT vector, the EFFECTIVE vector deposits route by, and whether the active vector is in effect (issue 1743). */
 export const ROUTER_WEIGHTS_ABI = parseAbi([
   "function getWeights() view returns (address[] vaults, uint256[] bps)",
@@ -47,6 +49,9 @@ export interface ApplyInputs {
   released: boolean;
   /** The stored payloadDigest of the receipt (read only when recorded). */
   storedDigest?: Hex;
+  /** Issue 1831: the receipt's stored recordedAt and RouterGovernance.lastAppliedRecordedAt (both read only when recorded). */
+  recordedAt?: bigint;
+  lastAppliedRecordedAt?: bigint;
   /** The registry's router-eligible vaults, in registry order. */
   eligible: readonly Address[];
   /** Bucket to deployed vault address (the vault manifests). */
@@ -86,14 +91,22 @@ export function payloadVector(payload: Uint8Array, vaultOf: Readonly<Record<Vaul
   return { vaults: kept.map((e) => e.vault), bps: kept.map((e) => e.bps) };
 }
 
+/** Issue 1831: why a receipt not recorded after the last applied one is refused. The contract would revert ReceiptNotNewerThanApplied. */
+export const notNewerMessage = (receiptId: Hex, recordedAt: bigint, last: bigint): string =>
+  `receipt ${receiptId} was recorded at ${recordedAt}, not later than the last applied receipt (lastAppliedRecordedAt ${last}): RouterGovernance.applyReceipt would revert ReceiptNotNewerThanApplied, so an older receipt can never replace a newer vector. Nothing was sent.`;
+
 /**
  * Pre-send validation. Throws USAGE (nothing was sent) unless: the receipt is recorded, its stored digest equals the receipt digest (receipt-digest.ts) of the payload bytes, the
- * vector sums to 10000 bps and lists exactly the registry's router-eligible vaults (it is arranged in registry order), and the receipt is not yet released.
+ * vector sums to 10000 bps and lists exactly the registry's router-eligible vaults (it is arranged in registry order), the receipt is not yet released, and it was
+ * recorded strictly later than the last receipt RouterGovernance applied (issue 1831).
  */
 export function planApply(i: ApplyInputs): WeightVector {
   if (!i.inFlight) {
     if (!i.recorded) usage(`receipt ${i.receiptId} is not recorded on the receipt contract: nothing to apply`, { receipt_id: i.receiptId });
     if (i.released) usage(`receipt ${i.receiptId} is already released: nothing to apply`, { receipt_id: i.receiptId });
+    if (i.recordedAt !== undefined && i.lastAppliedRecordedAt !== undefined && i.recordedAt <= i.lastAppliedRecordedAt) {
+      usage(notNewerMessage(i.receiptId, i.recordedAt, i.lastAppliedRecordedAt), { receipt_id: i.receiptId, recorded_at: Number(i.recordedAt), last_applied_recorded_at: Number(i.lastAppliedRecordedAt) });
+    }
   }
   if (i.storedDigest === undefined) usage(`receipt ${i.receiptId} has no stored payload digest to compare`, { receipt_id: i.receiptId });
   const digest = receiptPayloadDigest(i.payload); // issue 1754: the protocol digest (domain line + canonical bytes), the same function record-receipt uses
