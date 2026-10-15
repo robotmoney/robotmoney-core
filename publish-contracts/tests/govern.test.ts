@@ -1707,10 +1707,12 @@ describe("QA plan v1 B4: self-administration rows after the Safe changes", () =>
     const err = await rejection(run(ctx, manifest, sheet, tl, { ownerSigners: signers(sheet, 2), warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } }));
     expect(err.kind).toBe("GOVERN");
     expect(err.message).toContain("2 of the 3");
-    expect(tl.s.events).toEqual(["propose:safe-change-threshold"]);
+    // The schedule bundle is built, then signing refuses: no Safe transaction executes and the timelock holds no operation.
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role"]);
+    expect(tl.s.ops.size).toBe(0);
     // with three signers the same row goes through the Safe at its new threshold
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: ROLE, account: NEW } });
-    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
+    expect(tl.s.events).toEqual(["propose:safe-change-threshold", "schedule:timelock-grant-role", "schedule:timelock-grant-role", "execute:timelock-grant-role"]);
   });
 
   test("the roster helpers: sheetRosterProblems names the sheet key that differs, safeAdminEffect reads a row's arguments back, safeRuleProblem is the Safe's rule", () => {
