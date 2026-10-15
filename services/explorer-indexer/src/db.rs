@@ -395,11 +395,13 @@ pub enum CountTable {
     /// that the in-place `vaults.status` is derived from, making status
     /// reorg-safe (IDX-8).
     VaultStatusEvents,
-    /// Added in migration 0003 — governance proposal events.
+    /// Added in migration 0003 — governance proposal events. No longer written:
+    /// `RouterGovernance` voting was deleted (issue #1698); the table stays
+    /// because migrations are append-only.
     GovernanceProposals,
-    /// Added in migration 0003 — per-voter vote events.
+    /// Added in migration 0003 — per-voter vote events. No longer written (issue #1698).
     GovernanceVotes,
-    /// Added in migration 0003 — weight-change history from WeightsApplied events.
+    /// Added in migration 0003 — weight-change history from PortfolioRouter weight events.
     RouterWeightSnapshots,
     /// Added in migration 0006 — per-leg data from RouterDeposit events (issue #373).
     RouterDepositLegs,
@@ -1461,130 +1463,8 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    /// Idempotent insert of a governance proposal row from a `ProposalCreated`
-    /// event.  Uses `ON CONFLICT DO NOTHING` so re-indexing is a no-op.
-    ///
-    /// `status` is initialised to 0 (open); it is updated by subsequent
-    /// `ProposalExecuted` events via [`Db::execute_proposal`].
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_proposal(
-        &self,
-        chain_id: i64,
-        proposal_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        proposer: [u8; 20],
-        description: &str,
-        created_at: i64,
-        deadline_block: i64,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "INSERT INTO governance_proposals \
-             (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, created_at, deadline_block) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (chain_id, proposal_id) DO NOTHING",
-        )
-        .bind(chain_id)
-        .bind(proposal_id)
-        .bind(block_number)
-        .bind(log_index)
-        .bind(&tx_hash[..])
-        .bind(&proposer[..])
-        .bind(description)
-        .bind(created_at)
-        .bind(deadline_block)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Idempotent insert of a per-voter vote row from a `VoteCast` event.
-    /// Uses `ON CONFLICT DO NOTHING` (one vote per voter per proposal).
-    ///
-    /// Also adds the vote's `weight` (voting power) to the running `votes_for`
-    /// or `votes_against` tally on the parent `governance_proposals` row — but
-    /// only when the vote row is new (rows_affected == 1).  The tally sums
-    /// power, not voter count (IDX-5).
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_vote(
-        &self,
-        chain_id: i64,
-        proposal_id: i64,
-        voter: [u8; 20],
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        support: bool,
-        weight: U256,
-    ) -> Result<u64, DbError> {
-        let mut tx = self.pool.begin().await?;
-        let r = sqlx::query(
-            "INSERT INTO governance_votes \
-             (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (chain_id, proposal_id, voter) DO NOTHING",
-        )
-        .bind(chain_id)
-        .bind(proposal_id)
-        .bind(&voter[..])
-        .bind(block_number)
-        .bind(log_index)
-        .bind(&tx_hash[..])
-        .bind(support)
-        .bind(u256_to_decimal(weight))
-        .execute(&mut *tx)
-        .await?;
-
-        if r.rows_affected() == 1 {
-            // IDX-5: sum the vote's *power* (weight) into the running tally,
-            // not `+ 1` per voter — the tally must reflect voting power so it
-            // agrees with on-chain quorum/threshold math.  The columns are
-            // NUMERIC(78, 0) (migration 0013) to hold a U256 power sum.
-            let col = if support {
-                "votes_for"
-            } else {
-                "votes_against"
-            };
-            let q = format!(
-                "UPDATE governance_proposals SET {} = {} + $3 \
-                 WHERE chain_id = $1 AND proposal_id = $2",
-                col, col
-            );
-            sqlx::query(&q)
-                .bind(chain_id)
-                .bind(proposal_id)
-                .bind(u256_to_decimal(weight))
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        tx.commit().await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Mark a proposal as executed (status = 2) from a `ProposalExecuted`
-    /// event.  A no-op if the proposal is unknown or already executed.
-    pub async fn execute_proposal(
-        &self,
-        chain_id: i64,
-        proposal_id: i64,
-        executed_block: i64,
-    ) -> Result<u64, DbError> {
-        let r = sqlx::query(
-            "UPDATE governance_proposals \
-             SET status = 2, executed_block = $3, indexed_at = now() \
-             WHERE chain_id = $1 AND proposal_id = $2 AND status < 2",
-        )
-        .bind(chain_id)
-        .bind(proposal_id)
-        .bind(executed_block)
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected())
-    }
-
-    /// Idempotent insert of a `WeightsApplied` snapshot row.
+    /// Idempotent insert of a PortfolioRouter `WeightsSet` / `DefaultWeightsSet`
+    /// snapshot row.
     /// `vault_addresses` and `bps_values` are parallel arrays.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_router_weight_snapshot(
@@ -1624,7 +1504,7 @@ impl Db {
     /// `ON CONFLICT DO NOTHING` keeps re-indexing idempotent.
     ///
     /// `kind` must be one of: `"deposit"`, `"withdrawal"`, `"fee_charged"`,
-    /// `"policy_change"`, `"governance_vote"`.
+    /// `"policy_change"`.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_history_event(
         &self,

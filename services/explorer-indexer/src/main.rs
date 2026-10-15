@@ -83,9 +83,8 @@ struct Cli {
     #[arg(long, env = "INDEXER_REGISTRY")]
     registry: Option<String>,
 
-    /// Optional PortfolioRouter / RouterGovernance contract address.
-    /// When set, the indexer ingests ProposalCreated, VoteCast,
-    /// ProposalExecuted, and WeightsApplied events.
+    /// Optional RouterGovernance (weight setter) contract address. Registered
+    /// in `contracts`; not watched for logs (it has no voting, issue #1698).
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 

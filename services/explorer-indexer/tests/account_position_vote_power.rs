@@ -1,5 +1,5 @@
-//! Integration tests for issue #1022 (IDX-3 / IDX-5): account-position and
-//! vote-power accounting in the explorer indexer.
+//! Integration tests for issue #1022 (IDX-3): account-position accounting in
+//! the explorer indexer.
 //!
 //! - **IDX-3** — `insert_wallet_position` had zero call sites, so the
 //!   `wallet_positions` table (which backs the `account_positions` view / the
@@ -8,14 +8,13 @@
 //!   balance forward into `wallet_positions`. These tests drive a synthetic
 //!   `Deposit` (then `Withdraw`) through `handle_log` and assert the resulting
 //!   balance row.
-//! - **IDX-5** — the proposal tally incremented `{col} + 1` per voter instead
-//!   of summing voting power, so `votes_for` counted *voters* not *power*. The
-//!   tally now sums each vote's `weight`/`power`. The test casts two votes of
-//!   unequal weight and asserts the tally equals the *sum of weights*, not the
-//!   voter count (2).
 //!
-//! Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-3/IDX-5),
-//!            services/explorer-indexer/src/scan_residual_seams.rs §B1/§B2.
+//! The file name keeps the IDX-5 vote-power half it used to carry because CI
+//! selects it by name. That half was deleted with `RouterGovernance` voting
+//! (issue #1698): there is no vote and no tally to index.
+//!
+//! Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-3),
+//!            services/explorer-indexer/src/scan_residual_seams.rs §B1.
 
 mod common;
 
@@ -25,7 +24,6 @@ use common::pg_fixture;
 use explorer_indexer::abi::{IVaultEvents, Topics};
 use explorer_indexer::indexer::{handle_log, IndexerConfig};
 use explorer_indexer::rpc::LogEntry;
-use std::str::FromStr;
 
 const CHAIN: i64 = 8453;
 
@@ -201,85 +199,4 @@ async fn position_balance(
     .await
     .unwrap();
     row.map(|(d,)| d)
-}
-
-// ─── IDX-5 ───────────────────────────────────────────────────────────────────
-
-/// IDX-5: two votes of weight 500_000 and 3 move the proposal tally to their
-/// *sum* (500_003), not the voter count (2). Before the fix the tally was
-/// `{col} + 1` per voter and would have read 2.
-#[tokio::test]
-async fn vote_tally_sums_power_not_voter_count() {
-    let fx = pg_fixture().await;
-    let db = &fx.db;
-    let gov = Address::from([0x99u8; 20]);
-    let whale = Address::from([0x44u8; 20]);
-    let dust = Address::from([0x66u8; 20]);
-
-    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
-    db.upsert_contract(CHAIN, gov.into_array(), "router_governance", None)
-        .await
-        .unwrap();
-    db.insert_proposal(
-        CHAIN,
-        1i64,
-        40i64,
-        0i32,
-        [0x11u8; 32],
-        gov.into_array(),
-        "seed proposal",
-        1_748_000_000i64,
-        100i64,
-    )
-    .await
-    .unwrap();
-
-    // Whale votes with power 500_000; dust holder votes with power 3.
-    let whale_weight = U256::from(500_000u64);
-    let dust_weight = U256::from(3u64);
-    db.insert_vote(
-        CHAIN,
-        1i64,
-        whale.into_array(),
-        41i64,
-        0i32,
-        [0xa1u8; 32],
-        true,
-        whale_weight,
-    )
-    .await
-    .unwrap();
-    db.insert_vote(
-        CHAIN,
-        1i64,
-        dust.into_array(),
-        42i64,
-        0i32,
-        [0xa2u8; 32],
-        true,
-        dust_weight,
-    )
-    .await
-    .unwrap();
-
-    let (votes_for, votes_against): (BigDecimal, BigDecimal) = sqlx::query_as(
-        "SELECT votes_for, votes_against FROM governance_proposals \
-         WHERE chain_id = $1 AND proposal_id = $2",
-    )
-    .bind(CHAIN)
-    .bind(1i64)
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
-
-    assert_eq!(
-        votes_for,
-        BigDecimal::from_str("500003").unwrap(),
-        "votes_for must sum voting power (500_000 + 3), not count voters (2)"
-    );
-    assert_eq!(
-        votes_against,
-        BigDecimal::from(0),
-        "no AGAINST votes were cast"
-    );
 }

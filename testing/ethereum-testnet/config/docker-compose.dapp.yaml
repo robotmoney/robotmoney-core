@@ -169,9 +169,9 @@ services:
       # this the explorer /v1/router/weights endpoint returns an empty weight list
       # even when the deploy script called setWeights() before the dapp stack booted.
       INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
-      # Issue 1647: INDEXER_ROUTER_GOVERNANCE enables ProposalCreated / VoteCast /
-      # ProposalExecuted ingestion from RouterGovernance. Without it /v1/governance/proposals
-      # stays empty however many proposals the Safe and timelock created on chain.
+      # Issue 1647: INDEXER_ROUTER_GOVERNANCE registers RouterGovernance (the weight setter) in
+      # the explorer's contract list. It is not watched for logs: issue 1698 deleted its voting,
+      # so it emits no proposal or vote events. Weight changes are indexed from the router.
       INDEXER_ROUTER_GOVERNANCE: ${INDEXER_ROUTER_GOVERNANCE:-}
       # Issue 1731: INDEXER_TIMELOCK and INDEXER_SAFE put the TimelockController and the Safe in the
       # watched set. The explorer then lists both in /v1/chains/{id}/contracts and serves their
