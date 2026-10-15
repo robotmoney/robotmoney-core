@@ -24,7 +24,31 @@ export interface TableStage {
   create2Libraries?: string[];
   vault: TableVaultKey | null;
 }
-export interface TableVault { key: TableVaultKey; stage: string; artifact: string; manifest: string }
+export interface TableVault extends Partial<VaultRules> { key: TableVaultKey; stage: string; artifact: string; manifest: string }
+/**
+ * The per-vault deploy and governance rule (issue 1705), one row per vault in the table's `vaults[]`. Every tool that treats the vaults differently reads the
+ * difference from here (vault-rules.ts), never from a literal vault key. A field whose value differs between vaults names its reason and decision in `vaultRuleDecisions`.
+ */
+export interface VaultRules {
+  /** The vault stage leaves deposits paused. */
+  deployPaused: boolean;
+  /** The govern row that unpauses the vault through the Safe and the timelock: `unpause-<KEY>`. */
+  unpauseRow: `unpause-${TableVaultKey}`;
+  /** The unpause row is a stage 13 row (scheduled in the one sitting, required on 8453). */
+  unpauseInStage13: boolean;
+  /** The sheet name of the seed deposit the vault stage makes, or null for no seed. */
+  seed: string | null;
+  /** Where router eligibility comes from: the router stage (the base leg) or the vault stage's ROUTER_DEFAULT_BPS sheet value. */
+  eligibilitySource: "router-stage" | "sheet:ROUTER_DEFAULT_BPS";
+  /** Every function EMERGENCY_ROLE may call on the vault, with no timelock. */
+  emergencyLevers: string[];
+  /** Where the registry name comes from: a sheet name (`sheet:<NAME>`) or the vault script's constant. */
+  registryNameSource: string;
+}
+export const VAULT_RULE_FIELDS = ["deployPaused", "unpauseRow", "unpauseInStage13", "seed", "eligibilitySource", "emergencyLevers", "registryNameSource"] as const;
+export type VaultRuleField = (typeof VAULT_RULE_FIELDS)[number];
+/** Why a rule field differs between vaults, and the issue that decided it. */
+export interface VaultRuleDecision { reason: string; decision: string }
 export interface TableLibrary { name: string; artifact: string; manifestKey: string; path: string }
 /** A library forge deploys through the CREATE2 factory inside a stage (not linked with `--libraries`, no manifest key). It may link other `create2Libraries`. */
 export interface TableCreate2Library { name: string; artifact: string; path: string }
@@ -50,6 +74,8 @@ export interface StageTable {
   create2Libraries?: TableCreate2Library[];
   /** Single-vault redeploys into a live deployment (issue 1796). Absent: none. */
   redeploys?: TableRedeploy[];
+  /** One entry per vault rule field whose value differs between vaults (issue 1705). */
+  vaultRuleDecisions?: Partial<Record<VaultRuleField, VaultRuleDecision>>;
   artifacts: Record<string, string>;
 }
 
@@ -107,6 +133,37 @@ export function parseStageTable(json: unknown, where = "stage-table.json"): Stag
     else if (st.vault !== v.key || st.manifest !== v.manifest) bad(`vault ${v.key} disagrees with its stage ${v.stage}`);
   }
   return t as StageTable;
+}
+
+const DECISION_LINK = /^https:\/\/github\.com\/robotmoney\/robotmoney-(?:core|devops)\/issues\/\d+$/;
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The vault rows with every rule field (issue 1705), or INPUT_MISSING naming what is wrong. A field that differs between vaults must name its reason and a decision
+ * link in `vaultRuleDecisions`; a decision for a field every vault agrees on is stale and is refused too.
+ */
+export function vaultRules(t: Pick<StageTable, "vaults" | "vaultRuleDecisions">, where = "stage-table.json"): (TableVault & VaultRules)[] {
+  for (const v of t.vaults) {
+    for (const f of VAULT_RULE_FIELDS) if (!(f in v)) bad(`${where}: vault ${v.key} has no ${f} (issue 1705 vault rules)`);
+    if (typeof v.deployPaused !== "boolean" || typeof v.unpauseInStage13 !== "boolean") bad(`${where}: vault ${v.key} deployPaused and unpauseInStage13 must be booleans`);
+    if (v.unpauseRow !== `unpause-${v.key}`) bad(`${where}: vault ${v.key} unpauseRow must be unpause-${v.key}`);
+    if (v.unpauseInStage13 && !v.deployPaused) bad(`${where}: vault ${v.key} deploys open, so stage 13 has nothing to unpause`);
+    if (v.seed !== null && (typeof v.seed !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(v.seed))) bad(`${where}: vault ${v.key} seed must be a sheet name or null`);
+    if (v.eligibilitySource !== "router-stage" && v.eligibilitySource !== "sheet:ROUTER_DEFAULT_BPS") bad(`${where}: vault ${v.key} eligibilitySource must be router-stage or sheet:ROUTER_DEFAULT_BPS`);
+    strList(v.emergencyLevers, `vault ${v.key} emergencyLevers`);
+    if (typeof v.registryNameSource !== "string" || !/^(?:sheet:[A-Z][A-Z0-9_]*|script-constant)$/.test(v.registryNameSource)) bad(`${where}: vault ${v.key} registryNameSource must be sheet:<NAME> or script-constant`);
+  }
+  const decisions = t.vaultRuleDecisions ?? {};
+  for (const f of VAULT_RULE_FIELDS) {
+    // unpauseRow names the vault's own key by construction (checked above): the rule is the same when every row is unpause-<KEY>.
+    const norm = (v: TableVault): unknown => (f === "unpauseRow" ? "unpause-<KEY>" : v[f]);
+    const differs = t.vaults.some((v) => !sameValue(norm(v), norm(t.vaults[0]!)));
+    const d = decisions[f];
+    if (differs && (!d || typeof d.reason !== "string" || d.reason === "" || typeof d.decision !== "string" || !DECISION_LINK.test(d.decision))) bad(`${where}: vault rule ${f} differs between vaults, so vaultRuleDecisions.${f} must give a reason and a decision link (an issue URL)`);
+    if (!differs && d) bad(`${where}: vaultRuleDecisions.${f} is stale: every vault has the same ${f}`);
+  }
+  for (const k of Object.keys(decisions)) if (!(VAULT_RULE_FIELDS as readonly string[]).includes(k)) bad(`${where}: vaultRuleDecisions names unknown field ${k}`);
+  return t.vaults as (TableVault & VaultRules)[];
 }
 
 /** The redeploy row of a vault, or INPUT_MISSING naming the checkout that lacks it. */

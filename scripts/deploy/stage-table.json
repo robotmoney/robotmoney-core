@@ -316,27 +316,94 @@
       "key": "USDC",
       "stage": "vault",
       "artifact": "RobotMoneyVault",
-      "manifest": "deployments/<chain>/vault.json"
+      "manifest": "deployments/<chain>/vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-USDC",
+      "unpauseInStage13": true,
+      "seed": "SEED_DEPOSIT_USDC",
+      "eligibilitySource": "router-stage",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyWithdraw",
+        "emergencyWithdrawAdapter",
+        "forceRemoveAdapter",
+        "shutdownVault"
+      ],
+      "registryNameSource": "sheet:VAULT_NAME"
     },
     {
       "key": "PROTO",
       "stage": "proto",
       "artifact": "ProtocolAssetVault",
-      "manifest": "deployments/<chain>/protocol-asset-vault.json"
+      "manifest": "deployments/<chain>/protocol-asset-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-PROTO",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     },
     {
       "key": "AGENT",
       "stage": "agent",
       "artifact": "AgentTokenVault",
-      "manifest": "deployments/<chain>/agent-token-vault.json"
+      "manifest": "deployments/<chain>/agent-token-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-AGENT",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     },
     {
       "key": "RWA",
       "stage": "rwa",
       "artifact": "RwaBasketVault",
-      "manifest": "deployments/<chain>/rwa-basket-vault.json"
+      "manifest": "deployments/<chain>/rwa-basket-vault.json",
+      "deployPaused": true,
+      "unpauseRow": "unpause-RWA",
+      "unpauseInStage13": true,
+      "seed": null,
+      "eligibilitySource": "sheet:ROUTER_DEFAULT_BPS",
+      "emergencyLevers": [
+        "pauseDeposits",
+        "emergencyUnwind",
+        "emergencyUnwindWithOverride",
+        "shutdownVault"
+      ],
+      "registryNameSource": "script-constant"
     }
   ],
+  "vaultRuleDecisions": {
+    "seed": {
+      "reason": "rmUSDC is seeded with 1 USDC (SEED_DEPOSIT_USDC) to the seed share receiver (owner D3, 2026-10-01). The baskets take no seed: the 18-decimal virtual share offset protects all four vaults (issue 1705 Q6 (a)).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "eligibilitySource": {
+      "reason": "rmUSDC is the router's base leg: the router stage makes it eligible and sets the first default vector before any basket exists. Each basket stage makes itself eligible from the sheet's ROUTER_DEFAULT_BPS in one migrateEligibility. The sheet's ROUTER_WEIGHTS names all four vaults, so the launch vector is sheet data for every vault.",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/475"
+    },
+    "emergencyLevers": {
+      "reason": "The two vault families have different emergency levers, each callable by EMERGENCY_ROLE (the emergency key) with no timelock. None freezes a withdrawal. For the mainnet test the levers stay as they are and are named here per vault (issue 1705 Q2 (a)). Only rmUSDC can write off a position: forceRemoveAdapter drops an adapter from NAV. A later recovery (ADMIN_ROLE, through the timelock, adds the adapter back) is credited to whoever holds shares at that moment; a holder who exits during the write-off is paid at the reduced NAV. Narrowing the levers is decided before the final deployment.",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    },
+    "registryNameSource": {
+      "reason": "The registry stage registers rmUSDC, a vault it did not deploy, under the sheet's VAULT_NAME. Each basket stage registers itself under its script constant VAULT_NAME. The table records the two sources rather than moving a sheet name (issue 1705 C9, recorded difference).",
+      "decision": "https://github.com/robotmoney/robotmoney-core/issues/1705"
+    }
+  },
   "libraries": [
     {
       "name": "tick_math",

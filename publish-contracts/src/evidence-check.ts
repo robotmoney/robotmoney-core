@@ -28,6 +28,7 @@ import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
 import { loadStageTable } from "./stage-table.ts";
+import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -38,18 +39,16 @@ const ADDR = /^0x[0-9a-fA-F]{40}$/;
  * one delay: each execute is at least 172800 s after the same operation's schedule. update-delay, batch and cancel are Twin-only demonstrations of the
  * Safe tool: on 8453 they are rejected here. The names are the unpause rows of the govern CLI (src/govern.ts UNPAUSE_ROWS).
  */
-export const BASKETS = ["PROTO", "AGENT", "RWA"] as const;
-export const VAULTS = ["USDC", ...BASKETS] as const;
-export const GOVERN_STEPS: readonly string[] = VAULTS.map((b) => `unpause-${b}`);
+export const GOVERN_STEPS: readonly string[] = STAGE13_UNPAUSE_ROWS;
 
 /**
  * Issue 1667: a vault the tool paused (pause-all, any of the four) comes back through a Safe -> Timelock unpause round. Every unpause step is required (round 1,
  * stage 13) and may repeat as a numbered ROUND (`round`, default 1): a vault paused again after an executed unpause has a second round with its own schedule, execute
  * and operation id. The one call on any vault the evidence accepts is unpauseDeposits().
  */
-export const USDC_STEP = "unpause-USDC";
-export const UNPAUSE_STEPS: readonly string[] = GOVERN_STEPS;
-const VAULT_OF_STEP: Record<string, string> = { "unpause-USDC": "rmUSDC", "unpause-PROTO": "rmPROTO", "unpause-AGENT": "rmAGENT", "unpause-RWA": "rmRWA" };
+export const UNPAUSE_STEPS: readonly string[] = VAULT_UNPAUSE_ROWS;
+/** The evidence vault name (`rm<KEY>`) an unpause step targets, from the stage table's vault rules (issue 1705). */
+const VAULT_OF_STEP: Record<string, string> = Object.fromEntries(VAULT_RULES.map((v) => [v.unpauseRow, `rm${v.key}`]));
 const UNPAUSE_ABI = parseAbi(["function unpauseDeposits()"]);
 export const unpauseCalldata = (): Hex => encodeFunctionData({ abi: UNPAUSE_ABI, functionName: "unpauseDeposits" });
 const roundOf = (g: any): number => (g?.round === undefined ? 1 : g.round);
@@ -472,7 +471,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (!(ev?.timelock?.min_delay >= floor)) bad(`timelock min_delay ${ev?.timelock?.min_delay} is under ${floor} s${kind === "rehearsal" ? " (the rehearsal floor)" : ""}`);
   else if (kind === "rehearsal" && rehearsalDelayProblem(ev.timelock.min_delay)) bad(`timelock min_delay ${rehearsalDelayProblem(ev.timelock.min_delay)}: ${kindLabel(kind, ev.timelock.min_delay)} cannot be told from production`);
   if (!(ev?.safe?.owners?.length >= 3) || !(ev?.safe?.threshold >= 2)) bad("safe owners or threshold are under the floor (3 owners, threshold 2)");
-  for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) if (!ADDR.test(ev?.vaults?.[k]?.address ?? "")) bad(`vault ${k} address is missing`);
+  for (const v of VAULT_RULES) if (!ADDR.test(ev?.vaults?.[`rm${v.key}`]?.address ?? "")) bad(`vault rm${v.key} address is missing`);
 
   const govern: any[] = Array.isArray(ev?.govern) ? ev.govern : [];
   for (const step of GOVERN_STEPS) if (!govern.some((g) => g?.step === step)) bad(`govern step '${step}' of Stage 13 has no evidence entry`);
@@ -659,9 +658,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
-  // (all four vaults deploy paused, issue 1710).
-  for (const b of VAULTS) {
-    const rows = (ev.govern ?? []).filter((g: any) => g?.step === `unpause-${b}`).sort((x: any, y: any) => roundOf(x) - roundOf(y));
+  // (all four vaults deploy paused, issue 1710; the rule is the stage table's deployPaused, issue 1705).
+  for (const { key: b, unpauseRow, deployPaused } of VAULT_RULES) {
+    const rows = (ev.govern ?? []).filter((g: any) => g?.step === unpauseRow).sort((x: any, y: any) => roundOf(x) - roundOf(y));
     const row = rows[rows.length - 1];
     const vault = ev.vaults?.[`rm${b}`]?.address;
     if (!vault) continue;
@@ -670,7 +669,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     catch (e) { bad(`rm${b}.depositsPaused() not readable (${(e as Error).message})`); continue; }
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
     if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
-    if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
+    if (!executed && deployPaused && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
   }
   return p;
 }

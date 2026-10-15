@@ -32,6 +32,8 @@ function redeployed(over: { status?: number; oldEligible?: boolean; oldRetiredFl
   // the new vault carries everything the old one carried: handlers and roles
   for (const [k, h] of [...w.chain.handlers]) if (k.startsWith(`${OLD.toLowerCase()}:`)) w.chain.handlers.set(`${NEW.toLowerCase()}:${k.split(":")[1]}`, h);
   for (const k of [...w.chain.roles]) if (k.startsWith(`${OLD.toLowerCase()}|`)) w.chain.roles.add(k.replace(OLD.toLowerCase(), NEW.toLowerCase()));
+  // the redeploy script's own role grants are logged on the new vault (issue 1705: EMERGENCY_ROLE holders are log-enumerated)
+  w.chain.roleGrantedLog(NEW, EMERGENCY_ROLE, EMERGENCY, 4100n);
   w.chain.set(NEW, "depositsPaused", false);
   w.chain.set(OLD, "depositsPaused", false);
   w.chain.set(OLD, "retired", over.oldRetiredFlag ?? true);

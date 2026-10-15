@@ -9,7 +9,7 @@ import { PROOF_TX_NONCES } from "../counts.ts";
 import { kindLabel, rehearsalDelayProblem } from "../chains.ts";
 import { compareCode, loadArtifact } from "./codehash.ts";
 import {
-  ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
+  ADMIN_ROLE, AGENT_ROLE, COMMITTEE_AGENT_ROLE, KEEPER_ROLE, WEIGHT_SETTER_ROLE, WEIGHT_SETTER_ROTATOR_ROLE, WEIGHT_SETTER_ROTATION_EXECUTOR_ROLE, CANCELLER_ROLE, coreContracts, EMERGENCY_ROLE, EXECUTOR_ROLE, DEPOSIT_PAUSER_ROLE, PROPOSER_ROLE, SIG_AGENT_AUTHORIZED,
   RM_TOKEN, SIG_AGENT_OWNERSHIP, SIG_ROLE_GRANTED, Z32, ZERO, minDelayFloor, requiredManifests, stageManifestName,
 } from "./constants.ts";
 import { manifestBase } from "../stage-table.ts";
@@ -183,9 +183,12 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const retryBaseMs = opts.retryBaseMs ?? 500;
   if (head === undefined) {
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
+    for (const v of man.vaults) for (const l of vaultScanLabels(v)) c.fail(l, "block number unreadable");
     c.fail("deployer: holds no role on any contract (log scan)", "block number unreadable");
     c.fail(ROLE_HOLDERS_LABEL, "block number unreadable");
   } else {
+    // each label is a c.run, so a failed log scan fails that label with the error and never skips it
+    for (const v of man.vaults) await vaultScanChecks(c, chain, v, sheet.vaults[v.key], sheet.emergency, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
     await agentChecks(c, chain, gateway, tlManifest, { fromBlock: opts.fromBlock, head: opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head, chunk, retryBaseMs });
     await roleScan(c, chain, D, { fromBlock: opts.fromBlock, head, chunk, retryBaseMs });
     await roleHolderEnumeration(c, chain, [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))], {
@@ -358,7 +361,7 @@ async function vaultChecks(
   if (!vs) {
     for (const l of ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
     if (v.kind !== "usdc") for (const l of ["asset config equals sheet", ...BASKET_GUARD_LABELS]) c.fail(`${p}: ${l}`, "no sheet entry for this vault");
-    if (v.kind === "agent") c.fail(`${p}: ${AGENT_SLIPPAGE_LABEL}`, "no sheet entry for this vault");
+    if (v.kind !== "usdc") c.fail(`${p}: ${SLIPPAGE_LABEL}`, "no sheet entry for this vault");
     if (v.kind === "usdc") { for (const l of ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"]) c.fail(`${p}: ${l}`, "no sheet entry for this vault"); }
     return;
   }
@@ -386,14 +389,87 @@ async function vaultChecks(
     if (v.kind === "agent") await c.run(`${p}: holds RM as its one asset`, async () => ({ ok: vs.assets.length === 1 && lc(vs.assets[0]!.token) === lc(RM_TOKEN), detail: `sheet lists [${vs.assets.map((a) => a.token).join(", ")}], expected only ${RM_TOKEN}` }));
     // core 1676: every UniswapV4 asset is wired to the permissionless price recorder, the V4 adapter and the configured PoolKey.
     for (const asset of vs.assets.filter((x) => x.venue === VENUE_V4)) await v4AssetChecks(c, chain, v, asset, ctx);
-    // core 1695: the V4 swap bound is read back from the rmAGENT vault itself (the pool fee alone is 291 bps, so the vault bound must be the launch 500).
-    if (v.kind === "agent") await c.runEq(`${p}: ${AGENT_SLIPPAGE_LABEL}`, () => chain.read(a, "function maxSlippageBps() view returns (uint256)"), AGENT_MAX_SLIPPAGE_BPS);
+    // core 1695, issue 1705 C4: the swap bound is read back from every basket and compared with the config (its maxSlippageBps, else the vault default).
+    // rmAGENT's config raises it to 500 because the V4 pool fee alone is 291 bps.
+    await c.run(`${p}: ${SLIPPAGE_LABEL}`, async () => {
+      if (vs.maxSlippageBps === undefined) return { ok: false, detail: "the sheet has no expected maxSlippageBps for this vault" };
+      const got = BigInt((await chain.read(a, "function maxSlippageBps() view returns (uint256)")) as bigint);
+      return { ok: got === vs.maxSlippageBps, detail: `chain ${got}, config ${vs.maxSlippageBps}` };
+    });
   }
 }
 
-/** The rmAGENT maxSlippageBps the deploy applies from the config (core 1676, 1695). */
-const AGENT_MAX_SLIPPAGE_BPS = 500n;
-const AGENT_SLIPPAGE_LABEL = `maxSlippageBps equals ${AGENT_MAX_SLIPPAGE_BPS}`;
+/** Every basket's maxSlippageBps equals the config value the deploy applies, or the vault default when the config sets none (core 1676, 1695, issue 1705 C4). */
+const SLIPPAGE_LABEL = "maxSlippageBps equals config";
+/** Issue 1705 C5, C4: log-enumerated per-vault role and allowlist labels (vaultScanChecks). */
+const KEEPER_LABEL = "KEEPER_ROLE has no holder";
+const EMERGENCY_ONE_LABEL = "EMERGENCY_ROLE has exactly one holder";
+const ADAPTERS_LABEL = "adapter set, caps and code-hash allowlist equal the deploy script";
+const SIG_ADAPTER_ALLOWED = "AdapterAllowedSet(address,bool)";
+const SIG_CODEHASH_ALLOWED = "AdapterCodeHashAllowedSet(bytes32,bool)";
+
+/** The labels vaultScanChecks pushes for one vault. */
+export const vaultScanLabels = (v: ManifestVault): string[] => [KEEPER_LABEL, EMERGENCY_ONE_LABEL, ...(v.kind === "usdc" ? [ADAPTERS_LABEL] : [])].map((l) => `vault[${v.key}]: ${l}`);
+
+/** The accounts that hold `role` on `at` now: every RoleGranted grantee in the scanned range that hasRole still answers true for. */
+async function currentHolders(chain: ChainReader, at: Address, role: Hex, s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number }): Promise<Address[]> {
+  const logs = await scanLogs(chain, { address: at, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), role], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+  const out: Address[] = [];
+  for (const who of new Set(logs.map((l) => lc(topicToAddress(l.topics[2]))))) if (await hasRole(chain, at, role, who as Address)) out.push(who as Address);
+  return out;
+}
+
+/**
+ * Issue 1705. Per vault, from the logs: no account holds KEEPER_ROLE (RobotMoneyVault.rebalance; the deploy grants it to nobody, and a basket has no keeper), EMERGENCY_ROLE has
+ * exactly one holder and it is the sheet's emergency key. For rmUSDC also: the active adapters and their caps are the deploy script's, in order, and the adapter and
+ * code-hash allowlists hold exactly those adapters and their code hashes (every AdapterAllowedSet and AdapterCodeHashAllowedSet key still allowed is enumerated).
+ */
+async function vaultScanChecks(
+  c: Collector, chain: ChainReader, v: ManifestVault, vs: VaultSheet | undefined, emergency: Address,
+  s: { fromBlock: bigint; head: bigint; chunk: number; retryBaseMs: number },
+): Promise<void> {
+  const p = `vault[${v.key}]`;
+  const a = v.address;
+  await c.run(`${p}: ${KEEPER_LABEL}`, async () => {
+    const h = await currentHolders(chain, a, KEEPER_ROLE, s);
+    return { ok: h.length === 0, detail: h.length ? `KEEPER_ROLE held by ${h.join(", ")}` : "no KEEPER_ROLE grant is held" };
+  });
+  await c.run(`${p}: ${EMERGENCY_ONE_LABEL}`, async () => {
+    const h = await currentHolders(chain, a, EMERGENCY_ROLE, s);
+    return { ok: h.length === 1 && lc(h[0]!) === lc(emergency), detail: `holders ${h.join(", ") || "none"}, want only the emergency key ${emergency}` };
+  });
+  if (v.kind !== "usdc") return;
+  await c.run(`${p}: ${ADAPTERS_LABEL}`, async () => {
+    const want = vs?.adapters;
+    if (!want || want.length === 0) return { ok: false, detail: "the sheet has no expected adapters for this vault" };
+    const active: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      let r: any;
+      try { r = await chain.read(a, "function adapters(uint256) view returns (address adapter, uint16 capBps, bool active)", [BigInt(i)]); } catch { break; }
+      const x = Array.isArray(r) ? r : [r.adapter, r.capBps, r.active];
+      if (x[2]) active.push(`${lc(x[0])}:${Number(x[1])}`);
+    }
+    const wantActive = want.map((w) => `${lc(w.adapter)}:${w.capBps}`);
+    const problems: string[] = [];
+    if (active.join(",") !== wantActive.join(",")) problems.push(`active adapters [${active.join(", ")}], deploy script [${wantActive.join(", ")}]`);
+    const allowed = async (sig: string, fn: string): Promise<string[]> => {
+      const logs = await scanLogs(chain, { address: a, topics: [keccak256(toHex(sig))], fromBlock: s.fromBlock, toBlock: s.head, chunk: s.chunk, retryBaseMs: s.retryBaseMs });
+      const out: string[] = [];
+      for (const k of new Set(logs.map((l) => lc(l.topics[1] ?? "")))) {
+        const arg = fn === "adapterAllowed" ? topicToAddress(k as Hex) : k;
+        if ((await chain.read(a, `function ${fn}(${fn === "adapterAllowed" ? "address" : "bytes32"}) view returns (bool)`, [arg])) === true) out.push(lc(arg));
+      }
+      return out.sort();
+    };
+    const wantAddrs = want.map((w) => lc(w.adapter)).sort();
+    const gotAddrs = await allowed(SIG_ADAPTER_ALLOWED, "adapterAllowed");
+    if (gotAddrs.join(",") !== wantAddrs.join(",")) problems.push(`allowed adapters [${gotAddrs.join(", ")}], deploy script [${wantAddrs.join(", ")}]`);
+    const wantHashes = [...new Set(await Promise.all(want.map(async (w) => lc(keccak256(await chain.getCode(w.adapter))))))].sort();
+    const gotHashes = await allowed(SIG_CODEHASH_ALLOWED, "adapterCodeHashAllowed");
+    if (gotHashes.join(",") !== wantHashes.join(",")) problems.push(`allowed code hashes [${gotHashes.join(", ")}], deployed adapters [${wantHashes.join(", ")}]`);
+    return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${want.length} adapters, caps and allowlists equal the deploy script` };
+  });
+}
 
 /** The labels v4AssetChecks pushes. A vault whose sheet lists a V4 asset must pass every one. */
 const V4_LABELS = [

@@ -25,7 +25,7 @@ describe("healthy deployment", () => {
     const r = await verifyDeployment(buildWorld().opts);
     const labels = r.checks.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
-    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "").replace("maxSlippageBps equals 500", "")).not.toMatch(/\d{3,}/); }
+    for (const l of labels) { expect(l).not.toMatch(/0x[0-9a-f]{4}/i); expect(l.replace(/GS\d+/g, "")).not.toMatch(/\d{3,}/); }
   });
 });
 
@@ -223,7 +223,7 @@ describe("mutations fail with the expected label", () => {
   test("emergency key lost EMERGENCY on a vault", async () => {
     const w = buildWorld();
     w.chain.revoke(VAULTS.rmRWA.address, EMERGENCY_ROLE, w.sheet.emergency);
-    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: EMERGENCY_ROLE held by emergency key"]);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: EMERGENCY_ROLE held by emergency key", "vault[rmRWA]: EMERGENCY_ROLE has exactly one holder"]);
   });
 
   test("basket asset config differs from the sheet", async () => {
@@ -232,28 +232,89 @@ describe("mutations fail with the expected label", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmRWA]: asset config equals sheet"]);
   });
 
-  test("rmAGENT maxSlippageBps read back on chain: 500 passes, any other value fails (core 1695)", async () => {
-    const L = "vault[rmAGENT]: maxSlippageBps equals 500";
+  test("every basket's maxSlippageBps is read back on chain and equals the config: rmAGENT 500, any other value fails (core 1695, issue 1705 C4)", async () => {
     const ok = await verifyDeployment(buildWorld().opts);
-    expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+    const labels = ["rmPROTO", "rmAGENT", "rmRWA"].map((k) => `vault[${k}]: maxSlippageBps equals config`);
+    for (const L of labels) expect(ok.checks.find((c) => c.label === L)).toMatchObject({ ok: true });
+    // rmUSDC holds no basket and is not asked for it
+    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals config")).map((c) => c.label)).toEqual(labels);
     for (const bad of [499n, 501n, 291n, 0n]) {
       const w = buildWorld();
       w.chain.set(VAULTS.rmAGENT.address, "maxSlippageBps", bad);
-      expect(failed(await verifyDeployment(w.opts))).toEqual([L]);
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: maxSlippageBps equals config"]);
     }
-    // the other vaults are not asked for it
-    expect(ok.checks.filter((c) => c.label.endsWith("maxSlippageBps equals 500")).map((c) => c.label)).toEqual([L]);
+    const p = buildWorld();
+    p.chain.set(VAULTS.rmPROTO.address, "maxSlippageBps", 300n);
+    expect(failed(await verifyDeployment(p.opts))).toEqual(["vault[rmPROTO]: maxSlippageBps equals config"]);
+    const none = buildWorld();
+    delete none.sheet.vaults.rmRWA.maxSlippageBps;
+    expect(failed(await verifyDeployment(none.opts))).toEqual(["vault[rmRWA]: maxSlippageBps equals config"]);
+  });
+
+  describe("per-vault role holders and the rmUSDC adapter allowlist, from the logs (issue 1705 C4, C5)", () => {
+    const KEEPER_ROLE = keccak256(toHex("KEEPER_ROLE"));
+    test("a healthy world passes every new label on every vault", async () => {
+      const r = await verifyDeployment(buildWorld().opts);
+      const want = [...Object.keys(VAULTS).flatMap((k) => [`vault[${k}]: KEEPER_ROLE has no holder`, `vault[${k}]: EMERGENCY_ROLE has exactly one holder`]), "vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script"];
+      for (const l of want) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+    });
+    test("the verifier fails when any vault's KEEPER_ROLE has a holder, even the Safe or the timelock", async () => {
+      for (const [k, who] of [["rmUSDC", SAFE], ["rmUSDC", TIMELOCK], ["rmPROTO", addr(0xbeef)], ["rmAGENT", addr(0xbeef)], ["rmRWA", addr(0xbeef)]] as const) {
+        const w = buildWorld();
+        w.chain.grant(VAULTS[k]!.address, KEEPER_ROLE, who);
+        w.chain.roleGrantedLog(VAULTS[k]!.address, KEEPER_ROLE, who, 3000n);
+        expect(failed(await verifyDeployment(w.opts))).toContain(`vault[${k}]: KEEPER_ROLE has no holder`);
+      }
+    });
+    test("a KEEPER_ROLE grant that was revoked again is not a holder", async () => {
+      const w = buildWorld();
+      w.chain.roleGrantedLog(VAULTS.rmUSDC.address, KEEPER_ROLE, addr(0xbeef), 3000n);
+      expect(failed(await verifyDeployment(w.opts))).toEqual([]);
+    });
+    test("a second EMERGENCY_ROLE holder fails, the emergency key alone passes", async () => {
+      const w = buildWorld();
+      w.chain.grant(VAULTS.rmAGENT.address, EMERGENCY_ROLE, addr(0xbeef));
+      w.chain.roleGrantedLog(VAULTS.rmAGENT.address, EMERGENCY_ROLE, addr(0xbeef), 3000n);
+      expect(failed(await verifyDeployment(w.opts))).toEqual(["vault[rmAGENT]: EMERGENCY_ROLE has exactly one holder", "roles: every holder of every role on every governed contract is an expected account (log scan)"]);
+    });
+    const ADAPTERS = "vault[rmUSDC]: adapter set, caps and code-hash allowlist equal the deploy script";
+    test("rmUSDC adapters: a moved cap, a missing adapter, an extra allowed adapter or code hash each fail", async () => {
+      const cap = buildWorld();
+      const a = cap.sheet.vaults.rmUSDC.adapters!;
+      cap.chain.set(VAULTS.rmUSDC.address, "adapters", (x: any[]) => { const e = a[Number(x[0])]; if (!e) throw new Error("execution reverted"); return [e.adapter, Number(x[0]) === 0 ? 5000 : e.capBps, true]; });
+      expect(failed(await verifyDeployment(cap.opts))).toEqual([ADAPTERS]);
+      const gone = buildWorld();
+      const b = gone.sheet.vaults.rmUSDC.adapters!;
+      gone.chain.set(VAULTS.rmUSDC.address, "adapters", (x: any[]) => { const e = b[Number(x[0])]; if (!e) throw new Error("execution reverted"); return [e.adapter, e.capBps, Number(x[0]) !== 2]; });
+      expect(failed(await verifyDeployment(gone.opts))).toEqual([ADAPTERS]);
+      const extra = buildWorld();
+      extra.chain.set(VAULTS.rmUSDC.address, "adapterAllowed", () => true);
+      extra.chain.logs.push({ address: VAULTS.rmUSDC.address, topics: [keccak256(toHex("AdapterAllowedSet(address,bool)")), padTopic(addr(0xbeef))], data: "0x", blockNumber: 3000n });
+      expect(failed(await verifyDeployment(extra.opts))).toEqual([ADAPTERS]);
+      const hash = buildWorld();
+      const h = keccak256(toHex("some other adapter code"));
+      hash.chain.set(VAULTS.rmUSDC.address, "adapterCodeHashAllowed", () => true);
+      hash.chain.logs.push({ address: VAULTS.rmUSDC.address, topics: [keccak256(toHex("AdapterCodeHashAllowedSet(bytes32,bool)")), h], data: "0x", blockNumber: 3000n });
+      expect(failed(await verifyDeployment(hash.opts))).toEqual([ADAPTERS]);
+    });
+    test("an unreadable block number fails every log-scan vault label (never a skip)", async () => {
+      const w = buildWorld();
+      w.chain.blockNumber = async () => { throw new Error("rpc down"); };
+      const f = failed(await verifyDeployment(w.opts));
+      for (const k of Object.keys(VAULTS)) expect(f).toContain(`vault[${k}]: KEEPER_ROLE has no holder`);
+      expect(f).toContain(ADAPTERS);
+    });
   });
 
   test("a missing sheet entry fails exactly the labels that vault kind owns (core 1695)", async () => {
     const common = ["tvlCap equals sheet", "perDepositCap equals sheet", "exitFeeBps equals sheet", "feeRecipient equals sheet", "feeRecipient is not deployer", "paused state equals sheet", "router eligibility equals sheet"];
     const basket = ["asset config equals sheet", "navDeviationGuardBps equals sheet", "navDeviationGuardBps above zero", "pool liquidity meets the sheet floor"];
-    const usdc = ["seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
+    const usdc = ["adapter set, caps and code-hash allowlist equal the deploy script", "seed present", "totalSupply above zero", "manifest deployer share balance after seed is zero", "seed share receiver is named and is not the deployer", "deployer holds no shares", "seed share receiver holds the seed shares"];
     const want: Record<string, string[]> = {
       rmUSDC: [...common, ...usdc],
-      rmPROTO: [...common, ...basket],
-      rmAGENT: [...common, ...basket, "maxSlippageBps equals 500"],
-      rmRWA: [...common, ...basket],
+      rmPROTO: [...common, ...basket, "maxSlippageBps equals config"],
+      rmAGENT: [...common, ...basket, "maxSlippageBps equals config"],
+      rmRWA: [...common, ...basket, "maxSlippageBps equals config"],
     };
     for (const key of Object.keys(want)) {
       const w = buildWorld();

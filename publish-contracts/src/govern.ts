@@ -1,7 +1,8 @@
 // Stage 13 govern: the post-handover operations through the REAL Safe and the REAL timelock, with the Safe tool (src/safe).
 // After the timelock stage the deployer holds no role. Everything here is a Safe transaction that schedules, executes or cancels a timelock operation.
-// ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520): the unpause of each of the four vaults (rmUSDC too, issue 1710: all four deploy paused). The docs put exactly this
-// there: unpause needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
+// STAGE 13 IS THE UNPAUSE OF EACH OF THE FOUR VAULTS (issue 1520, issue 1710: all four deploy paused). The rows come from the stage table's vault rules
+// (scripts/deploy/stage-table.json vaults[], `unpauseRow` and `unpauseInStage13`, issue 1705), never from a vault key typed here. An unpause
+// needs ADMIN_ROLE through the timelock (docs/technical/security-model.md, the pause-key abuse and pause-trigger rows). The vault
 // setters, router eligibility and the router default weights are DEPLOY-TIME configuration the deployer sets before the handover (the basket vault
 // stages), and the verify stage asserts them against the sheet. There is no voting by anyone: RouterGovernance has no propose, vote or execute (issue 1698).
 // ROUTER WEIGHTS CHANGE ON DEMAND THROUGH ONE ROW, apply-receipt (core 1696): the Safe, through the timelock, is the only body that changes any
@@ -75,6 +76,7 @@ import type { DeploymentKind } from "./chains.ts";
 import { BASE_CHAIN_ID, httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import { manifestDir, loadRunManifest, readManifestField, reserveManifestSeq, saveRunManifest, type PauseEntry, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_NAME, type Sheet, type VaultKey } from "./sheet.ts";
+import { STAGE13_UNPAUSE_ROWS, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { VAULT_STAGES, manifestRef, type StageRow } from "./stages.ts";
 import {
   cancelOnTimelock, connectSafe, executeOnTimelock, executeTx, operationId, operationState, proposeTx, roleId, scheduleOnTimelock, signTx, timelockMinDelay,
@@ -119,16 +121,18 @@ export function loadGovernAddrs(ctx: Pick<RunContext, "coreDir" | "chainId" | "m
 
 export interface LabelledCall extends TimelockCall { label: string }
 
-/** The mainnet rows: one unpause per vault (rmUSDC and the three baskets, issue 1710). Each is its own timelock operation, all scheduled in one sitting. */
+/**
+ * The mainnet rows: one unpause per vault, each its own timelock operation, all scheduled in one sitting. Derived from the stage table's vault rules
+ * (issue 1705, `unpauseRow` where `unpauseInStage13`): all four vaults deploy paused (issue 1710), so stage 13 is the four unpauses.
+ */
 export { BASKET_KEYS };
-export const UNPAUSE_ROWS = ["unpause-USDC", "unpause-PROTO", "unpause-AGENT", "unpause-RWA"] as const;
+export const UNPAUSE_ROWS: readonly UnpauseRow[] = STAGE13_UNPAUSE_ROWS;
+export type UnpauseRow = `unpause-${VaultKey}`;
 /** Demonstrations of the Safe tool. They exist only as Twin-fork runs and are refused with USAGE on 8453. */
 export const TWIN_ONLY_ROWS = ["update-delay", "batch", "cancel"] as const;
-/** The govern rows in run order: the unpauses, then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
-export const GOVERN_ROWS = [...UNPAUSE_ROWS, ...TWIN_ONLY_ROWS] as const;
-export type GovernRowName = (typeof GOVERN_ROWS)[number];
-/** The rmUSDC unpause row. Since issue 1710 rmUSDC deploys paused, so this is a stage 13 row like the other three (and the reopen row after a pause-all). */
-export const UNPAUSE_USDC_ROW = "unpause-USDC";
+/** The govern rows in run order: every vault's unpause row (table order), then the Twin-only demonstrations. `--row` takes the 1-based number or the name. */
+export const GOVERN_ROWS: readonly GovernRowName[] = [...VAULT_UNPAUSE_ROWS, ...TWIN_ONLY_ROWS];
+export type GovernRowName = UnpauseRow | (typeof TWIN_ONLY_ROWS)[number];
 /** A row that runGovern can plan: every matrix row. */
 export type PlannedRow = GovernRowName;
 export const governRowNames = (): readonly string[] => GOVERN_ROWS;

@@ -79,6 +79,16 @@ const ASSETS: Record<string, { token: Address; pool: Address; swapFee: number; a
   rmRWA: [{ token: addr(0xde5), pool: addr(0xf003), swapFee: 500, adapter: addr(0xad01), venue: 0 }],
 };
 
+/** Issue 1705 C4: rmUSDC's three strategy adapters (Aave, Compound, Moonwell) with the deploy script's caps, and each basket's maxSlippageBps (config or vault default). */
+export const USDC_ADAPTERS = [
+  { adapter: addr(0xaa01), capBps: 3334, field: "aave_adapter" },
+  { adapter: addr(0xaa02), capBps: 3333, field: "compound_adapter" },
+  { adapter: addr(0xaa03), capBps: 3333, field: "moonwell_flagship_adapter" },
+] as const;
+export const SLIPPAGE: Record<string, bigint> = { rmPROTO: 100n, rmAGENT: 500n, rmRWA: 100n };
+export const SIG_ADAPTER_ALLOWED = "AdapterAllowedSet(address,bool)";
+export const SIG_CODEHASH_ALLOWED = "AdapterCodeHashAllowedSet(bytes32,bool)";
+
 /** Issue 1666: the guard every basket carries, and the in-range liquidity of every pool against the sheet floor. */
 export const NAV_GUARD_BPS = 100n;
 export const POOL_LIQUIDITY = 10n ** 18n;
@@ -270,12 +280,13 @@ export function buildWorld(chainId = 8453): World {
   for (const [k, v] of Object.entries(VAULTS)) {
     ch.set(v.address, "registry", REGISTRY);
     ch.grant(v.address, EMERGENCY_ROLE, EMERGENCY);
+    ch.roleGrantedLog(v.address, EMERGENCY_ROLE, EMERGENCY, 2600n);
     const caps = k === "rmUSDC" ? { tvl: 1_000_000_000_000n, per: 100_000_000_000n } : { tvl: 10_000_000_000n, per: 1_000_000_000n };
     ch.set(v.address, "tvlCap", caps.tvl);
     ch.set(v.address, "perDepositCap", caps.per);
     ch.set(v.address, "exitFeeBps", 10n);
     if (v.kind !== "usdc") ch.set(v.address, "navDeviationGuardBps", NAV_GUARD_BPS);
-    if (v.kind === "agent") ch.set(v.address, "maxSlippageBps", 500n);
+    if (v.kind !== "usdc") ch.set(v.address, "maxSlippageBps", SLIPPAGE[k]!);
     ch.set(v.address, "feeRecipient", SAFE);
     const paused = k !== "rmUSDC";
     ch.set(v.address, "depositsPaused", paused);
@@ -292,10 +303,20 @@ export function buildWorld(chainId = 8453): World {
     });
     // core 1676: the vault allowlists the codehash of the V4 adapter it was deployed with
     ch.set(v.address, "adapterCodeHashAllowed", (a: any[]) => String(a[0]).toLowerCase() === keccak256(ch.codes.get(V4_ADAPTER.toLowerCase())!).toLowerCase());
+    if (v.kind === "usdc") {
+      // issue 1705 C4: the three strategy adapters, active with the script caps, and exactly their addresses and code hashes on the allowlists
+      USDC_ADAPTERS.forEach((x, i) => ch.codes.set(x.adapter.toLowerCase(), `0x6080${(0xa0 + i).toString(16)}`));
+      const hashes = USDC_ADAPTERS.map((x) => keccak256(ch.codes.get(x.adapter.toLowerCase())!).toLowerCase());
+      ch.set(v.address, "adapters", (a: any[]) => { const x = USDC_ADAPTERS[Number(a[0])]; if (!x) throw new Error("execution reverted"); return [x.adapter, x.capBps, true]; });
+      ch.set(v.address, "adapterAllowed", (a: any[]) => USDC_ADAPTERS.some((x) => x.adapter.toLowerCase() === String(a[0]).toLowerCase()));
+      ch.set(v.address, "adapterCodeHashAllowed", (a: any[]) => hashes.includes(String(a[0]).toLowerCase()));
+      for (const x of USDC_ADAPTERS) ch.logs.push({ address: v.address, topics: [keccak256(toHex(SIG_ADAPTER_ALLOWED)), padTopic(x.adapter)], data: "0x", blockNumber: 2510n });
+      for (const h of new Set(hashes)) ch.logs.push({ address: v.address, topics: [keccak256(toHex(SIG_CODEHASH_ALLOWED)), h as Hex], data: "0x", blockNumber: 2510n });
+    }
     vsheet[k] = {
       tvlCap: caps.tvl, perDepositCap: caps.per, exitFeeBps: 10n, feeRecipient: SAFE, expectPaused: paused, routerEligible: true,
       ...(v.kind !== "usdc" ? { navDeviationBps: NAV_GUARD_BPS, minPoolLiquidity: POOL_LIQUIDITY_FLOOR } : {}),
-      assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER } : {}),
+      assets: assets.map((x) => ({ ...x })), ...(k === "rmUSDC" ? { seed: 1_000_000n, seedShareReceiver: SEED_RECEIVER, adapters: USDC_ADAPTERS.map((x) => ({ adapter: x.adapter, capBps: x.capBps })) } : { maxSlippageBps: SLIPPAGE[k]! }),
     };
   }
 
@@ -321,7 +342,7 @@ export function buildWorld(chainId = 8453): World {
 
   const w = (f: string, o: unknown) => writeFileSync(join(manifestDir, f), JSON.stringify(o, null, 2));
   const file = (stage: string) => stageManifestFile(table, stage);
-  w(file("vault"), { chain_id: chainId, vault: VAULTS.rmUSDC.address, seed_share_receiver: SEED_RECEIVER, seed_shares: SEED_SHARES.toString(), deployer_share_balance_after: 0 });
+  w(file("vault"), { chain_id: chainId, vault: VAULTS.rmUSDC.address, seed_share_receiver: SEED_RECEIVER, seed_shares: SEED_SHARES.toString(), deployer_share_balance_after: 0, ...Object.fromEntries(USDC_ADAPTERS.map((x) => [x.field, x.adapter])) });
   w(file("registry"), { chain_id: chainId, registry: REGISTRY });
   w(file("router"), { chain_id: chainId, router: ROUTER });
   w(file("gateway"), { chain_id: chainId, gateway: GATEWAY });

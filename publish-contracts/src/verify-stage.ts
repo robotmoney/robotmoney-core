@@ -1,6 +1,6 @@
 // Stage 12 verify: the one verifier (src/verify). The CLI builds the verifier's sheet from the frozen sheet, reads the expected
 // asset config from the core config file (never from the chain it is checking) and fails the run on any failed check.
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { keccak256 } from "viem";
 import { checkReceiptApplications, checkReceiptApplicationsOnChain, checkVaultRedeploys, checkVaultRedeploysOnChain, type ChainReader as EvidenceChainReader } from "./evidence-check.ts";
 import { buildMigrationOverlay } from "./migration-overlay.ts";
@@ -12,10 +12,11 @@ import { loadReceiptAddr, resumeCommand } from "./govern.ts";
 import { MAINNET_CHAIN_ID, delayFloor } from "./floors.ts";
 import { kindLabel } from "./chains.ts";
 import { adoptedTxs, governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
-import { VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
-import { RECORDER_STAGE, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
+import { BASKET_KEYS, VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
+import { ROUTER_STAGE_ELIGIBLE, SEEDED_VAULTS, STAGE13_UNPAUSE_VAULTS, expectPaused, routerEligible, vaultRule } from "./vault-rules.ts";
+import { RECORDER_STAGE, STRATEGY_ADAPTER_VAULT_ARTIFACT, STRATEGY_ADAPTER_WIRING, VAULT_RECORDER_FIELD, VENUE_V4, adapterFieldFor } from "./core-wiring.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
-import { loadConfigAssets } from "./asset-config.ts";
+import { loadConfigAssets, loadExpectedMaxSlippageBps } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
 import { verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
@@ -41,16 +42,33 @@ export function loadExpectedAssets(ctx: Pick<RunContext, "coreDir" | "chainId" |
 }
 
 /**
+ * The strategy adapters a RobotMoneyVault stage registered (issue 1705 C4), in registration order: each address from the vault manifest and its bps cap from the
+ * deploy script's constant, both at the DEPLOY_SHA. Undefined for a vault whose artifact registers no strategy adapters (the baskets).
+ */
+export function loadExpectedStrategyAdapters(ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">, key: VaultKey): VaultSheet["adapters"] {
+  const row = getStageTable().vaults.find((v) => v.key === key)!;
+  if (row.artifact !== STRATEGY_ADAPTER_VAULT_ARTIFACT) return undefined;
+  const stage = getStageTable().stages.find((s) => s.name === row.stage)!;
+  const scriptPath = join(ctx.coreDir, stage.script.split(":")[0]!);
+  const src = existsSync(scriptPath) ? readFileSync(scriptPath, "utf8") : "";
+  return STRATEGY_ADAPTER_WIRING.map((w) => {
+    const m = new RegExp(`uint16 public constant ${w.capConstant} = ([\\d_]+);`).exec(src);
+    if (!m) throw new PublishError("INPUT_MISSING", `${stage.script.split(":")[0]} has no ${w.capConstant}: the expected adapter cap of ${VAULT_NAME[key]} is read from the deploy script`, { path: scriptPath });
+    return { adapter: readManifestField(ctx, `${manifestBase(stage.manifest)}:${w.field}`) as `0x${string}`, capBps: Number(m[1]!.replaceAll("_", "")) };
+  });
+}
+
+/**
  * The vaults the govern unpause rows have unpaused: a vault is listed once the run manifest records the executed phase of its own row
  * `unpause-<VAULT>` (one round per vault). Before that phase, none. A vault whose row was skipped (not in GOVERN_UNPAUSE_VAULTS) stays paused.
  */
 export function unpausedByGovern(manifest: Pick<RunManifest, "govern">, sheet: RunContext["sheet"]): VaultKey[] {
   const g = manifest.govern as Record<string, { executed?: unknown } | undefined> | undefined;
-  return sheet.govern.unpauseVaults.filter((k) => !!g?.[`unpause-${k}`]?.executed);
+  return sheet.govern.unpauseVaults.filter((k) => !!g?.[vaultRule(k).unpauseRow]?.executed);
 }
 
-/** The four vaults whose unpause rows are stage 13 on 8453 (the sheet parser requires all four listed, issue 1710). */
-export const MAINNET_UNPAUSE_VAULTS: readonly VaultKey[] = ["USDC", "PROTO", "AGENT", "RWA"];
+/** The vaults whose unpause rows are stage 13 on 8453 (the sheet parser requires all of them listed, issue 1710): the stage table's vault rules (issue 1705). */
+export const MAINNET_UNPAUSE_VAULTS: readonly VaultKey[] = STAGE13_UNPAUSE_VAULTS;
 
 type RowPhase = "none" | "scheduled" | "executed";
 const phaseOf = (g: Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined, row: string): RowPhase =>
@@ -66,7 +84,7 @@ const phaseOf = (g: Record<string, { scheduled?: unknown; executed?: unknown } |
 export type MainnetGovernMode = { mode: "pre-govern" | "post-govern" } | { mode: "part-way"; detail: string };
 export function mainnetGovernMode(manifest: Pick<RunManifest, "govern">): MainnetGovernMode {
   const g = manifest.govern as Record<string, { scheduled?: unknown; executed?: unknown } | undefined> | undefined;
-  const rows = MAINNET_UNPAUSE_VAULTS.map((k) => [`unpause-${k}`, phaseOf(g, `unpause-${k}`)] as const);
+  const rows = MAINNET_UNPAUSE_VAULTS.map((k) => vaultRule(k).unpauseRow).map((r) => [r, phaseOf(g, r)] as const);
   if (!(rows.every(([, p]) => p === "none") || rows.every(([, p]) => p === "executed"))) {
     return { mode: "part-way", detail: rows.map(([r, p]) => `${r} ${p === "none" ? "not scheduled" : p}`).join(", ") };
   }
@@ -80,29 +98,34 @@ export function expectedTimelockDelay(manifest: Pick<RunManifest, "govern">, she
 }
 
 /**
- * The verifier's sheet, from the frozen sheet. Basket and agent vaults ship paused until stage 13. The link between the govern rows and the
- * reads: a vault the unpause rows unpaused is expected paused=false, every other vault is expected paused=true. So a verify
- * run after govern fails when an unpause row ran and the vault still reads paused, and when a vault reads unpaused with no unpause row behind it.
+ * The verifier's sheet, from the frozen sheet. The per-vault rules come from the stage table (issue 1705, vault-rules.ts): every vault the table marks
+ * deployPaused ships paused until its unpause row. The link between the govern rows and the reads: a vault the unpause rows unpaused is expected
+ * paused=false, every other deployPaused vault is expected paused=true. So a verify run after govern fails when an unpause row ran and the vault still
+ * reads paused, and when a vault reads unpaused with no unpause row behind it. Router eligibility is the table's eligibilitySource: the router stage's
+ * base leg always, a basket when the sheet lists it in ELIGIBLE_VAULTS. The seed is checked on the vaults the table seeds.
  */
 export function buildVerifySheet(ctx: Pick<RunContext, "sheet" | "coreDir" | "chainId" | "manifestOut">, safeAddress: string, unpaused: readonly VaultKey[] = [], timelockDelay?: number): VerifySheet {
   const s = ctx.sheet;
   const vaults: Record<string, VaultSheet> = {};
   for (const k of VAULT_KEYS) {
     const v = s.vaults[k];
+    const adapters = loadExpectedStrategyAdapters(ctx, k);
     vaults[VAULT_NAME[k]] = {
       tvlCap: v.tvlCap, perDepositCap: v.perDepositCap, exitFeeBps: v.exitFeeBps,
-      ...(k !== "USDC" ? { navDeviationBps: v.navDeviationBps, minPoolLiquidity: v.minPoolLiquidity } : {}),
+      ...((BASKET_KEYS as readonly VaultKey[]).includes(k) ? { navDeviationBps: v.navDeviationBps, minPoolLiquidity: v.minPoolLiquidity } : {}),
       feeRecipient: (s.feeRecipient === "@safe" ? safeAddress : s.feeRecipient) as `0x${string}`,
-      expectPaused: !unpaused.includes(k),
-      routerEligible: k === "USDC" || s.eligibleVaults.includes(k),
+      expectPaused: expectPaused(k, unpaused),
+      routerEligible: routerEligible(k, s.eligibleVaults),
       assets: loadExpectedAssets(ctx, k),
-      ...(k === "USDC" ? { seed: s.seedDeposit, seedShareReceiver: s.shareReceiver } : {}),
+      ...((BASKET_KEYS as readonly VaultKey[]).includes(k) ? { maxSlippageBps: loadExpectedMaxSlippageBps(ctx.coreDir, k, getStageTable().vaults.find((x) => x.key === k)!.artifact) } : {}),
+      ...(adapters ? { adapters } : {}),
+      ...(SEEDED_VAULTS.includes(k) ? { seed: s.seedDeposit, seedShareReceiver: s.shareReceiver } : {}),
     };
   }
   return {
     chainId: ctx.chainId, deployer: s.admin, pauser: s.pauser, emergency: s.emergency, safeOwners: s.safeOwners, safeThreshold: s.safeThreshold,
     timelockDelay: timelockDelay ?? Number(s.timelockMinDelay), deploymentKind: s.kind, vaults,
-    defaultWeights: (["USDC", ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
+    defaultWeights: ([...ROUTER_STAGE_ELIGIBLE, ...eligibleInOrder(s)] as VaultKey[]).map((k) => ({ vault: VAULT_NAME[k], bps: s.weights.find((w) => w.key === k)!.bps })),
   };
 }
 
@@ -197,11 +220,12 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     // The mode came from the manifest, which an operator can edit or lose: read depositsPaused of all four vaults and fail on any disagreement with it.
     const read = deps.depositsPaused ?? readDepositsPaused;
     for (const v of VAULT_STAGES) {
-      const want = mode === "pre-govern";
+      // pre-govern: the table's deployPaused. post-govern: open when the vault's unpause row is a stage 13 row, else still its deploy state.
+      const want = expectPaused(v.key, mode === "post-govern" ? MAINNET_UNPAUSE_VAULTS : []);
       const vault = governedRedeploys.find((r) => r.key === v.key)?.new_vault ?? readManifestField(ctx, manifestRef(v.stage, "vault")) as `0x${string}`;
       let got: boolean | string;
       try { got = await read(ctx.rpc, vault); } catch (e) { got = (e as Error).message; }
-      if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, `unpause-${v.key}`)}` : ""}` });
+      if (got !== want) report.checks.push({ label: `govern ${mode}: ${VAULT_NAME[v.key]} depositsPaused is ${want}`, ok: false, detail: `the run manifest says ${mode}, so ${VAULT_NAME[v.key]} must read depositsPaused ${want}, the chain reads ${String(got)}${mode === "post-govern" ? `. If pause-all ran, reopen it: ${resumeCommand(ctx, vaultRule(v.key).unpauseRow)}` : ""}` });
     }
     // Issue 1701: the router weight check above trusts the applied vector of the run manifest, which an operator can edit. On 8453 every receipt_applications
     // entry must be backed by its timelock batch on chain (the evidence-check --receipt-applications --rpc check), so a forged entry cannot hide router weight drift.
