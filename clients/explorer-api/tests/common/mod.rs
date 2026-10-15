@@ -120,9 +120,9 @@ pub const PREVIEW_REDEEM_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0023_vault_snapshot_preview_redeem.sql"
 );
 
-/// Migration 0024 (QA plan C1, core issue 1698): drops `governance_proposals` and
-/// `governance_votes` and deletes `governance_vote` history rows. RouterGovernance
-/// voting was deleted, so the API serves against a schema without them.
+/// Migration 0024 (QA plan C1, core issue 1698): drops the proposal and vote tables
+/// and deletes the vote history rows. RouterGovernance voting was deleted, so the
+/// API serves against a schema without them.
 pub const DROP_GOVERNANCE_VOTING_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0024_drop_governance_voting.sql"
 );

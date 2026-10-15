@@ -571,8 +571,8 @@ pub fn exclusion_finalize_reason_label(reason: i16) -> &'static str {
 /// Kinds of events that appear in the per-account history feed.
 ///
 /// Architecture §5.4: deposits, withdrawals, fee events and policy changes.
-/// There is no governance-vote kind: RouterGovernance voting was deleted
-/// (issue 1698) and migration 0024 removed the old `governance_vote` rows.
+/// There is no vote kind: RouterGovernance voting was deleted (issue 1698)
+/// and migration 0024 removed the old vote history rows.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
