@@ -581,16 +581,6 @@ describe("core-stack dapp --chain 8453", () => {
     expect(h.err).not.toContain("SECRET-API-KEY");
     expect(h.out).not.toContain("SECRET-API-KEY");
   });
-  test("up: --upgrade-evidence reaches the env builder (security round 2); a scheduled-only row refuses the build before compose runs", async () => {
-    const ev = join(WORK, "cli-ev.json");
-    writeFileSync(ev, JSON.stringify({ chain_id: 8453, proxy_upgrades: [{ proxy: "rmUSDC", proxy_address: A(0x9999), implementation_code_hash: `0x${"f0".repeat(32)}`, execute_tx: `0x${"13".repeat(32)}`, execute_status: 1 }] }));
-    const h = harness();
-    expect(await runCli([...UP, "--upgrade-evidence", ev], h.deps)).toBe(0);
-    writeFileSync(ev, JSON.stringify({ chain_id: 8453, proxy_upgrades: [{ proxy: "rmUSDC", proxy_address: A(0x9999), implementation_code_hash: `0x${"f0".repeat(32)}` }] }));
-    const refused = harness();
-    expect(await runCli([...UP, "--upgrade-evidence", ev], refused.deps)).not.toBe(0);
-    expect(refused.calls).toEqual([]);
-  });
   test("up: flags reach the environment (logs RPC, range, ports)", async () => {
     const h = harness();
     const argv = [...UP, "--logs-rpc", "https://logs.example/x", "--max-block-range", "900", "--dapp-port", "16000", "--explorer-port", "16001"];

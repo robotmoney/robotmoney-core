@@ -107,8 +107,9 @@ Deploy 2 is devops run 2 on Base 8453: release `release/v0.4.0-base.3-rehearsal`
   | `VITE_VAULT_EXPECTED_IMPLEMENTATION_HASH` | `timelock.json` `vault_handover.vault_<i>.implementation_code_hash`, keyed by vault address, for each vault whose stage manifest names a `vault_implementation` (ADR-0014) | `{}` (Deploy 2 is direct) |
   | `VITE_ROUTER_EXPECTED_IMPLEMENTATION_HASH` | `timelock.json` `code_hashes.router_implementation` when `router.json` names a `router_implementation` | empty (Deploy 2 is direct) |
   | `VITE_REGISTRY_ADDRESS`, `INDEXER_REGISTRY` | `registry.json` `registry` | `0x686EbEFda732DffA988253Ecf9c012946B8066A3` |
-  | `VITE_GOVERNANCE_ADDRESS`, `INDEXER_ROUTER_GOVERNANCE` | `governance.json` `governance` | `0x59b593ab06bB5587534EfE255f6C614858b32754` |
+  | `INDEXER_ROUTER_GOVERNANCE` | `governance.json` `governance` | `0x59b593ab06bB5587534EfE255f6C614858b32754` |
   | `INDEXER_CONSENSUS_RECEIPT` | `timelock.json` `addresses.consensus_receipt` | `0xEfEe1c9881D1291460f72dA7000bA53e42eb36E2` |
+  | `INDEXER_INVESTMENT_COMMITTEE` | `timelock.json` `addresses.ic_policy` | `0x820A3874A8B44D7e1D4C67B3Bf5619CFAe06907e` |
   | `VITE_TIMELOCK_ADDRESS`, `INDEXER_TIMELOCK` | `timelock.json` `addresses.timelock` | `0xd65165AF0Fb4062ED0da5D119d4B56B92b15356b` |
   | `VITE_SAFE_ADDRESS`, `INDEXER_SAFE` | `timelock.json` `addresses.safe` | `0xdFDea0E1AdF55a9a938bD34ead7920175b47Cb4b` |
   | `INDEXER_START_BLOCK` | `--start-block` | `52484018` |
