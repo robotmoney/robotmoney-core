@@ -216,6 +216,8 @@ describe("production refuses the rehearsal-only rows BEFORE any signer or passph
       makeSigner: () => { calls.makeSigner++; throw new Error("stop: a signer was built"); },
       ownerSigner: async () => { calls.ownerSigner++; throw new Error("stop: an owner signer was built"); },
       prompt: async () => { calls.prompt++; return ""; },
+      // issue 1816: govern on 8453 passes the release gate, and a rehearsal needs a rehearsal tag
+      releaseTag: async () => sheet.DEPLOYMENT_KIND === "rehearsal" ? "release/1.0.0-rehearsal" : "release/1.0.0",
     });
     return { code, calls, msg: w.logs().filter((l) => l.event === "run.failed").pop()?.message as string };
   };
