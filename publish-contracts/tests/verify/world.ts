@@ -122,7 +122,9 @@ export class FakeChain implements ChainReader {
 
   async chainId() { return this.chain; }
   async blockNumber() { return this.head; }
-  async getCode(a: Address) { return this.codes.get(a.toLowerCase()) ?? "0x"; }
+  /** Code at a past block (issue 1833): empty unless a test sets it, so every contract is created after the scan start. */
+  pastCodes = new Map<string, Hex>();
+  async getCode(a: Address, blockNumber?: bigint) { return blockNumber === undefined ? this.codes.get(a.toLowerCase()) ?? "0x" : this.pastCodes.get(`${a.toLowerCase()}@${blockNumber}`) ?? "0x"; }
   async nonce(a: Address) { return this.noncesMap.get(a.toLowerCase()) ?? 0; }
   async getStorageAt(a: Address, slot: Hex) { return this.storage.get(`${a.toLowerCase()}|${slot}`) ?? Z32; }
 

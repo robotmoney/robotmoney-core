@@ -535,3 +535,36 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
     expect(failed(await verifyDeployment(w.opts))).toEqual(["router: WEIGHT_SETTER_ROLE has exactly one holder"]);
   });
 });
+
+// Issue 1833: the KEEPER/EMERGENCY holder and allowlist scans start at --from-block. A vault that already has code one block earlier was created before the scan start,
+// so a grant made before it would never be seen: the vault's scan labels fail instead of passing on a partial log.
+describe("from-block after a vault's creation (issue 1833)", () => {
+  const scanLabels = (key: string) => [`vault[${key}]: KEEPER_ROLE has no holder`, `vault[${key}]: EMERGENCY_ROLE has exactly one holder`, ...(key === "rmUSDC" ? [`vault[${key}]: adapter set, caps and code-hash allowlist equal the deploy script`] : [])];
+  test("no vault has code at from-block minus 1: every vault scan label passes", async () => {
+    const w = buildWorld();
+    w.opts.fromBlock = 100n;
+    const r = await verifyDeployment(w.opts);
+    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+  });
+  test("a vault with code at from-block minus 1: its scan labels fail with 'after the vault's creation', the other vaults' still pass", async () => {
+    const w = buildWorld();
+    w.opts.fromBlock = 100n;
+    w.chain.pastCodes.set(`${VAULTS.rmUSDC!.address.toLowerCase()}@99`, "0x6001");
+    const r = await verifyDeployment(w.opts);
+    expect(r.ok).toBe(false);
+    for (const l of scanLabels("rmUSDC")) {
+      const c = r.checks.find((x) => x.label === l);
+      expect([l, c?.ok]).toEqual([l, false]);
+      expect(c!.detail).toContain("from-block 100 is after the vault's creation");
+    }
+    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+  });
+  test("an unreadable past code read fails the labels too, never a silent pass", async () => {
+    const w = buildWorld();
+    w.opts.fromBlock = 100n;
+    const getCode = w.chain.getCode.bind(w.chain);
+    w.chain.getCode = async (a, b) => { if (b !== undefined) throw new Error("missing trie node"); return getCode(a); };
+    const r = await verifyDeployment(w.opts);
+    for (const l of scanLabels("rmPROTO")) expect(r.checks.find((c) => c.label === l)?.detail).toContain("missing trie node");
+  });
+});

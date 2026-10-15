@@ -26,6 +26,7 @@ import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./st
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet } from "./sheet.ts";
+import { assertVaultRulesMatch } from "./vault-rules.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
 import { APPLY_ROW } from "./apply-receipt.ts";
@@ -371,7 +372,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const a = parseCli(argv);
     const cwd = deps.cwd ?? process.cwd();
     const caller = callerInputs(env);
-    const sheet = parseSheet(readFileSync(resolve(cwd, a.sheet), "utf8"));
+    // Issue 1833: a follow-on verb (pause-all above all) drops an old sheet's VAULT_NAME line with one warning; a deploy run refuses it.
+    const sheetOpts = { verb: a.verb ?? (a.stage === "verify" || a.stage === "govern" ? a.stage : undefined), warn: (message: string, fields: Record<string, unknown>) => log.log("warn", "sheet.vault_name_ignored", { ...fields, message }) };
+    const sheet = parseSheet(readFileSync(resolve(cwd, a.sheet), "utf8"), sheetOpts);
     // one chain-id source: the RPC
     const castEnv = childEnv({ baseEnv: env, rpc: a.rpc, chainId: a.chain });
     const rpcChainId = await readRpcChainId(async (args) => {
@@ -401,8 +404,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
     // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
     assertExitFeeBound(coreDir, sheet.vaults);
-    // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo
-    useStageTable(loadStageTable(coreDir));
+    // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
+    // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
+    const stageTable = loadStageTable(coreDir);
+    assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL));
+    useStageTable(stageTable);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
@@ -566,7 +572,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       log.log("info", "run.counts_measured", { file: p });
     }
     if (!a.dryRun && existsSync(ctx.evidenceDir)) {
-      const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8")) } : undefined;
+      const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`), report);
     }

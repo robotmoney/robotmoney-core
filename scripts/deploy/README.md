@@ -2,6 +2,8 @@
 
 `stage-table.json` is the one source of truth for the core deploy. It is DATA. The one deploy driver, the publish-contracts CLI (`bun publish-contracts/src/cli.ts`, in this repo), reads it from the repo root and keeps no script, env, artifact or manifest names of its own. Devops checks core out and runs the same CLI. There is no other runner.
 
+The CLI must run from the same core sha as `DEPLOY_SHA`. It reads the stages from `--core-dir` at `DEPLOY_SHA`, but the per-vault rules (`vaults[]`, issue 1705) from its own checkout. It refuses to start, naming both table paths, when the two checkouts' vault rules differ (issue 1833).
+
 `stage-table.test.ts` (bun test) checks the table against the real scripts: every script file and contract exists, every `requiredEnv` name is read by its script, every manifest name is written by it, and no deploy script lacks a stage.
 
 ## Schema (version 1)
@@ -37,7 +39,6 @@ Every name in `requiredEnv` is read with no fallback. An unset or malformed valu
 - `DEPLOYMENT_OUT` for every stage. The publish-contracts CLI sets it. Anyone who runs a script directly must set it too. There is no `deployments/<vault>-<chainid>.json` default.
 - `vault`: `SEED_DEPOSIT_USDC` (non-zero, 6-decimal units) and `EXIT_FEE_BPS`.
 - `governance`: `ADMIN_ADDRESS`, `ROUTER_ADDRESS` and `CONSENSUS_RECEIPT_ADDRESS`. The stage runs after `ic-policy`, which deploys the receipt register. It grants `RouterGovernance` router `ADMIN_ROLE`, router `WEIGHT_SETTER_ROLE` (the deployer's copy dropped) and the receipt register's `ADMIN_ROLE`, so `applyReceipt` can release a receipt and set the weights in one call. There is no voting by anyone and no voting parameter (issue 1698). The sheet parser refuses the old voter, quorum, voting period and execution delay names. The `timelock` stage hands `RouterGovernance`'s own `WEIGHT_SETTER_ROLE` to the timelock and drops the deployer's copy.
-- `registry`: `VAULT_NAME` (the registered name comes from the sheet; there is no default).
 - `proto`, `agent`, `rwa`: the same four names as `vault` (`FEE_RECIPIENT`, `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`) and `ROUTER_DEFAULT_BPS`: `none` leaves the basket router-ineligible, otherwise a comma list of bps for the router default vector after this basket flips eligible (rmUSDC, the eligible baskets so far, this vault). The stage makes the basket eligible and sets that vector in one atomic `registry.migrateEligibility`, before the timelock handover.
 - `recorder` (core 1676) reads only `DEPLOYMENT_OUT`: it deploys the permissionless Uniswap V4 price recorder for the UniswapV4 entry of `config/agent-token-shortlist.json`, grows its ring to 901 slots and records the first snapshot. `agent` reads `RECORDER_ADDRESS` (the recorder stage manifest's `recorder`); the other basket stages ignore it. The runner waits for a full 1800 s window of recorder history before the `agent` stage.
 - `proto`, `agent`, `rwa` also read `NAV_DEVIATION_BPS` (1 to 2000, never 0: the vault default 0 disables the ORA-4 deposit check; the script calls `setNavDeviationGuardBps` before the handover and reads it back) and `MIN_POOL_LIQUIDITY` (above 0, a floor for the pool's in-range liquidity: `IUniswapV3Pool.liquidity()` for a V3 pool and the V4 pool's liquidity L (`StateView.getLiquidity`) for a V4 pool, a uint128 L and not a USDC amount; every configured pool must meet it). The sheet names are `VAULT_<PROTO|AGENT|RWA>_NAV_DEVIATION_BPS` and `VAULT_<PROTO|AGENT|RWA>_MIN_POOL_LIQUIDITY`. rmUSDC has neither (issue 1666).
@@ -50,7 +51,7 @@ The frozen sheet must carry a value for each of these. `0` is a valid exit fee. 
 
 ## One env-name set for every vault
 
-rmUSDC (`vault`) and the three basket vaults (`proto`, `agent`, `rwa`) read the same four names: `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`, `FEE_RECIPIENT`. The old `VAULT_TVL_CAP`, `VAULT_PER_DEPOSIT_CAP`, `VAULT_EXIT_FEE_BPS` and `FEE_RECIPIENT_ADDRESS` are gone. No script has a default cap or recipient. A missing or malformed value reverts. The registry stage requires `VAULT_NAME`.
+rmUSDC (`vault`) and the three basket vaults (`proto`, `agent`, `rwa`) read the same four names: `TVL_CAP`, `PER_DEPOSIT_CAP`, `EXIT_FEE_BPS`, `FEE_RECIPIENT`. The old `VAULT_TVL_CAP`, `VAULT_PER_DEPOSIT_CAP`, `VAULT_EXIT_FEE_BPS` and `FEE_RECIPIENT_ADDRESS` are gone. No script has a default cap or recipient. A missing or malformed value reverts. No stage reads `VAULT_NAME`: every vault's registry name, rmUSDC's included, is a constant of its own stage script (issue 1705). Every deploy run refuses a sheet that still has a `VAULT_NAME` line. `pause-all`, `govern`, `verify` and `record-receipt` ignore it with one warning, so an old sheet never blocks an emergency pause. Delete `VAULT_NAME` from the sheet before the next deploy run.
 
 ## config-check CLI (devops calls this)
 

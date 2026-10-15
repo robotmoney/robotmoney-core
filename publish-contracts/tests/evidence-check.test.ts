@@ -8,6 +8,7 @@ import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { releaseCalldata, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
+import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
 import { withUpgradeability, withUpgradeabilityReads } from "./upgradeability-fixture.ts";
 
@@ -322,6 +323,17 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
     const p = await online({ paused: false }, (e) => { e.govern.find((x: any) => x.step === "unpause-USDC").execute_status = 0; });
     expect(p.join("\n")).toContain("rmUSDC.depositsPaused() reads false on chain, but govern unpause-USDC has no executed receipt");
   });
+  // Issue 1833: the alarm does not read the table's deployPaused, so a uniform table edit to deployPaused=false cannot silence it.
+  for (const deployPaused of [true, false]) {
+    test(`a vault reading paused=false without an executed unpause receipt is reported when the table says deployPaused=${deployPaused}`, async () => {
+      const rules = VAULT_RULES.map((v) => ({ ...v, deployPaused, unpauseInStage13: v.unpauseInStage13 && deployPaused }));
+      const e = good();
+      const chain = stub(e, { paused: false });
+      e.govern.find((x: any) => x.step === "unpause-RWA").execute_status = 0;
+      const p = await checkEvidenceOnChain(e, chain, { safe: 2 }, { vaultRules: rules });
+      expect(p).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
+    });
+  }
   test("a missing unpause-USDC row is rejected: rmUSDC is no longer optional", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-USDC"); })).toContain("'unpause-USDC' of Stage 13 has no evidence entry"));
 });
 

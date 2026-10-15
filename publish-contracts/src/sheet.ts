@@ -174,6 +174,27 @@ export function parseSheetText(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Issue 1833: the verbs that run against a deployment that already exists. A sheet made before issue 1705 (the old rehearsal key fragment printed VAULT_NAME) must not
+ * block them, above all the emergency pause-all: they drop the line with one warning. Every deploy stage still refuses it.
+ */
+export const LEGACY_VAULT_NAME_VERBS = ["pause-all", "govern", "verify", "record-receipt"] as const;
+const LEGACY_VAULT_NAME = "VAULT_NAME";
+export interface ParseSheetOpts {
+  /** The CLI verb (or the single follow-on stage, verify or govern) the sheet is parsed for. Absent: a deploy run, which refuses VAULT_NAME. */
+  verb?: string;
+  /** Receives the one warning when a follow-on verb drops a VAULT_NAME line. */
+  warn?: (message: string, fields: Record<string, unknown>) => void;
+}
+
+/** A follow-on verb drops VAULT_NAME with one warning naming its line. A deploy run keeps it, so checkNames refuses it with the issue 1705 reason. */
+function dropLegacyVaultName(text: string, raw: Record<string, string>, o: ParseSheetOpts): void {
+  if (!(LEGACY_VAULT_NAME in raw) || !(LEGACY_VAULT_NAME_VERBS as readonly string[]).includes(o.verb ?? "")) return;
+  const line = text.replace(/^\uFEFF/, "").split(/\r?\n/).findIndex((l) => /^(?:export\s+)?VAULT_NAME=/.test(l.trim())) + 1;
+  delete raw[LEGACY_VAULT_NAME];
+  o.warn?.(`sheet line ${line}: VAULT_NAME is ignored by ${o.verb}. Every registry name is a vault stage script constant (issue 1705): delete the line before the next deploy run, which refuses it`, { name: LEGACY_VAULT_NAME, line, verb: o.verb });
+}
+
 function checkNames(raw: Record<string, string>): void {
   for (const name of Object.keys(raw)) {
     for (const [re, why] of REFUSED) if (re.test(name)) throw err(`${name} is refused: ${why}`, { name });
@@ -227,8 +248,9 @@ function asVaultKeys(name: string, v: string, allowNone = true): VaultKey[] {
 }
 
 /** Parse and validate a sheet. Structure floors that hold on every chain live here. Chain-keyed floors live in floors.ts. */
-export function parseSheet(text: string): Sheet {
+export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   const raw = parseSheetText(text);
+  dropLegacyVaultName(text, raw, opts);
   checkNames(raw);
   const v = raw;
 
