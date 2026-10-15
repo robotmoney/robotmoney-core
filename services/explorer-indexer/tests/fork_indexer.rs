@@ -195,9 +195,9 @@ alloy_sol_types::sol! {
 /// from the ledger its initializer created, and the holder's claim is served.
 ///
 /// Every vault is an ERC-1967 proxy, and its initializer creates the ledger (`RobotMoneyVaultOps.createLedger`). The
-/// indexer used to derive the ledger as the vault's CREATE address at nonce 1, which holds no code
-/// on a proxy, so no record was ever indexed and `/v1/accounts/:holder/exclusion-claims` said
-/// nothing was owed. Here a holder deposits into the freshly published rmUSDC vault, governance
+/// indexer reads the ledger from the vault's `exclusionLedger()` instead of deriving it, because a
+/// derived address can be wrong for a vault that an upgrade pointed at another ledger, and then no
+/// record is indexed and `/v1/accounts/:holder/exclusion-claims` says nothing is owed. Here a holder deposits into the freshly published rmUSDC vault, governance
 /// (the real Safe and timelock) excludes its Aave adapter, which opens record 1, and then restores
 /// it, which drains the adapter into the record and closes it. The indexer then runs over the
 /// whole range. It must store the vault's ledger as the vault names it, index the record at that
@@ -232,8 +232,10 @@ async fn exclusion_record_of_a_proxy_vault_is_indexed_at_its_factory_ledger() {
     let vault = twin.vault();
     let vault_hex = format!("{vault:#x}");
 
-    // The vault names its ledger: a contract bound to this vault, and not the vault's own CREATE
-    // address at nonce 1 (the old derivation).
+    // The vault names its ledger: a contract bound to this vault. Its initializer creates the ledger
+    // through the linked library in the proxy's own context, so the ledger is the proxy's CREATE at
+    // nonce 1. The indexer still takes it from `exclusionLedger()`, not from that derivation, because
+    // an upgrade can point a vault at another ledger.
     let head = rpc.block_number().await.expect("Twin head block");
     let reply = rpc
         .eth_call_at(
@@ -247,9 +249,8 @@ async fn exclusion_record_of_a_proxy_vault_is_indexed_at_its_factory_ledger() {
         other => panic!("the published rmUSDC vault names no ExclusionLedger: {other:?}"),
     };
     assert_ne!(
-        ledger,
-        vault.create(1),
-        "the ledger is the factory's creation, not the vault's"
+        ledger, vault,
+        "the ledger is a contract of its own, not the vault"
     );
     assert!(
         !rpc.get_code_at(ledger, head)
