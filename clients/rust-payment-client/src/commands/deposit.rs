@@ -49,7 +49,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::errors::{Result as RmpcResult, RmpcError};
-use crate::floors::{floor_from_preview, DEFAULT_FLOOR_TOLERANCE_BPS};
+use crate::floors::{default_gas_limit_for_floor, floor_from_preview, DEFAULT_FLOOR_TOLERANCE_BPS};
 use crate::gateway::{PortfolioRouter, RobotMoneyGateway};
 use crate::logging::AuditDecision;
 use crate::output::emit;
@@ -527,10 +527,6 @@ pub const ROUTER_DEPOSIT_BASE_GAS: u64 = 400_000;
 /// (`ROUTER_DEPOSIT_GAS_PER_LEG`). Zero-weight legs count: the gateway
 /// multiplies by `getEffectiveWeights().length`.
 pub const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 1_850_000;
-/// Headroom above the router floor for intrinsic tx gas, calldata and the
-/// policy reads that run before the entry check, none of which the check
-/// sees. Same margin as `withdraw-router`.
-const ROUTER_GAS_MARGIN: u64 = 150_000;
 
 /// Gateway entry floor for a router-destination `depositTo` over `legs`
 /// effective-weight legs.
@@ -568,7 +564,7 @@ impl DepositGas {
         Self {
             router_legs: Some(legs),
             floor,
-            default_limit: floor.saturating_add(ROUTER_GAS_MARGIN),
+            default_limit: default_gas_limit_for_floor(floor),
         }
     }
 

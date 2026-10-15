@@ -39,6 +39,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::errors::RmpcError;
+use crate::floors::default_gas_limit_for_floor;
 pub use crate::floors::{
     router_withdraw_gas_floor as gas_floor, ROUTER_WITHDRAW_BASE_GAS, ROUTER_WITHDRAW_GAS_PER_LEG,
 };
@@ -577,10 +578,6 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
-/// Headroom above the floor for intrinsic tx gas and calldata, which the
-/// entry check does not see.
-const GAS_MARGIN: u64 = 150_000;
-
 /// The gateway's entry floor for these shares: it counts only the non-zero
 /// legs (`RobotMoneyGateway.withdrawFromRouter`, core 1482).
 pub fn gas_floor_for(shares_per_leg: &[U256]) -> u64 {
@@ -589,7 +586,7 @@ pub fn gas_floor_for(shares_per_leg: &[U256]) -> u64 {
 
 /// Default tx gas limit: the entry floor for every leg plus a margin.
 pub fn default_gas_limit(legs: usize) -> u64 {
-    gas_floor(legs).saturating_add(GAS_MARGIN)
+    default_gas_limit_for_floor(gas_floor(legs))
 }
 
 #[cfg(test)]

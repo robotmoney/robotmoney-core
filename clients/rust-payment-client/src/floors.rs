@@ -33,3 +33,37 @@ pub const ROUTER_WITHDRAW_GAS_PER_LEG: u64 = 1_850_000;
 pub fn router_withdraw_gas_floor(legs: usize) -> u64 {
     ROUTER_WITHDRAW_BASE_GAS.saturating_add(ROUTER_WITHDRAW_GAS_PER_LEG.saturating_mul(legs as u64))
 }
+
+/// Headroom above a gateway entry floor for intrinsic tx gas, calldata and the reads the entry
+/// function makes before it checks the floor (the router's effective weights, the policy). None of
+/// those is counted by the floor.
+const GAS_MARGIN: u64 = 150_000;
+
+/// The tx gas limit that makes a gateway entry floor hold. The gateway is an ERC-1967 proxy, and
+/// a call forwards at most 63/64 of the gas it holds (EIP-150), so the implementation sees about
+/// 1/64 less than the limit before it runs: at a 9.8M limit that is 150k, as much as the whole
+/// margin. A limit of `floor + 150k` therefore reverted `InsufficientGas(9540386, 9650000)` on the
+/// Twin chain for five router legs. The limit is the floor grossed up by 64/63, plus the margin.
+pub fn default_gas_limit_for_floor(floor: u64) -> u64 {
+    floor
+        .saturating_add(floor / 63 + 1)
+        .saturating_add(GAS_MARGIN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the Twin chain measured for five router legs (core 1808 proxy hop): the implementation
+    /// held 9,540,386 gas at the entry check of a 9.8M limit, 78,227 of which it had spent reading
+    /// the router's weights first, so a limit needs to leave at least floor + 78k + that 1/64.
+    #[test]
+    fn default_limit_leaves_the_floor_after_the_proxy_hop_and_the_entry_reads() {
+        let floor = router_withdraw_gas_floor(5);
+        assert_eq!(floor, 9_650_000);
+        let needed = (floor + 78_227) as f64 * 64.0 / 63.0 + 24_000.0;
+        assert!(default_gas_limit_for_floor(floor) as f64 >= needed);
+        assert!(default_gas_limit_for_floor(floor) > 9_800_000);
+        assert_eq!(default_gas_limit_for_floor(u64::MAX), u64::MAX);
+    }
+}
