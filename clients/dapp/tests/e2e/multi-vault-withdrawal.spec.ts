@@ -30,6 +30,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { sendBufferedTransaction } from "./helpers/gas";
+import { syncBrowserClockToChain } from "./helpers/chainClock";
 import { openDapp, openTab } from "./helpers/wallet";
 import { signWithdraw } from "./helpers/withdraw";
 import { erc20Abi, vaultAbi } from "../../src/lib/abi";
@@ -158,7 +159,10 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
       });
     });
 
-    // Step 3: open dapp and navigate to Deposit & Withdraw tab.
+    // Step 3: open dapp and navigate to Deposit & Withdraw tab. The router redeem's deadline is built
+    // from the browser clock and checked against the chain's block time, and the devnet's boot warps
+    // chain time ahead of the wall clock, so the browser takes the chain's time first.
+    await syncBrowserClockToChain(page, endpoints.rpc_url);
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
 
