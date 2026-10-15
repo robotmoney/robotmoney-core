@@ -76,6 +76,9 @@ library GovernedUpgrade {
     ///      there is no interim authority. The timelock stage verifies its code and Safe
     ///      ownership, and that every proxy names it, before deposits open.
     function init(address timelock, uint8 mode) external {
+        // Exactly once per proxy: a later reinitializer cannot re-run it to name another
+        // authority (and nothing here ever writes `upgradesFrozen = false`).
+        if (layout().upgradeTimelock != address(0)) revert InvalidInitialization();
         if (timelock == address(0)) revert InvalidUpgradeTimelock(timelock);
         if (mode != MODE_UPGRADEABLE && mode != MODE_FROZEN_AT_DEPLOY) {
             revert UpgradeModeUndeclared();
@@ -93,6 +96,11 @@ library GovernedUpgrade {
     ///         run a call (a reinitializer) on it in the same transaction.
     function upgradeToAndCall(address newImplementation, bytes calldata data) external {
         _authorize();
+        // No code: refuse with the typed error (a call to it could not be told apart from a
+        // failing `proxiableUUID`).
+        if (newImplementation.code.length == 0) {
+            revert ERC1967Utils.ERC1967InvalidImplementation(newImplementation);
+        }
         try IERC1822Proxiable(newImplementation).proxiableUUID() returns (bytes32 slot) {
             if (slot != ERC1967Utils.IMPLEMENTATION_SLOT) {
                 revert ERC1967Utils.ERC1967InvalidImplementation(newImplementation);

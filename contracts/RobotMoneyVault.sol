@@ -4,13 +4,15 @@
 //  docs/architecture.md §6 — Data and Trust Boundaries)
 pragma solidity ^0.8.24;
 
-import {ERC4626Upgradeable} from
-    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {ReentrancyGuardUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {
+    ReentrancyGuardUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
 import {RobotMoneyVaultOps} from "./lib/RobotMoneyVaultOps.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
@@ -387,6 +389,13 @@ contract RobotMoneyVault is
 
     /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it). Takes the
     ///         arguments the constructor took, plus the upgrade authority and release mode.
+    /// @param _asset The vault asset (USDC).
+    /// @param _tvlCap Maximum total assets, 6-decimal units (0 = no cap).
+    /// @param _perDepositCap Maximum single deposit; must not exceed a non-zero `_tvlCap`.
+    /// @param _exitFeeBps Exit fee in basis points, at most `MAX_EXIT_FEE_BPS`.
+    /// @param _feeRecipient Receives exit fees. Not zero.
+    /// @param _admin Receives ADMIN_ROLE. Not zero.
+    /// @param _emergencyResponder Receives EMERGENCY_ROLE. Not zero.
     /// @param upgradeTimelock_ The Safe-controlled timelock: the only upgrade and freeze authority.
     /// @param upgradeMode_ The release mode. `Undeclared` reverts.
     function initialize(
@@ -1511,19 +1520,13 @@ contract RobotMoneyVault is
             int256[] memory drifts
         )
     {
-        return RobotMoneyVaultOps.adapterDrift(
-            _opsAdapters(), totalAssets(), _activeAdapterCount()
-        );
+        return RobotMoneyVaultOps.adapterDrift(_opsAdapters(), totalAssets(), _activeAdapterCount());
     }
 
     /// @dev Reinterpret the `adapters` storage array as the layout-identical
     ///      `RobotMoneyVaultOps.AdapterInfo[]` for the delegatecall-linked library. The two
     ///      structs share an exact field layout; only the nominal type differs.
-    function _opsAdapters()
-        internal
-        view
-        returns (RobotMoneyVaultOps.AdapterInfo[] storage o)
-    {
+    function _opsAdapters() internal view returns (RobotMoneyVaultOps.AdapterInfo[] storage o) {
         AdapterInfo[] storage a = adapters;
         // solhint-disable-next-line no-inline-assembly
         assembly {

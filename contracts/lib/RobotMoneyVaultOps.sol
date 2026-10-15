@@ -5,6 +5,7 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {BpsMath} from "./BpsMath.sol";
 
 /// @title RobotMoneyVaultOps
 /// @notice The off-hot-path adapter loops of `RobotMoneyVault`, as an externally linked library:
@@ -22,7 +23,7 @@ library RobotMoneyVaultOps {
         bool active;
     }
 
-    uint256 internal constant MAX_BPS = 10_000;
+    uint256 internal constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
 
     /// @notice Same signatures as the `RobotMoneyVault` events (the vault declares them for its ABI).
     event Pulled(uint256 indexed index, address indexed adapter, uint256 amount);
@@ -151,13 +152,8 @@ library RobotMoneyVaultOps {
             }
             targetBps = equalWeightBps(rank, activeCount);
         }
-        return (
-            address(info.adapter),
-            info.capBps,
-            info.active,
-            info.adapter.totalAssets(),
-            targetBps
-        );
+        return
+            (address(info.adapter), info.capBps, info.active, info.adapter.totalAssets(), targetBps);
     }
 
     /// @notice Share of `MAX_BPS` owed to the `rank`-th (0-based, registry order) of `active`

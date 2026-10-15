@@ -10,6 +10,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {BasketAssetConfigGuard} from "./BasketAssetConfigGuard.sol";
 import {ForeignTokenQuarantine} from "./ForeignTokenQuarantine.sol";
+import {BpsMath} from "./BpsMath.sol";
 
 /// @dev The vault getters the emergency unwind reads from `address(this)` (the vault).
 interface IBasketSwapsVault {
@@ -34,7 +35,7 @@ interface IBasketSwapsVault {
 library BasketSwaps {
     using SafeERC20 for IERC20;
 
-    uint256 internal constant MAX_BPS = 10_000;
+    uint256 internal constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
 
     /// @dev Same signatures as the `BasketVault` events (the vault declares them for its ABI).
     event Swapped(
@@ -72,9 +73,10 @@ library BasketSwaps {
         if (adapter != address(0)) {
             // Adapter pulls `tokenIn` from the vault via transferFrom.
             IERC20(tokenIn).forceApprove(adapter, amountIn);
-            amountOut = IBasketSwapAdapter(adapter).swap(
-                tokenIn, tokenOut, fee, amountIn, minAmountOut, address(this), block.timestamp
-            );
+            amountOut = IBasketSwapAdapter(adapter)
+                .swap(
+                    tokenIn, tokenOut, fee, amountIn, minAmountOut, address(this), block.timestamp
+                );
             IERC20(tokenIn).forceApprove(adapter, 0);
         } else {
             IERC20(tokenIn).forceApprove(address(router), amountIn);
