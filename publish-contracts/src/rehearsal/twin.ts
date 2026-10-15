@@ -18,11 +18,13 @@ export { BASE_CHAIN_ID };
 export const USDC_BALANCE_SLOT = 9n;
 const BLACKLIST_BIT = 1n << 255n;
 /**
- * Default gas balance `fund-gas` gives each sheet wallet on the Twin chain: 0.5 ETH. The runner pre-flight needs 3x the simulated stage
+ * Default gas balance `fund-gas` gives each sheet wallet on the Twin chain: 2 ETH. The runner pre-flight needs 3x the simulated stage
  * cost plus the L1 allowance. The vault stage needed 0.0447 ETH at the time of core 1554 (the old 0.02 ETH default failed it once), and every
- * stage spends from the one deployer. Do not lower it without re-measuring. Never weaken the pre-flight instead.
+ * stage spends from the one deployer. The recorder stage now grows its ring to 7,201 slots in 31 transactions (core 1793, QA plan D5): its
+ * simulated cost at the fork's 1 gwei is about 0.19 ETH, so its pre-flight needs 0.68 ETH and 0.5 ETH failed it. Do not lower it without
+ * re-measuring. Never weaken the pre-flight instead.
  */
-export const TWIN_GAS_WEI = 5n * 10n ** 17n;
+export const TWIN_GAS_WEI = 2n * 10n ** 18n;
 const MAX_FUND_WEI = 10n ** 21n;   // 1000 ETH: a misread amount is refused
 
 export class TwinError extends Error {}
