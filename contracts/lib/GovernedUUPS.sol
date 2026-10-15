@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/contract-upgradeability-plan.md — Mechanism and authority
-// (See also: docs/adr/ADR-0011-governed-uups-upgrades-and-freeze.md; issue 1808)
+// (See also: docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; issue 1808)
 pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";

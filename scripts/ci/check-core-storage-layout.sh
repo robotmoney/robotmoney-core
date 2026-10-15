@@ -3,7 +3,7 @@
 #
 # Canonical: docs/technical/contract-upgradeability-plan.md (Mechanism and authority: "Pin and validate that layout for
 #            every upgrade; append-only layout discipline alone is insufficient when inheritance or library linking
-#            changes"), docs/adr/ADR-0011-governed-uups-upgrades-and-freeze.md.
+#            changes"), docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md.
 #
 # Each core contract runs behind its own ERC-1967 proxy. A new implementation is upgrade-safe only if it reads the
 # proxy's existing storage the way the old one wrote it. This gate compares, per contract, the live layout with a
@@ -34,7 +34,7 @@ SNAPSHOT_DIR="${SNAPSHOT_DIR:-$REPO_ROOT/contracts/test/fixtures/storage-layout}
 FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
 
-# contract:source — the ten proxied core contracts (docs/adr/ADR-0011-governed-uups-upgrades-and-freeze.md).
+# contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md).
 CONTRACTS=(
   "RobotMoneyVault:contracts/RobotMoneyVault.sol"
   "ProtocolAssetVault:contracts/vaults/ProtocolAssetVault.sol"

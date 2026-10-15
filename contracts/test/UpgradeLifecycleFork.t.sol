@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/contract-upgradeability-plan.md — Delivery step 3 (fork tests for v1 -> v2 state preservation)
-// (See also: docs/adr/ADR-0011-governed-uups-upgrades-and-freeze.md; issue 1808)
+// (See also: docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; issue 1808)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
