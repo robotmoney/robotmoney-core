@@ -103,7 +103,7 @@ describe("docs the redeploy script header cites exist (QA plan v1 E3)", () => {
     ["the verb", /redeploy-vault --vault PROTO|`--vault PROTO`/],
     ["the row", /govern --row redeploy-vault/],
     ["the cap call", /router\.setVaultCap\(new, vaultCap\(old\)\)/],
-    ["the cap-parity label", /redeploy\[rmPROTO\]: router\.vaultCap\(new\) equals router\.vaultCap\(old\)/],
+    ["the cap-parity label", /redeploy\[rmPROTO\]: router per-address cap equals approved old cap/],
     ["--prior-out", /--prior-out/],
     ["the evidence cap field", /router_vault_cap/],
   ];
