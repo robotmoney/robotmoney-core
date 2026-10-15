@@ -1017,7 +1017,17 @@ export function stripPublicContexts(line: string): string {
   return out;
 }
 
-/** Scan one evidence folder for secrets. Transaction hashes are 64-hex by design: they are allowed in the fields that name a tx. `strip` is the public-context allowance (a test swaps it to prove widening it is caught). */
+/** A whole-line JSON string value that is one 0x bytes32 (a tx hash, a code hash, a `tx_hashes` element). A word on the line never exempts a hit. */
+const B32_JSON_VALUE = /^\s*(?:"[^"]*"\s*:\s*)?"0x[0-9a-fA-F]{64}",?\s*$/;
+/** One `"config/<file>": "sha256:<64 hex>"` entry of a pretty-printed isomorphism report (isomorphism.ts configHashes). */
+const CONFIG_HASH_ENTRY = /^\s*"[^"]*"\s*:\s*"sha256:[0-9a-fA-F]{64}",?\s*$/;
+const CONFIG_HASHES_OPEN = /^(\s*)"configHashes"\s*:\s*\{\s*$/;
+
+/**
+ * Scan one evidence folder for secrets. Transaction hashes are 64-hex by design: a line whose whole value is one 0x bytes32 JSON string is allowed.
+ * A bare (un-prefixed) 64-hex is exempt only as a `sha256:` value directly under a `configHashes` key (issue 1689); a line that merely names a
+ * hash word (tx, hash, salt, digest, sha) is scanned like any other. `strip` is the public-context allowance (a test swaps it to prove widening it is caught).
+ */
 export function scanEvidenceFolder(dir: string, strip: (line: string) => string = stripPublicContexts): string[] {
   const hits: string[] = [];
   const walk = (d: string) => {
@@ -1025,9 +1035,14 @@ export function scanEvidenceFolder(dir: string, strip: (line: string) => string 
       const f = join(d, n);
       if (statSync(f).isDirectory()) { walk(f); continue; }
       const text = readFileSync(f, "utf8");
+      let configIndent: string | undefined; // set while inside a `"configHashes": {` block, to its indent
       text.split("\n").forEach((line, i) => {
+        const open = CONFIG_HASHES_OPEN.exec(line);
+        if (configIndent !== undefined && line.startsWith(`${configIndent}}`)) configIndent = undefined;
+        const configHash = configIndent !== undefined && CONFIG_HASH_ENTRY.test(line);
+        if (open) configIndent = open[1];
         for (const [name, re] of SECRET_PATTERNS) {
-          if (name.startsWith("64-hex") && /(tx|hash|transaction|block|codehash|salt|digest|sha|0x[0-9a-fA-F]{64}",?\s*$)/i.test(line)) continue;
+          if (name.startsWith("64-hex") && (configHash || B32_JSON_VALUE.test(line))) continue;
           if (re.test(name.startsWith("64-hex") ? strip(line) : line)) hits.push(`${f}:${i + 1}: ${name}`);
         }
       });
