@@ -248,6 +248,19 @@
   },
   {
     "type": "function",
+    "name": "lastAppliedRecordedAt",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "proxiableUUID",
     "inputs": [],
     "outputs": [
@@ -624,6 +637,27 @@
         "name": "receiptId",
         "type": "bytes32",
         "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ReceiptNotNewerThanApplied",
+    "inputs": [
+      {
+        "name": "receiptId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "recordedAt",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "lastApplied",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ]
   },

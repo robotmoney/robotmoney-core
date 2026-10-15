@@ -71,3 +71,26 @@ describe("docs name both causes of exit 25 and the apply-receipt ordering gap (i
     expect(readme.match(/pause not confirmed or not recorded 25/g)?.length).toBe(2);
   });
 });
+
+// Issue 1831: the CLI help describes apply-receipt as the one RouterGovernance.applyReceipt call, and architecture 4.9 names both receipt ADMIN_ROLE holders.
+describe("the CLI help and architecture 4.9 describe the one-call apply and both receipt ADMIN_ROLE holders (issue 1831)", () => {
+  test("the cli.ts USAGE text for apply-receipt names RouterGovernance.applyReceipt and not ONE timelock batch", async () => {
+    const { USAGE } = await import("../src/cli.ts");
+    const start = USAGE.indexOf("--row apply-receipt --receipt-id");
+    expect(start).toBeGreaterThan(0);
+    const paragraph = USAGE.slice(start, USAGE.indexOf("--row clear-voted-weights", start));
+    expect(paragraph).toContain("RouterGovernance.applyReceipt");
+    expect(paragraph).not.toContain("ONE timelock batch");
+    expect(paragraph).toContain("lastAppliedRecordedAt");
+    expect(paragraph).toMatch(/--row release-receipt .*is refused with USAGE/);
+  });
+  test("docs/architecture.md section 4.9 names both ADMIN_ROLE holders and no longer says exactly one holder", () => {
+    const arch = readFileSync(join(ROOT, "docs", "architecture.md"), "utf8");
+    const s49 = arch.slice(arch.indexOf("### 4.9 "), arch.indexOf("\n## 5. "));
+    expect(s49.length).toBeGreaterThan(0);
+    expect(s49).not.toContain("exactly one holder");
+    expect(s49).toContain("has two holders: the\n`TimelockController` and `RouterGovernance`");
+    expect(s49).toContain("ReceiptNotNewerThanApplied");
+    expect(s49).toMatch(/`release-receipt` is refused with USAGE/);
+  });
+});

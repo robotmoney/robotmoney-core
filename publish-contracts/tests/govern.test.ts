@@ -516,6 +516,26 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
   const RID = `0x${"ab".repeat(32)}` as `0x${string}`;
   const OTHER = `0x${"cd".repeat(32)}` as `0x${string}`;
   const rel = (receiptId: string, extra: object = {}) => ({ row: RECEIPT_ROW, receiptId, ...extra });
+  /** A deployment from before issue 1698, where RouterGovernance does not hold the receipt ADMIN_ROLE: the only world in which the release row still runs (issue 1831). */
+  const legacyTl = (sheet: Parameters<typeof fakeTimelock>[0]) => { const tl = fakeTimelock(sheet, DELAY); tl.s.governanceIsReceiptAdmin = false; return tl; };
+
+  test("issue 1831: once RouterGovernance holds the receipt ADMIN_ROLE the release row is refused with USAGE, names --row apply-receipt and sends nothing", async () => {
+    for (const chainId of [918453, 8453]) {
+      const { ctx, sheet } = setup(ALL, chainId);
+      const tl = fakeTimelock(sheet, DELAY);
+      tl.s.recorded.add(RID);
+      const e = await runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID, { warp: warpTo(tl) }))).catch((x: PublishError) => x);
+      expect(e).toBeInstanceOf(PublishError);
+      expect((e as PublishError).kind).toBe("USAGE");
+      expect((e as PublishError).exitCode).toBe(EXIT_CODES.USAGE);
+      expect((e as PublishError).message).toContain("--row apply-receipt");
+      expect((e as PublishError).message).toContain("burn");
+      expect(tl.s.events).toEqual([]);
+      expect(tl.s.log).toEqual([]);
+      expect(tl.s.nonce).toBe(0);
+      expect(tl.s.released.has(RID)).toBe(false);
+    }
+  });
 
   test("calldata: one releaseReceipt(receiptId) on the deployed receipt contract", () => {
     const c = buildReleaseCall(A.receipt, RID);
@@ -527,7 +547,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 
   test("one schedule and one execute through the timelock, lines carry row release-receipt, the receipt reads released, the matrix is untouched", async () => {
     const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     tl.s.recorded.add(RID);
     const manifest = newManifest(ctx, addr(0xa001));
     const out: string[] = [];
@@ -552,7 +572,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 
   test("a rerun for the same receipt sends nothing and reprints its lines; a second receipt is its own round", async () => {
     const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     tl.s.recorded.add(RID); tl.s.recorded.add(OTHER);
     const manifest = newManifest(ctx, addr(0xa001));
     await runGovern(ctx, stageByName("govern"), manifest, opts(sheet, tl, rel(RID, { warp: warpTo(tl) })));
@@ -567,7 +587,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 
   test("a record under the receipt's key for a different operation is refused, not adopted", async () => {
     const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     tl.s.recorded.add(RID);
     const manifest = newManifest(ctx, addr(0xa001));
     manifest.govern = { [releaseRecordKey(RID)]: { scheduled: { at: "x", operation_id: `0x${"99".repeat(32)}` } } };
@@ -577,7 +597,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 
   test("an unrecorded or already released receipt is refused before the Safe schedules anything", async () => {
     const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID)))).rejects.toThrow("is not recorded");
     tl.s.recorded.add(RID); tl.s.released.add(RID);
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, rel(RID)))).rejects.toThrow("already released");
@@ -586,7 +606,7 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
 
   test("on 8453 the release schedules exactly one releaseReceipt operation and exits GOVERN_PENDING with the resume command; the resume after the delay executes it and reads released back (issue 1611)", async () => {
     const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     tl.s.recorded.add(RID);
     const manifest = newManifest(ctx, addr(0xa001));
     const noWarp = async () => { throw new Error("no anvil_ or evm_ method on 8453"); };
@@ -622,20 +642,20 @@ describe("release-receipt: the on-demand row, one Safe -> Timelock round per rec
   test("on 8453 update-delay, batch and cancel stay refused while the release row is accepted; a stage run on 8453 never includes the release (issue 1611)", async () => {
     for (const row of TWIN_ONLY_ROWS) {
       const { ctx, sheet } = setup(ALL, 8453);
-      const tl = fakeTimelock(sheet, DELAY);
+      const tl = legacyTl(sheet);
       await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { row }))).rejects.toMatchObject({ kind: "USAGE" });
       expect(tl.s.events.length).toBe(0);
     }
     expect([...stageRows(8453)]).toEqual([...UNPAUSE_ROWS]);
     expect([...stageRows(8453)]).not.toContain(RECEIPT_ROW as never);
     const { ctx, sheet } = setup(ALL, 8453);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     await expect(runGovern(ctx, stageByName("govern"), newManifest(ctx, addr(0xa001)), opts(sheet, tl, { call: { label: "x", target: A.gateway, data: "0x12" } }))).rejects.toThrow("refused on chain 8453");
   });
 
   test("usage: --receipt-id needs --row release-receipt, the row needs a bytes32 id, and it is not a generic call label or a matrix row", async () => {
     const { ctx, sheet } = setup(ALL);
-    const tl = fakeTimelock(sheet, DELAY);
+    const tl = legacyTl(sheet);
     const m = () => newManifest(ctx, addr(0xa001));
     await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: "unpause-PROTO", receiptId: RID }))).rejects.toThrow("--row release-receipt only");
     await expect(runGovern(ctx, stageByName("govern"), m(), opts(sheet, tl, { row: RECEIPT_ROW }))).rejects.toThrow("needs --receipt-id");
@@ -1283,6 +1303,37 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     w.tl.s.released.add(RID);
     await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("was released after operation") });
     expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
+  });
+
+  test("issue 1831: apply-receipt refuses a receipt not recorded after lastAppliedRecordedAt with USAGE and sends nothing; a newer one applies", async () => {
+    for (const last of [7n, 8n]) {
+      const w = world();
+      w.tl.s.recordedAt.set(RID, 7n);
+      w.tl.s.lastAppliedRecordedAt = last;
+      await refused(w, "not later than the last applied receipt");
+      expect(w.tl.s.nonce).toBe(0);
+      const msg = await w.apply().catch((e: Error) => e.message);
+      expect(msg).toContain("ReceiptNotNewerThanApplied");
+      expect(w.tl.s.released.has(RID)).toBe(false);
+    }
+    const newer = world();
+    newer.tl.s.recordedAt.set(RID, 7n);
+    newer.tl.s.lastAppliedRecordedAt = 6n;
+    await newer.apply({ warp: warpTo(newer.tl) });
+    expect(newer.tl.s.released.has(RID)).toBe(true);
+    expect(newer.tl.s.lastAppliedRecordedAt).toBe(7n);
+  });
+
+  test("issue 1831: an older receipt's apply scheduled before a newer receipt was applied is refused at execute (GOVERN), nothing is sent", async () => {
+    const w = world(8453);
+    w.tl.s.recordedAt.set(RID, 7n);
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    // a newer receipt is applied while this operation waits
+    w.tl.s.lastAppliedRecordedAt = 9n;
+    w.tl.s.clock += DELAY;
+    await expect(w.apply({ warp: noWarp })).rejects.toMatchObject({ kind: "GOVERN", message: expect.stringContaining("ReceiptNotNewerThanApplied") });
+    expect(w.tl.s.events).toEqual(["schedule:apply-receipt"]);
+    expect(w.tl.s.released.has(RID)).toBe(false);
   });
 
   test("apply-receipt pending and cancelled rounds: a pending round exits GOVERN_PENDING with the resume command and a cancelled operation schedules again with a newer seq", async () => {

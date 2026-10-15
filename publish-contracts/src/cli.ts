@@ -73,13 +73,13 @@ export const USAGE = `publish contracts
                      Naming an unpause row whose
                      vault was paused again after an executed round opens a new numbered round: a new timelock operation, a new 48 hour delay.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
-                     On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
-                     (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
-                     the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
-                     --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696): ONE timelock batch,
-                     releaseReceipt plus the router weight change for the payload's vector, refused with USAGE (nothing sent) unless the receipt is recorded and
-                     unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector sums to 10000 bps and lists the registry's router-eligible vaults in
+                     On demand, outside the ordered rows: --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698):
+                     ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector together.
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, was recorded after the last applied receipt (lastAppliedRecordedAt, issue 1831),
+                     the payload's receipt digest (domain line + bytes) equals the stored digest, and the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
+                     --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698):
+                     a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
                      --row clear-voted-weights (no other argument) clears the router's VOTED weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(), so routing
                      falls back to the default vector. Refused (nothing scheduled) when no voted vector is active. apply-receipt refuses while one is active. Production and rehearsal, never part of stage 13.
                      --row register-committee --submitter 0x<address> [--agent-label NAME] registers the consensus receipt submitter (issue 1727): ONE timelock batch,

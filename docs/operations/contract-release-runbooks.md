@@ -496,16 +496,15 @@ issue is closed only after this report is filed.
 
 ### 4.8. Post-launch consensus receipt application (the rebalance)
 
-Releasing a consensus receipt on 8453 is a standalone post-launch action (core 1611). It is never part of
-stage 13, which stays the four vault unpauses. Run `govern --row release-receipt --receipt-id 0x<bytes32>`
-with the usual chain, RPC, sheet, signer and `--owner-signer` arguments. The real Safe schedules `releaseReceipt` on
-the timelock as its own operation and the CLI exits `GOVERN_PENDING` (exit 15) with the resume command. After the
-48-hour delay the same command makes the Safe execute it, and the CLI reads `released` back. Record the operation
-under `receipt_releases` in the evidence file. `update-delay`, `batch` and `cancel` stay Twin-only in production; a Base mainnet rehearsal (4.10) may run them.
+Do not release a consensus receipt on its own. `govern --row release-receipt` is refused with USAGE (issue 1831)
+because `RouterGovernance` holds the receipt contract's `ADMIN_ROLE` on every deployment since core 1698. A release
+alone would burn the receipt: `applyReceipt` then reverts `ReceiptAlreadyReleased`, so its vector could never land.
+A receipt is released only by applying it with `govern --row apply-receipt` (4.9). Historical `receipt_releases`
+entries in an evidence file are still parsed by the evidence check.
 
 ### 4.9. Post-launch receipt application (the Safe applies a rebalance)
 
-The Safe multisig, through the timelock, is the only body that changes Robot Money contract configuration, router weights included. There is no vote. `govern --row apply-receipt --receipt-id 0x<bytes32> --payload FILE` applies one recorded consensus receipt as ONE timelock call (issue 1696, issue 1698): `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, gated by `RouterGovernance`'s `WEIGHT_SETTER_ROLE`, which the timelock holds. It checks that the receipt is recorded, unreleased and that `payloadDigest` equals the stored digest, then releases the receipt and sets the router's ACTIVE vector in the same call. Partial state is impossible. The default vector is untouched and stays the fallback. After the real delay the same command makes the Safe execute the call, and the tool reads `isReleased(receiptId)`, the router's active weights (`getWeights()`), its EFFECTIVE weights (`getEffectiveWeights()`, what deposits route by) and `votedWeightsActive()` back. It fails (`GOVERN`, exit 14) unless the receipt is released, `votedWeightsActive()` is true and the active and effective weights equal the receipt vector.
+The Safe multisig, through the timelock, is the only body that changes Robot Money contract configuration, router weights included. There is no vote. `govern --row apply-receipt --receipt-id 0x<bytes32> --payload FILE` applies one recorded consensus receipt as ONE timelock call (issue 1696, issue 1698): `RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps)`, gated by `RouterGovernance`'s `WEIGHT_SETTER_ROLE`, which the timelock holds. It checks that the receipt is recorded, unreleased, recorded strictly after the last applied receipt (`lastAppliedRecordedAt`, issue 1831: an older receipt executed after a newer one reverts `ReceiptNotNewerThanApplied`, and the tool refuses it with USAGE before scheduling) and that `payloadDigest` equals the stored digest, then releases the receipt and sets the router's ACTIVE vector in the same call. Partial state is impossible. The default vector is untouched and stays the fallback. After the real delay the same command makes the Safe execute the call, and the tool reads `isReleased(receiptId)`, the router's active weights (`getWeights()`), its EFFECTIVE weights (`getEffectiveWeights()`, what deposits route by) and `votedWeightsActive()` back. It fails (`GOVERN`, exit 14) unless the receipt is released, `votedWeightsActive()` is true and the active and effective weights equal the receipt vector.
 
 `--payload FILE` is the receipt payload whose `weights` list names a bucket and `weight_bps` per entry. The buckets map to the basket vaults (`conservative_defi_yield` rmUSDC, `protocol_tokens` rmPROTO, `agent_tokens` rmAGENT, `real_world_assets` rmRWA). A bucket at 0 bps whose vault is not router-eligible is dropped, every other entry is kept and the vector is arranged in registry order (issue 1754: the signed payload lists the buckets in the receipt's canonical order agent, conservative, protocol, rwa).
 
@@ -550,7 +549,7 @@ Owner decision 2026-10-10 (reverses the 2026-10-02 rule that a short-delay run i
 | --- | --- | --- |
 | `unpause-USDC`, `-PROTO`, `-AGENT`, `-RWA` | yes, stage 13, run first | the launch path, unchanged |
 | `register-committee --submitter ADDR` | yes, rehearsal and Twin only, on demand | the ADMIN_ROLE action that lets a submitter anchor receipts: one batch of `gateway.authorizeAgent` (AGENT_ROLE, the smallest legal policy: deposits capped at 1 raw unit per payment and window, withdrawals disabled (zero withdraw caps), owned by the timelock, 90 days) and `gateway.committeeRegister` (COMMITTEE_AGENT_ROLE on the IC policy). Refused on 8453 in production: adding it to the production surface is a separate owner decision |
-| `release-receipt` | yes, as in production | already allowed, delay is the mode floor |
+| `release-receipt` | no, refused with USAGE (issue 1831) | a release alone burns the receipt; use `apply-receipt` |
 | `apply-receipt` | yes, as in production | one `RouterGovernance.applyReceipt` call releases the receipt and sets the router's active weights; read back |
 | `clear-voted-weights` | yes, as in production, on demand | clears a voted router weight vector so the default is what routes; read back (issue 1743) |
 | `update-delay` | yes, explicit `--row`, after the four unpauses | exercises the Safe tool timelock path on real contracts; the new delay stays 900 to 172799 and the verifier follows the executed delay |

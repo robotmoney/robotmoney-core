@@ -62,6 +62,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** Registry order, the vaults that are NOT router-eligible, the digest each recorded receipt stored, and the router's default weights (an executed setDefaultWeights sets them). */
     listed: [A.vaults.USDC, A.vaults.PROTO, A.vaults.AGENT, A.vaults.RWA] as Address[], ineligible: new Set<string>(),
     digests: new Map<string, Hex>(),
+    /** Issue 1831: a receipt's recordedAt (default: its 1-based position in `recorded`, so receipts seeded in order are recorded in order), RouterGovernance's
+     *  lastAppliedRecordedAt (an executed applyReceipt raises it and refuses a receipt not newer), and whether RouterGovernance holds the receipt ADMIN_ROLE. */
+    recordedAt: new Map<string, bigint>(), lastAppliedRecordedAt: 0n, governanceIsReceiptAdmin: true,
     vaultCaps: new Map<string, bigint>(),
     weights: { vaults: [] as Address[], bps: [] as bigint[] },
     /** Issue 1743: the ACTIVE ("voted") vector on the router. An executed applyReceipt sets it (issue 1698). While set, votedWeightsActive reads true and getEffectiveWeights reads it
@@ -82,6 +85,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
   };
+  const recordedAtOf = (rid: string): bigint => s.recordedAt.get(rid.toLowerCase()) ?? BigInt([...s.recorded].map((x) => x.toLowerCase()).indexOf(rid.toLowerCase()) + 1);
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
   const idOf = (p: { calls: { target: string; data: string }[]; salt: string; form?: string; predecessor?: string }): Hex => keccak256(toBytes(JSON.stringify([p.calls.map((c) => [c.target, c.data]), p.salt, p.form ?? "batch", p.predecessor ?? null])));
   const handle: any = {
@@ -104,7 +108,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "retired": return s.retiredFlag.has(address);
           case "registry": return s.linked.has(address) ? A.registry : addr(0);
           case "listVaults": return s.listed;
-          case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()) };
+          case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()), recordedAt: recordedAtOf(String(args?.[0])) };
+          case "lastAppliedRecordedAt": return s.lastAppliedRecordedAt;
           case "vaultCap": return s.vaultCaps.get(String(args?.[0])) ?? 0n;
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
           case "getWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [[], []];
@@ -113,7 +118,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "depositsPaused": return s.paused.has(address);
           case "feeRecipient": return sheet.feeRecipient === "@safe" ? A.safe : sheet.feeRecipient;
           case "agents": return [true, 0n];
-          case "hasRole": if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
+          case "hasRole": if (address === A.receipt && String(args?.[1]).toLowerCase() === A.governance.toLowerCase()) return s.governanceIsReceiptAdmin; if (address === A.registry) return s.timelockIsRegistryAdmin; if (s.governed.has(address)) return String(args?.[1]).toLowerCase() === A.timelock.toLowerCase(); if (address === A.timelock) return s.roles.has(`${String(args?.[0])}:${String(args?.[1]).toLowerCase()}`); return address === A.icPolicy ? s.committee.has(String(args?.[1]).toLowerCase()) : s.agentRole.has(String(args?.[1]).toLowerCase()) || s.gatewayAdmins.has(String(args?.[1]).toLowerCase());
           case "agentOwner": return s.agentOwner.get(String(args?.[0]).toLowerCase()) ?? addr(0);
           case "icPolicy": return A.icPolicy;
           case "agentId": return s.committee.get(String(args?.[0]).toLowerCase()) ?? "";
@@ -170,7 +175,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "cancel") s.ops.delete(id);
       else if (b.action === "execute") {
-        const snap = { listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops) };
+        const snap = { listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops), lastAppliedRecordedAt: s.lastAppliedRecordedAt };
         try {
         // a TimelockController refuses an operation whose predecessor is not done
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
@@ -185,7 +190,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             if (!s.recorded.has(rid.toLowerCase()) && !s.recorded.has(rid)) throw new Error("ReceiptNotRecorded");
             if (s.released.has(rid.toLowerCase())) throw new Error("ReceiptAlreadyReleased");
             if ((s.digests.get(rid.toLowerCase()) ?? "").toLowerCase() !== digest.toLowerCase()) throw new Error("PayloadDigestMismatch");
+            if (recordedAtOf(rid) <= s.lastAppliedRecordedAt) throw new Error("ReceiptNotNewerThanApplied");
             if (new Set(vs.map((x) => x.toLowerCase())).size !== vs.length) throw new Error("DuplicateVault");
+            s.lastAppliedRecordedAt = recordedAtOf(rid);
             s.released.add(rid.toLowerCase());
             s.voted = { vaults: [...vs], bps: [...bps] };
             continue;

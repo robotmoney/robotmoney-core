@@ -597,6 +597,9 @@ contract FvInvariantsTest is Test {
         bps[0] = 10_000;
         bytes32 digest = keccak256("payload");
         receipts.recordReceipt(submitter, keccak256("r1"), digest, "uri");
+        // r2 is recorded later, so applyReceipt's monotonic guard (issue 1831) passes
+        // and the router's own refusal is what this test sees.
+        vm.warp(block.timestamp + 1);
         receipts.recordReceipt(submitter, keccak256("r2"), digest, "uri");
 
         // While Active, the receipt applies.

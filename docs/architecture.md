@@ -742,7 +742,8 @@ signatures.
 | `setConsensusReceipt(address)` | `RobotMoneyGateway` | `ADMIN_ROLE` on the gateway |
 | `consensusRecordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)` | `RobotMoneyGateway` | `AGENT_ROLE` on the gateway **and** `COMMITTEE_AGENT_ROLE` on the IC policy |
 | `recordReceipt(address submitter, …)` | `ConsensusRecommendationReceipt` | `onlyGateway` |
-| `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `ADMIN_ROLE`, held by the `TimelockController` |
+| `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `ADMIN_ROLE`, held by the `TimelockController` and by `RouterGovernance` |
+| `applyReceipt(bytes32 receiptId, bytes32 payloadDigest, address[] vaults, uint256[] bps)` | `RouterGovernance` | `WEIGHT_SETTER_ROLE`, held by the `TimelockController` |
 
 `receiptId` is
 `keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`;
@@ -753,26 +754,41 @@ refusing an existing id enforces **one receipt per session per subject**.
 **Why release is not a gateway entrypoint.** Routing release through the
 gateway would require granting the gateway `ADMIN_ROLE` on the receipt
 contract — the pattern `committeeRegister` uses. INV-3 requires that role
-to be held by the `TimelockController`, and a second holder would defeat
-it. The timelock therefore calls `releaseReceipt` directly, and
-`ADMIN_ROLE` on the receipt contract has exactly one holder.
+to stay under the `TimelockController`, so the gateway never holds it.
+`ADMIN_ROLE` on the receipt contract has two holders: the
+`TimelockController` and `RouterGovernance` (granted by the governance
+stage, issue 1698). `RouterGovernance` holds it so `applyReceipt` can
+release a receipt in the same call that sets its vector on the router.
+`applyReceipt` itself is gated by `WEIGHT_SETTER_ROLE`, which only the
+timelock holds, so every release still passes through the Safe and the
+timelock delay. The stage 12 verifier asserts both holders ("receipt:
+ADMIN_ROLE held by timelock" and "receipt: ADMIN_ROLE held by governance").
 `testAdminRoleHeldByTimelock` and
-`testReleaseRevertsUnlessRoutedThroughTimelock` assert both halves.
-Operators release a receipt with the publish-contracts govern row
-`release-receipt` (`bun publish-contracts/src/cli.ts govern --row
-release-receipt --receipt-id 0x<bytes32> ...`, wrapped by `bun
-scripts/stage/core-stack.ts governance release --receipt-id ID`): the real Safe
-schedules `releaseReceipt` on the timelock, the delay passes, and the Safe
-executes it. The same row runs on Base mainnet (8453) as a standalone
-post-launch action (issue 1611): its own timelock operation with its own
-48-hour delay, never part of stage 13, which stays the four vault
-unpauses. The first run schedules and exits `GOVERN_PENDING` with the resume
-command. After the delay the Safe executes it and the CLI reads `isReleased`
-back. `update-delay`, `batch` and `cancel` stay Twin-only. The mainnet evidence
-check (`evidence-check.ts`) accepts a release only under `receipt_releases`:
-one schedule and one execute at least 172800 s apart, target the receipt
-contract, calldata `releaseReceipt(receiptId)`. No EOA can release a
-receipt after handover.
+`testReleaseRevertsUnlessRoutedThroughTimelock` assert that no EOA, admin
+or gateway holds the role.
+
+**A receipt is released only by applying it.** Operators run the
+publish-contracts govern row `apply-receipt` (`bun
+publish-contracts/src/cli.ts govern --row apply-receipt --receipt-id
+0x<bytes32> --payload FILE ...`): the real Safe schedules
+`RouterGovernance.applyReceipt` on the timelock, the delay passes, and the
+Safe executes it. On Base mainnet (8453) it is a standalone post-launch
+action with its own 48-hour delay, never part of stage 13. The row
+`release-receipt` is refused with USAGE once `RouterGovernance` holds the
+receipt `ADMIN_ROLE` (issue 1831). A release alone would burn the receipt:
+`applyReceipt` then reverts `ReceiptAlreadyReleased`, so its vector could
+never be applied. The evidence check still parses historical
+`receipt_releases` entries.
+
+**Apply order (issue 1831).** `RouterGovernance` stores
+`lastAppliedRecordedAt`, the `recordedAt` of the last receipt it applied.
+`applyReceipt` reverts `ReceiptNotNewerThanApplied` unless the receipt was
+recorded strictly later. The timelock's executor role is open, so anyone can
+execute two ready apply operations in either order. Executing an older one
+after a newer one therefore reverts, the older receipt stays unreleased, and
+the newer vector stays active. The `apply-receipt` row reads
+`lastAppliedRecordedAt` and refuses with USAGE before it schedules a receipt
+that is not newer. No EOA can release a receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
