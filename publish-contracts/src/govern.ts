@@ -1390,18 +1390,20 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       let plan = (state[name] as { redeploy?: Plan } | undefined)?.redeploy;
       if (!plan) {
         // First plan of the round: the state the batch starts from must be the state the deploy was made for, or nothing is scheduled.
-        const [listed, [meta, status0], eligible0, registryRouter, tlAdmin, voted, [defVaults, defBps]] = await Promise.all([
+        const [listed, [meta, status0], eligible0, registryRouter, tlAdmin, tlRouterAdmin, voted, [defVaults, defBps]] = await Promise.all([
           rd<Address[]>(a.registry, REGISTRY_REDEPLOY_ABI, "listVaults"),
           rd<[{ name: string; asset: Address }, number]>(a.registry, REGISTRY_REDEPLOY_ABI, "getVault", [oldVault]),
           rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "isRouterEligible", [oldVault]),
           rd<Address>(a.registry, REGISTRY_REDEPLOY_ABI, "router"),
           rd<boolean>(a.registry, REGISTRY_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]),
+          // QA plan v1 E3: the batch's router.setVaultCap needs ADMIN_ROLE on the router too; DeployTimelock grants it at the timelock stage.
+          rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "hasRole", [ADMIN_ROLE, a.timelock]),
           rd<boolean>(a.router, ROUTER_REDEPLOY_ABI, "votedWeightsActive"),
           rd<[Address[], bigint[]]>(a.router, ROUTER_REDEPLOY_ABI, "getDefaultWeights"),
         ]);
         const oldCode = await handle.client.getCode({ address: oldVault });
         const problems = redeployBeforeProblems(oldVault, newVault, {
-          listed, oldStatus: Number(status0), oldEligible: eligible0, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, votedWeightsActive: voted,
+          listed, oldStatus: Number(status0), oldEligible: eligible0, registryRouter, router: a.router, timelockIsRegistryAdmin: tlAdmin, timelockIsRouterAdmin: tlRouterAdmin, votedWeightsActive: voted,
           defaultVaults: defVaults, defaultBps: defBps, oldHasCode: !!oldCode && oldCode !== "0x",
         });
         // the new vault must be what the deploy left: closed, unregistered (above), linked, governed by the timelock
