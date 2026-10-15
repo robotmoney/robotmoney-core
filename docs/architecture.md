@@ -1436,7 +1436,7 @@ only role that may call `applyReceipt`) and `ADMIN_ROLE` only by
 consensus receipt or without the timelock delay. The stage 12 verifier checks
 the same sets once at deploy; this check catches a grant executed later. It
 resolves when all three sets match again, and it never pauses. It replaced the
-`quorumThreshold()` floor check, whose view issue 1698 deleted. Verified by
+quorum-floor check, whose view issue 1698 deleted. Verified by
 `services/watchdog/tests/governance_weight_setter_rpc.rs`.
 
 #### Watchdog liveness and deployment
