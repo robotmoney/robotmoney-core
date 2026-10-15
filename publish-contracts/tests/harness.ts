@@ -32,7 +32,7 @@ export const SCRIPT: Record<string, string> = scriptFiles();
 export interface World {
   dir: string; coreDir: string; sheetPath: string; countsDir: string; evidence: string; statePath: string; cfgPath: string; lines: string[];
   cfg: {
-    counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[];
+    counts: Record<string, number>; sent?: Record<string, number>; failBroadcast?: string; simFails?: string; zeroTx?: string; zeroTxBumps?: number; codeAt?: Record<string, string>; creates?: Record<string, string[]>; libsAddress?: string; chainId: number; gitDirty?: string[]; gitCountsDirty?: string[];
     emptyCode?: string[];
     vaultOut?: Record<string, string>;
     manifestMode?: Record<string, string>;

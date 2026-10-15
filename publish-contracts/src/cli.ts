@@ -16,6 +16,7 @@ import { assertRecordInputs, recordReceipt, type RecordApi } from "./record-rece
 import { FROZEN_DIR, assertSha, loadFrozen, resolveCounts, writeFrozen, type FrozenFile } from "./counts.ts";
 import { siblingEmergencySpec, siblingOwnerSpecs } from "./owner-signers.ts";
 import { buildIsomorphismReport, dirtyTreeLines, readGitHead, writeReport } from "./isomorphism.ts";
+import { scrubGitEnv } from "./git-env.ts";
 import { publishLogger, type Logger } from "./log.ts";
 import { planNonceBasis, stagePlan } from "./plan.ts";
 import { assertBaselineCommitted, assertReleaseGate, gitAnchorCommitted, gitFrozenDirCommitted, type CheckShaGreen } from "./release-gate.ts";
@@ -490,11 +491,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     };
     const realAnchorCommitted = (anchorPath: string, hash: string): Promise<void> => gitAnchorCommitted(anchorPath, hash);
     const countsDir = a.countsDir ? resolve(cwd, a.countsDir) : defaultCountsDir(cwd);
-    // the contracts-freeze gate (core 1524): on 8453 the plan runs only at a release-tagged SHA with committed counts and green CI. No signer exists yet.
-    if (a.stage === "plan" && rpcChainId === MAINNET_CHAIN_ID && !a.measure) {
+    // the contracts-freeze gate (core 1524, issue 1816): on 8453 the plan AND every non-dry run that broadcasts (publish, govern, --stage prove-control, deploy, all: any
+    // stage but verify) run only at a release-tagged SHA with committed, clean counts and green CI. No signer exists yet. pause-all, record-receipt and redeploy-vault returned above.
+    const names = a.stage === "plan" ? [] : a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
+    const broadcasts = names.some((n) => n !== "verify");
+    if (rpcChainId === MAINNET_CHAIN_ID && !a.measure && (a.stage === "plan" || (broadcasts && !a.dryRun))) {
       const tag = await assertReleaseGate({ sha: a.coreSha, coreDir, countsDir, env, kind: sheet.kind, releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, checkShaGreen: deps.checkShaGreen, remoteTag: deps.remoteTag,
-        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted });
-      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha });
+        verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
+        run, runEnv: scrubGitEnv(castEnv) });
+      log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default" });
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts.
     const counts = a.stage === "plan"
@@ -518,7 +523,6 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       console.log(JSON.stringify({ chainId: rpcChainId, coreSha: a.coreSha, deploymentKind: sheet.kind, startNonceBasis: planNonceBasis(sheet.kind), plan }));
       return 0;
     }
-    const names = a.verb ? selectVerbStages(a.verb) : selectStages(a.stage);
     // Issue 1733: the plan is not the only place a reconstructed baseline is re-verified against the build and the chain. A run that sends deployer transactions on 8453 does it too,
     // before any signer exists, so the order plan then publish is not something an operator can get wrong.
     if (rpcChainId === MAINNET_CHAIN_ID && !counts.measure && names.some((n) => DEPLOYER_STAGES.some((s) => s.name === n))) {
