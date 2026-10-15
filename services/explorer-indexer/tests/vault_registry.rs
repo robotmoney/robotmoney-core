@@ -325,7 +325,10 @@ async fn vault_status_changed_updates_status() {
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
     );
-    stub2.set("eth_getBlockByNumber", stub_block(89, 0xbc, 0xab));
+    // One canned header answers the reorg check's read of block 65 too, so it carries block 65's
+    // hash (0xab). Another hash would read as a reorg, and the rollback deletes the vaults
+    // registered above its root (QA plan X7, DI-8).
+    stub2.set("eth_getBlockByNumber", stub_block(89, 0xab, 0xaa));
     stub2.set(
         "eth_getTransactionReceipt",
         // A real receipt carries `from` and `to`; the indexer refuses one without them (QA plan X6).
@@ -478,7 +481,10 @@ async fn registered_vault_added_to_watched_address_set() {
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
     );
-    stub2.set("eth_getBlockByNumber", stub_block(89, 0xbc, 0xab));
+    // One canned header answers the reorg check's read of block 65 too, so it carries block 65's
+    // hash (0xab). Another hash would read as a reorg, and the rollback deletes the vaults
+    // registered above its root (QA plan X7, DI-8).
+    stub2.set("eth_getBlockByNumber", stub_block(89, 0xab, 0xaa));
 
     let rpc2 = JsonRpc::new(&stub2.url);
     let cfg2 = IndexerConfig {
@@ -607,7 +613,7 @@ async fn cutover_interval_backfills_old_and_new_generation_exits_and_survives_re
     stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
     stub1.set(
         "eth_getTransactionReceipt",
-        serde_json::json!({ "status": "0x1" }),
+        serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
     );
     let o1 = run_once(&fx.db, &JsonRpc::new(&stub1.url), &cfg)
         .await
@@ -676,7 +682,7 @@ async fn cutover_interval_backfills_old_and_new_generation_exits_and_survives_re
         stub.set("eth_getBlockByNumber", stub_block(block, hash, parent));
         stub.set(
             "eth_getTransactionReceipt",
-            serde_json::json!({ "status": "0x1" }),
+            serde_json::json!({ "status": "0x1", "from": common::STUB_TX_FROM, "to": null }),
         );
         let cfg_pass = IndexerConfig {
             end_block: Some(end),
