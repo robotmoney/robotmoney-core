@@ -427,6 +427,18 @@ async function currentHolders(chain: ChainReader, at: Address, role: Hex, s: { f
   return out;
 }
 
+/** Issue 1833: why the scan from `fromBlock` cannot see the vault's whole history (it has code at fromBlock - 1, or that read failed), or undefined. */
+async function createdBefore(chain: ChainReader, at: Address, fromBlock: bigint): Promise<string | undefined> {
+  if (fromBlock === 0n) return undefined;
+  const before = fromBlock - 1n;
+  try {
+    const code = await chain.getCode(at, before);
+    return code.length > 2 ? `from-block ${fromBlock} is after the vault's creation: ${at} already has code at block ${before}, so a role or allowlist grant before the scan start is never seen. Pass the block of the first deploy receipt` : undefined;
+  } catch (e) {
+    return `the vault's code at block ${before} (the block before from-block) is not readable, so the scan start cannot be shown to precede the vault's creation: ${(e as Error).message}`;
+  }
+}
+
 /**
  * Issue 1705. Per vault, from the logs: no account holds KEEPER_ROLE (RobotMoneyVault.rebalance; the deploy grants it to nobody, and a basket has no keeper), EMERGENCY_ROLE has
  * exactly one holder and it is the sheet's emergency key. For rmUSDC also: the active adapters and their caps are the deploy script's, in order, and the adapter and
@@ -438,6 +450,10 @@ async function vaultScanChecks(
 ): Promise<void> {
   const p = `vault[${v.key}]`;
   const a = v.address;
+  // Issue 1833: the scans see only grants from fromBlock on. A vault that already has code at fromBlock - 1 was created earlier, so a grant before the scan start
+  // would never be seen: every scan label of the vault fails instead of passing on a partial log.
+  const late = await createdBefore(chain, a, s.fromBlock);
+  if (late !== undefined) { for (const l of vaultScanLabels(v)) c.fail(l, late); return; }
   await c.run(`${p}: ${KEEPER_LABEL}`, async () => {
     const h = await currentHolders(chain, a, KEEPER_ROLE, s);
     return { ok: h.length === 0, detail: h.length ? `KEEPER_ROLE held by ${h.join(", ")}` : "no KEEPER_ROLE grant is held" };

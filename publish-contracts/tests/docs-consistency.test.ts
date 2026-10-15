@@ -128,3 +128,21 @@ describe("four-vault rule", () => {
     expect(hits).toEqual([]);
   });
 });
+
+// Issue 1833: review follow-ups to the per-vault rule table (PR 1830).
+describe("VAULT_NAME and the same-core-sha rule in the deploy README (issue 1833)", () => {
+  const readme = () => read("scripts/deploy/README.md").replace(/\s+/g, " ");
+  test("the deploy README does not say the registry stage requires VAULT_NAME, and tells operators to delete it", () => {
+    expect(readme()).not.toMatch(/registry stage requires `VAULT_NAME`/);
+    expect(readme()).not.toMatch(/- `registry`: `VAULT_NAME`/);
+    expect(readme()).toContain("Delete `VAULT_NAME` from the sheet before the next deploy run");
+  });
+  test("the deploy README states the CLI runs from the same core sha as DEPLOY_SHA", () => {
+    expect(readme()).toContain("The CLI must run from the same core sha as `DEPLOY_SHA`");
+  });
+  test("the core-parity test title names the current VAULT_NAME rule", () => {
+    const parity = read("publish-contracts/tests/core-parity.test.ts");
+    expect(parity).not.toContain("VAULT_NAME is read by the registry script only");
+    expect(parity).toContain("no stage script reads VAULT_NAME");
+  });
+});

@@ -85,7 +85,7 @@ describe("planted drift fails and names the row", () => {
     const t = clone(); t.stages[3]!.requiredEnv = [...t.stages[3]!.requiredEnv, "VAULT_TVL_CAP_NOPE"];
     expect(parityProblems(t, REPO_ROOT).some((m) => m.startsWith(`stage ${t.stages[3]!.name}:`) && m.includes("VAULT_TVL_CAP_NOPE"))).toBe(true);
   });
-  test("an env name core does not read on a basket stage (VAULT_NAME is read by the registry script only)", () => {
+  test("an env name core does not read on a basket stage (no stage script reads VAULT_NAME: every registry name is a script constant, issue 1705)", () => {
     const t = clone(); const b = t.stages.find((s) => s.vault === "PROTO")!;
     b.requiredEnv = [...b.requiredEnv, "VAULT_NAME"];
     expect(parityProblems(t, REPO_ROOT).some((m) => m.startsWith(`stage ${b.name}:`) && m.includes("VAULT_NAME"))).toBe(true);

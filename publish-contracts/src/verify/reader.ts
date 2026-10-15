@@ -8,7 +8,7 @@ export function viemReader(rpcUrl: string): ChainReader {
     chainId: async () => await client.getChainId(),
     blockNumber: async () => await client.getBlockNumber(),
     blockTimestamp: async () => (await client.getBlock({ blockTag: "latest" })).timestamp,
-    getCode: async (address) => ((await client.getCode({ address })) ?? "0x") as Hex,
+    getCode: async (address, blockNumber) => ((await client.getCode(blockNumber === undefined ? { address } : { address, blockNumber })) ?? "0x") as Hex,
     nonce: async (address) => await client.getTransactionCount({ address, blockTag: "latest" }),
     getStorageAt: async (address, slot) => ((await client.getStorageAt({ address, slot })) ?? "0x") as Hex,
     read: async (address, signature, args = []) => {
