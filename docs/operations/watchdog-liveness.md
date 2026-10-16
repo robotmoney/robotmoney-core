@@ -158,9 +158,11 @@ backfill would page every historical upgrade in one burst (issue 1856).
   cycle that finds no baseline stores `-1`. Otherwise an indexer run that
   commits after startup could cover an upgrade mined after the watchdog started,
   and that upgrade would never page (issue 1868).
-- With nothing indexed when the watchdog first starts (or a failed startup
-  call), no baseline is taken. The next cycle stores `-1`, so every historical
-  proxy event the backfill inserts pages once, in one burst. This is intended.
+- With nothing indexed when the watchdog first starts, the startup call stores
+  `-1` at once. After a failed startup call the next cycle stores `-1`. Either
+  way a restart or a second replica cannot take the indexer cursor later, and
+  every historical proxy event the backfill inserts pages once, in one burst.
+  This is intended.
   Retrying the cursor baseline until the indexer's first run would reopen the
   race above, and a burst of extra pages is recoverable while a silent upgrade
   is not. Start the watchdog after the indexer has indexed its first blocks to

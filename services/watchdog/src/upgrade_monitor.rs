@@ -47,11 +47,12 @@
 //! has a `watchdog_cursor` row or any `watchdog_pager_state` row, an older
 //! watchdog ran here. It may have seen a real upgrade whose page was never
 //! delivered (webhook down or unset), so the baseline is `-1` and nothing is
-//! seeded. With nothing indexed at startup (or a failed startup call) no
-//! baseline is taken. The first later call then stores `-1`, never the cursor:
+//! seeded. With nothing indexed at startup the baseline is `-1` at once. After
+//! a failed startup call the first later call stores `-1`, never the cursor:
 //! an indexer run that commits after startup could otherwise cover an upgrade
-//! mined after the watchdog started and silence it (issue 1868). Every doubtful
-//! case pages.
+//! mined after the watchdog started and silence it (issue 1868). Storing `-1`
+//! at startup also closes that window for a restart or a second replica before
+//! the first cycle. Every doubtful case pages.
 //!
 //! Alert-only: an upgrade never pauses the gateway.
 
@@ -127,9 +128,9 @@ pub const PROXY_BASELINE_DDL: &str = "CREATE TABLE IF NOT EXISTS watchdog_proxy_
 /// (see the module doc). Taken on the first call that stores one, and kept.
 /// With `first_start` (the startup call, before the first cycle writes the
 /// watchdog cursor) it is the indexer cursor when no watchdog ran on this
-/// database before, else `-1`; `None` when no watchdog ran before and nothing
-/// is indexed yet. Without `first_start` a missing baseline is stored as `-1`,
-/// so every unpaged change pages (issue 1868).
+/// database before and something is indexed, else `-1`. Without `first_start`
+/// a missing baseline is stored as `-1`, so every unpaged change pages
+/// (issue 1868). `None` only if the stored row vanished after the insert.
 pub async fn proxy_change_baseline(
     pool: &PgPool,
     chain_id: i64,
@@ -143,13 +144,12 @@ pub async fn proxy_change_baseline(
     {
         return Ok(Some(b));
     }
+    // Nothing indexed at startup stores -1 at once: a restart or a second
+    // replica after the indexer's first run must not take its cursor.
     let baseline = if first_start {
-        cursor_baseline(pool, chain_id).await?
+        cursor_baseline(pool, chain_id).await?.unwrap_or(-1)
     } else {
-        Some(-1)
-    };
-    let Some(baseline) = baseline else {
-        return Ok(None);
+        -1
     };
     sqlx::query(
         "INSERT INTO watchdog_proxy_baseline (chain_id, baseline_block) VALUES ($1, $2) \

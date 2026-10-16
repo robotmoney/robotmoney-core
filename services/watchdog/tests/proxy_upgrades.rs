@@ -695,7 +695,7 @@ async fn non_startup_call_stores_minus_one() {
     assert_eq!(stored, -1);
 }
 
-/// Issue 1868: startup finds nothing indexed, so it takes no baseline. The
+/// Issue 1868: startup finds nothing indexed, so the baseline is `-1`. The
 /// indexer's first run then commits a cursor at 95 that covers an upgrade at
 /// 90 mined after the watchdog started. The next cycle must not take that
 /// cursor as the baseline: the upgrade pages exactly once.
@@ -706,8 +706,8 @@ async fn late_cycle_never_takes_a_cursor_baseline() {
     seed_chain(&fx.pool).await;
     assert_eq!(
         proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
-        None,
-        "nothing indexed at startup: no baseline"
+        Some(-1),
+        "nothing indexed at startup: the baseline is -1 at once"
     );
 
     seed_run(&fx.pool, 95, 100).await;
@@ -750,4 +750,24 @@ async fn late_cycle_never_takes_a_cursor_baseline() {
         "proxy_upgraded"
     );
     server.shutdown();
+}
+
+/// Issue 1868 (review): startup finds nothing indexed and the watchdog restarts
+/// (or a second replica starts) after the indexer's first run but before any
+/// cycle ran. The second startup must not take the new cursor as the baseline.
+#[tokio::test]
+async fn a_restart_after_an_empty_startup_never_takes_a_cursor_baseline() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1)
+    );
+    seed_run(&fx.pool, 95, 100).await;
+    assert_eq!(
+        proxy_change_baseline(&fx.pool, CHAIN, true).await.unwrap(),
+        Some(-1),
+        "the second startup keeps -1, not the cursor (95)"
+    );
 }
