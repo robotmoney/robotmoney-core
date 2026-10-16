@@ -19,11 +19,14 @@
 #            idempotent worker                           AC-CORE-01 AC-CORE-09 AC-E2E-02
 #   index    indexer and explorer API converge on the same digest and URL
 #                                                        AC-CORE-06 AC-CORE-07
-#   release  admin release, then the two duplicate refusals that only exist once
-#            something is anchored                       AC-CORE-03 AC-E2E-03 AC-E2E-06
+#   release  the Safe applies the receipt through the timelock (govern row
+#            apply-receipt: release plus weights in one call), then the two
+#            duplicate refusals that only exist once something is anchored
+#                                                        AC-CORE-03 AC-E2E-03 AC-E2E-06
 #   dapp     the dapp serves the receipt surface          AC-CORE-08
-#   govern   a release-only path sets no router weights: the weight setter's
-#            RouterGovernance.currentWeights() is unchanged  AC-E2E-04
+#   govern   recording a receipt sets no router weights: the weight setter's
+#            RouterGovernance.currentWeights() is unchanged up to the apply
+#                                                        AC-E2E-04
 #            (issue 1698: a receipt reaches the router only through
 #            RouterGovernance.applyReceipt, the publish-contracts govern row
 #            apply-receipt, which releases it and sets the weights in one call.
@@ -63,10 +66,12 @@
 #                                  address also lacks ADMIN_ROLE)
 # Required for the index stage:  FUSION_EXPLORER_API
 # Required for the dapp stage:   FUSION_DAPP_URL
-# Required for the release stage: FUSION_GOVERN_CMD (the govern release
-#   command, `bun scripts/stage/core-stack.ts governance release`; it is called with
-#   `--receipt-id ID` appended and runs publish contracts govern row
-#   release-receipt through the real Safe and the timelock), FUSION_TIMELOCK_ADDRESS
+# Required for the release stage: FUSION_GOVERN_CMD (the govern apply command,
+#   `bun scripts/stage/core-stack.ts governance apply`; it is called with
+#   `--receipt-id ID --payload FILE` appended, FILE being the bytes served at the
+#   receipt URL, and runs publish contracts govern row apply-receipt through the
+#   real Safe and the timelock. Issue 1849: row release-receipt is refused since
+#   issue 1831, because a bare release burns the receipt), FUSION_TIMELOCK_ADDRESS
 #   (the TimelockController, the ONLY holder of ADMIN_ROLE on the receipt contract
 #   after the handover, used as `--from` of the duplicate-release probe below so
 #   the call passes the role check and reaches ReceiptAlreadyReleased). No keystore
@@ -241,10 +246,12 @@ fi
 # so the witnesses bracketing them are read immediately before the record stage
 # and immediately after the last write stage, which is the narrowest honest
 # window. The criterion is NOT softened — the comparison is still exact equality.
-assert_witnesses_unchanged() { # <stage> <label> [baseline]
+assert_witnesses_unchanged() { # <stage> <label> [baseline] [reading]
   local now diff baseline id
   baseline="${3:-$W_START}"
-  now="$(witnesses)"
+  # A reading taken earlier closes the window there instead of now (issue 1849:
+  # the apply-receipt call moves the router weights by design).
+  now="${4:-$(witnesses)}"
   id="$2 — vault balances, router weights unchanged (INV-4)"
   keep "witnesses-after-$1.txt" "$now"
   # AN UNREADABLE WITNESS IS A FAILED ASSERTION, NEVER A PASS. Two snapshots of
@@ -553,6 +560,9 @@ else
 fi
 
 # ── stage: release ───────────────────────────────────────────────────────────
+# APPLY_SENT=1 once this run handed the receipt to the apply-receipt row.
+# W_PRE_APPLY is the witness reading taken immediately before that call.
+APPLY_SENT=0; W_PRE_APPLY=""
 if have_stage release; then
   if [[ -z "${FUSION_GOVERN_CMD:-}" || -z "${FUSION_TIMELOCK_ADDRESS:-}" ]]; then
     record_assertion release "admin release" SKIP \
@@ -576,25 +586,39 @@ FUSION_TIMELOCK_ADDRESS are not all set" unconfigured
     if [[ "$already_released" == "true" ]]; then
       keep "release-tx.json" "{\"action\":\"already_released\",\"receipt_id\":\"$RECEIPT_ID\"}"
       record_assertion release \
-        "AC-CORE-03 the admin release transaction succeeds (idempotent no-op: already released, no second transaction sent)" \
-        PASS "isReleased=true before this run; releaseReceipt was NOT re-broadcast"
+        "AC-CORE-03 the Safe applies the receipt through the timelock (idempotent no-op: already released, no second transaction sent)" \
+        PASS "isReleased=true before this run; applyReceipt was NOT re-broadcast"
     else
-      # Release is a timelocked Safe operation through publish contracts govern
-      # (row release-receipt): the real Safe schedules `releaseReceipt` through
-      # the timelock, the delay passes, the real Safe executes. Every row prints
-      # a tx hash and receipt status. Idempotent: the isReleased() pre-check
-      # above sends nothing for an already released receipt.
-      # shellcheck disable=SC2086 # the command is a word list by contract
-      $FUSION_GOVERN_CMD --receipt-id "$RECEIPT_ID" \
-        >"$WORK/release.json" 2>"$WORK/release.stderr"
-      rel=$?
-      keep "release-tx.json" "$(cat "$WORK/release.json" 2>/dev/null)"
-      keep "release-stderr.txt" "$(cat "$WORK/release.stderr" 2>/dev/null)"
-      { (( rel == 0 )) && grep '^{' "$WORK/release.json" | jq -s -e \
-          'map(select(.row == "release-receipt")) | length >= 1 and all(.status == 1 or .status == "0x1") and all(.txHash | test("^0x[0-9a-fA-F]{64}$"))' \
-          >/dev/null 2>&1; }
-      expect release "AC-CORE-03 the admin release transaction succeeds" $? \
-        "$(head -c 300 "$WORK/release.json" 2>/dev/null) $(tail -c 300 "$WORK/release.stderr" 2>/dev/null)"
+      # Issue 1849: the Safe applies the receipt through publish contracts govern
+      # (row apply-receipt): the real Safe schedules RouterGovernance.applyReceipt
+      # on the timelock, the delay passes, the real Safe executes. That one call
+      # releases the receipt AND sets its weights. Row release-receipt is refused
+      # since issue 1831 (a bare release burns the receipt). The row checks the
+      # payload file against the anchored digest before it sends anything, so the
+      # file is the bytes served at the receipt URL. Every row prints a tx hash and
+      # receipt status. Idempotent: the isReleased() pre-check above sends nothing
+      # for an already released receipt.
+      # The apply moves the router weights by design, so the INV-4 window closes
+      # here, immediately before it (W_PRE_APPLY).
+      W_PRE_APPLY="$(witnesses)"
+      keep "witnesses-before-apply.txt" "$W_PRE_APPLY"
+      if ! curl -fsS "$RECEIPT_URL" -o "$WORK/apply-payload.json" || [[ ! -s "$WORK/apply-payload.json" ]]; then
+        record_assertion release "AC-CORE-03 the Safe applies the receipt through the timelock" FAIL \
+          "the receipt payload could not be fetched from $RECEIPT_URL, so nothing was applied"
+      else
+        APPLY_SENT=1
+        # shellcheck disable=SC2086 # the command is a word list by contract
+        $FUSION_GOVERN_CMD --receipt-id "$RECEIPT_ID" --payload "$WORK/apply-payload.json" \
+          >"$WORK/release.json" 2>"$WORK/release.stderr"
+        rel=$?
+        keep "release-tx.json" "$(cat "$WORK/release.json" 2>/dev/null)"
+        keep "release-stderr.txt" "$(cat "$WORK/release.stderr" 2>/dev/null)"
+        { (( rel == 0 )) && grep '^{' "$WORK/release.json" | jq -s -e \
+            'length >= 1 and all(.row == "apply-receipt") and all(.status == 1 or .status == "0x1") and all(.txHash | test("^0x[0-9a-fA-F]{64}$"))' \
+            >/dev/null 2>&1; }
+        expect release "AC-CORE-03 the Safe applies the receipt through the timelock (apply-receipt rows, status 1, tx hash)" $? \
+          "$(head -c 300 "$WORK/release.json" 2>/dev/null) $(tail -c 300 "$WORK/release.stderr" 2>/dev/null)"
+      fi
     fi
 
     released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' "$RECEIPT_ID" \
@@ -672,21 +696,30 @@ fi
 # Issue 1698: RouterGovernance has no propose/vote/execute and nothing is
 # drafted. A receipt reaches the router ONLY through applyReceipt (publish
 # contracts govern row apply-receipt), which releases it and sets the weights in
-# one call. What remains to assert here is the converse: the release-only path
-# this script exercises (row release-receipt) set no weights. The weight setter's
-# own read of the router must equal its reading from before any write stage.
+# one call. What remains to assert here is that RECORDING a receipt sets no
+# weights. The weight setter's own read of the router must equal its reading
+# from before any write stage. When this run applied the receipt (issue 1849),
+# the apply moved the weights by design, so the reading taken immediately before
+# the apply is the one compared.
 if have_stage govern; then
   setter_before="$(sed -n 's/^setter_weights=//p' <<<"$W_PRE_WRITE")"
+  setter_read_ok=1
+  if (( APPLY_SENT )); then
+    setter_after="$(sed -n 's/^setter_weights=//p' <<<"$W_PRE_APPLY")"
+    { inv4_unreadable "$W_PRE_APPLY" || [[ -z "$setter_after" ]]; } && setter_read_ok=0
+  else
+    setter_after="$(_inv4_read "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
+      'currentWeights()(address[],uint256[])')" || setter_read_ok=0
+  fi
   if inv4_unreadable "$W_PRE_WRITE" || [[ -z "$setter_before" ]]; then
-    record_assertion govern "AC-E2E-04 a release-only path sets no router weights" FAIL \
+    record_assertion govern "AC-E2E-04 recording a receipt sets no router weights" FAIL \
       "the pre-write RouterGovernance.currentWeights() reading is missing: ${W_PRE_WRITE:-<empty>}"
-  elif setter_after="$(_inv4_read "$CAST_BIN" "$FUSION_RPC_URL" "$FUSION_GOVERNANCE_ADDRESS" \
-         'currentWeights()(address[],uint256[])')"; then
+  elif (( setter_read_ok )); then
     [[ "$setter_before" == "$setter_after" ]]
-    expect govern "AC-E2E-04 a release-only path sets no router weights (RouterGovernance.currentWeights unchanged)" $? \
+    expect govern "AC-E2E-04 recording a receipt sets no router weights (RouterGovernance.currentWeights unchanged up to the apply)" $? \
       "currentWeights $setter_before -> $setter_after"
   else
-    record_assertion govern "AC-E2E-04 a release-only path sets no router weights" FAIL \
+    record_assertion govern "AC-E2E-04 recording a receipt sets no router weights" FAIL \
       "RouterGovernance.currentWeights() could not be READ at $FUSION_GOVERNANCE_ADDRESS"
   fi
 else
@@ -694,7 +727,11 @@ else
 fi
 
 # ── final INV-4 comparison across the whole run ──────────────────────────────
-if have_stage record || have_stage release; then
+# When this run applied the receipt, the apply set the router weights by design
+# (issue 1849), so the window closes at the reading taken immediately before it.
+if (( APPLY_SENT )); then
+  assert_witnesses_unchanged final "across record, up to the apply-receipt call (AC-CORE-04, AC-E2E-03)" "$W_PRE_WRITE" "$W_PRE_APPLY"
+elif have_stage record || have_stage release; then
   assert_witnesses_unchanged final "across record and release (AC-CORE-04, AC-E2E-03)" "$W_PRE_WRITE"
 fi
 

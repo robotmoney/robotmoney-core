@@ -5,7 +5,8 @@
 # suite-25-fusion-harness-selftests.yml carries an independent executed-assertion
 # floor of 63 — the count as of the commit that created it. The round-2 harness
 # cycle took the real count to 171 (117 since issue 1698 deleted the draft
-# watcher and its tests), and run-tests.sh asserts that its
+# watcher and its tests, 129 since issue 1849 moved the release step to the
+# apply-receipt row), and run-tests.sh asserts that its
 # MIN_EXPECTED_ASSERTIONS EQUALS the floor of the workflow it names, precisely so
 # a silently lowered in-script floor cannot buy a green on its own.
 #
@@ -76,8 +77,9 @@ jobs:
           # Lowered 171 -> 117 by issue 1698: the draft watcher
           # (watch-released-drafts.sh) and every draft-proposal assertion were
           # deleted with RouterGovernance's propose/vote/execute.
-          if [[ "$count" -lt 117 ]]; then
-            echo "::error::only $count assertions executed (expected >= 117, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          # Raised 117 -> 129 by issue 1849: the apply-receipt release step.
+          if [[ "$count" -lt 129 ]]; then
+            echo "::error::only $count assertions executed (expected >= 129, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
 

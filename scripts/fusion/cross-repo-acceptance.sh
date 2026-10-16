@@ -10,8 +10,8 @@ fail() { echo "fusion-cross-repo: $*" >&2; exit 1; }
 : "${FUSION_RMPC_CONFIG:?set FUSION_RMPC_CONFIG}"
 : "${FUSION_RECEIPT_ADDRESS:?set FUSION_RECEIPT_ADDRESS}"
 : "${FUSION_RPC_URL:?set FUSION_RPC_URL}"
-# INV-4 witnesses. Required, not optional: "release changed no allocation state"
-# is an assertion this test makes, and an unset address would turn it into a
+# INV-4 witnesses. Required, not optional: "recording changed no allocation
+# state" is an assertion this test makes, and an unset address would turn it into a
 # silent skip (AC-CORE-04, AC-E2E-03, AC-E2E-04).
 : "${FUSION_GOVERNANCE_ADDRESS:?set FUSION_GOVERNANCE_ADDRESS (RouterGovernance)}"
 : "${FUSION_ROUTER_ADDRESS:?set FUSION_ROUTER_ADDRESS (PortfolioRouter)}"
@@ -104,49 +104,13 @@ worker_out="$(FUSION_RECEIPT_FILE="$FUSION_FRONTEND_RECEIPT_FILE" \
 record "submit-worker.json" "$worker_out"
 printf '%s\n' "$worker_out" >&2
 
-# The release is a governance action. It goes through the real Safe and the
-# timelock, run by `bun scripts/stage/core-stack.ts governance release` (publish
-# contracts govern, row release-receipt). A single keystore never releases a
-# receipt: after handover no EOA holds the receipt contract's admin role, so a
-# direct send would only revert. Run the govern row first, then run this script
-# with FUSION_SKIP_RELEASE=1, or set FUSION_GOVERN_CMD so this script runs it.
-#
-# T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
-# `releaseReceipt` is a one-shot state transition: a second `cast send` reverts
-# ReceiptAlreadyReleased, and under `set -euo pipefail` that aborts the script at
-# this line — so the INV-4 comparison and the evidence JSON
-# after it never execute, and a real INV-4 regression between the two runs would
-# be invisible behind the false failure. Read the state first, which is also what
-# an operator does. The post-condition read below stays the actual assertion.
-release_action="sent"
-if [[ "${FUSION_SKIP_RELEASE:-0}" == "1" ]]; then
-  release_action="skipped_external_ceremony"
-else
-  already_released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
-    "$receipt_id" --rpc-url "$FUSION_RPC_URL")" \
-    || fail "could not read isReleased() before the release broadcast"
-  already_released="$(tr -d '[:space:]' <<<"$already_released")"
-  if [[ "$already_released" == "true" ]]; then
-    release_action="already_released"
-    echo "fusion-cross-repo: receipt $receipt_id is already released; no second broadcast" >&2
-  else
-    : "${FUSION_GOVERN_CMD:?the release goes through the real Safe and the timelock: set FUSION_GOVERN_CMD to the govern release command (bun scripts/stage/core-stack.ts governance release), or run it first and set FUSION_SKIP_RELEASE=1}"
-    # shellcheck disable=SC2086 # the command is a word list by contract
-    $FUSION_GOVERN_CMD --receipt-id "$receipt_id" >/dev/null \
-      || fail "the govern release row failed for receipt $receipt_id"
-  fi
-fi
-
-released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
-  "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
-[[ "$released" == "true" ]] || fail "receipt is anchored but not released"
-
-# INV-4 "after" witnesses, closing the window opened before the submit. Record
-# and release are signalling-only, so nothing here may have moved. Issue 1698:
-# there is no draft step. A receipt reaches the router only through
+# INV-4 "after" witnesses, closing the window opened before the submit. Recording
+# is signalling-only, so nothing here may have moved. Issue 1698: there is no
+# draft step. A receipt reaches the router only through
 # RouterGovernance.applyReceipt (publish-contracts govern row apply-receipt),
-# which releases it and sets the weights in one call; this seam runs the
-# release-only row, so the router weights (both reads) must be unchanged.
+# which releases it and sets the weights in one call. That apply moves the
+# router weights by design (issue 1849), so the window closes HERE, immediately
+# before it.
 witnesses_after="$(witnesses)"
 record "inv4-witnesses-after.txt" "$witnesses_after"
 inv4_unreadable "$witnesses_after" \
@@ -154,10 +118,58 @@ inv4_unreadable "$witnesses_after" \
 compared — $witnesses_after"
 
 if [[ "$witnesses_after" != "$witnesses_before" ]]; then
-  fail "INV-4 violated: an allocation-state witness moved across record/release
+  fail "INV-4 violated: an allocation-state witness moved across record
 $(diff <(printf '%s' "$witnesses_before") <(printf '%s' "$witnesses_after") || true)
 $INV4_ACCRUAL_NOTE"
 fi
+
+# The release is a governance action. The Safe applies the receipt through the
+# timelock, run by `bun scripts/stage/core-stack.ts governance apply` (publish
+# contracts govern, row apply-receipt), which releases the receipt and sets its
+# weights in one RouterGovernance.applyReceipt call. Issue 1849: row
+# release-receipt is refused since issue 1831, because a bare release burns the
+# receipt. A single keystore never releases a receipt: after handover no EOA
+# holds the receipt contract's admin role, so a direct send would only revert.
+# Run the govern row first, then run this script with FUSION_SKIP_RELEASE=1, or
+# set FUSION_GOVERN_CMD so this script runs it. The payload is the frontend
+# receipt file: it is the file that was submitted, and the URL was proved above
+# to serve the same digest. The row checks it against the anchored digest
+# before it sends anything.
+#
+# T29: IDEMPOTENT, BECAUSE THIS SCRIPT IS THE AC-E2E-05 SEAM AND IS RUN TWICE.
+# A receipt applies once: a second apply is refused (already released), and
+# under `set -euo pipefail` that would abort the script at this line, so the
+# evidence JSON after it would never be written and a real regression between
+# the two runs would be invisible behind the false failure. Read the state
+# first, which is also what an operator does. The post-condition read below
+# stays the actual assertion.
+release_action="sent"
+if [[ "${FUSION_SKIP_RELEASE:-0}" == "1" ]]; then
+  release_action="skipped_external_ceremony"
+else
+  already_released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
+    "$receipt_id" --rpc-url "$FUSION_RPC_URL")" \
+    || fail "could not read isReleased() before the apply"
+  already_released="$(tr -d '[:space:]' <<<"$already_released")"
+  if [[ "$already_released" == "true" ]]; then
+    release_action="already_released"
+    echo "fusion-cross-repo: receipt $receipt_id is already released; no second apply" >&2
+  else
+    : "${FUSION_GOVERN_CMD:?the apply goes through the real Safe and the timelock: set FUSION_GOVERN_CMD to the govern apply command (bun scripts/stage/core-stack.ts governance apply), or run it first and set FUSION_SKIP_RELEASE=1}"
+    # shellcheck disable=SC2086 # the command is a word list by contract
+    apply_out="$($FUSION_GOVERN_CMD --receipt-id "$receipt_id" --payload "$FUSION_FRONTEND_RECEIPT_FILE")" \
+      || fail "the govern apply-receipt row failed for receipt $receipt_id"
+    record "apply-rows.json" "$apply_out"
+    grep '^{' <<<"$apply_out" | jq -s -e \
+      'length >= 1 and all(.row == "apply-receipt") and all(.status == 1 or .status == "0x1") and all(.txHash | test("^0x[0-9a-fA-F]{64}$"))' \
+      >/dev/null 2>&1 \
+      || fail "the govern apply printed no apply-receipt row with a tx hash and status 1 for receipt $receipt_id: $(head -c 300 <<<"$apply_out")"
+  fi
+fi
+
+released="$("$CAST_BIN" call "$FUSION_RECEIPT_ADDRESS" 'isReleased(bytes32)(bool)' \
+  "$receipt_id" --rpc-url "$FUSION_RPC_URL")"
+[[ "$released" == "true" ]] || fail "receipt is anchored but not released"
 
 witnesses_json() { # `key=value` lines -> {"key":"value"}
   jq -Rn '[inputs | select(length>0) | (index("=")) as $i |
@@ -178,5 +190,5 @@ jq -n --arg receipt_id "$receipt_id" --arg payload_digest "$digest" \
     anchored_url:{url:$receipt_url,payload_digest:$url_digest,matches_submitted_bytes:true},
     inv4:{witnesses_before:$witnesses_before,
           witnesses_after:$witnesses_after,
-          window:"immediately before submit .. immediately after release",
+          window:"immediately before submit .. immediately before the apply",
           unchanged:true}}'
