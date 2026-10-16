@@ -13,9 +13,9 @@ use alloy_primitives::{Address, Bytes, FixedBytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall as _, SolEvent as _};
 use common::{pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::{IGovernedUpgradeEvents, ITimelockEvents, Topics},
+    abi::{IGovernedUpgradeEvents, ITimelockEvents, IVaultRegistryEvents, Topics},
     db::CountTable,
-    indexer::{run_once, IndexerConfig},
+    indexer::{backfill_proxy_events, run_once, IndexerConfig},
     rpc::JsonRpc,
 };
 use std::io::{Read, Write};
@@ -527,5 +527,207 @@ async fn a_failed_depositspaused_read_skips_the_snapshot_instead_of_recording_op
     .await
     .unwrap();
     assert_eq!(rows, 0, "no snapshot is better than a guessed 'open'");
+    stub.shutdown();
+}
+
+/// Issue 1840: the startup backfill reads every watched proxy's `Upgraded` and
+/// `UpgradesFrozen` from the deploy floor up to the cursor, which live
+/// ingestion never revisits. It stores the event block's transactions, so the
+/// watchdog can tell a deployment by its contract-creation transaction. It
+/// ignores other topics, other addresses and blocks above the cursor, and a
+/// second run inserts nothing.
+#[tokio::test]
+async fn the_startup_backfill_indexes_proxy_events_below_the_cursor_once() {
+    let fx = pg_fixture().await;
+    let gateway = cfg().gateway;
+    let late_vault = Address::from([0x33u8; 20]);
+    register_vault(&fx, late_vault).await;
+    let impl_v1 = Address::from([0x1au8; 20]);
+    let upgraded =
+        |implementation| IGovernedUpgradeEvents::Upgraded { implementation }.encode_log_data();
+    let frozen = IGovernedUpgradeEvents::UpgradesFrozen {
+        proxy: late_vault,
+        implementation: impl_v1,
+        codeHash: FixedBytes([0x66; 32]),
+    }
+    .encode_log_data();
+
+    // A first tick with no logs moves the cursor to the safe head, 15.
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set("eth_getLogs", serde_json::json!([]));
+    let rpc = JsonRpc::new(&stub.url);
+    let mut c = cfg();
+    c.end_block = None;
+    c.start_block = Some(1);
+    let first = run_once(&fx.db, &rpc, &c).await.unwrap();
+    assert!(first.error.is_none(), "{:?}", first.error);
+    assert_eq!(first.last_indexed_block, Some(15));
+    assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 0);
+
+    // The deploy-time events the live ticks never read: a contract creation at
+    // block 5. Plus noise the backfill must ignore.
+    stub.set(
+        "eth_getBlockByNumber",
+        serde_json::json!({
+            "number": "0x5",
+            "hash": format!("0x{}", hex::encode([0xbbu8; 32])),
+            "parentHash": format!("0x{}", hex::encode([0x00u8; 32])),
+            "timestamp": "0x65000000",
+            "transactions": [{
+                "hash": format!("0x{}", hex::encode([0x01u8; 32])),
+                "transactionIndex": "0x0",
+                "from": format!("0x{}", hex::encode([0x0eu8; 20])),
+                "to": null
+            }]
+        }),
+    );
+    stub.set(
+        "eth_getTransactionReceipt",
+        serde_json::json!({
+            "from": format!("0x{}", hex::encode([0x0eu8; 20])),
+            "to": null,
+            "status": "0x1"
+        }),
+    );
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            log_json(gateway, &upgraded(impl_v1), 5, 0),
+            log_json(late_vault, &upgraded(impl_v1), 5, 1),
+            log_json(late_vault, &frozen, 5, 2),
+            // Not a watched proxy.
+            log_json(Address::from([0x01; 20]), &upgraded(impl_v1), 5, 3),
+            // The Timelock is not a Robot Money proxy.
+            log_json(timelock(), &upgraded(impl_v1), 5, 4),
+            // Above the cursor: live ingestion's job.
+            log_json(gateway, &upgraded(impl_v1), 18, 0),
+        ]),
+    );
+    let inserted = backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap();
+    assert_eq!(
+        inserted, 3,
+        "the gateway's and the registered vault's events"
+    );
+    let rows: Vec<(Vec<u8>, i64, String, String)> = sqlx::query_as(
+        "SELECT contract, block_number, contract_kind, event_name FROM admin_events \
+         WHERE chain_id = $1 ORDER BY log_index",
+    )
+    .bind(CHAIN)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows.iter().all(|r| r.1 == 5 && r.2 == "proxy"), "{rows:?}");
+    assert_eq!(rows[0].0.as_slice(), gateway.as_slice());
+    assert_eq!(rows[2].0.as_slice(), late_vault.as_slice());
+    assert_eq!(rows[2].3, "UpgradesFrozen");
+    let creation: Option<Option<Vec<u8>>> =
+        sqlx::query_scalar("SELECT to_addr FROM transactions WHERE chain_id = $1 AND tx_hash = $2")
+            .bind(CHAIN)
+            .bind(&[0x01u8; 32][..])
+            .fetch_optional(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        creation,
+        Some(None),
+        "the deployment's contract-creation transaction is stored"
+    );
+
+    // The proxy topics alone were asked for.
+    let proxy_topics = [
+        format!("{:#x}", Topics::new().proxy_upgraded),
+        format!("{:#x}", Topics::new().proxy_upgrades_frozen),
+    ];
+    let last_logs = stub
+        .captured_requests()
+        .into_iter()
+        .rev()
+        .find(|r| r["method"] == "eth_getLogs")
+        .unwrap();
+    assert_eq!(
+        last_logs["params"][0]["topics"][0],
+        serde_json::json!(proxy_topics)
+    );
+
+    let again = backfill_proxy_events(&fx.db, &rpc, &c).await.unwrap();
+    assert_eq!(again, 0, "idempotent: a second run inserts nothing");
+    assert_eq!(fx.db.count(CountTable::AdminEvents).await.unwrap(), 3);
+    stub.shutdown();
+}
+
+/// Issue 1840: the registry is a proxied core contract, so its `Upgraded` and
+/// `UpgradesFrozen` are indexed with INDEXER_MULTI_VAULT_EVENTS off. Its
+/// `VaultRegistered` stays behind the flag.
+#[tokio::test]
+async fn registry_proxy_events_are_indexed_with_multi_vault_events_off() {
+    let fx = pg_fixture().await;
+    let registry = Address::from([0x44u8; 20]);
+    let impl_v1 = Address::from([0x1au8; 20]);
+    let upgraded = IGovernedUpgradeEvents::Upgraded {
+        implementation: impl_v1,
+    }
+    .encode_log_data();
+    let registered = IVaultRegistryEvents::VaultRegistered {
+        vault: Address::from([0x33u8; 20]),
+        name: "Robot Money USDC".into(),
+        asset: Address::from([0x55u8; 20]),
+    }
+    .encode_log_data();
+
+    let stub = StubRpcServer::start().await;
+    program(&stub, 20);
+    stub.set(
+        "eth_getLogs",
+        serde_json::json!([
+            log_json(registry, &upgraded, 10, 0),
+            log_json(registry, &registered, 10, 1),
+        ]),
+    );
+    let rpc = JsonRpc::new(&stub.url);
+    let mut c = cfg();
+    c.registry = Some(registry);
+    assert_eq!(c.feature_flags, 0, "INDEXER_MULTI_VAULT_EVENTS is off");
+    let outcome = run_once(&fx.db, &rpc, &c).await.unwrap();
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+
+    // The registry is asked for its proxy topics, not only by vault discovery.
+    let upgraded_topic = format!("{:#x}", Topics::new().proxy_upgraded);
+    let asked_registry_proxy = stub.captured_requests().iter().any(|r| {
+        r["method"] == "eth_getLogs"
+            && r["params"][0]["address"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == &format!("{registry:#x}")))
+            && r["params"][0]["topics"][0]
+                .as_array()
+                .is_some_and(|t| t.iter().any(|x| x == &upgraded_topic))
+    });
+    assert!(
+        asked_registry_proxy,
+        "the registry's proxy topics must be fetched with the flag off"
+    );
+
+    let rows: Vec<(Vec<u8>, String, String)> = sqlx::query_as(
+        "SELECT contract, contract_kind, event_name FROM admin_events WHERE chain_id = $1",
+    )
+    .bind(CHAIN)
+    .fetch_all(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![(
+            registry.to_vec(),
+            "proxy".to_string(),
+            "Upgraded".to_string()
+        )]
+    );
+    let vaults: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE chain_id = $1")
+        .bind(CHAIN)
+        .fetch_one(fx.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(vaults, 0, "VaultRegistered stays behind the flag");
     stub.shutdown();
 }

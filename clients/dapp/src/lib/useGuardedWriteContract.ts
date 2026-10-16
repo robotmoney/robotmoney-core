@@ -42,6 +42,11 @@
  * Other env classes behave exactly like `useWriteContract`.
  * A redeem of a RobotMoneyVault (rmUSDC) also gets a fixed gas limit (redeemGas.ts, core issue 1758),
  * on every class and path. A basket vault redeem does not: it needs more than that limit (QA plan U3).
+ *
+ * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), every write
+ * first re-verifies the gateway proxy and implementation at the latest block, on
+ * every env class, and is refused with `GatewayChangedError` on a mismatch. That
+ * check runs after checks (2) to (5), which only apply on Base.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -70,6 +75,7 @@ import {
 } from "./codePins";
 import { routerAbi } from "./abi";
 import { ERC1967_IMPLEMENTATION_SLOT, implementationFromSlot } from "./gatewayVerifier";
+import { useGatewayWriteCheck } from "./gatewayWriteCheck";
 
 /** Current guard state: shared by the write hook and the wrong-chain screen. */
 export function useWriteChainGuard(): { state: WriteGuardState; blocked: boolean } {
@@ -294,6 +300,7 @@ export function useGuardedWriteContract() {
   const implementationAddressPins = useMemo(() => parseImplementationAddressPins(env), [env]);
   const gateway = env.VITE_GATEWAY_ADDRESS;
   const router = env.VITE_ROUTER_ADDRESS;
+  const gatewayCheck = useGatewayWriteCheck();
   const [refusal, setRefusal] = useState<Error | null>(null);
   const blocked = isWriteBlocked(state);
   const pinned = state.kind === "ok" ? state.targetChainId : undefined;
@@ -317,28 +324,33 @@ export function useGuardedWriteContract() {
       robotMoneyVaults,
     ) as never;
 
+  /** The asynchronous checks a write must pass before it goes to the wallet. */
+  const preflight = async (variables: unknown) => {
+    if (pinned !== undefined) {
+      await assertWriteTarget(
+        connector as CodeSource | undefined,
+        variables,
+        codePins,
+        implementationPins,
+        implementationAddressPins,
+        gateway,
+        router,
+      );
+    }
+    if (gatewayCheck) await gatewayCheck();
+  };
+
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {
     setRefusal(null);
     if (blocked) {
       refuse(new WrongChainError(state), variables, options);
       return;
     }
-    if (pinned === undefined) {
-      base.writeContract(
-        withRedeemGasWorkaround(variables, robotMoneyVaults) as never,
-        options as never,
-      );
+    if (pinned === undefined && !gatewayCheck) {
+      base.writeContract(pin(variables), options as never);
       return;
     }
-    assertWriteTarget(
-      connector as CodeSource | undefined,
-      variables,
-      codePins,
-      implementationPins,
-      implementationAddressPins,
-      gateway,
-      router,
-    )
+    preflight(variables)
       .then(() => base.writeContract(pin(variables), options as never))
       .catch((e: unknown) => refuse(e as Error, variables, options));
   }) as WriteFn;
@@ -353,21 +365,11 @@ export function useGuardedWriteContract() {
       setRefusal(err);
       throw err;
     }
-    if (pinned !== undefined) {
-      try {
-        await assertWriteTarget(
-          connector as CodeSource | undefined,
-          variables,
-          codePins,
-          implementationPins,
-          implementationAddressPins,
-          gateway,
-          router,
-        );
-      } catch (e) {
-        setRefusal(e as Error);
-        throw e;
-      }
+    try {
+      await preflight(variables);
+    } catch (e) {
+      setRefusal(e as Error);
+      throw e;
     }
     return base.writeContractAsync(pin(variables), options as never);
   }) as WriteAsyncFn;

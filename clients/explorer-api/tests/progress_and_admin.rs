@@ -670,3 +670,52 @@ async fn contracts_disclose_implementation_and_freeze_state_from_proxy_events() 
     assert_eq!(admin["events"][0]["event_name"], "UpgradesFrozen");
     assert_eq!(admin["events"][0]["detail"]["implementation"], v2);
 }
+
+/// Issue 1840: a proxy whose deploy-time `Upgraded` predates the indexed range
+/// has only its `UpgradesFrozen` row. The contracts endpoint reports the
+/// implementation that freeze names, and the state is frozen.
+#[tokio::test]
+async fn a_contract_with_only_a_freeze_row_reports_the_frozen_implementation() {
+    let s = boot().await;
+    run(&s.pool, true, None, Some(1000), Some(1010)).await;
+    let registry = [0x44u8; 20];
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind) VALUES ($1, $2, 'vault_registry')",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&registry[..])
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let frozen_impl = format!("0x{}", "3c".repeat(20));
+    sqlx::query(
+        "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
+                                   contract_kind, event_name, detail) \
+         VALUES ($1, 40, 0, $2, $3, 'proxy', 'UpgradesFrozen', $4)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&[0x02u8; 32][..])
+    .bind(&registry[..])
+    .bind(format!(
+        r#"{{"implementation":"{frozen_impl}","code_hash":"0x{}"}}"#,
+        "88".repeat(32)
+    ))
+    .execute(&s.pool)
+    .await
+    .unwrap();
+
+    let body = get(&s, &format!("/v1/chains/{PRIMARY_CHAIN_ID}/contracts")).await;
+    let reg = body["contracts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "vault_registry")
+        .cloned()
+        .unwrap_or_else(|| panic!("no registry in {body}"));
+    assert_eq!(
+        reg["implementation"], frozen_impl,
+        "the freeze row's implementation is reported when no Upgraded row exists: {reg}"
+    );
+    assert_eq!(reg["upgrade_state"], "frozen");
+    assert_eq!(reg["frozen_at_block"], 40);
+}

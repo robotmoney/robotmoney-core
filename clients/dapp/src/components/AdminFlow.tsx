@@ -16,6 +16,7 @@ import { useCodeTargetVerification } from "../lib/useVerifiedCodeTargets";
 import { describeVerificationCause } from "../lib/gatewayVerifier";
 import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
 import { parseImplementationPinMap } from "../lib/codePins";
+import { GatewayWriteCheck } from "../lib/gatewayWriteCheck";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -165,7 +166,13 @@ export function AdminFlow(props: Props) {
         </p>
       )}
 
-      <Tabs tabs={tabs} defaultTabId="agent-permissions" />
+      {/* Issue 1840: every write from the tabs re-verifies the gateway at the latest block first. */}
+      <GatewayWriteCheck
+        gatewayAddress={props.gatewayAddress}
+        verification={gatewayVerificationState}
+      >
+        <Tabs tabs={tabs} defaultTabId="agent-permissions" />
+      </GatewayWriteCheck>
     </main>
   );
 }

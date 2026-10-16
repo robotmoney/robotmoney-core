@@ -223,16 +223,21 @@ authorizes signing.
 gateway call carries an implementation version, and adding one is a Solidity
 change (stage 1 scope). The clients therefore bind what they sign:
 
-- `rmpc` re-reads the implementation at `latest` after signing and before
-  broadcast. A changed or unapproved implementation discards the signed
-  transaction unsent (`ErrImplementationChanged`), so it can never execute.
+- `rmpc deposit`, `withdraw` and `withdraw-router` re-read the implementation
+  at `latest` after signing and before broadcast. A changed or unapproved
+  implementation discards the signed transaction unsent
+  (`ErrImplementationChanged`), so it can never execute. `committee
+  vote-submit` and `receipt submit` verify the gateway once before signing and
+  are not re-verified before broadcast (issue 1840, `write_path.rs` module doc).
 - After the receipt, `rmpc` reads the implementation slot at the block the
   transaction executed in. Anything other than the implementation it verified
   is reported as `ErrImplementationChanged` with the `tx_hash`, never as a
   success, and the replay-cache entry stays so the write is not re-sent
   blindly.
-- A signed gateway write carries a `deadline` of at most
-  `MAX_DEADLINE_SKEW` (600 s) ahead of the block time. An upgrade must wait the
+- A signed `deposit`, `withdraw` or `withdraw-router` carries an on-chain
+  `deadline` of at most `MAX_DEADLINE_SKEW` (600 s) ahead of the block time.
+  `committee vote-submit` and `receipt submit` carry no deadline; only the
+  receipt check covers them. An upgrade must wait the
   timelock's minimum delay after it is scheduled, which is far longer, and the
   `CallScheduled` operation is public for that whole time. A write signed before
   an upgrade can only execute after it inside that bound, and the receipt check
@@ -244,10 +249,11 @@ change (stage 1 scope). The clients therefore bind what they sign:
   (`upgradeToAndCall` data). Pending commitments also expire after
   `COMMIT_EXPIRY_BLOCKS`. The dapp gates every admin flow, including a
   reveal, on a verified gateway with the implementation pin. It verifies when
-  the page loads, the wallet connects or changes chain, and on "Re-verify"; it
-  does not re-check an open page before each signature and has no receipt-time
-  check, so an upgrade during an open session is caught on the next
-  verification, not at the click.
+  the page loads, the wallet connects or changes chain, and on "Re-verify".
+  Every write from AdminFlow and AgentsPanel also re-reads the gateway code,
+  implementation slot and implementation code at the latest block right before
+  it goes to the wallet, and is refused on any change (issue 1840). It has no
+  receipt-time check.
 - Queued timelock operations: a queued `freezeUpgrades` is bound to the
   reviewed implementation and code hash and reverts after an intervening
   upgrade; a queued upgrade reverts once the proxy is frozen. Review and cancel
@@ -259,7 +265,11 @@ intended fail-closed behavior.
 
 **Disclosure.** The explorer indexer stores every proxied core contract's
 `Upgraded` and `UpgradesFrozen` events in `admin_events` (`contract_kind =
-'proxy'`, migration 0019) and now watches RouterGovernance for them. The API
+'proxy'`, migration 0019) and now watches RouterGovernance for them. The
+registry's proxy events are fetched whether or not `INDEXER_MULTI_VAULT_EVENTS`
+is on. On startup the indexer backfills both topics for every watched proxy from
+the deploy floor to its cursor, so a proxy added after the cursor passed its
+deploy block still gets its history (issue 1840). The API
 lists them with the governance events and gives each contract its
 `implementation`, `upgrade_state` (`frozen`, `upgradeable`, `unknown`) and
 `frozen_at_block` on `/v1/chains/:chain_id/contracts`. The dapp shows the
@@ -267,8 +277,13 @@ gateway's live implementation and freeze state once verified, and the vault
 detail shows each vault's indexed implementation and upgrade state. `rmpc
 get-gateway` reports the implementation, its code hash, `upgradesFrozen()` and
 `upgradeTimelock()` beside the approved pin. The watchdog pages each governed
-upgrade or freeze (an event in a later block than the proxy's deployment) once;
-it never pauses.
+upgrade or freeze once; it never pauses. An event is the deployment, and not
+paged, only when its transaction is a contract creation or its block is the
+contract's known deploy block. It is never inferred from the first indexed
+`Upgraded`, so a late-registered vault's first upgrade and a freeze with no
+indexed `Upgraded` both page (issue 1840). The dapp re-verifies the gateway
+proxy and implementation at the latest block right before each admin write and
+refuses on a mismatch.
 
 ## Delivery sequence and acceptance gates
 

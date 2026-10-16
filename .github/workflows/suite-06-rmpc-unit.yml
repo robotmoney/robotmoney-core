@@ -86,6 +86,15 @@ jobs:
         working-directory: clients/rust-payment-client
         run: cargo test --lib -- --nocapture
 
+      # Issue 1840: the module docs (write_path's per-command deadline and
+      # re-verify table among them) build and their doc tests run.
+      - name: cargo test --doc
+        env:
+          CARGO_TEST_MIN_EXECUTED: 1
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p rust-payment-client --doc
+
       - name: Plugin skill command parser conformance
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \

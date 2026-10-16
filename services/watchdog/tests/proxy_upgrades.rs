@@ -2,9 +2,11 @@
 //! core contract once, from the indexer's `admin_events` proxy rows.
 //!
 //! A proxy's deployment emits `Upgraded` (and, frozen at deploy,
-//! `UpgradesFrozen`) in its deployment block; those are not paged. A later
-//! `Upgraded` (an upgrade) or `UpgradesFrozen` (a delayed freeze) is paged once
-//! and never again, and a failed delivery is retried.
+//! `UpgradesFrozen`) in its creation transaction; those are not paged. The
+//! deployment is recognised by its creation transaction or the contract's known
+//! deploy block, never by "the first indexed `Upgraded`" (issue 1840). Any
+//! other `Upgraded` (an upgrade) or `UpgradesFrozen` (a delayed freeze) is paged
+//! once and never again, and a failed delivery is retried.
 //!
 //! Run: `cargo test -p watchdog --test proxy_upgrades -- --test-threads=1`.
 
@@ -19,21 +21,91 @@ const CHAIN: i64 = 918_453;
 const GATEWAY: [u8; 20] = [0x11; 20];
 const VAULT: [u8; 20] = [0x22; 20];
 
-async fn seed(pool: &sqlx::PgPool) {
+const TIMELOCK: [u8; 20] = [0x7a; 20];
+
+async fn seed_chain(pool: &sqlx::PgPool) {
     sqlx::query("INSERT INTO chains (chain_id, name, rpc_label) VALUES ($1, 'fusion', 'stub')")
         .bind(CHAIN)
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// One indexed transaction. `to = None` is a contract creation.
+async fn seed_tx(pool: &sqlx::PgPool, tx: u8, block: i64, to: Option<[u8; 20]>) {
+    sqlx::query(
+        "INSERT INTO transactions (chain_id, tx_hash, block_number, tx_index, from_addr, to_addr, status) \
+         VALUES ($1, $2, $3, 0, $4, $5, 1)",
+    )
+    .bind(CHAIN)
+    .bind(&[tx; 32][..])
+    .bind(block)
+    .bind(&[0x0eu8; 20][..])
+    .bind(to.as_ref().map(|a| &a[..]))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// One `contracts` row; `deployed_block = None` is a contract whose deploy
+/// block was never discovered (a registry-discovered vault).
+async fn seed_contract(pool: &sqlx::PgPool, contract: [u8; 20], deployed_block: Option<i64>) {
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, 'vault', $3)",
+    )
+    .bind(CHAIN)
+    .bind(&contract[..])
+    .bind(deployed_block)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// One `proxy` row of `admin_events`, emitted in transaction `[tx; 32]`.
+async fn seed_event(
+    pool: &sqlx::PgPool,
+    contract: [u8; 20],
+    block: i64,
+    log_index: i32,
+    tx: u8,
+    event: &str,
+    detail: &str,
+) {
+    sqlx::query(
+        "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
+                                   contract_kind, event_name, detail) \
+         VALUES ($1, $2, $3, $4, $5, 'proxy', $6, $7)",
+    )
+    .bind(CHAIN)
+    .bind(block)
+    .bind(log_index)
+    .bind(&[tx; 32][..])
+    .bind(&contract[..])
+    .bind(event)
+    .bind(detail)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed(pool: &sqlx::PgPool) {
+    seed_chain(pool).await;
+    // The gateway's deploy block (10) was discovered by the indexer. The
+    // vault's was not, but its deployment transaction is a contract creation.
+    seed_contract(pool, GATEWAY, Some(10)).await;
+    seed_contract(pool, VAULT, None).await;
+    seed_tx(pool, 0x01, 10, Some(TIMELOCK)).await;
+    seed_tx(pool, 0x02, 12, None).await;
     let v1 = format!("0x{}", "1a".repeat(20));
     let v2 = format!("0x{}", "2b".repeat(20));
-    // (contract, block, log_index, event, detail)
+    // (contract, block, log_index, tx, event, detail)
     let rows = [
         // Gateway deployed upgradeable at block 10, upgraded at 50, frozen at 60.
         (
             GATEWAY,
             10i64,
             0i32,
+            0x01u8,
             "Upgraded",
             format!(r#"{{"implementation":"{v1}"}}"#),
         ),
@@ -41,6 +113,7 @@ async fn seed(pool: &sqlx::PgPool) {
             GATEWAY,
             50,
             0,
+            0x03,
             "Upgraded",
             format!(r#"{{"implementation":"{v2}"}}"#),
         ),
@@ -48,6 +121,7 @@ async fn seed(pool: &sqlx::PgPool) {
             GATEWAY,
             60,
             0,
+            0x04,
             "UpgradesFrozen",
             format!(
                 r#"{{"implementation":"{v2}","code_hash":"0x{}"}}"#,
@@ -59,6 +133,7 @@ async fn seed(pool: &sqlx::PgPool) {
             VAULT,
             12,
             0,
+            0x02,
             "Upgraded",
             format!(r#"{{"implementation":"{v1}"}}"#),
         ),
@@ -66,6 +141,7 @@ async fn seed(pool: &sqlx::PgPool) {
             VAULT,
             12,
             1,
+            0x02,
             "UpgradesFrozen",
             format!(
                 r#"{{"implementation":"{v1}","code_hash":"0x{}"}}"#,
@@ -73,22 +149,8 @@ async fn seed(pool: &sqlx::PgPool) {
             ),
         ),
     ];
-    for (contract, block, log_index, event, detail) in &rows {
-        sqlx::query(
-            "INSERT INTO admin_events (chain_id, block_number, log_index, tx_hash, contract, \
-                                       contract_kind, event_name, detail) \
-             VALUES ($1, $2, $3, $4, $5, 'proxy', $6, $7)",
-        )
-        .bind(CHAIN)
-        .bind(block)
-        .bind(log_index)
-        .bind(&[0x01u8; 32][..])
-        .bind(&contract[..])
-        .bind(*event)
-        .bind(detail)
-        .execute(pool)
-        .await
-        .unwrap();
+    for (contract, block, log_index, tx, event, detail) in &rows {
+        seed_event(pool, *contract, *block, *log_index, *tx, event, detail).await;
     }
 }
 
@@ -181,5 +243,131 @@ async fn a_failed_delivery_is_retried_and_no_webhook_records_nothing() {
         .await
         .unwrap();
     assert_eq!(paged, 2);
+    server.shutdown();
+}
+
+/// Issue 1840: a registry-discovered vault is watched from the tick that saw
+/// its `VaultRegistered`, so its deploy-time events are never indexed and its
+/// deploy block is unknown. Its first indexed `Upgraded`, sent by the
+/// Timelock, is a governed upgrade and is paged once.
+#[tokio::test]
+async fn a_late_registered_vaults_first_indexed_upgrade_is_paged_once() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    // Deployed at block 5 (never indexed), registered and watched from 40.
+    seed_contract(&fx.pool, VAULT, None).await;
+    seed_tx(&fx.pool, 0x09, 70, Some(TIMELOCK)).await;
+    let v2 = format!("0x{}", "2b".repeat(20));
+    seed_event(
+        &fx.pool,
+        VAULT,
+        70,
+        0,
+        0x09,
+        "Upgraded",
+        &format!(r#"{{"implementation":"{v2}"}}"#),
+    )
+    .await;
+
+    let changes = governed_proxy_changes(&fx.pool, CHAIN).await.unwrap();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| (c.event_name.as_str(), c.block_number))
+            .collect::<Vec<_>>(),
+        vec![("Upgraded", 70)],
+        "the first indexed Upgraded is not the deployment"
+    );
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let bodies = server.drain_captures();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&bodies[0].body).unwrap();
+    assert_eq!(
+        body["payload"]["custom_details"]["alert_kind"],
+        "proxy_upgraded"
+    );
+    assert_eq!(body["payload"]["custom_details"]["implementation"], v2);
+
+    let again = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_012)
+        .await
+        .unwrap();
+    assert_eq!(again, 0, "paged once");
+    server.shutdown();
+}
+
+/// Issue 1840: RouterGovernance became watched after the cursor had passed its
+/// deploy block, so it can have an `UpgradesFrozen` and no indexed `Upgraded`
+/// at all. The old JOIN on the first `Upgraded` dropped that freeze. It pages,
+/// and so does a later upgrade of a contract whose first indexed row is a freeze.
+#[tokio::test]
+async fn a_freeze_before_the_first_indexed_upgrade_is_paged() {
+    let fx = pg_fixture().await;
+    ensure_pager_state_table(&fx.pool).await.unwrap();
+    seed_chain(&fx.pool).await;
+    // Deploy block known (3) but outside the indexed range.
+    seed_contract(&fx.pool, GATEWAY, Some(3)).await;
+    seed_tx(&fx.pool, 0x0a, 80, Some(TIMELOCK)).await;
+    seed_tx(&fx.pool, 0x0b, 90, Some(TIMELOCK)).await;
+    let v1 = format!("0x{}", "1a".repeat(20));
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        80,
+        0,
+        0x0a,
+        "UpgradesFrozen",
+        &format!(
+            r#"{{"implementation":"{v1}","code_hash":"0x{}"}}"#,
+            "55".repeat(32)
+        ),
+    )
+    .await;
+    seed_event(
+        &fx.pool,
+        GATEWAY,
+        90,
+        0,
+        0x0b,
+        "Upgraded",
+        &format!(r#"{{"implementation":"0x{}"}}"#, "2b".repeat(20)),
+    )
+    .await;
+
+    let changes = governed_proxy_changes(&fx.pool, CHAIN).await.unwrap();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| (c.event_name.as_str(), c.block_number))
+            .collect::<Vec<_>>(),
+        vec![("UpgradesFrozen", 80), ("Upgraded", 90)],
+    );
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+    let paged = alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(paged, 2);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let first: serde_json::Value =
+        serde_json::from_slice(&server.drain_captures()[0].body).unwrap();
+    assert_eq!(
+        first["payload"]["custom_details"]["alert_kind"],
+        "proxy_upgrades_frozen"
+    );
+    assert_eq!(
+        alert_new_proxy_changes(&fx.pool, &client, Some(&server.url), CHAIN, 1_012)
+            .await
+            .unwrap(),
+        0
+    );
     server.shutdown();
 }
