@@ -279,7 +279,10 @@ intended fail-closed behavior.
 registry's proxy events are fetched whether or not `INDEXER_MULTI_VAULT_EVENTS`
 is on. On startup the indexer backfills both topics for every watched proxy from
 the deploy floor to its cursor, so a proxy added after the cursor passed its
-deploy block still gets its history (issue 1840). The API
+deploy block still gets its history (issue 1840). The backfill runs one bounded
+slice per tick from a saved checkpoint, and a refused or cursorless backfill is
+retried and shown as `proxy_backfill` in the explorer's `/health` (issue 1856).
+The API
 lists them with the governance events and gives each contract its
 `implementation`, `upgrade_state` (`frozen`, `upgradeable`, `unknown`) and
 `frozen_at_block` on `/v1/chains/:chain_id/contracts`. The dapp shows the
@@ -295,8 +298,11 @@ because the timelock's executor role is open and anyone can execute a ready
 upgrade from a throwaway contract's constructor. Neither the deploy block nor
 "the first indexed `Upgraded`" exempts a row, so a late-registered vault's
 first upgrade and a freeze with no indexed `Upgraded` both page (issue 1840).
-Rows indexed before this rule existed are marked by the startup backfill; until
-then they page once. The dapp re-verifies the gateway proxy and implementation
+Rows indexed before this rule existed are marked by the startup backfill. Proxy
+events at or below the watchdog's first-run baseline (the chain head the indexer
+had seen) are recorded as seen and never paged, so neither those rows nor the
+backfilled history page in a burst; every later event pages (issue 1856,
+`docs/operations/watchdog-liveness.md`). The dapp re-verifies the gateway proxy and implementation
 at the latest block right before each write from AdminFlow and AgentsPanel,
 through the connected wallet's provider on the connected chain, and before a
 Safe proposal signature. A gateway, Timelock or Safe write is refused unless
