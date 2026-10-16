@@ -409,6 +409,39 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     expect(code).toBe(0);
     expect(p.calls).toEqual([]);
   });
+  // Issue 1864: the real verifier on the in-memory world, reached through the CLI. A null receipt is RPC_REFUSED only when the same RPC serves none of the run's receipts.
+  async function nullReceiptRun(drop: (world: ReturnType<typeof deployedWorld>) => void) {
+    const w = seed({});
+    const path = join(w.evidence, "publish-run.json");
+    const m = JSON.parse(readFileSync(path, "utf8"));
+    const world = deployedWorld();
+    m.firstBlock = 100;
+    m.stages.safe.txHashes = world.opts.deployTxs;
+    writeFileSync(path, JSON.stringify(m));
+    drop(world);
+    const p = spy();
+    const verify = {
+      verifyDeployment: (async (o: { deployTxs?: `0x${string}`[]; fromBlock: bigint }) => await verifyDeployment({ ...world.opts, fromBlock: o.fromBlock, deployTxs: o.deployTxs })) as never,
+      verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true,
+    };
+    const code = await w.run(["verify"], { pauseAll: p.pauseAll, verify });
+    return { code, calls: p.calls, w, world };
+  }
+  test("one recorded deploy receipt is null while the same RPC serves the run's other receipts: exit 13 (VERIFY), the detail names the missing transaction, pauseAll is called", async () => {
+    let gone = "";
+    const { code, calls, w } = await nullReceiptRun((world) => { gone = world.opts.deployTxs![0]!; world.chain.receipts.delete(gone.toLowerCase()); });
+    expect(code).toBe(EXIT_CODES.VERIFY);
+    expect(calls).toEqual(["verify"]);
+    const details = w.logs().filter((l) => l.event === "verify.check" && l.ok === false).map((l) => String(l.detail));
+    expect(details.length).toBeGreaterThan(0);
+    for (const d of details) { expect(d).toContain(gone); expect(d.startsWith(RPC_REFUSED_DETAIL)).toBe(false); }
+  });
+  test("the RPC returns null for every recorded receipt and for eth_getTransactionByHash (a pruned node): exit 30 (RPC_REFUSED), pauseAll is never called", async () => {
+    const { code, calls, w } = await nullReceiptRun((world) => world.chain.receipts.clear());
+    expect(code).toBe(EXIT_CODES.RPC_REFUSED);
+    expect(calls).toEqual([]);
+    expect(w.logs().filter((l) => l.event === "run.failed").pop().message).toContain("No vault was paused");
+  });
   test("an RPC_REFUSED failure beside a real failure is a real verify failure: pauseAll is called once", async () => {
     const w = seed({});
     const p = spy();

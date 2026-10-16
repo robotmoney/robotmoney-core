@@ -582,12 +582,32 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
     for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(`${RPC_REFUSED_DETAIL}: `)).toBe(true);
     expect(detailOf(r, DEPLOYER_SCAN)).toContain("missing trie node");
   });
-  test("a recorded deploy transaction the RPC does not know (a node that does not index old transactions): every scan label fails classified RPC_REFUSED", async () => {
+  // Issue 1864: a null receipt is a pruned node only when the same RPC serves none of the run's receipts and does not know the transaction.
+  test("a recorded deploy transaction with no receipt while the same RPC serves the run's other receipts: every scan label fails naming it, not classified RPC_REFUSED", async () => {
     const w = deployed();
-    w.chain.receipts.delete(w.opts.deployTxs![0]!.toLowerCase());
+    const gone = w.opts.deployTxs![0]!;
+    w.chain.receipts.delete(gone.toLowerCase());
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    for (const l of ALL_SCANS) {
+      expect(detailOf(r, l).startsWith(RPC_REFUSED_DETAIL)).toBe(false);
+      expect(detailOf(r, l)).toContain(`the recorded deploy transaction(s) ${gone} of the run have no receipt`);
+    }
+  });
+  test("an RPC that returns no receipt for any recorded deploy transaction and does not know them (a node that does not index old transactions): every scan label fails classified RPC_REFUSED", async () => {
+    const w = deployed();
+    w.chain.receipts.clear();
     const r = await verifyDeployment(w.opts);
     expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
     for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(`${RPC_REFUSED_DETAIL}: the RPC does not know the transaction`)).toBe(true);
+  });
+  test("no receipt for any recorded deploy transaction while eth_getTransactionByHash knows one: not mined, every scan label fails not classified RPC_REFUSED", async () => {
+    const w = deployed();
+    w.chain.receipts.clear();
+    w.chain.txs.set(w.opts.deployTxs![3]!.toLowerCase(), { to: null, input: "0x", value: 0n, status: "success" });
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(RPC_REFUSED_DETAIL)).toBe(false);
   });
   test("a contract no receipt of the run created and the run did not adopt: its scan labels fail, not classified RPC_REFUSED", async () => {
     const w2 = deployed();
@@ -615,11 +635,34 @@ describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
     expect(failed(r)).toEqual([]);
     for (const l of TL_LABELS) expect(okOf(r, l)).toEqual([l, true]);
   });
-  test("an adopted timelock whose earliest RoleGranted log from from-block is not its CREATE2 creation (it existed before the scan start): those labels fail", async () => {
-    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: TIMELOCK, logs: [{ address: TIMELOCK }] }));
+  // Issue 1864: the proof is the constructor's own RoleGranted(DEFAULT_ADMIN_ROLE, timelock, sender = factory), however the factory was reached.
+  test("an adopted timelock created through a wrapper (the creation transaction's to is a multicall, not the factory): the labels pass", async () => {
+    const WRAPPER = addr(0xca11);
+    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WRAPPER, logs: [{ address: TIMELOCK }] }));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    for (const l of TL_LABELS) expect(okOf(r, l)).toEqual([l, true]);
+  });
+  for (const [what, grant] of [
+    ["another role", { role: ADMIN_ROLE }],
+    ["another account", { account: SAFE }],
+    ["another sender (a grantRole call, not the constructor)", { sender: addr(0xabc) }],
+  ] as const) {
+    test(`an adopted timelock whose earliest RoleGranted log is in a successful direct CREATE2 factory call but grants ${what}: those labels fail, not classified RPC_REFUSED`, async () => {
+      const w = adoptTimelock(deployedWorld(), 105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] }), grant);
+      const r = await verifyDeployment(w.opts);
+      expect(failed(r).sort()).toEqual([...TL_LABELS].sort());
+      for (const l of TL_LABELS) {
+        expect(detailOf(r, l)).toContain("is not the constructor's RoleGranted(DEFAULT_ADMIN_ROLE");
+        expect(detailOf(r, l).startsWith(RPC_REFUSED_DETAIL)).toBe(false);
+      }
+    });
+  }
+  test("an adopted timelock whose constructor grant sits in a reverted transaction: those labels fail", async () => {
+    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "reverted", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [] }));
     const r = await verifyDeployment(w.opts);
     expect(failed(r).sort()).toEqual([...TL_LABELS].sort());
-    expect(detailOf(r, TIMELOCK_SCAN)).toContain("is not a successful CREATE2 factory call that created it");
+    expect(detailOf(r, TIMELOCK_SCAN)).toContain("is not successful");
   });
   test("the same timelock missing from deployTxs and NOT adopted: those labels fail closed", async () => {
     const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] }));
