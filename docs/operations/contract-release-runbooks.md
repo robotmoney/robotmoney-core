@@ -52,9 +52,10 @@ deploy to every target network. The version tag `vA.B.C` is cut on `dev` at
 the exact commit that was deployed and verified — there is no cherry-pick
 dance, because there is no long-lived release branch to keep in sync.
 
-From v0.5.0 (Deploy 3, owner decision 2026-10-16) the version tag of a Base
-mainnet production deployment is `vA.B.C` with no network suffix: Deploy 3 is
-tagged `v0.5.0`. Earlier tags keep their old names (`release/v0.4.0-base`).
+From v0.5.0 (owner decision 2026-10-16) the version tag of a Base mainnet
+production deployment is `vA.B.C` with no network suffix. A rehearsal-kind
+deployment (§4.10, Deploy 3 included) cuts no version tag: its record is the
+`release/<version>-rehearsal` tag and its evidence. Earlier tags keep their old names (`release/v0.4.0-base`).
 A Devnet (Twin chain) verification pass is not tagged: its record is the CI
 run and the evidence folder.
 

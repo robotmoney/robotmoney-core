@@ -12,9 +12,11 @@ notes: |
   release/v0.4.0-base.3-rehearsal (Deploy 2, 78c50cbd, a rehearsal-kind deployment). This file QA-checks the
   next deployment of the line, Deploy 3: a NEW deployment of governed UUPS proxies at new addresses. Deploy 2
   predates the proxies and cannot be upgraded in place (ADR-0009: no assisted migration; the legacy vaults stay
-  redeemable). The release tag of a production Deploy 3 is release/v0.5.0 with no "rehearsal" in it. Its version tag
-  (P10.05, {versionTag}) is v0.5.0 with no network suffix (owner, 2026-10-16). Pushing it also builds and
-  publishes the dApp image v0.5.0 (release-dapp.yml): no dApp release may have used v0.5.0 first.
+  redeemable). Deploy 3 is a REHEARSAL-kind deployment on 8453 (DEPLOYMENT_KIND=rehearsal), as Deploy 2 was
+  (owner, 2026-10-16). Its release tag is release/v0.5.0-rehearsal (runbook 4.10). The version tag step P10.05
+  runs only for --target production, so a rehearsal run cuts no version tag. A version tag is v0.5.0 with no
+  network suffix (owner, 2026-10-16); pushing it also builds and publishes the dApp image v0.5.0
+  (release-dapp.yml), so no dApp release may have used v0.5.0 first.
 
   What this release adds to the Deploy 2 flow (everything marked added: v0.5.0): governed proxies and the
   freeze (P2.50 to P2.52, P7.50 to P7.62), the ProposerFloorTimelock check (P2.51), set-unwind-guard and its
@@ -24,8 +26,9 @@ notes: |
   the Safe self-administration pair on the Twin chain (P4.51, P4.52) and the failure and exclusion drills
   (P9.50 to P9.55).
 
-  Environments. The same file runs on the Twin chain (--target twin), as the Base mainnet rehearsal with a 900 s
-  timelock (--target rehearsal, runbook 4.10) and as Deploy 3 (--target production). Steps for one environment say
+  Environments. The same file runs on the Twin chain (--target twin) and on Base mainnet as a rehearsal with a
+  900 s timelock (--target rehearsal, runbook 4.10). Deploy 3 is the --target rehearsal run. --target production
+  is a later production-kind deployment (48 hour timelock), not Deploy 3; the open decisions below gate only it. Steps for one environment say
   so with onlyFor. The lifecycle steps (P7) run only when the run sheet says UPGRADE_MODE=upgradeable. The freeze
   steps (P7.56 to P7.61) run only when the owner has recorded {runDir}/go/freeze.json: the freeze is OFF by
   default on 8453.
@@ -57,7 +60,7 @@ decisions:
   - id: freeze-policy
     question: "Is Deploy 3 frozen at launch (UPGRADE_MODE=frozen), or an upgradeable proving period with UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12)"
     status: decided
-    answer: "No. Deploy 3 does not launch frozen: it is an upgradeable proving period (UPGRADE_MODE=upgradeable). It needs UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12), still to be set."
+    answer: "No. Deploy 3 does not launch frozen: it is an upgradeable proving period (UPGRADE_MODE=upgradeable). For a rehearsal-kind run UPGRADE_FREEZE_DEADLINE is optional (4.12 table). The release owner, signers and backups (4.12) are still to be named."
     decidedOn: 2026-10-16
     ref: "owner decision session deploy3-runbook, 2026-10-16"
   - id: emergency-levers
@@ -81,7 +84,7 @@ decisions:
   - id: production-receipt-surface
     question: "How a production deployment registers a receipt submitter and records receipts: register-committee and record-receipt are refused on 8453 in production, so P3.03 to P3.05 and P5.01 to P5.58 are skipped until this is decided"
     status: decided
-    answer: "Yes. Rebalancing works on 8453 from launch. The CLI must stop refusing register-committee and record-receipt in production; the change is not yet made."
+    answer: "Not needed for Deploy 3. Rebalancing works on 8453 from launch because Deploy 3 is rehearsal kind, where register-committee and record-receipt run, as in Deploy 2 (P3.03 to P3.05, P5). No tool change. How a later production-kind deployment records receipts stays a question for that release."
     decidedOn: 2026-10-16
     ref: "owner decision session deploy3-runbook, 2026-10-16"
   - id: version-line
