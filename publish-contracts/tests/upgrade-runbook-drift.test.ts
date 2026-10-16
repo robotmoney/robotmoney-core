@@ -86,3 +86,24 @@ describe("the release checklist and the Twin lifecycle rehearsal (issue 1811)", 
     for (const s of ["`core-stages-twin-upgrade-lifecycle`", "`deployments/twin-918453/upgrade-rehearsal.env`", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`", "--upgrade-lifecycle FILE --rpc URL", "`UpgradesAreFrozen`", "**Rollback is not assumed safe.**", "**After a governed upgrade.**"]) expect(SECTION, s).toContain(s);
   });
 });
+
+// Issue 1842 docs drift check: runbook 4.12 names the two operator rows the code runs, the manifest re-record, the WARN and ESCALATE states verify reports, and the
+// upgradeability plan no longer says publish passes a fixed frozen mode.
+describe("the operator rows and the deadline alert states (issue 1842)", () => {
+  test("runbook 4.12 names govern --row freeze-upgrades and govern --row upgrade-proxy, the re-record step and the WARN and ESCALATE states", async () => {
+    const { FREEZE_ROW, UPGRADE_ROW } = await import("../src/upgrade-rows.ts");
+    expect([FREEZE_ROW, UPGRADE_ROW]).toEqual(["freeze-upgrades", "upgrade-proxy"]);
+    for (const s of [`govern --row ${FREEZE_ROW}`, `govern --row ${UPGRADE_ROW} --proxy NAME --implementation 0x<new>`, "--upgrade-build DIR", "**The governed upgrade procedure:", "**Layout review.**", "**Schedule.**", "**Execute.**", "**Re-record.**",
+      "rewrites the proxy's stage manifest", "`gateway_implementation_runtime_hash` and `gateway_runtime_hash`", "`proxy_upgrades`", "`upgrade_freezes`", "`govern.preview`", "starts with `WARN`", "starts with `ESCALATE`", "starts with `MISSED`",
+      "`freeze_block` and `freeze_tx`", "(`govern --row upgrade-proxy` back to the previous implementation), possible only while the proxy is unfrozen", "now + `TIMELOCK_MIN_DELAY` + 1 day"]) expect(SECTION, s).toContain(s);
+    expect(SECTION).not.toContain("is not part of this procedure yet");
+    // the verifier detail words are the ones the runbook quotes
+    const src = readFileSync(join(REPO, "publish-contracts", "src", "verify", "upgradeability.ts"), "utf8");
+    for (const w of ['"ESCALATE" : "WARN"', "MISSED: ", "govern --row freeze-upgrades"]) expect(src).toContain(w);
+  });
+  test("the upgradeability plan does not say publish passes a fixed frozen mode", () => {
+    const plan = readFileSync(join(REPO, "docs", "technical", "contract-upgradeability-plan.md"), "utf8");
+    expect(plan).not.toContain("publish passes `UPGRADE_MODE=frozen`");
+    expect(plan).toContain("publish passes the sheet's `UPGRADE_MODE`");
+  });
+});

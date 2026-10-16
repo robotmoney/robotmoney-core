@@ -167,6 +167,8 @@ export interface LogEntry {
   topics: Hex[];
   data: Hex;
   blockNumber: bigint;
+  /** The transaction that emitted the log (issue 1842: a freeze is matched with the timelock execution of the same transaction). */
+  transactionHash?: Hex;
 }
 
 /** The only surface the verifier uses to touch a chain. It is read-only. */

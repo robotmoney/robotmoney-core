@@ -257,7 +257,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   }
 
   // ---- upgradeability (issue 1809): every proxied core contract is the build's ERC-1967 proxy in the sheet's release mode, governed by the timelock alone
-  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now });
+  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
   for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, emergency: sheet.emergency, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });

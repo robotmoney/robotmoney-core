@@ -4,11 +4,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { keccak256, pad, toHex, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, keccak256, pad, parseAbi, toHex, type Hex } from "viem";
 import { getStageTable } from "../../src/stages.ts";
 import { verifyDeployment } from "../../src/verify/index.ts";
 import { stageManifestFile } from "../../src/verify/constants.ts";
-import { CLAIM_LABEL, DEADLINE_LABEL, ERC1967_ADMIN_SLOT, GOVERNED_PARAMETERS, MODE_LABEL, PROXY_LABELS, UPSTREAM_DEPENDENCIES, layoutId, proxySpecs } from "../../src/verify/upgradeability.ts";
+import { padTopic } from "../../src/verify/logs.ts";
+import { CLAIM_LABEL, CODE_LABEL, DEADLINE_LABEL, ERC1967_ADMIN_SLOT, GOVERNED_PARAMETERS, MODE_LABEL, PROXY_LABELS, UPSTREAM_DEPENDENCIES, layoutId, proxySpecs } from "../../src/verify/upgradeability.ts";
 import { buildWorld, failed, addr, GATEWAY, GOVERNED_UPGRADE_LIB, GOV, IMPLS, IMPL_SLOT, INIT_SLOT, REGISTRY, ROUTER, TIMELOCK, VAULTS, type World } from "./world.ts";
 
 const table = getStageTable();
@@ -32,6 +33,26 @@ function upgradeable(chainId = 8453, deadline?: string): World {
   for (const a of [...Object.values(ADDR), addr(0x1c9), addr(0x4ec)]) w.chain.set(a, "upgradesFrozen", false);
   return w;
 }
+
+const GOVERNED = parseAbi(["function freezeUpgrades(address expectedImplementation, bytes32 expectedCodeHash)", "function upgradeToAndCall(address newImplementation, bytes data)"]);
+const T_FROZEN = keccak256(toHex("UpgradesFrozen(address,address,bytes32)"));
+const T_EXECUTED = keccak256(toHex("CallExecuted(bytes32,uint256,address,uint256,bytes)"));
+const T_SCHEDULED = keccak256(toHex("CallScheduled(bytes32,uint256,address,uint256,bytes,bytes32,uint256)"));
+const txOf = (n: number) => pad(toHex(n), { size: 32 }) as Hex;
+/** The logs of a freeze: the proxy's UpgradesFrozen and, when `byTimelock`, the timelock's CallExecuted of freezeUpgrades on it, in the same transaction. */
+function freezeLogs(w: World, proxy: `0x${string}`, block: bigint, tx: Hex, byTimelock = true): void {
+  w.chain.set(proxy, "upgradesFrozen", true);
+  w.chain.logs.push({ address: proxy, topics: [T_FROZEN, padTopic(proxy), padTopic(addr(0x1111))], data: pad("0x01", { size: 32 }), blockNumber: block, transactionHash: tx });
+  const call = encodeFunctionData({ abi: GOVERNED, functionName: "freezeUpgrades", args: [addr(0x1111), pad("0x01", { size: 32 })] });
+  if (byTimelock) w.chain.logs.push({ address: TIMELOCK, topics: [T_EXECUTED, txOf(0xf0), pad("0x00", { size: 32 })], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }], [proxy, 0n, call]), blockNumber: block, transactionHash: tx });
+}
+/** A freeze (or another call) scheduled on the timelock: CallScheduled, and isOperationPending reads `pending`. */
+function scheduleLog(w: World, target: `0x${string}`, id: Hex, pending = true, data: Hex = encodeFunctionData({ abi: GOVERNED, functionName: "freezeUpgrades", args: [addr(0x1111), pad("0x01", { size: 32 })] })): void {
+  w.chain.logs.push({ address: TIMELOCK, topics: [T_SCHEDULED, id, pad("0x00", { size: 32 })], data: encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "bytes" }, { type: "bytes32" }, { type: "uint256" }], [target, 0n, data, pad("0x00", { size: 32 }), 172800n]), blockNumber: 4000n, transactionHash: txOf(0x5c) });
+  const prev = w.chain.handlers.get(`${TIMELOCK.toLowerCase()}:isOperationPending`);
+  w.chain.set(TIMELOCK, "isOperationPending", (args: unknown[]) => (String(args[0]).toLowerCase() === id.toLowerCase() ? pending : prev ? prev(args) : false));
+}
+const ALL_ADDRS = () => [...Object.values(ADDR), addr(0x1c9), addr(0x4ec)];
 
 describe("the full proxied core set (issue 1809)", () => {
   test("the stage table names the ten proxied core contracts, and a healthy frozen deployment passes every label and claims core immutability", async () => {
@@ -159,11 +180,11 @@ describe("an upgradeable release makes no immutability claim (issue 1809)", () =
   });
   test("a frozen proxy inside an upgradeable release (a governed freeze) passes; once governance froze them all, the claim is made in the same mode", async () => {
     const w = upgradeable(918453);
-    w.chain.set(ROUTER, "upgradesFrozen", true);
+    freezeLogs(w, ROUTER, 4100n, txOf(1));
     const one = await verifyDeployment(w.opts);
     expect(failed(one)).toEqual([]);
     expect(one.upgradeability!.core_immutable).toBe(false);
-    for (const a of [...Object.values(ADDR), addr(0x1c9), addr(0x4ec)]) w.chain.set(a, "upgradesFrozen", true);
+    ALL_ADDRS().forEach((a, i) => { if (a !== ROUTER) freezeLogs(w, a, 4200n, txOf(2 + i)); });
     const all = await verifyDeployment(w.opts);
     expect(failed(all)).toEqual([]);
     expect(all.upgradeability!.core_immutable).toBe(true);
@@ -186,8 +207,119 @@ describe("an upgradeable release makes no immutability claim (issue 1809)", () =
     expect(r.checks.find((c) => c.label === DEADLINE_LABEL)!.detail).toMatch(/^MISSED: .*router/);
     const done = upgradeable(8453, due);
     done.opts.now = at + 1n;
-    for (const a of [...Object.values(ADDR), addr(0x1c9), addr(0x4ec)]) done.chain.set(a, "upgradesFrozen", true);
+    ALL_ADDRS().forEach((a, i) => freezeLogs(done, a, 4200n, txOf(1 + i)));
     expect(failed(await verifyDeployment(done.opts))).toEqual([]);
+  });
+});
+
+// Issue 1842: the deadline label alerts before the deadline (WARN from deadline - (delay + 7 days), ESCALATE from deadline - (delay + 1 day)) while a proxy is unfrozen and
+// no freeze is scheduled for it. Both pass; MISSED after the deadline fails (exit 13). The 8453 production delay is 172800 s.
+describe("the freeze deadline alerts before the deadline (issue 1842)", () => {
+  const due = "2027-01-31T00:00:00Z";
+  const at = BigInt(Date.parse(due) / 1000);
+  const DELAY = 172800n, DAY = 86400n;
+  const detail = async (w: World) => {
+    const r = await verifyDeployment(w.opts);
+    return { failed: failed(r), detail: r.checks.find((c) => c.label === DEADLINE_LABEL)!.detail, ok: r.checks.find((c) => c.label === DEADLINE_LABEL)!.ok };
+  };
+  const world = (now: bigint) => { const w = upgradeable(8453, due); w.opts.now = now; return w; };
+  test("before deadline - (delay + 7 days) the label passes quietly", async () => {
+    const d = await detail(world(at - DELAY - 7n * DAY - 1n));
+    expect(d.failed).toEqual([]);
+    expect(d.detail).toMatch(/^deadline 2027-01-31T00:00:00Z, 10 of 10 proxies still upgradeable$/);
+  });
+  test("WARN at deadline - (delay + 7 days): passes, names every unfrozen proxy and the govern row", async () => {
+    const w = world(at - DELAY - 7n * DAY);
+    freezeLogs(w, ROUTER, 4100n, txOf(1));
+    const d = await detail(w);
+    expect(d.failed).toEqual([]);
+    expect(d.ok).toBe(true);
+    expect(d.detail).toMatch(/^WARN: /);
+    expect(d.detail).toContain("govern --row freeze-upgrades");
+    for (const n of ALL.filter((x) => x !== "router")) expect(d.detail).toContain(n);
+    expect(d.detail).not.toContain("router,");
+  });
+  test("ESCALATE at deadline - (delay + 1 day): passes and names the unfrozen proxies", async () => {
+    const d = await detail(world(at - DELAY - DAY));
+    expect(d.failed).toEqual([]);
+    expect(d.detail).toMatch(/^ESCALATE: .*vault\[rmUSDC\].*router.*gateway/);
+  });
+  test("MISSED after the deadline: fails (exit 13) and names the unfrozen proxies", async () => {
+    const d = await detail(world(at + 1n));
+    expect(d.failed).toEqual([DEADLINE_LABEL]);
+    expect(d.detail).toMatch(/^MISSED: .*vault\[rmUSDC\].*router.*gateway/);
+    const { EXIT_CODES } = await import("../../src/errors.ts");
+    expect(EXIT_CODES.VERIFY).toBe(13);
+  });
+  test("a freeze scheduled (pending) on the timelock for every unfrozen proxy silences the alert; a cancelled or executed one, or another call, does not", async () => {
+    const w = world(at - DELAY - DAY);
+    ALL_ADDRS().forEach((a, i) => scheduleLog(w, a, txOf(0x100 + i)));
+    expect((await detail(w)).detail).toMatch(/a freeze is scheduled on the timelock for each of them$/);
+    const notPending = world(at - DELAY - DAY);
+    ALL_ADDRS().forEach((a, i) => scheduleLog(notPending, a, txOf(0x100 + i), a !== GATEWAY));
+    expect((await detail(notPending)).detail).toMatch(/^ESCALATE: .* is near and gateway still read/);
+    const upgrade = world(at - DELAY - DAY);
+    ALL_ADDRS().forEach((a, i) => scheduleLog(upgrade, a, txOf(0x100 + i), true, a === REGISTRY ? encodeFunctionData({ abi: GOVERNED, functionName: "upgradeToAndCall", args: [addr(0x99), "0x"] }) : undefined));
+    expect((await detail(upgrade)).detail).toMatch(/^ESCALATE: .* is near and registry still read/);
+  });
+});
+
+// Issue 1842: in an upgradeable release a proxy that reads frozen must have been frozen by a timelock-executed freezeUpgrades, never in its initializer; the record keeps
+// the freeze block and transaction.
+describe("an upgradeable release's frozen proxy was frozen by the timelock (issue 1842)", () => {
+  test("a proxy frozen in its initializer (no UpgradesFrozen log after the scan start) fails its freeze label", async () => {
+    const w = upgradeable(918453);
+    w.chain.set(REGISTRY, "upgradesFrozen", true);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([L("registry", 5)]);
+    expect(r.checks.find((c) => c.label === L("registry", 5))!.detail).toContain("frozen in its initializer");
+  });
+  test("a proxy whose UpgradesFrozen log is in a transaction without the timelock's CallExecuted (the deploy transaction) fails", async () => {
+    const w = upgradeable(918453);
+    freezeLogs(w, REGISTRY, 120n, txOf(7), false);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([L("registry", 5)]);
+    expect(r.checks.find((c) => c.label === L("registry", 5))!.detail).toContain("not from a freezeUpgrades the timelock");
+    expect(r.upgradeability!.proxies.registry!.freeze_tx).toBeNull();
+  });
+  test("a proxy frozen by a timelock-executed freezeUpgrades after deployment passes, with freeze_block and freeze_tx recorded", async () => {
+    const w = upgradeable(918453);
+    freezeLogs(w, REGISTRY, 4321n, txOf(9));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    expect(r.upgradeability!.proxies.registry).toMatchObject({ upgrades_frozen: true, freeze_block: "4321", freeze_tx: txOf(9) });
+    expect(r.upgradeability!.proxies.router).toMatchObject({ upgrades_frozen: false, freeze_block: null, freeze_tx: null });
+  });
+});
+
+// Issue 1842: the gateway's runtime hash pins are fail-closed. A missing implementation pin fails, and the proxy pin must equal the live proxy code hash.
+describe("the gateway pins are fail-closed (issue 1842)", () => {
+  const gatewayManifest = (w: World, edit: (m: any) => void) => {
+    const p = join(w.manifestDir, stageManifestFile(table, "gateway"));
+    const m = JSON.parse(readFileSync(p, "utf8"));
+    edit(m);
+    writeFileSync(p, JSON.stringify(m));
+  };
+  test("no gateway_implementation_runtime_hash fails the implementation slot label", async () => {
+    const w = buildWorld();
+    gatewayManifest(w, (m) => delete m.gateway_implementation_runtime_hash);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([L("gateway", 1), CLAIM_LABEL]);
+    expect(r.checks.find((c) => c.label === L("gateway", 1))!.detail).toContain("the manifest has no gateway_implementation_runtime_hash");
+  });
+  test("a gateway_runtime_hash that differs from the live proxy code hash, or none, fails the proxy label", async () => {
+    const w = buildWorld();
+    gatewayManifest(w, (m) => { m.gateway_runtime_hash = keccak256("0x01"); });
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([L("gateway", 0), CLAIM_LABEL]);
+    expect(r.checks.find((c) => c.label === L("gateway", 0))!.detail).toContain("manifest gateway_runtime_hash");
+    const n = buildWorld();
+    gatewayManifest(n, (m) => delete m.gateway_runtime_hash);
+    expect(failed(await verifyDeployment(n.opts))).toEqual([L("gateway", 0), CLAIM_LABEL]);
+  });
+  test("another proxy without a runtime hash pin is not affected (only the gateway is pinned)", async () => {
+    expect(failed(await verifyDeployment(buildWorld().opts))).toEqual([]);
+    void CODE_LABEL;
   });
 });
 

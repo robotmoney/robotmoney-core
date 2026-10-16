@@ -15,6 +15,8 @@ import { GOVERNANCE_APPLY_ABI } from "../src/apply-receipt.ts";
 import { GOVERNANCE_CLEAR_ABI } from "../src/clear-voted-weights.ts";
 import { GATEWAY_REGISTER_ABI } from "../src/committee-register.ts";
 import { REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI } from "../src/redeploy-vault.ts";
+import { GOVERNED_PROXY_ABI } from "../src/upgrade-rows.ts";
+import { ERC1967_IMPLEMENTATION_SLOT } from "../src/verify/codehash.ts";
 import { SHA, sheetText, tmp } from "./fixtures.ts";
 
 export const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -84,6 +86,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     agentRole: new Set<string>(), committee: new Map<string, string>(), agentOwner: new Map<string, string>(), gatewayAdmins: new Set<string>(),
     /** The Safe's owner list and threshold on chain (Safe self-administration rows change them), and the timelock roles as `role:account`. */
     owners: [...sheet.safeOwners] as string[], threshold: BigInt(sheet.safeThreshold), roles: new Set<string>(),
+    /** Issue 1842: the GovernedUUPS proxies (lower-case address to its implementation and freeze flag), the code at an address (else a default), and every call the timelock
+     *  scheduled (the CallScheduled logs the freeze row scans). An executed upgradeToAndCall moves the implementation, an executed freezeUpgrades sets the flag, as the library does. */
+    proxies: new Map<string, { impl: Address; frozen: boolean }>(), codes: new Map<string, Hex>(), scheduledCalls: [] as { id: Hex; target: Address; data: Hex }[],
   };
   const recordedAtOf = (rid: string): bigint => s.recordedAt.get(rid.toLowerCase()) ?? BigInt([...s.recorded].map((x) => x.toLowerCase()).indexOf(rid.toLowerCase()) + 1);
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
@@ -91,7 +96,12 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
   const handle: any = {
     address: A.safe, owners: sheet.safeOwners, threshold: sheet.safeThreshold, chain: { rpcUrl: "x", chainId: 918453 },
     client: {
-      getCode: async () => "0x6001600155",
+      getCode: async ({ address }: { address?: string } = {}) => s.codes.get(String(address).toLowerCase()) ?? "0x6001600155",
+      getStorageAt: async ({ address, slot }: { address: string; slot: string }) => {
+        const p = s.proxies.get(address.toLowerCase());
+        return slot.toLowerCase() === ERC1967_IMPLEMENTATION_SLOT && p ? (`0x${"0".repeat(24)}${p.impl.slice(2).toLowerCase()}` as Hex) : (`0x${"0".repeat(64)}` as Hex);
+      },
+      getBlockNumber: async () => s.clock,
       getBlock: async (a?: { blockNumber?: bigint }) => ({ timestamp: a?.blockNumber ?? s.clock }),
       getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success" }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
@@ -126,6 +136,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "getOwners": return s.owners;
           case "getThreshold": return s.threshold;
           case "isReleased": return s.released.has(String(args?.[0]).toLowerCase());
+          case "upgradesFrozen": { const p = s.proxies.get(address.toLowerCase()); if (!p) throw new Error(`fake: ${address} is not a proxy`); return p.frozen; }
         }
         throw new Error(`fake: ${functionName}`);
       },
@@ -147,6 +158,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
       s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor });
       s.ids.set(rowOf(p.description), id);
+      for (const c of p.calls) s.scheduledCalls.push({ id, target: c.target as Address, data: c.data as Hex });
       return { ...bundle("schedule", id), predecessor: p.predecessor };
     }) as never,
     executeOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: Hex }[] }) => {
@@ -175,13 +187,26 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       else if (b.action === "schedule") s.ops.set(id, { exists: true, pending: true, done: false, readyAt: s.clock + s.minDelay });
       else if (b.action === "cancel") s.ops.delete(id);
       else if (b.action === "execute") {
-        const snap = { listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops), lastAppliedRecordedAt: s.lastAppliedRecordedAt };
+        const snap = { proxies: new Map([...s.proxies].map(([k, v]) => [k, { ...v }])), listed: [...s.listed], ineligible: new Set(s.ineligible), weights: { vaults: [...s.weights.vaults], bps: [...s.weights.bps] }, statuses: new Map(s.statuses), retiredFlag: new Set(s.retiredFlag), paused: new Set(s.paused), vaultCaps: new Map(s.vaultCaps), released: new Set(s.released), voted: s.voted, ops: new Map(s.ops), lastAppliedRecordedAt: s.lastAppliedRecordedAt };
         try {
         // a TimelockController refuses an operation whose predecessor is not done
         if (b.predecessor && !s.ops.get(b.predecessor)?.done) throw new Error("TimelockController: missing dependency");
         s.ops.set(id, { exists: true, pending: false, done: true, readyAt: 1n });
         for (const c of (b.calls ?? []) as { target: string; data: Hex }[]) {
           if (s.failOn?.(c)) throw new Error("injected revert");
+          const px = s.proxies.get(c.target.toLowerCase());
+          if (px) {
+            // GovernedUpgrade: timelock only (the fake timelock is the caller), never once frozen; a freeze is bound to the live implementation and its code hash
+            const d = decodeFunctionData({ abi: GOVERNED_PROXY_ABI, data: c.data });
+            if (px.frozen) throw new Error("UpgradesAreFrozen()");
+            if (d.functionName === "upgradeToAndCall") px.impl = d.args[0] as Address;
+            else if (d.functionName === "freezeUpgrades") {
+              const code = s.codes.get(px.impl.toLowerCase()) ?? "0x6001600155";
+              if (String(d.args[0]).toLowerCase() !== px.impl.toLowerCase() || String(d.args[1]).toLowerCase() !== keccak256(code as Hex).toLowerCase()) throw new Error("FreezeTargetMismatch");
+              px.frozen = true;
+            }
+            continue;
+          }
           if (c.target === A.governance) {
             if (c.data === encodeFunctionData({ abi: GOVERNANCE_CLEAR_ABI, functionName: "clearVotedWeights" })) { s.voted = undefined; continue; }
             // RouterGovernance.applyReceipt (issue 1698): the contract's own checks, then release and the active vector in one call
@@ -257,6 +282,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     }) as never,
     proposeTx: (async (_h: unknown, o: { to: string; data: Hex; action?: string }) => { s.events.push(`propose:${o.action}`); return { ...bundle(o.action ?? "call", keccak256(o.data)), to: o.to, data: o.data }; }) as never,
     verifyTimelockEffect: (async () => ({ ok: true, detail: "", state: {} })) as never,
+    scheduledCalls: (async () => [...s.scheduledCalls]) as never,
   };
   return { s, api, handle };
 }
