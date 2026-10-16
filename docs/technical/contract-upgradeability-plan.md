@@ -146,9 +146,15 @@ Implemented by issue 1809. The operator procedure is
   2 deployer transactions per proxy. The counts do not depend on the mode.
 - **Timelock pin (issue 1835).** The first proxy stage records the predicted
   timelock address and its init code hash, derived from the build, in the run
-  manifest. Every proxy manifest must name that address, and the timelock stage
-  refuses to run when its recomputed prediction differs (a toolchain change
-  moves the CBOR metadata and so the address). A timelock someone already
+  manifest. Every proxy manifest must name that address. Every later proxy
+  stage and the timelock stage recompute the prediction after their simulation
+  and refuse before they broadcast when it differs (issue 1853: a toolchain
+  change moves the CBOR metadata and so the address, and so does another Safe
+  or delay). A run manifest from an earlier release without the pin is
+  backfilled only when the first proxy stage's manifest, its proxy's
+  `upgradeTimelock()` on chain and the recomputed prediction agree. CI checks
+  that the TypeScript prediction equals `UpgradeAuthority.predictTimelock`
+  for the same build. A timelock someone already
   deployed at the prediction with the build's runtime code is adopted: the
   stage sends one transaction fewer and records the adoption.
 - **Verify.** Per proxied core contract the verifier proves the build's
