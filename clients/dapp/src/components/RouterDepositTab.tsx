@@ -294,7 +294,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const onDeposit = () => {
     if (!depositSim || !canSimDeposit) return;
     if (!sameAddress(depositSim.request.address)) return;
-    // The router's entry floor is 1.7M per effective-weight leg (QA plan U3). `previewDeposit` returns
+    // The router's entry floor is 2.4M per effective-weight leg (QA plan U3). `previewDeposit` returns
     // one leg per entry of that vector, and submit requires it to match `getEffectiveWeights()`.
     const legCount = Math.max(legs.length, currentActiveVaults?.length ?? 0);
     depositWrite.writeContract(withGasLimit(depositSim.request, routerDepositGasLimit(legCount)));

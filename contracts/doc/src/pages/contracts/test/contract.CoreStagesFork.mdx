@@ -86,7 +86,7 @@ function test_fork_routerDepositAndWithdraw_throughSplitStageGateway() public;
 <i>
 
 Four-leg router like the live one: the real vault plus three mock vaults. The router
-floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 1,700,000 = 6,800,000.
+floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 2,400,000 = 9,600,000.
 
 </i>
 
@@ -94,20 +94,20 @@ floor is legs * DEPOSIT_GAS_PER_LEG = 4 * 1,700,000 = 6,800,000.
 function _fourLegRouter() internal;
 ```
 
-<a id="test_fork_routerdeposit_below6p8m_revertsinsufficientgaswiththefloor"></a>
+<a id="test_fork_routerdeposit_below9p6m_revertsinsufficientgaswiththefloor"></a>
 
-### test_fork_routerDeposit_below6p8M_revertsInsufficientGasWithTheFloor
+### test_fork_routerDeposit_below9p6M_revertsInsufficientGasWithTheFloor
 
 ```solidity
-function test_fork_routerDeposit_below6p8M_revertsInsufficientGasWithTheFloor() public;
+function test_fork_routerDeposit_below9p6M_revertsInsufficientGasWithTheFloor() public;
 ```
 
-<a id="test_fork_routerdeposit_at8m_succeeds"></a>
+<a id="test_fork_routerdeposit_at10p8m_succeeds"></a>
 
-### test_fork_routerDeposit_at8M_succeeds
+### test_fork_routerDeposit_at10p8M_succeeds
 
 ```solidity
-function test_fork_routerDeposit_at8M_succeeds() public;
+function test_fork_routerDeposit_at10p8M_succeeds() public;
 ```
 
 <a id="test_fork_vaultdeposit_below1p6m_revertsinsufficientgaswiththefloor"></a>

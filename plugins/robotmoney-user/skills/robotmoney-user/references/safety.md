@@ -107,7 +107,7 @@ manager (pending-tx queue, replacement, gap recovery) is v1 work.
 
 | Condition | Error code | Meaning |
 |---|---|---|
-| `--gas-limit` below the gateway entry floor for the deposit | `ErrGasLimitBelowFloor` | The gateway checks `gasleft()` at entry: 2,000,000 for a vault deposit, 400,000 + 1,850,000 per `getEffectiveWeights()` leg for a router deposit. Below it the deposit reverts `InsufficientGas` and burns the gas, so the client refuses before signing. Omit `--gas-limit` to use the derived default. |
+| `--gas-limit` below the gateway entry floor for the deposit | `ErrGasLimitBelowFloor` | The gateway checks `gasleft()` at entry: 2,000,000 for a vault deposit, 400,000 + 2,550,000 per `getEffectiveWeights()` leg for a router deposit. Below it the deposit reverts `InsufficientGas` and burns the gas, so the client refuses before signing. Omit `--gas-limit` to use the derived default. |
 
 ## Fee cap refusal (implementation-plan §4.7)
 

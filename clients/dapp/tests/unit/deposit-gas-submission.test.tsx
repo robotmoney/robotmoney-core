@@ -133,9 +133,9 @@ describe("deposit gas on wallet submission", () => {
     assertSubmission(ROUTER, routerAbi, [1_000_000n, [995_000n]], routerDepositGasFloor(1));
   });
 
-  // QA plan U3: the router floor is 1.7M per effective-weight leg, so a fifth leg needs 8.5M. The old
-  // fixed 8M constant reverted InsufficientGas there; the limit now follows the leg count.
-  it("RouterDepositTab sends a five-leg router deposit with at least the 8.5M five-leg floor", () => {
+  // QA plan U3: the router floor is 2.4M per effective-weight leg, so a fifth leg needs 12M. A fixed
+  // 4-leg constant reverts InsufficientGas there; the limit follows the leg count.
+  it("RouterDepositTab sends a five-leg router deposit with at least the 12M five-leg floor", () => {
     routerLegVaults = [1, 2, 3, 4, 5].map(
       (i) => `0x${i.toString(16).padStart(2, "0").repeat(20)}` as Address,
     );
@@ -144,10 +144,10 @@ describe("deposit gas on wallet submission", () => {
     const submit = screen.getByTestId("router-deposit-tab-submit");
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
-    assertSubmission(ROUTER, routerAbi, [1_000_000n, Array(5).fill(199_000n)], 8_500_000n);
+    assertSubmission(ROUTER, routerAbi, [1_000_000n, Array(5).fill(199_000n)], 12_000_000n);
     const [request] = writeContract.mock.calls[0];
-    expect(request.gas).toBeGreaterThan(8_000_000n);
-    expect(routerDepositGasFloor(5)).toBe(8_500_000n);
+    expect(request.gas).toBeGreaterThan(10_800_000n);
+    expect(routerDepositGasFloor(5)).toBe(12_000_000n);
   });
 
   it("VaultSelectorDepositTab submits the selected vault deposit with at least 1.6M gas", () => {

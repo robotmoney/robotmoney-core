@@ -32,7 +32,7 @@
 //! - `deposit_router_default_gas_clears_gateway_floor` — QA plan U3: the
 //!   shipping `rmpc deposit --destination <router>` against a gateway wired
 //!   to a five-leg router. A `--gas-limit` under the gateway floor
-//!   (400_000 + 1_850_000 per leg) is refused before signing, and the
+//!   (400_000 + 2_550_000 per leg) is refused before signing, and the
 //!   derived default lands the deposit on a real EVM.
 //!
 //! Each test boots its own anvil fork backend (per ADR §3.5), providing
@@ -1018,7 +1018,7 @@ fn agent_gateway_router_deposit() {
 /// Gateway `ROUTER_DEPOSIT_BASE_GAS` and `ROUTER_DEPOSIT_GAS_PER_LEG`
 /// (contracts/gateway/RobotMoneyGateway.sol).
 const ROUTER_DEPOSIT_BASE_GAS: u64 = 400_000;
-const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 1_850_000;
+const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 2_550_000;
 /// The passphrase of the throwaway agent keystore.
 const RMPC_PASSPHRASE: &str = "fork-e2e-router-gas";
 /// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
@@ -1154,9 +1154,9 @@ fn rmpc_router_deposit(
 /// deposit_router_default_gas_clears_gateway_floor — QA plan U3 (DR-3).
 ///
 /// The gateway checks `gasleft()` at the entry of a router `depositTo`
-/// against 400_000 + 1_850_000 per `getEffectiveWeights()` leg. rmpc used to
+/// against 400_000 + 2_550_000 per `getEffectiveWeights()` leg. rmpc used to
 /// send a fixed 3_000_000, which reverts `InsufficientGas` from two legs up
-/// and burns the gas and the nonce. Five legs need 9_650_000, above the
+/// and burns the gas and the nonce. Five legs need 13_150_000, above the
 /// dapp's old 8_000_000 router constant too.
 ///
 /// Stack: the fixture's own rmUSDC as the gateway's vault (rmpc's preflight
@@ -1182,7 +1182,7 @@ fn deposit_router_default_gas_clears_gateway_floor() {
 
     const LEGS: usize = 5;
     let floor = ROUTER_DEPOSIT_BASE_GAS + LEGS as u64 * ROUTER_DEPOSIT_GAS_PER_LEG;
-    assert_eq!(floor, 9_650_000);
+    assert_eq!(floor, 13_150_000);
 
     let usdc = rmpc_fork_e2e::addresses::USDC;
     let one_eth = U256::from(10u64).pow(U256::from(18u64));

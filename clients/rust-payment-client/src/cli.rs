@@ -64,7 +64,7 @@ pub enum Command {
         /// Moonwell Flagship USDC (Morpho) vault whose `convertToAssets`
         /// iterates its multi-market supply queue; on a real-adapter vault
         /// this path costs ~1.55M gas (issue #912). Router path
-        /// (`--destination <router>`): 400_000 + 1_850_000 per
+        /// (`--destination <router>`): 400_000 + 2_550_000 per
         /// `getEffectiveWeights()` leg plus a 150_000 margin, read from the
         /// router before signing. A value below the floor is refused with
         /// `ErrGasLimitBelowFloor` before signing: the gateway would revert

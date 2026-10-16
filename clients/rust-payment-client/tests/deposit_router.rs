@@ -11,7 +11,7 @@
 //!
 //! QA plan U3: the router path reads `gateway.router()` and
 //! `router.getEffectiveWeights()` to size the gas limit from the gateway's
-//! entry floor (400_000 + 1_850_000 per leg). The gas tests decode the
+//! entry floor (400_000 + 2_550_000 per leg). The gas tests decode the
 //! broadcast envelope and check the refusal of a `--gas-limit` below the
 //! floor. The real-EVM twin is `deposit_router_default_gas_clears_gateway_floor`
 //! in `testing/fork-e2e-rust/tests/router.rs`.
@@ -402,7 +402,7 @@ async fn deposit_router_happy_path_exits_zero_with_payment_id() {
 
 /// QA plan U3: with no `--gas-limit` the router deposit is signed with the
 /// gateway floor for the router's effective leg count plus the margin. Five
-/// legs: 400_000 + 5 * 1_850_000 = 9_650_000, sent as 9_800_000. The old
+/// legs: 400_000 + 5 * 2_550_000 = 13_150_000, sent as 13_300_000. The old
 /// fixed 3_000_000 default would revert `InsufficientGas` on chain.
 #[tokio::test]
 async fn deposit_router_default_gas_derives_from_effective_leg_count() {
@@ -428,7 +428,7 @@ async fn deposit_router_default_gas_derives_from_effective_leg_count() {
 
     let raw = sent.lock().unwrap().first().cloned().expect("tx broadcast");
     let gas = envelope_gas_limit(&raw);
-    assert_eq!(router_deposit_gas_floor(legs), 9_650_000);
+    assert_eq!(router_deposit_gas_floor(legs), 13_150_000);
     assert_eq!(gas, DepositGas::router(legs).default_limit);
     assert!(
         gas > router_deposit_gas_floor(legs),
@@ -437,7 +437,7 @@ async fn deposit_router_default_gas_derives_from_effective_leg_count() {
 }
 
 /// QA plan U3: a `--gas-limit` under the gateway floor is refused before
-/// anything is signed. Four legs need 7_800_000; the old 3_000_000 default
+/// anything is signed. Four legs need 10_600_000; the old 3_000_000 default
 /// is refused with `ErrGasLimitBelowFloor`, exit 2, and no broadcast.
 #[tokio::test]
 async fn deposit_router_refuses_gas_limit_below_gateway_floor() {
@@ -472,7 +472,7 @@ async fn deposit_router_refuses_gas_limit_below_gateway_floor() {
     assert_eq!(v["status"], "refused");
     assert_eq!(v["error"], "ErrGasLimitBelowFloor");
     let message = v["message"].as_str().expect("message");
-    assert!(message.contains("7800000"), "{message}");
+    assert!(message.contains("10600000"), "{message}");
     broadcast.assert_async().await;
 }
 

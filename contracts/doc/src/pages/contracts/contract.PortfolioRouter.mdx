@@ -120,12 +120,19 @@ Gas `_depositTo` needs per weighted leg, checked once at entry (core 1482). Same
 reasoning as `REDEEM_GAS_PER_LEG`: each leg must hand `vault.deposit` its
 1_600_000 entry floor after the 63/64 forward, and a per-leg check in the vault
 would run after earlier legs spent accrual-dependent gas. Legs that end up skipped
-still count, so the floor is an upper bound. See docs/technical/redeem-gas-1482.md.
+still count, so the floor is an upper bound. The availability pass runs first (QA
+plan D4, security round 3): it reads every leg's `maxDeposit` (a venue-withdrawal
+check on each lending adapter, about 350_000 gas for the first cold read of rmUSDC)
+and `previewDeposit` before any vault is called, about 700_000 gas for one rmUSDC
+leg. At 1_700_000 the vault's own entry floor, not this one, bound the estimate for
+a one- or two-leg router, and it moved by about 22_000 gas between the estimate
+block and the next block, so a limit equal to the estimate failed at inclusion. At
+2_400_000 this floor binds again. See docs/technical/redeem-gas-1482.md.
 
 </i>
 
 ```solidity
-uint256 internal constant DEPOSIT_GAS_PER_LEG = 1_700_000;
+uint256 internal constant DEPOSIT_GAS_PER_LEG = 2_400_000;
 ```
 
 ## State Variables

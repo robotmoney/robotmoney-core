@@ -7,10 +7,12 @@
  * sit above the floors with headroom. They match the harness limits that succeeded on Base.
  *
  * - Vault `deposit`: floor 1,600,000 (`DEPOSIT_ENTRY_GAS_FLOOR`), limit 2,500,000.
- * - Router `deposit`: floor `legs * 1,700,000` (`DEPOSIT_GAS_PER_LEG`), where `legs` is the length of
- *   the router's effective weight vector. Limit `legs * 1,700,000 + 1,200,000`: 8,000,000 for the
- *   4-leg router (`InsufficientGas(5948330, 6800000)` at a 6,000,000 limit). The limit follows the
- *   leg count (QA plan U3): a fixed 8,000,000 is below the 8,500,000 floor of a fifth leg.
+ * - Router `deposit`: floor `legs * 2,400,000` (`DEPOSIT_GAS_PER_LEG`), where `legs` is the length of
+ *   the router's effective weight vector. Limit `legs * 2,400,000 + 1,200,000`: 10,800,000 for the
+ *   4-leg router. The limit follows the leg count (QA plan U3): a fixed limit is below the floor of
+ *   a further leg. The per-leg floor rose from 1,700,000 when the availability pass (QA plan D4)
+ *   began to run before any vault, so that the floor, not the vault's own entry floor, is the
+ *   threshold an estimate lands on.
  *
  * Unused gas is refunded, so a high limit costs nothing extra. It only raises the balance a wallet
  * needs for the maximum fee.
@@ -18,7 +20,7 @@
 export const VAULT_DEPOSIT_GAS_FLOOR = 1_600_000n;
 export const VAULT_DEPOSIT_GAS_LIMIT = 2_500_000n;
 /** `PortfolioRouter.DEPOSIT_GAS_PER_LEG`: the router's entry floor per effective-weight leg. */
-export const ROUTER_DEPOSIT_GAS_PER_LEG = 1_700_000n;
+export const ROUTER_DEPOSIT_GAS_PER_LEG = 2_400_000n;
 /** Headroom above the router floor for intrinsic gas and the code before the entry check. */
 export const ROUTER_DEPOSIT_GAS_HEADROOM = 1_200_000n;
 

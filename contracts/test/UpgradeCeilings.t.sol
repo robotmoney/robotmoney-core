@@ -135,7 +135,7 @@ contract UpgradeCeilingsTest is Test {
         assertGe(g.depositGasFloor(), 2_000_000, "gateway DEPOSIT_GAS_FLOOR lowered");
         assertGe(g.routerDepositBaseGas(), 400_000, "gateway ROUTER_DEPOSIT_BASE_GAS lowered");
         assertGe(
-            g.routerDepositGasPerLeg(), 1_850_000, "gateway ROUTER_DEPOSIT_GAS_PER_LEG lowered"
+            g.routerDepositGasPerLeg(), 2_550_000, "gateway ROUTER_DEPOSIT_GAS_PER_LEG lowered"
         );
     }
 

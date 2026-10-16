@@ -64,8 +64,8 @@ Optional flags:
 - `--gas-limit <N>` — gas limit for the deposit envelope. Omit it: the
   client derives it from the gateway's entry floor. Vault path: 3_000_000
   (floor 2_000_000). Router path (`--destination <router>`): 400_000 +
-  1_850_000 per `getEffectiveWeights()` leg plus 150_000, read from the
-  router before signing (7_950_000 for a 4-leg router). A value below the
+  2_550_000 per `getEffectiveWeights()` leg plus 150_000, read from the
+  router before signing (10_750_000 for a 4-leg router). A value below the
   floor is refused with `ErrGasLimitBelowFloor` before anything is signed,
   because the gateway would revert `InsufficientGas` and burn the gas.
 - `--destination <0x...>` — route the deposit through the PortfolioRouter at

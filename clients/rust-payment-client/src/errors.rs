@@ -98,7 +98,7 @@ pub enum RmpcError {
     ErrAgentDepositLogMissing { tx_hash: String },
 
     /// `--gas-limit` is below the gateway's entry floor for this deposit
-    /// (2_000_000 for the vault path, 400_000 + 1_850_000 per effective
+    /// (2_000_000 for the vault path, 400_000 + 2_550_000 per effective
     /// router leg for `--destination <router>`). The gateway checks
     /// `gasleft()` against that floor at entry and reverts
     /// `InsufficientGas`, which burns the gas and the nonce, so the client
@@ -335,7 +335,7 @@ mod tests {
             },
             RmpcError::ErrGasLimitBelowFloor {
                 gas_limit: 3_000_000,
-                floor: 7_800_000,
+                floor: 10_600_000,
             },
             RmpcError::ErrWithdrawCapExceeded("maxWithdrawPerPayment".into()),
             RmpcError::ErrDepositCapExceeded("maxPerPayment".into()),

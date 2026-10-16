@@ -14,7 +14,7 @@
 //!    exits non-zero with a named-error JSON body — symmetric with
 //!    `self-check` so operators can correlate.
 //! 3. The gas limit, from the gateway's entry floor (QA plan U3): a router
-//!    deposit needs 400_000 + 1_850_000 per `getEffectiveWeights()` leg, so
+//!    deposit needs 400_000 + 2_550_000 per `getEffectiveWeights()` leg, so
 //!    the default is read from the router, and a `--gas-limit` below the
 //!    floor is refused (`ErrGasLimitBelowFloor`) before anything is signed.
 //! 4. The router path's per-leg floors (security round 3). rmpc reads
@@ -263,7 +263,7 @@ pub fn run(args: Args) -> i32 {
 
     // -- Gas limit from the gateway entry floor (QA plan U3) -------------
     // The gateway checks `gasleft()` at entry: 2_000_000 for the vault
-    // path, 400_000 + 1_850_000 per effective-weight leg for the router.
+    // path, 400_000 + 2_550_000 per effective-weight leg for the router.
     // A fixed default (the old 3_000_000) reverts `InsufficientGas` on any
     // router with two or more legs and burns the gas and the nonce.
     let gas = match session
@@ -526,7 +526,7 @@ pub const ROUTER_DEPOSIT_BASE_GAS: u64 = 400_000;
 /// Router-destination `depositTo` floor per effective-weight leg
 /// (`ROUTER_DEPOSIT_GAS_PER_LEG`). Zero-weight legs count: the gateway
 /// multiplies by `getEffectiveWeights().length`.
-pub const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 1_850_000;
+pub const ROUTER_DEPOSIT_GAS_PER_LEG: u64 = 2_550_000;
 
 /// Gateway entry floor for a router-destination `depositTo` over `legs`
 /// effective-weight legs.
@@ -827,9 +827,9 @@ mod tests {
     #[test]
     fn router_floor_matches_the_gateway_constants() {
         // RobotMoneyGateway.sol: ROUTER_DEPOSIT_BASE_GAS + legs * ROUTER_DEPOSIT_GAS_PER_LEG.
-        assert_eq!(router_deposit_gas_floor(1), 2_250_000);
-        assert_eq!(router_deposit_gas_floor(4), 7_800_000);
-        assert_eq!(router_deposit_gas_floor(5), 9_650_000);
+        assert_eq!(router_deposit_gas_floor(1), 2_950_000);
+        assert_eq!(router_deposit_gas_floor(4), 10_600_000);
+        assert_eq!(router_deposit_gas_floor(5), 13_150_000);
     }
 
     #[test]
@@ -860,8 +860,8 @@ mod tests {
         let g = DepositGas::router(4);
         let err = g.resolve(Some(3_000_000)).unwrap_err();
         assert_eq!(err.name(), "ErrGasLimitBelowFloor");
-        assert!(format!("{err}").contains("7800000"), "{err}");
-        assert_eq!(g.resolve(Some(7_800_000)).unwrap(), 7_800_000);
+        assert!(format!("{err}").contains("10600000"), "{err}");
+        assert_eq!(g.resolve(Some(10_600_000)).unwrap(), 10_600_000);
         assert_eq!(g.resolve(Some(12_000_000)).unwrap(), 12_000_000);
         let v = DepositGas::vault();
         assert_eq!(
