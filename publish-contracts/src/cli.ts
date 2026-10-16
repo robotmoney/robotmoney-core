@@ -425,8 +425,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
+    // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
     const stageTable = loadStageTable(coreDir);
-    assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL));
+    try { assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL)); } catch (e) {
+      if (a.verb !== "pause-all" || !isPublishError(e, "INPUT_MISSING")) throw e;
+      log.log("warn", "vault_rules.mismatch", { ...(e.details ?? {}), message: `${e.message}. pause-all reads no per-vault rule, so it runs anyway` });
+    }
     useStageTable(stageTable);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
@@ -571,7 +575,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         verify: async (c, row, m) => {
           try { await runVerifyStage(c, row, m, { ...realVerifyDeps, ...(deps.verify ?? {}) }); } catch (e) {
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused.
-            if (!isPublishError(e, "GOVERN_PENDING")) postflight = "verify";
+            // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
+            if (!isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED")) postflight = "verify";
             throw e;
           }
         },
