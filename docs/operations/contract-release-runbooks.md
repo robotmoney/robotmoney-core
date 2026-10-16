@@ -103,7 +103,11 @@ This section covers two different tags. Do not confuse them.
     own conclusion in `counts.json` (`rehearsal.conclusion`), and `freeze-counts.ts` refuses any file whose
     conclusion is not `success` (core #1602). `core-stages-twin-chain` is deliberately not in
     `scripts/ci/required-checks.json`: it reads a public upstream that can rate limit, and a required entry would
-    block every DEPLOY_SHA on a provider outage. Freezing needs a green run, and `check-sha-green` still gates the plan.
+    block every DEPLOY_SHA on a provider outage. It is gated indirectly: freezing needs a green run, and `check-sha-green` still gates the plan.
+    `core-stages-twin-upgrade-lifecycle` reads the same upstream, yet it IS in the required list and gates every DEPLOY_SHA
+    directly through `check-sha-green` (issue 1846). Every core stage deploys a governed proxy and the freeze is irreversible,
+    so the Twin rehearsal of the upgrade and the freeze is never skipped. On an upstream outage, re-run the failed job:
+    `check-sha-green` lists check-runs with `filter=latest`, so a successful re-run supersedes the failed attempt.
   - **Required list source.** `check-sha-green` runs from the tagged SHA's own checkout, so it reads that SHA's
     `scripts/ci/required-checks.json`. Review that file's diff since the last release before tagging.
   - **Later 8453 stages (decision, core #1602).** Only the `plan` stage checks the tag and green CI. Later stages check the
@@ -177,14 +181,15 @@ Before any deployment activity, verify all of the following:
    decision, and the tracking issue links it. Freeze removes recovery by
    upgrade, so this gate is never waived for a final release. A Base mainnet
    rehearsal or contained test does not need it.
-4. **Twin rehearsal of the governed proxy lifecycle.** For a release that
-   deploys governed proxies, the CI job `core-stages-twin-upgrade-lifecycle` is
-   green at the release SHA: it deploys the exact release artifacts upgradeable,
+4. **Twin rehearsal of the governed proxy lifecycle.** The CI job
+   `core-stages-twin-upgrade-lifecycle` gates every `DEPLOY_SHA` (it is in
+   `scripts/ci/required-checks.json`, section 3), because every core stage
+   deploys a governed proxy. It is green at the release SHA: it deploys the exact release artifacts upgradeable,
    upgrades through the real Safe and timelock, freezes, and shows a queued
    upgrade is refused after the freeze, with the evidence check passing (4.12).
 
 Do not begin preflight, rehearsal, or any other deployment step while any
-of the above is incomplete.
+item above that applies to this deployment is incomplete.
 
 ### 4.2. Preflight
 
@@ -668,7 +673,7 @@ Verify writes `deployments/<chain>/upgradeability.json` on every run, pass or fa
 
 After a miss the deployment stays reported as upgradeable everywhere until every proxy verifies frozen: `core_immutable` stays false, the explorer reports `upgrade_state` `upgradeable`, and the dapp shows the gateway as upgradeable. Never describe the release as immutable before that.
 
-**Twin rehearsal of the lifecycle (issue 1811).** Before a proxied release, the CI job `core-stages-twin-upgrade-lifecycle` (suite 28, in the deploy-gate list) rehearses the whole lifecycle with the exact release artifacts of the SHA on the Twin chain. It publishes with the committed Twin sheet plus the overlay `deployments/twin-918453/upgrade-rehearsal.env` (`UPGRADE_MODE=upgradeable`). Then `publish-contracts/src/ci/twin-upgrade-lifecycle.ts` runs these steps through the real Safe (two owners sign, the deployer pays gas) and the real timelock, with the delay passed by a Twin time warp:
+**Twin rehearsal of the lifecycle (issue 1811).** At every `DEPLOY_SHA`, the CI job `core-stages-twin-upgrade-lifecycle` (suite 28, in the deploy-gate list) rehearses the whole lifecycle with the exact release artifacts of the SHA on the Twin chain. It publishes with the committed Twin sheet plus the overlay `deployments/twin-918453/upgrade-rehearsal.env` (`UPGRADE_MODE=upgradeable`). The overlay names no deadline: `twin-publish` sets `UPGRADE_FREEZE_DEADLINE` to the pin block timestamp plus 365 days (issue 1846). Then `publish-contracts/src/ci/twin-upgrade-lifecycle.ts` runs these steps through the real Safe (two owners sign, the deployer pays gas) and the real timelock, with the delay passed by a Twin time warp:
 
 1. Record the deployment: every proxy upgradeable, no immutability claim.
 2. Deploy a second copy of the gateway implementation from the build. Schedule and execute `upgradeToAndCall(newImplementation, "")` on the gateway proxy. Re-record the gateway manifest's implementation pin and run verify.
@@ -687,6 +692,8 @@ The record `upgrade-lifecycle.json` is checked by `bun publish-contracts/src/evi
 4. **Execute.** On 8453 the run exits `GOVERN_PENDING`. After the delay the same command executes it through the Safe and reads the implementation slot back.
 5. **Re-record.** The same run then rewrites the proxy's stage manifest: the implementation field and, for the gateway, `gateway_implementation_runtime_hash` and `gateway_runtime_hash` from the chain. It records the operation and both transactions in the run manifest (`proxy_upgrades`).
 6. **Verify.** Run `verify`: it re-records `upgradeability.json`. Copy it into the evidence.
+
+**Ownership of the implementation deploy and the re-record.** Deploying the new implementation with its library links (step 2) and re-recording the stage manifest, the gateway implementation pin and the gateway runtime hashes after a governed upgrade (step 5) are owned by the operator tooling follow-up (1842). Its `govern --row upgrade-proxy` executes the re-record. It ships no command for the implementation deploy with library linking: until one lands, the only executed path for that step is the Twin harness (`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`), which fills the link placeholders from the live implementation and sends a raw `cast send --create`.
 
 **After a governed upgrade.** Until the manifest is re-recorded from the chain (step 5 above; the Twin rehearsal re-records in its own harness), `implementation slot equals the manifest` fails: the implementation slot of the upgraded proxy no longer equals its manifest. Then run verify, and copy the new `upgradeability.json` into the evidence. An upgrade to a build other than the DEPLOY_SHA's also needs that build's `out/` for `runtime code equals build artifact (masked)`: verify compares every contract with one build directory. Every signing client's implementation pin is updated from the new gateway manifest: the `rmpc` TOML, the dapp build env and the headless agent config. Until then the clients refuse to sign, which is the intended fail-closed behavior.
 
@@ -731,8 +738,8 @@ corresponding gate was actually executed and passed.
 
 For a final Base mainnet release the preflight checklist always contains the
 item "External security review completed for the release SHA, report recorded
-in `docs/audits.md`" (§4.1, item 3). A release with governed proxies also
-carries "`core-stages-twin-upgrade-lifecycle` green at the release SHA"
+in `docs/audits.md`" (§4.1, item 3). Every release also carries
+"`core-stages-twin-upgrade-lifecycle` green at the release SHA"
 (§4.1, item 4).
 
 ## 7. Backporting

@@ -107,3 +107,36 @@ describe("the operator rows and the deadline alert states (issue 1842)", () => {
     expect(plan).toContain("publish passes the sheet's `UPGRADE_MODE`");
   });
 });
+
+// Issue 1846 docs drift check: one required-check policy for the lifecycle job (the runbook and scripts/ci/required-checks.json agree), the 4.1 closing sentence scoped to the
+// items that apply, and 4.12 naming who owns the implementation deploy with library linking and the manifest re-record.
+describe("the lifecycle job's required-check policy and the 4.1 and 4.12 wording (issue 1846)", () => {
+  const gate = RUNBOOK.slice(RUNBOOK.indexOf("### 4.1. Code-readiness gate"), RUNBOOK.indexOf("### 4.2."));
+  const item4 = gate.slice(gate.indexOf("4. **Twin rehearsal of the governed proxy lifecycle.**"), gate.indexOf("Do not begin preflight"));
+  const greenOnly = (() => {
+    const start = RUNBOOK.indexOf("  - **Green rehearsal only.**");
+    const end = RUNBOOK.indexOf("\n  - **", start + 1);
+    if (start < 0 || end < 0) throw new Error("the runbook has no Green rehearsal only bullet");
+    return RUNBOOK.slice(start, end);
+  })();
+  test("4.1 item 4 gates every DEPLOY_SHA with the lifecycle job, as the required list does", () => {
+    expect(item4.length).toBeGreaterThan(0);
+    expect(item4).not.toContain("For a release that deploys governed proxies");
+    expect(item4).toContain("`core-stages-twin-upgrade-lifecycle` gates every `DEPLOY_SHA`");
+    const required = JSON.parse(readFileSync(join(REPO, "scripts", "ci", "required-checks.json"), "utf8")).required.map((r: { name: string }) => r.name);
+    expect(required).toContain("core-stages-twin-upgrade-lifecycle");
+    expect(required).not.toContain("core-stages-twin-chain");
+  });
+  test("the Green rehearsal only bullet names both Twin jobs and the re-run recovery", () => {
+    for (const s of ["`core-stages-twin-chain`", "`core-stages-twin-upgrade-lifecycle`", "gated indirectly", "directly through `check-sha-green`", "re-run the failed job", "`filter=latest`"]) expect(greenOnly, s).toContain(s);
+  });
+  test("the 4.1 closing sentence applies only the items that apply to this deployment", () => {
+    expect(gate).toContain("that applies to this deployment");
+    expect(gate).not.toContain("while any of the above is incomplete");
+  });
+  test("4.12 assigns the implementation deploy with library linking and the manifest re-record to the operator tooling follow-up (1842)", () => {
+    const own = SECTION.slice(SECTION.indexOf("**Ownership of the implementation deploy and the re-record.**"), SECTION.indexOf("**After a governed upgrade.**"));
+    expect(own.length).toBeGreaterThan(0);
+    for (const s of ["Deploying the new implementation with its library links", "re-recording the stage manifest", "gateway runtime hashes", "owned by the operator tooling follow-up (1842)", "only executed path", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`"]) expect(own, s).toContain(s);
+  });
+});

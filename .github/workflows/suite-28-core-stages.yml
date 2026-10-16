@@ -173,12 +173,15 @@ jobs:
 
   # UPGRADEABILITY STAGE 4 (issue 1811): deploy upgradeable, governed upgrade, freeze, refused upgrade after the freeze, on a Twin chain this job starts itself.
   # It never skips: a Twin chain that does not start, or any step that exits non-zero, fails the job.
+  # Issue 1846: it runs AFTER core-stages-twin, not beside it, so the two 60-minute forks never load the rate-limited upstream at once and this job
+  # restores the exact-pin RPC cache (twin-anvil-rpc-<pin>) core-stages-twin saved. always() keeps it independent of the rehearsal's result;
+  # the pin and draft guards keep the skip rules of a job that only needs pin.
   core-stages-twin-upgrade:
     name: core-stages-twin-upgrade-lifecycle
-    needs: pin
+    needs: [pin, core-stages-twin]
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    if: ${{ always() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     env:
       CI_CLASS: system-correctness
     steps:
