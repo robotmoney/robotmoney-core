@@ -39,6 +39,10 @@ notes: |
 
   Exceptions to the README. None recorded.
 
+  Reviews. The 2026-10-15 internal review (docs/code-review/20261015-review-security-claude.md) is neither the
+  external review nor a gate for Deploy 3 (owner, 2026-10-16). The external review of the proxy form must be a
+  report recorded in docs/audits.md (decision external-review).
+
   Open owner decisions are the decisions: list below. A production run (validate with --target production
   --runnable) refuses while any is open, and so does productionReady: true.
 decisions:
