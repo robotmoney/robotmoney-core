@@ -245,22 +245,24 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   // Issue 1796: after a redeploy only the new vault runs the current build. The others (and the retired vault, below) run the build of the original deployment sha.
   const redeployed = new Set(redeploys.map((r) => r.vault));
   const priorDir = opts.priorArtifactsDir;
-  const codeTargets: { label: string; address: Address; artifact: string; dir?: string }[] = [
-    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact })),
-    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, ...(redeploys.length > 0 && !redeployed.has(v.key) ? { dir: priorDir } : {}) })),
+  // Issue 1859: a proxy upgraded by govern --row upgrade-proxy runs the build its upgrade named (opts.proxyBuildDirs), whatever build the release deployed.
+  const upgradedDir = (label: string): { implDir?: string } => (opts.proxyBuildDirs?.[label] ? { implDir: opts.proxyBuildDirs[label] } : {});
+  const codeTargets: { label: string; address: Address; artifact: string; dir?: string; implDir?: string }[] = [
+    ...core.map((x) => ({ label: x.name, address: x.address, artifact: x.artifact, ...upgradedDir(x.name) })),
+    ...man.vaults.map((v) => ({ label: `vault[${v.key}]`, address: v.address, artifact: sheet.vaults[v.key]?.contract ?? v.artifact, ...(redeploys.length > 0 && !redeployed.has(v.key) ? { dir: priorDir } : {}), ...upgradedDir(`vault[${v.key}]`) })),
     ...v4Adapters.map((a) => ({ label: `adapter[V4:${a.vault}]`, address: a.address, artifact: table.artifacts[V4_ADAPTER_ARTIFACT_KEY]! })),
     ...libNames.map((n) => ({ label: `library[${n}]`, address: man.libraries[n], artifact: man.libraryArtifacts[n]! })),
   ];
   for (const t of codeTargets) {
     await c.run(`${t.label}: ${CODE_LABEL}`, async () => {
       // Issue 1808: a core contract behind an ERC-1967 proxy is checked through the implementation its slot names.
-      const r = await compareDeployedCode(chain, t.address, loadArtifact(t.dir ?? opts.artifactsDir, t.artifact), tryLoadArtifact(t.dir ?? opts.artifactsDir, ERC1967_PROXY_ARTIFACT));
-      return { ok: r.ok, detail: `${t.artifact}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
+      const r = await compareDeployedCode(chain, t.address, loadArtifact(t.implDir ?? t.dir ?? opts.artifactsDir, t.artifact), tryLoadArtifact(t.dir ?? opts.artifactsDir, ERC1967_PROXY_ARTIFACT));
+      return { ok: r.ok, detail: `${t.artifact}${t.implDir ? ` (${t.implDir})` : ""}: ${r.detail}${!r.ok && redeploys.length > 0 && t.dir === undefined && t.label.startsWith("vault[") ? " (after a redeploy the vaults it did not replace run the original build: pass --prior-out <forge out/ of the original sha>)" : ""}` };
     });
   }
 
   // ---- upgradeability (issue 1809): every proxied core contract is the build's ERC-1967 proxy in the sheet's release mode, governed by the timelock alone
-  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
+  const upgradeability = await upgradeabilityChecks(c, chain, table, { sheet, timelock: tl, artifactsDir: opts.artifactsDir, proxyBuildDirs: opts.proxyBuildDirs, coreDir: opts.coreDir, data: manifestDataOf(table, man.files, man.vaults), now: opts.now, ...(head !== undefined ? { scan: { fromBlock: opts.fromBlock, head, chunk, retryBaseMs } } : {}) });
 
   // ---- single-vault redeploys (issue 1796): only when the run has one, so a run without one keeps the label set of every other deployment
   for (const r of redeploys) await redeployChecks(c, chain, r, { registry, router: byName.router!, tl, emergency: sheet.emergency, vaults: man.vaults, priorDir, artifactsDir: opts.artifactsDir, artifact: man.vaults.find((v) => v.key === r.vault)?.artifact });

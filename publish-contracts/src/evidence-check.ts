@@ -32,6 +32,7 @@ import { loadStageTable, type StageTable, type TableVault, type VaultRules } fro
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
+import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
 import { upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "./upgrade-lifecycle.ts";
 
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -253,6 +254,70 @@ export function checkReceiptApplications(ev: any, floor: number = MAINNET_DELAY_
   const p: string[] = [];
   const apps = applicationShapeProblems(ev, (m) => p.push(m));
   operationProblems(apps.map((r) => ({ ...r, step: applyLabel(r) })), (m) => p.push(m), floor);
+  return p;
+}
+
+/**
+ * Issue 1859: `upgrade_freezes` (govern --row freeze-upgrades) and `proxy_upgrades` (govern --row upgrade-proxy), the governed-upgrade operations the run manifest records. Both
+ * lists are optional. Each entry is ONE executed timelock operation: its id, the schedule and the execute transaction (status 1, at least the floor apart, none shared) and never
+ * a cancel field. A transaction this tool did not send and could not recover from the timelock's log (an execution adopted from the chain) is null, with a null status and
+ * timestamp, and the entry's `note` says why. A freeze names its targets (proxy, implementation, code hash); an upgrade names the proxy and both implementations.
+ */
+export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_FLOOR, proxies: readonly string[] = repoProxyNames()): string[] {
+  const p: string[] = [];
+  const bad = (m: string) => p.push(m);
+  const list = (k: string): any[] => (ev?.[k] === undefined ? [] : Array.isArray(ev[k]) ? ev[k] : (bad(`${k} is not a list`), []));
+  const entries: [any, string][] = [...list("upgrade_freezes").map((e): [any, string] => [e, FREEZE_ROW]), ...list("proxy_upgrades").map((e): [any, string] => [e, UPGRADE_ROW])];
+  const label = (e: any, step: string) => `${step}${step === UPGRADE_ROW ? ` ${e?.proxy_name}` : ""} ${e?.operation_id}`;
+  for (const [e, step] of entries) forbidCancelFields([e], () => label(e, step), bad);
+  const tl = ev?.timelock?.address;
+  const seen = new Map<string, string>();
+  for (const [e, step] of entries) {
+    const w = label(e, step);
+    if (e?.step !== step) bad(`${w}: step '${e?.step}' is not ${step}`);
+    if (!ADDR.test(e?.timelock ?? "")) bad(`${w}: timelock is not an address`);
+    else if (ADDR.test(tl ?? "") && lc(e.timelock) !== lc(tl)) bad(`${w}: timelock ${e.timelock} is not the deployed timelock ${tl}`);
+    if (!TX.test(e?.operation_id ?? "")) bad(`${w}: operation_id is not a bytes32`);
+    for (const k of ["operation_id", "schedule_tx", "execute_tx"]) {
+      if (!TX.test(e?.[k] ?? "")) continue;
+      const other = seen.get(`${k}:${lc(e[k])}`);
+      if (other !== undefined) bad(`${w}: ${k} is also the ${k} of ${other} (one operation per freeze or upgrade, none shared)`);
+      else seen.set(`${k}:${lc(e[k])}`, w);
+    }
+    for (const kind of ["schedule", "execute"]) {
+      const tx = e?.[`${kind}_tx`], status = e?.[`${kind}_status`], at = e?.[`${kind}_block_timestamp`];
+      if (tx === null) {
+        if (status !== null || at !== null) bad(`${w}: ${kind}_tx is null, so ${kind}_status and ${kind}_block_timestamp must be null`);
+        if (typeof e.note !== "string" || e.note.trim() === "") bad(`${w}: ${kind}_tx is null with no note: an unknown transaction is recorded only with the reason`);
+        continue;
+      }
+      if (!TX.test(tx ?? "")) bad(`${w}: ${kind}_tx is missing`);
+      if (status !== 1) bad(`${w}: ${kind} receipt status is ${status}`);
+      if (!Number.isInteger(at)) bad(`${w}: ${kind}_block_timestamp is not a block timestamp`);
+    }
+    if (TX.test(e?.schedule_tx ?? "") && TX.test(e?.execute_tx ?? "")) {
+      if (lc(e.schedule_tx) === lc(e.execute_tx)) bad(`${w}: execute_tx is also the schedule_tx`);
+      else if (Number.isInteger(e.schedule_block_timestamp) && Number.isInteger(e.execute_block_timestamp) && !(e.execute_block_timestamp - e.schedule_block_timestamp >= floor)) bad(`${w}: schedule-to-execute gap ${e.execute_block_timestamp - e.schedule_block_timestamp} s is under ${floor} s`);
+    }
+    if (step === FREEZE_ROW) {
+      const targets = e?.targets && typeof e.targets === "object" && !Array.isArray(e.targets) ? Object.entries<any>(e.targets) : [];
+      if (targets.length === 0) bad(`${w}: targets name no proxy`);
+      for (const [n, t] of targets) {
+        if (!proxies.includes(n)) bad(`${w}: target ${n} is not a proxied core contract of the stage table`);
+        if (!ADDR.test(t?.proxy ?? "") || !ADDR.test(t?.implementation ?? "")) bad(`${w}: target ${n} has no proxy or implementation address`);
+        if (!TX.test(t?.implementation_code_hash ?? "")) bad(`${w}: target ${n} implementation_code_hash is not a bytes32`);
+      }
+    } else {
+      if (!proxies.includes(e?.proxy_name)) bad(`${w}: proxy_name ${e?.proxy_name} is not a proxied core contract of the stage table`);
+      for (const k of ["proxy", "from_implementation", "to_implementation"]) if (!ADDR.test(e?.[k] ?? "")) bad(`${w}: ${k} is not an address`);
+      if (ADDR.test(e?.from_implementation ?? "") && lc(e.from_implementation) === lc(e?.to_implementation ?? "")) bad(`${w}: to_implementation equals from_implementation, nothing was upgraded`);
+      if (!TX.test(e?.to_code_hash ?? "")) bad(`${w}: to_code_hash is not a bytes32`);
+      if (e?.from_code_hash !== null && !TX.test(e?.from_code_hash ?? "")) bad(`${w}: from_code_hash is neither a bytes32 nor null`);
+      const fields = e?.manifest_fields && typeof e.manifest_fields === "object" && !Array.isArray(e.manifest_fields) ? Object.values<unknown>(e.manifest_fields) : [];
+      if (!fields.some((v) => typeof v === "string" && lc(v) === lc(String(e?.to_implementation ?? "")))) bad(`${w}: manifest_fields does not re-record the implementation field to ${e?.to_implementation}`);
+      if (typeof e?.build !== "string" || e.build === "") bad(`${w}: build names no core checkout`);
+    }
+  }
   return p;
 }
 
@@ -527,6 +592,7 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   if (ev?.verifier?.registry_list_vaults_equals_manifests !== true) bad("registry listVaults was not shown equal to the manifests");
   if (ev?.sources?.blockscout_all_verified !== true || ev?.sources?.sourcify_all_exact !== true) bad("source verification is not complete");
   p.push(...upgradeabilityEvidenceProblems(ev, opts?.proxies ?? repoProxyNames(), kind));
+  p.push(...governedUpgradeProblems(ev, floor, opts?.proxies ?? repoProxyNames()));
   return p;
 }
 

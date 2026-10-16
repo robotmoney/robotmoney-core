@@ -180,7 +180,7 @@ const addrOf = (w: string): Address => `0x${w.slice(24)}` as Address;
  */
 export async function upgradeabilityChecks(
   c: Collector, chain: ChainReader, table: StageTable,
-  ctx: { sheet: VerifySheet; timelock: Address; artifactsDir: string; coreDir?: string; data: (spec: ProxySpec) => any; now?: bigint; scan?: ScanWindow },
+  ctx: { sheet: VerifySheet; timelock: Address; artifactsDir: string; proxyBuildDirs?: Record<string, string>; coreDir?: string; data: (spec: ProxySpec) => any; now?: bigint; scan?: ScanWindow },
 ): Promise<UpgradeabilityRecord> {
   const u = table.upgradeAuthority;
   const mode = ctx.sheet.upgradeMode ?? null;
@@ -241,8 +241,9 @@ export async function upgradeabilityChecks(
       const problems: string[] = [];
       let n = 0;
       const seen = new Set<string>();
-      const visit = async (code: Hex, artifact: string): Promise<void> => {
-        for (const l of linkedLibraries(ctx.artifactsDir, artifact)) {
+      // the implementation's link offsets come from the build it was made from (issue 1859: a governed upgrade's own build); the libraries it links are the release's
+      const visit = async (code: Hex, artifact: string, dir: string): Promise<void> => {
+        for (const l of linkedLibraries(dir, artifact)) {
           const at = (`0x${code.replace(/^0x/, "").slice(l.start * 2, (l.start + 20) * 2)}`) as Address;
           const key = `${l.name}:${lc(at)}`;
           if (seen.has(key)) continue;
@@ -251,10 +252,10 @@ export async function upgradeabilityChecks(
           const libCode = await chain.getCode(at);
           const res = compareCode(libCode, loadArtifact(ctx.artifactsDir, l.name));
           if (!res.ok) { problems.push(`${l.name} at ${at}: ${res.detail}`); continue; }
-          await visit(libCode, l.name);
+          await visit(libCode, l.name, ctx.artifactsDir);
         }
       };
-      await visit(implCode, s.contract);
+      await visit(implCode, s.contract, ctx.proxyBuildDirs?.[p] ?? ctx.artifactsDir);
       return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${n} linked librar${n === 1 ? "y" : "ies"} equal the build` };
     });
     await c.run(`${p}: ${PROXY_LABELS[3]}`, async () => {
