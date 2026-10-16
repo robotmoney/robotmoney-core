@@ -190,9 +190,10 @@ is refused after the freeze with `UpgradesAreFrozen`. Verify then claims core
 immutability. `evidence-check --upgrade-lifecycle` reads the record back from
 the chain. The release runbook (4.1 and 4.12) makes this job and an external
 security review gates of a final mainnet release, and says why a rollback is not
-assumed safe after a state migration. Operator rows for upgrade and freeze
-rounds are follow-up work: the rehearsal drives the Safe tool library directly
-and re-records the gateway manifest itself.
+assumed safe after a state migration. The rehearsal runs the operator rows
+`govern --row upgrade-proxy` and `govern --row freeze-upgrades` (issues 1842 and
+1859); only the queued upgrade that never executes goes through the Safe tool
+library directly.
 
 ## Signing clients and disclosure (stage 3)
 

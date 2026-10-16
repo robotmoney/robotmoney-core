@@ -156,6 +156,12 @@ export interface VerifyOptions {
    * code hashes are compared with this directory. Absent: the current `artifactsDir` is used for every vault.
    */
   priorArtifactsDir?: string;
+  /**
+   * Issue 1859: forge out/ of the build each governed-upgraded proxy runs now, by verifier proxy name (`gateway`, `vault[rmUSDC]`, ...), from the `build` of the proxy's last
+   * `proxy_upgrades` entry in the run manifest. That proxy's `runtime code equals build artifact (masked)` label and its library-link label read this directory; every other
+   * contract reads `artifactsDir`. Absent or no entry: `artifactsDir`.
+   */
+  proxyBuildDirs?: Record<string, string>;
   /** Issue 1796: the deployer transactions the redeploys sent (the sum of their deploy counts). They are outside every frozen stage count and move the deployer nonce. */
   redeployDeployerTxs?: number;
   /** Test seam only: the pinned FiatTokenProxy code hash. Production never sets it (src/usdc.ts holds the pin). */

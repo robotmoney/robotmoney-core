@@ -50,7 +50,7 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** `kind:row` per timelock bundle built, in order: the row is the first word of the description. */
     events: [] as string[],
     /** The scheduled calls per row, with the timelock predecessor each operation carries (undefined: none). */
-    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string }>(),
+    scheduled: new Map<string, { form: string; calls: { target: string; data: string }[]; predecessor?: string; salt: Hex }>(),
     /** The timelock operation id of each scheduled row. */
     ids: new Map<string, Hex>(),
     /** Every transaction hash the fake Safe sent, per timelock operation id: a Safe transaction shared by two operations would show here. */
@@ -89,6 +89,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     /** Issue 1842: the GovernedUUPS proxies (lower-case address to its implementation and freeze flag), the code at an address (else a default), and every call the timelock
      *  scheduled (the CallScheduled logs the freeze row scans). An executed upgradeToAndCall moves the implementation, an executed freezeUpgrades sets the flag, as the library does. */
     proxies: new Map<string, { impl: Address; frozen: boolean }>(), codes: new Map<string, Hex>(), scheduledCalls: [] as { id: Hex; target: Address; data: Hex }[],
+    /** Issue 1859: the transaction of each timelock CallScheduled and CallExecuted log, keyed `event:operation id` (what operationTx finds). A test deletes one to model a log not found. */
+    timelockLogs: new Map<string, Hex>(),
   };
   const recordedAtOf = (rid: string): bigint => s.recordedAt.get(rid.toLowerCase()) ?? BigInt([...s.recorded].map((x) => x.toLowerCase()).indexOf(rid.toLowerCase()) + 1);
   const rowOf = (d?: string) => (d ?? "").split(/[ :]/)[0]!;
@@ -154,9 +156,9 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
     timelockMinDelay: (async () => s.minDelay) as never,
     operationId: (async (_h: unknown, p: never) => idOf(p)) as never,
     operationState: (async (_h: unknown, _t: unknown, id: string) => { const o = s.ops.get(id); return o ? { exists: true, pending: o.pending, done: o.done, ready: o.pending && s.clock >= o.readyAt, readyAt: o.readyAt } : { exists: false, pending: false, done: false, ready: false, readyAt: 0n }; }) as never,
-    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; calls: { target: string; data: string }[] }) => {
+    scheduleOnTimelock: (async (_h: unknown, p: { form?: string; description?: string; predecessor?: string; salt: Hex; calls: { target: string; data: string }[] }) => {
       const id = idOf(p as never); const k = p.form === "single" ? "schedule" : "scheduleBatch";
-      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor });
+      s.log.push(k); s.events.push(`${k}:${rowOf(p.description)}`); s.scheduled.set(rowOf(p.description), { form: p.form ?? "batch", calls: p.calls, predecessor: p.predecessor, salt: p.salt });
       s.ids.set(rowOf(p.description), id);
       for (const c of p.calls) s.scheduledCalls.push({ id, target: c.target as Address, data: c.data as Hex });
       return { ...bundle("schedule", id), predecessor: p.predecessor };
@@ -277,12 +279,14 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       s.nonce++;
       const hash = `0x${s.nonce.toString(16).padStart(64, "0")}`;
       s.txClock.set(hash, s.clock);
+      if (b.action === "schedule" || b.action === "execute") s.timelockLogs.set(`${b.action === "schedule" ? "CallScheduled" : "CallExecuted"}:${id}`, hash as Hex);
       s.safeTxs.set(id, [...(s.safeTxs.get(id) ?? []), hash]);
       return { txHash: `0x${s.nonce.toString(16).padStart(64, "0")}` as Hex, bundle: { ...b, executed: { tx_hash: `0x${s.nonce.toString(16).padStart(64, "0")}`, status: 1 } } };
     }) as never,
     proposeTx: (async (_h: unknown, o: { to: string; data: Hex; action?: string }) => { s.events.push(`propose:${o.action}`); return { ...bundle(o.action ?? "call", keccak256(o.data)), to: o.to, data: o.data }; }) as never,
     verifyTimelockEffect: (async () => ({ ok: true, detail: "", state: {} })) as never,
     scheduledCalls: (async () => [...s.scheduledCalls]) as never,
+    operationTx: (async (_h: unknown, _t: unknown, id: Hex, event: string) => s.timelockLogs.get(`${event}:${id}`)) as never,
   };
   return { s, api, handle };
 }

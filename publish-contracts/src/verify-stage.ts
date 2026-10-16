@@ -161,6 +161,21 @@ export function appliedReceiptOf(manifest: Pick<RunManifest, "receipt_applicatio
   return last ? { receiptId: last.receipt_id, vaults: last.vaults, bps: last.bps } : undefined;
 }
 
+/**
+ * Issue 1859: the build directory (forge out/) of each proxy a governed upgrade moved to another build, from the run manifest's `proxy_upgrades` (govern --row upgrade-proxy):
+ * the `build` of the proxy's last entry. A rerun of an older row never moves an entry (govern.ts leaves a superseded one where it is), so the last is the live one. A proxy
+ * whose build is the deploy checkout is left out: it reads `deployOut` like every other contract.
+ */
+export function proxyBuildDirsOf(manifest: object, deployOut: string): { proxyBuildDirs?: Record<string, string> } {
+  const dirs: Record<string, string> = {};
+  for (const e of ((manifest as { proxy_upgrades?: unknown }).proxy_upgrades as { proxy_name?: unknown; build?: unknown }[] | undefined) ?? []) {
+    if (typeof e?.proxy_name !== "string" || typeof e.build !== "string" || e.build === "") continue;
+    const out = join(e.build, "out");
+    if (out === deployOut) delete dirs[e.proxy_name]; else dirs[e.proxy_name] = out;
+  }
+  return Object.keys(dirs).length ? { proxyBuildDirs: dirs } : {};
+}
+
 export interface VerifyDeps {
   verifyDeployment: (o: VerifyOptions) => Promise<VerifyReport>;
   verifySources: typeof verifySources;
@@ -211,6 +226,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
     handoverBlock: handoverBlock(manifest),

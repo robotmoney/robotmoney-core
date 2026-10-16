@@ -364,6 +364,11 @@ export interface GovernApi {
   proposeTx?: typeof proposeTx;
   /** Issue 1842: every call scheduled on the timelock from `fromBlock` (CallScheduled logs), for the freeze row's pending-upgrade refusal. Absent: the real log scan. */
   scheduledCalls?: (handle: SafeHandle, timelock: Address, fromBlock: bigint) => Promise<{ id: Hex; target: Address; data: Hex }[]>;
+  /**
+   * Issue 1859: the transaction of the timelock's first CallScheduled or CallExecuted log of operation `id` from `fromBlock`, undefined when there is none. The freeze and upgrade
+   * rows read it when the phase was adopted from the chain (an earlier run crashed after the send, or another signer executed through the Safe UI). Absent: the real log scan.
+   */
+  operationTx?: (handle: SafeHandle, timelock: Address, id: Hex, event: TimelockEvent, fromBlock: bigint) => Promise<Hex | undefined>;
 }
 
 const CALL_SCHEDULED = parseAbiItem("event CallScheduled(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data, bytes32 predecessor, uint256 delay)");
@@ -377,7 +382,21 @@ export async function scanScheduledCalls(handle: SafeHandle, timelock: Address, 
   }
   return out;
 }
-export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect, proposeTx, scheduledCalls: scanScheduledCalls,
+export type TimelockEvent = "CallScheduled" | "CallExecuted";
+const CALL_EXECUTED = parseAbiItem("event CallExecuted(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data)");
+/** Issue 1859: the transaction of the first `event` log of operation `id` on the timelock from `fromBlock` to the head, in 2000-block chunks. A failed chunk throws: none is read as "no log". */
+export async function scanOperationTx(handle: SafeHandle, timelock: Address, id: Hex, event: TimelockEvent, fromBlock: bigint): Promise<Hex | undefined> {
+  const head = await handle.client.getBlockNumber();
+  for (let lo = fromBlock; lo <= head; lo += 2000n) {
+    const hi = lo + 1999n < head ? lo + 1999n : head;
+    const logs = event === "CallExecuted"
+      ? await handle.client.getLogs({ address: timelock, event: CALL_EXECUTED, args: { id }, fromBlock: lo, toBlock: hi })
+      : await handle.client.getLogs({ address: timelock, event: CALL_SCHEDULED, args: { id }, fromBlock: lo, toBlock: hi });
+    if (logs[0]?.transactionHash) return logs[0].transactionHash;
+  }
+  return undefined;
+}
+export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect, proposeTx, scheduledCalls: scanScheduledCalls, operationTx: scanOperationTx,
   inspectSubmitter: (handle, submitter, forbidden) => inspectSubmitterSafe(chainFromClient(handle.client as never), submitter, forbidden) };
 
 export type GovernPhase = "scheduled" | "executed" | "cancelled";
@@ -1033,6 +1052,30 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
     return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
   };
+  /**
+   * Issue 1859: the operation and transaction fields of an executed freeze or upgrade for its evidence entry. A phase this tool sent carries its transaction. A phase adopted from
+   * the chain (an earlier run crashed after the send was mined, or another signer executed through the Safe UI) has none: it is recovered from the timelock's CallScheduled or
+   * CallExecuted log of the operation (only a successful transaction emits one, so status 1), else recorded null with a `note`, which evidence-check accepts.
+   * `prior`: the entry an earlier run wrote, whose recovered transactions are reused instead of a second scan.
+   */
+  async function operationEvidence(r: RowRecord, prior: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
+    const id = r.scheduled!.operation_id as Hex;
+    const notes: string[] = [];
+    const phase = async (kind: "schedule" | "execute", rec: PhaseRecord, event: TimelockEvent, fromBlock: bigint): Promise<{ tx?: Hex; fields: Record<string, unknown> }> => {
+      let tx = rec.tx_hash as Hex | undefined;
+      if (!tx) {
+        const earlier = prior?.[`${kind}_tx`];
+        tx = typeof earlier === "string" ? (earlier as Hex) : await (api.operationTx ?? scanOperationTx)(handle, a.timelock, id, event, fromBlock);
+        notes.push(tx ? `${kind}_tx recovered from the timelock's ${event} log of operation ${id}: this tool did not send the ${kind}` : `${kind}_tx unknown: this tool did not send the ${kind} and the timelock has no ${event} log of operation ${id} from block ${fromBlock}`);
+      }
+      if (!tx) return { fields: { [`${kind}_tx`]: null, [`${kind}_status`]: null, [`${kind}_block_timestamp`]: null } };
+      return { tx, fields: { [`${kind}_tx`]: tx, [`${kind}_status`]: rec.tx_hash ? rec.status ?? 1 : 1, [`${kind}_block_timestamp`]: await blockTime(tx) } };
+    };
+    const sched = await phase("schedule", r.scheduled!, "CallScheduled", scanStart());
+    const from = sched.tx ? (await handle.client.getTransactionReceipt({ hash: sched.tx })).blockNumber : scanStart();
+    const exec = await phase("execute", r.executed!, "CallExecuted", from);
+    return { operation_id: id, ...sched.fields, ...exec.fields, ...(notes.length ? { note: notes.join("; ") } : {}) };
+  }
 
   if (freezing) {
     // Issue 1842: ONE timelock batch, freezeUpgrades(implementation, implementation_code_hash) on every unfrozen core proxy, bound to the record verify wrote. Never part of
@@ -1085,16 +1128,13 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     } else {
       reprint(name);
     }
-    // the evidence entry (`upgrade_freezes` of the run manifest): the targets, the operation and its two transactions
+    // the evidence entry (`upgrade_freezes` of the run manifest): the targets, the operation and its two transactions. An execution adopted from the chain passed the
+    // upgradesFrozen read-back in executePhase before it was recorded (issue 1859), so it is written too.
     const r = state[name] as RowRecord & { freeze?: Freeze };
-    if (r.executed?.tx_hash && r.scheduled?.tx_hash && r.freeze) {
-      const entry = {
-        step: FREEZE_ROW, timelock: a.timelock, targets: r.freeze.targets, operation_id: r.scheduled.operation_id,
-        schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await blockTime(r.scheduled.tx_hash),
-        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await blockTime(r.executed.tx_hash),
-      };
-      const list = ((manifest as { upgrade_freezes?: { operation_id?: string }[] }).upgrade_freezes ??= []);
-      const i = list.findIndex((x) => x.operation_id === entry.operation_id);
+    if (r.executed && r.scheduled?.operation_id && r.freeze) {
+      const list = ((manifest as { upgrade_freezes?: Record<string, unknown>[] }).upgrade_freezes ??= []);
+      const i = list.findIndex((x) => x.operation_id === r.scheduled!.operation_id);
+      const entry = { step: FREEZE_ROW, timelock: a.timelock, targets: r.freeze.targets, ...(await operationEvidence(r, list[i])) };
       if (i >= 0) list[i] = entry; else list.push(entry);
     }
     save();
@@ -1154,20 +1194,23 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       if (r.scheduled) emitPhase(o, UPGRADE_ROW, "scheduled", r.scheduled);
       if (r.executed) emitPhase(o, UPGRADE_ROW, "executed", r.executed);
     }
-    // the re-record (runbook 4.12, "After a governed upgrade") and the evidence entry (`proxy_upgrades` of the run manifest)
+    // the re-record (runbook 4.12, "After a governed upgrade") and the evidence entry (`proxy_upgrades` of the run manifest). Issue 1859: both are gated on the live
+    // implementation slot. A rerun of this row after a later upgrade (B to C, then the B row again) finds the proxy on C: it leaves the manifest and the entry as they are,
+    // so the manifest never names an implementation the proxy no longer runs. An execution adopted from the chain passed the same slot read-back in executePhase.
     const r = state[name] as RowRecord & { upgrade?: Upgrade };
-    if (r.executed?.tx_hash && r.scheduled?.tx_hash && r.upgrade) {
-      const implHash = codeHashOf(await codeOf(implementation))!, proxyHash = codeHashOf(await codeOf(r.upgrade.proxy as Address))!;
-      const fields = rerecordProxyManifest(manifestPath, spec, implementation, implHash, proxyHash);
-      ctx.log.log("info", "govern.manifest_rerecorded", { row: UPGRADE_ROW, manifest: manifestPath, fields, next: "run verify: it re-records upgradeability.json" });
-      const entry = {
-        step: UPGRADE_ROW, proxy_name: spec.name, ...r.upgrade, timelock: a.timelock, manifest_fields: fields, operation_id: r.scheduled.operation_id,
-        schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await blockTime(r.scheduled.tx_hash),
-        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await blockTime(r.executed.tx_hash),
-      };
-      const list = ((manifest as { proxy_upgrades?: { operation_id?: string }[] }).proxy_upgrades ??= []);
-      const i = list.findIndex((x) => x.operation_id === entry.operation_id);
-      if (i >= 0) list[i] = entry; else list.push(entry);
+    if (r.executed && r.scheduled?.operation_id && r.upgrade) {
+      const live = await implOf(r.upgrade.proxy as Address);
+      if (live.toLowerCase() !== implementation.toLowerCase()) {
+        ctx.log.log("warn", "govern.manifest_not_rerecorded", { row: UPGRADE_ROW, proxy: spec.name, live_implementation: live, row_implementation: implementation, manifest: manifestPath, reason: "the proxy runs another implementation now (a later upgrade): the manifest and the evidence entry are left unchanged" });
+      } else {
+        const implHash = codeHashOf(await codeOf(implementation))!, proxyHash = codeHashOf(await codeOf(r.upgrade.proxy as Address))!;
+        const fields = rerecordProxyManifest(manifestPath, spec, implementation, implHash, proxyHash);
+        ctx.log.log("info", "govern.manifest_rerecorded", { row: UPGRADE_ROW, manifest: manifestPath, fields, next: "run verify: it re-records upgradeability.json" });
+        const list = ((manifest as { proxy_upgrades?: Record<string, unknown>[] }).proxy_upgrades ??= []);
+        const i = list.findIndex((x) => x.operation_id === r.scheduled!.operation_id);
+        const entry = { step: UPGRADE_ROW, proxy_name: spec.name, ...r.upgrade, timelock: a.timelock, manifest_fields: fields, ...(await operationEvidence(r, list[i])) };
+        if (i >= 0) list[i] = entry; else list.push(entry);
+      }
     }
     save();
     ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: UPGRADE_ROW, proxy: spec.name, implementation });

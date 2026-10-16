@@ -140,3 +140,22 @@ describe("the lifecycle job's required-check policy and the 4.1 and 4.12 wording
     for (const s of ["Deploying the new implementation with its library links", "re-recording the stage manifest", "gateway runtime hashes", "owned by the operator tooling follow-up (1842)", "only executed path", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`"]) expect(own, s).toContain(s);
   });
 });
+
+// Issue 1859 docs drift check: 4.12 describes verify's per-proxy build directories (verify-stage.ts proxyBuildDirsOf) and no longer states the deployed-build-only limitation;
+// it names the rerun and already-executed behavior of the rows, and the Twin harness runs both rows.
+describe("per-proxy build directories and the row follow-ups (issue 1859)", () => {
+  const after = SECTION.slice(SECTION.indexOf("**After a governed upgrade.**"), SECTION.indexOf("**Rollback is not assumed safe.**"));
+  test("4.12 describes per-proxy build directories and no longer states the deployed-build-only limitation", () => {
+    expect(after.length).toBeGreaterThan(0);
+    for (const s of ["per-proxy build directories", `\`${CODE_LABEL}\``, "the `build` its last `proxy_upgrades` entry names", "every other contract with the DEPLOY_SHA's `out/`"]) expect(after, s).toContain(s);
+    expect(SECTION).not.toContain("verify compares every contract with one build directory");
+    expect(SECTION).not.toContain("re-records in its own harness");
+    const stage = readFileSync(join(REPO, "publish-contracts", "src", "verify-stage.ts"), "utf8");
+    expect(stage).toContain("...proxyBuildDirsOf(manifest, join(ctx.coreDir, \"out\"))");
+  });
+  test("4.12 names the stale-rerun guard, the already-executed repair and the null execute_tx note, and the Twin harness runs both rows", () => {
+    for (const s of ["gated on the live implementation slot", "leaves the manifest and the entry unchanged", "`CallExecuted` log", "`execute_tx` null with a `note`", "`govern --row freeze-upgrades --no-warp --max-wait 0`"]) expect(SECTION, s).toContain(s);
+    const harness = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-lifecycle.ts"), "utf8");
+    for (const s of ['"--row", UPGRADE_ROW', '"--row", FREEZE_ROW, "--no-warp", "--max-wait", "0"]', "governedUpgradeProblems("]) expect(harness, s).toContain(s);
+  });
+});

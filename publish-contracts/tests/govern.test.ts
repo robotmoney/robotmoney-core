@@ -1695,6 +1695,10 @@ describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () 
     expect(() => parseCli([...base, "--row", "freeze-upgrades", "--proxy", "gateway"])).toThrow("go with --row upgrade-proxy only");
     expect(() => parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "0x12"])).toThrow("--implementation must be an address");
     expect(parseCli([...base, "--row", "freeze-upgrades"]).row).toBe("freeze-upgrades");
+    // issue 1859: --no-warp (the Twin rehearsal stops the freeze row after its schedule) goes with govern only
+    expect(parseCli([...base, "--row", "freeze-upgrades", "--no-warp", "--max-wait", "0"])).toMatchObject({ noWarp: true, maxWait: 0 });
+    expect(parseCli([...base, "--row", "freeze-upgrades"]).noWarp).toBe(false);
+    expect(() => parseCli(["verify", ...base.slice(1), "--no-warp"])).toThrow("--no-warp goes with the govern verb only");
   });
 
   test("usage: the rows are on demand, upgrade-proxy needs a known proxy and an address, and --proxy goes with upgrade-proxy only; both run on 8453", async () => {
@@ -1707,5 +1711,81 @@ describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () 
     await expect(w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: "0x12" })).rejects.toMatchObject({ kind: "USAGE" });
     await expect(w.run({ row: "freeze-upgrades", proxy: "gateway" })).rejects.toMatchObject({ kind: "USAGE" });
     expect(w.tl.s.events).toEqual([]);
+  });
+
+  // Issue 1859: the follow-ups of 1857. A rerun of an older upgrade row never re-records a superseded implementation, and an operation executed outside the row (a crash after
+  // the Safe execute mined, or another signer through the Safe UI) still gets its re-record and its evidence entry, with the execute transaction from the CallExecuted log.
+  const C = addr(0x9201);
+  /** The row stops at GOVERN_PENDING right after its schedule (no warp, no wait), the delay passes, and the Safe executes the same operation outside the row. */
+  async function executedOutsideTheRow(w: ReturnType<typeof world>, row: string, extra: object): Promise<`0x${string}`> {
+    await expect(w.run({ row, ...extra, warp: false, maxWaitSeconds: 0 })).rejects.toMatchObject({ kind: "GOVERN_PENDING" });
+    const sc = w.tl.s.scheduled.get(row)!;
+    w.tl.s.clock += DELAY;
+    const b = await w.tl.api.executeOnTimelock(w.tl.handle, { timelock: A.timelock, calls: sc.calls, salt: sc.salt, form: sc.form, description: "safe-ui execute" } as never);
+    await w.tl.api.executeTx(w.tl.handle, { ...b, signatures: ["a", "b", "c"] } as never, sender);
+    return b.timelock_operation_id as `0x${string}`;
+  }
+
+  test("issue 1859: upgrade A to B, then B to C, then a rerun of the B row: the manifest still names C, the B entry is unchanged, nothing is sent, the run succeeds", async () => {
+    const w = world();
+    w.tl.s.codes.set(C.toLowerCase(), GW_CODE);
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: C });
+    expect(w.tl.s.proxies.get(A.gateway.toLowerCase())!.impl).toBe(C);
+    const before = JSON.parse(JSON.stringify((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades));
+    const sent = w.tl.s.events.length;
+    const res = await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    expect(res.rows).toEqual([upgradeRecordKey("gateway", NEW)]);
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(C.toLowerCase());
+    expect((w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades).toEqual(before);
+    expect(before.map((e: any) => e.to_implementation)).toEqual([NEW, C]);
+    expect(w.tl.s.events.length).toBe(sent);
+    const warn = w.lines.map((l) => JSON.parse(l)).find((l) => l.event === "govern.manifest_not_rerecorded")!;
+    expect(warn).toMatchObject({ level: "warn", live_implementation: C.toLowerCase(), row_implementation: NEW });
+  });
+
+  test("issue 1859: an upgrade executed outside the row (the Safe UI): the rerun re-records the manifest and writes proxy_upgrades with execute_tx from the CallExecuted log", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "upgrade-proxy", { proxy: "gateway", implementation: NEW });
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation).toBe(w.proxies.gateway.implementation); // not yet re-recorded
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    expect(w.tl.s.events.filter((e) => e === "execute:upgrade-proxy")).toEqual([]); // the row sent no execute of its own
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(NEW.toLowerCase());
+    const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+    expect(ev.length).toBe(1);
+    expect(ev[0]).toMatchObject({ operation_id: id, schedule_tx: w.tl.s.timelockLogs.get(`CallScheduled:${id}`), execute_tx: w.tl.s.timelockLogs.get(`CallExecuted:${id}`), execute_status: 1, schedule_status: 1 });
+    expect(ev[0].execute_tx).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(ev[0].note).toContain("execute_tx recovered from the timelock's CallExecuted log");
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ proxy_upgrades: ev }, Number(DELAY))).toEqual([]);
+  });
+
+  test("issue 1859: a freeze executed outside the row: the rerun reads every proxy frozen and writes the upgrade_freezes entry with execute_tx from the CallExecuted log", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "freeze-upgrades", {});
+    for (const p of w.tl.s.proxies.values()) expect(p.frozen).toBe(true);
+    expect((w.manifest as { upgrade_freezes?: any[] }).upgrade_freezes).toBeUndefined();
+    await w.run({ row: "freeze-upgrades" });
+    expect(w.tl.s.events.filter((e) => e === "executeBatch:freeze-upgrades")).toEqual([]);
+    const ev = (w.manifest as { upgrade_freezes?: any[] }).upgrade_freezes!;
+    expect(ev.length).toBe(1);
+    expect(ev[0]).toMatchObject({ step: "freeze-upgrades", operation_id: id, execute_tx: w.tl.s.timelockLogs.get(`CallExecuted:${id}`), execute_status: 1 });
+    expect(Object.keys(ev[0].targets)).toEqual(SPECS.map((x) => x.name));
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ upgrade_freezes: ev }, Number(DELAY))).toEqual([]);
+  });
+
+  test("issue 1859: no CallExecuted log to find: execute_tx is recorded null with a note, and evidence-check accepts that entry", async () => {
+    const w = world();
+    const id = await executedOutsideTheRow(w, "upgrade-proxy", { proxy: "gateway", implementation: NEW });
+    w.tl.s.timelockLogs.delete(`CallExecuted:${id}`);
+    await w.run({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW });
+    const ev = (w.manifest as { proxy_upgrades?: any[] }).proxy_upgrades!;
+    expect(ev[0]).toMatchObject({ operation_id: id, execute_tx: null, execute_status: null, execute_block_timestamp: null, schedule_status: 1 });
+    expect(ev[0].note).toContain("execute_tx unknown");
+    expect(JSON.parse(readFileSync(w.gm, "utf8")).gateway_implementation.toLowerCase()).toBe(NEW.toLowerCase()); // the slot read-back still gates the re-record
+    const { governedUpgradeProblems } = await import("../src/evidence-check.ts");
+    expect(governedUpgradeProblems({ proxy_upgrades: ev }, Number(DELAY))).toEqual([]);
+    expect(governedUpgradeProblems({ proxy_upgrades: [{ ...ev[0], note: undefined }] }, Number(DELAY)).join("\n")).toContain("execute_tx is null with no note");
   });
 });
