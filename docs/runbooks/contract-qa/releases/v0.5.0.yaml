@@ -364,6 +364,19 @@ steps:
     onlyFor: "twin"
     added: "v0.5.0"
 
+  - id: "P0.51-rehearsal-upgrade-mode"
+    standing: ["4.12"]
+    description: "Deploy 3 deploys the proxies upgradeable (owner decision 2026-10-16, freeze-policy): the overlay sets UPGRADE_MODE=upgradeable over the rehearsal sheet, and the merged sheet reads it back"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/ci/merge-sheet.ts", "--template", "{sheet}", "--fragment", "deployments/base-8453-rehearsal/upgrade-mode.env", "--out", "{sheet}"]
+      - ["bash", "-c", 'grep -Eq "^UPGRADE_MODE=upgradeable([[:space:]]|$)" "{sheet}"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "rehearsal"
+    added: "v0.5.0"
   - id: "P0.16-sheet-copy"
     standing: ["4.3"]
     description: "The reviewed frozen production sheet is the run sheet, byte for byte"
