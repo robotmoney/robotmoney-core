@@ -140,6 +140,8 @@ export function parseSteps(raw: unknown, where: string, errors: string[]): Runbo
   }
   const seen = new Set<string>();
   const written = new Set<string>();
+  // The run sheet exists from the first step that writes it (merge-sheet ... --out {sheet}); a {sheet:X} read before that has nothing to read.
+  let sheetWritten = false;
   for (const s of steps) {
     const at = `${where} ${s.id}`;
     if (s.irreversible && s.notBefore === undefined && s.go === undefined) errors.push(`${at}: an irreversible step needs notBefore (the step that must come first) or go (a recorded owner decision)`);
@@ -147,7 +149,9 @@ export function parseSteps(raw: unknown, where: string, errors: string[]): Runbo
     for (const ref of placeholdersOf(s)) {
       if (ref.kind === "state" && !written.has(ref.arg!) && !(s.writes ?? []).includes(ref.arg!)) errors.push(`${at}: {state:${ref.arg}} is read before any step writes it`);
       if (ref.kind === "journal" && !seen.has(ref.arg!) && ref.arg !== s.id) errors.push(`${at}: {journal:${ref.arg}} is no earlier step`);
+      if (ref.kind === "sheet" && ref.arg !== undefined && !sheetWritten) errors.push(`${at}: {sheet:${ref.arg}} is read before any step writes the run sheet (--out {sheet})`);
     }
+    if (s.cmds.some((c) => c.some((a, i) => a === "--out" && c[i + 1] === "{sheet}"))) sheetWritten = true;
     for (const w of s.writes ?? []) written.add(w);
     seen.add(s.id);
   }

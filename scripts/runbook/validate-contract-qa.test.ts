@@ -40,6 +40,11 @@ test("a release that edits a template step fails", () => {
   expect(p.join("\n")).toContain("P0.03-tools");
 });
 
+test("a sheet value read before the run sheet is written fails", () => {
+  const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.03-tools"), (b) => `${b}    env:\n      X: "{sheet:TIMELOCK_MIN_DELAY}"\n`));
+  expect(p.join("\n")).toContain("is read before any step writes the run sheet");
+});
+
 test("a command that names a verb no CLI has fails", () => {
   const p = problemsWith("template.yaml", (t) => t.replace(stepBlock(t, "P0.06-forge-build"), (b) => b.replace('["forge", "build"]', '["forge", "no-such-verb"]')));
   expect(p.length).toBeGreaterThan(0);

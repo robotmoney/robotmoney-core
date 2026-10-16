@@ -102,18 +102,6 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 30
-  - id: "P0.07-preflight-guards"
-    standing: ["4.2"]
-    description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
-    host: "control"
-    phase: 0
-    cmds:
-      - ["bash", "scripts/release/preflight-guards.sh"]
-    env:
-      TIMELOCK_MIN_DELAY: "{sheet:TIMELOCK_MIN_DELAY}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
   - id: "P0.08-dependency-manifest"
     standing: ["4.2"]
     description: "The third-party dependency manifest for this release is recorded at the deploy block; run from the dev checkout, because it writes a file under deployments/ that would dirty the DEPLOY_SHA checkout"
@@ -237,6 +225,18 @@ steps:
     phase: 0
     cmds:
       - ["bun", "scripts/runbook/validate-contract-qa.ts", "--check-sheet", "{sheet}", "--target", "{target}", "--owner-signers", "{ownerSignerCount}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+  - id: "P0.07-preflight-guards"
+    standing: ["4.2"]
+    description: "EIP-170 size gate and the zero timelock delay guard pass on the exact build artifacts"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "scripts/release/preflight-guards.sh"]
+    env:
+      TIMELOCK_MIN_DELAY: "{sheet:TIMELOCK_MIN_DELAY}"
     expectExit: 0
     receipts: []
     irreversible: false
