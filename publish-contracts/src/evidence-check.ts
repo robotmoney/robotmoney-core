@@ -28,7 +28,7 @@ import { REDEPLOY_ROW, buildRedeployCalls, vectorsFromFinal } from "./redeploy-v
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
-import { loadStageTable, type TableVault, type VaultRules } from "./stage-table.ts";
+import { loadStageTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
@@ -1165,10 +1165,9 @@ async function checkLifecycleMain(values: Record<string, string | boolean | unde
   console.log(`evidence ok (upgrade lifecycle: deploy upgradeable, governed upgrade, freeze of ${Object.keys(r.freeze.targets).length} proxies, refused upgrade${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
-/** The per-stage cap from core's stage table in this checkout. */
-function adoptableFromTable(): AdoptableLibraries {
-  const t = loadStageTable(new URL("../../", import.meta.url).pathname);
-  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length]));
+/** The per-stage cap from core's stage table in this checkout. The timelock stage may adopt the core timelock itself (issue 1835). */
+export function adoptableFromTable(t: StageTable = loadStageTable(new URL("../../", import.meta.url).pathname)): AdoptableLibraries {
+  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length + (st.name === t.upgradeAuthority?.stage ? 1 : 0)]));
 }
 
 async function main() {

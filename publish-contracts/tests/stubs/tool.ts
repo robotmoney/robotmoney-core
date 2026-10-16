@@ -22,6 +22,7 @@ interface Cfg {
   gitDirty?: string[];                     // `git status --porcelain` lines the stub git prints (default: a clean tree)
   gitCountsDirty?: string[];               // issue 1816: the lines it prints for the path-limited status of the frozen counts file (default: committed and clean)
   manifestMode?: Record<string, string>;   // script file -> the upgrade_mode its manifest records instead of the UPGRADE_MODE it read (issue 1809: a stage that came back in another mode)
+  upgradeTimelock?: Record<string, string>; // script file -> the upgrade_timelock its manifest records instead of the prediction (issue 1835: a stage built with another toolchain)
 }
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 
@@ -72,7 +73,14 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   if (count === undefined) out(`stub forge: no count for ${file}`, 1);
   if (cfg.simFails === file) out("Error: script failed", 1);
 
-  const writeFiles = (n: number, dry: boolean) => {
+  // issue 1835: like the real stage scripts, a proxy stage names the CREATE2 prediction of the core timelock (build artifact, SAFE_ADDRESS, TIMELOCK_MIN_DELAY)
+  const upgradeTimelock = async (): Promise<string> => {
+    if (cfg.upgradeTimelock?.[file]) return cfg.upgradeTimelock[file]!;
+    if (!existsSync(join("out", "TimelockController.sol", "TimelockController.json")) || !process.env.SAFE_ADDRESS || !process.env.TIMELOCK_MIN_DELAY) return addr(0x1008);
+    const [{ loadStageTable }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
+    return predictCoreTimelock(loadStageTable(".").upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY)).address;
+  };
+  const writeFiles = async (n: number, dry: boolean) => {
     if (cfg.zeroTx === file) n = -1; // zero planned transactions: forge writes no broadcast file, only the script's own manifest
     const dir = join("broadcast", file, chain, ...(dry ? ["dry-run"] : []));
     if (n >= 0) {
@@ -93,7 +101,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
         ...(process.env.UPGRADE_MODE ? {
           vault_implementation: addr(0x1101), registry_implementation: addr(0x1102), router_implementation: addr(0x1103), gateway_implementation: addr(0x1104),
           governance_implementation: addr(0x1105), policy_implementation: addr(0x1106), consensus_receipt_implementation: addr(0x1107), implementation: addr(0x1108),
-          upgrade_timelock: addr(0x1008), upgrade_mode: cfg.manifestMode?.[file] ?? process.env.UPGRADE_MODE,
+          upgrade_timelock: await upgradeTimelock(), upgrade_mode: cfg.manifestMode?.[file] ?? process.env.UPGRADE_MODE,
         } : {}),
         // the vault stage's three strategy adapters (issue 1705 C4: the verifier sheet reads them)
         aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3),
@@ -101,9 +109,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     }
   };
 
-  if (cfg.zeroTx === file) { st.nonces[sender] = (st.nonces[sender] ?? 0) + (cfg.zeroTxBumps ?? 0); writeFiles(0, !broadcast); out("Script ran successfully."); }
+  if (cfg.zeroTx === file) { st.nonces[sender] = (st.nonces[sender] ?? 0) + (cfg.zeroTxBumps ?? 0); await writeFiles(0, !broadcast); out("Script ran successfully."); }
   if (!broadcast) {
-    writeFiles(count, true);
+    await writeFiles(count, true);
     out(`Estimated amount required: 0.000001 ETH\nSIMULATION COMPLETE. To broadcast these transactions, add --broadcast`);
   }
   if (cfg.failBroadcast === file && !resume && !(st.resumed ?? []).includes(file)) {
@@ -117,6 +125,6 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
   const startNonce = st.broadcastStart?.[file] ?? (st.nonces[sender] ?? 0);
   st.broadcastStart = { ...(st.broadcastStart ?? {}), [file]: startNonce };
   st.nonces[sender] = startNonce + sent;
-  writeFiles(sent, false);
+  await writeFiles(sent, false);
   out("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.");
 }
