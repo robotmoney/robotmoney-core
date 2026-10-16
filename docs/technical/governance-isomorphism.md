@@ -145,7 +145,7 @@ it works, but the event stream production tooling expects is absent.
 |---|---|
 | R1 to R3 | The Twin chain (a pinned lazy fork of real Base state, core 1498) carries all five contracts of section 2.2 with their canonical code, and both singletons carry the lock their constructor writes (threshold 1 in storage slot 4, so `setup()` on a singleton reverts `GS200`, as on Base). `scripts/devnet/safe-set.ts` reads the five from the chain over RPC and fails naming any contract that is absent, whose code does not hash to its pinned keccak256 (table below), or (singletons) whose slot 4 is not 1. |
 | R4 | `SafeIntegration.t.sol` and the stage deploy both use `SafeL2` (`0x29fcB43b...`). The verifier checks the proxy's `masterCopy` slot. |
-| R5 to R8 | The devops publish-contracts runbook creates the `SafeProxy` through `@safe-global/protocol-kit` (`SafeProxyFactory.createProxyWithNonce` on `SafeL2`, canonical fallback handler, threshold 2). It refuses a chain without the Safe set. There is no fallback. |
+| R5 to R8 | Core's `publish-contracts` CLI creates the `SafeProxy` through `@safe-global/protocol-kit` (`SafeProxyFactory.createProxyWithNonce` on `SafeL2`, canonical fallback handler, threshold 2). It refuses a chain without the Safe set. There is no fallback. |
 | R9 to R11 | Every Safe operation goes through `execTransaction` with two owner signatures over the Safe's own `getTransactionHash`, packed ascending by owner. Keystore passphrases are never on a command line. |
 | R10 (CI handover) | `SafeIntegration.t.sol` and `DeployTimelock.t.sol` run `DeployTimelock` from the deployer that holds the roles, list every holder from the `RoleGranted` and `RoleRevoked` logs (the contracts are not `AccessControlEnumerable`), and assert the timelock is the only `ADMIN_ROLE` holder on each governed contract (the router also has RouterGovernance, by design) and the only gateway `DEFAULT_ADMIN_ROLE` holder. |
 | R12 to R14 | The verifier reads everything from the Safe: runtime code hash equal to the canonical SafeProxy's, threshold 2, owner set equal to the sheet's signers, `SafeL2` as singleton, no module, no guard, the canonical fallback handler. Quorum is proved enforced by eth_calls of one harmless SafeTx: one owner signature must revert `GS020`, the same owner twice and two non-owners must each revert `GS026`, and threshold signatures must return `true`. The devops driver grades these as `AC-ID-06#safe-quorum`. |
@@ -156,7 +156,7 @@ checked against the Twin chain with `bun scripts/devnet/safe-set.ts`:
 
 | Contract | Code hash | Pinned in |
 |---|---|---|
-| `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | the devops publish-contracts verifier (`verify`) |
+| `SafeProxy` v1.4.1 (every proxy the factory creates) | `0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c` | core's `publish-contracts` verifier (`verify`) |
 | `Safe` singleton (L1) | `0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4` | `scripts/devnet/safe-set.ts` |
 | `SafeL2` singleton | `0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff` | `scripts/devnet/safe-set.ts` |
 | `SafeProxyFactory` | `0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317` | `scripts/devnet/safe-set.ts` |
