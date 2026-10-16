@@ -179,6 +179,13 @@ uint256 internal constant DEPOSIT_ENTRY_GAS_FLOOR = 1_600_000;
 
 Ordered registry of all strategy adapters (active and inactive).
 
+<i>
+
+Written only through the `RobotMoneyVaultOps` library's storage pointer (`_book()`), which
+slither cannot follow, hence the same-line `uninitialized-state` suppression.
+
+</i>
+
 ```solidity
 AdapterInfo[] public adapters;
 ```
