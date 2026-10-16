@@ -103,6 +103,16 @@ export interface VerifyOptions {
   sheet: VerifySheet;
   /** First block of the deployment (the first deploy receipt). The role scan starts here. */
   fromBlock: bigint;
+  /**
+   * Issue 1851: every deploy transaction the run manifest recorded (each stage's txHashes and each redeploy's deploy_tx_hashes). Every log scan proves from their receipts
+   * that each contract it scans was created at or after `fromBlock`. Absent with a `fromBlock` above zero: every scan label fails, the scan start cannot be proven.
+   */
+  deployTxs?: Hex[];
+  /**
+   * Issue 1851, issue 1835: contracts the run adopted instead of creating (the run manifest's adopted stages, `adoption.libraries[].address`: the core timelock someone else
+   * deployed at the predicted CREATE2 address). The creation proof finds their creation transaction from their earliest RoleGranted log from `fromBlock` on.
+   */
+  adoptedContracts?: Address[];
   /** The block of the timelock handover. The agent checks stop here, because depositors authorize their own agents after it. Unset: the chain head. */
   handoverBlock?: bigint;
   /** Blocks per eth_getLogs call. The public Base RPC caps at 2000. */
@@ -154,6 +164,17 @@ export interface VerifyOptions {
   retryBaseMs?: number;
 }
 
+/** Issue 1851: what the creation proof of the log scans reads from one deploy transaction's receipt. */
+export interface DeployReceipt {
+  blockNumber: bigint;
+  status: "success" | "reverted";
+  /** The contract a CREATE transaction made. Null for a call (the CREATE2 factory call of the timelock stage). */
+  contractAddress: Address | null;
+  to: Address | null;
+  /** The emitter of every log of the transaction. */
+  logs: { address: Address }[];
+}
+
 export interface RawCallResult {
   ok: boolean;
   /** Return data when ok, revert data when not. */
@@ -177,8 +198,8 @@ export interface ChainReader {
   blockNumber(): Promise<bigint>;
   /** Timestamp of the head block, in seconds. Optional: only the config-check freshness read needs it. */
   blockTimestamp?(): Promise<bigint>;
-  /** Runtime code at the head, or at `blockNumber` when given (issue 1833: the vault scans check the vault had no code before the scan start). */
-  getCode(address: Address, blockNumber?: bigint): Promise<Hex>;
+  /** Runtime code at the head. Never a historical block: a pruned RPC cannot serve past state (issue 1851). */
+  getCode(address: Address): Promise<Hex>;
   nonce(address: Address): Promise<number>;
   getStorageAt(address: Address, slot: Hex): Promise<Hex>;
   /** Decoded read. `signature` is a human-readable ABI fragment such as "function hasRole(bytes32,address) view returns (bool)". Throws on revert. */
@@ -187,6 +208,8 @@ export interface ChainReader {
   getTransaction(hash: Hex): Promise<{ to: Address | null; input: Hex; value: bigint } | null>;
   /** The receipt status of a mined transaction, or null when it is not mined. */
   receiptStatus(hash: Hex): Promise<"success" | "reverted" | null>;
+  /** Issue 1851: a deploy transaction's receipt (eth_getTransactionReceipt, served by pruned nodes), or null when the chain does not know it. Throws when the RPC refuses. */
+  deployReceipt(hash: Hex): Promise<DeployReceipt | null>;
   /** Raw eth_call that never throws on revert. */
   callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult>;
   getLogs(params: { address?: Address; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;

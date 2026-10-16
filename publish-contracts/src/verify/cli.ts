@@ -1,10 +1,13 @@
-// CLI: bun src/verify/cli.ts --rpc URL --manifests DIR --sheet-json FILE --artifacts out --frozen FILE --deploy-sha SHA --from-block N --core-dir CORE [--sources]
+// CLI: bun src/verify/cli.ts --rpc URL --manifests DIR --sheet-json FILE --artifacts out --frozen FILE --deploy-sha SHA --from-block N --core-dir CORE [--run-manifest FILE] [--sources]
+// --run-manifest is the run's publish-run.json: its deploy transaction hashes prove the log scans start at or before each scanned contract's creation (issue 1851).
+// Without it a --from-block above zero fails every log scan label.
 // The sheet JSON is the whitelist-parsed sheet in VerifySheet shape (bigints as decimal strings), with `upgradeMode` (issue 1809: the release mode; absent fails the
 // upgradeability labels) and, for an upgradeable release, `freezeDeadline`. The core dir also holds the storage-layout snapshots. No secret is read or written here.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { loadStageTable } from "../stage-table.ts";
 import { verifyDeployment, viemReader, loadFrozenCounts } from "./index.ts";
+import { runAdoptedContracts, runDeployTxs } from "./manifests.ts";
 import { verifySources, contractsFromManifests } from "./sources.ts";
 import type { VerifySheet } from "./types.ts";
 
@@ -24,7 +27,7 @@ async function main() {
     options: {
       rpc: { type: "string" }, manifests: { type: "string" }, "sheet-json": { type: "string" }, artifacts: { type: "string" },
       frozen: { type: "string" }, "deploy-sha": { type: "string" }, "core-dir": { type: "string" }, "from-block": { type: "string" }, "log-chunk": { type: "string" },
-      sources: { type: "boolean" }, json: { type: "boolean" },
+      "run-manifest": { type: "string" }, sources: { type: "boolean" }, json: { type: "boolean" },
     },
   });
   for (const k of ["rpc", "manifests", "sheet-json", "artifacts", "frozen", "deploy-sha", "from-block", "core-dir"] as const)
@@ -35,6 +38,7 @@ async function main() {
     chain: viemReader(values.rpc!), manifestDir: values.manifests!, table, sheet, artifactsDir: values.artifacts!, coreDir: values["core-dir"]!,
     fromBlock: BigInt(values["from-block"]!), logChunk: values["log-chunk"] ? Number(values["log-chunk"]) : undefined,
     frozenCounts: loadFrozenCounts(values.frozen!, values["deploy-sha"]!),
+    ...(values["run-manifest"] ? (() => { const run = JSON.parse(readFileSync(values["run-manifest"]!, "utf8")); return { deployTxs: runDeployTxs(run), adoptedContracts: runAdoptedContracts(run) }; })() : {}),
   });
   if (values.sources) {
     const s = await verifySources({ chainId: sheet.chainId, contracts: contractsFromManifests(values.manifests!, table) });

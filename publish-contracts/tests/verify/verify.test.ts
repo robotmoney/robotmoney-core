@@ -3,14 +3,14 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../../src/counts.ts";
 import { getStageTable } from "../../src/stages.ts";
-import { verifyDeployment } from "../../src/verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment } from "../../src/verify/index.ts";
 import { keccak256, toHex } from "viem";
 import { padTopic } from "../../src/verify/logs.ts";
 import { ADMIN_ROLE, EMERGENCY_ROLE, SAFE_GUARD_SLOT, WEIGHT_SETTER_ROLE, stageManifestFile, SIG_AGENT_AUTHORIZED, SIG_AGENT_OWNERSHIP } from "../../src/verify/constants.ts";
 import { USDC_ADDRESS, USDC_PROXY_CODE_HASH } from "../../src/usdc.ts";
 import { LABELS_TXT, rewriteLabelsTxt, verifySection } from "./labels-file.ts";
 import { CLAIM_LABEL } from "../../src/verify/upgradeability.ts";
-import { buildWorld, failed, IMPLS, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
+import { adoptTimelock, buildWorld, deployedWorld, failed, WORLD_CREATE2_FACTORY, IMPLS, addr, DEPLOYER, SAFE, SEED_SHARES, VAULTS, REGISTRY, TIMELOCK, GATEWAY, OWNERS, ROUTER, GOV, REC, type World } from "./world.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "expected-labels.json");
 
@@ -536,35 +536,115 @@ describe("rotation of the weight setter (core 1616, ADR-0002)", () => {
   });
 });
 
-// Issue 1833: the KEEPER/EMERGENCY holder and allowlist scans start at --from-block. A vault that already has code one block earlier was created before the scan start,
-// so a grant made before it would never be seen: the vault's scan labels fail instead of passing on a partial log.
-describe("from-block after a vault's creation (issue 1833)", () => {
+// Issue 1833, 1851: every log scan starts at --from-block. Each scanned contract's creation block is read from the receipt of the run's deploy transaction that created it
+// (eth_getTransactionReceipt, served by pruned nodes), never from historical state. A contract created before the scan start fails its scan labels instead of passing on a partial log.
+describe("from-block against the deploy receipts (issue 1833, 1851)", () => {
   const scanLabels = (key: string) => [`vault[${key}]: KEEPER_ROLE has no holder`, `vault[${key}]: EMERGENCY_ROLE has exactly one holder`, ...(key === "rmUSDC" ? [`vault[${key}]: adapter set, caps and code-hash allowlist equal the deploy script`] : [])];
-  test("no vault has code at from-block minus 1: every vault scan label passes", async () => {
-    const w = buildWorld();
-    w.opts.fromBlock = 100n;
+  const AGENT_SCANS = ["agents: no agent authorized at handover", "agents: no address holds AGENT_ROLE after handover"];
+  const DEPLOYER_SCAN = "deployer: holds no role on any contract (log scan)";
+  const HOLDERS_SCAN = "roles: every holder of every role on every governed contract is an expected account (log scan)";
+  const TIMELOCK_SCAN = "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)";
+  const ALL_SCANS = [...["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"].flatMap(scanLabels), ...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN, TIMELOCK_SCAN];
+  const deployed = deployedWorld;
+  const okOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => [l, r.checks.find((c) => c.label === l)?.ok];
+  const detailOf = (r: Awaited<ReturnType<typeof verifyDeployment>>, l: string) => r.checks.find((c) => c.label === l)?.detail ?? "";
+
+  test("every receipt at or after from-block: every scan label passes, and no code is read at a historical block", async () => {
+    const w = deployed();
     const r = await verifyDeployment(w.opts);
-    for (const k of ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+    expect(failed(r)).toEqual([]);
+    for (const l of ALL_SCANS) expect(okOf(r, l)).toEqual([l, true]);
+    expect(w.chain.codeCalls.filter((x) => x.blockNumber !== undefined)).toEqual([]);
+    expect(w.chain.receiptCalls.length).toBe(w.opts.deployTxs!.length); // read once per run, not once per label
   });
-  test("a vault with code at from-block minus 1: its scan labels fail with 'after the vault's creation', the other vaults' still pass", async () => {
-    const w = buildWorld();
-    w.opts.fromBlock = 100n;
-    w.chain.pastCodes.set(`${VAULTS.rmUSDC!.address.toLowerCase()}@99`, "0x6001");
-    const r = await verifyDeployment(w.opts);
+  test("a vault whose deploy receipt is before from-block: its scan labels fail with 'after the vault's creation', the other vaults' still pass", async () => {
+    const r = await verifyDeployment(deployed({ rmUSDC: 99n }).opts);
     expect(r.ok).toBe(false);
     for (const l of scanLabels("rmUSDC")) {
-      const c = r.checks.find((x) => x.label === l);
-      expect([l, c?.ok]).toEqual([l, false]);
-      expect(c!.detail).toContain("from-block 100 is after the vault's creation");
+      expect(okOf(r, l)).toEqual([l, false]);
+      expect(detailOf(r, l)).toContain("from-block 100 is after the vault's creation");
+      expect(detailOf(r, l)).toContain("created in block 99");
     }
-    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect([l, r.checks.find((c) => c.label === l)?.ok]).toEqual([l, true]);
+    for (const k of ["rmPROTO", "rmAGENT", "rmRWA"]) for (const l of scanLabels(k)) expect(okOf(r, l)).toEqual([l, true]);
   });
-  test("an unreadable past code read fails the labels too, never a silent pass", async () => {
-    const w = buildWorld();
-    w.opts.fromBlock = 100n;
+  test("historical state reads throw 'missing trie node' and the receipts read fine: every scan passes", async () => {
+    const w = deployed();
     const getCode = w.chain.getCode.bind(w.chain);
-    w.chain.getCode = async (a, b) => { if (b !== undefined) throw new Error("missing trie node"); return getCode(a); };
+    w.chain.getCode = async (a: `0x${string}`, ...rest: unknown[]) => { if (rest[0] !== undefined) throw new Error("missing trie node"); return getCode(a); };
     const r = await verifyDeployment(w.opts);
-    for (const l of scanLabels("rmPROTO")) expect(r.checks.find((c) => c.label === l)?.detail).toContain("missing trie node");
+    expect(failed(r)).toEqual([]);
   });
+  test("a receipt read that throws: every scan label fails with an RPC_REFUSED detail, the other labels pass", async () => {
+    const w = deployed();
+    w.chain.receipts.set(w.opts.deployTxs![2]!.toLowerCase(), () => { throw new Error("missing trie node"); });
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(`${RPC_REFUSED_DETAIL}: `)).toBe(true);
+    expect(detailOf(r, DEPLOYER_SCAN)).toContain("missing trie node");
+  });
+  test("a recorded deploy transaction the RPC does not know (a node that does not index old transactions): every scan label fails classified RPC_REFUSED", async () => {
+    const w = deployed();
+    w.chain.receipts.delete(w.opts.deployTxs![0]!.toLowerCase());
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...ALL_SCANS].sort());
+    for (const l of ALL_SCANS) expect(detailOf(r, l).startsWith(`${RPC_REFUSED_DETAIL}: the RPC does not know the transaction`)).toBe(true);
+  });
+  test("a contract no receipt of the run created and the run did not adopt: its scan labels fail, not classified RPC_REFUSED", async () => {
+    const w2 = deployed();
+    w2.opts.deployTxs = w2.opts.deployTxs!.slice(1); // the gateway's receipt is missing from the run manifest
+    const r2 = await verifyDeployment(w2.opts);
+    expect(failed(r2).sort()).toEqual([...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN].sort());
+    expect(detailOf(r2, AGENT_SCANS[0]!)).toContain("no deploy transaction of the run created gateway");
+    expect(detailOf(r2, AGENT_SCANS[0]!)).toContain("the run did not adopt it");
+    expect(detailOf(r2, AGENT_SCANS[0]!).startsWith(RPC_REFUSED_DETAIL)).toBe(false);
+  });
+  test("no deploy transactions given with from-block above zero: every scan label fails; from-block zero needs none", async () => {
+    const w = deployed();
+    w.opts.deployTxs = undefined;
+    expect(failed(await verifyDeployment(w.opts)).sort()).toEqual([...ALL_SCANS].sort());
+    const w0 = buildWorld();
+    expect(failed(await verifyDeployment(w0.opts))).toEqual([]);
+    expect(w0.chain.receiptCalls).toEqual([]);
+  });
+  // Issue 1835: the timelock stage may ADOPT a timelock someone else created at the predicted CREATE2 address. The run sent no creation transaction for it.
+  const adoptedTimelock = (block: bigint, receipt: (tx: `0x${string}`) => Record<string, unknown> | null) => adoptTimelock(deployedWorld(), block, receipt);
+  const TL_LABELS = [TIMELOCK_SCAN, DEPLOYER_SCAN, HOLDERS_SCAN];
+  test("an adopted timelock created by a CREATE2 factory call at or after from-block: the timelock-holder, deployer-role and role-holder labels pass", async () => {
+    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] }));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r)).toEqual([]);
+    for (const l of TL_LABELS) expect(okOf(r, l)).toEqual([l, true]);
+  });
+  test("an adopted timelock whose earliest RoleGranted log from from-block is not its CREATE2 creation (it existed before the scan start): those labels fail", async () => {
+    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: TIMELOCK, logs: [{ address: TIMELOCK }] }));
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...TL_LABELS].sort());
+    expect(detailOf(r, TIMELOCK_SCAN)).toContain("is not a successful CREATE2 factory call that created it");
+  });
+  test("the same timelock missing from deployTxs and NOT adopted: those labels fail closed", async () => {
+    const w = adoptedTimelock(105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] }));
+    w.opts.adoptedContracts = [];
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...TL_LABELS].sort());
+    expect(detailOf(r, TIMELOCK_SCAN)).toContain("no deploy transaction of the run created timelock");
+  });
+  test("an adopted timelock whose creation receipt the RPC refuses: those labels fail classified RPC_REFUSED", async () => {
+    const w = adoptedTimelock(105n, () => null);
+    const r = await verifyDeployment(w.opts);
+    expect(failed(r).sort()).toEqual([...TL_LABELS].sort());
+    for (const l of TL_LABELS) expect(detailOf(r, l).startsWith(RPC_REFUSED_DETAIL)).toBe(true);
+  });
+  // Each scan family fails when --from-block is after the deploy receipt block of the contract it scans.
+  for (const [what, blocks, want] of [
+    ["the gateway (agent scans, deployer-role and role-holder scans)", { gateway: 99n }, [...AGENT_SCANS, DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["the router (deployer-role and role-holder scans)", { router: 99n }, [DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["the timelock, created through the CREATE2 factory (timelock-holder, deployer-role and role-holder scans)", { timelock: 99n }, [TIMELOCK_SCAN, DEPLOYER_SCAN, HOLDERS_SCAN]],
+    ["a vault (its own scans, deployer-role and role-holder scans)", { rmAGENT: 99n }, [...scanLabels("rmAGENT"), DEPLOYER_SCAN, HOLDERS_SCAN]],
+  ] as const) {
+    test(`from-block after the creation of ${what}: exactly those scan labels fail`, async () => {
+      const r = await verifyDeployment(deployed(blocks as Record<string, bigint>).opts);
+      expect(failed(r).sort()).toEqual([...want].sort());
+      for (const l of want) expect(detailOf(r, l)).toContain("from-block 100 is after the");
+    });
+  }
 });

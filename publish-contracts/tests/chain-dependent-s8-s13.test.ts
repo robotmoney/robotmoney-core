@@ -64,7 +64,7 @@ describe.skipIf(!mainReady)(`devops 60: verifier exits 0 against chain 8453 (rea
   test("the one verifier is VERIFIED against 8453 with the recorded manifests", () => {
     const j = JSON.parse(readFileSync(INPUTS, "utf8"));
     const p = Bun.spawnSync(["bun", join(import.meta.dir, "..", "src", "verify", "cli.ts"), "--rpc", MAIN_RPC!, "--manifests", join(REPO, "deployments", "8453"), "--core-dir", CORE!,
-      "--sheet-json", join(REPO, j.sheet_json), "--artifacts", j.artifacts, "--frozen", join(REPO, j.frozen), "--deploy-sha", j.deploy_sha, "--from-block", String(j.from_block)], { stdout: "pipe", stderr: "pipe" });
+      "--sheet-json", join(REPO, j.sheet_json), "--artifacts", j.artifacts, "--frozen", join(REPO, j.frozen), "--deploy-sha", j.deploy_sha, "--from-block", String(j.from_block), ...(j.run_manifest ? ["--run-manifest", join(REPO, j.run_manifest)] : [])], { stdout: "pipe", stderr: "pipe" });
     expect(p.stdout.toString()).toContain("RESULT: VERIFIED");
     expect(p.exitCode).toBe(0);
   }, 600_000);

@@ -186,6 +186,18 @@ directory):
 bun publish-contracts/src/cli.ts pause-all --chain 8453 --rpc "$BASE_RPC" --sheet "$SHEET"   --signer "$DEPLOYER_SIGNER" --emergency-signer "$EMERGENCY_SIGNER"   --core-sha "$DEPLOY_SHA" --evidence "$EVIDENCE_DIR"
 ```
 
+Run the CLI from a checkout of `DEPLOY_SHA` (the same checkout `--core-dir`
+names). A CLI from another sha still pauses: `pause-all` reads no per-vault
+rule, so it logs one `vault_rules.mismatch` warning naming both stage tables
+and runs. Every other verb refuses that mismatch with `INPUT_MISSING`
+(issue 1851).
+
+A verify whose only failures are reads the RPC refused (it could not serve a
+deploy transaction's receipt) exits 30 (`RPC_REFUSED`) and pauses nothing:
+rerun verify against an RPC that serves `eth_getTransactionReceipt` for the
+run's deploy transactions. No archive node is needed. Exit 30 means the
+deployment is NOT verified: do not proceed to govern until verify passes.
+
 The signer follows the stage. Before the stage 11 handover the deployer signs
 (it still holds `EMERGENCY_ROLE` on every vault). After it, the EMERGENCY key
 signs (`--emergency-signer`, never defaulted on mainnet). The CLI reads

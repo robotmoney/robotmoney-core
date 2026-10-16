@@ -1,5 +1,5 @@
 // The per-vault deploy and governance rules (issue 1705), the one table loader for them: scripts/deploy/stage-table.json `vaults[]` in this checkout.
-// The CLI refuses to start when they differ from the --core-dir table (issue 1833, assertVaultRulesMatch).
+// The CLI refuses to start when they differ from the --core-dir table (issue 1833, assertVaultRulesMatch), except pause-all, which only warns (issue 1851).
 // govern.ts (the unpause rows), evidence-check.ts (the stage 13 steps), verify-stage.ts (the verifier's expected paused state and router eligibility) and sheet.ts
 // read every per-vault difference from here. None of them names a vault key to treat it differently: the difference is a table field with its decision link.
 import { readFileSync } from "node:fs";

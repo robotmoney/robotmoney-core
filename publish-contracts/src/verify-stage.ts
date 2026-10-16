@@ -11,6 +11,7 @@ import { effectiveCounts } from "./counts.ts";
 import { loadReceiptAddr, resumeCommand } from "./govern.ts";
 import { MAINNET_CHAIN_ID, delayFloor } from "./floors.ts";
 import { kindLabel } from "./chains.ts";
+import { runAdoptedContracts, runDeployTxs } from "./verify/manifests.ts";
 import { adoptedTxs, governHasRun, measuredCounts, manifestDir, saveRunManifest, readManifestField, type RunContext, type RunManifest } from "./runner.ts";
 import { BASKET_KEYS, VAULT_KEYS, VAULT_NAME, eligibleInOrder, type VaultKey } from "./sheet.ts";
 import { ROUTER_STAGE_ELIGIBLE, SEEDED_VAULTS, STAGE13_UNPAUSE_VAULTS, expectPaused, routerEligible, vaultRule } from "./vault-rules.ts";
@@ -19,7 +20,7 @@ import { PROOF_STAGE } from "./control-proof.ts";
 import { loadConfigAssets, loadExpectedMaxSlippageBps } from "./asset-config.ts";
 import { manifestBase } from "./stage-table.ts";
 import { DEPLOYER_STAGES, VAULT_STAGES, getStageTable, manifestRef, type StageRow } from "./stages.ts";
-import { verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment, verifySources, viemReader, type VerifyReport, type VerifySheet, type VerifyOptions, type VaultSheet } from "./verify/index.ts";
 import { recordDependencyManifest, type RecorderSpawn } from "./record-dependencies.ts";
 import { contractsFromManifests } from "./verify/sources.ts";
 import { REDEPLOY_ROW, redeploysOf } from "./redeploy-vault.ts";
@@ -208,6 +209,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   ctx.log.log("info", "stage.start", { stage: row.name });
   const report = await deps.verifyDeployment({
     chain: viemReader(ctx.rpc), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
+    deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
     logChunk: 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
@@ -267,6 +269,10 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const failed = report.checks.filter((c) => !c.ok);
   manifest.stages[row.name] = { status: report.ok ? "done" : "started", startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(), checks: report.checks.length, failed: failed.length };
   saveRunManifest(ctx.evidenceDir, manifest);
+  // Issue 1851: when every failure is a read the RPC refused (a pruned node, a throttle), the scans did not run: RPC_REFUSED, which does not pause the vaults. The deployment is NOT verified.
+  if (!report.ok && failed.every((c) => c.detail.startsWith(RPC_REFUSED_DETAIL))) {
+    throw new PublishError("RPC_REFUSED", `the verifier could not read ${failed.length} label(s) because the RPC refused a read: ${failed.slice(0, 5).map((c) => c.label).join(", ")}. The deployment is NOT verified: those scans did not run, so do not proceed to govern. No vault was paused, because an RPC without the data is not an incident. Rerun verify against an RPC that serves eth_getTransactionReceipt for the run's deploy transactions and eth_getLogs from the first deploy block: ${failed[0]!.detail.slice(0, 300)}`, { failed: failed.map((c) => c.label) });
+  }
   if (!report.ok) throw new PublishError("VERIFY", `the verifier reports ${failed.length} failure(s): ${failed.slice(0, 5).map((c) => c.label).join(", ")}`, { failed: failed.map((c) => c.label) });
   if (governedRedeploys.length) {
     const evidence = { deployment_kind: ctx.sheet.kind, registry: { address: governedRedeploys[0]!.registry }, timelock: { address: governedRedeploys[0]!.timelock }, vault_redeploys: governedRedeploys, vaults: Object.fromEntries(governedRedeploys.map((r) => [r.vault, { address: r.new_vault }])) };
