@@ -103,14 +103,16 @@ for (const [job, file] of Object.entries(SUITES)) {
 }
 
 // 2a'. suite 28 (issue 1846): the upgrade lifecycle job runs after the rehearsal job at the same pin, so the two forks never run at once and the
-// lifecycle job restores the pin's RPC cache the rehearsal saved. always() keeps it independent of the rehearsal's result; the pin and draft guards stay.
+// lifecycle job restores the pin's RPC cache the rehearsal saved. !cancelled() keeps it independent of the rehearsal's result, and (issue 1861) unlike always() starts
+// no 60-minute fork after a cancelled (superseded) run; the pin and draft guards stay.
 function lifecycleJobProblem(wf: any): string | null {
   const job = wf.jobs?.["core-stages-twin-upgrade"];
   if (!job || job.name !== "core-stages-twin-upgrade-lifecycle") return "suite-28-core-stages.yml has no core-stages-twin-upgrade-lifecycle job";
   const needs: string[] = [].concat(job.needs ?? []);
   for (const n of ["pin", "core-stages-twin"]) if (!needs.includes(n)) return `core-stages-twin-upgrade-lifecycle must need ${n} (needs: ${JSON.stringify(job.needs)})`;
   const cond = String(job.if ?? "");
-  if (!/always\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must contain always()";
+  if (/always\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must not use always(): it also fires after a cancelled run (use !cancelled())";
+  if (!/!\s*cancelled\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must contain !cancelled()";
   if (!cond.includes("needs.pin.result == 'success'")) return "core-stages-twin-upgrade-lifecycle if: must require needs.pin.result == 'success'";
   if (!cond.includes("github.event.pull_request.draft == false")) return "core-stages-twin-upgrade-lifecycle if: must keep the draft guard";
   return null;
@@ -123,10 +125,18 @@ function lifecycleJobProblem(wf: any): string | null {
   const onlyPin = structuredClone(wf);
   onlyPin.jobs["core-stages-twin-upgrade"].needs = "pin";
   if (lifecycleJobProblem(onlyPin) === null) bad("the lifecycle job check accepted a job that needs only pin");
-  const noAlways = structuredClone(wf);
-  noAlways.jobs["core-stages-twin-upgrade"].if = "${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}";
-  if (lifecycleJobProblem(noAlways) === null) bad("the lifecycle job check accepted an if: without always()");
-  ok("suite 28 lifecycle job needs pin and core-stages-twin, runs if: always() with the pin and draft guards (a needs-only-pin fixture is refused)");
+  const noCancelled = structuredClone(wf);
+  noCancelled.jobs["core-stages-twin-upgrade"].if = "${{ needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}";
+  if (lifecycleJobProblem(noCancelled) === null) bad("the lifecycle job check accepted an if: without !cancelled()");
+  const withAlways = structuredClone(wf);
+  withAlways.jobs["core-stages-twin-upgrade"].if = "${{ always() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}";
+  if (lifecycleJobProblem(withAlways) === null) bad("the lifecycle job check accepted an if: using always() (it fires after a cancelled run)");
+  for (const [k, v] of [["pin", "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}"], ["draft", "${{ !cancelled() && needs.pin.result == 'success' }}"]] as const) {
+    const f = structuredClone(wf);
+    f.jobs["core-stages-twin-upgrade"].if = v;
+    if (lifecycleJobProblem(f) === null) bad(`the lifecycle job check accepted an if: without the ${k} guard`);
+  }
+  ok("suite 28 lifecycle job needs pin and core-stages-twin, runs if: !cancelled() with the pin and draft guards (needs-only-pin, always(), no-!cancelled(), no-pin-guard and no-draft-guard fixtures are refused)");
 }
 
 // 2b. the nightly uploads the results and the pin file.

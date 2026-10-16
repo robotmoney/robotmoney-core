@@ -28,7 +28,11 @@ bun scripts/devnet/twin-fork.ts stop
 
 ## Stale pin
 
-A non-archive upstream stops serving the state of an old block. `start` probes the pinned block (`eth_getBalance` at the pin). If the upstream answers "missing trie node" or similar, and also if anvil dies with that error, `start --repin-on-stale` prints a loud `WARN: STALE PIN` line, re-pins to head minus 2 and rewrites `--pin-file` with the new block. It is on by default when `CI` or `GITHUB_ACTIONS` is set and off locally (a stale pin is then an error). `--no-repin-on-stale` forces it off. A re-pin means jobs of the same run may not share a block, so treat the WARN as a signal to rerun the whole run.
+A non-archive upstream stops serving the state of an old block. `start` probes the pinned block (`eth_getBalance` at the pin). If the upstream answers "missing trie node" or similar, and also if anvil dies with that error, `start --repin-on-stale` prints a loud `WARN: STALE PIN` line, re-pins to head minus 2 and rewrites `--pin-file` with the new block. It is on by default when `CI` or `GITHUB_ACTIONS` is set and off locally (a stale pin is then an error). `--no-repin-on-stale` forces it off. A re-pin means jobs of the same run may not share a block, so treat the WARN as a signal to rerun the whole run: use **Re-run all jobs**, so the pin job picks a fresh block for every job.
+
+## Prolonged upstream outage
+
+A failed Twin job (`core-stages-twin-chain`, `core-stages-twin-upgrade-lifecycle`) after an upstream outage is recovered by re-running the failed job: `check-sha-green` lists check-runs with `filter=latest` (the GitHub API default, pinned explicitly), so a green re-run supersedes the failed attempt. When the provider stays down, point the `BASE_UPSTREAM_RPC` secret at another provider and re-run the failed job. If the re-run logs `WARN: STALE PIN`, use **Re-run all jobs** so the pin job picks a fresh block. The release runbook (`docs/operations/contract-release-runbooks.md`, Green rehearsal only) says the same.
 
 ## Caching
 

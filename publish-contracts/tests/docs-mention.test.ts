@@ -94,3 +94,23 @@ describe("the CLI help and architecture 4.9 describe the one-call apply and both
     expect(s49).toMatch(/`release-receipt` is refused with USAGE/);
   });
 });
+
+// Issue 1861: the prolonged upstream outage path is named in the release runbook and the Twin fork README, and filter=latest is described as the API default pinned explicitly.
+describe("the prolonged upstream outage path and the filter=latest wording (issue 1861)", () => {
+  const read = (...p: string[]) => readFileSync(join(ROOT, ...p), "utf8");
+  test("the runbook and README-twin-fork name another provider, then Re-run all jobs on WARN: STALE PIN", () => {
+    for (const [f, text] of [["contract-release-runbooks.md", read("docs", "operations", "contract-release-runbooks.md")], ["README-twin-fork.md", read("scripts", "devnet", "README-twin-fork.md")]] as const) {
+      expect(text, f).toMatch(/point the `BASE_UPSTREAM_RPC`\s+secret at another provider and re-run the failed job/);
+      expect(text, f).toMatch(/If the re-run logs `WARN: STALE PIN`[^.]*, use \*\*Re-run all jobs\*\* so the pin job picks a fresh block/);
+    }
+  });
+  test("ci-suites.md and check-sha-green.ts say filter=latest is pinned explicitly (the API default), not the change that makes re-runs recover", () => {
+    const ci = read("docs", "development", "ci-suites.md");
+    const gate = read("scripts", "ci", "check-sha-green.ts");
+    for (const [f, text] of [["ci-suites.md", ci], ["check-sha-green.ts", gate]] as const) {
+      expect(text, f).toMatch(/filter=latest[^\n]{0,160}pinned explicitly|pinned explicitly[^\n]{0,160}filter=latest/);
+      expect(text, f).toContain("API default");
+    }
+    expect(ci).not.toContain("`filter=latest` (issue 1846) returns");
+  });
+});
