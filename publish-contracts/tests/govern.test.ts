@@ -1692,7 +1692,7 @@ describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () 
     const p = parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", NEW, "--upgrade-build", "upgrade-build"]);
     expect(p).toMatchObject({ row: "upgrade-proxy", proxy: "gateway", implementation: NEW, upgradeBuild: join(process.cwd(), "upgrade-build") });
     expect(() => parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway"])).toThrow("--proxy NAME and --implementation");
-    expect(() => parseCli([...base, "--row", "freeze-upgrades", "--proxy", "gateway"])).toThrow("go with --row upgrade-proxy only");
+    expect(() => parseCli([...base, "--row", "freeze-upgrades", "--proxy", "gateway"])).toThrow("go with --row upgrade-proxy (or the deploy-implementation verb) only");
     expect(() => parseCli([...base, "--row", "upgrade-proxy", "--proxy", "gateway", "--implementation", "0x12"])).toThrow("--implementation must be an address");
     expect(parseCli([...base, "--row", "freeze-upgrades"]).row).toBe("freeze-upgrades");
     // issue 1859: --no-warp (the Twin rehearsal stops the freeze row after its schedule) goes with govern only
