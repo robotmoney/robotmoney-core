@@ -25,8 +25,8 @@ use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
     db::Db, feature_flags, indexer::backfill_proxy_events, indexer::refusal_backoff,
-    indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc, rpc::RetryPolicy,
-    DEFAULT_TICK_SECONDS,
+    indexer::run_once, indexer::IndexerConfig, indexer::ProxyBackfillOutcome, rpc::JsonRpc,
+    rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -316,7 +316,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut interval = tokio::time::interval(Duration::from_secs(cli.tick_seconds));
     let mut consecutive_refusals: u32 = 0;
-    // Issue 1840: backfill the proxy upgrade and freeze history once, after the first good tick.
+    // Issue 1840: backfill the proxy upgrade and freeze history once per process start. Issue 1856: one
+    // slice per good tick from a saved checkpoint, so live ingestion keeps moving, and a refused or
+    // cursorless attempt is retried (and shown in `/health`) rather than marked done.
     let mut proxy_backfill_done = false;
 
     loop {
@@ -347,10 +349,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     consecutive_refusals = 0;
                     if !proxy_backfill_done {
                         match backfill_proxy_events(&db, &rpc, &cfg).await {
-                            Ok(_) => proxy_backfill_done = true,
+                            // Progress, Refused and NoCursor all run again next tick; the
+                            // backfill logs and saves its own state.
+                            Ok(outcome) => {
+                                proxy_backfill_done =
+                                    matches!(outcome, ProxyBackfillOutcome::Done { .. })
+                            }
                             Err(e) => error!(
                                 error = %e,
-                                "proxy upgrade backfill failed; retrying after the next tick"
+                                "proxy upgrade backfill slice failed; resuming from the saved \
+                                 checkpoint after the next tick"
                             ),
                         }
                     }

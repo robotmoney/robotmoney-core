@@ -61,11 +61,11 @@ use crate::model::{
     CommitteeAgent, CommitteeAgentsResponse, CommitteeTilt, CommitteeTiltsResponse,
     CommitteeTrackRecordResponse, CommitteeVoteEntry, ConsensusReceipt, ConsensusReceiptResponse,
     ConsensusReceiptsResponse, Contract, ContractsResponse, Deposit, DepositResponse,
-    DepositsResponse, EventKind, Freshness, Health, RegimeFeedResponse, RegimeSnapshot,
-    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
-    UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
-    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
-    VaultsResponse, WeightHistoryEntry,
+    DepositsResponse, EventKind, Freshness, Health, ProxyBackfillHealth, RegimeFeedResponse,
+    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
+    TransactionResponse, UpgradeState, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry,
+    VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint,
+    VaultWeight, VaultsResponse, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -275,11 +275,26 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     .fetch_optional(&state.pool)
     .await?;
     let progress = indexer_progress(&state).await?;
+    // Issue 1856. A database the indexer has not migrated to 0020 yet has no
+    // such table (42P01): report null rather than turn the probe red.
+    let proxy_backfill: Option<ProxyBackfillHealth> = match sqlx::query_as(
+        "SELECT state, floor_block, target_block, next_block, detail \
+         FROM proxy_backfill_progress WHERE chain_id = $1",
+    )
+    .bind(state.chain_id)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("42P01") => None,
+        Err(e) => return Err(e.into()),
+    };
     Ok(Json(Health {
         status: "ok",
         last_indexed_block: progress.map(|(b, _)| b),
         chain_head_block: chain_head_block(&state).await?,
         reorg_count: reorg_count.unwrap_or(0),
+        proxy_backfill,
     }))
 }
 

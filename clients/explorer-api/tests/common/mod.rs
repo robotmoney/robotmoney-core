@@ -108,6 +108,11 @@ pub const VAULT_CAPS_MIGRATION: &str =
 /// `UpgradesFrozen` events, from which `/v1/chains/:chain_id/contracts` derives implementation and freeze state.
 pub const PROXY_UPGRADE_EVENTS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql");
+/// Migration 0020 (issue 1856): `proxy_backfill_progress`, the indexer's proxy upgrade backfill checkpoint,
+/// which `/health` reports as `proxy_backfill`.
+pub const PROXY_BACKFILL_PROGRESS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0020_proxy_backfill_progress.sql"
+);
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
@@ -221,6 +226,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply proxy upgrade events migration (0019)");
+    sqlx::raw_sql(PROXY_BACKFILL_PROGRESS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply proxy backfill progress migration (0020)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.

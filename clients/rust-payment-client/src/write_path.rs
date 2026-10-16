@@ -64,8 +64,8 @@
 //! | `deposit` | yes | the deadline | yes | yes |
 //! | `withdraw-router` | yes | the deadline | yes | yes |
 //! | `withdraw` | yes | `0` | yes | yes |
-//! | `committee vote-submit` | none | no replay cache | no | yes |
-//! | `receipt submit` | none | no replay cache | no | yes |
+//! | `committee vote-submit` | none | no replay cache | yes | yes |
+//! | `receipt submit` | none | no replay cache | yes | yes |
 //!
 //! For the three commands that go through [`WriteSession::submit`], the
 //! on-chain `deadline` in the calldata (at most `MAX_DEADLINE_SKEW_SECS` past
@@ -74,10 +74,14 @@
 //! bound) cannot apply to an old signature. `withdraw` passes that deadline in
 //! its calldata but stores `replay_deadline: 0`, because its `paymentId`
 //! excludes the deadline. `committee vote-submit` and `receipt submit` build
-//! and broadcast their own envelope: they verify the gateway once before
-//! signing (`verify_gateway_code_now`) and check the implementation at the
-//! executed block (`check_executed_under`), but carry no deadline and are not
-//! re-verified between signing and broadcast.
+//! and broadcast their own envelope: they verify the gateway before signing
+//! (`verify_gateway_code_now`), re-verify it between signing and broadcast
+//! through the same `reverify_gateway_after_signing` that `submit` calls
+//! (issue 1856), and check the implementation at the executed block
+//! (`check_executed_under`). They carry no on-chain deadline: the gateway's
+//! vote and receipt ABI has none, so a signed vote or receipt that is never
+//! mined stays valid until its nonce is used. The re-verify bounds the window
+//! to the time between the `latest` read and the broadcast.
 //!
 //! # One broadcast path
 //!
@@ -104,10 +108,8 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
-use crate::policy::implementation::{
-    check_executed_under, fmt_implementation, read_implementation,
-};
-use crate::policy::{verify_gateway_code, ChecksOutput};
+use crate::policy::implementation::{check_executed_under, reverify_gateway_after_signing};
+use crate::policy::ChecksOutput;
 use crate::replay_cache::ReplayCache;
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
@@ -664,20 +666,12 @@ impl WriteSession {
         // Re-verify the gateway now that the envelope is signed. A changed
         // or unapproved implementation discards the envelope: it is never
         // sent, so it can never execute.
-        let live = self.rt.block_on(async {
-            let live = read_implementation(&self.rpc, self.request.gateway, "latest").await?;
-            if live != gateway_implementation {
-                return Err(RmpcError::ErrImplementationChanged(format!(
-                    "gateway implementation changed from {} to {} after preflight; the signed \
-                     transaction was discarded unsent",
-                    fmt_implementation(gateway_implementation),
-                    fmt_implementation(live)
-                )));
-            }
-            verify_gateway_code(&self.rpc, cfg, "latest")
-                .await
-                .map(|_| ())
-        });
+        let live = self.rt.block_on(reverify_gateway_after_signing(
+            &self.rpc,
+            cfg,
+            self.request.gateway,
+            gateway_implementation,
+        ));
         if let Err(e) = live {
             log::error!("rmpc {cmd}: {e}");
             self.record(AuditDecision::Refused, Some(e.name().to_string()));

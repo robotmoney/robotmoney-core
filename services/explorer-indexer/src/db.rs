@@ -1605,6 +1605,48 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// The proxy upgrade backfill's checkpoint and state for `chain_id`
+    /// (`proxy_backfill_progress`, migration 0020; issue 1856). `None` before
+    /// the first backfill attempt.
+    pub async fn proxy_backfill_progress(
+        &self,
+        chain_id: i64,
+    ) -> Result<Option<ProxyBackfillProgress>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT state, floor_block, target_block, next_block, detail \
+             FROM proxy_backfill_progress WHERE chain_id = $1",
+        )
+        .bind(chain_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Save the proxy upgrade backfill's checkpoint and state for `chain_id`.
+    pub async fn save_proxy_backfill_progress(
+        &self,
+        chain_id: i64,
+        p: &ProxyBackfillProgress,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO proxy_backfill_progress \
+                 (chain_id, state, floor_block, target_block, next_block, detail, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, now()) \
+             ON CONFLICT (chain_id) DO UPDATE SET \
+                 state = EXCLUDED.state, floor_block = EXCLUDED.floor_block, \
+                 target_block = EXCLUDED.target_block, next_block = EXCLUDED.next_block, \
+                 detail = EXCLUDED.detail, updated_at = now()",
+        )
+        .bind(chain_id)
+        .bind(&p.state)
+        .bind(p.floor_block)
+        .bind(p.target_block)
+        .bind(p.next_block)
+        .bind(&p.detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Record the chain head a run saw (`indexer_runs.chain_head_block`, migration 0017).
     pub async fn set_run_chain_head(&self, run_id: i64, head: i64) -> Result<(), DbError> {
         sqlx::query("UPDATE indexer_runs SET chain_head_block = $2 WHERE run_id = $1")
@@ -2291,6 +2333,20 @@ pub struct AgentPolicyRow {
     pub max_per_window: Option<BigDecimal>,
     pub window_usage_to_date: Option<BigDecimal>,
     pub share_receiver: Option<Vec<u8>>,
+}
+
+/// One `proxy_backfill_progress` row (migration 0020; issue 1856).
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct ProxyBackfillProgress {
+    /// `running`, `done`, `refused` or `no_cursor`.
+    pub state: String,
+    pub floor_block: Option<i64>,
+    /// The cursor when the pass began.
+    pub target_block: Option<i64>,
+    /// The first block the pass has not scanned yet.
+    pub next_block: Option<i64>,
+    /// Why the pass was refused.
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
