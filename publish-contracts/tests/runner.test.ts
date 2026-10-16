@@ -4,7 +4,7 @@ import { encodeErrorResult, encodeFunctionData, parseAbi } from "viem";
 import { basename, join } from "node:path";
 import { PROOF_TX_NONCES } from "../src/counts.ts";
 import { EXIT_CODES } from "../src/errors.ts";
-import { STAGE_NAMES, getStageTable } from "../src/stages.ts";
+import { STAGE_NAMES, getStageTable, stageByName, useStageTable } from "../src/stages.ts";
 import { predictCoreTimelock } from "../src/timelock-pin.ts";
 import { COUNTS, SHA, exampleText, tmp } from "./fixtures.ts";
 import { ADMIN, LOCAL_RPC, SCRIPT, world } from "./harness.ts";
@@ -19,6 +19,10 @@ const targetBroadcasts = (w: ReturnType<typeof world>) => forgeScripts(w).filter
 const simulations = (w: ReturnType<typeof world>) => forgeScripts(w).filter((c: any) => !c.args.includes("--broadcast"));
 const manifest = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
 const lastError = (w: ReturnType<typeof world>) => w.logs().filter((l) => l.event === "run.failed").pop();
+/** The deployment manifest a stage's simulation and broadcast write (deployments/<chain>/ in the core checkout). */
+const stageManifest = (w: ReturnType<typeof world>, stage: string) => join(w.coreDir, "deployments", String(w.cfg.chainId), stageByName(stage).manifest!);
+/** Snapshot a file now; the returned function writes it back (undo a test's change). */
+const keep = (f: string) => { const t = readFileSync(f, "utf8"); return () => writeFileSync(f, t); };
 
 describe("the stage runner on stub forge and cast", () => {
   test("a full deploy runs every stage in table order and the final nonce equals the summed frozen counts", async () => {
@@ -461,6 +465,7 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(lastError(w).message).toContain(`stage timelock: the dry-run sends ${COUNTS.timelock! - 1} transactions, the frozen count is ${COUNTS.timelock}`);
     expect(broadcasts(w)).not.toContain(SCRIPT.timelock);
     expect(manifest(w).stages.timelock).toBeUndefined();
+    expect(existsSync(stageManifest(w, "timelock"))).toBe(false); // issue 1866: the refusal removes what the simulation wrote
     expect(w.logs().find((l) => l.event === "stage.timelock_not_adopted")).toMatchObject({ timelock: TL.address, runtime_hash: TL.runtimeHash });
   });
 
@@ -532,31 +537,50 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(broadcasts(w)).not.toContain(SCRIPT.registry);
     expect(simulations(w).some((c: any) => String(c.args[1]).includes(SCRIPT.registry!))).toBe(true); // refused after its simulation, before the broadcast
     expect(manifest(w).stages.registry).toBeUndefined();
+    // issue 1866: the refusal removes the manifest the registry simulation wrote, so the same command runs again once the cause is fixed
+    expect(existsSync(stageManifest(w, "registry"))).toBe(false);
   };
+  /** Issue 1866: undo the cause, run the same command again: the deploy finishes (no "already ran" refusal). */
+  const rerunSucceeds = async (w: ReturnType<typeof world>, undo: () => void) => {
+    undo();
+    const seen = w.lines.length;
+    expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0);
+    expect(w.logs().slice(seen).filter((l) => l.event === "run.failed")).toEqual([]);
+    expect(manifest(w).stages.registry.status).toBe("done");
+    expect(broadcasts(w)).toContain(SCRIPT.timelock);
+  };
+  const artifact = (w: ReturnType<typeof world>) => join(w.coreDir, "out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json");
 
-  test("issue 1853: the ProposerFloorTimelock artifact changed since the vault stage: the registry stage refuses before its broadcast", async () => {
-    const { w, code } = await resumeRegistry(rebuildTimelock);
+  test("issue 1853, 1866: the ProposerFloorTimelock artifact changed since the vault stage: the registry stage refuses before its broadcast, and runs once it is restored", async () => {
+    let undo = () => {};
+    const { w, code } = await resumeRegistry((w) => { undo = keep(artifact(w)); rebuildTimelock(w); });
     refusedBeforeRegistry(w, code);
     expect(lastError(w).message).toContain("stage registry: the core timelock prediction changed since stage vault");
     expect(lastError(w).message).toContain(`pinned ${TL.address} (init code hash ${TL.initCodeHash}`);
+    await rerunSucceeds(w, undo);
   });
 
-  test("issue 1853: SAFE_ADDRESS changed since the vault stage: the registry stage refuses before its broadcast", async () => {
+  test("issue 1853, 1866: SAFE_ADDRESS changed since the vault stage: the registry stage refuses before its broadcast, and runs once it is restored", async () => {
     const other = "0x00000000000000000000000000000000000050ff";
+    let undo = () => {};
     const { w, code } = await resumeRegistry((w) => {
       const f = join(w.coreDir, "deployments", "918453", "safe.json");
+      undo = keep(f);
       writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), safe: other }));
     });
     refusedBeforeRegistry(w, code);
     expect(lastError(w).message).toContain("stage registry: the core timelock prediction changed since stage vault");
     expect(lastError(w).message).toContain(`Safe ${other}`);
+    await rerunSucceeds(w, undo);
   });
 
-  test("issue 1853: TIMELOCK_MIN_DELAY changed since the vault stage: the registry stage refuses before its broadcast", async () => {
-    const { w, code } = await resumeRegistry((w) => writeFileSync(w.sheetPath, readFileSync(w.sheetPath, "utf8").replace(/^TIMELOCK_MIN_DELAY=60$/m, "TIMELOCK_MIN_DELAY=120")));
+  test("issue 1853, 1866: TIMELOCK_MIN_DELAY changed since the vault stage: the registry stage refuses before its broadcast, and runs once it is restored", async () => {
+    let undo = () => {};
+    const { w, code } = await resumeRegistry((w) => { undo = keep(w.sheetPath); writeFileSync(w.sheetPath, readFileSync(w.sheetPath, "utf8").replace(/^TIMELOCK_MIN_DELAY=60$/m, "TIMELOCK_MIN_DELAY=120")); });
     refusedBeforeRegistry(w, code);
     expect(lastError(w).message).toContain("stage registry: the core timelock prediction changed since stage vault");
     expect(lastError(w).message).toContain("delay 120");
+    await rerunSucceeds(w, undo);
   });
 
   /** A run manifest from a release before 1835: the vault stage is done and recorded no pin. `onChain` is what the vault proxy's upgradeTimelock() reads. */
@@ -588,16 +612,127 @@ describe("the core timelock: pinned at the first proxy stage, adopted when someo
     expect(msg).toContain("reads upgradeTimelock() 0x00000000000000000000000000000000000000b0 on chain");
     noVaultRerun(msg);
     expect(manifest(w).stages.vault.timelockPrediction).toBeUndefined();
+    // issue 1866: once the chain reads the recorded timelock the same command backfills the pin and runs the registry stage
+    await rerunSucceeds(w, () => { w.cfg.castReplies = { call: { stdout: TL.address } }; });
+    expect(manifest(w).stages.vault.timelockPrediction).toMatchObject({ address: TL.address });
   });
 
   test("issue 1853: no backfill when this build predicts another timelock than the vault manifest and the chain name: MANIFEST, nothing sent, no vault rerun advice", async () => {
-    const { w, code } = await resumeRegistry(unpinned(TL.address, rebuildTimelock));
+    let undo = () => {};
+    const { w, code } = await resumeRegistry(unpinned(TL.address, (w) => { undo = keep(artifact(w)); rebuildTimelock(w); }));
     refusedBeforeRegistry(w, code);
     const msg: string = lastError(w).message;
     expect(msg).toContain(`the vault proxies name the timelock ${TL.address}, this build predicts`);
     expect(msg).toContain("Rebuild core with the toolchain");
     noVaultRerun(msg);
     expect(manifest(w).stages.vault.timelockPrediction).toBeUndefined();
+    // issue 1866: rebuilt with the vault stage's toolchain, the same command backfills the pin and runs the registry stage
+    await rerunSucceeds(w, undo);
+    expect(manifest(w).stages.vault.timelockPrediction).toMatchObject({ address: TL.address });
+  });
+
+  test("issue 1866: a transient cast failure (TOOL) in the backfill's upgradeTimelock() read leaves no registry manifest, and the next run with a working cast backfills and finishes", async () => {
+    const { w, code } = await resumeRegistry(unpinned(TL.address, (w) => { w.cfg.castReplies = { call: { stderr: "error sending request: connection reset", code: 1 } }; }));
+    expect(code).toBe(EXIT_CODES.TOOL);
+    expect(lastError(w).message).toContain("cast call failed");
+    expect(broadcasts(w)).not.toContain(SCRIPT.registry);
+    expect(manifest(w).stages.registry).toBeUndefined();
+    expect(existsSync(stageManifest(w, "registry"))).toBe(false);
+    expect(manifest(w).stages.vault.timelockPrediction).toBeUndefined();
+    await rerunSucceeds(w, () => { w.cfg.castReplies = { call: { stdout: TL.address } }; });
+    expect(manifest(w).stages.vault.timelockPrediction).toMatchObject({ address: TL.address });
+  });
+
+  /** Issue 1866: a deploy from a release before 1835 that stopped in the router simulation: vault and registry done, no pin. */
+  async function unpinnedAtRouter(mutate: (w: ReturnType<typeof world>) => void) {
+    const w = world({ startNonce: 0 });
+    w.cfg.simFails = SCRIPT.router;
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.SIMULATION);
+    expect(manifest(w).stages.registry.status).toBe("done");
+    w.cfg.simFails = undefined;
+    unpinned(TL.address, mutate)(w);
+    return { w, code: await w.run(["--stage", "deploy", "--resume"]) };
+  }
+  const refusedBeforeRouter = (w: ReturnType<typeof world>, code: number) => {
+    expect(code).toBe(EXIT_CODES.MANIFEST);
+    expect(broadcasts(w)).not.toContain(SCRIPT.router);
+    expect(manifest(w).stages.router).toBeUndefined();
+    expect(existsSync(stageManifest(w, "router"))).toBe(false);
+    expect(manifest(w).stages.vault.timelockPrediction).toBeUndefined();
+  };
+  const OTHER = "0x00000000000000000000000000000000000000b0";
+
+  test("issue 1866: no backfill when a done registry stage's manifest names another timelock than the vault manifest: MANIFEST, nothing sent, no pin", async () => {
+    const { w, code } = await unpinnedAtRouter((w) => {
+      const f = stageManifest(w, "registry");
+      writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), upgrade_timelock: OTHER }));
+    });
+    refusedBeforeRouter(w, code);
+    expect(lastError(w).message).toContain(`the manifest of stage registry records upgrade_timelock ${OTHER}, the vault manifest records ${TL.address}`);
+  });
+
+  test("issue 1866: no backfill when a done registry proxy reads another upgradeTimelock() on chain: MANIFEST, nothing sent, no pin", async () => {
+    const { w, code } = await unpinnedAtRouter((w) => {
+      const registry = JSON.parse(readFileSync(stageManifest(w, "registry"), "utf8")).registry as string;
+      w.cfg.callAt = { [registry.toLowerCase()]: OTHER };
+    });
+    refusedBeforeRouter(w, code);
+    expect(lastError(w).message).toContain(`the registry registry proxy`);
+    expect(lastError(w).message).toContain(`reads upgradeTimelock() ${OTHER} on chain`);
+  });
+
+  test("issue 1866: every done proxy stage agrees: the backfill reads each one on chain, pins and finishes", async () => {
+    const { w, code } = await unpinnedAtRouter(() => {});
+    expect(code).toBe(0);
+    expect(manifest(w).stages.vault.timelockPrediction).toMatchObject({ address: TL.address });
+    const reads = w.state().calls.filter((c: any) => c.tool === "cast" && c.args[0] === "call" && c.args[2] === "upgradeTimelock()(address)").map((c: any) => c.args[1].toLowerCase());
+    const proxyOf = (stage: string, field: string) => String(JSON.parse(readFileSync(stageManifest(w, stage), "utf8"))[field]).toLowerCase();
+    expect(reads).toEqual([proxyOf("vault", "vault"), proxyOf("registry", "registry")]);
+  });
+
+  test("issue 1866: no backfill when the second proxy of the first proxy stage reads another upgradeTimelock() on chain: MANIFEST, no pin", async () => {
+    const original = getStageTable();
+    try {
+      const { w, code } = await resumeRegistry(unpinned(TL.address, (w) => {
+        // the vault stage deploys two proxies in this table: the second is the aave_adapter address the stub vault manifest holds
+        const p = join(w.coreDir, "scripts", "deploy", "stage-table.json");
+        const t = JSON.parse(readFileSync(p, "utf8"));
+        const vault = t.stages.find((s: any) => s.name === "vault");
+        vault.proxies.push({ ...vault.proxies[0], field: "aave_adapter" });
+        writeFileSync(p, JSON.stringify(t));
+        w.cfg.callAt = { [JSON.parse(readFileSync(stageManifest(w, "vault"), "utf8")).aave_adapter.toLowerCase()]: OTHER };
+      }));
+      refusedBeforeRegistry(w, code);
+      expect(lastError(w).message).toContain(`the vault aave_adapter proxy`);
+      expect(lastError(w).message).toContain(`reads upgradeTimelock() ${OTHER} on chain`);
+      expect(manifest(w).stages.vault.timelockPrediction).toBeUndefined();
+    } finally {
+      useStageTable(original);
+    }
+  });
+
+  test("issue 1866: a COUNT_MISMATCH after the simulation of a fresh real run leaves no stage manifest, and the run finishes once the count agrees", async () => {
+    const w = world({ startNonce: 0 });
+    w.cfg.counts[SCRIPT.registry!] = COUNTS.registry! + 1;
+    expect(await w.run(["--stage", "deploy"])).toBe(EXIT_CODES.COUNT_MISMATCH);
+    expect(broadcasts(w)).not.toContain(SCRIPT.registry);
+    expect(manifest(w).stages.registry).toBeUndefined();
+    expect(existsSync(stageManifest(w, "registry"))).toBe(false);
+    w.cfg.counts[SCRIPT.registry!] = COUNTS.registry!;
+    expect(await w.run(["--stage", "deploy", "--resume"])).toBe(0); // the run manifest exists, so the same deploy continues with --resume
+    expect(manifest(w).stages.registry.status).toBe("done");
+  });
+
+  test("issue 1866: a dry run that refuses after its simulation keeps today's restore: a manifest that was there is put back, one the simulation created is gone", async () => {
+    const w = world({ startNonce: 0, writeSafeManifest: true });
+    w.cfg.counts[SCRIPT.registry!] = COUNTS.registry! + 1;
+    const before = JSON.stringify({ registry: "0x00000000000000000000000000000000000000c1", note: "an earlier deploy" });
+    mkdirSync(join(w.coreDir, "deployments", "918453"), { recursive: true });
+    writeFileSync(stageManifest(w, "registry"), before);
+    expect(await w.run(["--stage", "deploy", "--dry-run"])).toBe(EXIT_CODES.COUNT_MISMATCH);
+    expect(targetBroadcasts(w)).toEqual([]);
+    expect(readFileSync(stageManifest(w, "registry"), "utf8")).toBe(before);
+    expect(existsSync(stageManifest(w, "vault"))).toBe(false);
   });
 
   test("issue 1853: a resumed vault stage whose earlier attempt landed transactions and recorded no pin is refused, never pinned to this build", async () => {

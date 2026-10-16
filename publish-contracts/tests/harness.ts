@@ -40,6 +40,7 @@ export interface World {
     staleNonceReads?: Record<string, number>;
     manifestMode?: Record<string, string>;
     upgradeTimelock?: Record<string, string>;
+    callAt?: Record<string, string>;
     failBroadcastOutput?: { stdout?: string; stderr?: string }; castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>;
   };
   state(): any;

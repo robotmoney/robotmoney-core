@@ -10,6 +10,7 @@ interface Cfg {
   failBroadcast?: string;                  // script file whose first broadcast dies halfway
   failBroadcastOutput?: { stdout?: string; stderr?: string }; // what that failing broadcast prints (default: a dropped RPC on stdout)
   castReplies?: Record<string, { stdout?: string; stderr?: string; code?: number }>; // cast subcommand -> its canned reply (receipt, call)
+  callAt?: Record<string, string>;         // lower-case address -> what `cast call <address> ...` prints there (before castReplies.call; issue 1866: one proxy reads another timelock)
   emptyCode?: string[];                    // addresses `cast code` answers 0x for (no code). Default: the Safe the fake Safe API predicts, a fresh address (issue 1727); [] gives it code
   simFails?: string;                       // script file whose simulation fails
   zeroTx?: string;                         // script file that plans ZERO transactions (issue 1721): exit 0, "Script ran successfully.", no SIMULATION COMPLETE, no broadcast file; the manifest is still written
@@ -53,6 +54,7 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
 
   if (tool === "cast") {
     const [cmd, a0] = args;
+    if (cmd === "call" && cfg.callAt?.[a0!.toLowerCase()] !== undefined) out(cfg.callAt[a0!.toLowerCase()]!);
     const reply = cfg.castReplies?.[cmd!];
     if (reply) { process.stderr.write(reply.stderr ?? ""); out(reply.stdout ?? "", reply.code ?? 0); }
     if (cmd === "chain-id") out(String(cfg.chainId));

@@ -809,28 +809,40 @@ async function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunMani
 }
 
 /**
- * Issue 1853. A run manifest from a release before 1835 has a done first proxy stage and no pin. The pin is backfilled only when three sources agree: the first proxy
- * stage's manifest upgrade_timelock, its first proxy's upgradeTimelock() on chain, and the prediction this build recomputes. Anything else is MANIFEST, nothing sent,
- * with a remedy that can work (the runner never reruns a stage whose manifest exists, so "run that stage again" is not one).
+ * Issue 1853, 1866. A run manifest from a release before 1835 has a done first proxy stage and no pin. The pin is backfilled only when these sources all name one
+ * timelock: the first proxy stage's manifest upgrade_timelock, upgradeTimelock() on chain of every proxy of that stage, the manifest upgrade_timelock of every other
+ * done proxy stage with one on-chain upgradeTimelock() read per such stage (they ran with no pin check), and the prediction this build recomputes. Anything else is
+ * MANIFEST, nothing sent, with a remedy that can work (the runner never reruns a stage whose manifest exists, so "run that stage again" is not one).
  */
 async function backfillTimelockPin(ctx: RunContext, row: StageRow, manifest: RunManifest, first: string, pin: TimelockPrediction): Promise<TimelockPrediction | undefined> {
   const refuse = (why: string, remedy: string): never => {
     throw new PublishError("MANIFEST", `stage ${row.name}: the run manifest has no core timelock pin from stage ${first} (an earlier release of publish-contracts ran it), and it cannot be backfilled: ${why}. ${remedy} Nothing was sent.`, { stage: row.name, pinnedBy: first, recomputed: pin.address });
   };
   if (manifest.stages[first]?.status !== "done") return undefined; // assertTimelockPin names the missing pin
-  const path = manifestFilePath(ctx, stageByName(first).manifest!);
-  let m: Record<string, unknown>;
-  try { m = JSON.parse(readFileSync(path, "utf8")); } catch { return refuse(`the manifest ${path} of stage ${first} is missing or not JSON`, `Restore the manifest stage ${first} wrote, then run this stage again.`); }
   const A = /^0x[0-9a-fA-F]{40}$/;
-  const field = getStageTable().stages.find((s) => s.name === first)!.proxies![0]!.field;
-  const recorded = String(m.upgrade_timelock ?? ""), proxy = String(m[field] ?? "");
-  if (!A.test(recorded) || !A.test(proxy)) return refuse(`the manifest ${path} names no upgrade_timelock or ${field} address`, `Restore the manifest stage ${first} wrote, then run this stage again.`);
-  const onChain = (await castOut(ctx, ["call", proxy, "upgradeTimelock()(address)"])).trim();
-  if (onChain.toLowerCase() !== recorded.toLowerCase()) return refuse(`the ${field} proxy ${proxy} reads upgradeTimelock() ${onChain} on chain, its manifest records ${recorded}`, "Stop and read the chain before anything else runs.");
+  /** A done proxy stage's manifest: its upgrade_timelock and the proxies to read on chain (every proxy of the first stage, the first proxy of any other). */
+  const read = (stage: string, all: boolean) => {
+    const path = manifestFilePath(ctx, stageByName(stage).manifest!);
+    let m: Record<string, unknown>;
+    try { m = JSON.parse(readFileSync(path, "utf8")); } catch { return refuse(`the manifest ${path} of stage ${stage} is missing or not JSON`, `Restore the manifest stage ${stage} wrote, then run this stage again.`); }
+    const fields = getStageTable().stages.find((s) => s.name === stage)!.proxies!.map((p) => p.field).slice(0, all ? undefined : 1);
+    const recorded = String(m.upgrade_timelock ?? ""), proxies = fields.map((f) => [f, String(m[f] ?? "")] as const);
+    if (!A.test(recorded) || proxies.some(([, a]) => !A.test(a))) return refuse(`the manifest ${path} names no upgrade_timelock or ${fields.join(", ")} address`, `Restore the manifest stage ${stage} wrote, then run this stage again.`);
+    return { stage, recorded, proxies };
+  };
+  const firstRead = read(first, true), recorded = firstRead.recorded;
+  const others = Object.entries(manifest.stages).filter(([n, r]) => n !== first && r?.status === "done" && isProxyStage(n)).map(([n]) => read(n, false));
+  for (const o of others) if (o.recorded.toLowerCase() !== recorded.toLowerCase()) refuse(`the manifest of stage ${o.stage} records upgrade_timelock ${o.recorded}, the ${first} manifest records ${recorded}`, "Stop and read the chain before anything else runs.");
+  const onChain: Record<string, string> = {};
+  for (const r of [firstRead, ...others]) for (const [field, proxy] of r.proxies) {
+    const got = (await castOut(ctx, ["call", proxy, "upgradeTimelock()(address)"])).trim();
+    onChain[`${r.stage}.${field}`] = got;
+    if (got.toLowerCase() !== recorded.toLowerCase()) refuse(`the ${r.stage} ${field} proxy ${proxy} reads upgradeTimelock() ${got} on chain, the ${first} manifest records ${recorded}`, "Stop and read the chain before anything else runs.");
+  }
   if (recorded.toLowerCase() !== pin.address.toLowerCase()) return refuse(`the ${first} proxies name the timelock ${recorded}, this build predicts ${pin.address} (init code hash ${pin.initCodeHash}, Safe ${pin.safe}, delay ${pin.minDelay})`, `Rebuild core with the toolchain, SAFE_ADDRESS and TIMELOCK_MIN_DELAY stage ${first} ran with, so the recomputed prediction is ${recorded}, then run this stage again.`);
   if (ctx.dryRun) dryRunPins.set(manifest, pin);
   else { manifest.stages[first]!.timelockPrediction = pin; saveRunManifest(ctx.evidenceDir, manifest); }
-  ctx.log.log("info", "stage.timelock_pin_backfilled", { stage: row.name, pinned_by: first, timelock: pin.address, init_code_hash: pin.initCodeHash, proxy, on_chain: onChain });
+  ctx.log.log("info", "stage.timelock_pin_backfilled", { stage: row.name, pinned_by: first, timelock: pin.address, init_code_hash: pin.initCodeHash, proxy: firstRead.proxies[0]![1], on_chain: onChain[`${first}.${firstRead.proxies[0]![0]}`], checked: onChain });
   return pin;
 }
 
@@ -889,32 +901,41 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
 
   // simulate: nothing is sent
   rmSync(dirname(broadcastFile(ctx, script, true)), { recursive: true, force: true });
-  const sim = await ctx.run("forge", base, { env: fenv, cwd: ctx.coreDir, interactive: true });
-  // Issue 1721: forge exits 0 and prints no SIMULATION COMPLETE when it plans zero transactions. For the libs stage that means the libraries are already on chain.
-  if (row.name === LIBS_STAGE && sim.code === 0 && !sim.stdout.includes("SIMULATION COMPLETE") && !((readTxCount(broadcastFile(ctx, script, true))?.count ?? 0) > 0)) {
-    await adoptLibsStage(ctx, row, manifest, rec, deployer, outPath, expectedCount, sim.stdout);
-    return;
-  }
-  if (sim.code !== 0 || !sim.stdout.includes("SIMULATION COMPLETE")) {
-    throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr, outputSecrets(ctx))}`, { stage: row.name });
-  }
-  const dry = readTxCount(broadcastFile(ctx, script, true));
-  if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
-  rec.dryRunCount = dry.count;
-  if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
-  const pinned = await timelockPinStep(ctx, row, manifest, rec, prior, env, resuming);
-  const adoptedLibs = [...await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount), ...await adoptCoreTimelock(ctx, row, dry, expectedCount, pinned)];
-  const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
-  ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
-  if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
-  if (ctx.dryRun) {
-    // The simulation wrote the manifest. It stays for the later stages of this dry run (their inputs); runStages restores the checkout at the end.
-    // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
-    // reads VAULT_ADDRESS code). That sends to the local anvil only (the sender is impersonated there), never to the target RPC.
-    createdInDryRun.set(manifest, new Set([...(createdInDryRun.get(manifest) ?? []), ...dry.creates, ...adoptedLibs.map((l) => l.address.toLowerCase())]));
-    if (real.simRpc) await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
-    ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: real.simRpc ? "local-anvil" : "target-rpc" });
-    return;
+  let sim: Awaited<ReturnType<RunContext["run"]>>, dry: NonNullable<ReturnType<typeof readTxCount>>, adoptedLibs: AdoptedLibrary[];
+  // Issue 1866: the simulation writes the stage manifest (outPath). Any refusal or error from here to the broadcast removes it again on a fresh, real run (outPath did not
+  // exist before: checked above), so fixing the cause and running the same command again works. A resumed stage keeps its manifest; a dry run restores it in runStages.
+  try {
+    sim = await ctx.run("forge", base, { env: fenv, cwd: ctx.coreDir, interactive: true });
+    // Issue 1721: forge exits 0 and prints no SIMULATION COMPLETE when it plans zero transactions. For the libs stage that means the libraries are already on chain.
+    if (row.name === LIBS_STAGE && sim.code === 0 && !sim.stdout.includes("SIMULATION COMPLETE") && !((readTxCount(broadcastFile(ctx, script, true))?.count ?? 0) > 0)) {
+      await adoptLibsStage(ctx, row, manifest, rec, deployer, outPath, expectedCount, sim.stdout);
+      return;
+    }
+    if (sim.code !== 0 || !sim.stdout.includes("SIMULATION COMPLETE")) {
+      throw new PublishError("SIMULATION", `simulation of ${row.name} failed (exit ${sim.code}). Nothing was sent. ${forgeFailureTail(sim.stdout, sim.stderr, outputSecrets(ctx))}`, { stage: row.name });
+    }
+    const read = readTxCount(broadcastFile(ctx, script, true));
+    if (!read) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
+    dry = read;
+    rec.dryRunCount = dry.count;
+    if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
+    const pinned = await timelockPinStep(ctx, row, manifest, rec, prior, env, resuming);
+    adoptedLibs = [...await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount), ...await adoptCoreTimelock(ctx, row, dry, expectedCount, pinned)];
+    const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
+    ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
+    if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
+    if (ctx.dryRun) {
+      // The simulation wrote the manifest. It stays for the later stages of this dry run (their inputs); runStages restores the checkout at the end.
+      // On the local chain the stage is then APPLIED to it, so the later stages find the contracts this one deployed (a registry stage
+      // reads VAULT_ADDRESS code). That sends to the local anvil only (the sender is impersonated there), never to the target RPC.
+      createdInDryRun.set(manifest, new Set([...(createdInDryRun.get(manifest) ?? []), ...dry.creates, ...adoptedLibs.map((l) => l.address.toLowerCase())]));
+      if (real.simRpc) await applyToSimulationChain(ctx, row, base, fenv, deployer, outPath, dry.count);
+      ctx.log.log("info", "stage.dry_run_done", { stage: row.name, dry_run_count: dry.count, simulated_on: real.simRpc ? "local-anvil" : "target-rpc" });
+      return;
+    }
+  } catch (e) {
+    if (!resuming && !ctx.dryRun) rmSync(outPath, { force: true });
+    throw e;
   }
   rmSync(outPath, { force: true }); // a simulation also writes the manifest; the real run rewrites it
 
