@@ -235,10 +235,13 @@ describe("the deploy-gate list equals the jobs the workflow tree runs on every p
       "explorer-indexer-fast",
       "explorer-indexer-devnet",
       "rmpc-e2e-*",
-      "core-stages-twin-chain",
+      "core-stages-twin-upgrade-lifecycle",
     ]) {
       expect(required.has(l)).toBe(true);
     }
+    // core-stages-twin-chain reads a rate-limited public upstream: optional with a reason, never required (issue 1846 policy).
+    expect(required.has("core-stages-twin-chain")).toBe(false);
+    expect(c.optional.map(label)).toContain("core-stages-twin-chain");
   });
 
   test("every optional and exempt entry says why it does not gate", () => {

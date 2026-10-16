@@ -34,6 +34,8 @@ export const KNOWN_CONDITIONS: Record<string, "push" | "never" | "deploy-paths">
   "github.event_name != 'pull_request'": "push",
   // suite 28's lifecycle job (issue 1846): always() keeps it running after core-stages-twin whatever that result, the pin and draft guards are the push rule above.
   "always() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)": "push",
+  // issue 1861: !cancelled() replaces always(), so a superseded run starts no fork; an uncancelled push still runs it.
+  "!cancelled() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)": "push",
   "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'": "never",
   // suite 14's `changes` job sets deploy=true on every event but pull_request.
   "needs.changes.outputs.deploy == 'true'": "deploy-paths",

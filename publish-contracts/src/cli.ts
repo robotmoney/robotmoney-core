@@ -36,6 +36,7 @@ import { CLEAR_ROW } from "./clear-voted-weights.ts";
 import { UNWIND_GUARD_KEYS, UNWIND_GUARD_ROW, parseUnwindGuardArgs } from "./unwind-guard.ts";
 import { REDEPLOY_ROW, REDEPLOY_VERB, REDEPLOY_KEYS, isRedeployKey, redeployRefusal, redeployShaPath, redeployShaRun, runRedeployVault } from "./redeploy-vault.ts";
 import { FREEZE_ROW, UPGRADE_ROW } from "./upgrade-rows.ts";
+import { DEPLOY_IMPL_VERB, runDeployImplementation } from "./deploy-implementation.ts";
 import { RECEIPT_ROW, SELF_ADMIN_ROWS, assertReceiptId, assertSelfAdminAllowed, govRowRefusal, isSelfAdminRow, isTwinOnlyRow, resolveGovernRow, runGovern, type GovernOpts } from "./govern.ts";
 import { isHardwareSpecLike, ownerHardwareSigner, parseOwnerHardwareSpec, signerFromSpec, type CastRunner, type Signer } from "./safe/index.ts";
 import { pauseAll, pauseIncomplete, pauseUnrecorded, type PauseTrigger } from "./pause-all.ts";
@@ -47,11 +48,11 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 
 /** The environment variable core's harness sets on the child: the directory the stage manifests are written to and read from. */
 export const MANIFEST_DIR_ENV = "PUBLISH_MANIFEST_DIR";
-export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt", "redeploy-vault"] as const;
+export const VERBS = ["publish", "verify", "govern", "pause-all", "record-receipt", "redeploy-vault", "deploy-implementation"] as const;
 export type Verb = (typeof VERBS)[number];
 
 export const USAGE = `publish contracts
-  VERB               optional first word: publish | verify | govern | pause-all | record-receipt | redeploy-vault. An alias for a stage set (below). Not combined with --stage.
+  VERB               optional first word: publish | verify | govern | pause-all | record-receipt | redeploy-vault | deploy-implementation. An alias for a stage set (below). Not combined with --stage.
                        publish = every deployer stage up to and including timelock (the same as --stage deploy), with the prove-control step
                                  before the timelock stage: the real Safe executes one self-call signed by EVERY owner, or stage 11 refuses (exit 24)
                        verify  = the verify stage (the one verifier; a follow-on verb, so it implies --resume)
@@ -63,6 +64,11 @@ export const USAGE = `publish contracts
                                  the deployment. Then run 'govern --row redeploy-vault' (the Safe, through the timelock, registers it, moves router eligibility, retires the old vault and opens the new one). --dry-run simulates only.
                                  SHA MODEL (QA plan v1 E1): --core-sha is the REDEPLOY sha (the fix's tag), recorded as the round's core_sha; the run manifest keeps the ORIGINAL sha. The govern row and the
                                  verify after it run at that redeploy sha (the row also at the original sha), with no frozen counts file for it: see --row redeploy-vault and --prior-out.
+                       deploy-implementation = step 2 of a governed upgrade (issue 1861): --proxy NAME [--upgrade-build DIR]. The DEPLOYER (--signer) deploys a new implementation of the proxy
+                                 from DIR/out (default the DEPLOY_SHA checkout), every library link filled with the address the LIVE implementation links. Refused (nothing sent) when the proxy
+                                 reads upgradesFrozen() true, when DIR's layout snapshot does not extend the deployed one append-only, or when the build and the live implementation do not link
+                                 the same libraries. It reads the runtime code back against the build (immutables and links masked), records implementation_deploys in the run manifest and
+                                 prints the govern --row upgrade-proxy --implementation command to run next. A rerun with the same arguments reprints the recorded entry and sends nothing.
                        pause-all = pause deposits on ALL FOUR vaults (rmUSDC, rmPROTO, rmAGENT, rmRWA), read depositsPaused back on each, write evidence/rollout-report-<chain>.json.
                                  Withdrawals stay open. The signer is the deployer before the stage 11 handover and the EMERGENCY key after it (--emergency-signer).
                                  It also runs by itself when stage 12 (verify) or the postflight fails (the run then still exits with the verify failure's code, 13).
@@ -114,9 +120,9 @@ export const USAGE = `publish contracts
                      --row upgrade-proxy --proxy NAME --implementation 0x<address> [--upgrade-build DIR] (issue 1842) upgrades one core proxy: ONE timelock call, upgradeToAndCall(new, "").
                      Refused (nothing scheduled) when the proxy is frozen, when the new implementation's storage layout snapshot (DIR, default the DEPLOY_SHA checkout) does not extend the
                      deployed one append-only, or when its runtime code is not DIR/out's build. After the execute it rewrites the proxy's stage manifest implementation fields. Run verify after it.
-  --proxy NAME       govern --row upgrade-proxy only: the verifier name of the proxy (gateway, registry, router, governance, icpolicy, receipt, vault[rmUSDC], ...).
-  --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries).
-  --upgrade-build D  govern --row upgrade-proxy only: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
+  --proxy NAME       govern --row upgrade-proxy and deploy-implementation: the verifier name of the proxy (gateway, registry, router, governance, icpolicy, receipt, vault[rmUSDC], ...).
+  --implementation A govern --row upgrade-proxy only: the new implementation, already deployed (linked to the live libraries): the address deploy-implementation printed.
+  --upgrade-build D  govern --row upgrade-proxy and deploy-implementation: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
@@ -195,6 +201,8 @@ export interface CliDeps {
   remoteTag?: (coreDir: string, tag: string) => Promise<void>;
   /** Test seam (issue 1733): the plan-time re-verification of a reconstructed baseline against the build and the chain. Default: rebuild the libraries from the checkout and read their code with cast. */
   verifyReconstructed?: (file: FrozenFile) => Promise<void>;
+  /** Test seam (issue 1861): the whole `deploy-implementation` verb. Default: the real one (runDeployImplementation). */
+  deployImplementation?: typeof runDeployImplementation;
   /** Test seam (issue 1796): the whole `redeploy-vault` verb. Default: the real one (runRedeployVault). */
   redeployVault?: typeof runRedeployVault;
   /** Test seams (issue 1733): the proof that the anchor file is committed, and the sleep between the retries of a rate-limited `cast code`. */
@@ -304,7 +312,11 @@ export function parseCli(argv: string[]): Parsed {
   // issue 1842: the governed upgrade row's arguments
   const proxy = v.proxy as string | undefined, implementation = v.implementation as string | undefined, upgradeBuild = v["upgrade-build"] as string | undefined;
   if (row === UPGRADE_ROW && (proxy === undefined || implementation === undefined)) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME and --implementation 0x<address>\n${USAGE}`);
-  if ((proxy !== undefined || implementation !== undefined || upgradeBuild !== undefined) && row !== UPGRADE_ROW) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} only\n${USAGE}`);
+  if (verb === DEPLOY_IMPL_VERB) {
+    if (proxy === undefined) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} needs --proxy NAME\n${USAGE}`);
+    if (implementation !== undefined) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} deploys the implementation: --implementation goes with govern --row ${UPGRADE_ROW} only\n${USAGE}`);
+    if (v["dry-run"]) throw new PublishError("USAGE", `${DEPLOY_IMPL_VERB} has no --dry-run: every check runs before its one send, and a refusal sends nothing\n${USAGE}`);
+  } else if ((proxy !== undefined || implementation !== undefined || upgradeBuild !== undefined) && row !== UPGRADE_ROW) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} (or the ${DEPLOY_IMPL_VERB} verb) only\n${USAGE}`);
   if (implementation !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(implementation)) throw new PublishError("USAGE", `--implementation must be an address, got '${implementation}'`);
   let adminArgs: Record<string, string> | undefined;
   const adminRaw = v["admin-arg"] as string[] | undefined;
@@ -655,6 +667,14 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         verifyReconstructed: deps.verifyReconstructed ?? realVerifyReconstructed, anchorCommitted: deps.anchorCommitted ?? realAnchorCommitted, frozenDirCommitted: deps.frozenDirCommitted ?? realFrozenDirCommitted,
         run, runEnv: scrubGitEnv(castEnv) });
       log.log("info", "plan.release_gate", { ok: true, tag, core_sha: a.coreSha, stage: a.stage ?? a.verb ?? "default", counts: shaRun ? "none (redeploy sha)" : "committed" });
+    }
+    // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
+    if (a.verb === DEPLOY_IMPL_VERB) {
+      const ctx = buildCtx(undefined, false);
+      const res = await (deps.deployImplementation ?? runDeployImplementation)(ctx, { proxy: a.proxy!, upgradeBuild: a.upgradeBuild });
+      console.log(JSON.stringify({ event: "deploy_implementation", reused: res.reused, proxy: res.entry.proxy_name, implementation: res.entry.implementation, code_hash: res.entry.code_hash, deploy_tx: res.entry.deploy_tx, next: res.next }));
+      log.log("info", "run.done", { ran: [DEPLOY_IMPL_VERB], skipped: [] });
+      return 0;
     }
     // plan is a gate: it needs the frozen file. Every other run resolves the counts (frozen, measure, dry-run measure) by counts.ts resolveCounts; a run at a redeploy sha
     // uses the original sha's counts and needs no file for the redeploy sha (QA plan v1 E1).
