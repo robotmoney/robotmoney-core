@@ -81,7 +81,7 @@ decisions:
   - id: version-line
     question: "The version line and tag of Deploy 3: release/v0.4.0-base.N or a bump to v0.5.0"
     status: decided
-    answer: "Deploy 3 is released as v0.5.0. This file is still named v0.4.0; moving the release to a v0.5.0 file is not yet done."
+    answer: "Deploy 3 is released as v0.5.0 from releases/v0.5.0.yaml, which supersedes this file for Deploy 3."
     decidedOn: 2026-10-16
     ref: "owner decision session deploy3-runbook, 2026-10-16"
 recovery: |

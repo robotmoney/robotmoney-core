@@ -41,7 +41,7 @@ Check before any run:
 
 ```
 bun scripts/runbook/validate-contract-qa.ts
-bun scripts/runbook/validate-contract-qa.ts --release v0.4.0 --target twin --runnable
+bun scripts/runbook/validate-contract-qa.ts --release v0.5.0 --target twin --runnable
 bun scripts/runbook/validate-contract-qa.ts --check-sheet <sheet.env> --target twin
 ```
 

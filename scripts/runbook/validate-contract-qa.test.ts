@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { QA_DIR, ROOT, loadModel, parseSheetText, runnableProblems, sheetProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
-const RELEASE = "releases/v0.4.0.yaml";
+const RELEASE = "releases/v0.5.0.yaml";
 
 /** A copy of docs/runbooks/contract-qa/ in a temp root, with one file rewritten; returns the problems the validator reports. */
 function problemsWith(file: string, edit: (text: string) => string): string[] {
@@ -26,6 +26,7 @@ test("the committed template and release runbooks are clean", () => {
   const all = validateAll(ROOT, model);
   expect(all.problems).toEqual([]);
   expect(all.releases.has("v0.4.0")).toBe(true);
+  expect(all.releases.has("v0.5.0")).toBe(true);
 });
 
 test("a release that drops a template step fails", () => {
@@ -50,7 +51,7 @@ test("a planted credential fails", () => {
 });
 
 test("a production run refuses while an owner decision is open", () => {
-  const r = validateAll(ROOT, model).releases.get("v0.4.0")!;
+  const r = validateAll(ROOT, model).releases.get("v0.5.0")!;
   expect(runnableProblems(r, "twin")).toEqual([]);
   expect(runnableProblems(r, "rehearsal")).toEqual([]);
   expect(runnableProblems(r, "production").length).toBeGreaterThan(0);
