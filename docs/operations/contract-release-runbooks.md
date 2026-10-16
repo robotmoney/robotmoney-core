@@ -4,7 +4,9 @@
 > release-runbook policy that every per-release contract-deployment runbook
 > must follow. It is not itself a runnable checklist; concrete deployments
 > are executed from per-release runbooks committed under `docs/runbooks/`
-> (see §5). An example is [`docs/runbooks/v0.1.0-devnet-verification.md`](../runbooks/v0.1.0-devnet-verification.md).
+> (see §5). A contract release's runbook is a YAML file under
+> [`docs/runbooks/contract-qa/`](../runbooks/contract-qa/README.md). An older
+> Markdown example is [`docs/runbooks/v0-1-0-devnet-verification.md`](../runbooks/v0-1-0-devnet-verification.md).
 >
 > Modeled on the sibling frontend repo's `docs/technical/release-runbooks.md`
 > policy, currently written for direct Solidity contract deployments rather than a
@@ -394,6 +396,10 @@ minimum:
    deposit and withdrawal events from step 2 are visible there — this is the
    check that the deployment is observable, not just functional.
 
+The contract QA runbook (§5) carries these checks as its phase 2 (verify), 4
+(verify again), 6 (deposits) and 8 (observability). A contract release runs
+those phases instead of writing its own postflight list.
+
 The postflight gate is satisfied only when every check above passes and the
 operator has signed off. Write the results into the stage rehearsal or
 production rollout report (§4.5/§4.9).
@@ -747,22 +753,41 @@ The record `upgrade-lifecycle.json` is checked by `bun publish-contracts/src/evi
 
 ## 5. Per-release runbook format
 
-Each release has an operator runbook committed under `docs/runbooks/`. The
-runbook must:
+A contract release is executed from YAML under `docs/runbooks/contract-qa/`,
+in the shape of the frontend repo's release runbooks:
 
-- state the release identity (`vA.B.C[-network]`) and the delta it
-  introduces,
-- list go/no-go gates that map directly to §4,
-- provide a preflight script or checklist,
-- provide step-by-step cutover commands, with destructive or irreversible
-  steps explicitly marked,
-- provide post-cutover manual QA steps (§4.4),
-- be written so it can be executed top to bottom, every command
-  copy-pasteable, every claim verified against a specific commit SHA rather
-  than described from memory.
+- **One template**, `template.yaml`: every step a contract release runs, in
+  order. It is general and names no release.
+- **One add-only file per release**, `releases/<release>.yaml`: a full copy of
+  the template steps, unchanged and in order, plus only the steps that release
+  adds (each marked `added: <release>`). It also holds the release's owner
+  `decisions:`, its `recovery:` decision, its `notes:` and its `scope:` (every
+  PR the release ships, tied to a check or a reason for none).
+- **The environment is chosen at run time** (`--target twin|rehearsal|production`).
+  There are no per-environment files. Only the sheet and the arguments differ.
+- **The validator is the gate.** `bun scripts/runbook/validate-contract-qa.ts`
+  refuses a release file that drops, edits or reorders a template step, a step
+  that reads state no step writes, and a command the real CLIs do not accept.
+  CI runs it on every pull request (`docs/development/ci-suites.md`, suite 13).
+- **A production run is refused** while an owner decision is open or the
+  release is not marked `productionReady`.
 
-Filenames under `docs/runbooks/` are kebab-case, matching the frontend
-repo's convention: `vA-B-C-<network>-<short-description>.md`.
+Each release runbook must still:
+
+- state the release identity (`vA.B.C[-network]`) and the delta it introduces,
+- map its go/no-go gates to §4,
+- mark destructive or irreversible steps (`irreversible`, with `notBefore`,
+  `onlyFor` or `go`),
+- be executable top to bottom, with every claim verified against a specific
+  commit SHA rather than described from memory.
+
+A new release adds `releases/<next>.yaml`. It never edits the template steps.
+The format, the placeholders and the run procedure are in
+`docs/runbooks/contract-qa/README.md`.
+
+Markdown runbooks under `docs/runbooks/` stay valid for work that is not a
+contract release (for example the devnet verification). Their filenames are
+kebab-case: `vA-B-C-<network>-<short-description>.md`.
 
 ## 6. Per-release GitHub tracking issue
 
@@ -772,7 +797,9 @@ contracts, on which network, with what role wiring) — not just a list of
 merged PRs.
 
 The issue carries two GitHub-checkbox checklists mirroring the runbook's
-preflight and postflight gates. Checking a box is a claim that the
+preflight and postflight gates. For a contract release these are the phases of
+the release's YAML runbook (§5): phase 0 for preflight, phases 1 to 10 for
+the cutover and postflight. Checking a box is a claim that the
 corresponding gate was actually executed and passed.
 
 For a final Base mainnet release the preflight checklist always contains the
