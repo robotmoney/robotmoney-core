@@ -8,7 +8,7 @@
 import { allManifests, expectedManifestCount } from "../stage-manifests.ts";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CORE_STACK_FORBIDDEN } from "../check-deleted-stage-scripts.ts";
@@ -115,7 +115,7 @@ describe("usage", () => {
   test("an unknown chain verb is a usage error", async () => expect((await run("chain", "sideways")).code).toBe(64));
   test("dapp up is gone", async () => expect((await run("dapp", "up")).code).toBe(64));
   test("an unknown governance verb is a usage error", async () => expect((await run("governance", "bogus")).code).toBe(64));
-  test("governance release needs --receipt-id", async () => expect((await run("governance", "release")).code).toBe(64));
+  test("governance apply needs --receipt-id", async () => expect((await run("governance", "apply", "--payload", "f.json")).code).toBe(64));
   test("an unknown flag is a usage error", async () => expect((await run("record", "write", "--bogus-flag")).code).toBe(64));
   test("a bad --timeout is a usage error", async () => expect((await run("chain", "status", "--timeout", "0")).code).toBe(64));
 });
@@ -208,11 +208,34 @@ describe("governance", () => {
     nextResult = { code: 0, stdout: "govern finished with no rows\n", stderr: "" };
     expect((await run("governance", "ensure")).code).toBe(66);
   });
-  test("release asks for the release-receipt row", async () => {
-    nextResult = { code: 0, stdout: rows({ row: "release-receipt", txHash: h(3), status: 1 }), stderr: "" };
+  // Issue 1849: govern refuses row release-receipt since issue 1831, so `governance release` refuses before calling publish contracts.
+  test("release is refused with 64, names governance apply and never calls publish contracts", async () => {
     const r = await run("governance", "release", "--receipt-id", "0xabc");
+    expect(r.code).toBe(64);
+    expect(r.err).toContain("governance apply");
+    expect(calls.cmds).toHaveLength(0);
+  });
+  test("apply asks for the apply-receipt row with the receipt id and the payload file", async () => {
+    nextResult = { code: 0, stdout: rows({ row: "apply-receipt", phase: "scheduled", txHash: h(3), status: 1 }, { row: "apply-receipt", phase: "executed", txHash: h(4), status: 1 }), stderr: "" };
+    const r = await run("governance", "apply", "--receipt-id", "0xabc", "--payload", "f.json");
     expect(r.code).toBe(0);
-    expect(publishCall().cmd.join(" ")).toContain("--row release-receipt --receipt-id 0xabc");
+    const argv = publishCall().cmd;
+    expect(argv[2]).toBe("govern");
+    expect(argv.join(" ")).toContain("--row apply-receipt --receipt-id 0xabc --payload f.json");
+  });
+  test("apply fails on a row with receipt status 0", async () => {
+    nextResult = { code: 0, stdout: rows({ row: "apply-receipt", txHash: h(3), status: 0 }), stderr: "" };
+    expect((await run("governance", "apply", "--receipt-id", "0xabc", "--payload", "f.json")).code).toBe(66);
+  });
+  test("apply fails on a row without a tx hash", async () => {
+    nextResult = { code: 0, stdout: rows({ row: "apply-receipt", status: 1 }), stderr: "" };
+    expect((await run("governance", "apply", "--receipt-id", "0xabc", "--payload", "f.json")).code).toBe(66);
+  });
+  test("apply without --payload exits 64 and never calls publish contracts", async () => {
+    const r = await run("governance", "apply", "--receipt-id", "0xabc");
+    expect(r.code).toBe(64);
+    expect(r.err).toContain("--payload");
+    expect(calls.cmds).toHaveLength(0);
   });
   test("a govern exit code passes through", async () => {
     nextResult = { code: 9, stdout: "", stderr: "" };
@@ -797,5 +820,41 @@ describe("core-stack holds no host process machinery", () => {
   }
   test("the Deps interface has no process-control member left", () => {
     for (const member of ["spawnDetached", "procCmdline", "procGroup", "signal("]) expect(code).not.toContain(member);
+  });
+});
+
+// Issue 1849: no test stub may fake a successful release-receipt row, and no script, development doc or workflow may
+// name `governance release` as a working command. Both read the real tree, so a stale caller turns this file red.
+describe("stale release-receipt callers (issue 1849)", () => {
+  const RELEASE_ROW = ["release", "receipt"].join("-");
+  const walk = (dir: string): string[] => {
+    const outFiles: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name.startsWith(".") && e.name !== ".github") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) outFiles.push(...walk(p));
+      else if (e.isFile()) outFiles.push(p);
+    }
+    return outFiles;
+  };
+  /** `file:line` of every match of the global regex `re` in the files under `dirs` (whole-file text, so a match may span a line break). */
+  const hits = (dirs: string[], re: RegExp): string[] =>
+    dirs.flatMap((d) => walk(join(CORE_ROOT, d))).flatMap((f) => {
+      const text = readFileSync(f, "utf8");
+      return [...text.matchAll(re)].map((m) => `${f.slice(CORE_ROOT.length + 1)}:${text.slice(0, m.index).split("\n").length}`);
+    });
+
+  test("no stage or fusion test stubs a successful release-receipt row", () => {
+    const stub = new RegExp(`"row":"${RELEASE_ROW}".*"status":1`, "g");
+    expect(hits(["scripts/stage/tests", "scripts/fusion/tests"], stub)).toEqual([]);
+  });
+  test("no script, development doc or workflow names governance release as a working command", () => {
+    // A comment may wrap between the tool and the verb. Only the refusal itself may name the verb.
+    const cmd = /core-stack(?:\.ts)?`?[\s#]+governance\s+release(?!`?(?: verb)? (?:is )?refused)/g;
+    expect(hits(["scripts", "docs/development", ".github/workflows"], cmd)).toEqual([]);
+  });
+  test("the guard is not vacuous: it walks the trees it names", () => {
+    expect(walk(join(CORE_ROOT, "scripts/fusion/tests")).length).toBeGreaterThan(0);
+    expect(walk(join(CORE_ROOT, ".github/workflows")).length).toBeGreaterThan(0);
   });
 });

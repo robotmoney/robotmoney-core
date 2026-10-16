@@ -43,9 +43,10 @@
 #     FUSION_VAULT_ADDRESSES, FUSION_SUBMITTER_ADDRESS,
 #     FUSION_TIMELOCK_ADDRESS, FUSION_UNAUTHORIZED_SUBMITTER,
 #     FUSION_UNAUTHORIZED_RELEASER, FUSION_GOVERN_CMD
-#       (FUSION_GOVERN_CMD is the govern release command, bun scripts/stage/core-stack.ts
-#       governance release: the release goes through the real Safe and the
-#       timelock, so no release keystore exists here at all)
+#       (FUSION_GOVERN_CMD is the govern apply command, bun scripts/stage/core-stack.ts
+#       governance apply: the script appends --receipt-id ID --payload FILE and
+#       the Safe applies the receipt through the timelock (govern row
+#       apply-receipt, issue 1849), so no release keystore exists here at all)
 #
 #   Repository SECRETS (secrets.*) — ephemeral devnet key material only:
 #     FUSION_RMPC_CONFIG          operator config TOML for the submitter

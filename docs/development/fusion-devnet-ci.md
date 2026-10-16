@@ -72,7 +72,7 @@ no workflow creates a key.**
 | `FUSION_VAULT_ADDRESSES` | `rmUSDC,rmPROTO,rmAGENT,rmRWA` in canonical bucket order |
 | `FUSION_SUBMITTER_ADDRESS` | the authorized submitter (positive control) |
 | `FUSION_TIMELOCK_ADDRESS` | the `TimelockController`, the only `ADMIN_ROLE` holder on the receipt contract after handover, used as `--from` for the duplicate-release probe (`cast call releaseReceipt`, which passes the role check and must revert `ReceiptAlreadyReleased`, not `AccessControlUnauthorizedAccount`) |
-| `FUSION_GOVERN_CMD` | the govern release command, `bun scripts/stage/core-stack.ts governance release`; the script appends `--receipt-id ID` and it runs publish contracts govern row `release-receipt` (`--row release-receipt --receipt-id ID`) through the real Safe and the `TimelockController` |
+| `FUSION_GOVERN_CMD` | the govern apply command, `bun scripts/stage/core-stack.ts governance apply`; the script appends `--receipt-id ID --payload FILE` (FILE is the bytes served at the receipt URL) and it runs publish contracts govern row `apply-receipt` (`--row apply-receipt --receipt-id ID --payload FILE`) through the real Safe and the `TimelockController`. Only `apply-receipt` rows with status 1 and a 32-byte tx hash pass. Row `release-receipt` is refused since issue 1831, so `governance release` exits 64 (issue 1849) |
 | `FUSION_UNAUTHORIZED_SUBMITTER` | EOA with neither `AGENT_ROLE` nor submit rights |
 | `FUSION_UNAUTHORIZED_RELEASER` | EOA **without** `ADMIN_ROLE` on the receipt |
 
@@ -88,8 +88,10 @@ them quietly.
 
 There is no release keystore. After handover only the `TimelockController`
 holds the receipt contract's `ADMIN_ROLE`, so a receipt is released only by the
-`release-receipt` govern row (the real Safe schedules and executes
-`releaseReceipt` through the timelock). A `releaseReceipt` sent from any EOA
+`apply-receipt` govern row (the real Safe schedules and executes
+`RouterGovernance.applyReceipt` through the timelock, which releases the receipt
+and sets its weights in one call). The apply moves the router weights by design,
+so the INV-4 window closes immediately before it. A `releaseReceipt` sent from any EOA
 reverts on authority. This is the same on the Twin chain and on Base mainnet. On Base mainnet the row is a
 standalone post-launch action (issue 1611): the first run exits `GOVERN_PENDING` after the schedule, and the same
 command executes it after the 48-hour delay.
