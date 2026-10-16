@@ -137,7 +137,7 @@ describe("the lifecycle job's required-check policy and the 4.1 and 4.12 wording
   test("4.12 assigns the implementation deploy with library linking and the manifest re-record to the operator tooling follow-up (1842)", () => {
     const own = SECTION.slice(SECTION.indexOf("**Ownership of the implementation deploy and the re-record.**"), SECTION.indexOf("**After a governed upgrade.**"));
     expect(own.length).toBeGreaterThan(0);
-    for (const s of ["Deploying the new implementation with its library links", "re-recording the stage manifest", "gateway runtime hashes", "owned by the operator tooling follow-up (1842)", "only executed path", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`"]) expect(own, s).toContain(s);
+    for (const s of ["Deploying the new implementation with its library links", "re-recording the stage manifest", "gateway runtime hashes", "owned by the operator tooling follow-up (1842)", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`"]) expect(own, s).toContain(s);
   });
 });
 
@@ -157,5 +157,29 @@ describe("per-proxy build directories and the row follow-ups (issue 1859)", () =
     for (const s of ["gated on the live implementation slot", "leaves the manifest and the entry unchanged", "`CallExecuted` log", "`execute_tx` null with a `note`", "`govern --row freeze-upgrades --no-warp --max-wait 0`"]) expect(SECTION, s).toContain(s);
     const harness = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-lifecycle.ts"), "utf8");
     for (const s of ['"--row", UPGRADE_ROW', '"--row", FREEZE_ROW, "--no-warp", "--max-wait", "0"]', "governedUpgradeProblems("]) expect(harness, s).toContain(s);
+  });
+});
+
+// Issue 1861 docs drift check: runbook 4.12 step 2 is the deploy-implementation verb (no longer "no command"), the ownership paragraph names it, and the Twin harness
+// deploys through the verb instead of a raw cast send --create.
+describe("the deploy-implementation verb in runbook 4.12 and the Twin harness (issue 1861)", () => {
+  test("step 2 names deploy-implementation, its refusals and the record, and the ownership paragraph no longer says no command exists", async () => {
+    const { DEPLOY_IMPL_VERB } = await import("../src/deploy-implementation.ts");
+    const step2 = SECTION.slice(SECTION.indexOf("2. **Deploy the implementation.**"), SECTION.indexOf("3. **Schedule.**"));
+    expect(step2.length).toBeGreaterThan(0);
+    for (const s of [`bun publish-contracts/src/cli.ts ${DEPLOY_IMPL_VERB} --proxy NAME --upgrade-build DIR`, "`upgradesFrozen()` true", "append-only", "does not link", "does not name", "`implementation_deploys`", "`govern --row upgrade-proxy --implementation`", "sends nothing", "release gate"]) expect(step2, s).toContain(s);
+    expect(step2).not.toContain("the Twin rehearsal's harness does the same");
+    const own = SECTION.slice(SECTION.indexOf("**Ownership of the implementation deploy and the re-record.**"), SECTION.indexOf("**After a governed upgrade.**"));
+    expect(own).toContain(`\`${DEPLOY_IMPL_VERB}\` verb (issue 1861)`);
+    for (const s of ["ships no command", "until one lands", "only executed path", "cast send --create"]) expect(own, s).not.toContain(s);
+    const usage = (await import("../src/cli.ts")).USAGE;
+    expect(usage).toContain(`${DEPLOY_IMPL_VERB} = step 2 of a governed upgrade`);
+    expect(readFileSync(join(REPO, "publish-contracts", "README.md"), "utf8")).toContain(`\`${DEPLOY_IMPL_VERB} --proxy NAME [--upgrade-build DIR]\` (issue 1861`);
+  });
+  test("the Twin harness deploys its second gateway implementation through the verb, never a raw CREATE", () => {
+    const harness = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-lifecycle.ts"), "utf8");
+    expect(harness).toContain('stage(DEPLOY_IMPL_VERB, stdoutTo, ["--proxy", UPGRADED_PROXY])');
+    expect(harness).not.toContain('"--create"');
+    expect(harness.indexOf("deployImpl(join(rh, \"deploy-implementation.txt\"))")).toBeLessThan(harness.indexOf('"--row", UPGRADE_ROW'));
   });
 });

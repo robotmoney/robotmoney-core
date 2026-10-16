@@ -25,6 +25,7 @@ import type { ChainReader } from "./verify/types.ts";
 import { manifestBase, manifestPathFor } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet, type UpgradeMode } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
+import type { ImplementationDeploy } from "./deploy-implementation.ts";
 import { httpRpc, isTwinFork, warpBy } from "./rehearsal/twin.ts";
 import type { CallerInputs } from "./sheet.ts";
 import { createSafe, impersonatedSender, connectSafe, verifyCreatedSafe, type CreateSafePlan, type SafeManifest } from "./safe/index.ts";
@@ -120,6 +121,8 @@ export interface RunManifest {
   voted_weights_clears?: unknown[];
   /** Issue 1796: one entry per single-vault redeploy (`redeploy-vault` verb, then govern `--row redeploy-vault`): the deploy transactions, the new and the old vault, the operation and the read-back (the evidence `vault_redeploys` shape). */
   vault_redeploys?: RedeployRecord[];
+  /** Issue 1861: one entry per new proxy implementation the `deploy-implementation` verb deployed (step 2 of a governed upgrade), before `govern --row upgrade-proxy` names it. */
+  implementation_deploys?: ImplementationDeploy[];
   /** Issue 1727: the committee registration rounds `govern --row register-committee` executed, one entry per submitter (the evidence `committee_registrations` shape). */
   committee_registrations?: unknown[];
   /** Issue 1727: the receipts `record-receipt` anchored (the evidence `recorded_receipts` shape): id, digest, uri, submitter ADDRESS, transaction. Never a key. */
