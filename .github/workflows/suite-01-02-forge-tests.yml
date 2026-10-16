@@ -179,6 +179,19 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Issue 1853: the TypeScript core timelock prediction publish-contracts pins before every proxy stage
+      # (publish-contracts/src/timelock-pin.ts) equals UpgradeAuthority.predictTimelock for this build. The
+      # forge test writes the Solidity vectors (removed first: out/ is cached), the bun gate recomputes them,
+      # and its self-test proves it is red on a mismatch and on a missing vector file. The workflow-summary
+      # test runs the storage-layout-reset waiver branch of the next step.
+      - name: Timelock prediction parity, TypeScript and Solidity (issue 1853)
+        run: |
+          (cd publish-contracts && bun install --frozen-lockfile)
+          rm -f out/timelock-prediction-vectors.json
+          bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract UpgradeAuthorityPrediction
+          bun scripts/ci/check-timelock-prediction-parity.ts
+          bun test scripts/ci/check-timelock-prediction-parity.test.ts scripts/ci/check-forge-workflow-summary.test.ts
+
       - name: Core storage-layout gate (issues 1476, 1808, 1835)
         # Every proxied core contract (the four vaults, registry, router, gateway, IC policy,
         # receipt register, RouterGovernance) keeps its storage across upgrades only if the
@@ -192,7 +205,9 @@ jobs:
         # commit) and of every production release tag that ships GovernedUUPS proxies. The
         # `storage-layout-reset` PR label (set before the push it should apply to) waives the
         # base-commit baseline only; a released layout is never waived. A push to dev was gated
-        # as a PR, so it compares with the releases only.
+        # as a PR, so it compares with the releases only. Issue 1853: the waiver is also written
+        # to the job summary, where a reviewer sees it without opening the log
+        # (scripts/ci/check-forge-workflow-summary.test.ts runs this branch).
         env:
           LAYOUT_RESET: ${{ contains(github.event.pull_request.labels.*.name, 'storage-layout-reset') }}
         run: |
@@ -201,6 +216,11 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             if [[ "$LAYOUT_RESET" == "true" ]]; then
               echo "::warning::storage-layout-reset label: the layout is not compared with the base commit (released layouts still are)"
+              {
+                echo "### Storage-layout waiver: storage-layout-reset"
+                echo ""
+                echo "The storage-layout-reset PR label is set: the core storage layout is **not** compared with the base commit. Released layouts are still compared."
+              } >> "$GITHUB_STEP_SUMMARY"
             else
               base=(--baseline HEAD^1)
             fi

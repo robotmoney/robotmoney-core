@@ -750,25 +750,59 @@ const dryRunPins = new WeakMap<object, TimelockPrediction>();
 /** The pin of this run: the first proxy stage's record (`rec` while that stage runs), or a dry run's. */
 const timelockPinOf = (manifest: RunManifest, rec?: StageRecord): TimelockPrediction | undefined => rec?.timelockPrediction ?? manifest.stages[firstProxyStage() ?? ""]?.timelockPrediction ?? dryRunPins.get(manifest);
 
+/** The stages of the table that deploy proxies (issue 1853: every one checks the pin before it broadcasts). */
+const isProxyStage = (name: string): boolean => (getStageTable().stages.find((s) => s.name === name)?.proxies?.length ?? 0) > 0;
+
 /**
- * Issue 1835. The first proxy stage pins the core timelock prediction (address and init code hash, from the build, the Safe and TIMELOCK_MIN_DELAY) in its run manifest
- * record; its resume and the timelock stage recompute it and refuse a difference (MANIFEST, nothing sent). Returns the recomputed prediction for the timelock stage.
+ * Issue 1835, 1853. The first proxy stage pins the core timelock prediction (address and init code hash, from the build, the Safe and TIMELOCK_MIN_DELAY) in its run
+ * manifest record. Every later proxy stage and the timelock stage recompute it after their simulation and refuse a difference before anything is sent (MANIFEST): a
+ * toolchain, SAFE_ADDRESS or TIMELOCK_MIN_DELAY change between two proxy stages would otherwise put proxies on chain that name another timelock (split upgrade
+ * authority, a redeploy). proxyManifestCheck stays the post-broadcast backstop. A run manifest from an earlier release has no pin: backfillTimelockPin. A resumed
+ * first proxy stage whose earlier attempt (an earlier release) landed transactions and recorded no pin is refused, never pinned silently to this build.
+ * Returns the recomputed prediction for the timelock stage.
  */
-function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, prior: StageRecord | undefined, env: Record<string, string>): ReturnType<typeof predictCoreTimelock> | undefined {
+async function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, prior: StageRecord | undefined, env: Record<string, string>, resuming: boolean): Promise<ReturnType<typeof predictCoreTimelock> | undefined> {
   const u = getStageTable().upgradeAuthority, first = firstProxyStage();
-  if (!u || !first || (row.name !== first && row.name !== u.stage)) return undefined;
+  if (!u || !first || (!isProxyStage(row.name) && row.name !== u.stage)) return undefined;
   const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!));
   const { runtimeHash: _, ...pin } = now;
   if (row.name === first) {
     if (prior?.timelockPrediction) assertTimelockPin(row.name, first, prior.timelockPrediction, pin);
+    else if (resuming) throw new PublishError("MANIFEST", `stage ${row.name}: an earlier attempt of this stage, started by an earlier release of publish-contracts, already landed transactions and recorded no core timelock pin, so this build cannot show that its proxies name the timelock this build deploys. Finish stage ${row.name} with --resume and the release of publish-contracts that started it. The next proxy stage then backfills the pin from the ${row.name} manifest and the chain. Nothing was sent.`, { stage: row.name });
     rec.timelockPrediction = prior?.timelockPrediction ?? pin;
     if (ctx.dryRun) dryRunPins.set(manifest, rec.timelockPrediction);
     ctx.log.log("info", "stage.timelock_pinned", { stage: row.name, timelock: rec.timelockPrediction.address, init_code_hash: rec.timelockPrediction.initCodeHash });
     return undefined;
   }
-  assertTimelockPin(row.name, first, timelockPinOf(manifest), pin);
+  assertTimelockPin(row.name, first, timelockPinOf(manifest) ?? await backfillTimelockPin(ctx, row, manifest, first, pin), pin);
   ctx.log.log("info", "stage.timelock_pin_ok", { stage: row.name, timelock: pin.address, init_code_hash: pin.initCodeHash });
-  return now;
+  return row.name === u.stage ? now : undefined;
+}
+
+/**
+ * Issue 1853. A run manifest from a release before 1835 has a done first proxy stage and no pin. The pin is backfilled only when three sources agree: the first proxy
+ * stage's manifest upgrade_timelock, its first proxy's upgradeTimelock() on chain, and the prediction this build recomputes. Anything else is MANIFEST, nothing sent,
+ * with a remedy that can work (the runner never reruns a stage whose manifest exists, so "run that stage again" is not one).
+ */
+async function backfillTimelockPin(ctx: RunContext, row: StageRow, manifest: RunManifest, first: string, pin: TimelockPrediction): Promise<TimelockPrediction | undefined> {
+  const refuse = (why: string, remedy: string): never => {
+    throw new PublishError("MANIFEST", `stage ${row.name}: the run manifest has no core timelock pin from stage ${first} (an earlier release of publish-contracts ran it), and it cannot be backfilled: ${why}. ${remedy} Nothing was sent.`, { stage: row.name, pinnedBy: first, recomputed: pin.address });
+  };
+  if (manifest.stages[first]?.status !== "done") return undefined; // assertTimelockPin names the missing pin
+  const path = manifestFilePath(ctx, stageByName(first).manifest!);
+  let m: Record<string, unknown>;
+  try { m = JSON.parse(readFileSync(path, "utf8")); } catch { return refuse(`the manifest ${path} of stage ${first} is missing or not JSON`, `Restore the manifest stage ${first} wrote, then run this stage again.`); }
+  const A = /^0x[0-9a-fA-F]{40}$/;
+  const field = getStageTable().stages.find((s) => s.name === first)!.proxies![0]!.field;
+  const recorded = String(m.upgrade_timelock ?? ""), proxy = String(m[field] ?? "");
+  if (!A.test(recorded) || !A.test(proxy)) return refuse(`the manifest ${path} names no upgrade_timelock or ${field} address`, `Restore the manifest stage ${first} wrote, then run this stage again.`);
+  const onChain = (await castOut(ctx, ["call", proxy, "upgradeTimelock()(address)"])).trim();
+  if (onChain.toLowerCase() !== recorded.toLowerCase()) return refuse(`the ${field} proxy ${proxy} reads upgradeTimelock() ${onChain} on chain, its manifest records ${recorded}`, "Stop and read the chain before anything else runs.");
+  if (recorded.toLowerCase() !== pin.address.toLowerCase()) return refuse(`the ${first} proxies name the timelock ${recorded}, this build predicts ${pin.address} (init code hash ${pin.initCodeHash}, Safe ${pin.safe}, delay ${pin.minDelay})`, `Rebuild core with the toolchain, SAFE_ADDRESS and TIMELOCK_MIN_DELAY stage ${first} ran with, so the recomputed prediction is ${recorded}, then run this stage again.`);
+  if (ctx.dryRun) dryRunPins.set(manifest, pin);
+  else { manifest.stages[first]!.timelockPrediction = pin; saveRunManifest(ctx.evidenceDir, manifest); }
+  ctx.log.log("info", "stage.timelock_pin_backfilled", { stage: row.name, pinned_by: first, timelock: pin.address, init_code_hash: pin.initCodeHash, proxy, on_chain: onChain });
+  return pin;
 }
 
 /**
@@ -839,7 +873,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
   rec.dryRunCount = dry.count;
   if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
-  const pinned = timelockPinStep(ctx, row, manifest, rec, prior, env);
+  const pinned = await timelockPinStep(ctx, row, manifest, rec, prior, env, resuming);
   const adoptedLibs = [...await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount), ...await adoptCoreTimelock(ctx, row, dry, expectedCount, pinned)];
   const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
   ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });

@@ -38,6 +38,9 @@ fs_permissions = [
     # Read-only access to the stage table so FourVaultInitialState.t.sol compares each vault's
     # deposit state after its deploy script with the table's deployPaused (issue 1705).
     { access = "read", path = "./scripts/deploy" },
+    # The Solidity core timelock predictions UpgradeAuthorityPrediction.t.sol writes for the
+    # TypeScript parity check (scripts/ci/check-timelock-prediction-parity.ts, issue 1853).
+    { access = "write", path = "./out/timelock-prediction-vectors.json" },
 ]
 
 # Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth
