@@ -61,8 +61,8 @@
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
-import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { existsSync, readFileSync } from "node:fs";
+import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiItem, toBytes, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
 import { APPLY_ROW, GOVERNANCE_LAST_APPLIED_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, notNewerMessage, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
@@ -71,6 +71,15 @@ import {
   redeployRecordKey, redeployRefusal, redeploysOf, vectorsFromFinal, type RedeployRecord, type RedeployVectors,
 } from "./redeploy-vault.ts";
 import { PublishError } from "./errors.ts";
+import {
+  FREEZE_ROW, GOVERNED_PROXY_ABI, UPGRADE_ROW, buildFreezeCalls, buildUpgradeCall, codeHashOf, freezeTargets, layoutGateProblems, pendingUpgrades, rerecordProxyManifest,
+  runtimeCodeProblems, upgradeRecordKey,
+} from "./upgrade-rows.ts";
+import { proxySpecs } from "./verify/upgradeability.ts";
+import { ERC1967_IMPLEMENTATION_SLOT } from "./verify/codehash.ts";
+import { UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
+import { getStageTable } from "./stages.ts";
+import { manifestBase } from "./stage-table.ts";
 import { REGISTER_ROW, GATEWAY_REGISTER_ABI, IC_REGISTER_ABI, SUBMITTER_POLICY_SECONDS, assertAgentLabel, assertSubmitter, buildRegisterCalls, registerReadBackProblems, registerRecordKey } from "./committee-register.ts";
 import { ADMIN_ROLE, AGENT_ROLE, DEPOSIT_PAUSER_ROLE } from "./verify/constants.ts";
 import { COMMITTEE_AGENT_ROLE } from "./record-receipt.ts";
@@ -152,7 +161,7 @@ export const twinOnlyRefused = (row: string, chainId: number, kind: DeploymentKi
  */
 export function govRowRefusal(row: string | undefined, chainId: number, kind: DeploymentKind): string | undefined {
   if (row === REDEPLOY_ROW) return redeployRefusal(chainId, kind);
-  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW) return undefined;
+  if (row === undefined || row === RECEIPT_ROW || row === APPLY_ROW || row === CLEAR_ROW || row === FREEZE_ROW || row === UPGRADE_ROW) return undefined;
   if (row === REGISTER_ROW) {
     return chainId === BASE_CHAIN_ID && kind !== "rehearsal"
       ? `--row ${REGISTER_ROW} is refused on chain 8453 in production: the production govern surface is the four unpauses, ${RECEIPT_ROW}, ${APPLY_ROW} and ${CLEAR_ROW}. It runs on a Base mainnet REHEARSAL (sheet DEPLOYMENT_KIND=rehearsal) and on the Twin chain.`
@@ -308,6 +317,8 @@ export function resolveGovernRow(row: string): PlannedRow {
   if (row === APPLY_ROW) throw new PublishError("USAGE", `--row ${APPLY_ROW} is the on-demand receipt application: it needs --receipt-id 0x<bytes32> and --payload FILE`);
   if (row === CLEAR_ROW) throw new PublishError("USAGE", `--row ${CLEAR_ROW} is the on-demand clear of the router's voted weight vector: it is run by name only (runGovern)`);
   if (row === REDEPLOY_ROW) throw new PublishError("USAGE", `--row ${REDEPLOY_ROW} is the on-demand replacement of one redeployed vault: it is run by name only (runGovern)`);
+  if (row === FREEZE_ROW) throw new PublishError("USAGE", `--row ${FREEZE_ROW} is the on-demand freeze of every core proxy (issue 1842): it is run by name only (runGovern)`);
+  if (row === UPGRADE_ROW) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} is the on-demand governed upgrade of one core proxy (issue 1842): it needs --proxy NAME --implementation 0x<address>`);
   if (/^[0-9]+$/.test(row)) {
     const n = Number(row);
     const name = GOVERN_ROWS[n - 1];
@@ -351,8 +362,22 @@ export interface GovernApi {
   inspectSubmitter: (handle: SafeHandle, submitter: Address, forbidden: ReadonlyMap<string, string>) => Promise<SubmitterSafeInfo | null>;
   /** Safe self-administration only (issue 1645). Absent in a test world that does not exercise it: the real one is used. */
   proposeTx?: typeof proposeTx;
+  /** Issue 1842: every call scheduled on the timelock from `fromBlock` (CallScheduled logs), for the freeze row's pending-upgrade refusal. Absent: the real log scan. */
+  scheduledCalls?: (handle: SafeHandle, timelock: Address, fromBlock: bigint) => Promise<{ id: Hex; target: Address; data: Hex }[]>;
 }
-export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect, proposeTx,
+
+const CALL_SCHEDULED = parseAbiItem("event CallScheduled(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data, bytes32 predecessor, uint256 delay)");
+/** The timelock's CallScheduled logs from `fromBlock` to the head, in 2000-block chunks (the public Base RPC's cap). A failed chunk throws: none is read as "no calls". */
+export async function scanScheduledCalls(handle: SafeHandle, timelock: Address, fromBlock: bigint): Promise<{ id: Hex; target: Address; data: Hex }[]> {
+  const head = await handle.client.getBlockNumber();
+  const out: { id: Hex; target: Address; data: Hex }[] = [];
+  for (let lo = fromBlock; lo <= head; lo += 2000n) {
+    const hi = lo + 1999n < head ? lo + 1999n : head;
+    for (const l of await handle.client.getLogs({ address: timelock, event: CALL_SCHEDULED, fromBlock: lo, toBlock: hi })) out.push({ id: l.args.id!, target: l.args.target!, data: l.args.data! });
+  }
+  return out;
+}
+export const realGovernApi: GovernApi = { connectSafe, scheduleOnTimelock, executeOnTimelock, cancelOnTimelock, updateTimelockDelay, operationId, operationState, timelockMinDelay, signTx, executeTx, verifyTimelockEffect, proposeTx, scheduledCalls: scanScheduledCalls,
   inspectSubmitter: (handle, submitter, forbidden) => inspectSubmitterSafe(chainFromClient(handle.client as never), submitter, forbidden) };
 
 export type GovernPhase = "scheduled" | "executed" | "cancelled";
@@ -395,6 +420,14 @@ export interface GovernOpts {
   call?: TwinCall;
   /** With a self-administration row (`--row safe-add-owner` and the others): the arguments of that row. Twin chain only. */
   selfAdmin?: SelfAdminArgs;
+  /** With `--row upgrade-proxy` only (issue 1842): the verifier name of the proxy (gateway, registry, vault[rmUSDC], ...) and the new implementation's address. */
+  proxy?: string;
+  implementation?: string;
+  /**
+   * With `--row upgrade-proxy` only: a core checkout at the commit the new implementation was built from, after `forge build` (its out/ and its storage-layout snapshots).
+   * Absent: the DEPLOY_SHA checkout itself (a new copy of the release implementation, as the Twin rehearsal deploys).
+   */
+  upgradeBuild?: string;
 }
 
 /** One generic timelock call, named by `label` (the manifest key, the salt input and the `row` of the output lines). */
@@ -539,10 +572,19 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   const registering = o.row === REGISTER_ROW;
   const clearing = o.row === CLEAR_ROW;
   const redeploying = o.row === REDEPLOY_ROW;
+  const freezing = o.row === FREEZE_ROW;
+  const upgrading = o.row === UPGRADE_ROW;
+  if ((o.proxy !== undefined || o.implementation !== undefined || o.upgradeBuild !== undefined) && !upgrading) throw new PublishError("USAGE", `--proxy, --implementation and --upgrade-build go with --row ${UPGRADE_ROW} only`);
   if ((o.submitter !== undefined || o.agentLabel !== undefined) && !registering) throw new PublishError("USAGE", `--submitter and --agent-label go with --row ${REGISTER_ROW} only`);
   const early = govRowRefusal(o.row, ctx.chainId, ctx.sheet.kind);
   if (early !== undefined) throw new PublishError("USAGE", early);
-  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
+  // Issue 1842: the upgrade row's arguments are checked before the Safe is read.
+  const upgradeSpec = upgrading ? proxySpecs(getStageTable()).find((x) => x.name === o.proxy) : undefined;
+  if (upgrading) {
+    if (!upgradeSpec) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME, one of ${proxySpecs(getStageTable()).map((x) => x.name).join(", ")}; got ${String(o.proxy)}`);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(o.implementation ?? "")) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --implementation 0x<address> (the new implementation, already deployed), got ${String(o.implementation)}`);
+  }
   const a = loadGovernAddrs(ctx);
   const sheet = ctx.sheet;
   const handle = await api.connectSafe({ rpcUrl: ctx.rpc, chainId: ctx.chainId, safeAddress: a.safe, logger: ctx.log });
@@ -967,6 +1009,169 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await at(r.executed.tx_hash),
     });
     save();
+  }
+
+  /** Issue 1842: the latest upgradeability.json verify wrote for this deployment. */
+  function upgradeabilityRecord(rowName: string): any {
+    const path = join(manifestDir(ctx), UPGRADEABILITY_MANIFEST);
+    if (!existsSync(path)) throw new PublishError("INPUT_MISSING", `--row ${rowName} reads ${path}, which does not exist: run verify first`, { row: rowName, path });
+    const rec = JSON.parse(readFileSync(path, "utf8"));
+    if (rec.chain_id !== undefined && Number(rec.chain_id) !== ctx.chainId) throw new PublishError("GOVERN", `${path} is for chain ${rec.chain_id}, not ${ctx.chainId}`, { row: rowName });
+    return rec;
+  }
+  const implOf = async (proxy: Address): Promise<Address> => `0x${((await handle.client.getStorageAt({ address: proxy, slot: ERC1967_IMPLEMENTATION_SLOT })) ?? "0x").replace(/^0x/, "").padStart(64, "0").slice(24)}` as Address;
+  const codeOf = async (x: Address): Promise<Hex> => ((await handle.client.getCode({ address: x })) ?? "0x") as Hex;
+  const frozenNow = (proxy: Address) => reader(handle)<boolean>(proxy, GOVERNED_PROXY_ABI, "upgradesFrozen");
+  /** The block the timelock scan starts at: the timelock stage's first block, else the deployment's. */
+  const scanStart = (): bigint => {
+    const u = getStageTable().upgradeAuthority;
+    const b = (u ? manifest.stages[u.stage]?.firstBlock : undefined) ?? manifest.firstBlock;
+    if (b === undefined) throw new PublishError("INPUT_MISSING", "the run manifest has no first deploy block: the scan for pending timelock operations needs it", {});
+    return BigInt(b);
+  };
+  const blockTime = async (hash: string): Promise<number> => {
+    const rc = await handle.client.getTransactionReceipt({ hash: hash as Hex });
+    return Number((await handle.client.getBlock({ blockNumber: rc.blockNumber })).timestamp);
+  };
+
+  if (freezing) {
+    // Issue 1842: ONE timelock batch, freezeUpgrades(implementation, implementation_code_hash) on every unfrozen core proxy, bound to the record verify wrote. Never part of
+    // the matrix. On 8453 in production and in a rehearsal, and on the Twin chain. The freeze is one-way: a rerun of a done row reprints it.
+    const name = FREEZE_ROW;
+    type Freeze = { targets: Record<string, { proxy: string; implementation: string; implementation_code_hash: string }> };
+    if (!rowComplete(state[name])) {
+      let plan = (state[name] as { freeze?: Freeze } | undefined)?.freeze;
+      if (!plan) {
+        const rec = upgradeabilityRecord(name);
+        if (rec.mode !== "upgradeable") throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: upgradeability.json says mode ${String(rec.mode)}. Only an upgradeable release has proxies to freeze. Nothing was scheduled.`, { row: name });
+        const { targets, problems } = freezeTargets(rec, proxySpecs(getStageTable()));
+        if (problems.length) throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: upgradeability.json cannot bind the freeze: ${problems.join("; ")}. Run verify, then this row again. Nothing was scheduled.`, { row: name, problems });
+        // each target must still be what the record says (else freezeUpgrades reverts FreezeTargetMismatch), and a proxy already frozen is left out (it would revert UpgradesAreFrozen)
+        const open: typeof targets = {};
+        const stale: string[] = [];
+        for (const [n, t] of Object.entries(targets)) {
+          if (await frozenNow(t.proxy as Address)) continue;
+          const impl = await implOf(t.proxy as Address), hash = codeHashOf(await codeOf(impl));
+          if (impl.toLowerCase() !== t.implementation.toLowerCase() || (hash ?? "").toLowerCase() !== t.implementation_code_hash.toLowerCase()) stale.push(`${n}: live implementation ${impl} (code hash ${hash}), upgradeability.json ${t.implementation} (${t.implementation_code_hash})`);
+          open[n] = t;
+        }
+        if (stale.length) throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: upgradeability.json is stale: ${stale.join("; ")}. Run verify, then this row again. Nothing was scheduled.`, { row: name, stale });
+        if (Object.keys(open).length === 0) throw new PublishError("GOVERN", `--row ${FREEZE_ROW}: every core proxy already reads upgradesFrozen() true. Nothing to freeze, nothing was scheduled.`, { row: name });
+        // an upgrade still pending on the timelock would either run before the freeze (and break its binding) or be stranded: refuse until it is executed or cancelled
+        const scheduled = await (api.scheduledCalls ?? scanScheduledCalls)(handle, a.timelock, scanStart());
+        const pendingIds = new Map<string, boolean>();
+        for (const c of scheduled) pendingIds.set(c.id, (await api.operationState(handle, a.timelock, c.id)).pending);
+        const queued = pendingUpgrades(scheduled, Object.values(targets).map((t) => t.proxy), (id) => pendingIds.get(id) === true);
+        if (queued.length) throw new PublishError("GOVERN", `--row ${FREEZE_ROW} is refused: upgrade operation(s) still pending on the timelock ${a.timelock}: ${queued.map((q) => `${q.id} on ${q.target}`).join(", ")}. Execute or cancel each through the Safe first. Nothing was scheduled.`, { row: name, pending: queued });
+        plan = { targets: open };
+        // the preview the signers compare with what they sign: every proxy, the implementation and the code hash it is frozen at
+        for (const [n, t] of Object.entries(open)) ctx.log.log("info", "govern.preview", { row: name, proxy_name: n, proxy: t.proxy, expected_implementation: t.implementation, expected_code_hash: t.implementation_code_hash });
+        state[name] = { ...(state[name] ?? { round: 1 }), freeze: plan } as RowRecord;
+        save();
+      }
+      const calls = buildFreezeCalls(plan.targets);
+      const p = { timelock: a.timelock, calls: calls.map(({ target, data }) => ({ target, data })), salt: salt(name), form: "batch" as const };
+      const id = await api.operationId(handle, p);
+      const readBack = async () => {
+        const bad: string[] = [];
+        for (const [n, t] of Object.entries(plan!.targets)) if (!(await frozenNow(t.proxy as Address))) bad.push(`${n} (${t.proxy}) reads upgradesFrozen() false`);
+        return bad;
+      };
+      await round(name, {
+        id, description: `freeze ${calls.length} core proxies`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${FREEZE_ROW}: ${calls.length} freezeUpgrades calls` }),
+        execute: () => api.executeOnTimelock(handle, { ...p, description: `${FREEZE_ROW} execute` }),
+      }, FREEZE_ROW);
+    } else {
+      reprint(name);
+    }
+    // the evidence entry (`upgrade_freezes` of the run manifest): the targets, the operation and its two transactions
+    const r = state[name] as RowRecord & { freeze?: Freeze };
+    if (r.executed?.tx_hash && r.scheduled?.tx_hash && r.freeze) {
+      const entry = {
+        step: FREEZE_ROW, timelock: a.timelock, targets: r.freeze.targets, operation_id: r.scheduled.operation_id,
+        schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await blockTime(r.scheduled.tx_hash),
+        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await blockTime(r.executed.tx_hash),
+      };
+      const list = ((manifest as { upgrade_freezes?: { operation_id?: string }[] }).upgrade_freezes ??= []);
+      const i = list.findIndex((x) => x.operation_id === entry.operation_id);
+      if (i >= 0) list[i] = entry; else list.push(entry);
+    }
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: FREEZE_ROW, next: "run verify: it records the freeze block and transaction of every proxy" });
+    return { rows: [name], skipped: [], opIds };
+  }
+
+  if (upgrading) {
+    // Issue 1842: ONE timelock call, upgradeToAndCall(new, "") on one core proxy, through the Safe. Refused before scheduling when the proxy is frozen, when the new
+    // implementation's layout does not extend the deployed snapshot, or when its code is not the build. After the execute the stage manifest is re-recorded.
+    const spec = upgradeSpec!;
+    const implementation = getAddress(o.implementation!) as Address;
+    const name = upgradeRecordKey(spec.name, implementation);
+    const t = getStageTable();
+    const manifestPath = join(manifestDir(ctx), `${manifestBase(t.stages.find((x) => x.name === spec.stage)!.manifest)}.json`);
+    type Upgrade = { proxy: string; from_implementation: string; from_code_hash: string | null; to_implementation: string; to_code_hash: string; build: string };
+    if (!rowComplete(state[name])) {
+      let plan = (state[name] as { upgrade?: Upgrade } | undefined)?.upgrade;
+      if (!plan) {
+        const rec = upgradeabilityRecord(name);
+        const r = rec.proxies?.[spec.name];
+        if (!r?.proxy) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: upgradeability.json has no ${spec.name}. Run verify first. Nothing was scheduled.`, { row: UPGRADE_ROW });
+        const proxy = getAddress(r.proxy) as Address;
+        const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+        if (String(m[spec.field]).toLowerCase() !== proxy.toLowerCase()) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${manifestPath} names ${spec.field} ${String(m[spec.field])}, upgradeability.json ${proxy}. Nothing was scheduled.`, { row: UPGRADE_ROW });
+        if (await frozenNow(proxy)) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${spec.name} (${proxy}) reads upgradesFrozen() true. A frozen proxy is never upgraded again. Nothing was scheduled.`, { row: UPGRADE_ROW, proxy });
+        const from = await implOf(proxy);
+        if (from.toLowerCase() === implementation.toLowerCase()) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${spec.name} already runs ${implementation}. Nothing was scheduled.`, { row: UPGRADE_ROW });
+        const build = o.upgradeBuild ?? ctx.coreDir;
+        const u = t.upgradeAuthority;
+        if (!u) throw new PublishError("GOVERN", "the stage table has no upgradeAuthority (layout pins)", { row: UPGRADE_ROW });
+        const layout = layoutGateProblems(spec, ctx.coreDir, build, u.layoutPins, r.layout_id);
+        if (layout.length) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: the storage layout gate refuses ${implementation} for ${spec.name}: ${layout.join("; ")}. Nothing was scheduled.`, { row: UPGRADE_ROW, layout });
+        let code: string[];
+        try { code = await runtimeCodeProblems(codeOf, implementation, join(build, "out"), spec.contract); } catch (e) { code = [(e as Error).message]; }
+        if (code.length) throw new PublishError("GOVERN", `--row ${UPGRADE_ROW}: ${implementation} is not the build's ${spec.contract} (${join(build, "out")}): ${code.join("; ")}. Nothing was scheduled.`, { row: UPGRADE_ROW, code });
+        plan = { proxy, from_implementation: from, from_code_hash: codeHashOf(await codeOf(from)), to_implementation: implementation, to_code_hash: codeHashOf(await codeOf(implementation))!, build };
+        ctx.log.log("info", "govern.preview", { row: UPGRADE_ROW, proxy_name: spec.name, proxy, old_implementation: plan.from_implementation, old_code_hash: plan.from_code_hash, new_implementation: implementation, new_code_hash: plan.to_code_hash });
+        state[name] = { ...(state[name] ?? { round: 1 }), upgrade: plan } as RowRecord;
+        save();
+      }
+      const c = buildUpgradeCall(spec.name, plan.proxy as Address, implementation);
+      const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };
+      const id = await api.operationId(handle, p);
+      const readBack = async () => ((await implOf(plan!.proxy as Address)).toLowerCase() === implementation.toLowerCase() ? [] : [`${spec.name} implementation slot reads ${await implOf(plan!.proxy as Address)}, want ${implementation}`]);
+      await round(name, {
+        id, description: `upgrade ${spec.name} to ${implementation}`, readBack,
+        schedule: () => api.scheduleOnTimelock(handle, { ...p, description: `${UPGRADE_ROW}: ${c.label}` }),
+        execute: async () => {
+          // a proxy frozen since the schedule would revert UpgradesAreFrozen on chain: refuse before the Safe signs
+          if (await frozenNow(plan!.proxy as Address)) throw new PublishError("GOVERN", `${spec.name} was frozen after this upgrade was scheduled: the operation can never execute. Cancel it through the Safe.`, { row: UPGRADE_ROW });
+          return api.executeOnTimelock(handle, { ...p, description: `${UPGRADE_ROW} execute` });
+        },
+      }, UPGRADE_ROW);
+    } else {
+      const r = state[name]!;
+      if (r.scheduled) emitPhase(o, UPGRADE_ROW, "scheduled", r.scheduled);
+      if (r.executed) emitPhase(o, UPGRADE_ROW, "executed", r.executed);
+    }
+    // the re-record (runbook 4.12, "After a governed upgrade") and the evidence entry (`proxy_upgrades` of the run manifest)
+    const r = state[name] as RowRecord & { upgrade?: Upgrade };
+    if (r.executed?.tx_hash && r.scheduled?.tx_hash && r.upgrade) {
+      const implHash = codeHashOf(await codeOf(implementation))!, proxyHash = codeHashOf(await codeOf(r.upgrade.proxy as Address))!;
+      const fields = rerecordProxyManifest(manifestPath, spec, implementation, implHash, proxyHash);
+      ctx.log.log("info", "govern.manifest_rerecorded", { row: UPGRADE_ROW, manifest: manifestPath, fields, next: "run verify: it re-records upgradeability.json" });
+      const entry = {
+        step: UPGRADE_ROW, proxy_name: spec.name, ...r.upgrade, timelock: a.timelock, manifest_fields: fields, operation_id: r.scheduled.operation_id,
+        schedule_tx: r.scheduled.tx_hash, schedule_status: r.scheduled.status ?? 1, schedule_block_timestamp: await blockTime(r.scheduled.tx_hash),
+        execute_tx: r.executed.tx_hash, execute_status: r.executed.status ?? 1, execute_block_timestamp: await blockTime(r.executed.tx_hash),
+      };
+      const list = ((manifest as { proxy_upgrades?: { operation_id?: string }[] }).proxy_upgrades ??= []);
+      const i = list.findIndex((x) => x.operation_id === entry.operation_id);
+      if (i >= 0) list[i] = entry; else list.push(entry);
+    }
+    save();
+    ctx.log.log("info", "govern.row_run_done", { stage: row.name, row: UPGRADE_ROW, proxy: spec.name, implementation });
+    return { rows: [name], skipped: [], opIds };
   }
 
   if (redeploying) {
