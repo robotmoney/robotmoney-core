@@ -42,13 +42,17 @@
 //! between the cursor and the chain head that live ingestion indexes later.
 //!
 //! The baseline is taken once and kept, and only by a watchdog that never ran
-//! before on this database. The watchdog takes it at startup, before its first
-//! cycle writes anything. If the chain already has a `watchdog_cursor` row or
-//! any `watchdog_pager_state` row, an older watchdog ran here. It may have seen
-//! a real upgrade whose page was never delivered (webhook down or unset), so the
-//! baseline is `-1` and nothing is seeded. With nothing indexed at startup no
-//! baseline is taken; by the next cycle the watchdog has its own cursor row, so
-//! the baseline becomes `-1` too. Every doubtful case pages.
+//! before on this database. Only the startup call (`first_start = true`) may
+//! take the cursor, before the first cycle writes anything. If the chain already
+//! has a `watchdog_cursor` row or any `watchdog_pager_state` row, an older
+//! watchdog ran here. It may have seen a real upgrade whose page was never
+//! delivered (webhook down or unset), so the baseline is `-1` and nothing is
+//! seeded. With nothing indexed at startup the baseline is `-1` at once. After
+//! a failed startup call the first later call stores `-1`, never the cursor:
+//! an indexer run that commits after startup could otherwise cover an upgrade
+//! mined after the watchdog started and silence it (issue 1868). Storing `-1`
+//! at startup also closes that window for a restart or a second replica before
+//! the first cycle. Every doubtful case pages.
 //!
 //! Alert-only: an upgrade never pauses the gateway.
 
@@ -121,13 +125,16 @@ pub const PROXY_BASELINE_DDL: &str = "CREATE TABLE IF NOT EXISTS watchdog_proxy_
      PRIMARY KEY (chain_id))";
 
 /// The block at or below which a proxy event predates the monitor's first run
-/// (see the module doc). Taken on the first call and kept: the indexer cursor
-/// when no watchdog ran on this database before, else `-1`. `None` when no
-/// watchdog ran before and nothing is indexed yet. Call it at startup, before
-/// the first cycle writes the watchdog cursor.
+/// (see the module doc). Taken on the first call that stores one, and kept.
+/// With `first_start` (the startup call, before the first cycle writes the
+/// watchdog cursor) it is the indexer cursor when no watchdog ran on this
+/// database before and something is indexed, else `-1`. Without `first_start`
+/// a missing baseline is stored as `-1`, so every unpaged change pages
+/// (issue 1868). `None` only if the stored row vanished after the insert.
 pub async fn proxy_change_baseline(
     pool: &PgPool,
     chain_id: i64,
+    first_start: bool,
 ) -> Result<Option<i64>, WatchdogError> {
     let stored = "SELECT baseline_block FROM watchdog_proxy_baseline WHERE chain_id = $1";
     if let Some(b) = sqlx::query_scalar(stored)
@@ -137,26 +144,12 @@ pub async fn proxy_change_baseline(
     {
         return Ok(Some(b));
     }
-    let ran_before: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM watchdog_cursor WHERE chain_id = $1) \
-             OR EXISTS (SELECT 1 FROM watchdog_pager_state WHERE chain_id = $1)",
-    )
-    .bind(chain_id)
-    .fetch_one(pool)
-    .await?;
-    let baseline: Option<i64> = if ran_before {
-        Some(-1)
+    // Nothing indexed at startup stores -1 at once: a restart or a second
+    // replica after the indexer's first run must not take its cursor.
+    let baseline = if first_start {
+        cursor_baseline(pool, chain_id).await?.unwrap_or(-1)
     } else {
-        sqlx::query_scalar(
-            "SELECT MAX(last_indexed_block) FROM indexer_runs \
-             WHERE chain_id = $1 AND error IS NULL",
-        )
-        .bind(chain_id)
-        .fetch_one(pool)
-        .await?
-    };
-    let Some(baseline) = baseline else {
-        return Ok(None);
+        -1
     };
     sqlx::query(
         "INSERT INTO watchdog_proxy_baseline (chain_id, baseline_block) VALUES ($1, $2) \
@@ -177,6 +170,28 @@ pub async fn proxy_change_baseline(
         .bind(chain_id)
         .fetch_optional(pool)
         .await?)
+}
+
+/// The startup baseline: the indexer cursor when no watchdog ran on this
+/// database before, else `-1`. `None` when nothing is indexed yet.
+async fn cursor_baseline(pool: &PgPool, chain_id: i64) -> Result<Option<i64>, WatchdogError> {
+    let ran_before: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM watchdog_cursor WHERE chain_id = $1) \
+             OR EXISTS (SELECT 1 FROM watchdog_pager_state WHERE chain_id = $1)",
+    )
+    .bind(chain_id)
+    .fetch_one(pool)
+    .await?;
+    if ran_before {
+        return Ok(Some(-1));
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT MAX(last_indexed_block) FROM indexer_runs \
+         WHERE chain_id = $1 AND error IS NULL",
+    )
+    .bind(chain_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 /// (contract, event_name, block_number, log_index, tx_hash, detail) of one `admin_events` row.
@@ -302,8 +317,9 @@ pub async fn alert_new_proxy_changes(
     now: i64,
 ) -> Result<usize, WatchdogError> {
     let mut paged = 0;
-    // Fail toward paging: without a baseline every change pages.
-    let baseline = match proxy_change_baseline(pool, chain_id).await {
+    // Fail toward paging: without a baseline every change pages. Only startup
+    // may take the cursor as the baseline (issue 1868).
+    let baseline = match proxy_change_baseline(pool, chain_id, false).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(
