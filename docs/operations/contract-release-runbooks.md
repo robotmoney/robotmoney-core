@@ -476,7 +476,12 @@ with the verify failure's code (13). It picks the signer by stage (deployer
 before the handover, EMERGENCY key after), reads `depositsPaused` back on
 every vault and records each vault's paused state in
 `rollout-report-<chain>.json` under the run's evidence directory. Withdrawals
-stay open. Exit 25 means a vault is not confirmed paused. **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. rmUSDC
+stay open. Exit 25 means a vault is not confirmed paused. Run the CLI from a
+checkout of `DEPLOY_SHA`. A CLI from another sha still pauses, with one
+`vault_rules.mismatch` warning naming both stage tables (`pause-all` reads no
+per-vault rule); every other verb refuses the mismatch (issue 1851). A verify
+whose only failures are RPC-refused receipt reads exits 30 (`RPC_REFUSED`) and
+pauses nothing: rerun it against an RPC that serves the deploy receipts. **Initial deposit state, one rule for all four vaults** (`scripts/deploy/stage-table.json` `vaults[].deployPaused` and `unpauseInStage13`, issue 1705): all four vaults deploy paused, and stage 13 unpauses all four through the Safe and the timelock. rmUSDC
 pauses right after its 1 USDC seed deposit.
 Rehearsed on every pull request that touches the deploy by the Twin test
 `testing/smoke-test/tests/twin_pause_all.rs`.

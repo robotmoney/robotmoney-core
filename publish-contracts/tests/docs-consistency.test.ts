@@ -146,3 +146,25 @@ describe("VAULT_NAME and the same-core-sha rule in the deploy README (issue 1833
     expect(parity).toContain("no stage script reads VAULT_NAME");
   });
 });
+
+// Issue 1851: the verify RPC requirement (receipts, no archive node) and the DEPLOY_SHA checkout of the emergency pause-all are in the operator docs.
+describe("the verify RPC requirement and the pause-all DEPLOY_SHA checkout are documented (issue 1851)", () => {
+  const flat = (p: string) => read(p).replace(/\s+/g, " ");
+  test("publish-contracts/README.md names the verify RPC requirement, the no-archive reading and the RPC_REFUSED no-pause rule", () => {
+    const r = flat("publish-contracts/README.md");
+    expect(r).toContain("The verify RPC must serve `eth_getTransactionReceipt` for every deploy transaction of the run, and `eth_getLogs` from `firstBlock` to the head.");
+    expect(r).toContain("The verifier never reads state at a past block");
+    expect(r).toContain("verify exits `RPC_REFUSED` (30) and pauses nothing");
+    expect(r).toContain("--run-manifest <publish-run.json>");
+  });
+  test("manual-admin-actions.md and runbook 4.6 tell the operator to run pause-all from the DEPLOY_SHA checkout", () => {
+    expect(flat("docs/operations/manual-admin-actions.md")).toContain("Run the CLI from a checkout of `DEPLOY_SHA` (the same checkout `--core-dir` names).");
+    const runbook = read("docs/operations/contract-release-runbooks.md");
+    const s46 = runbook.slice(runbook.indexOf("### 4.6. Rollback"), runbook.indexOf("### 4.7")).replace(/\s+/g, " ");
+    expect(s46).toContain("Run the CLI from a checkout of `DEPLOY_SHA`.");
+    expect(s46).toContain("exits 30 (`RPC_REFUSED`) and pauses nothing");
+  });
+  test("the deploy README names the pause-all exception to the same-core-sha refusal", () => {
+    expect(flat("scripts/deploy/README.md")).toContain("The emergency `pause-all` is the one exception");
+  });
+});
