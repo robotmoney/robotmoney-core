@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { useGuardedWriteContract, useWriteChainGuard } from "../lib/useGuardedWriteContract";
 import { WrongChainError } from "../lib/writeChainGuard";
+import { useGatewayWriteCheck } from "../lib/gatewayWriteCheck";
 import { getAddress, type Address, type Hex } from "viem";
 import {
   SafeProposalError,
@@ -184,9 +185,10 @@ type LoadState =
 
 function ActiveSafeProposal(props: ActiveProps) {
   const { testId, safeAddress, timelockAddress, request } = props;
-  const { address, connector } = useAccount();
+  const { address, connector, chainId } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useGuardedWriteContract();
+  const gatewayCheck = useGatewayWriteCheck();
   const chainGuard = useWriteChainGuard();
   const reader = useMemo(() => (publicClient ? toReader(publicClient) : undefined), [publicClient]);
 
@@ -256,6 +258,9 @@ function ActiveSafeProposal(props: ActiveProps) {
       const m = makeModel(ctx, request);
       await verifyDigestOnChain(reader, ctx, m.build);
       const provider = (await connector.getProvider()) as Eip1193;
+      // Issue 1840: the owner signature authorizes a gateway admin action, so the gateway is
+      // re-verified at the latest block first, exactly as before a write.
+      if (gatewayCheck) await gatewayCheck({ target: safeAddress, provider, chainId });
       const raw = await provider.request({
         method: "eth_signTypedData_v4",
         params: [address, m.build.typedDataJson],
