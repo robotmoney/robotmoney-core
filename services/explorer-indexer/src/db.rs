@@ -1583,6 +1583,28 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Mark an already-stored proxy row as its contract's deployment (issue
+    /// 1840), for rows indexed before the receipt check existed. The startup
+    /// backfill calls this when the row's transaction created the proxy.
+    pub async fn mark_proxy_deployment(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE admin_events SET detail = (detail::jsonb || '{\"deployment\":true}'::jsonb)::text \
+             WHERE chain_id = $1 AND block_number = $2 AND log_index = $3 \
+               AND contract_kind = 'proxy' AND NOT (detail::jsonb ? 'deployment')",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Record the chain head a run saw (`indexer_runs.chain_head_block`, migration 0017).
     pub async fn set_run_chain_head(&self, run_id: i64, head: i64) -> Result<(), DbError> {
         sqlx::query("UPDATE indexer_runs SET chain_head_block = $2 WHERE run_id = $1")

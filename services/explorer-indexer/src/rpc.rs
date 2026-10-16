@@ -177,6 +177,10 @@ pub struct TxRow {
     pub from: Address,
     pub to: Option<Address>,
     pub status: u8,
+    /// The receipt's `contractAddress`: the contract this transaction created
+    /// at top level, `None` for a call. Issue 1840: the indexer marks a proxy's
+    /// `Upgraded` / `UpgradesFrozen` as its deployment only when this is the proxy.
+    pub contract_address: Option<Address>,
 }
 
 impl JsonRpc {
@@ -404,20 +408,23 @@ impl JsonRpc {
                 // Receipt fetch for status. Cheap since we're already
                 // ingesting block-by-block; a future optimization could
                 // batch these.
-                let status = self.tx_status(tx_hash).await?;
+                let (status, contract_address) = self.tx_receipt(tx_hash).await?;
                 txs.push(TxRow {
                     tx_hash,
                     tx_index,
                     from,
                     to,
                     status,
+                    contract_address,
                 });
             }
         }
         Ok((header, txs))
     }
 
-    async fn tx_status(&self, hash: B256) -> Result<u8, RpcError> {
+    /// The receipt's status and `contractAddress` (the contract a creation
+    /// transaction deployed; `None` for a call or an unknown receipt).
+    async fn tx_receipt(&self, hash: B256) -> Result<(u8, Option<Address>), RpcError> {
         let v: serde_json::Value = self
             .call(
                 "eth_getTransactionReceipt",
@@ -425,11 +432,15 @@ impl JsonRpc {
             )
             .await?;
         if v.is_null() {
-            return Ok(0);
+            return Ok((0, None));
         }
         let s = v.get("status").and_then(|x| x.as_str()).unwrap_or("0x0");
         let n = parse_u64_hex("receipt.status", s)?;
-        Ok(n as u8)
+        let created = match v.get("contractAddress").and_then(|x| x.as_str()) {
+            None | Some("") => None,
+            Some(a) => Some(parse_address("receipt.contractAddress", a)?),
+        };
+        Ok((n as u8, created))
     }
 
     /// `eth_getLogs` for a block range, optionally filtered by address
