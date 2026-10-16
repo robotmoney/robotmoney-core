@@ -19,18 +19,10 @@ import { join } from "node:path";
 import { receiptIdOfBytes, receiptPayloadDigest } from "../receipt-digest.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
 import { BASKET_KEYS, parseSheetText } from "../sheet.ts";
-import { UNWIND_GUARD_ROW } from "../unwind-guard.ts";
+import { twinUnwindGuardArgs } from "../unwind-guard.ts";
 
 /** The one Safe self-administration row the Twin govern matrix runs on the real SafeL2 (QA plan v1 B5): one Safe transaction to the Safe itself, no timelock round. */
 const SELF_ADMIN_MATRIX_ROW = "safe-change-threshold";
-/**
- * QA plan v1 D7: the emergency unwind guard the Twin sets on every basket stage 13 opened (`govern --row set-unwind-guard ... token=all`), before the post-govern verify, whose
- * label requires a non-zero minUsdcOut on every active asset of an open basket. The baskets hold nothing when the row runs, so these values prove the row and the label on the
- * real contracts, never a sizing: on 8453 the operator sizes min-usdc-out from each vault's holding (runbook).
- */
-const TWIN_UNWIND_MIN_USDC_OUT = "1000000";
-const TWIN_UNWIND_MAX_LOSS_BPS = "500";
-
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-publish: ${m}`); process.exit(1); };
 
@@ -112,8 +104,7 @@ if (env("GOVERN_IN") === "true") {
   // QA plan v1 D7: one set-unwind-guard round per basket the sheet's GOVERN_UNPAUSE_VAULTS opened, through the real Safe and timelock (one warp each), before the post-govern verify.
   const unpaused = (parseSheetText(readFileSync(sheet, "utf8")).GOVERN_UNPAUSE_VAULTS ?? fail("the merged sheet has no GOVERN_UNPAUSE_VAULTS")).split(",").map((x) => x.trim());
   const guarded = BASKET_KEYS.filter((k) => unpaused.includes(k));
-  const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), ["--row", UNWIND_GUARD_ROW, "--admin-arg", `vault=${k}`, "--admin-arg", "token=all",
-    "--admin-arg", `min-usdc-out=${TWIN_UNWIND_MIN_USDC_OUT}`, "--admin-arg", `max-loss-bps=${TWIN_UNWIND_MAX_LOSS_BPS}`]));
+  const guardRows = guarded.map((k) => stage("govern", join(rh, `unwind-guard-${k}.txt`), twinUnwindGuardArgs(k)));
   writeFileSync(join(rh, "unwind-guard-rows.txt"), guardRows.join(""));
   exportVar("TWIN_UNWIND_GUARD_ROWS", join(rh, "unwind-guard-rows.txt"));
   // Issue 1667: verify, govern, verify. The second verify reads the post-govern state (all four vaults unpaused). The Twin run only proves the scripts execute in this

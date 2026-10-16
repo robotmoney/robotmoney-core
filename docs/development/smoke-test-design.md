@@ -328,8 +328,9 @@ gateway's `ADMIN_ROLE`, held by the timelock after handover, so it is a Safe ->
 Timelock call (`Fixture::timelock_call`). The harness agent key (`AGENT_ROLE`
 plus the `COMMITTEE_AGENT_ROLE` that registration grants) records `receipt-a`
 with the keccak256 of its served bytes and `receipt-b` with a deliberately
-wrong digest. `receipt-a` is then released through the publish-contracts govern
-row `release-receipt` (the real Safe -> Timelock round). `receipt-b` stays
+wrong digest. `receipt-a` is then released by a Twin-only Safe -> Timelock
+call (`Fixture::timelock_call`, the real Safe and timelock). The govern row
+`release-receipt` is refused since issue 1831. `receipt-b` stays
 recorded, not released. Each receipt id is derived from the payload's own
 `session_id` and `subject_id`. Both payloads in
 `testing/ethereum-testnet/config/consensus-receipt-fixtures/` validate against

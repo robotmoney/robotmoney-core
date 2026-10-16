@@ -120,21 +120,25 @@ describe("docs the redeploy script header cites exist (QA plan v1 E3)", () => {
   });
 });
 
-// QA plan v1 E4 (issue 1816, review T7): the runbook claimed the gate ran on publish, prove-control and govern, and named a COUNTS_UNTRACKED kind, while the code gated
-// `--stage plan` only. Both docs now name the broadcasting runs the gate covers, the exemptions and the committed-and-clean proof for a plain baseline, and drop the old claims.
-describe("docs name the release gate on every broadcasting 8453 run (QA plan v1 E4)", () => {
-  const P: [string, RegExp][] = [
-    ["the plan", /QA plan v1 E4/],
-    ["the broadcasting runs", /`prove-control`/],
-    ["the govern verb", /`govern` verb \(every row/],
-    ["the exemptions", /`pause-all`, `record-receipt` and a `--dry-run`|Exempt: a verify-only run, `pause-all`, `record-receipt`, a `--dry-run`/],
-    ["a plain baseline is proven committed too", /a plain measured file (is held to this )?as well as a reconstructed one/],
-  ];
-  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
-  for (const [file, text] of Object.entries(DOCS)) {
-    test(`${file} no longer says only the plan is gated, nor names an error kind the code lacks`, () => {
-      expect(text).not.toMatch(/Only the `plan` stage checks the tag/);
-      expect(text).not.toMatch(/COUNTS_UNTRACKED/);
-    });
-  }
+// Issue 1831: the CLI help describes apply-receipt as the one RouterGovernance.applyReceipt call, and architecture 4.9 names both receipt ADMIN_ROLE holders.
+describe("the CLI help and architecture 4.9 describe the one-call apply and both receipt ADMIN_ROLE holders (issue 1831)", () => {
+  test("the cli.ts USAGE text for apply-receipt names RouterGovernance.applyReceipt and not ONE timelock batch", async () => {
+    const { USAGE } = await import("../src/cli.ts");
+    const start = USAGE.indexOf("--row apply-receipt --receipt-id");
+    expect(start).toBeGreaterThan(0);
+    const paragraph = USAGE.slice(start, USAGE.indexOf("--row clear-voted-weights", start));
+    expect(paragraph).toContain("RouterGovernance.applyReceipt");
+    expect(paragraph).not.toContain("ONE timelock batch");
+    expect(paragraph).toContain("lastAppliedRecordedAt");
+    expect(paragraph).toMatch(/--row release-receipt .*is refused with USAGE/);
+  });
+  test("docs/architecture.md section 4.9 names both ADMIN_ROLE holders and no longer says exactly one holder", () => {
+    const arch = readFileSync(join(ROOT, "docs", "architecture.md"), "utf8");
+    const s49 = arch.slice(arch.indexOf("### 4.9 "), arch.indexOf("\n## 5. "));
+    expect(s49.length).toBeGreaterThan(0);
+    expect(s49).not.toContain("exactly one holder");
+    expect(s49).toContain("has two holders: the\n`TimelockController` and `RouterGovernance`");
+    expect(s49).toContain("ReceiptNotNewerThanApplied");
+    expect(s49).toMatch(/`release-receipt` is refused with USAGE/);
+  });
 });

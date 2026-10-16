@@ -9,7 +9,11 @@ import { GOVERN_STEPS, UNPAUSE_STEPS } from "../src/evidence-check.ts";
 import { MAINNET_UNPAUSE_VAULTS, buildVerifySheet } from "../src/verify-stage.ts";
 import { VAULT_NAME, VAULT_KEYS, parseSheet, type VaultKey } from "../src/sheet.ts";
 import { VAULT_RULES, expectPaused, routerEligible } from "../src/vault-rules.ts";
-import { vaultRules } from "../src/stage-table.ts";
+import { TABLE_REL, vaultRules } from "../src/stage-table.ts";
+import { EXIT_CODES } from "../src/errors.ts";
+import { VAULT_RULES_PATH } from "../src/vault-rules.ts";
+import { SHA } from "./fixtures.ts";
+import { world } from "./harness.ts";
 import { REPO, sheetText, tmp, writeCoreAssetConfig } from "./fixtures.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestBase } from "../src/stage-table.ts";
@@ -92,4 +96,38 @@ describe("the tools read the vault rules from the stage table (issue 1705)", () 
     }
     for (const f of ["govern.ts", "evidence-check.ts", "verify-stage.ts", "sheet.ts"]) expect(readFileSync(join(REPO, "publish-contracts", "src", f), "utf8")).toContain("./vault-rules.ts");
   });
+});
+
+// Issue 1833: vault-rules.ts reads the rules from the CLI's own checkout; the stages come from --core-dir at the DEPLOY_SHA. A CLI from another sha must refuse to start.
+describe("the CLI's vault rules equal the --core-dir stage table (issue 1833)", () => {
+  /** A pause-all whose pause is a stub: it exits 0 once startup passes, so the exit code tells whether the startup check let the run through. */
+  async function pauseAllWith(edit?: (t: any) => void): Promise<{ code: number; message?: string; pauses: number; corePath: string }> {
+    const w = world();
+    if (edit) { const p = join(w.coreDir, TABLE_REL); const t = JSON.parse(readFileSync(p, "utf8")); edit(t); writeFileSync(p, JSON.stringify(t)); }
+    mkdirSync(w.evidence, { recursive: true });
+    writeFileSync(join(w.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 918453, coreSha: SHA, deployer: "0x0000000000000000000000000000000000000001", environment: "local", startedAt: "t", firstBlock: 7, stages: {} }));
+    let pauses = 0;
+    const pauseAll = (async () => { pauses++; return { allPaused: true, manifestRecorded: true, vaults: [] }; }) as never;
+    const code = await w.run(["pause-all"], { pauseAll });
+    return { code, message: w.logs().filter((l) => l.event === "run.failed").pop()?.message, pauses, corePath: join(w.coreDir, TABLE_REL) };
+  }
+
+  test("the tables match: the CLI starts and runs the verb", async () => {
+    expect(await pauseAllWith()).toMatchObject({ code: 0, message: undefined, pauses: 1 });
+  });
+  for (const [what, edit] of [
+    ["deployPaused", (t: any) => { const v = t.vaults.find((x: any) => x.key === "AGENT"); v.deployPaused = !v.deployPaused; }],
+    ["unpauseRow", (t: any) => { t.vaults.find((x: any) => x.key === "AGENT").unpauseRow = "unpause-RWA"; }],
+  ] as const) {
+    test(`one vault's ${what} differs: refused at startup, naming both table paths, before the verb runs`, async () => {
+      const r = await pauseAllWith(edit);
+      expect(r.code).toBe(EXIT_CODES.INPUT_MISSING);
+      expect(r.pauses).toBe(0);
+      expect(r.message).toContain(VAULT_RULES_PATH);
+      expect(r.message).toContain(r.corePath);
+      expect(r.corePath).not.toBe(VAULT_RULES_PATH);
+      expect(r.message).toContain("for vault AGENT");
+      expect(r.message).toContain("same core sha as DEPLOY_SHA");
+    });
+  }
 });

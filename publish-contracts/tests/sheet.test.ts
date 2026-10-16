@@ -318,6 +318,35 @@ test("VAULT_NAME is refused with the reason: one registry-name source for all fo
   expect(() => parseSheet(sheetText({}, ['VAULT_NAME="Robot Money USDC"']))).toThrow(/VAULT_NAME is refused: .*one registry-name source/);
 });
 
+// Issue 1833: an old sheet (made before issue 1705) still carries VAULT_NAME. The follow-on verbs drop it with one warning naming the line; every deploy run refuses it.
+describe("VAULT_NAME on an old sheet: follow-on verbs warn, deploy verbs refuse (issue 1833)", () => {
+  const OLD = sheetText({}, ['VAULT_NAME="Robot Money USDC"']);
+  const line = OLD.split("\n").findIndex((l) => l.startsWith("VAULT_NAME=")) + 1;
+  for (const verb of ["govern", "verify", "record-receipt", "pause-all"]) {
+    test(`${verb}: parses, with one warning naming the VAULT_NAME line`, () => {
+      const warnings: { message: string; fields: Record<string, unknown> }[] = [];
+      const s = parseSheet(OLD, { verb, warn: (message, fields) => warnings.push({ message, fields }) });
+      expect(s.values.VAULT_NAME).toBeUndefined();
+      expect(s.chainId).toBe(918453);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.message).toContain(`sheet line ${line}: VAULT_NAME is ignored by ${verb}`);
+      expect(warnings[0]!.fields).toMatchObject({ name: "VAULT_NAME", line, verb });
+    });
+  }
+  for (const verb of [undefined, "publish", "redeploy-vault"]) {
+    test(`deploy verb ${verb ?? "(none: a stage run)"}: refused with the issue 1705 reason, no warning`, () => {
+      const warnings: string[] = [];
+      expect(() => parseSheet(OLD, { verb, warn: (m) => warnings.push(m) })).toThrow(/VAULT_NAME is refused: .*\(issue 1705: one registry-name source for all four vaults\)/);
+      expect(warnings).toEqual([]);
+    });
+  }
+  test("a sheet without VAULT_NAME warns about nothing on a follow-on verb", () => {
+    const warnings: string[] = [];
+    parseSheet(sheetText(), { verb: "pause-all", warn: (m) => warnings.push(m) });
+    expect(warnings).toEqual([]);
+  });
+});
+
 // Issue 1809 (upgradeability stage 2): the release mode of every core proxy is a required sheet name with no default; an upgradeable production release on 8453 names
 // its freeze deadline, a frozen one refuses one.
 describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {

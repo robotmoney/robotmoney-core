@@ -3,7 +3,7 @@
 // What is a fake: the chain. A recording `cast send` / `cast call` stands in for the node (every other tool call goes to the stub forge and cast).
 // The vaults themselves, the real keys and a real redeem on every paused vault are the Twin rehearsal: testing/smoke-test/tests/twin_pause_all.rs (suite 14).
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT_CODES } from "../src/errors.ts";
 import { EMERGENCY_ROLE, pauseSignerRole, rolloutReportPath } from "../src/pause-all.ts";
@@ -140,6 +140,27 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
     expect(r.pauseAll.vaults.map((v: any) => v.vault)).toEqual(["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
     expect(VAULTS.map((v) => VAULT_NAME[v.key])).toEqual(["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]);
     for (const v of r.pauseAll.vaults) expect(v).toMatchObject({ depositsPaused: true, signerRole: "emergency", signer: EMERGENCY, txHash: `0x${"ab".repeat(32)}` });
+  });
+
+  // Issue 1833: an operator sheet made before issue 1705 still has VAULT_NAME. The emergency pause must not stop at startup on it.
+  test("a sheet that still carries VAULT_NAME: pause-all exits 0, sends all four pauses and logs one warning naming VAULT_NAME", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    seed(w, AFTER_HANDOVER);
+    appendFileSync(w.sheetPath, 'VAULT_NAME="Robot Money USDC"\n');
+    const line = readFileSync(w.sheetPath, "utf8").split("\n").findIndex((l) => l.startsWith("VAULT_NAME=")) + 1;
+    expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
+    expect(c.sends.map((s) => s.to)).toEqual(VAULTS.map((_, i) => vaultAddr(i)));
+    const warnings = w.logs().filter((l) => l.event === "sheet.vault_name_ignored");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ level: "warn", name: "VAULT_NAME", line, verb: "pause-all" });
+    expect(warnings[0].message).toContain(`sheet line ${line}: VAULT_NAME is ignored by pause-all`);
+  });
+  test("the same sheet on a deploy run is refused with the issue 1705 reason before anything is sent", async () => {
+    const w = world({ writeSafeManifest: true }), c = newChain();
+    appendFileSync(w.sheetPath, 'VAULT_NAME="Robot Money USDC"\n');
+    expect(await w.run(["publish"], deps(c))).toBe(EXIT_CODES.SHEET);
+    expect(lastError(w).message).toContain("VAULT_NAME is refused");
+    expect(c.sends).toEqual([]);
   });
 
   test("one send fails: the other three are still paused, the report says which vault is open, the exit is PAUSE", async () => {

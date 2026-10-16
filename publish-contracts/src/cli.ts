@@ -27,6 +27,7 @@ import { DEPLOYER_STAGES, STAGE_NAMES, getStageTable, useStageTable } from "./st
 import { TABLE_REL, loadStageTable } from "./stage-table.ts";
 import { adoptedTxs, finalNonceCheck, loadRunManifest, measuredCounts, runStages, spawnTool, childEnv, type ProcessRunner, type RunContext } from "./runner.ts";
 import { callerInputs, parseSheet, type Sheet } from "./sheet.ts";
+import { assertVaultRulesMatch } from "./vault-rules.ts";
 import { makeSigner, type PublishSigner } from "./signer.ts";
 import { PROOF_STAGE } from "./control-proof.ts";
 import { realVerifyDeps, runVerifyStage, type VerifyDeps } from "./verify-stage.ts";
@@ -78,14 +79,13 @@ export const USAGE = `publish contracts
                      Naming an unpause row whose
                      vault was paused again after an executed round opens a new numbered round: a new timelock operation, a new 48 hour delay.
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
-                     On demand, outside the ordered rows: --row release-receipt --receipt-id 0x<bytes32> releases one recorded consensus receipt
-                     (ConsensusRecommendationReceipt.releaseReceipt) as its own Safe -> Timelock round, on 918453 and on 8453 (post-launch, never part of stage 13:
-                     the first run exits GOVERN_PENDING with the resume command, the same command after the 48-hour delay executes it).
-                     --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698): ONE timelock call,
-                     RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector in the same transaction.
-                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, the payload's receipt digest (domain line + bytes) equals the stored digest, the vector
-                     sums to 10000 bps and lists the registry's router-eligible vaults in registry order. Not part of stage 13. After the delay the same command executes it and reads
-                     isReleased and the router's active and effective weights back.
+                     On demand, outside the ordered rows: --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698):
+                     ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector together.
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, was recorded after the last applied receipt (lastAppliedRecordedAt, issue 1831),
+                     the payload's receipt digest (domain line + bytes) equals the stored digest, and the vector sums to 10000 bps and lists the registry's router-eligible vaults in
+                     registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
+                     --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698):
+                     a release alone would burn the receipt, so use --row apply-receipt (issue 1831).
                      --row clear-voted-weights (no other argument) clears the router's ACTIVE (applied receipt) weight vector (issue 1743): ONE timelock call, RouterGovernance.clearVotedWeights(),
                      so routing falls back to the default vector: the emergency lever. Refused (nothing scheduled) when no active vector is in effect. Production and rehearsal, never part of stage 13.
                      --row set-unwind-guard --admin-arg vault=PROTO|AGENT|RWA --admin-arg token=0x<address>|all --admin-arg min-usdc-out=N --admin-arg max-loss-bps=N
@@ -470,7 +470,9 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const a = parseCli(argv);
     const cwd = deps.cwd ?? process.cwd();
     const caller = callerInputs(env);
-    const sheet = parseSheet(readFileSync(resolve(cwd, a.sheet), "utf8"));
+    // Issue 1833: a follow-on verb (pause-all above all) drops an old sheet's VAULT_NAME line with one warning; a deploy run refuses it.
+    const sheetOpts = { verb: a.verb ?? (a.stage === "verify" || a.stage === "govern" ? a.stage : undefined), warn: (message: string, fields: Record<string, unknown>) => log.log("warn", "sheet.vault_name_ignored", { ...fields, message }) };
+    const sheet = parseSheet(readFileSync(resolve(cwd, a.sheet), "utf8"), sheetOpts);
     // one chain-id source: the RPC
     const castEnv = childEnv({ baseEnv: env, rpc: a.rpc, chainId: a.chain });
     const rpcChainId = await readRpcChainId(async (args) => {
@@ -513,8 +515,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
     // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
     assertExitFeeBound(coreDir, sheet.vaults);
-    // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo
-    useStageTable(loadStageTable(coreDir));
+    // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
+    // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
+    const stageTable = loadStageTable(coreDir);
+    assertVaultRulesMatch(stageTable, join(coreDir, TABLE_REL));
+    useStageTable(stageTable);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
@@ -696,7 +701,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // QA plan v1 E1: the isomorphism report describes the deployment at its own sha. A run at a redeploy sha leaves it as the original run wrote it.
     if (shaRun) log.log("info", "run.isomorphism_kept", { original_sha: shaRun.originalSha, note: "a run at a redeploy sha does not rewrite the deployment's isomorphism report" });
     else if (!a.dryRun && existsSync(ctx.evidenceDir)) {
-      const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8")) } : undefined;
+      const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`), report);
     }

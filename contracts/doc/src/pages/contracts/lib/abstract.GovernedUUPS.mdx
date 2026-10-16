@@ -5,7 +5,7 @@ description: "The UUPS entry points every proxied Robot Money core contract inhe
 
 # GovernedUUPS
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/lib/GovernedUUPS.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c4a1d1a75d078415bc79e2b2c5cf0da7b21df3c4/contracts/lib/GovernedUUPS.sol)
 
 **Inherits:** Initializable, IERC1822Proxiable
 
@@ -24,7 +24,8 @@ are in [GovernedUpgrade](/contracts/lib/library.GovernedUpgrade); these entry po
 - The release mode is a required initializer argument with no default.
 `Undeclared` (the zero value) reverts. `FrozenAtDeploy` sets the one-way flag
 inside the atomic proxy initialization, before any public call reaches the proxy.
-- `freezeUpgrades` also disables every initializer and reinitializer on the proxy.
+- Freezing, by `freezeUpgrades` or by `FrozenAtDeploy`, also disables every
+initializer and reinitializer on the proxy (initialized version = max).
 
 ## Constants
 

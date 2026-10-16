@@ -36,9 +36,11 @@
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
 // timelock operation with its own 48-hour delay, never part of stage 13 (stageRows stays the four unpauses). The first run schedules and exits
 // GOVERN_PENDING with the resume command, the resume after the delay executes and reads isReleased back. Its run-manifest key and salt are `release-receipt-<receiptId>`.
-// A receipt released by this row carries no weights and can never be applied afterwards: RouterGovernance.applyReceipt reverts ReceiptAlreadyReleased (review-security-023).
+// Issue 1831: REFUSED with USAGE (nothing read past the role, nothing sent) once RouterGovernance holds the receipt contract's ADMIN_ROLE, which every deploy since issue 1698
+// grants. A release alone would burn the receipt (applyReceipt then reverts ReceiptAlreadyReleased), so the message points at apply-receipt.
 //   apply-receipt                the rebalance (issue 1696, issue 1698): ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) for the
-// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
+// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, it was recorded after RouterGovernance.lastAppliedRecordedAt
+// (issue 1831: applyReceipt is monotonic, so an older receipt can never replace a newer vector; an execute that finds a newer receipt applied meanwhile refuses GOVERN), its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
 // vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
 // the call and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
 // Its run-manifest key and salt are `apply-receipt-<receiptId>`. A Twin run proves the row executes on the real contracts, not that mainnet governance works.
@@ -79,7 +81,7 @@ import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, toBytes, toHex, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
-import { APPLY_ROW, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, planApply } from "./apply-receipt.ts";
+import { APPLY_ROW, GOVERNANCE_LAST_APPLIED_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, notNewerMessage, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, buildRedeployCalls, createdVaultProblems, planRedeployVectors, redeployBeforeProblems,
@@ -1501,11 +1503,14 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     if (!rowComplete(state[name])) {
       const recorded = await rd<boolean>(receipt, RECEIPT_ABI, "isRecorded", [receiptId]);
       const released = recorded ? await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]) : false;
-      const stored = recorded ? (await rd<{ payloadDigest: Hex }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId])).payloadDigest : undefined;
+      const rec = recorded ? await rd<{ payloadDigest: Hex; recordedAt: bigint }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId]) : undefined;
+      const stored = rec?.payloadDigest;
+      // Issue 1831: applyReceipt is monotonic in recordedAt. A receipt not recorded after the last applied one is refused here, before the Safe schedules it.
+      const lastApplied = recorded ? await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedRecordedAt") : undefined;
       const listed = await rd<Address[]>(a.registry, REGISTRY_ELIGIBLE_ABI, "listVaults");
       const eligible: Address[] = [];
       for (const v of listed) if (await rd<boolean>(a.registry, REGISTRY_ELIGIBLE_ABI, "isRouterEligible", [v])) eligible.push(v);
-      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
+      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, recordedAt: rec?.recordedAt, lastAppliedRecordedAt: lastApplied, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
       const call = buildApplyCall(governance, receiptId, receiptPayloadDigest(payload), vec);
       const p = { timelock: a.timelock, calls: [{ target: call.target, data: call.data }], salt: salt(name), form: "single" as const };
       const id = await api.operationId(handle, p);
@@ -1527,6 +1532,10 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
         execute: async () => {
           // Issue 1796: the operation is not done, so a receipt that reads released was released by another path after the schedule (a stale operation): applyReceipt would revert.
           if (await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: receipt ${receiptId} was released after operation ${id} was scheduled. Nothing was sent. Cancel the operation through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
+          // Issue 1831: a newer receipt was applied after this one was scheduled, so applyReceipt would revert ReceiptNotNewerThanApplied.
+          const at = (await rd<{ recordedAt: bigint }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId])).recordedAt;
+          const last = await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedRecordedAt");
+          if (at <= last) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: ${notNewerMessage(receiptId, at, last)} Cancel operation ${id} through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
           return api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` });
         },
       }, APPLY_ROW);
@@ -1569,6 +1578,11 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
     if (o.receiptId === undefined) throw new PublishError("USAGE", `--row ${RECEIPT_ROW} needs --receipt-id 0x<bytes32>`);
     const receiptId = assertReceiptId(o.receiptId);
     const receipt = loadReceiptAddr(ctx);
+    // Issue 1831: once RouterGovernance holds the receipt ADMIN_ROLE (every deploy since issue 1698), a release without the apply burns the receipt: applyReceipt
+    // would then revert ReceiptAlreadyReleased and its vector could never land. Refused before anything is scheduled.
+    if (await reader(handle)<boolean>(receipt, ROLE_ABI, "hasRole", [ADMIN_ROLE, a.governance])) {
+      throw new PublishError("USAGE", `--row ${RECEIPT_ROW} is refused: RouterGovernance ${a.governance} holds the receipt contract's ADMIN_ROLE, so a receipt is released only by applying it. A release alone would burn receipt ${receiptId} (applyReceipt then reverts ReceiptAlreadyReleased). Use --row ${APPLY_ROW} --receipt-id ${receiptId} --payload FILE. Nothing was sent.`, { row: RECEIPT_ROW, receipt_id: receiptId, governance: a.governance });
+    }
     const name = releaseRecordKey(receiptId);
     const c = buildReleaseCall(receipt, receiptId);
     const p = { timelock: a.timelock, calls: [{ target: c.target, data: c.data }], salt: salt(name), form: "single" as const };

@@ -28,7 +28,7 @@ import { REDEPLOY_ROW, buildRedeployCalls, createdVaultProblems, vectorsFromFina
 import { assertOwnerExceptions } from "./plan.ts";
 import { effectiveCounts, finalDeployerNonce } from "./counts.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
-import { loadStageTable } from "./stage-table.ts";
+import { loadStageTable, type StageTable, type TableVault, type VaultRules } from "./stage-table.ts";
 import { STAGE13_UNPAUSE_ROWS, VAULT_RULES, VAULT_UNPAUSE_ROWS } from "./vault-rules.ts";
 import { upgradeabilityEvidenceProblems, upgradeabilityOnChainProblems } from "./evidence-upgradeability.ts";
 import { proxySpecs } from "./verify/upgradeability.ts";
@@ -368,6 +368,8 @@ export interface EvidenceOpts {
   kind?: DeploymentKind;
   /** Issue 1809: the full proxied core set by verifier name (the stage table's proxies). Absent: read from this repo's stage table. */
   proxies?: readonly string[];
+  /** Issue 1833 test seam: the per-vault rule rows. Absent: this checkout's stage table (vault-rules.ts). */
+  vaultRules?: readonly (TableVault & VaultRules)[];
 }
 /** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
 export const repoProxyNames = (): string[] => proxySpecs(loadStageTable(new URL("../../", import.meta.url).pathname)).map((s) => s.name);
@@ -695,8 +697,9 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
   p.push(...(await checkVaultRedeploysOnChain(ev, chain, FLOOR)));
   if (kind === "rehearsal") { p.push(...(await checkRehearsalRowsOnChain(ev, chain, FLOOR))); p.push(...(await checkReceiptPathOnChain(ev, chain, FLOOR))); }
   // The unpause govern rows and the depositsPaused() reads must tell one story: a vault is unpaused on chain exactly when its LATEST unpause round executed
-  // (all four vaults deploy paused, issue 1710; the rule is the stage table's deployPaused, issue 1705).
-  for (const { key: b, unpauseRow, deployPaused } of VAULT_RULES) {
+  // (all four vaults deploy paused, issue 1710). Issue 1833: the unpaused-without-receipt alarm holds for every vault whatever the table's deployPaused says,
+  // so a table edit to deployPaused=false can never silence it.
+  for (const { key: b, unpauseRow } of opts?.vaultRules ?? VAULT_RULES) {
     const rows = (ev.govern ?? []).filter((g: any) => g?.step === unpauseRow).sort((x: any, y: any) => roundOf(x) - roundOf(y));
     const row = rows[rows.length - 1];
     const vault = ev.vaults?.[`rm${b}`]?.address;
@@ -706,7 +709,7 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
     catch (e) { bad(`rm${b}.depositsPaused() not readable (${(e as Error).message})`); continue; }
     const executed = !!row && row.execute_status === 1 && TX.test(row.execute_tx ?? "");
     if (executed && paused !== false) bad(`govern unpause-${b} executed with receipt status 1, but rm${b}.depositsPaused() reads ${String(paused)} on chain, want false`);
-    if (!executed && deployPaused && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
+    if (!executed && paused === false) bad(`rm${b}.depositsPaused() reads false on chain, but govern unpause-${b} has no executed receipt`);
   }
   return p;
 }
@@ -1210,10 +1213,9 @@ async function checkLifecycleMain(values: Record<string, string | boolean | unde
   console.log(`evidence ok (upgrade lifecycle: deploy upgradeable, governed upgrade, freeze of ${Object.keys(r.freeze.targets).length} proxies, refused upgrade${values.rpc ? ", chain read" : ", offline shape only"})`);
 }
 
-/** The per-stage cap from core's stage table in this checkout. */
-function adoptableFromTable(): AdoptableLibraries {
-  const t = loadStageTable(new URL("../../", import.meta.url).pathname);
-  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length]));
+/** The per-stage cap from core's stage table in this checkout. The timelock stage may adopt the core timelock itself (issue 1835). */
+export function adoptableFromTable(t: StageTable = loadStageTable(new URL("../../", import.meta.url).pathname)): AdoptableLibraries {
+  return Object.fromEntries(t.stages.map((st) => [st.name, st.name === LIBS_STAGE ? t.libraries.length : (st.create2Libraries ?? []).length + (st.name === t.upgradeAuthority?.stage ? 1 : 0)]));
 }
 
 async function main() {

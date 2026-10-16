@@ -144,6 +144,13 @@ Implemented by issue 1809. The operator procedure is
   implementation manifest fields, contract, layout snapshot);
   `upgradeAuthority` states the deployed-last timelock, its CREATE2 inputs and
   2 deployer transactions per proxy. The counts do not depend on the mode.
+- **Timelock pin (issue 1835).** The first proxy stage records the predicted
+  timelock address and its init code hash, derived from the build, in the run
+  manifest. Every proxy manifest must name that address, and the timelock stage
+  refuses to run when its recomputed prediction differs (a toolchain change
+  moves the CBOR metadata and so the address). A timelock someone already
+  deployed at the prediction with the build's runtime code is adopted: the
+  stage sends one transaction fewer and records the adoption.
 - **Verify.** Per proxied core contract the verifier proves the build's
   `ERC1967Proxy` with empty admin and beacon slots, the implementation the
   manifest names (and the gateway's implementation pin), the build's linked

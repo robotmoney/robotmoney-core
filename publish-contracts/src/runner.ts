@@ -13,6 +13,7 @@ import type { DeploymentKind } from "./chains.ts";
 import { countFor, sumCounts, checkNonce, effectiveCounts, type AdoptedTxs, type FrozenCounts } from "./counts.ts";
 import { CREATE2_FACTORY, buildCreate2Libraries, create2ArtifactsPresent, verifyAdoptedCreate2, verifyAdoptedLibraries, type AdoptedLibrary, type AdoptionRecord } from "./libs-adopt.ts";
 import type { Logger } from "./log.ts";
+import { adoptableCoreTimelock, assertTimelockPin, predictCoreTimelock, type TimelockPrediction } from "./timelock-pin.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
 import { DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
@@ -87,6 +88,8 @@ export interface StageRecord {
   created?: string[];
   /** Safe stage: the predicted or created address, recorded before the creation is sent so a resume can adopt it. */
   safe?: string;
+  /** First proxy stage (issue 1835): the core timelock address every proxy names and its init code hash, derived from the build. The timelock stage requires the same. */
+  timelockPrediction?: TimelockPrediction;
   [k: string]: unknown;
 }
 
@@ -766,6 +769,47 @@ async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: R
   return libs;
 }
 
+/** The first stage of the table that deploys proxies: it pins the core timelock prediction (issue 1835). */
+const firstProxyStage = (): string | undefined => getStageTable().stages.find((s) => (s.proxies?.length ?? 0) > 0)?.name;
+/** Pins of a dry run, which never persists the run manifest. */
+const dryRunPins = new WeakMap<object, TimelockPrediction>();
+/** The pin of this run: the first proxy stage's record (`rec` while that stage runs), or a dry run's. */
+const timelockPinOf = (manifest: RunManifest, rec?: StageRecord): TimelockPrediction | undefined => rec?.timelockPrediction ?? manifest.stages[firstProxyStage() ?? ""]?.timelockPrediction ?? dryRunPins.get(manifest);
+
+/**
+ * Issue 1835. The first proxy stage pins the core timelock prediction (address and init code hash, from the build, the Safe and TIMELOCK_MIN_DELAY) in its run manifest
+ * record; its resume and the timelock stage recompute it and refuse a difference (MANIFEST, nothing sent). Returns the recomputed prediction for the timelock stage.
+ */
+function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, prior: StageRecord | undefined, env: Record<string, string>): ReturnType<typeof predictCoreTimelock> | undefined {
+  const u = getStageTable().upgradeAuthority, first = firstProxyStage();
+  if (!u || !first || (row.name !== first && row.name !== u.stage)) return undefined;
+  const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!));
+  const { runtimeHash: _, ...pin } = now;
+  if (row.name === first) {
+    if (prior?.timelockPrediction) assertTimelockPin(row.name, first, prior.timelockPrediction, pin);
+    rec.timelockPrediction = prior?.timelockPrediction ?? pin;
+    if (ctx.dryRun) dryRunPins.set(manifest, rec.timelockPrediction);
+    ctx.log.log("info", "stage.timelock_pinned", { stage: row.name, timelock: rec.timelockPrediction.address, init_code_hash: rec.timelockPrediction.initCodeHash });
+    return undefined;
+  }
+  assertTimelockPin(row.name, first, timelockPinOf(manifest), pin);
+  ctx.log.log("info", "stage.timelock_pin_ok", { stage: row.name, timelock: pin.address, init_code_hash: pin.initCodeHash });
+  return now;
+}
+
+/**
+ * Issue 1835. The timelock stage found the TimelockController already at the predicted address (anyone can deploy it there once the proxies are on chain), so the
+ * stage script reuses it and plans one transaction fewer. Evaluated only on a shortfall (or when measuring), like the CREATE2 libraries: the code there must hash to
+ * the build's TimelockController runtime code. Anything else adopts nothing, and the shortfall is the usual COUNT_MISMATCH.
+ */
+async function adoptCoreTimelock(ctx: RunContext, row: StageRow, dry: { count: number }, expectedCount: number | undefined, p: ReturnType<typeof predictCoreTimelock> | undefined): Promise<AdoptedLibrary[]> {
+  if (!p || (expectedCount !== undefined && dry.count >= expectedCount)) return [];
+  const contract = getStageTable().upgradeAuthority!.contract;
+  const adopted = await adoptableCoreTimelock(contract, p, async (a) => castOut(ctx, ["code", a]));
+  ctx.log.log(adopted.length ? "info" : "warn", adopted.length ? "stage.timelock_adopted" : "stage.timelock_not_adopted", { stage: row.name, timelock: p.address, runtime_hash: p.runtimeHash, code_hash: adopted[0]?.codeHash ?? null, dry_run_count: dry.count, expected_count: expectedCount ?? null });
+  return adopted;
+}
+
 async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
   await controlProofGate(ctx, row, manifest);
   await vaultConfigGate(ctx, row);
@@ -821,7 +865,8 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (!dry) throw new PublishError("SIMULATION", `the simulation of ${row.name} wrote no dry-run file`, { stage: row.name });
   rec.dryRunCount = dry.count;
   if (ctx.dryCounts) ctx.dryCounts[row.countKey!] = dry.count;
-  const adoptedLibs = await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount);
+  const pinned = timelockPinStep(ctx, row, manifest, rec, prior, env);
+  const adoptedLibs = [...await adoptCreate2Libraries(ctx, row, manifest, dry, expectedCount), ...await adoptCoreTimelock(ctx, row, dry, expectedCount, pinned)];
   const wantCount = expectedCount === undefined ? undefined : expectedCount - adoptedLibs.length; // the transactions this stage sends: the frozen count less the adopted creations
   ctx.log.log("info", "stage.simulated", { stage: row.name, dry_run_count: dry.count, expected_count: expectedCount ?? null, ...(adoptedLibs.length ? { adopted_create2: adoptedLibs.map((l) => ({ name: l.name, address: l.address, code_hash: l.codeHash })) } : {}) });
   if (wantCount !== undefined && dry.count !== wantCount) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: the dry-run sends ${dry.count} transactions, the frozen count is ${expectedCount}. Nothing was sent.`, { stage: row.name, dry: dry.count, frozen: expectedCount });
@@ -881,7 +926,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
   if (expectedCount === undefined && adoptedLibs.length === 0 && sent.count !== delta) throw new PublishError("COUNT_MISMATCH", `stage ${row.name}: broadcast count ${sent.count} differs from the nonce delta ${delta}`, { stage: row.name });
   rec.count = expectedCount ?? sent.count;
   if (!existsSync(outPath) || readFileSync(outPath, "utf8").trim() === "") throw new PublishError("MANIFEST", `manifest ${outPath} was not written by ${row.name}`, { stage: row.name });
-  proxyManifestCheck(ctx, row, outPath);
+  proxyManifestCheck(ctx, row, outPath, timelockPinOf(manifest, rec)?.address);
   if (sent.firstBlock !== undefined && (manifest.firstBlock === undefined || sent.firstBlock < manifest.firstBlock)) manifest.firstBlock = sent.firstBlock;
   rec.status = "done";
   rec.finishedAt = (ctx.now?.() ?? new Date()).toISOString();
@@ -895,7 +940,7 @@ async function runForgeStage(ctx: RunContext, row: StageRow, manifest: RunManife
  * the upgrade authority, and the sheet's release mode. A stage that came back in another mode or without the addresses is not a state a later stage may build on: the stage stays
  * `started` and the run stops (MANIFEST). The verifier then proves the same facts on chain.
  */
-export function proxyManifestCheck(ctx: Pick<RunContext, "sheet">, row: Pick<StageRow, "name">, outPath: string): void {
+export function proxyManifestCheck(ctx: Pick<RunContext, "sheet">, row: Pick<StageRow, "name">, outPath: string, pinnedTimelock?: string): void {
   const proxies = getStageTable().stages.find((s) => s.name === row.name)?.proxies ?? [];
   if (proxies.length === 0 || !ctx.sheet.upgrade) return;
   let m: Record<string, unknown>;
@@ -904,6 +949,7 @@ export function proxyManifestCheck(ctx: Pick<RunContext, "sheet">, row: Pick<Sta
   const problems: string[] = [];
   for (const p of proxies) for (const f of [p.field, p.implementationField]) if (typeof m[f] !== "string" || !A.test(m[f] as string) || /^0x0{40}$/.test(m[f] as string)) problems.push(`${f} is not an address`);
   if (typeof m.upgrade_timelock !== "string" || !A.test(m.upgrade_timelock)) problems.push("upgrade_timelock is not an address");
+  else if (pinnedTimelock && m.upgrade_timelock.toLowerCase() !== pinnedTimelock.toLowerCase()) problems.push(`upgrade_timelock is ${m.upgrade_timelock}, the core timelock this run pinned from the build is ${pinnedTimelock}`);
   if (m.upgrade_mode !== ctx.sheet.upgrade.mode) problems.push(`upgrade_mode is ${String(m.upgrade_mode)}, the sheet's UPGRADE_MODE is ${ctx.sheet.upgrade.mode}`);
   if (problems.length) throw new PublishError("MANIFEST", `stage ${row.name}: its proxy manifest ${outPath} is not the release the sheet declares: ${problems.join("; ")}. Stop and read the chain before anything else runs.`, { stage: row.name, problems });
 }

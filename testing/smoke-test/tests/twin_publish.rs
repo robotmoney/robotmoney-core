@@ -379,9 +379,9 @@ fn twin_chain_publish_verify_and_govern_matrix() {
     );
 
     // Core 1611: one consensus receipt is released end to end through the REAL Safe and the REAL timelock on the fork. The seed records two
-    // receipts (the gateway committee registration is itself a Safe -> Timelock call), then `govern --row release-receipt` schedules
-    // `releaseReceipt` through the Safe, waits the real timelock delay (one time warp on the fork) and executes it. The CLI reads `released`
-    // back, and this test reads it again from the chain: A is released, B (recorded, never released) is not.
+    // receipts (the gateway committee registration is itself a Safe -> Timelock call), then a Safe -> Timelock call (issue 1831: the govern row is refused) schedules
+    // `releaseReceipt` through the Safe, waits the real timelock delay (one time warp on the fork) and executes it. This test reads `released`
+    // back from the chain: A is released, B (recorded, never released) is not.
     fx.seed_consensus_receipts()
         .expect("record two receipts and release one through the real Safe and timelock");
     let receipt = format!("{:#x}", fx.consensus_receipt());

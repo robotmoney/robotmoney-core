@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
-import { applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
+import { getStageTable } from "../src/stages.ts";
+import { adoptableFromTable, applyCalldata, chainReaderFromFixture, checkEvidence, checkEvidenceOnChain, checkReceiptApplications, checkReceiptApplicationsOnChain, GOVERN_STEPS, recordingChainReader, scanEvidenceFolder, unpauseCalldata, type ChainReader } from "../src/evidence-check.ts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain } from "../src/evidence-check.ts";
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
+import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
 import { withUpgradeability, withUpgradeabilityReads } from "./upgradeability-fixture.ts";
 
@@ -323,6 +325,17 @@ describe("unpause govern rows and paused=false reads tell one story", () => {
     const p = await online({ paused: false }, (e) => { e.govern.find((x: any) => x.step === "unpause-USDC").execute_status = 0; });
     expect(p.join("\n")).toContain("rmUSDC.depositsPaused() reads false on chain, but govern unpause-USDC has no executed receipt");
   });
+  // Issue 1833: the alarm does not read the table's deployPaused, so a uniform table edit to deployPaused=false cannot silence it.
+  for (const deployPaused of [true, false]) {
+    test(`a vault reading paused=false without an executed unpause receipt is reported when the table says deployPaused=${deployPaused}`, async () => {
+      const rules = VAULT_RULES.map((v) => ({ ...v, deployPaused, unpauseInStage13: v.unpauseInStage13 && deployPaused }));
+      const e = good();
+      const chain = stub(e, { paused: false });
+      e.govern.find((x: any) => x.step === "unpause-RWA").execute_status = 0;
+      const p = await checkEvidenceOnChain(e, chain, { safe: 2 }, { vaultRules: rules });
+      expect(p).toContain("rmRWA.depositsPaused() reads false on chain, but govern unpause-RWA has no executed receipt");
+    });
+  }
   test("a missing unpause-USDC row is rejected: rmUSDC is no longer optional", () => expect(mut((e) => { e.govern = e.govern.filter((g: any) => g.step !== "unpause-USDC"); })).toContain("'unpause-USDC' of Stage 13 has no evidence entry"));
 });
 
@@ -517,6 +530,21 @@ describe("evidence check: an adopted libs stage (issue 1721)", () => {
     expect(checkEvidence(twice, FROZEN_WITH_LIBS, { ...cap, libs: 2 }).join()).toContain("lists a library twice");
     const unlisted = adoptedEv(); unlisted.stages[1].stage = "recorder";
     expect(checkEvidence(unlisted, { ...FROZEN_WITH_LIBS, recorder: 4 }, cap).join()).toContain("lets this stage adopt 0");
+  });
+  test("offline: the timelock stage may adopt the core timelock only (issue 1835): the table cap is one, frozen count less one passes, two entries are refused", () => {
+    const cap = adoptableFromTable(getStageTable());
+    expect(cap.timelock).toBe(1);
+    expect(cap.registry).toBe(1); // GovernedUpgrade only: the cap of other stages is unchanged
+    const mk = (n: number, txs: number) => {
+      const e: any = good();
+      e.stages.push({ stage: "timelock", frozen_count: 25, receipt_count: txs, tx_hashes: Array.from({ length: txs }, (_, i) => h(60 + i)), receipts_status: Array.from({ length: txs }, () => 1),
+        adopted: { deployer_txs: txs, libraries: Array.from({ length: n }, (_, i) => ({ name: i ? `X${i}` : "TimelockController", address: a(70 + i), code_hash: keccak256(LIBCODE) })) } });
+      e.deployer_nonce_final = 2 + txs + 1;
+      return e;
+    };
+    const f = { safe: 2, timelock: 25 };
+    expect(checkEvidence(mk(1, 24), f, cap)).toEqual([]);
+    expect(checkEvidence(mk(2, 23), f, cap).join()).toContain("the stage table lets this stage adopt 1");
   });
   test("offline: an adopted entry without a library, an address or a code hash is refused", () => {
     const none = adoptedEv(); none.stages[1].adopted.libraries = [];

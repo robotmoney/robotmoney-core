@@ -5,7 +5,7 @@ description: "The router's weight setter. It holds the Portfolio Router's `WEIGH
 
 # RouterGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/6e2b153decbfd1e3c9eb217de25017f3343488e4/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ef707305749eb5814ddb4ffa65dab0e0f435b360/contracts/RouterGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -99,6 +99,20 @@ can release a receipt in the same call that applies it.
 IConsensusRecommendationReceipt public receipts;
 ```
 
+### lastAppliedRecordedAt
+
+The `recordedAt` of the last receipt `applyReceipt` applied (0 until
+the first). `applyReceipt` refuses any receipt not recorded strictly
+later, so two ready apply operations executed out of order cannot
+make the older receipt's vector the active one (issue 1831).
+Appended after `receipts`: the compiler packs it into the unused
+bytes 20..27 of slot 1, which earlier code never wrote, so the
+layout stays append-only and an upgraded proxy reads 0 here.
+
+```solidity
+uint64 public lastAppliedRecordedAt;
+```
+
 ## Functions
 
 <a id="initialize-address-address-address-address-upgrademode"></a>
@@ -134,8 +148,11 @@ function initialize(
 Release `receiptId` and set its weight vector on the router, in
 one call. `WEIGHT_SETTER_ROLE` only (the timelock).
 
-Reverts unless the receipt is recorded, is not released, and its
-stored digest equals `payloadDigest`. The router then refuses a
+Reverts unless the receipt is recorded, is not released, its
+stored digest equals `payloadDigest`, and it was recorded strictly
+later than the last applied receipt (`lastAppliedRecordedAt`).
+An older receipt executed after a newer one therefore reverts and
+stays unreleased, and the newer vector stays active. The router then refuses a
 vector whose lengths differ, whose bps do not sum to 10 000, that
 names a vault twice, or that names a vault that is not
 router-eligible and Active. Any refusal reverts the whole call, so
@@ -286,4 +303,21 @@ error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
 | receiptId | `bytes32` |  |
 | stored | `bytes32` |  |
 | given | `bytes32` |  |
+
+### ReceiptNotNewerThanApplied
+
+`receiptId` was recorded at `recordedAt`, which is not later than
+`lastApplied`, the `recordedAt` of the receipt already applied.
+
+```solidity
+error ReceiptNotNewerThanApplied(bytes32 receiptId, uint64 recordedAt, uint64 lastApplied);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| recordedAt | `uint64` |  |
+| lastApplied | `uint64` |  |
 

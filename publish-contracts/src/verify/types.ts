@@ -213,7 +213,8 @@ export interface ChainReader {
   blockNumber(): Promise<bigint>;
   /** Timestamp of the head block, in seconds. Optional: only the config-check freshness read needs it. */
   blockTimestamp?(): Promise<bigint>;
-  getCode(address: Address): Promise<Hex>;
+  /** Runtime code at the head, or at `blockNumber` when given (issue 1833: the vault scans check the vault had no code before the scan start). */
+  getCode(address: Address, blockNumber?: bigint): Promise<Hex>;
   nonce(address: Address): Promise<number>;
   getStorageAt(address: Address, slot: Hex): Promise<Hex>;
   /** Decoded read. `signature` is a human-readable ABI fragment such as "function hasRole(bytes32,address) view returns (bool)". Throws on revert. */

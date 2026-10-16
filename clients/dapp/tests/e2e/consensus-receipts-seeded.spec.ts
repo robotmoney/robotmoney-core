@@ -21,7 +21,8 @@
  * needs no environment at all and runs on every suite-10 run. The seeding uses
  * the mainnet authorities, no test-only admin: `committeeRegister` and
  * `releaseReceipt` go through the real Safe -> TimelockController (the release
- * is the publish-contracts govern row `release-receipt`), and the harness agent
+ * is a Twin-only generic timelock call: the govern row `release-receipt` is
+ * refused since issue 1831), and the harness agent
  * key records both receipts.
  *
  *   receipt-a — digest matches its payload, released, weights equal the live

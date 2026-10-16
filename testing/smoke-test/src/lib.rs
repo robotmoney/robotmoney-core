@@ -1730,8 +1730,10 @@ impl Fixture {
     /// - `committeeRegister` needs the gateway's ADMIN_ROLE, held by the timelock after handover: a Safe -> Timelock
     ///   generic call ([`Self::timelock_call`]).
     /// - `consensusRecordReceipt` needs AGENT_ROLE plus COMMITTEE_AGENT_ROLE: the harness agent key signs it.
-    /// - `releaseReceipt` needs the receipt contract's ADMIN_ROLE, held by the timelock: the publish-contracts govern
-    ///   row `release-receipt` (the same row `core-stack governance release` and the Fusion acceptance scripts run).
+    /// - `releaseReceipt` needs the receipt contract's ADMIN_ROLE, held by the timelock: a Safe -> Timelock generic
+    ///   call ([`Self::timelock_call`], Twin-only). The govern row `release-receipt` is refused once RouterGovernance
+    ///   holds that role (issue 1831: a release alone burns a receipt in production), and receipt A's plain digest is
+    ///   not the `apply-receipt` digest, so the harness sends the bare `releaseReceipt` the dapp needs to render.
     ///
     /// Both payloads are served by the `receipt-fixtures` compose service at [`RECEIPT_FIXTURES_PORT`] under the
     /// hostname `receipt-fixtures`: the indexer reaches it over the compose network, and the Playwright browser maps
@@ -1771,7 +1773,12 @@ impl Fixture {
 
         // Release receipt A only: a signalling-only act (no funds move, no router weight changes). Receipt B stays
         // recorded, not released.
-        self.govern("release-receipt", &["--receipt-id", &id_a])?;
+        self.timelock_call(
+            "receipt-release",
+            self.consensus_receipt(),
+            "releaseReceipt(bytes32)",
+            &[&id_a],
+        )?;
         logging::info(
             "smoke-test",
             format!("seeded consensus receipts: a={id_a} (released) b={id_b} (recorded only)"),
