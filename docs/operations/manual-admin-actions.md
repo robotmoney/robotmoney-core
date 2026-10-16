@@ -195,7 +195,8 @@ and runs. Every other verb refuses that mismatch with `INPUT_MISSING`
 A verify whose only failures are reads the RPC refused (it could not serve a
 deploy transaction's receipt) exits 30 (`RPC_REFUSED`) and pauses nothing:
 rerun verify against an RPC that serves `eth_getTransactionReceipt` for the
-run's deploy transactions. No archive node is needed.
+run's deploy transactions. No archive node is needed. Exit 30 means the
+deployment is NOT verified: do not proceed to govern until verify passes.
 
 The signer follows the stage. Before the stage 11 handover the deployer signs
 (it still holds `EMERGENCY_ROLE` on every vault). After it, the EMERGENCY key

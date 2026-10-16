@@ -156,6 +156,8 @@ describe("the verify RPC requirement and the pause-all DEPLOY_SHA checkout are d
     expect(r).toContain("The verifier never reads state at a past block");
     expect(r).toContain("verify exits `RPC_REFUSED` (30) and pauses nothing");
     expect(r).toContain("--run-manifest <publish-run.json>");
+    expect(r).toContain("**An adopted timelock (issue 1835) is accepted.**");
+    expect(r).toContain("**Exit 30 means the deployment is NOT verified**");
   });
   test("manual-admin-actions.md and runbook 4.6 tell the operator to run pause-all from the DEPLOY_SHA checkout", () => {
     expect(flat("docs/operations/manual-admin-actions.md")).toContain("Run the CLI from a checkout of `DEPLOY_SHA` (the same checkout `--core-dir` names).");
