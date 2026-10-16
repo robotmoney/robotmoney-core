@@ -117,6 +117,28 @@ async fn before_anything_is_indexed_the_cursor_and_head_are_null_not_invented() 
     assert!(h["chain_head_block"].is_null(), "{h}");
 }
 
+/// Issue 1856: a refused proxy upgrade backfill is in `/health`, not just one log line.
+#[tokio::test]
+async fn health_reports_the_proxy_backfill_state() {
+    let s = boot().await;
+    let h = get(&s, "/health").await;
+    assert!(h["proxy_backfill"].is_null(), "before any attempt: {h}");
+    sqlx::query(
+        "INSERT INTO proxy_backfill_progress (chain_id, state, floor_block, target_block, detail) \
+         VALUES ($1, 'refused', 0, 20000000, 'set INDEXER_START_BLOCK')",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let h = get(&s, "/health").await;
+    assert_eq!(h["proxy_backfill"]["state"], "refused", "{h}");
+    assert_eq!(h["proxy_backfill"]["floor_block"], 0);
+    assert_eq!(h["proxy_backfill"]["target_block"], 20_000_000);
+    assert!(h["proxy_backfill"]["next_block"].is_null());
+    assert_eq!(h["proxy_backfill"]["detail"], "set INDEXER_START_BLOCK");
+}
+
 #[tokio::test]
 async fn the_cursor_is_scoped_to_the_chain_of_the_service() {
     let s = boot().await;

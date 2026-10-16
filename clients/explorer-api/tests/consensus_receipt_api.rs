@@ -61,6 +61,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../services/explorer-indexer/migrations/0018_vault_snapshot_caps.sql"),
     // Issue 1810: admin_events admits contract_kind 'proxy'.
     include_str!("../../../services/explorer-indexer/migrations/0019_proxy_upgrade_events.sql"),
+    // Issue 1856: the proxy upgrade backfill checkpoint.
+    include_str!("../../../services/explorer-indexer/migrations/0020_proxy_backfill_progress.sql"),
 ];
 
 /// The `MIGRATIONS` list above is hand-maintained, and a migration missing from

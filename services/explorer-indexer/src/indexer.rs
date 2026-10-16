@@ -38,7 +38,7 @@ use crate::abi::{
     IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents, ITimelockEvents, IVaultEvents,
     IVaultReads, IVaultRegistryEvents, Topics,
 };
-use crate::db::{Db, DbError, ReceiptVerification};
+use crate::db::{Db, DbError, ProxyBackfillProgress, ReceiptVerification};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
 use alloy_primitives::{Address, Bytes, U256};
@@ -1561,15 +1561,57 @@ fn is_proxy_log(topics: &Topics, log: &LogEntry) -> bool {
         .is_some_and(|t| *t == topics.proxy_upgraded || *t == topics.proxy_upgrades_frozen)
 }
 
-/// Most `eth_getLogs` requests one proxy backfill may make. At the default
+/// Most `eth_getLogs` requests one proxy backfill pass may make. At the default
 /// 1000-block range that is ten million blocks, about eight months of Base.
 /// A wider range means the deploy floor degraded to 0: the backfill refuses
 /// and says to set `INDEXER_START_BLOCK`, rather than scan from genesis.
 pub const PROXY_BACKFILL_MAX_REQUESTS: u64 = 10_000;
 
+/// Most `eth_getLogs` requests one backfill slice makes (issue 1856). The
+/// main loop runs one slice per tick, so a tick spends at most this many
+/// requests (plus one block fetch per event block) on the backfill before
+/// live ingestion runs again. At the default 1000-block range a slice is
+/// 25000 blocks, and the widest allowed pass takes 400 ticks.
+pub const PROXY_BACKFILL_SLICE_REQUESTS: u64 = 25;
+
+/// What one [`backfill_proxy_events`] call did (issue 1856).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyBackfillOutcome {
+    /// Nothing is indexed yet, so there is no range to backfill. Saved as
+    /// `no_cursor`; the next call tries again.
+    NoCursor,
+    /// The floor-to-cursor range needs more than
+    /// [`PROXY_BACKFILL_MAX_REQUESTS`] requests (a floor of 0 means deploy-block
+    /// detection degraded). Saved as `refused`; the next call tries again.
+    Refused {
+        floor: u64,
+        cursor: u64,
+        requests: u64,
+    },
+    /// One slice is scanned and the checkpoint saved; blocks
+    /// `next_block..=target_block` remain.
+    Progress {
+        next_block: u64,
+        target_block: u64,
+        inserted: u64,
+    },
+    /// The pass reached its target block. Saved as `done`.
+    Done { inserted: u64 },
+}
+
+impl ProxyBackfillOutcome {
+    /// Rows this call inserted.
+    pub fn inserted(&self) -> u64 {
+        match self {
+            Self::Progress { inserted, .. } | Self::Done { inserted } => *inserted,
+            Self::NoCursor | Self::Refused { .. } => 0,
+        }
+    }
+}
+
 /// Backfill every watched proxy's `Upgraded` and `UpgradesFrozen` events from
-/// the deploy floor to the stored cursor (issue 1840). Returns the number of
-/// `admin_events` rows inserted.
+/// the deploy floor to the stored cursor (issue 1840), one slice per call
+/// (issue 1856).
 ///
 /// Live ingestion only reads blocks above the cursor. So a proxy added to the
 /// config after the cursor passed its deploy block, a vault discovered from the
@@ -1578,46 +1620,105 @@ pub const PROXY_BACKFILL_MAX_REQUESTS: u64 = 10_000;
 /// `upgrade_state = 'unknown'` for ever. The watchdog relies on the deploy-time
 /// rows too: without them a later upgrade cannot be told from a deployment.
 ///
+/// A pass covers the deploy floor to the cursor at the time the pass began
+/// (`target_block`). Each call scans at most [`PROXY_BACKFILL_SLICE_REQUESTS`]
+/// requests of `max_blocks_per_tick` blocks from the checkpoint in
+/// `proxy_backfill_progress` (migration 0020) and saves the new checkpoint, so
+/// live ingestion keeps moving between slices and a restart or an RPC error
+/// resumes from the last saved slice instead of the floor. A call with no pass
+/// `running` starts a new one. The main loop calls this once per good tick
+/// until it returns [`ProxyBackfillOutcome::Done`], so every process start runs
+/// one pass: a vault registered while the indexer runs is backfilled at the
+/// next restart. A pass resumed after a restart keeps its proxy list's range,
+/// so a vault registered in between is only scanned from the checkpoint up.
+///
+/// A refused range and a missing cursor are not done: they are saved as
+/// `refused` / `no_cursor` (which `/health` reports as `proxy_backfill`) and
+/// the next call tries again.
+///
 /// Idempotent: rows insert on the existing `(chain_id, block_number,
-/// log_index)` key with `ON CONFLICT DO NOTHING`, so a second run inserts
+/// log_index)` key with `ON CONFLICT DO NOTHING`, so a second pass inserts
 /// nothing. Each event block's header and transactions are stored as well. A
 /// row whose transaction created that proxy (receipt `contractAddress`) is
 /// marked `"deployment": true`, including a row indexed before this check
-/// existed, so the watchdog does not page it. Bounded: requests span at most `max_blocks_per_tick` blocks,
-/// and at most [`PROXY_BACKFILL_MAX_REQUESTS`] of them are made.
-///
-/// The main loop runs it once at startup, after the first successful tick. A
-/// vault registered while the indexer runs is backfilled at the next restart.
+/// existed, so the watchdog does not page it.
 pub async fn backfill_proxy_events(
     db: &Db,
     rpc: &JsonRpc,
     cfg: &IndexerConfig,
-) -> Result<u64, IndexerError> {
-    let Some(cursor) = db.last_indexed_block(cfg.chain_id).await? else {
-        return Ok(0);
-    };
-    let Ok(cursor) = u64::try_from(cursor) else {
-        return Ok(0);
-    };
-    let floor = resolve_deploy_floor(db, rpc, cfg, Some(cursor as i64)).await;
-    if floor > cursor {
-        return Ok(0);
-    }
+) -> Result<ProxyBackfillOutcome, IndexerError> {
+    let prior = db.proxy_backfill_progress(cfg.chain_id).await?;
     let span = cfg.max_blocks_per_tick.max(1);
-    let requests = (cursor - floor) / span + 1;
-    if requests > PROXY_BACKFILL_MAX_REQUESTS {
-        tracing::error!(
-            chain_id = cfg.chain_id,
-            floor,
-            cursor,
-            requests,
-            max_requests = PROXY_BACKFILL_MAX_REQUESTS,
-            "proxy upgrade backfill refused: the range from the deploy floor to the cursor is \
-             too wide (a floor of 0 means deploy-block detection degraded). Set \
-             INDEXER_START_BLOCK to the deployment's first block and restart"
-        );
-        return Ok(0);
-    }
+    let resumed = prior.as_ref().and_then(|p| match p {
+        ProxyBackfillProgress {
+            state,
+            floor_block: Some(floor),
+            target_block: Some(target),
+            next_block: Some(next),
+            ..
+        } if state == "running" => Some((
+            u64::try_from(*floor).ok()?,
+            u64::try_from(*target).ok()?,
+            u64::try_from(*next).ok()?,
+        )),
+        _ => None,
+    });
+    let (floor, target, next) = match resumed {
+        Some(r) => r,
+        None => {
+            let cursor = db
+                .last_indexed_block(cfg.chain_id)
+                .await?
+                .and_then(|c| u64::try_from(c).ok());
+            let Some(cursor) = cursor else {
+                if prior.as_ref().map(|p| p.state.as_str()) != Some("no_cursor") {
+                    tracing::warn!(
+                        chain_id = cfg.chain_id,
+                        "proxy upgrade backfill waiting: nothing is indexed yet"
+                    );
+                }
+                save_backfill_state(db, cfg, "no_cursor", None, None, None, None).await?;
+                return Ok(ProxyBackfillOutcome::NoCursor);
+            };
+            let floor = resolve_deploy_floor(db, rpc, cfg, Some(cursor as i64)).await;
+            if floor > cursor {
+                save_backfill_state(db, cfg, "done", Some(floor), Some(cursor), None, None).await?;
+                return Ok(ProxyBackfillOutcome::Done { inserted: 0 });
+            }
+            let requests = (cursor - floor) / span + 1;
+            if requests > PROXY_BACKFILL_MAX_REQUESTS {
+                let detail = format!(
+                    "proxy upgrade backfill refused: the range from the deploy floor {floor} to \
+                     the cursor {cursor} needs {requests} eth_getLogs requests, more than \
+                     {PROXY_BACKFILL_MAX_REQUESTS} (a floor of 0 means deploy-block detection \
+                     degraded). Set INDEXER_START_BLOCK to the deployment's first block and restart"
+                );
+                // Said loudly once; a repeat each tick would bury every other line.
+                if prior.as_ref().map(|p| p.state.as_str()) != Some("refused") {
+                    tracing::error!(chain_id = cfg.chain_id, "{detail}");
+                }
+                save_backfill_state(
+                    db,
+                    cfg,
+                    "refused",
+                    Some(floor),
+                    Some(cursor),
+                    None,
+                    Some(detail),
+                )
+                .await?;
+                return Ok(ProxyBackfillOutcome::Refused {
+                    floor,
+                    cursor,
+                    requests,
+                });
+            }
+            (floor, cursor, floor)
+        }
+    };
+    let slice_end = next
+        .saturating_add(span.saturating_mul(PROXY_BACKFILL_SLICE_REQUESTS) - 1)
+        .min(target);
 
     let mut proxies = cfg.proxy_addresses();
     let registered: Vec<Vec<u8>> =
@@ -1640,9 +1741,9 @@ pub async fn backfill_proxy_events(
     let mut inserted = 0u64;
     let mut stored_blocks: BTreeSet<u64> = BTreeSet::new();
     let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
-    let mut from = floor;
-    while from <= cursor {
-        let to = from.saturating_add(span - 1).min(cursor);
+    let mut from = next;
+    while from <= slice_end {
+        let to = from.saturating_add(span - 1).min(slice_end);
         let logs = rpc.get_logs(from, to, &proxies, &proxy_topics).await?;
         for log in logs.iter().filter(|l| {
             proxies.contains(&l.address)
@@ -1679,15 +1780,67 @@ pub async fn backfill_proxy_events(
         }
         from = to + 1;
     }
+
+    if slice_end >= target {
+        save_backfill_state(db, cfg, "done", Some(floor), Some(target), None, None).await?;
+        tracing::info!(
+            chain_id = cfg.chain_id,
+            floor,
+            target,
+            proxies = proxies.len(),
+            inserted,
+            "proxy upgrade backfill complete"
+        );
+        return Ok(ProxyBackfillOutcome::Done { inserted });
+    }
+    let next_block = slice_end + 1;
+    save_backfill_state(
+        db,
+        cfg,
+        "running",
+        Some(floor),
+        Some(target),
+        Some(next_block),
+        None,
+    )
+    .await?;
     tracing::info!(
         chain_id = cfg.chain_id,
-        floor,
-        cursor,
-        proxies = proxies.len(),
+        next_block,
+        target,
         inserted,
-        "proxy upgrade backfill complete"
+        "proxy upgrade backfill slice saved"
     );
-    Ok(inserted)
+    Ok(ProxyBackfillOutcome::Progress {
+        next_block,
+        target_block: target,
+        inserted,
+    })
+}
+
+/// Save one `proxy_backfill_progress` row (see [`backfill_proxy_events`]).
+async fn save_backfill_state(
+    db: &Db,
+    cfg: &IndexerConfig,
+    state: &str,
+    floor: Option<u64>,
+    target: Option<u64>,
+    next: Option<u64>,
+    detail: Option<String>,
+) -> Result<(), IndexerError> {
+    let block = |b: Option<u64>| b.and_then(|b| i64::try_from(b).ok());
+    db.save_proxy_backfill_progress(
+        cfg.chain_id,
+        &ProxyBackfillProgress {
+            state: state.to_string(),
+            floor_block: block(floor),
+            target_block: block(target),
+            next_block: block(next),
+            detail,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Walk back from `start` until we find a block whose stored hash

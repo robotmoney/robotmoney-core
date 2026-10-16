@@ -26,6 +26,24 @@ pub struct Health {
     /// Chain head the indexer last saw (`eth_blockNumber`); null until a tick has read it.
     pub chain_head_block: Option<i64>,
     pub reorg_count: i32,
+    /// The indexer's proxy upgrade backfill (`proxy_backfill_progress`, migration 0020; issue 1856); null
+    /// before its first attempt. `refused` and `no_cursor` mean the upgrade history below the cursor is not
+    /// indexed yet.
+    pub proxy_backfill: Option<ProxyBackfillHealth>,
+}
+
+/// One chain's proxy upgrade backfill state.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ProxyBackfillHealth {
+    /// `running`, `done`, `refused` or `no_cursor`.
+    pub state: String,
+    pub floor_block: Option<i64>,
+    /// The cursor when the current pass began.
+    pub target_block: Option<i64>,
+    /// The first block the running pass has not scanned yet.
+    pub next_block: Option<i64>,
+    /// Why the pass was refused, and what to set.
+    pub detail: Option<String>,
 }
 
 /// One Timelock, Safe or proxy-upgrade event (`admin_events`).
