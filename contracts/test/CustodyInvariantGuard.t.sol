@@ -49,22 +49,12 @@ contract CustodyInvariantGuardTest is Test {
         paths[20] = "contracts/ProposerFloorTimelock.sol";
     }
 
-    /// @dev True if `haystack` contains `needle` (naive substring scan).
+    /// @dev True if `haystack` contains `needle`. The scan is the `contains` cheatcode, not a byte loop in the EVM: the
+    ///      loop cost about 700M gas over 21 files and ran out of gas under `forge coverage`, whose instrumentation
+    ///      makes every opcode dearer.
     function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
-        bytes memory h = bytes(haystack);
-        bytes memory n = bytes(needle);
-        if (n.length == 0 || n.length > h.length) return false;
-        for (uint256 i = 0; i + n.length <= h.length; i++) {
-            bool matched = true;
-            for (uint256 j = 0; j < n.length; j++) {
-                if (h[i + j] != n[j]) {
-                    matched = false;
-                    break;
-                }
-            }
-            if (matched) return true;
-        }
-        return false;
+        if (bytes(needle).length == 0 || bytes(needle).length > bytes(haystack).length) return false;
+        return vm.contains(haystack, needle);
     }
 
     /// @notice INV-1: no production source declares an arbitrary-recipient
