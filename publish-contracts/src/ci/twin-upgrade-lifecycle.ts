@@ -2,7 +2,8 @@
 // Issue 1811 (upgradeability stage 4): the Twin rehearsal of the governed proxy lifecycle, after twin-publish deployed the release artifacts with the upgrade
 // overlay (deployments/twin-918453/upgrade-rehearsal.env: UPGRADE_MODE=upgradeable) and ran publish, verify, govern and verify. On that deployment it runs:
 //   1. deploy record    the verifier's upgradeability.json after the post-govern verify: every proxy upgradeable, no immutability claim.
-//   2. upgrade          the deployer creates a second copy of the gateway implementation from the build artifact (linked to the libraries the live one uses), then
+//   2. upgrade          `deploy-implementation --proxy gateway` (issue 1861): the deployer creates a second copy of the gateway implementation from the build artifact, linked to
+//                       the libraries the live one uses, the verb reads its code back and records implementation_deploys (a rerun reuses the entry and sends nothing), then
 //                       `govern --row upgrade-proxy` (issue 1859): the governing Safe (two owner keystores sign, the deployer pays the gas) schedules
 //                       upgradeToAndCall(new, "") on the timelock, the Twin clock is warped past the real delay, the Safe executes it, and the row re-records the gateway
 //                       manifest's implementation pin and records `proxy_upgrades` in the run manifest. verify runs again.
@@ -19,7 +20,7 @@
 // with the evidence tool against the chain (evidence-check --upgrade-lifecycle --rpc).
 // Every step goes through the real contracts, the real Safe and the real timelock; the only Twin environment step is the time warp. Any failure exits non-zero.
 // Environment in: RPC_URL, TWIN_RUN_DIR (twin-publish's run directory: keys, passphrase, sheet.env, manifests), GITHUB_WORKSPACE, GITHUB_ENV (optional).
-// Tests and local runs may replace the tools: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts), CAST (cast). Never use this against Base mainnet.
+// Tests and local runs may replace the tools: TWIN_CLI (default src/cli.ts), TWIN_EVIDENCE_CHECK (default src/evidence-check.ts). Never use this against Base mainnet.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPublicClient, http, keccak256, toBytes, type Address, type Hex } from "viem";
@@ -35,6 +36,7 @@ import { governSalt } from "../govern.ts";
 import { loadRunManifest } from "../runner.ts";
 import { FREEZE_ROW, UPGRADE_ROW, upgradeRecordKey } from "../upgrade-rows.ts";
 import { UPGRADEABILITY_MANIFEST } from "../verify-stage.ts";
+import { DEPLOY_IMPL_VERB } from "../deploy-implementation.ts";
 
 const env = (k: string, d = ""): string => process.env[k] ?? d;
 const fail = (m: string): never => { console.error(`twin-upgrade-lifecycle: ${m}`); process.exit(1); };
@@ -59,7 +61,6 @@ const pass = join(rh, "passphrase"), sheet = join(rh, "sheet.env"), manifests = 
 const key = (name: string) => join(rh, "keys", name);
 const json = (path: string): any => JSON.parse(readFileSync(path, "utf8"));
 const upgradeabilityNow = (): any => json(join(manifests, UPGRADEABILITY_MANIFEST));
-const castBin = env("CAST", "cast");
 const rpcFn = httpRpc(rpc);
 await requireTwin(rpcFn);
 
@@ -112,23 +113,22 @@ async function waitReady(ids: Hex[]): Promise<void> {
 }
 
 // ---- 2. the governed upgrade of the gateway ----
-// The new implementation: the build's creation code with every library placeholder filled with the address the live implementation links (so it is the same
-// reviewed release artifact at a new address; its immutable self-address makes its code hash differ from the first copy).
-const art = json(join(core, "out", `${gw.contract}.sol`, `${gw.contract}.json`));
-const liveCode = ((await client.getCode({ address: fromImpl })) ?? "0x").replace(/^0x/, "");
-const libAddr = new Map<string, string>();
-for (const file of Object.values<any>(art.deployedBytecode?.linkReferences ?? {})) for (const [lib, refs] of Object.entries<any>(file)) libAddr.set(lib, liveCode.slice(refs[0].start * 2, (refs[0].start + 20) * 2));
-let creation = String(art.bytecode.object).replace(/^0x/, "");
-for (const file of Object.values<any>(art.bytecode?.linkReferences ?? {})) for (const [lib, refs] of Object.entries<any>(file)) {
-  const a = libAddr.get(lib) ?? fail(`the live ${gw.contract} implementation links no ${lib}`);
-  for (const r of refs) creation = creation.slice(0, r.start * 2) + a + creation.slice((r.start + r.length) * 2);
-}
-if (creation.includes("__$")) fail(`${gw.contract} creation code still has an unlinked library placeholder`);
-const created = JSON.parse(run([castBin, "send", "--keystore", key("DEPLOYER"), "--password-file", pass, "--rpc-url", rpc, "--json", "--create", `0x${creation}`], { stdoutTo: join(rh, "upgrade-impl-deploy.json") }));
-if (created.status !== "0x1" && created.status !== 1 && created.status !== "1") fail(`the implementation deploy ${created.transactionHash} reverted`);
-const toImpl = created.contractAddress as Address;
+// The new implementation: the operator verb (issue 1861) deploys the build's creation code with every library placeholder filled with the address the live implementation
+// links (the same reviewed release artifact at a new address; its immutable self-address makes its code hash differ from the first copy) and records it in the run manifest.
+const deployImpl = (stdoutTo: string): any => JSON.parse(stage(DEPLOY_IMPL_VERB, stdoutTo, ["--proxy", UPGRADED_PROXY]).split("\n").find((l) => l.includes('"event":"deploy_implementation"')) ?? fail(`${DEPLOY_IMPL_VERB} printed no deploy_implementation line (${stdoutTo})`));
+const dep = deployImpl(join(rh, "deploy-implementation.txt"));
+const toImpl = dep.implementation as Address;
+const deployTx = dep.deploy_tx as Hex;
+if (dep.reused !== false || !isTx(deployTx)) fail(`deploy-implementation did not deploy: ${JSON.stringify(dep)}`);
+if (!String(dep.next).includes(`--row ${UPGRADE_ROW} --proxy ${UPGRADED_PROXY} --implementation ${toImpl}`)) fail(`deploy-implementation printed no govern --row ${UPGRADE_ROW} command for ${toImpl}: ${dep.next}`);
+const depEntry = (runManifest().implementation_deploys ?? []).find((e: any) => e?.proxy_name === UPGRADED_PROXY && String(e?.implementation).toLowerCase() === toImpl.toLowerCase())
+  ?? fail(`deploy-implementation recorded no implementation_deploys entry for ${toImpl}`);
 const toHash = await codeHash(toImpl);
-say("implementation_deployed", { implementation: toImpl, code_hash: toHash, tx: created.transactionHash });
+if (String(depEntry.code_hash).toLowerCase() !== toHash.toLowerCase() || String(depEntry.live_implementation).toLowerCase() !== fromImpl.toLowerCase()) fail(`the implementation_deploys entry does not match the chain: ${JSON.stringify(depEntry)}`);
+// a rerun with the same arguments reuses the entry and sends nothing
+const again = deployImpl(join(rh, "deploy-implementation-rerun.txt"));
+if (again.reused !== true || String(again.implementation).toLowerCase() !== toImpl.toLowerCase()) fail(`a rerun of deploy-implementation did not reuse ${toImpl}: ${JSON.stringify(again)}`);
+say("implementation_deployed", { implementation: toImpl, code_hash: toHash, tx: deployTx, libraries: depEntry.libraries });
 
 // the row: schedule through the Safe, warp past the real delay, execute, read the slot back, re-record the gateway manifest, record proxy_upgrades
 stage("govern", join(rh, "govern-upgrade-proxy.txt"), ["--row", UPGRADE_ROW, "--proxy", UPGRADED_PROXY, "--implementation", toImpl]);
@@ -207,7 +207,7 @@ const record: UpgradeLifecycleRecord = {
   kind: LIFECYCLE_KIND, chain_id: TWIN_CHAIN_ID, core_sha: sha, safe: safeAddr,
   timelock: { address: timelock, min_delay: String(finalRec.timelock?.min_delay) },
   deploy: { upgradeability: deployRec },
-  upgrade: { proxy: UPGRADED_PROXY, proxy_address: gwProxy, from_implementation: fromImpl, to_implementation: toImpl, to_code_hash: toHash, deploy_tx: created.transactionHash,
+  upgrade: { proxy: UPGRADED_PROXY, proxy_address: gwProxy, from_implementation: fromImpl, to_implementation: toImpl, to_code_hash: toHash, deploy_tx: deployTx,
     operation_id: upId, salt: upSalt, schedule_tx: upSchedTx, execute_tx: upExecTx, upgradeability: upgradeRec },
   rejected_upgrade: { proxy: UPGRADED_PROXY, proxy_address: gwProxy, target_implementation: fromImpl, operation_id: rejId, salt: rejSalt, schedule_tx: rejSchedTx,
     safe_tool_refusal: refusal, revert_selector: rev.slice(0, 10), revert_error: "UpgradesAreFrozen" },

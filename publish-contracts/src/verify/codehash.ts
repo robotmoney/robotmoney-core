@@ -9,7 +9,7 @@ export interface Ref { start: number; length: number }
 export interface Artifact { object: string; refs: Ref[] }
 
 /** Load `<out>/<Name>.sol/<Name>.json` (forge layout). Falls back to any directory holding `<Name>.json`. */
-function artifactJson(outDir: string, name: string): any {
+export function artifactJson(outDir: string, name: string): any {
   let path = join(outDir, `${name}.sol`, `${name}.json`);
   if (!existsSync(path)) {
     const hit = existsSync(outDir) ? readdirSync(outDir).find((d) => existsSync(join(outDir, d, `${name}.json`))) : undefined;
