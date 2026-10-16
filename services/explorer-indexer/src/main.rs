@@ -24,8 +24,9 @@
 use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
-    db::Db, feature_flags, indexer::refusal_backoff, indexer::run_once, indexer::IndexerConfig,
-    rpc::JsonRpc, rpc::RetryPolicy, DEFAULT_TICK_SECONDS,
+    db::Db, feature_flags, indexer::backfill_proxy_events, indexer::refusal_backoff,
+    indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc, rpc::RetryPolicy,
+    DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -315,6 +316,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut interval = tokio::time::interval(Duration::from_secs(cli.tick_seconds));
     let mut consecutive_refusals: u32 = 0;
+    // Issue 1840: backfill the proxy upgrade and freeze history once, after the first good tick.
+    let mut proxy_backfill_done = false;
 
     loop {
         match run_once(&db, &rpc, &cfg).await {
@@ -342,6 +345,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     error!(run_id = o.run_id, error = %err, "tick error (will retry)");
                 } else {
                     consecutive_refusals = 0;
+                    if !proxy_backfill_done {
+                        match backfill_proxy_events(&db, &rpc, &cfg).await {
+                            Ok(_) => proxy_backfill_done = true,
+                            Err(e) => error!(
+                                error = %e,
+                                "proxy upgrade backfill failed; retrying after the next tick"
+                            ),
+                        }
+                    }
                 }
                 info!(
                     run_id = o.run_id,

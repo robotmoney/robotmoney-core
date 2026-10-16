@@ -283,8 +283,17 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     }))
 }
 
-/// (address, kind, newest `Upgraded` detail, first `UpgradesFrozen` block).
-type ContractRow = (Vec<u8>, String, Option<String>, Option<i64>);
+/// (address, kind, newest `Upgraded` detail, first `UpgradesFrozen` block, first `UpgradesFrozen` detail).
+type ContractRow = (Vec<u8>, String, Option<String>, Option<i64>, Option<String>);
+
+/// The `implementation` field of an indexed proxy event's `detail` JSON.
+fn detail_implementation(detail: Option<&str>) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(detail?)
+        .ok()?
+        .get("implementation")?
+        .as_str()
+        .map(str::to_string)
+}
 
 async fn list_contracts(
     State(state): State<AppState>,
@@ -295,7 +304,9 @@ async fn list_contracts(
     //
     // Issue 1810: each contract's implementation and freeze state come from
     // its newest indexed `Upgraded` and `UpgradesFrozen` events
-    // (`admin_events`, contract_kind 'proxy').
+    // (`admin_events`, contract_kind 'proxy'). A contract whose only indexed
+    // proxy row is its `UpgradesFrozen` (its `Upgraded` predates the indexed
+    // range) reports the implementation the freeze names (issue 1840).
     let rows: Vec<ContractRow> = sqlx::query_as(
         "SELECT c.address, c.kind, \
              (SELECT e.detail FROM admin_events e \
@@ -305,7 +316,11 @@ async fn list_contracts(
              (SELECT e.block_number FROM admin_events e \
                WHERE e.chain_id = c.chain_id AND e.contract = c.address \
                  AND e.contract_kind = 'proxy' AND e.event_name = 'UpgradesFrozen' \
-               ORDER BY e.block_number ASC, e.log_index ASC LIMIT 1) AS frozen_at_block \
+               ORDER BY e.block_number ASC, e.log_index ASC LIMIT 1) AS frozen_at_block, \
+             (SELECT e.detail FROM admin_events e \
+               WHERE e.chain_id = c.chain_id AND e.contract = c.address \
+                 AND e.contract_kind = 'proxy' AND e.event_name = 'UpgradesFrozen' \
+               ORDER BY e.block_number ASC, e.log_index ASC LIMIT 1) AS frozen \
          FROM contracts c WHERE c.chain_id = $1 ORDER BY c.address",
     )
     .bind(chain_id)
@@ -313,14 +328,9 @@ async fn list_contracts(
     .await?;
     let contracts = rows
         .into_iter()
-        .map(|(address, kind, upgraded, frozen_at_block)| {
-            let implementation = upgraded.as_deref().and_then(|d| {
-                serde_json::from_str::<serde_json::Value>(d)
-                    .ok()?
-                    .get("implementation")?
-                    .as_str()
-                    .map(str::to_string)
-            });
+        .map(|(address, kind, upgraded, frozen_at_block, frozen)| {
+            let implementation = detail_implementation(upgraded.as_deref())
+                .or_else(|| detail_implementation(frozen.as_deref()));
             Contract {
                 chain_id,
                 address: addr_to_hex(&address),
