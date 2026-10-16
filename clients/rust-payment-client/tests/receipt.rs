@@ -39,7 +39,7 @@ mod common;
 
 use crate::common::{
     install_direct_gateway_code_mocks, install_gateway_implementation, jrpc_result,
-    jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
+    jrpc_result_raw, FIXTURE_BLOCK_TAG, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
 };
 use alloy_primitives::{b256, hex as ahex, keccak256, Address, B256};
 use alloy_sol_types::SolCall;
@@ -1684,5 +1684,81 @@ async fn receipt_submit_refuses_an_unapproved_gateway_implementation() {
     assert_eq!(output.status.code(), Some(2), "refusal exit code: {v}");
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"], "ErrImplementationNotApproved");
+    send.assert_async().await;
+}
+
+/// Issue 1856: `receipt submit` verifies the gateway before signing at the
+/// pinned block (FIXTURE_BLOCK_TAG shows the approved IMPL_A) and again after
+/// signing at `latest`, where the slot now names IMPL_B. The signed anchor is
+/// discarded unsent.
+#[tokio::test]
+async fn receipt_submit_discards_the_signed_anchor_when_the_implementation_changes_before_broadcast(
+) {
+    use alloy_primitives::address;
+    const IMPL_A: Address = address!("00000000000000000000000000000000000a11ce");
+    const IMPL_B: Address = address!("00000000000000000000000000000000000b0b00");
+    const IMPL_A_CODE: &[u8] = &[0x60, 0x01, 0xaa];
+    const IMPL_B_CODE: &[u8] = &[0x60, 0x01, 0xbb];
+
+    let mut server = mockito::Server::new_async().await;
+    let body = fixture_str("consensus-receipt.valid.json");
+    server
+        .mock("GET", RECEIPT_PATH)
+        .with_status(200)
+        .with_body(&body)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    mock_write_preamble(&mut server).await;
+    install_gateway_implementation(&mut server, IMPL_A, IMPL_A_CODE, Some(FIXTURE_BLOCK_TAG)).await;
+    install_gateway_implementation(&mut server, IMPL_B, IMPL_B_CODE, Some("latest")).await;
+    let send = server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fix = ReceiptFixture::build_with(
+        &server.url(),
+        &format!(
+            "gateway_implementation = \"{IMPL_A:#x}\"\n\
+             gateway_implementation_runtime_hash = \"0x{}\"\n",
+            ahex::encode(keccak256(IMPL_A_CODE))
+        ),
+    );
+    let (_, _, pinned) = pinned_golden(0);
+    let url = format!("{}{RECEIPT_PATH}", server.url());
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
+        .args([
+            "receipt",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "submit",
+            "--receipt-url",
+            &url,
+            "--expected-digest",
+            &pinned,
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let v = stdout_json(&output);
+    assert_eq!(output.status.code(), Some(2), "refusal exit code: {v}");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"], "ErrImplementationChanged", "{v}");
+    assert!(
+        v["message"].as_str().unwrap().contains("discarded unsent"),
+        "{v}"
+    );
     send.assert_async().await;
 }

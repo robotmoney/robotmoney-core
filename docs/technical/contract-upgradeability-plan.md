@@ -229,12 +229,12 @@ authorizes signing.
 gateway call carries an implementation version, and adding one is a Solidity
 change (stage 1 scope). The clients therefore bind what they sign:
 
-- `rmpc deposit`, `withdraw` and `withdraw-router` re-read the implementation
-  at `latest` after signing and before broadcast. A changed or unapproved
+- Every `rmpc` gateway write (`deposit`, `withdraw`, `withdraw-router`,
+  `committee vote-submit` and `receipt submit`) re-reads the implementation at
+  `latest` after signing and before broadcast. A changed or unapproved
   implementation discards the signed transaction unsent
-  (`ErrImplementationChanged`), so it can never execute. `committee
-  vote-submit` and `receipt submit` verify the gateway once before signing and
-  are not re-verified before broadcast (issue 1840, `write_path.rs` module doc).
+  (`ErrImplementationChanged`), so it can never execute (issue 1856,
+  `write_path.rs` module doc).
 - After the receipt, `rmpc` reads the implementation slot at the block the
   transaction executed in. Anything other than the implementation it verified
   is reported as `ErrImplementationChanged` with the `tx_hash`, never as a
@@ -242,8 +242,9 @@ change (stage 1 scope). The clients therefore bind what they sign:
   blindly.
 - A signed `deposit`, `withdraw` or `withdraw-router` carries an on-chain
   `deadline` of at most `MAX_DEADLINE_SKEW` (600 s) ahead of the block time.
-  `committee vote-submit` and `receipt submit` carry no deadline; only the
-  receipt check covers them. An upgrade must wait the
+  `committee vote-submit` and `receipt submit` carry no deadline, because the
+  gateway's vote and receipt ABI has none; the re-read before broadcast and the
+  receipt check cover them. An upgrade must wait the
   timelock's minimum delay after it is scheduled, which is far longer, and the
   `CallScheduled` operation is public for that whole time. A write signed before
   an upgrade can only execute after it inside that bound, and the receipt check

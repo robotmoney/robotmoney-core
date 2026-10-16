@@ -44,7 +44,9 @@ use crate::gateway::{GatewayVoteParams, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::output::emit;
-use crate::policy::implementation::{check_executed_under, verify_gateway_code_now};
+use crate::policy::implementation::{
+    check_executed_under, reverify_gateway_after_signing, verify_gateway_code_now,
+};
 use crate::rpc::FailoverRpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
@@ -339,6 +341,28 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
     let raw = encode_signed(tx, alloy_sig);
+
+    // Re-verify the gateway now that the envelope is signed (issue 1856), as
+    // `WriteSession::submit` does. A changed or unapproved implementation
+    // discards the envelope: it is never sent, so it can never execute.
+    if let Err(e) = rt.block_on(reverify_gateway_after_signing(
+        &rpc,
+        &cfg,
+        gateway_addr,
+        gateway_implementation,
+    )) {
+        log::error!("rmpc committee vote-submit: {e}");
+        emit_failure(
+            &CommitteeFailure {
+                ok: false,
+                error: e.name().to_string(),
+                message: Some(format!("{e}")),
+                tx_hash: None,
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     let tx_hash = match rt.block_on(async { broadcast(&rpc, &raw).await }) {
         Ok(h) => h,
