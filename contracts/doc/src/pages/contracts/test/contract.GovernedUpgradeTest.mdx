@@ -5,7 +5,7 @@ description: "Issue 1808: the ten proxied core contracts, their one upgrade auth
 
 # GovernedUpgradeTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/612b3a3d3e3bca56f4870ac64ee2a922bfa4d04e/contracts/test/GovernedUpgrade.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c4a1d1a75d078415bc79e2b2c5cf0da7b21df3c4/contracts/test/GovernedUpgrade.t.sol)
 
 **Inherits:** [SafeGovernance](/contracts/test/helpers/abstract.SafeGovernance)
 
@@ -534,6 +534,18 @@ so not even the timelock can ever upgrade the proxy.
 
 ```solidity
 function test_freezeAtDeploy_isFrozenFromTheFirstBlock() public;
+```
+
+<a id="test_freezeatdeploy_disableseveryreinitializer"></a>
+
+### test_freezeAtDeploy_disablesEveryReinitializer
+
+Issue 1835: a FrozenAtDeploy proxy reports the max initialized version, so a
+reinitializer the implementation carries can never run on it (with version 1 left
+behind, `reinitializer(2)` would still run).
+
+```solidity
+function test_freezeAtDeploy_disablesEveryReinitializer() public;
 ```
 
 <a id="_sawlog-address-bytes32-bytes32"></a>

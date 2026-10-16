@@ -431,6 +431,8 @@ contract GovernedUpgradeTest is SafeGovernance {
             address p = CoreProxies.proxy(impl, init);
             assertTrue(GovernedUUPS(p).upgradesFrozen(), _name(i));
             assertTrue(_sawFrozen(p, impl), string.concat(_name(i), ": UpgradesFrozen at init"));
+            // Issue 1835: the same end state as freezeUpgrades, initializers disabled for good.
+            assertEq(_initializedVersion(p), type(uint64).max, _name(i));
             address v2 = _newV2(i);
             vm.prank(address(timelock));
             vm.expectRevert(GovernedUpgrade.UpgradesAreFrozen.selector);
@@ -440,6 +442,29 @@ contract GovernedUpgradeTest is SafeGovernance {
             GovernedUUPS(p).freezeUpgrades(impl, impl.codehash);
             assertEq(CoreProxies.implementationOf(p), impl, _name(i));
         }
+    }
+
+    /// @notice Issue 1835: a FrozenAtDeploy proxy reports the max initialized version, so a
+    ///         reinitializer the implementation carries can never run on it (with version 1 left
+    ///         behind, `reinitializer(2)` would still run).
+    function test_freezeAtDeploy_disablesEveryReinitializer() public {
+        VaultRegistryV2Reinit impl = new VaultRegistryV2Reinit();
+        address p = CoreProxies.proxy(
+            address(impl),
+            abi.encodeCall(
+                VaultRegistry.initialize,
+                (admin, address(timelock), GovernedUUPS.UpgradeMode.FrozenAtDeploy)
+            )
+        );
+        assertEq(_initializedVersion(p), type(uint64).max, "max initialized version");
+        vm.prank(address(timelock));
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        VaultRegistryV2Reinit(p).initializeV2(7);
+        vm.prank(stranger);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        VaultRegistryV2Reinit(p).initializeV2(7);
+        assertEq(VaultRegistryV2Reinit(p).v2Value(), 0, "the reinitializer never ran");
+        assertTrue(GovernedUUPS(p).upgradesFrozen(), "frozen");
     }
 
     function _sawLog(address emitter, bytes32 topic0, bytes32 topic1) internal returns (bool) {

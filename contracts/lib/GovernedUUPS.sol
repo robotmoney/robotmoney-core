@@ -89,6 +89,10 @@ library GovernedUpgrade {
             $.upgradesFrozen = true;
             address impl = ERC1967Utils.getImplementation();
             emit UpgradesFrozen(address(this), impl, impl.codehash);
+            // Same end state as `freezeUpgrades` (issue 1835): no reinitializer can ever run.
+            // This runs inside the proxy's `initializer` call, which still emits its own
+            // `Initialized(1)` when it returns but never lowers the stored version.
+            _disableInitializers();
         }
     }
 
@@ -126,11 +130,21 @@ library GovernedUpgrade {
         layout().upgradesFrozen = true;
         emit UpgradesFrozen(address(this), impl, codeHash);
 
-        InitializableLayout storage i;
+        if (_initializable().initializing) revert InvalidInitialization();
+        _disableInitializers();
+    }
+
+    /// @dev OpenZeppelin `Initializable` storage of the proxy.
+    function _initializable() private pure returns (InitializableLayout storage i) {
         assembly {
             i.slot := INITIALIZABLE_STORAGE
         }
-        if (i.initializing) revert InvalidInitialization();
+    }
+
+    /// @dev Set the OpenZeppelin `Initializable` version to the maximum, what OpenZeppelin's
+    ///      `_disableInitializers` does: no initializer or reinitializer can run afterwards.
+    function _disableInitializers() private {
+        InitializableLayout storage i = _initializable();
         if (i.initialized != type(uint64).max) {
             i.initialized = type(uint64).max;
             emit Initialized(type(uint64).max);
@@ -158,7 +172,8 @@ library GovernedUpgrade {
 ///         - The release mode is a required initializer argument with no default.
 ///           `Undeclared` (the zero value) reverts. `FrozenAtDeploy` sets the one-way flag
 ///           inside the atomic proxy initialization, before any public call reaches the proxy.
-///         - `freezeUpgrades` also disables every initializer and reinitializer on the proxy.
+///         - Freezing, by `freezeUpgrades` or by `FrozenAtDeploy`, also disables every
+///           initializer and reinitializer on the proxy (initialized version = max).
 abstract contract GovernedUUPS is Initializable, IERC1822Proxiable {
     /// @notice Release mode chosen at initialization. There is no default.
     enum UpgradeMode {
