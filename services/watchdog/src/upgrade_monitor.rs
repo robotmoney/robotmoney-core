@@ -7,13 +7,27 @@
 //! `UpgradesFrozen(proxy, implementation, codeHash)`, which the explorer
 //! indexer stores in `admin_events` with `contract_kind = 'proxy'` (migration
 //! 0019). Deploying a proxy emits `Upgraded` (and, frozen at deploy,
-//! `UpgradesFrozen`) in its deployment block. Anything in a LATER block is a
+//! `UpgradesFrozen`) in its creation transaction. Every other proxy event is a
 //! governed change: an upgrade that replaced the implementation, or a delayed
 //! freeze. Each one pages the on-call operator exactly once.
 //!
-//! Alert-only: an upgrade never pauses the gateway. The rule assumes the
-//! indexer starts at or before each proxy's deployment block, so the first
-//! indexed `Upgraded` is the deployment.
+//! An event is the deployment only when the chain says so (issue 1840):
+//!
+//! - its transaction is a contract creation (`transactions.to_addr IS NULL`,
+//!   the indexer stores every transaction of a block with a watched event), or
+//! - its block is the contract's configured or discovered deploy block
+//!   (`contracts.deployed_block`).
+//!
+//! It is never inferred from "the first `Upgraded` the indexer happened to
+//! see". A registry-discovered vault is watched from the tick that saw its
+//! `VaultRegistered`, and a contract added to the config later is watched from
+//! the cursor, so their deploy-time events may never be indexed. Under the old
+//! first-seen rule their first governed upgrade was taken for the deployment
+//! and never paged, and a freeze before any indexed `Upgraded` was dropped.
+//! When the evidence is missing the event pages: a spurious page is
+//! recoverable, a silent upgrade is not.
+//!
+//! Alert-only: an upgrade never pauses the gateway.
 
 use reqwest::Client;
 use serde::Serialize;
@@ -77,8 +91,9 @@ impl ProxyChange {
 /// (contract, event_name, block_number, log_index, tx_hash, detail) of one `admin_events` row.
 type ProxyEventRow = (Vec<u8>, String, i64, i32, Vec<u8>, String);
 
-/// Governed proxy changes for `chain_id`: proxy events in a later block than
-/// the contract's first indexed `Upgraded`, oldest first.
+/// Governed proxy changes for `chain_id`, oldest first: every proxy event
+/// except those of the contract's deployment, which is its creation
+/// transaction or its known deploy block (see the module doc).
 pub async fn governed_proxy_changes(
     pool: &PgPool,
     chain_id: i64,
@@ -86,10 +101,11 @@ pub async fn governed_proxy_changes(
     let rows: Vec<ProxyEventRow> = sqlx::query_as(
         "SELECT e.contract, e.event_name, e.block_number, e.log_index, e.tx_hash, e.detail \
          FROM admin_events e \
-         JOIN (SELECT contract, MIN(block_number) AS deploy_block FROM admin_events \
-               WHERE chain_id = $1 AND contract_kind = 'proxy' AND event_name = 'Upgraded' \
-               GROUP BY contract) d ON d.contract = e.contract \
-         WHERE e.chain_id = $1 AND e.contract_kind = 'proxy' AND e.block_number > d.deploy_block \
+         LEFT JOIN contracts c ON c.chain_id = e.chain_id AND c.address = e.contract \
+         LEFT JOIN transactions t ON t.chain_id = e.chain_id AND t.tx_hash = e.tx_hash \
+         WHERE e.chain_id = $1 AND e.contract_kind = 'proxy' \
+           AND e.block_number IS DISTINCT FROM c.deployed_block \
+           AND NOT (t.tx_hash IS NOT NULL AND t.to_addr IS NULL) \
          ORDER BY e.block_number, e.log_index",
     )
     .bind(chain_id)
