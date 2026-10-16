@@ -28,6 +28,7 @@ import type { VerificationState } from "../lib/useGatewayVerifier";
 import type { PreviewContext } from "../lib/preview";
 import { getInjectedProvider, syncDevnetChain } from "../lib/syncDevnetChain";
 import { useRuntimeConfig } from "../lib/RuntimeConfigContext";
+import { GatewayWriteCheck } from "../lib/gatewayWriteCheck";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -143,17 +144,23 @@ export function AgentsPanel(props: Props) {
       gatewayCodeHashVerified: props.gatewayVerificationState.status === "verified",
       envClass: props.envClass,
     };
+    // Issue 1840: the commit and reveal writes re-verify the gateway at the latest block first.
     return (
-      <OnboardingWizard
+      <GatewayWriteCheck
         gatewayAddress={props.gatewayAddress}
-        ctx={ctx}
-        env={props.flagEnv}
-        now={props.now}
-        onDismiss={() => {
-          if (address) markOnboardingDismissed(address);
-          setOnboardingDismissed(true);
-        }}
-      />
+        verification={props.gatewayVerificationState}
+      >
+        <OnboardingWizard
+          gatewayAddress={props.gatewayAddress}
+          ctx={ctx}
+          env={props.flagEnv}
+          now={props.now}
+          onDismiss={() => {
+            if (address) markOnboardingDismissed(address);
+            setOnboardingDismissed(true);
+          }}
+        />
+      </GatewayWriteCheck>
     );
   }
 
