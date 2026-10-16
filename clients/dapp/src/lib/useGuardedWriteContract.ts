@@ -44,9 +44,11 @@
  * on every class and path. A basket vault redeem does not: it needs more than that limit (QA plan U3).
  *
  * Inside a `GatewayWriteCheck` (AdminFlow and AgentsPanel, issue 1840), every write
- * first re-verifies the gateway proxy and implementation at the latest block, on
- * every env class, and is refused with `GatewayChangedError` on a mismatch. That
- * check runs after checks (2) to (5), which only apply on Base.
+ * first runs the gateway check through the connected wallet's provider, on every
+ * env class: an admin write (gateway, Timelock, Safe) is refused unless the
+ * gateway is verified and still matches at the latest block, and any write is
+ * refused on a mismatch (`GatewayChangedError`). That check runs after checks
+ * (2) to (5), which only apply on Base.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useAccount, useWriteContract } from "wagmi";
@@ -291,7 +293,7 @@ async function assertWriteTarget(
 
 export function useGuardedWriteContract() {
   const base = useWriteContract();
-  const { connector } = useAccount();
+  const { connector, chainId } = useAccount();
   const { state } = useWriteChainGuard();
   const env = useRuntimeConfig();
   const robotMoneyVaults = useMemo(() => robotMoneyVaultTargets(env), [env]);
@@ -337,7 +339,19 @@ export function useGuardedWriteContract() {
         router,
       );
     }
-    if (gatewayCheck) await gatewayCheck();
+    if (gatewayCheck) {
+      let provider: Eip1193 | undefined;
+      try {
+        provider = await walletProvider(connector as CodeSource | undefined);
+      } catch {
+        provider = undefined;
+      }
+      await gatewayCheck({
+        target: (variables as { address?: unknown }).address,
+        provider,
+        chainId,
+      });
+    }
   };
 
   const writeContract = ((variables: Parameters<WriteFn>[0], options?: Parameters<WriteFn>[1]) => {

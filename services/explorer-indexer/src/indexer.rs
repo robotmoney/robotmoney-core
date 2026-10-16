@@ -1812,6 +1812,7 @@ async fn run_inner(
     // with a serial receipt for each cost one request per Base transaction in every event block and
     // dominated a catch-up (issue 1780). Every read of a block happens before its rows are written, so
     // a null receipt (an error, see `JsonRpc::tx_receipt`) fails the tick with nothing half-written.
+    let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
     let mut log_txs: BTreeMap<u64, BTreeMap<alloy_primitives::B256, u32>> = BTreeMap::new();
     for log in &logs {
         log_txs
@@ -1830,7 +1831,9 @@ async fn run_inner(
             })?;
         let mut txs = Vec::new();
         for (hash, index) in log_txs.get(&bn).into_iter().flatten() {
-            txs.push((*hash, *index, rpc.tx_receipt(*hash).await?));
+            let receipt = rpc.tx_receipt(*hash).await?;
+            created.extend(receipt.contract_address.map(|c| (*hash, c)));
+            txs.push((*hash, *index, receipt));
         }
         let r = db
             .insert_block(
@@ -1884,7 +1887,8 @@ async fn run_inner(
     let inline_fetch_deadline = tokio::time::Instant::now() + INLINE_FETCH_TIME_BUDGET;
     for log in &logs {
         rows_inserted +=
-            handle_log_within(db, cfg, &topics, log, Some(inline_fetch_deadline)).await? as i64;
+            handle_log_within(db, cfg, &topics, log, Some(inline_fetch_deadline), &created).await?
+                as i64;
     }
 
     // Each holder's share balance at the snapshot of every exclusion record (X7, core 1820).
@@ -2191,15 +2195,35 @@ pub struct AdminEvent {
     pub detail: serde_json::Value,
 }
 
+/// Contracts created at top level in a range: `(transaction, created contract)` from each stored
+/// receipt's `contractAddress`.
+pub type CreatedContracts = [(alloy_primitives::B256, Address)];
+
+/// Is this proxy event its contract's deployment? Only when its transaction created THIS proxy (the
+/// receipt's `contractAddress` is the emitter), issue 1840. A bare contract-creation transaction is
+/// not enough: the timelock's executor role is open, so anyone can execute a ready upgrade from a
+/// throwaway contract's constructor, and that upgrade must still page.
+pub fn is_proxy_deployment(created: &CreatedContracts, log: &LogEntry) -> bool {
+    created
+        .iter()
+        .any(|(tx, contract)| *tx == log.tx_hash && *contract == log.address)
+}
+
 async fn handle_admin_log(
     db: &Db,
     cfg: &IndexerConfig,
     topics: &Topics,
     log: &LogEntry,
+    created: &CreatedContracts,
 ) -> Result<Option<u64>, IndexerError> {
-    let Some(ev) = admin_event_of(cfg, topics, log)? else {
+    let Some(mut ev) = admin_event_of(cfg, topics, log)? else {
         return Ok(None);
     };
+    // The watchdog pages every proxy row except one marked as the deployment.
+    let deployment = ev.contract_kind == "proxy" && is_proxy_deployment(created, log);
+    if deployment {
+        ev.detail["deployment"] = serde_json::Value::Bool(true);
+    }
     let n = db
         .insert_admin_event(
             cfg.chain_id,
@@ -2210,6 +2234,11 @@ async fn handle_admin_log(
             &ev,
         )
         .await?;
+    if n == 0 && deployment {
+        // Indexed before the receipt check existed: mark it now.
+        db.mark_proxy_deployment(cfg.chain_id, log.block_number as i64, log.log_index as i32)
+            .await?;
+    }
     Ok(Some(n))
 }
 
@@ -2239,10 +2268,11 @@ pub const PROXY_BACKFILL_MAX_REQUESTS: u64 = 10_000;
 ///
 /// Idempotent: rows insert on the existing `(chain_id, block_number,
 /// log_index)` key with `ON CONFLICT DO NOTHING`, so a second run inserts
-/// nothing. Each event block's header and transactions are stored as well, so
-/// the watchdog can recognise a deployment by its contract-creation
-/// transaction. Bounded: requests span at most `max_blocks_per_tick` blocks,
-/// and at most [`PROXY_BACKFILL_MAX_REQUESTS`] of them are made.
+/// nothing. Each event block's header and the transactions that carry a proxy log are stored as
+/// well. A row whose transaction created that proxy (receipt `contractAddress`) is marked
+/// `"deployment": true`, including a row indexed before this check existed, so the watchdog does
+/// not page it. Bounded: requests span at most `max_blocks_per_tick` blocks, and at most
+/// [`PROXY_BACKFILL_MAX_REQUESTS`] of them are made.
 ///
 /// The main loop runs it once at startup, after the first successful tick. A
 /// vault registered while the indexer runs is backfilled at the next restart.
@@ -2297,6 +2327,7 @@ pub async fn backfill_proxy_events(
     let proxy_topics = [topics.proxy_upgraded, topics.proxy_upgrades_frozen];
     let mut inserted = 0u64;
     let mut stored_blocks: BTreeSet<u64> = BTreeSet::new();
+    let mut created: Vec<(alloy_primitives::B256, Address)> = Vec::new();
     let mut from = floor;
     while from <= cursor {
         let to = from.saturating_add(span - 1).min(cursor);
@@ -2311,8 +2342,8 @@ pub async fn backfill_proxy_events(
             .collect();
         // Each event block's header and the transactions that carry a proxy log (QA plan X6, DI-6:
         // the log gives the hash, the block and the index, one receipt adds from, to and status).
-        // A creation transaction has `to = None`, which is how the watchdog tells a deployment
-        // from an upgrade. Every read of a block happens before its rows are written.
+        // The receipt's `contractAddress` is how a deployment is told from an upgrade (issue 1840).
+        // Every read of a block happens before its rows are written.
         let mut block_txs: BTreeMap<u64, BTreeMap<alloy_primitives::B256, u32>> = BTreeMap::new();
         for log in &proxy_logs {
             if !stored_blocks.contains(&log.block_number) {
@@ -2333,7 +2364,9 @@ pub async fn backfill_proxy_events(
                 })?;
             let mut receipts = Vec::new();
             for (hash, index) in txs {
-                receipts.push((hash, index, rpc.tx_receipt(hash).await?));
+                let receipt = rpc.tx_receipt(hash).await?;
+                created.extend(receipt.contract_address.map(|c| (hash, c)));
+                receipts.push((hash, index, receipt));
             }
             db.insert_block(
                 cfg.chain_id,
@@ -2358,7 +2391,9 @@ pub async fn backfill_proxy_events(
             stored_blocks.insert(bn);
         }
         for log in proxy_logs {
-            inserted += handle_admin_log(db, cfg, &topics, log).await?.unwrap_or(0);
+            inserted += handle_admin_log(db, cfg, &topics, log, &created)
+                .await?
+                .unwrap_or(0);
         }
         from = to + 1;
     }
@@ -2437,7 +2472,7 @@ pub async fn handle_log(
     topics: &Topics,
     log: &LogEntry,
 ) -> Result<u64, IndexerError> {
-    handle_log_within(db, cfg, topics, log, None).await
+    handle_log_within(db, cfg, topics, log, None, &[]).await
 }
 
 /// Security round 2: the wall-clock budget a tick may spend fetching the payloads of the receipts
@@ -2462,6 +2497,7 @@ async fn handle_log_within(
     topics: &Topics,
     log: &LogEntry,
     inline_fetch_deadline: Option<tokio::time::Instant>,
+    created: &CreatedContracts,
 ) -> Result<u64, IndexerError> {
     let topic0 = match log.topics.first() {
         Some(t) => *t,
@@ -3312,7 +3348,7 @@ async fn handle_log_within(
     // than trusting the topic.
     // Timelock and Safe governance events (issue #1731). The topic-0s are generic hashes, so the emitter
     // must be the configured Timelock or Safe before anything is written.
-    if let Some(n) = handle_admin_log(db, cfg, topics, log).await? {
+    if let Some(n) = handle_admin_log(db, cfg, topics, log, created).await? {
         return Ok(n);
     }
 

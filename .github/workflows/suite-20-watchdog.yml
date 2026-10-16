@@ -234,11 +234,12 @@ jobs:
       # paged once, from the indexer's admin_events proxy rows; deployments are
       # not paged and a failed delivery is retried. Issue 1840: a late-registered
       # vault's first indexed upgrade and a freeze before any indexed upgrade are
-      # paged. Postgres testcontainer plus a mock webhook. Floor = the four tests
-      # the target holds.
+      # paged, and so is an upgrade executed from a throwaway contract's
+      # constructor in the deploy block. Postgres testcontainer plus a mock
+      # webhook. Floor = the five tests the target holds.
       - name: Proxy upgrade and freeze alert integration test (issues 1810, 1840)
         env:
-          CARGO_TEST_MIN_EXECUTED: 4
+          CARGO_TEST_MIN_EXECUTED: 5
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p watchdog \

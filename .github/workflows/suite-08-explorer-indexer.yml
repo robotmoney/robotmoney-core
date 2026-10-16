@@ -182,7 +182,8 @@ jobs:
       # (admin_events_and_progress: Postgres testcontainer). The lib steps run the pure decoders and the
       # refusal backoff. Each is wrapped in the executed-count guard so zero collected tests is RED.
       # Issue 1840: admin_events_and_progress also runs the startup proxy backfill and the registry
-      # proxy topics with INDEXER_MULTI_VAULT_EVENTS off (floor 10 = the tests the target holds), and
+      # proxy topics with INDEXER_MULTI_VAULT_EVENTS off, and marks a proxy row as its deployment only
+      # when its transaction created that proxy (floor 11 = the tests the target holds), and
       # the lib step runs the proxy decode and RouterGovernance watch tests (floor 7).
       - name: Refused RPC, Timelock and Safe events, chain head, paused snapshots (issues 1731, 1840)
         env:
@@ -190,7 +191,7 @@ jobs:
         run: |
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test rpc_refused -- --nocapture
-          CARGO_TEST_MIN_EXECUTED=10 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=11 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --test admin_events_and_progress -- --test-threads=1 --nocapture
           CARGO_TEST_MIN_EXECUTED=7 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::refusal_backoff indexer::tests::timelock_and_safe indexer::tests::call_scheduled indexer::tests::safe_ indexer::tests::proxy_ indexer::tests::router_governance --nocapture

@@ -166,10 +166,12 @@ export function AdminFlow(props: Props) {
         </p>
       )}
 
-      {/* Issue 1840: every write from the tabs re-verifies the gateway at the latest block first. */}
+      {/* Issue 1840: every write from the tabs re-verifies the gateway at the latest block first,
+          and a gateway, Timelock or Safe write is refused unless the gateway is verified. */}
       <GatewayWriteCheck
         gatewayAddress={props.gatewayAddress}
         verification={gatewayVerificationState}
+        adminTargets={[props.timelockAddress, props.safeAddress]}
       >
         <Tabs tabs={tabs} defaultTabId="agent-permissions" />
       </GatewayWriteCheck>

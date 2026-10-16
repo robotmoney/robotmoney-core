@@ -178,6 +178,10 @@ pub struct TxReceipt {
     /// `None` for a contract creation.
     pub to: Option<Address>,
     pub status: u8,
+    /// The receipt's `contractAddress`: the contract this transaction created at top level, `None`
+    /// for a call. Issue 1840: the indexer marks a proxy's `Upgraded` / `UpgradesFrozen` as its
+    /// deployment only when this is the proxy.
+    pub contract_address: Option<Address>,
 }
 
 impl JsonRpc {
@@ -390,9 +394,14 @@ impl JsonRpc {
                 message: format!("receipt for {hash:#x} has no status"),
             })?;
         let status = parse_u64_hex("receipt.status", status)?;
+        let contract_address = match v.get("contractAddress").and_then(|x| x.as_str()) {
+            None | Some("") => None,
+            Some(a) => Some(parse_address("receipt.contractAddress", a)?),
+        };
         Ok(TxReceipt {
             from,
             to,
+            contract_address,
             status: u8::try_from(status).map_err(|_| RpcError::Decode {
                 method: "receipt.status".into(),
                 message: format!("status {status} out of range"),
