@@ -15,6 +15,8 @@ import {
 import { padTopic } from "../../src/verify/logs.ts";
 import { USDC_ADDRESS } from "../../src/usdc.ts";
 import { ERC1967_ADMIN_SLOT } from "../../src/verify/upgradeability.ts";
+import { getStageTable } from "../../src/stages.ts";
+import { manifestBase } from "../../src/stage-table.ts";
 import { buildWorld, failed, addr, GOVERNED_UPGRADE_LIB, IMPL_SLOT, INIT_SLOT, DEPLOYER, SAFE, VAULTS, REGISTRY, TIMELOCK, GATEWAY, ROUTER, GOV, ICP, REC, RECORDER, V4_ADAPTER, OWNERS, OWNER_KEYS, PROOF_TX, proofInput, EMERGENCY, PAUSER, SEED_SHARES, type World } from "./world.ts";
 
 const LABELS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "expected-labels.json"), "utf8")) as string[];
@@ -254,5 +256,27 @@ describe("role-holder enumeration names the planted holder (core 1668)", () => {
     const w = buildWorld(8453);
     w.chain.blockNumber = async () => { throw new Error("rpc down"); };
     expect(failed(await verifyDeployment(w.opts))).toContain(label);
+  });
+});
+
+// Issue 1842: the new failing cases of existing labels, each planted alone in a healthy world.
+describe("issue 1842: fail-closed gateway pins and the governed freeze of an upgradeable release", () => {
+  const gatewayManifest = (w: World, fn: (o: any) => void) => editManifest(w, `${manifestBase(getStageTable().stages.find((s) => s.name === "gateway")!.manifest)}.json`, fn);
+  test("gateway: no gateway_implementation_runtime_hash fails the implementation slot label", async () => {
+    const w = buildWorld(8453);
+    gatewayManifest(w, (o) => { delete o.gateway_implementation_runtime_hash; });
+    expect(failed(await verifyDeployment(w.opts))).toContain("gateway: implementation slot equals the manifest");
+  });
+  test("gateway: a gateway_runtime_hash that is not the live proxy code hash fails the proxy label", async () => {
+    const w = buildWorld(8453);
+    gatewayManifest(w, (o) => { o.gateway_runtime_hash = keccak256(toHex("another proxy")); });
+    expect(failed(await verifyDeployment(w.opts))).toContain("gateway: is the build's proxy with no admin and no beacon");
+  });
+  test("an upgradeable release whose proxy came up frozen in its initializer fails its freeze label", async () => {
+    const w = buildWorld(918453);
+    w.sheet.upgradeMode = "upgradeable";
+    for (const s of getStageTable().stages.filter((x) => x.proxies)) editManifest(w, `${manifestBase(s.manifest)}.json`, (o) => { o.upgrade_mode = "upgradeable"; });
+    for (const a of [GATEWAY, REGISTRY, ROUTER, GOV, ICP, REC, ...Object.values(VAULTS).map((v) => v.address)]) w.chain.set(a, "upgradesFrozen", a === GOV);
+    expect(failed(await verifyDeployment(w.opts))).toEqual(["governance: upgradesFrozen() agrees with the release mode"]);
   });
 });
