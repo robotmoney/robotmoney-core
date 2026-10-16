@@ -219,6 +219,7 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/release/preflight-guards.sh", { flags: new Set(["dependency-manifest", "contract"]) });
   tools.set("scripts/runbook/validate-contract-qa.ts", { flags: new Set(["release", "target", "runnable", "check-sheet", "owner-signers", "root"]) });
   tools.set("scripts/runbook/qa-assert.ts", { verbs: new Set(["eq", "ge", "within-bps", "receipt-id", "receipt-digest"]), flags: new Set() });
+  tools.set("scripts/runbook/run-record.ts", { verbs: new Set(["go", "report", "signoff"]), flags: new Set(["kind", "run-dir", "evidence-dir", "sha", "target", "chain-id", "sheet", "tag"]) });
 
   const rs = read(root, "clients/rust-payment-client/src/cli.rs");
   const variants = (enumName: string): Set<string> => {
@@ -247,7 +248,7 @@ export function expandArgv(argv: string[]): string[] {
 /** Words of a `bash -c` string, quotes and shell punctuation removed. */
 export const wordsOf = (script: string): string[] => script.replace(/["'`]/g, " ").split(/[\s;|&()<>]+/).filter(Boolean);
 
-const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts"];
+const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts"];
 
 /** The invocations of known tools in one command: the tool and the words after it. A `bash -c` script is searched word by word. */
 export function invocations(argv: string[]): { tool: string; args: string[] }[] {

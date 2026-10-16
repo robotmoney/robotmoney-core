@@ -10,6 +10,7 @@ One runbook checks every deploy, governance and deposit step of a contract relea
 | `releases/<release>.yaml` | A full copy of the template steps, unchanged and in order. Plus only the steps that release adds, each marked `added: <release>`. |
 | `../../../scripts/runbook/validate-contract-qa.ts` | The checker. Run it with no arguments for the template and every release file. |
 | `../../../scripts/runbook/qa-assert.ts` | The small assertions a step makes between two commands. |
+| `../../../scripts/runbook/run-record.ts` | Writes the run's own records: the publish go, the Twin freeze go, the rollout report and the sign-off. |
 
 A release file also holds its `decisions:` (owner decisions, open or decided), its `recovery:` decision, its `notes:` and its `scope:` (every PR the release ships, each tied to a check or a reason for none).
 
@@ -52,7 +53,8 @@ A `production` run is refused while any owner decision is open or `productionRea
 - Steps run in phase order, 0 to 10.
 - An irreversible step carries `notBefore`, `onlyFor` or `go`.
 - A step reads only state an earlier step (or the step itself) writes.
+- No step waits on a file a person makes at run time. A record a step checks is written by an earlier step, or committed and reviewed (the Deploy 3 sheet fragment, `deployments/base-8453-rehearsal/deploy-3.env`).
 - No secret and no keyed RPC URL appears in any file here.
 - Core never imports devops. A step calls the documented `publish-contracts` CLI only.
 
-The test is `scripts/runbook/validate-contract-qa.test.ts`. CI runs it in the doc checks suite.
+The tests are `scripts/runbook/validate-contract-qa.test.ts` and `scripts/runbook/run-record.test.ts`. CI runs it in the doc checks suite.

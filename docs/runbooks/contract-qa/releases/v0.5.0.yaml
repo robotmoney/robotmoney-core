@@ -30,8 +30,9 @@ notes: |
   900 s timelock (--target rehearsal, runbook 4.10). Deploy 3 is the --target rehearsal run. --target production
   is a later production-kind deployment (48 hour timelock), not Deploy 3; the open decisions below gate only it. Steps for one environment say
   so with onlyFor. The lifecycle steps (P7) run only when the run sheet says UPGRADE_MODE=upgradeable. The freeze
-  steps (P7.56 to P7.61) run only when the owner has recorded {runDir}/go/freeze.json: the freeze is OFF by
-  default on 8453.
+  steps (P7.56 to P7.61) run only when {runDir}/go/freeze.json exists. On the Twin chain the run writes it (P7.70).
+  On 8453 the freeze is OFF: only the owner records that go, and Deploy 3 does not freeze. No step waits on a hand-made file:
+  the fragment (P0.52), the publish go (P1.50), the report (P10.51) and the sign-off (P10.52) are written by the run.
 
   Not exercised here, and why. (1) The Twin-only rows update-delay, batch and cancel: the default Twin govern
   run (P3.01) already runs them, the rehearsal rows are optional demonstrations of the Safe tool. (2) Twin-only
@@ -327,6 +328,20 @@ steps:
     irreversible: false
     onlyFor: "twin"
     gateAbsent: "{runDir}/fragment.env"
+  - id: "P0.52-deploy3-fragment"
+    standing: ["4.10"]
+    description: "Deploy 3 takes its sheet fragment from the committed deploy-3.env (the reused keys' public addresses, the Deploy 2 caps, a new SAFE_SALT_NONCE): nothing is typed at run time"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["cp", "deployments/base-8453-rehearsal/deploy-3.env", "{runDir}/fragment.env"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "fragment.env", "required": true}
+    irreversible: false
+    onlyFor: "rehearsal"
+    gateAbsent: "{runDir}/fragment.env"
+    added: "v0.5.0"
   - id: "P0.14-fragment"
     standing: ["4.10"]
     description: "The public addresses of the reused deployer, pauser, emergency key and Safe owners, and a new SAFE_SALT_NONCE, are in the sheet fragment"
@@ -457,6 +472,18 @@ steps:
     maxMinutes: 60
 
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
+  - id: "P1.50-record-go"
+    standing: ["4.3"]
+    description: "The publish go is written by the run: the sha, the environment and the hash of the merged sheet it proceeds with. Starting the run is the go"
+    host: "control"
+    phase: 1
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "publish", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
+    irreversible: false
+    added: "v0.5.0"
   - id: "P1.01-go"
     standing: ["4.3"]
     description: "The operator's recorded go for this run: the sha, the environment and the sheet hash they approved"
@@ -1354,6 +1381,20 @@ steps:
     sheetIs: {"UPGRADE_MODE": "upgradeable"}
     writes: ["shares-hold"]
     added: "v0.5.0"
+  - id: "P7.70-twin-freeze-go"
+    standing: ["4.12"]
+    description: "Twin only: the run records the freeze go itself, so the freeze steps run on the throwaway chain. The tool refuses a freeze go off the Twin chain: on 8453 the freeze stays OFF unless the owner records it"
+    host: "control"
+    phase: 7
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "go", "--kind", "freeze", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "freeze.json", "required": true}
+    irreversible: false
+    onlyFor: "twin"
+    sheetIs: {"UPGRADE_MODE": "upgradeable"}
+    added: "v0.5.0"
   - id: "P7.56-freeze-schedule"
     standing: ["4.12"]
     description: "Only on a recorded freeze go: the Safe schedules ONE batch of freezeUpgrades(implementation, code hash) for every proxy, both values from the verify record, refused while any upgrade is still queued. The freeze is OFF unless the owner records it"
@@ -1776,6 +1817,18 @@ steps:
     added: "v0.5.0"
 
 
+  - id: "P10.51-write-rollout-report"
+    standing: ["4.7"]
+    description: "The rollout report is written from the run: sha, network, sheet hash, tag, every step's journal, every evidence file's sha256, and any pause as an issue"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "report", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
+    irreversible: false
+    added: "v0.5.0"
   - id: "P10.03-rollout-report"
     standing: ["4.7"]
     description: "The rollout report exists: sha, network, preflight and postflight results, issues, the tag, operator sign-off"
@@ -1787,6 +1840,18 @@ steps:
     receipts:
       - {"dir": "{runDir}", "pattern": "rollout-report.md", "required": true}
     irreversible: false
+  - id: "P10.52-record-signoff"
+    standing: ["4.4"]
+    description: "The sign-off is written by the run, and only when the report lists no issue and matches the publish go"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--sha", "{coreSha}", "--target", "{target}", "--sheet", "{sheet}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
+    irreversible: false
+    added: "v0.5.0"
   - id: "P10.04-signoff"
     standing: ["4.4"]
     description: "The operator's recorded sign-off on the postflight"
