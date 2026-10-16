@@ -44,16 +44,16 @@ notes: |
 decisions:
   - id: adr-0014-accepted
     question: "Accept ADR-0014 (governed UUPS proxies with a one-way, target-bound freeze), which is Proposed"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Yes. Follows from freeze-policy: an upgradeable proving period needs ADR-0014 accepted. The ADR file itself still says Proposed and must be updated to Accepted."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
   - id: freeze-policy
     question: "Is Deploy 3 frozen at launch (UPGRADE_MODE=frozen), or an upgradeable proving period with UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12)"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "No. Deploy 3 does not launch frozen: it is an upgradeable proving period (UPGRADE_MODE=upgradeable). It needs UPGRADE_FREEZE_DEADLINE and a named release owner, signers and backups (4.12), still to be set."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
   - id: emergency-levers
     question: "Confirm or narrow the two hot-key levers the security fixes added to EMERGENCY_ROLE (emergencyExcludeAdapter, recoverRemovedAdapter), issue 1705"
     status: open
@@ -74,16 +74,16 @@ decisions:
     ref: null
   - id: production-receipt-surface
     question: "How a production deployment registers a receipt submitter and records receipts: register-committee and record-receipt are refused on 8453 in production, so P3.03 to P3.05 and P5.01 to P5.58 are skipped until this is decided"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Yes. Rebalancing works on 8453 from launch. The CLI must stop refusing register-committee and record-receipt in production; the change is not yet made."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
   - id: version-line
     question: "The version line and tag of Deploy 3: release/v0.4.0-base.N or a bump to v0.5.0"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Deploy 3 is released as v0.5.0. This file is still named v0.4.0; moving the release to a v0.5.0 file is not yet done."
+    decidedOn: 2026-10-16
+    ref: "owner decision session deploy3-runbook, 2026-10-16"
 recovery: |
   Contracts are immutable; there is no in-place rollback (runbook 4.6). What to do depends on how far the run got.
   - Before P1.02-publish (phase 0 and the go): nothing was sent. Fix on dev, take the new tip, tag it again,
