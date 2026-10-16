@@ -337,6 +337,8 @@ describe("VAULT_NAME on an old sheet: follow-on verbs warn, deploy verbs refuse 
 // its freeze deadline, a frozen one refuses one.
 describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
   const MAIN = { CHAIN_ID: "8453", EXPECTED_CHAIN_ID: "8453", TIMELOCK_MIN_DELAY: "172800", GOVERN_NEW_DELAY: "172800" };
+  /** A fixed wall clock: 2026-10-01T00:00:00Z. */
+  const CLOCK = Date.UTC(2026, 9, 1);
   test("UPGRADE_MODE is required, has no default and takes only upgradeable or frozen", () => {
     expect(REQUIRED_NAMES).toContain("UPGRADE_MODE");
     expect(refused(sheetText({ UPGRADE_MODE: null })).message).toContain("missing required names: UPGRADE_MODE");
@@ -346,7 +348,7 @@ describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
   });
   test("an upgradeable production release on 8453 needs the freeze deadline; a rehearsal, the Twin chain and a frozen release do not", () => {
     expect(refused(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" })).message).toContain("UPGRADE_FREEZE_DEADLINE");
-    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])).upgrade).toEqual({ mode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
+    expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"]), { now: () => CLOCK }).upgrade).toEqual({ mode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
     expect(parseSheet(sheetText({ ...MAIN, UPGRADE_MODE: "frozen" })).upgrade).toEqual({ mode: "frozen" });
     expect(parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" })).upgrade.freezeDeadline).toBeUndefined();
   });
@@ -355,6 +357,21 @@ describe("UPGRADE_MODE and UPGRADE_FREEZE_DEADLINE (issue 1809)", () => {
     for (const bad of ["2027-01-31", "2027-02-30T00:00:00Z", "2027-01-31T00:00:00+01:00", "tomorrow"]) {
       expect(refused(sheetText({ UPGRADE_MODE: "upgradeable" }, [`UPGRADE_FREEZE_DEADLINE=${bad}`])).message, bad).toContain("ISO 8601 UTC");
     }
+  });
+  test("issue 1842: a deploy run refuses a deadline in the past or sooner than now + TIMELOCK_MIN_DELAY + 1 day, naming UPGRADE_FREEZE_DEADLINE; a later one parses", () => {
+    const at = (deadline: string, over: Record<string, string> = MAIN, opts: { verb?: string } = {}) => {
+      try { return parseSheet(sheetText({ ...over, UPGRADE_MODE: "upgradeable" }, [`UPGRADE_FREEZE_DEADLINE=${deadline}`]), { now: () => CLOCK, ...opts }).upgrade; }
+      catch (e) { expect((e as PublishError).kind).toBe("SHEET"); return (e as PublishError).message; }
+    };
+    // the clock is 2026-10-01T00:00:00Z and the delay 172800 s: the earliest deadline is 2026-10-04T00:00:00Z
+    expect(at("2026-09-30T00:00:00Z")).toEqual(expect.stringMatching(/^UPGRADE_FREEZE_DEADLINE 2026-09-30T00:00:00Z is in the past/));
+    expect(at("2026-10-03T23:59:59Z")).toEqual(expect.stringMatching(/^UPGRADE_FREEZE_DEADLINE 2026-10-03T23:59:59Z is too near: .*TIMELOCK_MIN_DELAY \(172800 s\) \+ 1 day, 2026-10-04T00:00:00Z/));
+    expect(at("2026-10-04T00:00:00Z")).toEqual({ mode: "upgradeable", freezeDeadline: "2026-10-04T00:00:00Z" });
+    // the delay is the sheet's own: a Twin sheet with 60 s may name a deadline a day and a minute out
+    expect(at("2026-10-02T00:01:00Z", { TIMELOCK_MIN_DELAY: "60" })).toEqual({ mode: "upgradeable", freezeDeadline: "2026-10-02T00:01:00Z" });
+    expect(at("2026-10-02T00:00:59Z", { TIMELOCK_MIN_DELAY: "60" })).toEqual(expect.stringContaining("too near"));
+    // a follow-on verb runs against a deployment that already exists: verify reports the deadline, the sheet does not block it
+    for (const verb of ["verify", "govern", "pause-all", "record-receipt", "redeploy-vault"]) expect(at("2026-09-30T00:00:00Z", MAIN, { verb })).toEqual({ mode: "upgradeable", freezeDeadline: "2026-09-30T00:00:00Z" });
   });
   test("every committed sheet declares its mode: the Twin sheet, the 8453 rehearsal example and the production fixture are frozen", () => {
     for (const f of ["deployments/twin-918453/stage-sheet.env", "deployments/base-8453-rehearsal/stage-sheet.example.env"]) {

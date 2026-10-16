@@ -185,6 +185,8 @@ export interface ParseSheetOpts {
   verb?: string;
   /** Receives the one warning when a follow-on verb drops a VAULT_NAME line. */
   warn?: (message: string, fields: Record<string, unknown>) => void;
+  /** Issue 1842, test seam: the wall clock (ms since the epoch) the freeze deadline is compared with. Absent: Date.now(). */
+  now?: () => number;
 }
 
 /** A follow-on verb drops VAULT_NAME with one warning naming its line. A deploy run keeps it, so checkNames refuses it with the issue 1705 reason. */
@@ -306,7 +308,9 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
     if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
   }
 
-  const upgrade = parseUpgrade(v, chainId, kind);
+  // Issue 1842: a deploy run refuses a freeze deadline the Safe could not meet (a follow-on verb runs against a deployment whose deadline was checked when it deployed,
+  // and verify reports the deadline itself, so verify, govern and pause-all keep working as the deadline approaches).
+  const upgrade = parseUpgrade(v, chainId, kind, (LEGACY_VAULT_NAME_VERBS as readonly string[]).includes(opts.verb ?? "") || opts.verb === "redeploy-vault" ? undefined : { minDelay: timelockMinDelay, nowMs: (opts.now ?? Date.now)() });
 
   const vaults = {} as Record<VaultKey, SheetVault>;
   for (const k of VAULT_KEYS) {
@@ -373,7 +377,7 @@ const DEADLINE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
  * Issue 1809. UPGRADE_MODE is required and is one of the two words. An upgradeable PRODUCTION release on 8453 is the proving period: it needs UPGRADE_FREEZE_DEADLINE, the
  * time by which the Safe signers have frozen every proxy. A frozen release has nothing to freeze later, so a deadline there is refused as a contradiction.
  */
-export function parseUpgrade(v: Record<string, string | undefined>, chainId: number, kind: DeploymentKind): Sheet["upgrade"] {
+export function parseUpgrade(v: Record<string, string | undefined>, chainId: number, kind: DeploymentKind, deadlineCheck?: { minDelay: bigint; nowMs: number }): Sheet["upgrade"] {
   const mode = v.UPGRADE_MODE ?? "";
   if (!(UPGRADE_MODES as readonly string[]).includes(mode)) throw err(`UPGRADE_MODE must be ${UPGRADE_MODES.join(" or ")}, got '${mode}'. There is no default: the release mode of every core proxy is declared (docs/technical/contract-upgradeability-plan.md, Release modes).`, { name: "UPGRADE_MODE" });
   const raw = v.UPGRADE_FREEZE_DEADLINE;
@@ -385,6 +389,12 @@ export function parseUpgrade(v: Record<string, string | undefined>, chainId: num
   const m = DEADLINE.exec(raw);
   const t = m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : Number.NaN;
   if (!m || Number.isNaN(t) || new Date(t).toISOString().replace(".000Z", "Z") !== raw) throw err(`UPGRADE_FREEZE_DEADLINE must be an ISO 8601 UTC time such as 2027-01-31T00:00:00Z, got '${raw}'`, { name: "UPGRADE_FREEZE_DEADLINE" });
+  if (deadlineCheck) {
+    // Issue 1842: the freeze is one Safe round through the timelock, so it needs TIMELOCK_MIN_DELAY plus a day of signer time before the deadline. A deadline sooner
+    // than that is refused now, before any stage broadcasts, instead of failing verify after the whole deployment ran.
+    const earliest = deadlineCheck.nowMs + Number(deadlineCheck.minDelay) * 1000 + 86_400_000;
+    if (t < earliest) throw err(`UPGRADE_FREEZE_DEADLINE ${raw} is ${t <= deadlineCheck.nowMs ? "in the past" : "too near"}: it must be no earlier than now + TIMELOCK_MIN_DELAY (${deadlineCheck.minDelay} s) + 1 day, ${new Date(earliest).toISOString().replace(/\.\d{3}Z$/, "Z")}, so the Safe can schedule and execute the freeze in time`, { name: "UPGRADE_FREEZE_DEADLINE" });
+  }
   return { mode: mode as UpgradeMode, freezeDeadline: raw };
 }
 

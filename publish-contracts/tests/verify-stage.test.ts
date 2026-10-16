@@ -448,7 +448,7 @@ describe("stage 12 records the upgradeability of the deployment (issue 1809)", (
   });
   test("an upgradeable sheet hands the verifier its freeze deadline", () => {
     const { ctx } = setup();
-    const s = buildVerifySheet({ ...ctx, sheet: parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"])) }, "0x00000000000000000000000000000000000050fe");
+    const s = buildVerifySheet({ ...ctx, sheet: parseSheet(sheetText({ UPGRADE_MODE: "upgradeable" }, ["UPGRADE_FREEZE_DEADLINE=2027-01-31T00:00:00Z"]), { verb: "verify" }) }, "0x00000000000000000000000000000000000050fe");
     expect(s).toMatchObject({ upgradeMode: "upgradeable", freezeDeadline: "2027-01-31T00:00:00Z" });
   });
 });
