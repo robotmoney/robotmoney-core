@@ -8,19 +8,17 @@ import { USDC_ADDRESS } from "./usdc.ts";
 import { STAGE13_UNPAUSE_VAULTS } from "./vault-rules.ts";
 import { getAddress, isAddress } from "viem";
 import { PublishError } from "./errors.ts";
+import { BASKET_KEYS, VAULT_KEYS, type VaultKey } from "./vault-keys.ts";
 import { MAINNET_CHAIN_ID, DEPLOYMENT_KINDS, REHEARSAL_DELAY_FLOOR, rehearsalDelayProblem, type DeploymentKind } from "./chains.ts";
 
 export type Address = `0x${string}`;
-export const VAULT_KEYS = ["USDC", "PROTO", "AGENT", "RWA"] as const;
-export type VaultKey = (typeof VAULT_KEYS)[number];
+export { VAULT_KEYS, BASKET_KEYS, type VaultKey } from "./vault-keys.ts";
 /** Manifest and verifier name of each vault. */
 export const VAULT_NAME: Record<VaultKey, string> = { USDC: "rmUSDC", PROTO: "rmPROTO", AGENT: "rmAGENT", RWA: "rmRWA" };
 
 /** Per-vault sheet names. Always required, never defaulted. */
 export const vaultSheetNames = (k: VaultKey): string[] => [`VAULT_${k}_TVL_CAP`, `VAULT_${k}_PER_DEPOSIT_CAP`, `VAULT_${k}_EXIT_FEE_BPS`];
 
-/** The baskets (rmPROTO, rmAGENT, rmRWA). rmUSDC is not a basket: it has no navDeviationGuardBps and no pool. */
-export const BASKET_KEYS = ["PROTO", "AGENT", "RWA"] as const satisfies readonly VaultKey[];
 /** Basket-only sheet names (issue 1666): the ORA-4 deposit guard in bps and the floor for every pool's in-range liquidity (`IUniswapV3Pool.liquidity()`, a uint128 L, not a USDC amount). */
 export const basketSheetNames = (k: VaultKey): string[] => (BASKET_KEYS as readonly string[]).includes(k) ? [`VAULT_${k}_NAV_DEVIATION_BPS`, `VAULT_${k}_MIN_POOL_LIQUIDITY`] : [];
 /** The vault's own ceiling: BasketVault.MAX_NAV_DEVIATION_BPS. The deploy script requires the same range 1..2000. */

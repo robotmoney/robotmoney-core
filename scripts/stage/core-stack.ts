@@ -58,8 +58,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BASKET_KEYS, parseSheetText } from "../../publish-contracts/src/sheet.ts";
-import { twinUnwindGuardArgs } from "../../publish-contracts/src/unwind-guard.ts";
+// These two modules have no dependency: this file must run where publish-contracts has no node_modules (CI jobs, an operator's checkout), so it never imports sheet.ts or unwind-guard.ts (viem).
+import { twinUnwindGuardArgs } from "../../publish-contracts/src/unwind-guard-twin.ts";
+import { BASKET_KEYS } from "../../publish-contracts/src/vault-keys.ts";
 import { checkRows, parseRows } from "./govern-rows.ts";
 import { labelParity, sheetParity } from "./parity.ts";
 import { parseSheet } from "./sheet-diff.ts";
@@ -824,7 +825,7 @@ async function governRun(s: Stack, extra: string[] = []): Promise<void> {
  * and the label, never a sizing. A guard already in effect is skipped by the row, so a rerun of ensure is safe. 8453 is untouched: the runbook runs the row there.
  */
 async function governUnwindGuards(s: Stack): Promise<void> {
-  const unpaused = parseSheetText(readFileSync(s.sv("sheet_path"), "utf8")).GOVERN_UNPAUSE_VAULTS;
+  const unpaused = parseSheet(readFileSync(s.sv("sheet_path"), "utf8")).get("GOVERN_UNPAUSE_VAULTS");
   if (unpaused === undefined) throw fail(`the stage sheet (${s.sv("sheet_path")}) has no GOVERN_UNPAUSE_VAULTS: cannot tell which baskets stage 13 opened`, EXIT.INPUT);
   const opened = unpaused.split(",").map((x) => x.trim());
   for (const k of BASKET_KEYS.filter((b) => opened.includes(b))) await governRun(s, twinUnwindGuardArgs(k));
