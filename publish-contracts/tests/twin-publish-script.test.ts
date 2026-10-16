@@ -5,6 +5,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COUNTS, tmp } from "./fixtures.ts";
 import { REPO_ROOT } from "./repo-root.ts";
+import { parseSheet } from "../src/sheet.ts";
 
 const ACTION = join(REPO_ROOT, ".github/actions/twin-publish");
 const sum = Object.values(COUNTS).reduce((a, b) => a + b, 0);
@@ -93,8 +94,40 @@ describe("twin-publish step script", () => {
     expect(r.code).toBe(0);
     const frag = readFileSync(join(r.exported.TWIN_RUN_DIR!, "fragment.env"), "utf8");
     expect(frag).toMatch(/^UPGRADE_MODE=upgradeable$/m);
-    expect(frag).toMatch(/^UPGRADE_FREEZE_DEADLINE=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/m);
     expect(readFileSync(join(runScript({}).exported.TWIN_RUN_DIR!, "fragment.env"), "utf8")).not.toMatch(/^UPGRADE_MODE=/m);
+  });
+  test("the upgrade overlay names no deadline; twin-publish derives it from the pin block timestamp plus 365 days into the merged sheet (issue 1846)", () => {
+    expect(readFileSync(join(REPO_ROOT, "deployments/twin-918453/upgrade-rehearsal.env"), "utf8")).not.toMatch(/^\s*UPGRADE_FREEZE_DEADLINE\s*=/m);
+    const T = 1_790_000_000; // the stubbed pin block timestamp, 2026-09-21T14:13:20Z
+    const castDir = tmp("stub-cast-");
+    const cast = join(castDir, "cast");
+    writeFileSync(cast, `#!/usr/bin/env bash\necho "cast $*" >> "$STUB_LOG"\nif [ "$1" = "block" ]; then echo "${T}"; else echo "$STUB_NONCE"; fi\n`);
+    chmodSync(cast, 0o755);
+    // The real merge (mergeSheet, which runs the sheet parser) of the committed Twin sheet and the fragment's UPGRADE_ lines: the stub keys are not a valid key set.
+    const mergeStub = join(castDir, "merge.js");
+    writeFileSync(mergeStub, `
+      const fs = require("node:fs"); const a = process.argv, v = (k) => a[a.indexOf(k) + 1];
+      const { mergeSheet } = require(${JSON.stringify(join(REPO_ROOT, "publish-contracts/src/ci/merge-sheet.ts"))});
+      const frag = fs.readFileSync(v("--fragment"), "utf8").split("\\n").filter((l) => l.startsWith("UPGRADE_"));
+      fs.writeFileSync(v("--out"), mergeSheet(fs.readFileSync(v("--template"), "utf8"), ["UPGRADE_MODE=frozen", ...frag].join("\\n")));`);
+    const r = runScript({ SHEET_OVERLAY_IN: "deployments/twin-918453/upgrade-rehearsal.env", PIN_BLOCK_IN: "36000000", CAST: cast, TWIN_MERGE_SHEET: mergeStub });
+    expect(r.err).toBe("");
+    expect(r.code).toBe(0);
+    expect(r.all).toContain("cast block 36000000 --field timestamp --rpc-url http://127.0.0.1:1");
+    const merged = readFileSync(join(r.exported.TWIN_RUN_DIR!, "sheet.env"), "utf8");
+    const lines = merged.split("\n").filter((l) => l.startsWith("UPGRADE_FREEZE_DEADLINE="));
+    const want = T + 365 * 86_400;
+    expect(lines).toEqual([`UPGRADE_FREEZE_DEADLINE=${new Date(want * 1000).toISOString().replace(".000Z", "Z")}`]);
+    expect(lines[0]).toBe("UPGRADE_FREEZE_DEADLINE=2027-09-21T14:13:20Z");
+    expect(want).toBeGreaterThan(T + 900 + 86_400); // later than the sheet's earliest: the pin time + the rehearsal timelock delay + 1 day
+    expect(merged).toMatch(/^UPGRADE_MODE=upgradeable$/m);
+    // the merged sheet still parses with the deploy-time deadline check at the pin time
+    expect(parseSheet(merged, { now: () => T * 1000 }).upgrade).toEqual({ mode: "upgradeable", freezeDeadline: "2027-09-21T14:13:20Z" });
+    // a frozen sheet (no overlay) never reads the pin block and gets no deadline
+    const frozen = runScript({ PIN_BLOCK_IN: "36000000", CAST: cast, TWIN_MERGE_SHEET: mergeStub });
+    expect(frozen.code).toBe(0);
+    expect(frozen.all.some((l) => l.startsWith("cast block"))).toBe(false);
+    expect(readFileSync(join(frozen.exported.TWIN_RUN_DIR!, "sheet.env"), "utf8")).not.toMatch(/^UPGRADE_FREEZE_DEADLINE=/m);
   });
   test("govern is off unless asked for", () => {
     const r = runScript({ GOVERN_IN: "false" });
