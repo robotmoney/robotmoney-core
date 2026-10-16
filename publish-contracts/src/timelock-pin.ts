@@ -4,8 +4,9 @@
 // Every proxy names the timelock from its first block: the CREATE2 address (stage table `upgradeAuthority`: factory, keccak256(salt)) of the TimelockController init
 // code for the Safe and TIMELOCK_MIN_DELAY (contracts/script/UpgradeAuthority.sol predictTimelock). That init code is the build's creation code, CBOR metadata included,
 // so a toolchain change between the first proxy stage and the timelock stage would move the address and leave every proxy naming a timelock nobody can deploy.
-// The runner therefore derives the prediction from the build here, pins it in the run manifest at the first proxy stage, and refuses the timelock stage when the
-// recomputed prediction differs. The same prediction lets the timelock stage adopt a timelock someone else already deployed at that address (anyone can: the init
+// The runner therefore derives the prediction from the build here, pins it in the run manifest at the first proxy stage, and refuses every later proxy stage and
+// the timelock stage before their broadcast when the recomputed prediction differs (issue 1853; scripts/ci/check-timelock-prediction-parity.ts holds this
+// function equal to UpgradeAuthority.predictTimelock). The same prediction lets the timelock stage adopt a timelock someone else already deployed at that address (anyone can: the init
 // code is public once the proxies are on chain).
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
