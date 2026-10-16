@@ -428,3 +428,36 @@ export function buildWorld(chainId = 8453): World {
 
 export const failed = (r: { checks: { label: string; ok: boolean }[] }) => r.checks.filter((c) => !c.ok).map((c) => c.label);
 void ({} as VHex);
+
+/** The canonical CREATE2 factory the timelock stage deploys the core timelock through. */
+export const WORLD_CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C" as const;
+
+/**
+ * Issue 1851: the healthy world with from-block 100 and the run's deploy receipts. Every governed contract has a CREATE receipt at `blocks[name] ?? 100`, the timelock a CREATE2
+ * factory call carrying its constructor log. `opts.deployTxs` lists them, the timelock's last.
+ */
+export function deployedWorld(blocks: Record<string, bigint> = {}): World {
+  const w = buildWorld();
+  w.opts.fromBlock = 100n;
+  const contracts: Record<string, Address> = { gateway: GATEWAY, registry: REGISTRY, router: ROUTER, governance: GOV, icpolicy: ICP, receipt: REC, recorder: RECORDER, ...Object.fromEntries(Object.entries(VAULTS).map(([k, v]) => [k, v.address])) };
+  const txs = Object.entries(contracts).map(([n, a]) => w.chain.created(a, blocks[n] ?? 100n));
+  const tl = keccak256(toHex("timelock factory call"));
+  w.chain.receipts.set(tl.toLowerCase(), { blockNumber: blocks.timelock ?? 100n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] });
+  w.opts.deployTxs = [...txs, tl];
+  return w;
+}
+
+/**
+ * Issue 1835: the timelock stage ADOPTED a timelock someone else created: the run's own timelock transaction is dropped, the timelock's constructor RoleGranted log sits in a
+ * transaction mined in `block` whose receipt is `receipt(tx)` (null: the chain does not know it), and `opts.adoptedContracts` names the timelock.
+ */
+export function adoptTimelock(w: World, block: bigint, receipt: (tx: Hex) => Record<string, unknown> | null): World {
+  const own = w.opts.deployTxs!.pop()!;
+  w.chain.receipts.delete(own.toLowerCase());
+  const tx = keccak256(toHex("someone else's timelock creation"));
+  w.chain.logs.push({ address: TIMELOCK, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), ADMIN_ROLE, padTopic(TIMELOCK), padTopic(addr(0xabc))], data: "0x", blockNumber: block, transactionHash: tx });
+  const r = receipt(tx);
+  if (r) w.chain.receipts.set(tx.toLowerCase(), r as never);
+  w.opts.adoptedContracts = [TIMELOCK];
+  return w;
+}

@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { loadStageTable } from "../stage-table.ts";
 import { verifyDeployment, viemReader, loadFrozenCounts } from "./index.ts";
-import { runDeployTxs } from "./manifests.ts";
+import { runAdoptedContracts, runDeployTxs } from "./manifests.ts";
 import { verifySources, contractsFromManifests } from "./sources.ts";
 import type { VerifySheet } from "./types.ts";
 
@@ -38,7 +38,7 @@ async function main() {
     chain: viemReader(values.rpc!), manifestDir: values.manifests!, table, sheet, artifactsDir: values.artifacts!, coreDir: values["core-dir"]!,
     fromBlock: BigInt(values["from-block"]!), logChunk: values["log-chunk"] ? Number(values["log-chunk"]) : undefined,
     frozenCounts: loadFrozenCounts(values.frozen!, values["deploy-sha"]!),
-    ...(values["run-manifest"] ? { deployTxs: runDeployTxs(JSON.parse(readFileSync(values["run-manifest"], "utf8"))) } : {}),
+    ...(values["run-manifest"] ? (() => { const run = JSON.parse(readFileSync(values["run-manifest"]!, "utf8")); return { deployTxs: runDeployTxs(run), adoptedContracts: runAdoptedContracts(run) }; })() : {}),
   });
   if (values.sources) {
     const s = await verifySources({ chainId: sheet.chainId, contracts: contractsFromManifests(values.manifests!, table) });

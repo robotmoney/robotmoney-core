@@ -108,6 +108,11 @@ export interface VerifyOptions {
    * that each contract it scans was created at or after `fromBlock`. Absent with a `fromBlock` above zero: every scan label fails, the scan start cannot be proven.
    */
   deployTxs?: Hex[];
+  /**
+   * Issue 1851, issue 1835: contracts the run adopted instead of creating (the run manifest's adopted stages, `adoption.libraries[].address`: the core timelock someone else
+   * deployed at the predicted CREATE2 address). The creation proof finds their creation transaction from their earliest RoleGranted log from `fromBlock` on.
+   */
+  adoptedContracts?: Address[];
   /** The block of the timelock handover. The agent checks stop here, because depositors authorize their own agents after it. Unset: the chain head. */
   handoverBlock?: bigint;
   /** Blocks per eth_getLogs call. The public Base RPC caps at 2000. */

@@ -19,7 +19,7 @@ import { padTopic, scanLogs, topicToAddress } from "./logs.ts";
 import { safeChecks } from "./safe-checks.ts";
 import { CODE_LABEL, finishUpgradeability, manifestDataOf, upgradeabilityChecks } from "./upgradeability.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
-import type { Address, ChainReader, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport } from "./types.ts";
+import type { Address, ChainReader, DeployReceipt, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport } from "./types.ts";
 
 export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader } from "./types.ts";
 export { viemReader } from "./reader.ts";
@@ -183,7 +183,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   const head = await chain.blockNumber().catch(() => undefined);
   const chunk = opts.logChunk ?? 2000;
   const retryBaseMs = opts.retryBaseMs ?? 500;
-  const created = creationProof(chain, opts.fromBlock, opts.deployTxs);
+  const created = creationProof(chain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
   const governed: Scanned[] = [...core, ...man.vaults.map((v) => ({ name: `vault[${v.key}]`, address: v.address }))];
   if (head === undefined) {
     for (const l of AGENT_LABELS) c.fail(l, "block number unreadable");
@@ -444,31 +444,59 @@ type CreationProof = (contracts: Scanned[], noun?: string) => Promise<string | u
  * Issue 1851 (replaces the issue 1833 eth_getCode at fromBlock - 1, which a pruned RPC cannot serve): every log scan starts at fromBlock and sees only the logs from there on.
  * Each scanned contract's creation block is read from the receipt of the deploy transaction of the run that created it: a CREATE receipt names it as contractAddress, a
  * CREATE2 factory call (the timelock) carries the constructor's logs of the contract. The scan start must not be after that block. Receipts are read once per verify run.
- * A receipt the RPC refuses fails the labels with an RPC_REFUSED detail; a contract no receipt of the run created fails them too (its creation cannot be shown).
+ * A contract the run ADOPTED instead of creating (issue 1835: the core timelock someone else deployed at the predicted CREATE2 address) has no deploy transaction of the run:
+ * its creation transaction is the one of its earliest RoleGranted log from fromBlock on, whose receipt must be a successful CREATE2 factory call carrying the contract's logs
+ * (the factory reverts when the address already holds code, so that call created it, at or after fromBlock). A contract the run neither created nor adopted fails the labels.
+ * A read the RPC refuses, or a recorded deploy transaction the RPC does not know (a node that does not index old transactions), fails them with an RPC_REFUSED detail.
  */
-function creationProof(chain: ChainReader, fromBlock: bigint, deployTxs: Hex[] | undefined): CreationProof {
+function creationProof(chain: ChainReader, fromBlock: bigint, deployTxs: Hex[] | undefined, adopted: Address[] | undefined, scan: { head: bigint; chunk: number; retryBaseMs: number } | undefined): CreationProof {
   let created: Promise<Map<string, { block: bigint; tx: Hex }>> | undefined;
+  const refused = (what: string, e: unknown) => new Error(`${RPC_REFUSED_DETAIL}: the RPC refused ${what}, so the scan start cannot be shown to precede the creation of the scanned contracts: ${String((e as Error)?.message ?? e).slice(0, 200)}`);
+  const receipt = async (tx: Hex) => {
+    let r;
+    try { r = await chain.deployReceipt(tx); } catch (e) { throw refused(`eth_getTransactionReceipt for the transaction ${tx}`, e); }
+    if (r === null) throw new Error(`${RPC_REFUSED_DETAIL}: the RPC does not know the transaction ${tx} (a node that does not index old transactions?), so the scan start cannot be shown to precede the creation of the scanned contracts. Rerun verify against an RPC that serves eth_getTransactionReceipt for it`);
+    return r;
+  };
+  const isFactoryCreation = (r: DeployReceipt, at: string) => r.status === "success" && !!r.to && lc(r.to) === CREATE2_FACTORY && r.logs.some((l) => lc(l.address) === at);
   const read = async () => {
     const out = new Map<string, { block: bigint; tx: Hex }>();
     const note = (a: string, block: bigint, tx: Hex) => { const k = lc(a); const prev = out.get(k); if (!prev || block < prev.block) out.set(k, { block, tx }); };
     for (const tx of deployTxs ?? []) {
-      let r;
-      try { r = await chain.deployReceipt(tx); } catch (e) { throw new Error(`${RPC_REFUSED_DETAIL}: the RPC refused eth_getTransactionReceipt for the deploy transaction ${tx}, so the scan start cannot be shown to precede the creation of the scanned contracts: ${String((e as Error)?.message ?? e).slice(0, 200)}`); }
-      if (r === null) throw new Error(`the deploy transaction ${tx} the run manifest recorded is not known to the chain, so the scan start cannot be shown to precede the creation of the scanned contracts`);
+      const r = await receipt(tx);
       if (r.status !== "success") continue; // a reverted transaction created nothing
       if (r.contractAddress) note(r.contractAddress, r.blockNumber, tx);
       if (r.to && lc(r.to) === CREATE2_FACTORY) for (const l of r.logs) note(l.address, r.blockNumber, tx);
     }
     return out;
   };
+  /** Issue 1835: the creation of an adopted contract, from its earliest RoleGranted log at or after fromBlock. */
+  const adoptedCreation = async (x: Scanned): Promise<{ block: bigint; tx: Hex } | string> => {
+    if (!scan) return `${x.name} ${x.address} was adopted by the run and the chain head is unreadable, so its creation transaction cannot be found`;
+    let logs;
+    try { logs = await scanLogs(chain, { address: x.address, topics: [keccak256(toHex(SIG_ROLE_GRANTED))], fromBlock, toBlock: scan.head, chunk: scan.chunk, retryBaseMs: scan.retryBaseMs }); }
+    catch (e) { throw refused(`eth_getLogs for the adopted ${x.name} ${x.address}`, e); }
+    const first = logs.filter((l) => l.transactionHash).sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : 0))[0];
+    if (!first) return `${x.name} ${x.address} was adopted by the run but has no RoleGranted log from from-block ${fromBlock} on, so it was created before the scan start (or the log scan cannot show when)`;
+    const r = await receipt(first.transactionHash!);
+    if (!isFactoryCreation(r, lc(x.address))) return `${x.name} ${x.address} was adopted by the run, but the transaction ${first.transactionHash} of its earliest RoleGranted log from from-block ${fromBlock} on is not a successful CREATE2 factory call that created it, so it was created before the scan start`;
+    return { block: r.blockNumber, tx: first.transactionHash! };
+  };
   return async (contracts, noun) => {
     if (fromBlock === 0n) return undefined; // the scan reads the whole chain
-    if (!deployTxs || deployTxs.length === 0) return `no deploy transaction hashes were given (the run manifest's stages[].txHashes), so the scan start from-block ${fromBlock} cannot be shown to precede the creation of the scanned contracts`;
+    if (!deployTxs || deployTxs.length === 0) return `no deploy transaction hashes were given (the run manifest's stages[].txHashes; the standalone verifier takes --run-manifest <publish-run.json>), so the scan start from-block ${fromBlock} cannot be shown to precede the creation of the scanned contracts`;
     let m: Map<string, { block: bigint; tx: Hex }>;
     try { m = await (created ??= read()); } catch (e) { return (e as Error).message; }
     for (const x of contracts) {
-      const c = m.get(lc(x.address));
-      if (!c) return `no deploy transaction of the run created ${x.name} ${x.address}, so the scan start from-block ${fromBlock} cannot be shown to precede its creation`;
+      let c = m.get(lc(x.address));
+      if (!c && (adopted ?? []).some((a) => lc(a) === lc(x.address))) {
+        let a: { block: bigint; tx: Hex } | string;
+        try { a = await adoptedCreation(x); } catch (e) { return (e as Error).message; }
+        if (typeof a === "string") return a;
+        m.set(lc(x.address), a); // once per run
+        c = a;
+      }
+      if (!c) return `no deploy transaction of the run created ${x.name} ${x.address} and the run did not adopt it, so the scan start from-block ${fromBlock} cannot be shown to precede its creation`;
       if (c.block < fromBlock) return `from-block ${fromBlock} is after the ${noun ?? x.name}'s creation: ${x.address} was created in block ${c.block} (deploy transaction ${c.tx}), so a role or allowlist grant before the scan start is never seen. Pass the block of the first deploy receipt`;
     }
     return undefined;

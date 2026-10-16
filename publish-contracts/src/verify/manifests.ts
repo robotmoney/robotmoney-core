@@ -74,3 +74,9 @@ export function runDeployTxs(run: { stages?: Record<string, { txHashes?: unknown
   const all = [...Object.values(run.stages ?? {}).map((s) => s.txHashes), ...(run.vault_redeploys ?? []).map((r) => r.deploy_tx_hashes)];
   return [...new Set(all.flatMap((h) => (Array.isArray(h) ? h : [])).filter((h): h is Hex => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h)))];
 }
+
+/** Issue 1851, issue 1835: every contract an adopted stage of a run manifest adopted instead of creating (`adoption.libraries[].address`: the core timelock, the CREATE2 libraries). */
+export function runAdoptedContracts(run: { stages?: Record<string, { adopted?: unknown; adoption?: { libraries?: { address?: unknown }[] } }> }): Address[] {
+  const all = Object.values(run.stages ?? {}).filter((s) => s.adopted === true).flatMap((s) => s.adoption?.libraries ?? []).map((l) => l.address);
+  return [...new Set(all.filter((a): a is Address => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a)))];
+}

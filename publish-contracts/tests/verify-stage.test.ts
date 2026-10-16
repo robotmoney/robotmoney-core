@@ -3,7 +3,8 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { RM_TOKEN } from "../src/verify/constants.ts";
 import { join } from "node:path";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { RPC_REFUSED_DETAIL } from "../src/verify/index.ts";
+import { RPC_REFUSED_DETAIL, verifyDeployment } from "../src/verify/index.ts";
+import { TIMELOCK, WORLD_CREATE2_FACTORY, adoptTimelock, deployedWorld } from "./verify/world.ts";
 import { publishLogger } from "../src/log.ts";
 import { newManifest, type RunContext } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
@@ -364,7 +365,10 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     const code = await w.run(["verify"], { pauseAll: p.pauseAll, verify: failing([{ label: "chain: id equals sheet", ok: true, detail: "ok" }, refused]) });
     expect(code).toBe(EXIT_CODES.RPC_REFUSED);
     expect(p.calls).toEqual([]);
-    expect(w.logs().filter((l) => l.event === "run.failed").pop().message).toContain("no vault was paused");
+    const msg = w.logs().filter((l) => l.event === "run.failed").pop().message;
+    expect(msg).toContain("No vault was paused");
+    expect(msg).toContain("The deployment is NOT verified");
+    expect(msg).toContain("do not proceed to govern");
   });
   test("the verifier is given every deploy transaction hash the run manifest recorded (the creation proof of the log scans)", async () => {
     const w = seed({});
@@ -378,6 +382,32 @@ describe("the CLI on 8453: a part-way govern run pauses nothing, a failed verify
     const verify = { verifyDeployment: (async (o: { deployTxs?: string[] }) => { seen = o.deployTxs; return { ok: true, checks: [] }; }) as never, verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true };
     await w.run(["verify"], { pauseAll: spy().pauseAll, verify });
     expect(seen).toEqual([h(1), h(2), h(3)]);
+  });
+  // Issue 1835, 1851: the timelock stage adopted the core timelock, so no deploy transaction of the run created it. The run manifest's adoption record reaches the real
+  // verifier (stubbed only for the chain it reads: the in-memory world), the receipt proof accepts the adopted timelock, verify passes and nothing is paused.
+  test("an 8453 verify of a run whose timelock stage adopted the timelock: the adoption reaches the verifier, verify passes, pauseAll is never called", async () => {
+    const w = seed({});
+    const path = join(w.evidence, "publish-run.json");
+    const m = JSON.parse(readFileSync(path, "utf8"));
+    const world = adoptTimelock(deployedWorld(), 105n, () => ({ blockNumber: 105n, status: "success", contractAddress: null, to: WORLD_CREATE2_FACTORY, logs: [{ address: TIMELOCK }] }));
+    m.firstBlock = 100;
+    m.stages.safe.txHashes = world.opts.deployTxs; // the run's own creations (the stage they belong to does not matter to the proof)
+    m.stages.timelock = { status: "done", startedAt: "t", txHashes: [], adopted: true, adoption: { libraries: [{ name: "TimelockController", artifact: "TimelockController", address: TIMELOCK, codeHash: "0x00" }], factory: WORLD_CREATE2_FACTORY, deployerTxs: 0 } };
+    writeFileSync(path, JSON.stringify(m));
+    const p = spy();
+    let report: { ok: boolean; checks: { label: string; ok: boolean }[] } | undefined;
+    const verify = {
+      verifyDeployment: (async (o: { deployTxs?: `0x${string}`[]; adoptedContracts?: `0x${string}`[]; fromBlock: bigint }) => {
+        report = await verifyDeployment({ ...world.opts, fromBlock: o.fromBlock, deployTxs: o.deployTxs, adoptedContracts: o.adoptedContracts });
+        return report;
+      }) as never,
+      verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true,
+    };
+    const code = await w.run(["verify"], { pauseAll: p.pauseAll, verify });
+    expect(report!.checks.filter((c) => !c.ok).map((c) => c.label)).toEqual([]);
+    expect(report!.checks.find((c) => c.label === "timelock: only the safe holds PROPOSER, CANCELLER or EXECUTOR role (log scan)")?.ok).toBe(true);
+    expect(code).toBe(0);
+    expect(p.calls).toEqual([]);
   });
   test("an RPC_REFUSED failure beside a real failure is a real verify failure: pauseAll is called once", async () => {
     const w = seed({});
